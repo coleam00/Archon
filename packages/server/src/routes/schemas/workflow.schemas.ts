@@ -486,6 +486,14 @@ export const itemWindowQuerySchema = z.object({
   until: z.string().min(1).optional(),
   limit: z.coerce.number().int().optional(),
   after: z.string().min(1).optional(),
+  open: z
+    .enum(['true', 'false'])
+    .transform(value => value === 'true')
+    .optional()
+    .openapi({
+      description:
+        'Keep only the open items (true: standing.state is not resting) or only the ones at rest (false). Name it on every page; the cursor does not carry it.',
+    }),
 });
 
 /** GET /api/items/window response: a page of items, as `archon workflow items --json`. */

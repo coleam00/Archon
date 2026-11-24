@@ -56,7 +56,11 @@ const runsByItem = new Map<string, WorkflowRun[]>([
   ],
 ]);
 
-function source(unreadable: string[] = []): ItemWindowSource {
+function source(
+  unreadable: string[] = [],
+  statuses: Record<string, WorkflowRun['status']> = {},
+  queuedOn: string[] = []
+): ItemWindowSource {
   return {
     branchOf: async () => null,
     store: {
@@ -72,11 +76,13 @@ function source(unreadable: string[] = []): ItemWindowSource {
       getItemRuns: async (_project, key) => {
         const item = items.find(entry => entry.key === key);
         if (!item) return null;
-        const runs = (runsByItem.get(item.id) ?? []).map(row =>
-          unreadable.includes(row.id)
-            ? ({ type: 'degraded', reason: 'run_unreadable', runId: row.id } as const)
-            : row
-        );
+        const runs = (runsByItem.get(item.id) ?? [])
+          .map(row => (statuses[row.id] === undefined ? row : { ...row, status: statuses[row.id] }))
+          .map(row =>
+            unreadable.includes(row.id)
+              ? ({ type: 'degraded', reason: 'run_unreadable', runId: row.id } as const)
+              : row
+          );
         return { item, runs, descendantIds: [] };
       },
       listEventsForRuns: async () => new Map(),
@@ -91,7 +97,19 @@ function source(unreadable: string[] = []): ItemWindowSource {
       listItemLinks: async () => [],
       listItemAsks: async () => [],
       listOpenItemWaits: async () => [],
-      listQueuedItemStarts: async () => [],
+      listQueuedItemStarts: async itemId =>
+        queuedOn.includes(itemId)
+          ? [
+              {
+                requestId: `start-${itemId}`,
+                workflow: 'review',
+                resource: 'review',
+                hostId: 'host',
+                queuedAt: '2026-11-04T00:00:00.000Z',
+                ahead: 0,
+              },
+            ]
+          : [],
       listSkippedItemStarts: async () => [],
       readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
       getInstallHold: async () => null,
@@ -149,6 +167,47 @@ describe('reading items over a window', () => {
     }
     expect(keys).toEqual(['a', 'b', 'c']);
     expect(pages).toBe(3);
+  });
+
+  test('each item says where it stands, and open keeps the ones something still moves', async () => {
+    const wide = { since: '2026-10-01T00:00:00Z', until: '2027-01-01T00:00:00Z' };
+    // a: its first run still runs after a later one ended. b: its only run failed.
+    // c: every run ended, and a start waits for admission.
+    const moving = (): ItemWindowSource => source([], { a1: 'running', b1: 'failed' }, ['item-c']);
+    const all = await readItemWindow(moving(), PROJECT, wide);
+    expect(all.items.map(read => [read.item.key, read.standing])).toEqual([
+      ['a', { runId: 'a1', state: 'running' }],
+      ['b', { runId: 'b1', state: 'failed' }],
+      ['c', { runId: 'c2', state: 'queued' }],
+    ]);
+    // Nothing moves an item whose runs all ended: it rests at its latest run.
+    const rested = await readItemWindow(source([], { b1: 'failed' }), PROJECT, wide);
+    expect(rested.items.map(read => [read.item.key, read.standing])).toEqual([
+      ['a', { runId: 'a2', state: 'resting' }],
+      ['b', { runId: 'b1', state: 'failed' }],
+      ['c', { runId: 'c2', state: 'resting' }],
+    ]);
+
+    // The filter holds across pages: a page fills with matching items only.
+    const keys = async (open: boolean): Promise<string[]> => {
+      const found: string[] = [];
+      let page = await readItemWindow(source([], { b1: 'failed' }), PROJECT, {
+        ...wide,
+        open,
+        limit: 1,
+      });
+      for (;;) {
+        found.push(...page.items.map(read => read.item.key));
+        if (page.next === null) return found;
+        page = await readItemWindow(source([], { b1: 'failed' }), PROJECT, {
+          after: page.next,
+          open,
+          limit: 1,
+        });
+      }
+    };
+    expect(await keys(true)).toEqual(['b']);
+    expect(await keys(false)).toEqual(['a', 'c']);
   });
 
   test('an item whose runs cannot all be read is reported as degraded, and the rest of it reads', async () => {

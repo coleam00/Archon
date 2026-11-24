@@ -472,6 +472,7 @@ describe('reading an item', () => {
     };
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
+      standing: { runId: null, state: 'resting' },
       runs: [],
       queued: [],
       skipped: [],

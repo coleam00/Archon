@@ -7,7 +7,8 @@ import {
   type WorkflowItem,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase, getDatabaseType, pool } from './connection';
+import { RUN_DISPATCH_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
+import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import {
   normalizeWorkflowRun,
@@ -234,4 +235,22 @@ export async function recordItemTitle(input: {
     await query('UPDATE remote_agent_items SET title = $1 WHERE id = $2', [input.title, id]);
     return { id, projectKey: input.projectKey, key: input.key, title: input.title };
   });
+}
+
+/**
+ * The packs with a run on an item, by the item's project key: the pack keys those runs
+ * recorded at dispatch (`runPack`). A run that recorded no pack counts for none.
+ */
+export async function listItemPacks(): Promise<ReadonlyMap<string, string[]>> {
+  const pack = getDialect().jsonText('r.metadata', `${RUN_DISPATCH_METADATA_KEY}.pack`);
+  const result = await pool.query<{ project_key: string; pack: string }>(
+    `SELECT DISTINCT i.project_key, ${pack} AS pack
+       FROM remote_agent_workflow_runs r JOIN remote_agent_items i ON i.id = r.item_id
+      WHERE ${pack} IS NOT NULL
+      ORDER BY 2`
+  );
+  const packs = new Map<string, string[]>();
+  for (const row of result.rows)
+    packs.set(row.project_key, [...(packs.get(row.project_key) ?? []), row.pack]);
+  return packs;
 }

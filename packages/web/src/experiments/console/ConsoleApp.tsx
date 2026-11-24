@@ -8,6 +8,7 @@ import { KeymapHelp } from './components/KeymapHelp';
 import { BuilderConnected } from './builder/BuilderConnected';
 import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
+import { BoardPage } from './routes/BoardPage';
 import { MetricsPage } from './routes/metrics/MetricsPage';
 import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
@@ -120,6 +121,7 @@ export function ConsoleApp(): ReactElement {
             <Route path="r/:runId" element={<RunDetailPage />} />
             <Route path="*" element={<Navigate to="/console" replace />} />
             <Route path="p/:projectId" element={<RunsPage />} />
+            <Route path="p/:projectId/board" element={<BoardPage />} />
             <Route path="p/:projectId/chat" element={<ChatPage />} />
             <Route path="p/:projectId/metrics" element={<MetricsPage />} />
             <Route path="p/:projectId/metrics/details" element={<MetricsPage view="details" />} />

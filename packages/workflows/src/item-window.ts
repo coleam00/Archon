@@ -5,8 +5,15 @@
  * that pins the window, so following it returns each remaining item once.
  */
 import { z } from 'zod';
-import { assembleItemRead, itemReadSchema, readItemQueue, type ItemReadSource } from './item-read';
+import {
+  itemReadSchema,
+  placeItem,
+  readInstallFacts,
+  type ItemRead,
+  type ItemReadSource,
+} from './item-read';
 import { MetricsQueryError, resolveMetricsWindow } from './metrics';
+import type { WorkflowItem } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 
 export const ITEM_WINDOW_DEFAULT_LIMIT = 20;
@@ -26,13 +33,16 @@ export type ItemWindow = z.infer<typeof itemWindowSchema>;
 
 /**
  * A first page names its window (`since` and `until` in `archon metrics` syntax, both
- * optional); a later page names only the cursor it follows.
+ * optional); a later page names only the cursor it follows. `open` keeps the items that
+ * are open (`true`: their `standing.state` is not `resting`) or the ones at rest (`false`);
+ * a cursor does not carry it, so each page names it again.
  */
 export interface ItemWindowQuery {
   since?: string;
   until?: string;
   limit?: number;
   after?: string;
+  open?: boolean;
 }
 
 /** The query cannot be answered as given; surfaces report it as a refusal, not a failure. */
@@ -100,7 +110,27 @@ export interface ItemWindowSource extends ItemReadSource {
   store: ItemReadSource['store'] & Pick<IWorkflowStore, 'listItemsInWindow'>;
 }
 
-/** One page of the project's items in the window. The attention queue is read once a page. */
+/** The item read whole when `open` keeps it (see `ItemWindowQuery`), else null. */
+async function keptRead(
+  source: ItemWindowSource,
+  item: WorkflowItem,
+  install: Awaited<ReturnType<typeof readInstallFacts>>,
+  open: boolean | undefined
+): Promise<ItemRead | null> {
+  const placed = await placeItem(source, item, install);
+  // Items are never deleted, so one the window listed is still there.
+  if (placed === null) throw new Error(`Item '${item.key}' was listed but not found`);
+  return open === undefined || open === (placed.standing.state !== 'resting')
+    ? placed.read()
+    : null;
+}
+
+/**
+ * One page of the project's items in the window. What the install holds for every item is
+ * read once a page. Where an item stands is decided by `placeItem`, so `open` filters on it
+ * and only a kept item is read whole: the store lists until the page is full or the window
+ * is exhausted.
+ */
 export async function readItemWindow(
   source: ItemWindowSource,
   projectKey: string,
@@ -108,31 +138,29 @@ export async function readItemWindow(
   now: Date = new Date()
 ): Promise<ItemWindow> {
   const { since, until, afterItemId, limit } = resolveQuery(query, projectKey, now);
-  const listed = await source.store.listItemsInWindow({
-    projectKey,
-    since,
-    until,
-    afterItemId,
-    limit: limit + 1,
-  });
-  const page = listed.slice(0, limit);
   const window = { since: since.toISOString(), until: until.toISOString() };
-  const last = page.at(-1);
-  if (last === undefined) return { window, items: [], next: null };
-  const queue = await readItemQueue(source);
-  const items = [];
-  for (const item of page) {
-    const read = await assembleItemRead(source, item, queue);
-    // Items are never deleted, so one the window listed is still there.
-    if (read === null) throw new Error(`Item '${item.key}' was listed but not found`);
-    items.push(read);
-  }
-  return {
+  const install = await readInstallFacts(source);
+  const items: ItemRead[] = [];
+  const page = (after: string | null): ItemWindow => ({
     window,
     items,
-    next:
-      listed.length > limit
-        ? encodeCursor({ project: projectKey, ...window, after: last.id })
-        : null,
-  };
+    next: after === null ? null : encodeCursor({ project: projectKey, ...window, after }),
+  });
+  let after = afterItemId;
+  for (;;) {
+    const listed = await source.store.listItemsInWindow({
+      projectKey,
+      since,
+      until,
+      afterItemId: after,
+      limit: limit + 1,
+    });
+    for (const item of listed.slice(0, limit)) {
+      after = item.id;
+      const read = await keptRead(source, item, install, query.open);
+      if (read !== null) items.push(read);
+      if (items.length === limit) return page(item === listed.at(-1) ? null : after);
+    }
+    if (listed.length <= limit) return page(null);
+  }
 }
