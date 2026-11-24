@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -628,6 +628,20 @@ describe('reading installed jobs back', () => {
         archonHome,
         programArguments: [...programArguments],
       }),
+    ]);
+  });
+
+  itOnPosixHost('lists a systemd job whose service file is gone, as unreadable', async () => {
+    const directory = await scratchDirectory();
+    const scheduler = {
+      platform: 'linux' as const,
+      systemdUserDirectory: directory,
+      runCommand: recorder().runCommand,
+    };
+    await installNativeSchedule(config({ archonHome: directory }), scheduler);
+    await unlink(join(directory, `${LABEL}.service`));
+    expect(await listNativeSchedules(directory, scheduler)).toEqual([
+      expect.objectContaining({ label: LABEL, unreadable: expect.any(String) }),
     ]);
   });
 

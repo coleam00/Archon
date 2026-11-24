@@ -6,7 +6,7 @@
  */
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, realpath, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -18,7 +18,11 @@ import {
   createInMemoryWorkflowHostStore,
   createInMemoryWorkflowStore,
 } from '../test-support/workflow-store';
-import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
+import {
+  installNativeSchedule,
+  listNativeSchedules,
+  type NativeScheduleOptions,
+} from '../triggers/native-schedule';
 import { triggerCommand } from './trigger';
 
 const tempRoots = trackTempRoots();
@@ -140,7 +144,17 @@ async function fixture() {
       schedules
     );
   };
-  return { home, linked, otherHome, run, schedule, jobFiles, installLegacy };
+  return {
+    home,
+    linked,
+    otherHome,
+    run,
+    schedule,
+    schedules,
+    jobFiles,
+    jobDirectory,
+    installLegacy,
+  };
 }
 
 test('status and remove find a timer installed under another spelling of the same home', async () => {
@@ -172,8 +186,12 @@ test('every spelling of a home installs the one job', async () => {
 
 test('a timer installed before the id followed the home identity is found and not duplicated', async () => {
   const { home, linked, schedule, jobFiles, installLegacy } = await fixture();
-  for (const spelling of [home, linked]) {
-    await installLegacy(`${home}${sep}`);
+  for (const [installedAs, spelling] of [
+    [`${home}${sep}`, home],
+    [`${home}${sep}`, linked],
+    [linked, home],
+  ] as const) {
+    await installLegacy(installedAs);
     expect(await schedule('status', spelling)).toMatchObject({ installed: true });
     await expect(schedule('install', spelling)).rejects.toThrow();
     expect(await jobFiles()).toHaveLength(1);
@@ -191,6 +209,48 @@ test('another home sharing the scheduler does not see or remove this home’s ti
   await expect(run('remove', otherHome)).rejects.toThrow();
   expect(await jobFiles()).toEqual(installed);
 });
+
+test('repointing a symlink to another home does not move a timer installed through it', async () => {
+  const { home, linked, otherHome, schedule, schedules } = await fixture();
+  await schedule('install', linked);
+  await rm(linked);
+  await symlink(otherHome, linked);
+
+  // The job still runs for the home it was installed for, as `trigger check` reads it.
+  expect(await listNativeSchedules(home, schedules)).toHaveLength(1);
+  expect(await listNativeSchedules(otherHome, schedules)).toEqual([]);
+  expect(await schedule('status', home)).toMatchObject({ installed: true });
+  expect(await schedule('status', linked)).toMatchObject({ installed: false });
+});
+
+// File modes do not stop reads on Windows.
+test.skipIf(process.platform === 'win32')(
+  'a job the listing cannot read stops a second install, and an exact job is still removed',
+  async () => {
+    const { home, linked, schedule, run, jobFiles, jobDirectory, installLegacy } = await fixture();
+    await installLegacy(`${home}${sep}`);
+    const [legacy] = await jobFiles();
+    await chmod(join(jobDirectory, legacy), 0o000);
+    try {
+      await expect(run('install', home)).rejects.toThrow();
+      await expect(run('remove', home)).rejects.toThrow();
+      expect(await jobFiles()).toEqual([legacy]);
+    } finally {
+      await chmod(join(jobDirectory, legacy), 0o600);
+    }
+    await schedule('remove', `${home}${sep}`);
+
+    await schedule('install', home);
+    // Searchable but not listable: the exact job is found by name.
+    await chmod(jobDirectory, 0o300);
+    try {
+      await schedule('remove', linked);
+    } finally {
+      await chmod(jobDirectory, 0o700);
+    }
+    expect(await jobFiles()).toEqual([]);
+  }
+);
 
 test('remove with no timer installed fails rather than reporting a removal', async () => {
   const { home, run } = await fixture();

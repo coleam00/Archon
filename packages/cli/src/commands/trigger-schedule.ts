@@ -12,6 +12,7 @@ import {
   installNativeSchedule,
   listNativeSchedules,
   nativeScheduleDefinition,
+  nativeScheduleFiles,
   removeNativeSchedule,
   scheduleLabel,
   type NativeScheduleOptions,
@@ -46,20 +47,25 @@ function triggerScheduleId(
 }
 
 interface TriggerScheduleJobs {
-  /** The id `install` writes: every spelling of this install's home computes the same one. */
-  id: string;
+  /** The job `install` writes: named for, and recording, this install's home identity. */
+  target: NativeScheduleTarget;
+  /** This binding's installed jobs, each by its definition file. */
   jobs: { target: NativeScheduleTarget; definition: string }[];
-  /** Archon job definitions that could not be read, so they may belong to this binding. */
-  unreadable: string[];
+  /**
+   * What stops a miss from being certain: Archon jobs whose definition is missing or cannot
+   * be read, each with how to remove it by hand, or why the jobs could not be listed at all.
+   */
+  unresolved: string[];
 }
 
 /**
  * The binding's installed jobs. A job is named for the install's home identity, the one
- * `listNativeSchedules` compares, so `/x/`, `/x` and a symlink to it compute one id. A job
- * installed before that was named for the home as written: it is found directly under the
- * caller's spelling, and under any other spelling by the home its definition records. The
- * direct ids go through `inspectNativeSchedule`, which counts a job by any file it owns, so
- * a job missing a companion file is still found.
+ * `listNativeSchedules` compares, and records that home, so every spelling of it (`/x/`,
+ * `/x`, a symlink) finds one job, and repointing a symlink later does not move the job.
+ * A job installed before that was named for the home as written. It is found by its
+ * files under the caller's spelling, and under any other spelling by the home its
+ * definition records. The exact names are checked by their files alone, so a job the
+ * listing cannot read is still found and removed.
  */
 async function triggerScheduleJobs(
   config: TriggerConfig,
@@ -68,36 +74,46 @@ async function triggerScheduleJobs(
   const home = getArchonHome();
   const { sourceInstanceId } = config;
   const { bindingId } = config.binding;
-  const id = triggerScheduleId(
-    await archonHomeIdentity(home, schedules.platform ?? process.platform),
-    sourceInstanceId,
-    bindingId
-  );
+  const identity = await archonHomeIdentity(home, schedules.platform ?? process.platform);
+  const target = {
+    id: triggerScheduleId(identity, sourceInstanceId, bindingId),
+    archonHome: identity,
+  };
   // No scheduler on this host: nothing can be installed, and `install` says what to run by hand.
-  if (nativeScheduleDefinition({ id, archonHome: home }, schedules) === undefined)
-    return { id, jobs: [], unreadable: [] };
+  if (nativeScheduleDefinition(target, schedules) === undefined)
+    return { target, jobs: [], unresolved: [] };
+  const exact = [
+    target,
+    { id: triggerScheduleId(home, sourceInstanceId, bindingId), archonHome: home },
+  ];
   const jobs: TriggerScheduleJobs['jobs'] = [];
-  for (const directId of new Set([id, triggerScheduleId(home, sourceInstanceId, bindingId)])) {
-    const target = { id: directId, archonHome: home };
-    const status = await inspectNativeSchedule(target, schedules);
-    if (status) jobs.push({ target, definition: status.path });
+  const found = new Set<string>();
+  const add = (job: NativeScheduleTarget): void => {
+    const label = scheduleLabel(job.id);
+    if (found.has(label)) return;
+    found.add(label);
+    jobs.push({ target: job, definition: nativeScheduleDefinition(job, schedules) ?? label });
+  };
+  for (const job of exact) if ((await nativeScheduleFiles(job, schedules)).length > 0) add(job);
+  let listed: Awaited<ReturnType<typeof listNativeSchedules>>;
+  try {
+    listed = await listNativeSchedules(home, schedules);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { target, jobs, unresolved: [`the scheduler's jobs cannot be listed: ${reason}`] };
   }
-  const found = new Set(jobs.map(job => scheduleLabel(job.target.id)));
-  const unreadable: string[] = [];
-  for (const entry of await listNativeSchedules(home, schedules)) {
+  const unresolved: string[] = [];
+  for (const entry of listed) {
     if (found.has(entry.label)) continue;
     if (!('archonHome' in entry)) {
-      unreadable.push(entry.definition);
+      unresolved.push(`${entry.unreadable} (remove it by hand: ${entry.removeByHand})`);
       continue;
     }
     const legacyId = triggerScheduleId(entry.archonHome, sourceInstanceId, bindingId);
     if (entry.label === scheduleLabel(legacyId))
-      jobs.push({
-        target: { id: legacyId, archonHome: entry.archonHome },
-        definition: entry.definition,
-      });
+      add({ id: legacyId, archonHome: entry.archonHome });
   }
-  return { id, jobs, unreadable };
+  return { target, jobs, unresolved };
 }
 
 /**
@@ -121,9 +137,16 @@ export async function scheduleTrigger(
   return scheduleInstall(config, configPath, found, schedules, assertKnownRunAsUser);
 }
 
+/** Why a binding with no job found may still have one; empty when the miss is certain. */
+function uncertainMiss(unresolved: readonly string[]): string {
+  return unresolved.length === 0
+    ? ''
+    : ` Archon cannot tell whether one of these is this binding's timer: ${unresolved.join('; ')}.`;
+}
+
 async function scheduleStatus(
   config: TriggerConfig,
-  { jobs }: TriggerScheduleJobs,
+  { jobs, unresolved }: TriggerScheduleJobs,
   schedules: NativeScheduleOptions
 ): Promise<void> {
   const [first, ...others] = jobs;
@@ -133,12 +156,13 @@ async function scheduleStatus(
     schedule: 'status',
     ...(status ? { installed: true, ...status } : { installed: false }),
     ...(others.length > 0 ? { duplicates: others.map(job => job.definition) } : {}),
+    ...(unresolved.length > 0 ? { unresolved } : {}),
   });
 }
 
 async function scheduleRemove(
   config: TriggerConfig,
-  { jobs }: TriggerScheduleJobs,
+  { jobs, unresolved }: TriggerScheduleJobs,
   schedules: NativeScheduleOptions
 ): Promise<void> {
   const bindingId = config.binding.bindingId;
@@ -146,33 +170,45 @@ async function scheduleRemove(
   for (const job of jobs)
     if (await removeNativeSchedule(job.target, schedules)) removed.push(job.definition);
   if (removed.length === 0)
-    throw new Error(`No timer is installed for binding '${bindingId}' under this ARCHON_HOME.`);
-  await writeJsonLine({ bindingId, schedule: 'remove', removed });
+    throw new Error(
+      `No timer is installed for binding '${bindingId}' under this ARCHON_HOME.${uncertainMiss(unresolved)}`
+    );
+  await writeJsonLine({
+    bindingId,
+    schedule: 'remove',
+    removed,
+    ...(unresolved.length > 0 ? { unresolved } : {}),
+  });
 }
 
 async function scheduleInstall(
   config: TimerTriggerConfig,
   configPath: string,
-  { id, jobs, unreadable }: TriggerScheduleJobs,
+  { target, jobs, unresolved }: TriggerScheduleJobs,
   schedules: NativeScheduleOptions,
   assertKnownRunAsUser: () => Promise<void>
 ): Promise<void> {
   const bindingId = config.binding.bindingId;
-  const older = jobs.filter(job => job.target.id !== id);
+  const older = jobs.filter(job => job.target.id !== target.id);
   if (older.length > 0)
     throw new Error(
       `Binding '${bindingId}' already has a timer installed for this ARCHON_HOME under the name an earlier Archon version gave it: ${older.map(job => job.definition).join(', ')}. ` +
         `Remove it (\`archon trigger schedule remove --config ${configPath}\`), then install again.`
+    );
+  // A second timer on one binding starts its stage twice per tick, so a possible one refuses.
+  if (jobs.length === 0 && unresolved.length > 0)
+    throw new Error(
+      `Refusing to install a timer for binding '${bindingId}'.${uncertainMiss(unresolved)}`
     );
   await assertKnownRunAsUser();
   const absoluteConfig = resolve(configPath);
   const [executable, ...prefix] = cliProgramArguments();
   await installNativeSchedule(
     {
-      id,
+      id: target.id,
       programArguments: [executable, ...prefix, 'trigger', 'fire', '--config', absoluteConfig],
       workingDirectory: config.binding.launch.cwd,
-      archonHome: getArchonHome(),
+      archonHome: target.archonHome,
       path: process.env.PATH ?? '',
       schedule: config.schedule,
       output: 'log',
@@ -180,9 +216,5 @@ async function scheduleInstall(
     },
     schedules
   );
-  await writeJsonLine({
-    bindingId,
-    schedule: 'install',
-    ...(unreadable.length > 0 ? { unreadable } : {}),
-  });
+  await writeJsonLine({ bindingId, schedule: 'install' });
 }

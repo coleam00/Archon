@@ -8,6 +8,7 @@
 import { execFile } from 'node:child_process';
 import {
   link,
+  lstat,
   mkdir,
   readdir,
   readFile,
@@ -222,8 +223,15 @@ function scheduleByHand(job: ScheduledJob, reason: string): NativeScheduleUnsupp
   );
 }
 
-/** The labels of the Archon jobs in `directory` whose file ends in `suffix`; none when it is missing. */
-export async function installedLabels(directory: string, suffix: string): Promise<string[]> {
+/**
+ * The labels of the Archon jobs in `directory` with a file ending in any of `suffixes`; none
+ * when it is missing. A backend passes every file a job owns, so a job that lost its
+ * definition but kept another file is still listed.
+ */
+export async function installedLabels(
+  directory: string,
+  ...suffixes: readonly string[]
+): Promise<string[]> {
   let names: string[];
   try {
     names = await readdir(directory);
@@ -231,15 +239,18 @@ export async function installedLabels(directory: string, suffix: string): Promis
     if (errorCode(error) === 'ENOENT') return [];
     throw error;
   }
-  return names
-    .filter(name => name.startsWith(LABEL_PREFIX) && name.endsWith(suffix))
-    .map(name => name.slice(0, -suffix.length))
-    .sort();
+  const labels = new Set<string>();
+  for (const name of names) {
+    const suffix = suffixes.find(candidate => name.endsWith(candidate));
+    if (name.startsWith(LABEL_PREFIX) && suffix) labels.add(name.slice(0, -suffix.length));
+  }
+  return [...labels].sort();
 }
 
 /**
- * Reads each job's definition with `read`. A file that cannot be read or parsed is kept, as
- * unreadable, so one bad file does not hide every other job from the listing.
+ * Reads each job's definition with `read`. A definition that is missing, cannot be read or
+ * cannot be parsed is kept, as unreadable, so one bad job neither hides the others nor reads
+ * as no job at all.
  */
 export async function readInstalled(
   labels: readonly string[],
@@ -254,8 +265,10 @@ export async function readInstalled(
     let readError: string | undefined;
     try {
       contents = await readExisting(path);
-      // Deleted between the listing and the read: nothing is installed under it any more.
-      if (contents === undefined) continue;
+      // The label came from another of the job's files. A job removed between the listing
+      // and this read lands here too, and reads as missing until the next listing.
+      if (contents === undefined)
+        readError = `${path} is missing, but other files of the job remain`;
     } catch (error) {
       readError = `${path} cannot be read: ${errorMessage(error)}`;
     }
@@ -344,12 +357,29 @@ async function writeOwnedFiles(files: OwnedFile[], removeCommand: string): Promi
   return created;
 }
 
+/** Which of `paths` exist. It does not read them, so a file it cannot read still counts. */
 async function existingPaths(paths: readonly string[]): Promise<string[]> {
   const found: string[] = [];
   for (const path of paths) {
-    if ((await readExisting(path)) !== undefined) found.push(path);
+    try {
+      await lstat(path);
+      found.push(path);
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') throw error;
+    }
   }
   return found;
+}
+
+/**
+ * The job's files that exist, without reading them, its log, or the scheduler; none when it
+ * is not installed.
+ */
+export async function nativeScheduleFiles(
+  target: NativeScheduleTarget,
+  options: NativeScheduleOptions = {}
+): Promise<string[]> {
+  return existingPaths(requireBackend(target, options).filePaths(scheduleLabel(target.id)));
 }
 
 /**
