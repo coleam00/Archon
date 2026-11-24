@@ -336,8 +336,6 @@ describe('the merge stage reads its item', () => {
     expect(woken('checks', HEAD, { checks: 'green' })).toBe('judge');
     expect(woken('checks', HEAD, { checks: 'red' })).toBe('judge');
     expect(woken('checks', OLD, { checks: 'pending' })).toBe('judge');
-    expect(woken('base-checks', OLD, { baseChecks: 'red' })).toBe('wait');
-    expect(woken('base-checks', OLD, {})).toBe('judge');
   }, 60_000);
 
   test('a pull request merged or closed before the run is settled without the judge', () => {
@@ -473,11 +471,12 @@ describe('the merge stage settles its item', () => {
     expect(approved.outcome).toBe('merged');
   }, 60_000);
 
-  test("the gate refuses while the default branch's CI is red, and the item waits for a check at that commit; pending does not hold it", () => {
+  test("the gate refuses while the default branch's CI is red, and the item waits for the backstop with no event wait; pending does not hold it", () => {
     const at = install();
     const red = gate(at, { pr: { baseChecks: 'red' } });
     expect(red.reason).toBe(`not merged: the default branch dev is red at ${OLD} (test)`);
-    expect(ok(red.result).waits).toEqual([{ event: 'base-checks', about: OLD, within_minutes: 60 }]);
+    // An open wait would keep merge-pick off the item until it went overdue.
+    expect(ok(red.result).waits).toEqual([]);
     expect(merges(red.result)).toEqual([]);
     seed(at, item());
     const pending = gate(at, { pr: { baseChecks: 'pending' } });

@@ -10,7 +10,7 @@ description: |
   A person can also say what to build in the run's message: one agent resolves the
   message to an issue to start, a choice between issues, a work order for several
   issues, which this run writes and later picks build, or new work it files and hands
-  to intake.
+  to intake through the operator's intake binding.
 
   Use when: a trigger binding the operator installed starts it (see
   https://archon.diy/guides/sdlc-operations/#build-queue), or a person says in words
@@ -34,6 +34,13 @@ inputs:
       The absolute path of the operator's fire-only binding config for this
       repository's build queue. Every start goes through it with `archon trigger fire`,
       so it is admitted under that binding's resource, capacity and overlap policy.
+  intake_binding:
+    default: ""
+    description: >-
+      The absolute path of the operator's fire-only intake binding config. New work the
+      message files, a work order's untriaged members and a blocked item sent back to
+      re-triage start intake through it; a node that would start intake refuses while
+      it is empty.
   orders_only:
     default: "false"
     description: >-

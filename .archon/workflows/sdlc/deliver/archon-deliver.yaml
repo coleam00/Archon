@@ -371,6 +371,7 @@ nodes:
     depends_on: [outcome]
     trigger_rule: all_done
     with:
+      flag: ready
       outcome: { from: "$outcome.output", if_skipped: null }
       pull_requests: { outputs: pull-request, if_unreadable: null }
     output_format:

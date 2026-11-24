@@ -20,9 +20,8 @@
  * INPUTS_BUILD_QUEUE_BINDING and INPUTS_ORDERS_ONLY.
  */
 
-import { emit, input, refuse, runId as workflowRunId, state } from 'archon:script';
+import { emit, input, refuse, runId as workflowRunId, state, trigger } from 'archon:script';
 import { buildWaits, waitingItem } from '../../.shared/build.ts';
-import { followUp } from '../../.shared/follow-up.ts';
 import { type QualifiedPr, sameRepo } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { openOrderMembers } from '../../.shared/order.ts';
@@ -81,16 +80,18 @@ function main(): void {
     const doc = readWorkItem(number);
     return doc !== null && buildWaits(doc);
   });
-  const lines = numbers.map(number =>
-    followUp(
+  const lines = numbers.map(number => {
+    const what = `issue ${String(number)}'s build`;
+    // A refused fire, such as a mistyped binding path, fails the node; a busy slot is an admission status.
+    const { disposition } = trigger.fire(
       binding,
-      `build-pick:${repo.host}/${repo.path}#${String(number)}:${runId}`,
       { repo_host: repo.host, repo_path: repo.path, number: String(number) },
-      `issue ${String(number)}'s build`,
-      'the next pick starts it',
-      itemKey(number)
-    )
-  );
+      { deliveryId: `build-pick:${repo.host}/${repo.path}#${String(number)}:${runId}`, item: itemKey(number) }
+    );
+    if (disposition?.status === 'admitted') return `${what} started at once (run ${disposition.runId})`;
+    if (disposition?.status === 'queued') return `${what} waits for the queue's capacity (request ${disposition.requestId})`;
+    return `${what} did not start (its binding ${disposition?.status ?? 'admitted nothing'}), so the next pick starts it`;
+  });
   emit({ fired: numbers, summary: lines.length === 0 ? 'No item waits for the build queue.' : lines.join('\n') });
 }
 

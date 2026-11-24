@@ -1,12 +1,13 @@
 /**
  * The host CLI for queue and discoveries script tests: `workflow runs --json` answers from
- * the rows in `RUN_LISTING` (`--item-of` answers the item `RUN_ITEM_KEY` names), and `workflow get <id> --json` with the row of that id, `workflow run <name>` acknowledges `launched-<name>` and
+ * the rows in `RUN_LISTING` (`--item-of` answers the item `RUN_ITEM_KEY` names), and `workflow get <id> --json` with the row of that id, and
  * `trigger fire` a receipt whose binding was admitted as run `fired-run`, without
- * starting anything (either refuses, exit 1, when `ARCHON_RUN_REFUSES` is set); every
+ * starting anything; every
  * other command runs the real CLI, whose argv the test passes as a JSON array in
  * `INTAKE_HOST_CLI` (`ARCHON_CLI_COMMAND` names this fake).
  *
- * When `ARCHON_CALL_LOG` names a file, each call's argv is appended to it as a JSON line.
+ * When `ARCHON_CALL_LOG` names a file, each call's argv is appended to it as a JSON line,
+ * a `trigger fire`'s `--inputs` as the file's text.
  *
  * The real CLI runs as a surface write, outside any run, in `INTAKE_STATE_CWD` when
  * set: inside a run it would refuse with exit 5, because its store has no such run. A
@@ -22,7 +23,10 @@ import { spawnSync } from 'node:child_process';
 import { fakeLeaseLive } from './fake-lease.ts';
 
 const argv = process.argv.slice(2);
-if (process.env.ARCHON_CALL_LOG) appendFileSync(process.env.ARCHON_CALL_LOG, `${JSON.stringify(argv)}\n`);
+// The script API removes a fire's `--inputs` file once the call returns, so the log
+// carries the file's text in place of its path.
+const logged = argv[0] === 'trigger' ? argv.map((arg, at) => (argv[at - 1] === '--inputs' ? readFileSync(arg, 'utf8') : arg)) : argv;
+if (process.env.ARCHON_CALL_LOG) appendFileSync(process.env.ARCHON_CALL_LOG, `${JSON.stringify(logged)}\n`);
 if (argv[0] === 'workflow' && argv[1] === 'runs' && argv.includes('--item-of')) {
   // The run's item, from `RUN_ITEM_KEY`; a run with none is on no item.
   const key = process.env.RUN_ITEM_KEY ?? '';
@@ -37,22 +41,12 @@ if (argv[0] === 'workflow' && argv[1] === 'runs' && argv.includes('--item-of')) 
   const run = runs.find(row => row.id === argv[2]);
   if (run === undefined) process.exitCode = 1;
   process.stdout.write(JSON.stringify(run ?? { ok: false, runId: argv[2], error: 'not_found' }));
-} else if (argv[0] === 'workflow' && argv[1] === 'run') {
-  if (process.env.ARCHON_RUN_REFUSES) {
-    process.stderr.write('refused');
-    process.exitCode = 1;
-  } else process.stdout.write(JSON.stringify({ runId: `launched-${argv[2]}` }));
 } else if (argv[0] === 'workflow' && argv[1] === 'notice') {
   // Accepted; a test reads what was said from `ARCHON_CALL_LOG`.
   process.stdout.write(JSON.stringify({ ok: true, action: 'notice', runId: process.env.WORKFLOW_ID ?? '', count: 1, limit: 50 }));
 } else if (argv[0] === 'trigger' && argv[1] === 'fire') {
-  if (process.env.ARCHON_RUN_REFUSES) {
-    process.stderr.write('refused');
-    process.exitCode = 1;
-  } else {
-    const disposition = { status: 'admitted', requestId: 'fired-run', runId: 'fired-run' };
-    process.stdout.write(JSON.stringify({ bindings: [{ status: 'complete', disposition }] }));
-  }
+  const disposition = { status: 'admitted', requestId: 'fired-run', runId: 'fired-run' };
+  process.stdout.write(JSON.stringify({ id: 'fired-receipt', bindings: [{ status: 'complete', disposition }] }));
 } else if (argv[0] === 'state') {
   state();
 } else {
