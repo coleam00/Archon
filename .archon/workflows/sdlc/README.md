@@ -17,10 +17,11 @@ An **operator** is whoever runs the pack: a person, or more often that person's 
 | Workflow | What it does | What starts it | What it ends with |
 |---|---|---|---|
 | `archon-triage` | Grounds the issue against the code and its tracker history, judges whether a run can start from it, and routes it. Posts questions for the author, what a blocked issue waits on, or the close of a duplicate or delivered issue; adds area labels. | A maintainer adds the label `archon-triage`; its own answers | `investigate`, `plan`, `build`, `split`; `questions`, `blocked`, `close`, `not_triaged` (start nothing); `ask` |
+| `archon-link` | Decides whether the issue can be built now: checks what it would wait on, records its `depends_on`, `part_of` and `duplicate_of` links itself, and places it, holds it, or asks. | Triage `plan` or `build`; an item it waits on lands, closes, splits or is refuted; its own answers | `plan`, `build`; `waiting`, `fold`, `dropped`, `none` (start nothing); asks with `wait`, `start-anyway`, `drop`, `keep-this`, `keep-other` |
 | `archon-investigate` | Proves the causal chain from symptom to root cause and decides the fix. | Triage `investigate`; its own answers | `rooted` (build); `refuted`, `inconclusive` (start nothing); `ask` |
 | `archon-split` | Decides whether a large issue is built whole or as pieces, files the next piece as its own issue (once, by a marker), links it `part_of` the item and puts it in triage. | Triage `split`; its own answers | `split` (the pieces come back through triage); `plan`, `build` (built whole); `ask` |
-| `archon-plan` | Chooses the approach, breaks it into verifiable steps and names the validation. | Triage or split `plan`; build or review `replan`; a `replan` answer; its own answers | `planned` (build); `ask` |
-| `archon-build` | Builds the change, commits, pushes and opens a draft pull request; when the change comes back, continues it in the same session on the same branch. | Plan `planned`, investigate `rooted`, triage or split `build`; a return from review, host or land; a `send-back` or `one-more-round` answer; its own answers | `built` (review); `replan`; `ask` |
+| `archon-plan` | Chooses the approach, breaks it into verifiable steps and names the validation. | Link or split `plan`; build or review `replan`; a `replan` answer; its own answers | `planned` (build); `ask` |
+| `archon-build` | Builds the change, commits, pushes and opens a draft pull request; when the change comes back, continues it in the same session on the same branch. | Plan `planned`, investigate `rooted`, link or split `build`; a return from review, host or land; a `send-back` or `one-more-round` answer; its own answers | `built` (review); `replan`; `ask` |
 | `archon-review` | Seven lenses (scope, seams, code, tests, errors, docs, ux), three verifiers on the blocking findings, and one verdict; posts the report on the pull request. Also reviews any pull request by hand. | Build `built` | `approve` (host); `return` (build); `replan`; `ask`. By hand: `ready`, `not_ready` |
 | `archon-host` | Answers the review threads the builder settled, updates the description, checks the merge with the base, reads CI once and takes the pull request out of draft. | Review `approve`; a `take-as-is` answer on a review ask | `ready` (land); `return` (build); `ask` |
 | `archon-land` | Judges the pull request against the project's land policy, merges it pinned to the head whose checks it read, and records the merge on the item. | Host `ready`; a `take-as-is` answer on a host ask; a `land` answer | `merged` (discoveries); `return` (build); `ask` |
@@ -28,13 +29,13 @@ An **operator** is whoever runs the pack: a person, or more often that person's 
 
 ### How the bindings chain them
 
-`.pack/pack.yaml` declares every hand-off under `bindings:`. Three kinds do all the work:
+`.pack/pack.yaml` declares every hand-off under `bindings:`. Four kinds do all the work:
 
 - **A label binding** starts triage when a maintainer adds `archon-triage` to an issue.
   Only someone with triage rights on the repository can add a label, so an issue
   nobody labelled reaches no agent. This is the only intake.
 - **Run-ended bindings** start the next stage when a run on the item completes with an
-  outcome: `plan-after-triage` starts `archon-plan` when triage ends `plan`. From build
+  outcome: `plan-after-link` starts `archon-plan` when link ends `plan`. From build
   on, each stage starts in the checkout the stage before it left (`checkout: ended-run`),
   so the change stays on one branch.
 - **Asks-settled bindings** start a stage when the asks a run left are answered. A
@@ -43,6 +44,9 @@ An **operator** is whoever runs the pack: a person, or more often that person's 
   the option chosen picks the stage: `send-back` the builder, `take-as-is` the next
   stage, `replan` planning, `land` the land stage again, `one-more-round` the builder
   once past its limit; `stop` starts nothing.
+
+- **Linked bindings** start link again on every item that holds a `depends_on` link to an
+  item that just landed or ended without landing, so an item that waits goes on by itself.
 
 Every binding passes `answers: { item: answers }`, so each stage reads every decision
 an operator made on the item so far. A stage reads what an earlier stage returned with a
@@ -118,7 +122,7 @@ merge asked says so in its `land.md`; this repository's does.
 ### 3. Models
 
 Every agent step names an alias that falls back to a tier (`small`, `medium`, `large`):
-`@triage`, `@investigator`, `@split`, `@planner`, `@implementer`, `@reviewer` and the
+`@triage`, `@link`, `@investigator`, `@split`, `@planner`, `@implementer`, `@reviewer` and the
 lens aliases `@review-<lens>` and `@review-route`, `@settle-threads`, `@update-pr-body`,
 `@ci`, `@merge`, `@discoveries`. Nothing needs setting for a first run.
 

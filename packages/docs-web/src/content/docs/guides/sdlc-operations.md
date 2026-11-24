@@ -71,7 +71,7 @@ archon workflow answer --ref ask:<id> --recommended
 archon workflow answer --withdraw ask:<id>
 ```
 
-When every ask a run left is answered, the answer starts the next stage. Most stages start themselves again with your answer as a decision made: triage, investigate, split, plan, build and discoveries. Review, host and land offer fixed options, and the option you choose decides what starts:
+When every ask a run left is answered, the answer starts the next stage. Most stages start themselves again with your answer as a decision made: triage, link, investigate, split, plan, build and discoveries. Link offers `wait` (keep waiting on what it depends on), `start-anyway` (stop waiting and build it now), `drop` (the item ends), and for two overlapping items `keep-this` and `keep-other`. Review, host and land offer fixed options, and the option you choose decides what starts:
 
 | Asked by | Option | Starts |
 |---|---|---|
@@ -85,6 +85,10 @@ When every ask a run left is answered, the answer starts the next stage. Most st
 | review, host, land | `stop` | nothing; land or close the change by hand |
 
 An answer that starts nothing says so: `archon workflow answer` ends with "No trigger binding starts on this settlement, so nothing was started." Every later stage on the item reads every answer given on it, oldest first.
+
+## Items that wait
+
+Triage's `plan` and `build` go through the link stage first, which decides whether the issue can be built now. When it depends on other work still on its way, link records a `depends_on` link to it and ends `waiting`. When that item lands, or ends without landing (triage `close` or `split`, investigate `refuted`), link starts again on every item that depends on it, and places it or asks. `archon workflow runs --item issue-42` lists the item's links.
 
 ## Round limits
 
@@ -104,7 +108,7 @@ When a change lands, the discoveries stage reads what the item's runs recorded o
 
 A binding's start can be refused or left unmatched, for example when a result names nothing the binding reads, or when the checkout a stage was to continue is gone. The run that ended still completes, and the command that ended it prints that the next stage was not started. `archon trigger list` shows the receipt with its reason, and `archon trigger inspect <id>` the detail.
 
-- **A stage that starts on a fresh checkout** (triage, investigate, split, plan, discoveries, and the first build): fix the file, then start it with the inputs the binding would have passed: `archon trigger fire --config ~/.archon/triggers/<file>.json --item issue-<n> --inputs inputs.json`, or `archon workflow run <stage> --item issue-<n> --input issue=<n>`.
+- **A stage that starts on a fresh checkout** (triage, link, investigate, split, plan, discoveries, and the first build): fix the file, then start it with the inputs the binding would have passed: `archon trigger fire --config ~/.archon/triggers/<file>.json --item issue-<n> --inputs inputs.json`, or `archon workflow run <stage> --item issue-<n> --input issue=<n>`.
 - **A stage that continues a checkout** (review, host, land, and a build that continues a change): a fire cannot take a checkout. Adopt the run that holds it: `archon workflow run <stage> --adopt <run-id> --item issue-<n> --input issue=<n>`. For a start after a read-only stage, adopt the run whose checkout that stage was given, `metadata.checkout_handoff.runId` in `archon workflow get <run-id> --json`, or for an answer, `metadata.asks_checkout.handoff.runId`. See [work in the checkout the ended run left](/guides/workflow-triggers/#work-in-the-checkout-the-ended-run-left).
 
 ## Metrics

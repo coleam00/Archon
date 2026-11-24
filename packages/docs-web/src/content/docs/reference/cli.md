@@ -3248,7 +3248,7 @@ A timer binding is written as a complete `trigger fire --config` file. A fire-on
 archon pack bindings sdlc --repo github.com/acme/widgets --host build-host-1 \
   --run-as 2a568f73-e217-40ca-b17d-a784d19fd43a --cwd /srv/archon/widgets --out /srv/archon/bindings
 # a run-ended path the command printed; another repository's file names a different one
-archon trigger add /srv/archon/bindings/sdlc-acme-widgets-plan-after-triage-plan-0297fdfa94d5.json
+archon trigger add /srv/archon/bindings/sdlc-acme-widgets-plan-after-link-plan-0297fdfa94d5.json
 archon trigger check
 ```
 

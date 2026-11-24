@@ -87,7 +87,7 @@ bindings:
       answers: { item: answers }
 
   # After triage: investigate a cause nobody knows, split what cannot be built as one
-  # change, plan what is known but not designed, and build what is ready.
+  # change, and send what is known (to plan) or ready (to build) through the link stage.
   investigate-after-triage:
     workflow: archon-investigate
     resource: investigate
@@ -120,13 +120,59 @@ bindings:
     overlap: queue
     asks_settled: { workflow: archon-split, settled: answered }
     inputs: *asked
-  plan-after-triage:
+  # Link: can it be built now? Triage's `plan` and `build` go through it. It records the
+  # item's links itself, and an item that waits holds a `depends_on` link to what it
+  # waits on: when that item lands or ends without landing, link starts again on every
+  # item that depends on it.
+  link-after-triage:
+    workflow: archon-link
+    resource: link
+    capacity: 3
+    overlap: queue
+    run_ended: { workflow: archon-triage, outcome: [plan, build] }
+    inputs: *ended
+  link-after-answers:
+    workflow: archon-link
+    resource: link
+    capacity: 3
+    overlap: queue
+    asks_settled: { workflow: archon-link, settled: answered }
+    inputs: *asked
+  link-after-blocker-landed:
+    workflow: archon-link
+    resource: link
+    capacity: 3
+    overlap: queue
+    run_ended: { workflow: archon-land, outcome: merged, linked: { kind: depends_on, holder: from } }
+    inputs: &blocker
+      ended: { item: key }
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+  link-after-blocker-closed:
+    workflow: archon-link
+    resource: link
+    capacity: 3
+    overlap: queue
+    run_ended: { workflow: archon-triage, outcome: [close, split], linked: { kind: depends_on, holder: from } }
+    inputs: *blocker
+  link-after-blocker-refuted:
+    workflow: archon-link
+    resource: link
+    capacity: 3
+    overlap: queue
+    run_ended: { workflow: archon-investigate, outcome: refuted, linked: { kind: depends_on, holder: from } }
+    inputs: *blocker
+  plan-after-link:
     workflow: archon-plan
     resource: plan
     capacity: 3
     overlap: queue
-    run_ended: { workflow: archon-triage, outcome: plan }
-    inputs: *ended
+    run_ended: { workflow: archon-link, outcome: plan }
+    inputs: &linked
+      issue: { result: /issue }
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+      answers: { item: answers }
   plan-after-split:
     workflow: archon-plan
     resource: plan
@@ -172,14 +218,15 @@ bindings:
     inputs: *asked
 
   # Build. The first build of an item starts from what planned it: a plan, an
-  # investigation that rooted the cause, or triage's handoff for small specified work.
-  build-after-triage:
+  # investigation that rooted the cause, or triage's handoff for small specified work
+  # that the link stage placed.
+  build-after-link:
     workflow: archon-build
     resource: build
     capacity: 5
     overlap: queue
-    run_ended: { workflow: archon-triage, outcome: build }
-    inputs: *ended
+    run_ended: { workflow: archon-link, outcome: build }
+    inputs: *linked
   build-after-split:
     workflow: archon-build
     resource: build

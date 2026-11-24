@@ -95,7 +95,7 @@ Repository runs get their own git worktree by default, so several can work on on
 The bundled `sdlc` pack is a working factory for a repository:
 
 1. **A maintainer labels an issue `archon-triage`.** `archon-triage` checks it against the current code and decides what it needs: an investigation, a plan, a split into smaller issues, straight to a build, or questions for its author. An issue nobody labelled reaches no agent.
-2. **It gets built.** `archon-plan` or `archon-investigate` decides how, and `archon-build` makes the change and opens a draft pull request. `archon-review` judges it through specialist lenses and sends findings back to the same builder session, round by round, until it approves.
+2. **It gets built.** `archon-link` checks whether it can be built now or waits on other work, `archon-plan` or `archon-investigate` decides how, and `archon-build` makes the change and opens a draft pull request. `archon-review` judges it through specialist lenses and sends findings back to the same builder session, round by round, until it approves.
 3. **It gets landed.** `archon-host` answers review threads, updates the description and reads CI. `archon-land` merges the pull request pinned to the head whose checks it read, when the project's land policy lets it, and asks otherwise.
 4. **You answer what's unclear.** A scope question, a schema change or a stuck round ends its stage with a question on the issue's item, with a recommendation. Your answer starts the stage it chose.
 5. **Nothing found along the way is lost.** Once a change lands, `archon-discoveries` reads what its runs noticed outside their task and files it, tracks it on an existing issue, or drops it.

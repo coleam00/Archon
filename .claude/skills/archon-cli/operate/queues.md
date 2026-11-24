@@ -1,6 +1,6 @@
 ---
 name: archon-cli-queues
-description: Drive the SDLC pack: label intake, its nine stages, following an issue's item, answering what a stage asks, round limits, starting each stage by hand, and installing the bindings that chain the stages. Read when setting up, running or tending the pack.
+description: Drive the SDLC pack: label intake, its ten stages, following an issue's item, answering what a stage asks, round limits, starting each stage by hand, and installing the bindings that chain the stages. Read when setting up, running or tending the pack.
 ---
 
 # Driving the SDLC pack
@@ -14,6 +14,7 @@ own: what happened to an issue is its item's runs, outcomes, asks and answers.
 | Workflow | One run | Ends with |
 |---|---|---|
 | `archon-triage` | Grounds the issue against the code, judges whether a run can start from it, and routes it. Posts questions for the author, what a blocked issue waits on, or closes a duplicate or delivered issue. | `investigate`, `plan`, `build`, `split`; `questions`, `blocked`, `close`, `not_triaged`; `ask` |
+| `archon-link` | Decides whether the issue can be built now, records its `depends_on`, `part_of` and `duplicate_of` links, and places it or holds it until what it waits on lands. Triage's `plan` and `build` go through it. | `plan`, `build`; `waiting`, `fold`, `dropped`, `none`; `ask` |
 | `archon-investigate` | Proves the cause of a symptom and decides the fix. | `rooted`; `refuted`, `inconclusive`; `ask` |
 | `archon-split` | Builds a large issue whole, or files its next piece as an issue linked `part_of` the item and puts it in triage. | `split`; `plan`, `build`; `ask` |
 | `archon-plan` | Chooses the approach and the verifiable steps. | `planned`; `ask` |
@@ -64,8 +65,9 @@ archon workflow answer --ref ask:<id> --choose <option> --text "<why>"
 The answer starts the next stage, so you don't relaunch. Which one depends on the
 option:
 
-- An ask from triage, investigate, split, plan, build or discoveries starts that same
-  stage again with the answers as decisions made. Its options are the stage's own.
+- An ask from triage, link, investigate, split, plan, build or discoveries starts that
+  same stage again with the answers as decisions made. Its options are the stage's own;
+  link offers `wait`, `start-anyway`, `drop`, `keep-this` and `keep-other`.
 - An ask from review or host offers `send-back` (the builder continues with your
   answer), `take-as-is` (the next stage takes the change as it is), `replan` (back to
   planning) and `stop` (nothing more runs; you land or close the change by hand). At
@@ -81,6 +83,13 @@ recommendation fits the user's standing direction, answer it yourself; when it i
 unclear, risky or not decided by anything the user has said, bring it to the user with
 the ask's own summary.
 
+## Waiting items
+
+An item that waits on another holds a `depends_on` link to it, recorded by the link
+stage. When that item lands, or ends without landing (triage `close` or `split`,
+investigate `refuted`), link starts again on every item that waits on it.
+`archon workflow runs --item issue-<n>` lists an item's links.
+
 ## Round limits
 
 A change goes back to its builder at most three times per way back (from review, host
@@ -95,6 +104,7 @@ clone of the repository the pack works on, detached:
 
 ```bash
 archon workflow run archon-triage --item issue-<n> --input issue=<n> --detach
+archon workflow run archon-link --item issue-<n> --input issue=<n> --detach
 archon workflow run archon-plan --item issue-<n> --input issue=<n> --detach
 ```
 

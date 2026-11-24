@@ -36,7 +36,15 @@ Grounds one issue against the current repository: tracker history, current code,
 
 - **Started by** a maintainer adding the label `archon-triage`, or by its own answers.
 - **Inputs**: `issue`.
-- **Outcomes**: `investigate`, `plan`, `build` (small specified work, or an open pull request that already carries the outcome, which the builder continues) and `split` start that stage. `questions` (the author must answer; remove and add the label again once they did), `blocked`, `close` and `not_triaged` (a forge read it needed failed) start nothing. `ask` leaves an operator decision, such as an owner-level product call or a close the policy leaves to a maintainer; the answer starts triage again.
+- **Outcomes**: `investigate` and `split` start that stage. `plan` and `build` (small specified work, or an open pull request that already carries the outcome, which the builder continues) start the link stage, which places the issue in that stage once it can be built. `questions` (the author must answer; remove and add the label again once they did), `blocked`, `close` and `not_triaged` (a forge read it needed failed) start nothing. `ask` leaves an operator decision, such as an owner-level product call or a close the policy leaves to a maintainer; the answer starts triage again.
+
+### `archon-link`
+
+Decides whether an issue that should be built can be built now, and how it relates to the project's other work. The agent checks the state of what the issue would wait on, records its `depends_on`, `part_of` and `duplicate_of` links on the item itself with `archon workflow link`, and places the issue or holds it. Changes nothing in the checkout.
+
+- **Started by** triage `plan` or `build`; an item it holds a `depends_on` link to that landed (land `merged`) or ended without landing (triage `close` or `split`, investigate `refuted`); or its own answers.
+- **Inputs**: `issue` (empty when a blocker ended; the agent reads its own item), `ended`, the key of the item that just ended; reads triage's result and its own last result from the item.
+- **Outcomes**: `plan` and `build` start that stage, by triage's route. `waiting` (it holds a `depends_on` link to each item it waits on), `fold`, `dropped` and `none` start nothing. `ask` offers `wait`, `start-anyway`, `drop`, `keep-this` and `keep-other`; every answer starts link again.
 
 ### `archon-investigate`
 
@@ -58,7 +66,7 @@ Decides whether a large issue is built whole or as the fewest pieces that each p
 
 Turns an issue whose outcome is decided into an implementable plan: the approach with rejected alternatives and what settled each call, verifiable steps, contract coverage and the validation. Changes nothing. The plan is `plan.md`; non-blocking questions are in `open_questions`.
 
-- **Started by** triage or split `plan`, a build or review that ended `replan`, a `replan` answer on a review or host ask, or its own answers.
+- **Started by** link or split `plan`, a build or review that ended `replan`, a `replan` answer on a review or host ask, or its own answers.
 - **Inputs**: `issue`; reads triage, split, and the last build and review from the item.
 - **Outcomes**: `planned` starts the build. `ask` leaves each call that belongs to an operator; the answers start the plan again.
 
@@ -66,7 +74,7 @@ Turns an issue whose outcome is decided into an implementable plan: the approach
 
 Implements the work with focused checks on what it changed, commits, pushes the branch and opens a draft pull request, written to the project's propose policy. When the change comes back from the review, the host, the land stage or an operator, the same node continues it in the session it last had on the item, on the same branch. The report is `implementation.md`, which records the disposition of every finding and review thread that came back.
 
-- **Started by** plan `planned`, investigate `rooted`, triage or split `build`; review, host or land `return`; a `send-back` or `one-more-round` answer; or its own answers.
+- **Started by** plan `planned`, investigate `rooted`, link or split `build`; review, host or land `return`; a `send-back` or `one-more-round` answer; or its own answers.
 - **Inputs**: `issue`, `returned` (the result of the stage that sent the change back; `null` on a first build); reads the latest plan, investigation, triage and split from the item.
 - **Outcomes**: `built` starts the review on the commit it pushed. `replan` starts planning. `ask` leaves a decision that is not the builder's; the answers start the build again in the same session.
 
@@ -117,9 +125,10 @@ Reads what the item's runs recorded outside their change, the review's accepted 
 | Workflow | Starts after | Ends with | Writes |
 |---|---|---|---|
 | `archon-triage` | the `archon-triage` label | `investigate`, `plan`, `build`, `split`, `questions`, `blocked`, `close`, `not_triaged`, `ask` | labels, issue comments, closes |
+| `archon-link` | triage `plan` or `build`, a blocker that ended | `plan`, `build`, `waiting`, `fold`, `dropped`, `none`, `ask` | links on the item |
 | `archon-investigate` | triage `investigate` | `rooted`, `refuted`, `inconclusive`, `ask` | nothing |
 | `archon-split` | triage `split` | `split`, `plan`, `build`, `ask` | new issues, a comment, links |
-| `archon-plan` | triage or split `plan`, `replan` | `planned`, `ask` | nothing |
+| `archon-plan` | link or split `plan`, `replan` | `planned`, `ask` | nothing |
 | `archon-build` | `planned`, `rooted`, `build`, any `return` | `built`, `replan`, `ask` | commits, a draft pull request |
 | `archon-review` | build `built` | `approve`, `return`, `replan`, `ask`; by hand `ready`, `not_ready` | one review comment |
 | `archon-host` | review `approve` | `ready`, `return`, `ask` | thread replies, the description, ready |

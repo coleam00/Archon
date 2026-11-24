@@ -12,6 +12,7 @@ The bundled `sdlc` pack is a software factory made of stages. A maintainer label
 | Stage | What it does |
 |---|---|
 | `archon-triage` | Judges whether a run can start from the issue and routes it to investigate, plan, build or split; asks the author questions, or closes a duplicate or delivered issue |
+| `archon-link` | Decides whether the issue can be built now, records its links to other work, and holds it until what it waits on lands |
 | `archon-investigate` | Proves the root cause of a symptom and decides the fix |
 | `archon-split` | Files the next piece of a large issue as its own issue and puts it in triage |
 | `archon-plan` | Chooses the approach and breaks it into verifiable steps |
