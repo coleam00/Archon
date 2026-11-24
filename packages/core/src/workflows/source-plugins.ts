@@ -379,31 +379,23 @@ export async function loadWebhookSourcePlugins(
           ),
         ],
       };
-      const record = async (acceptance: SourceReceiptAcceptance): Promise<boolean> => {
+      const record = async (acceptance: SourceReceiptAcceptance): Promise<void> => {
         try {
           const admitted = await admit(sourceInstanceId, acceptance);
           if (admitted.outcome === 'conflict') result.conflicts += 1;
           else result.admitted.push({ receiptId: admitted.receiptId, replay: admitted.replay });
-          return admitted.outcome === 'accepted';
         } catch (error) {
           result.failures.push(causeChain(error));
-          return false;
         }
       };
       for (const acceptance of observation.acceptances) await record(acceptance);
-      // A read is seen once every issue it listed is recorded: no read of it failed and each
-      // of its acceptances was admitted. Another read's failure does not hold it back. Until
-      // then the next pass sees it for the first time again, which is safe because that
-      // records only unmatched receipts; an issue whose read failed must not start later as
-      // though its label were new.
-      const unrecorded = new Set(
-        observation.labelFailures.map(({ bindingId, label }) => JSON.stringify([bindingId, label]))
-      );
-      for (const { bindingId, label, acceptance } of observation.labelAcceptances)
-        if (!(await record(acceptance))) unrecorded.add(JSON.stringify([bindingId, label]));
+      for (const { acceptance } of observation.labelAcceptances) await record(acceptance);
+      // A read is seen after its first pass even when some of that pass's reads failed: the
+      // marker's time is the cutoff, and a label added after it starts on a later pass. An
+      // issue whose read failed is compared with the same cutoff when it reads, so a label
+      // it already carried still starts nothing.
       for (const read of labels) {
-        if (read.seenSince !== null || unrecorded.has(JSON.stringify([read.bindingId, read.label])))
-          continue;
+        if (read.seenSince !== null) continue;
         const deliveryId = labelSeenMarker(read);
         await record({
           receipt: {
@@ -457,6 +449,12 @@ export interface ObservedSourceReport {
   reads: number;
   /** Receipts first recorded by this pass; a replay of an earlier pass is not one. */
   receipts: string[];
+  /**
+   * Receipts this pass observed again that an earlier pass, or an earlier process, recorded,
+   * such as a label still on its item. They start nothing new, but a start one recorded may
+   * still be waiting for capacity on its host.
+   */
+  replayed: string[];
   conflicts: number;
   unserved: SourceObservation['unserved'];
   /** The label bindings the source declared it cannot observe. */
@@ -488,7 +486,7 @@ export function createItemWaitObserver(input: {
   const { sources, store, forge } = input;
   if (sources.observing.length === 0) return undefined;
   const lastObserved = new Map<string, number>();
-  // The forge's last answer to when a label was added to an issue, with the issue's
+  // The forge's last answer naming when a label was added to an issue, with the issue's
   // `updatedAt` from the list it was read for. A later label add bumps `updatedAt`, so an
   // unchanged value means the answer is unchanged: replaying it rebuilds the same delivery,
   // which admission records as a replay. Only this process remembers, so its first pass
@@ -621,7 +619,9 @@ export function createItemWaitObserver(input: {
           number: request.number,
           label: request.label,
         });
-        if (updatedAt !== undefined) {
+        // An answer that names no add is not kept: the event can become readable after the
+        // label shows in the list, with no change to `updatedAt` to say so.
+        if (updatedAt !== undefined && answer.added !== null) {
           const memo = labelAddedMemo.get(key) ?? new Map();
           memo.set(item, { updatedAt, answer });
           labelAddedMemo.set(key, memo);
@@ -639,6 +639,9 @@ export function createItemWaitObserver(input: {
       reads: read.size,
       receipts: (admitted?.admitted ?? [])
         .filter(receipt => !receipt.replay)
+        .map(receipt => receipt.receiptId),
+      replayed: (admitted?.admitted ?? [])
+        .filter(receipt => receipt.replay)
         .map(receipt => receipt.receiptId),
       conflicts: admitted?.conflicts ?? 0,
       unserved: admitted?.unserved ?? [],
@@ -678,6 +681,7 @@ export function createItemWaitObserver(input: {
       labels: 0,
       reads: 0,
       receipts: [],
+      replayed: [],
       conflicts: 0,
       unserved: [],
       unservedBindings: source.unservedBindings,

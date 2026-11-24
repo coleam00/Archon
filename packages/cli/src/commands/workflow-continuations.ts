@@ -363,21 +363,21 @@ async function reportEngineChanged(
 }
 
 /**
- * One source's observation, as `wake` reports it. The hosts of the starts it recorded are
- * added to `owed`, which `drainOwed` empties.
+ * How many starts the report's new receipts recorded. Adds the host of each start its
+ * receipts name, new or replayed, to `owed`, which `drainOwed` empties.
  */
-/** How many starts `receipts` recorded; adds each start's host to `owed`. */
 async function owedStarts(
   host: WorkflowHost,
-  receipts: readonly string[],
+  report: Pick<ObservedSourceReport, 'receipts' | 'replayed'>,
   owed: Set<string>
 ): Promise<number> {
   let started = 0;
-  for (const receiptId of receipts)
+  const fresh = new Set(report.receipts);
+  for (const receiptId of [...report.receipts, ...report.replayed])
     for (const binding of (await host.deps.store.getStartReceipt(receiptId))?.bindings ?? []) {
       // A binding recorded as unmatched or rejected has no host and starts nothing.
       if (!binding.hostId) continue;
-      started += 1;
+      if (fresh.has(receiptId)) started += 1;
       owed.add(binding.hostId);
     }
   return started;
@@ -423,7 +423,7 @@ async function reportObserved(
   owed: Set<string>,
   json: boolean
 ): Promise<boolean> {
-  const started = await owedStarts(host, report.receipts, owed);
+  const started = await owedStarts(host, report, owed);
   const { source, waits, labels, reads, conflicts, unserved, unservedBindings, error } = report;
   const ok = error === undefined;
   if (json)
@@ -460,7 +460,11 @@ async function reportObserved(
  * whose drain fails stays owed and is drained again on this process's next pass. Every wake
  * pass also drains the hosts this install's trigger files name (`wakePass`), but a source
  * binding's host is named in the source configuration and may be in no trigger file, so
- * observation drains its own. The owed set lives only in this process.
+ * observation drains its own. A drain that leaves a start queued at capacity succeeds, and
+ * a run that frees the slot may end in a process that does not drain this host, such as
+ * this watch's own resume. So each pass also owes the hosts of the label starts it observes
+ * again: while the label is on its item, a start queued at capacity is admitted on the pass
+ * after its slot frees, in this watch or in one started after it.
  */
 async function drainOwed(
   host: WorkflowHost,
