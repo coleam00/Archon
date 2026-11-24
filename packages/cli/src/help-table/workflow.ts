@@ -363,6 +363,20 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'title',
+      spec: 'workflow title --item <key> --text <title>',
+      description:
+        'Set what an item is called. Every read of the item returns it beside the key.\nSetting it again replaces it',
+      scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description: 'In place of --item: the item the run is on, in its own project',
+        },
+        { spec: '--text <title>', description: 'The title' },
+      ],
+    },
+    {
+      command: 'workflow',
       subcommand: 'landing',
       spec: 'workflow landing --item <key> --branch <name> [--from <start-point>]',
       description:

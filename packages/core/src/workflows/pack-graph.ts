@@ -10,6 +10,7 @@
 import { loadStoreSelection } from '../config/store-selection';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { existsSync } from 'node:fs';
+import { groupProblems, loadPackDocument } from '@archon/workflows/pack-document';
 import {
   buildPackGraph,
   graphLink,
@@ -134,5 +135,23 @@ export async function readPackGraph(
     workflows: [...discovered.workflows, ...(discovered.support ?? [])].map(e => e.workflow),
     discoveryErrors: discovered.errors,
   });
-  return { ...graph, ...copies };
+  // The nearest copy's document, as the nearest copy's bindings are the pack's.
+  const dir = copies.loaded[0]?.dir ?? null;
+  const read = dir === null ? null : await loadPackDocument(dir);
+  const problems =
+    read === null
+      ? []
+      : [
+          ...read.problems,
+          ...groupProblems(
+            read.groups,
+            graph.stages.filter(stage => stage.inFlow).map(stage => stage.workflow)
+          ),
+        ];
+  return {
+    ...graph,
+    ...copies,
+    document: read === null || read.document === null ? null : { path: read.document, problems },
+    groups: read === null || problems.length > 0 ? [] : read.groups,
+  };
 }

@@ -7,7 +7,8 @@ import {
   type WorkflowItem,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
-import { getDatabaseType, pool } from './connection';
+import { RUN_DISPATCH_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
+import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import {
   normalizeWorkflowRun,
@@ -15,6 +16,21 @@ import {
   type WorkflowRunRow,
 } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
+
+interface ItemRow {
+  id: string;
+  project_key: string;
+  key: string;
+  title: string | null;
+}
+/** The columns every read of an item takes, from `remote_agent_items i`. */
+const ITEM_COLUMNS = 'i.id, i.project_key, i.key, i.title';
+const itemOf = (row: ItemRow): WorkflowItem => ({
+  id: row.id,
+  projectKey: row.project_key,
+  key: row.key,
+  title: row.title,
+});
 
 /**
  * The item `key` names in a codebase's project, written on first use; naming it again is
@@ -100,8 +116,8 @@ export async function getItemRuns(
   runs: AttentionRead<WorkflowRun>[];
   descendantIds: string[];
 } | null> {
-  const found = await pool.query<{ id: string; project_key: string; key: string }>(
-    'SELECT id, project_key, key FROM remote_agent_items WHERE project_key = $1 AND key = $2',
+  const found = await pool.query<ItemRow>(
+    `SELECT ${ITEM_COLUMNS} FROM remote_agent_items i WHERE i.project_key = $1 AND i.key = $2`,
     [projectKey, itemKey]
   );
   const row = found.rows[0];
@@ -129,7 +145,7 @@ export async function getItemRuns(
     }
   });
   return {
-    item: { id: row.id, projectKey: row.project_key, key: row.key },
+    item: itemOf(row),
     runs,
     descendantIds: await descendantRunIds(result.rows.map(run => run.id)),
   };
@@ -158,12 +174,12 @@ async function descendantRunIds(roots: readonly string[]): Promise<string[]> {
 }
 
 export async function getItem(id: string): Promise<WorkflowItem | null> {
-  const result = await pool.query<{ id: string; project_key: string; key: string }>(
-    'SELECT id, project_key, key FROM remote_agent_items WHERE id = $1',
+  const result = await pool.query<ItemRow>(
+    `SELECT ${ITEM_COLUMNS} FROM remote_agent_items i WHERE i.id = $1`,
     [id]
   );
   const row = result.rows[0];
-  return row ? { id: row.id, projectKey: row.project_key, key: row.key } : null;
+  return row ? itemOf(row) : null;
 }
 
 /**
@@ -194,13 +210,47 @@ export async function listItemsInWindow(query: {
     after = `AND CAST(i.id AS TEXT) > $${String(params.length)}`;
   }
   params.push(query.limit);
-  const result = await pool.query<{ id: string; project_key: string; key: string }>(
-    `SELECT i.id, i.project_key, i.key FROM remote_agent_items i
+  const result = await pool.query<ItemRow>(
+    `SELECT ${ITEM_COLUMNS} FROM remote_agent_items i
       WHERE i.project_key = $1 ${after}
         AND EXISTS (SELECT 1 FROM remote_agent_workflow_runs r
                      WHERE r.item_id = i.id AND ${from} AND ${to})
       ORDER BY CAST(i.id AS TEXT) LIMIT $${String(params.length)}`,
     params
   );
-  return result.rows.map(row => ({ id: row.id, projectKey: row.project_key, key: row.key }));
+  return result.rows.map(itemOf);
+}
+
+/**
+ * Set the title of the item `key` names in a project, writing the item on first use, so a
+ * title can be given before the item has a run. Setting it again replaces it.
+ */
+export async function recordItemTitle(input: {
+  projectKey: string;
+  key: string;
+  title: string;
+}): Promise<WorkflowItem> {
+  return getDatabase().withTransaction(async query => {
+    const id = await ensureItemInProject(query, input.projectKey, input.key);
+    await query('UPDATE remote_agent_items SET title = $1 WHERE id = $2', [input.title, id]);
+    return { id, projectKey: input.projectKey, key: input.key, title: input.title };
+  });
+}
+
+/**
+ * The packs with a run on an item, by the item's project key: the pack keys those runs
+ * recorded at dispatch (`runPack`). A run that recorded no pack counts for none.
+ */
+export async function listItemPacks(): Promise<ReadonlyMap<string, string[]>> {
+  const pack = getDialect().jsonText('r.metadata', `${RUN_DISPATCH_METADATA_KEY}.pack`);
+  const result = await pool.query<{ project_key: string; pack: string }>(
+    `SELECT DISTINCT i.project_key, ${pack} AS pack
+       FROM remote_agent_workflow_runs r JOIN remote_agent_items i ON i.id = r.item_id
+      WHERE ${pack} IS NOT NULL
+      ORDER BY 2`
+  );
+  const packs = new Map<string, string[]>();
+  for (const row of result.rows)
+    packs.set(row.project_key, [...(packs.get(row.project_key) ?? []), row.pack]);
+  return packs;
 }

@@ -129,6 +129,15 @@ export const workflowPackManifestSchema = z.object({
       entries => new Set(Object.values(entries)).size === Object.keys(entries).length,
       'each entrypoint must name a different workflow file'
     ),
+  /**
+   * The pack's own document: one markdown file, relative to the plugin root, that explains
+   * the pack to an operator. Its frontmatter may declare `groups` of stages for display.
+   */
+  document: z
+    .string()
+    .regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*\.md$/, 'must be a .md file inside the pack')
+    .refine(path => !path.split('/').includes('..'), 'must stay inside the pack')
+    .optional(),
 });
 
 export const pluginManifestSchema = z.discriminatedUnion('kind', [

@@ -24,6 +24,28 @@ Use lowercase words joined by hyphens for `name` and entrypoint names. Each entr
 
 From Archon 0.15.0, Archon ignores a manifest key it does not know, so a manifest that uses a field from a newer Archon still installs on 0.15.0 or later. Releases before 0.15.0 refuse a manifest with any key they do not know, so a pack that must install on them can use only the fields they read. `archon validate workflows` run in the plugin root lists unknown keys as warnings, which catches a misspelled key. An unknown `schemaVersion` is refused. Do not add version, credentials, install scripts, dependencies, or permission grants: none of them is read. `compatibility.archon` is optional; when supplied, installation checks it. Put prerequisites and usage instructions in a `README.md` alongside the manifest. The index links to the README on GitHub; it does not execute plugin code or embed author-supplied HTML.
 
+### The pack's document
+
+A pack may ship one markdown document that explains it to an operator, and name it in the manifest:
+
+```json
+"document": "docs/how-it-works.md"
+```
+
+The path is relative to the plugin root, stays inside the pack and ends in `.md`. Installation refuses a pack whose manifest names a file it does not hold, and `archon validate workflows` run in the plugin root reports a document that is missing or does not read. The document's frontmatter may group the pack's stages for display, in order:
+
+```yaml
+---
+groups:
+  - name: Make
+    stages: [plan, build]
+  - name: Check
+    stages: [review, verify]
+---
+```
+
+A stage is named by its workflow's `name:`, as bindings name it. A stage belongs to at most one group; one in no group keeps a column of its own. A group that names something that is not a workflow of the pack fails validation, and [`archon pack graph`](/reference/cli/#pack-graph) refuses groups that name a workflow work does not flow through. The engine gives the rest of the document no meaning.
+
 To try the pack before you publish or install it, pass its folder as the source: `archon workflow run <workflow> --workflow-source <plugin root>` or `archon pack graph <name> --workflow-source <plugin root>`. Archon reads it as the project pack `<name>`; see [A pack folder as the source](/reference/cli/#a-pack-folder-as-the-source).
 
 ## Tags and executable release assets
