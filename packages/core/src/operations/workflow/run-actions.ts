@@ -16,7 +16,7 @@ import {
 import type { RunActor } from '../run-authorization';
 import { hostname } from 'node:os';
 import { getLog, type OperationContext } from './context';
-import { rootRunIdOf } from './teardown';
+import { isSubrun, rootRunIdOf } from './teardown';
 import { removeRunFiles, type RunFilesReport } from '../../services/cleanup/run-files';
 
 export interface WorkflowStatusData {
@@ -172,13 +172,13 @@ export async function resumeWorkflow(
  * and item from the run's record and starts fresh, without its completed nodes. The line
  * holds only the run id, so it pastes unchanged into any shell.
  *
- * A `workflow:` sub-run gets none: restarting it alone would run the child outside its
- * parent, and the parent is the run to resume or abandon.
+ * A `workflow:` sub-run gets none, also after its parent was deleted: restarting it alone
+ * would run the child outside its parent, and the parent is the run to resume or abandon.
  */
 export function restartCommandFor(
-  run: Pick<WorkflowRun, 'id' | 'parent_run_id'>
+  run: Pick<WorkflowRun, 'id' | 'parent_run_id' | 'metadata'>
 ): string | undefined {
-  return run.parent_run_id ? undefined : `archon workflow run --supersedes ${run.id}`;
+  return isSubrun(run) ? undefined : `archon workflow run --supersedes ${run.id}`;
 }
 
 /**

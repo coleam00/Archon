@@ -90,6 +90,7 @@ describe('write command --json output', () => {
       workflow_name: 'implement',
       status: 'running',
       last_activity_at: new Date('2026-09-20T10:00:00.000Z'),
+      parent_run_id: null,
       metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
     });
     (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -123,6 +124,8 @@ describe('write command --json output', () => {
       id: 'run-ab',
       workflow_name: 'implement',
       status: 'running',
+      parent_run_id: null,
+      metadata: {},
     });
     (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
@@ -309,6 +312,8 @@ describe('workflowResumeCommand', () => {
       workflow_name: 'implement',
       status: 'failed',
       working_path: null,
+      parent_run_id: null,
+      metadata: {},
     });
 
     await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-no-path')).rejects.toThrow(
@@ -318,7 +323,13 @@ describe('workflowResumeCommand', () => {
 
   it('refuses a cancelled run, naming the command that starts it again', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
-    const cancelled = { id: 'run-gone', workflow_name: 'implement', status: 'cancelled' };
+    const cancelled = {
+      id: 'run-gone',
+      workflow_name: 'implement',
+      status: 'cancelled',
+      parent_run_id: null,
+      metadata: {},
+    };
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(cancelled);
 
     await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-gone')).rejects.toThrow(
