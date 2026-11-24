@@ -6,13 +6,14 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import type { StopReason, Usage } from '@earendil-works/pi-ai';
 
-import type { ProviderStopReason } from '@archon/provider-contract';
+import type { ProviderFailureClass, ProviderStopReason } from '@archon/provider-contract';
 
 import type { MessageChunk, ResultChunk } from '../../types';
 import {
   AsyncQueue,
   bridgeSession,
   buildResultChunk,
+  failureClassFromMessage,
   mapPiEvent,
   serializeToolResult,
   tryParseStructuredOutput,
@@ -245,18 +246,80 @@ describe('buildResultChunk', () => {
     }
   });
 
-  // Pi has no typed error taxonomy: a failure is `unknown` whatever its words say,
-  // and the words are kept as evidence.
+  // Pi gives the bridge no typed error, so the class comes from the one structured value
+  // that survives: an HTTP status, which pi-ai writes as the message's first token. The
+  // shapes below were captured from pi-ai 1.3.0 against a stand-in provider answering each
+  // status with a JSON body (`normalizeProviderError` → `formatProviderError`), plus one
+  // real llama.cpp body for the auth case. The vendor's words stay evidence.
   test.each([
-    ['429 Too Many Requests: rate limit exceeded'],
+    ['429: {"message":"probe says 429","type":"probe_error"}', 'rate_limited'],
+    ['429 Too Many Requests: rate limit exceeded', 'rate_limited'],
+    ['429 status code (no body)', 'rate_limited'],
+    ['401: {"type":"authentication_error","message":"missing or wrong API key"}', 'auth'],
+    ['401 Unauthorized: invalid x-api-key', 'auth'],
+    ['403: {"message":"probe says 403","type":"probe_error"}', 'auth'],
+    ['500: {"message":"probe says 500","type":"probe_error"}', 'transient'],
+    ['502: {"message":"probe says 502","type":"probe_error"}', 'transient'],
+    ['503: {"message":"probe says 503","type":"probe_error"}', 'transient'],
+    ['504: {"message":"probe says 504","type":"probe_error"}', 'transient'],
+  ] as [string, ProviderFailureClass][])(
+    'an errored turn "%s" is classified from its leading status',
+    (errorMessage, expected) => {
+      const chunk = buildResultChunk([
+        { role: 'assistant', usage, stopReason: 'error', errorMessage, content: [] },
+      ]);
+      expect(chunk.failure).toEqual({ class: expected, evidence: errorMessage });
+    }
+  );
+
+  // Not a status in the leading position: the turn stays `unknown`, which is what every
+  // unclassifiable failure lands on. A status quoted mid-sentence is not read. The two
+  // observed shapes are here: `Connection error.` is verbatim what pi-ai 1.3.0 reports for
+  // a refused connection (no status and no errno; 1.6 appends the cause chain), and the
+  // engine-restart text below is from a real failed lane run.
+  test.each([
     ['Selected model is at capacity'],
-    ['401 Unauthorized: invalid x-api-key'],
     ["400 invalid_request_error: You're out of extra usage"],
-  ])('an errored turn "%s" reports an unknown failure with the vendor text', errorMessage => {
+    ['Connection error.'],
+    ['the engine stopped unexpectedly (exit code 0)'],
+    ['provider said 429 later in the sentence'],
+    ['2024-06-01T00:00:00Z request expired'],
+    ['5021 is not a status'],
+    // A status the shared table does not classify stays unknown: 408 is not a rate limit,
+    // auth or server error, so it is not guessed at.
+    ['408: {"message":"probe says 408","type":"probe_error"}'],
+  ])('an errored turn "%s" stays unknown', errorMessage => {
     const chunk = buildResultChunk([
       { role: 'assistant', usage, stopReason: 'error', errorMessage, content: [] },
     ]);
     expect(chunk.failure).toEqual({ class: 'unknown', evidence: errorMessage });
+  });
+
+  test.each([
+    ['404 Not Found', 'unknown'],
+    ['201 Created', 'unknown'],
+    [undefined, 'unknown'],
+    ['', 'unknown'],
+  ] as [string | undefined, ProviderFailureClass][])(
+    'a leading status %p maps to %p',
+    (message, expected) => {
+      expect(failureClassFromMessage(message)).toBe(expected);
+    }
+  );
+
+  test('keeps the transport status out of the subtype the operator sees', () => {
+    const chunk = buildResultChunk([
+      {
+        role: 'assistant',
+        usage,
+        stopReason: 'error',
+        errorMessage: '503: {"error":{"message":"restarting"}}',
+        content: [],
+      },
+    ]);
+    if (chunk.type !== 'result') throw new Error('expected result');
+    expect(chunk.errorSubtype).toBe('error');
+    expect(chunk.errors).toEqual(['503: {"error":{"message":"restarting"}}']);
   });
 
   // Pi's stop reasons in ACP's names; one ACP has no name for is left off.

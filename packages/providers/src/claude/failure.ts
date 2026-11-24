@@ -16,7 +16,7 @@ import type {
 import type { ProviderFailure, ProviderFailureClass } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import type { MessageChunk, ResultChunk } from '../types';
-import { ClassifiedProviderError } from '../shared/failure';
+import { ClassifiedProviderError, classOfHttpStatus } from '../shared/failure';
 import { pathKind } from './binary-resolver';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -35,14 +35,6 @@ function sdkErrorClass(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null) return undefined;
   const value = (error as { errorClass?: unknown }).errorClass;
   return typeof value === 'string' ? value : undefined;
-}
-
-/** The class an HTTP status alone can justify. Anything else is `unknown`. */
-function classOfHttpStatus(status: number | null | undefined): ProviderFailureClass {
-  if (status === 429) return 'rate_limited';
-  if (status === 401 || status === 403) return 'auth';
-  if (typeof status === 'number' && status >= 500) return 'transient';
-  return 'unknown';
 }
 
 export function failureOf(failureClass: ProviderFailureClass, evidence: string): ProviderFailure {
