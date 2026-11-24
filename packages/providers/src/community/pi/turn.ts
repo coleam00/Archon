@@ -8,6 +8,7 @@
 import { createLogger } from '@archon/paths';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { MessageChunk, SendQueryOptions, SystemPromptInput } from '../../types';
+import { ClassifiedProviderError } from '../../shared/failure';
 import { resumedOutcome, withResumedOutcome } from '../../shared/resumed';
 import { authorizePiTurn, openTurnModelRuntime, piAuthEnv, resolvePiModel } from './auth';
 import { parsePiConfig, resolvePiExtensionSettings, type PiProviderDefaults } from './config';
@@ -463,16 +464,29 @@ function piCustomTools(
   defaultToolNames: readonly string[] | undefined,
   structuredOutputTool: ToolDefinition | undefined
 ) {
-  const addedTools = [
-    ...(requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
+  const declaredTools =
+    requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
       ? nativeTools.buildPiNativeToolDefinitions(requestOptions.nativeTools)
-      : []),
-    ...(structuredOutputTool ? [structuredOutputTool] : []),
-  ];
+      : [];
+  const addedTools = [...declaredTools, ...(structuredOutputTool ? [structuredOutputTool] : [])];
   const baseTools =
     filteredTools ??
     (addedTools.length > 0
       ? optionsTranslator.buildDefaultPiTools(cwd, requestOptions?.env, defaultToolNames)
       : undefined);
+  // Pi resolves a call by name alone, so a declared tool that shares a name with a
+  // built-in or the structured-output tool would silently run the wrong one.
+  const takenNames = new Set(
+    [...(baseTools ?? []), ...(structuredOutputTool ? [structuredOutputTool] : [])].map(
+      tool => tool.name
+    )
+  );
+  const clash = declaredTools.find(tool => takenNames.has(tool.name));
+  if (clash) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `Tool '${clash.name}' has the name of a tool Pi already offers this node. Rename the declared tool.`
+    );
+  }
   return baseTools && [...baseTools, ...addedTools];
 }

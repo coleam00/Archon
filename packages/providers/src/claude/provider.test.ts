@@ -28,10 +28,11 @@ const mockQuery = mock<MockQuery>(async function* (_params) {
 });
 
 // Mock the claude-agent-sdk
-const sdkToolHandlers = new Map<
-  string,
-  (args: Record<string, unknown>) => Promise<{ content: { type: 'text'; text: string }[] }>
->();
+type SdkToolHandler = (
+  args: Record<string, unknown>,
+  extra: { requestId: number }
+) => Promise<{ content: { type: 'text'; text: string }[] }>;
+const sdkToolHandlers = new Map<string, SdkToolHandler>();
 // Exports these tests never reach fail when called instead of running the real SDK.
 const unmocked = (name: string) => () => {
   throw new Error(`${name} is not mocked`);
@@ -41,13 +42,7 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
     type: 'sdk',
     name,
     instance: {
-      registerTool: (
-        name: string,
-        _config: unknown,
-        handler: (
-          args: Record<string, unknown>
-        ) => Promise<{ content: { type: 'text'; text: string }[] }>
-      ) => {
+      registerTool: (name: string, _config: unknown, handler: SdkToolHandler) => {
         sdkToolHandlers.set(name, handler);
       },
     },
@@ -3599,7 +3594,10 @@ describe('provider contract', () => {
     for (const provider of [createProvider(), overStreams(createProvider, descriptor)]) {
       mockQuery.mockImplementation(async function* ({ options }) {
         expect(options?.mcpServers?.archon).toBeDefined();
-        const result = await sdkToolHandlers.get('manage_run')!({ action: 'inspect' });
+        const result = await sdkToolHandlers.get('manage_run')!(
+          { action: 'inspect' },
+          { requestId: 1 }
+        );
         yield {
           type: 'result',
           subtype: 'success',

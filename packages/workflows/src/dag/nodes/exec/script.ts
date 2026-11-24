@@ -2,6 +2,7 @@ import { scriptInvocation } from '../../../script-invocation';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
+  subprocessCredentialValues,
   type RawSubprocessRejection,
 } from '../../../subprocess';
 import { finishNodeExecution } from '../../../node-execution';
@@ -82,6 +83,33 @@ export async function executeScriptNode(
 }
 
 type ScriptInvocation = ReturnType<typeof scriptInvocation>;
+
+/**
+ * Resolve a named script once for an agent node's tool, so each call of the tool goes
+ * straight to {@link runScript}. `credentialValues` is the set those runs redact.
+ * @throws Error when the script cannot be resolved; RunSourceUnreadableError as a script node does.
+ */
+export async function prepareToolScript(
+  ctx: RunLayersContext,
+  node: ExecNode,
+  execution: NodeExecutionRecord
+): Promise<{
+  invocation: ScriptInvocation;
+  env: NodeJS.ProcessEnv;
+  credentialValues: readonly string[];
+}> {
+  const listings = await writeInvocationListings(ctx);
+  const source = await captureScriptSource(ctx, node.script, execution.path);
+  const invocation = resolveScriptInvocation(ctx, node, node.script, source.namedScripts);
+  if ('errorMsg' in invocation) throw new Error(invocation.errorMsg);
+  const env = scriptEnvironment(ctx, node, listings, execution);
+  const credentialValues = subprocessCredentialValues(ctx.execContext, {
+    env,
+    protectedEnvKeys: ctx.config.protectedEnvKeys,
+    protectedCredentialValues: ctx.config.protectedCredentialValues,
+  });
+  return { invocation, env, credentialValues };
+}
 
 /** Discovered named scripts, the discovery error, or undefined for an inline script. */
 interface ScriptSource {
@@ -288,7 +316,7 @@ async function recheckNamedScriptSource(
   }
 }
 
-async function runScript(
+export async function runScript(
   ctx: RunLayersContext,
   node: ExecNode,
   { command, args, input }: ScriptInvocation,

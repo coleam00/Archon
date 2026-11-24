@@ -129,6 +129,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `skills` | (`string` \| `{ name, optional? }`)[] | unset | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. A string is required. On agent nodes, `{ name, optional: true }` skips a filesystem skill and records why if the provider cannot load named skills or Archon finds no such skill in its known roots. A skill installed only outside the provider's enabled roots is still passed. A required name fails preflight on an unsupported provider; an all-optional list does not. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`. See [Optional skills](/guides/skills/#optional-skills) |
 | `plugins` | string[] | unset | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | unset | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
+| `tools` | object | unset | Named scripts the node's agent can call as tools. Claude, Codex and Pi; any other provider fails the run before it starts. See [Script tools](#script-tools) |
 | `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | unset | Reasoning depth. Every provider with a request-level reasoning control: Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
 | `maxBudgetUsd` | number | unset | USD cost cap; node fails if exceeded. Claude only. Per-node only. For a ceiling across the whole run, see [Run budgets](#run-budgets) |
 | `systemPrompt` | string | unset | Set system instructions for this node (Claude/Codex/Pi/Copilot/OpenCode). Replaces the default `claude_code` prompt on Claude. Per-node only |
@@ -760,6 +761,52 @@ Keys:
 - **`.claude/agents/*.md` (on-disk)**: use when the sub-agent is shared across multiple workflows OR the whole project (for example, a `triage-agent` used by several maintenance workflows). On-disk agents live outside workflow YAMLs and are picked up automatically by the Claude Agent SDK.
 
 Both sources coexist: inline agents and on-disk agents are both available to `Task(subagent_type=...)` at runtime.
+
+### Script tools
+
+An agent node can offer its model named scripts as tools. The agent decides when to call one and reads the result in the same turn; Archon validates the call, runs the script and records it.
+
+```yaml
+nodes:
+  - id: inspect
+    prompt: Look up the checks of pull request $ARGUMENTS and say whether they are green.
+    tools:
+      lookup_checks:
+        description: Get the check status of a pull request
+        script: lookup-checks        # .archon/scripts/lookup-checks.ts
+        input_schema:
+          type: object
+          properties: { pr: { type: integer } }
+          required: [pr]
+        output_schema:
+          type: object
+          properties: { green: { type: boolean } }
+          required: [green]
+        timeout: 30000
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `description` | string | What the tool does, as the model reads it. Required |
+| `script` | string | A named script, resolved the way a `script:` node resolves one. In a pack it resolves inside the pack. Inline code is refused. Required |
+| `input_schema` | object | JSON Schema of the call's arguments. Its root must be `type: object`. Required |
+| `output_schema` | object | JSON Schema of the script's stdout. Required |
+| `timeout` | number | Milliseconds one call may run. Without it a call runs until it exits or the run stops |
+| `deps` | string[] | Dependencies, as on a `script:` node |
+
+A tool name starts with a letter and holds up to 64 letters, digits, `_` or `-`. On Claude the model sees it as `mcp__archon__<name>`.
+
+**A call runs the way a `script:` node runs**: the same script discovery, runtime, environment and execution backend. The arguments arrive as one JSON document on stdin, and stdout must be one JSON document that satisfies `output_schema`.
+
+- Arguments that do not satisfy `input_schema` start no script. The agent gets an error and can correct the call.
+- A script that exits non-zero, runs past its `timeout` or prints output that does not satisfy `output_schema` is also an error returned to the agent. It does not fail the node.
+- A tool whose script cannot be found, or whose schemas cannot be compiled, fails before the model is called.
+
+**A tool must be safe to rerun.** A retried attempt starts the node over and the agent makes its calls again; nothing is replayed from the earlier attempt, and a call that was running when the attempt stopped may have finished or not. Use tools to read: look something up, compute, check. Tools that write are not supported yet, because the engine cannot yet stop a run from continuing automatically after a write whose outcome is unknown ([issue 6182](https://github.com/coleam00/Archon/issues/6182)). Nothing stops a script from writing; a write in a tool is yours to make safe to repeat.
+
+Each call writes one `script_tool_call` event on the run, with the tool name, the provider's call id, the status (`completed` or `failed`), the input, and the output or the error. Credential values the script could see are removed from the event. The node's own output is whatever the agent answers; a tool result is not added to it.
+
+On Pi, a tool named like a tool Pi already offers the node (`read`, `bash`, or `structured_output` on a node with `output_format`) is refused before the model is called. Rename the tool.
 
 ## Durable waits
 
