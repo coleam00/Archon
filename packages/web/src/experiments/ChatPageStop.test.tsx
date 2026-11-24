@@ -54,9 +54,11 @@ const container = document.createElement('div');
 const originalFetch = globalThis.fetch;
 const CONV = 'web-1-abc';
 const requests: string[] = [];
+const cancelBodies: unknown[] = [];
 
 beforeEach(() => {
   requests.length = 0;
+  cancelBodies.length = 0;
   set(K.project('project-1'), {
     id: 'project-1',
     name: 'demo',
@@ -89,6 +91,7 @@ beforeEach(() => {
       const url = String(input);
       requests.push(`${init?.method ?? 'GET'} ${url}`);
       if (url.endsWith(`/api/conversations/${CONV}/cancel`)) {
+        cancelBodies.push(JSON.parse(String(init?.body)));
         return Response.json({ cancelled: true });
       }
       return Response.json([]);
@@ -134,10 +137,12 @@ async function openChat(): Promise<void> {
   expect(FakeEventSource.last?.url).toContain(`/api/stream/${CONV}`);
 }
 
-test('Stop stays while the server holds the turn, calls cancel, and goes when the turn ends', async () => {
+test('Stop stays while the server holds the turn, stops the turn the lock named, and goes when the turn ends', async () => {
   await openChat();
 
-  await act(async () => FakeEventSource.last?.emit({ type: 'conversation_lock', locked: true }));
+  await act(async () =>
+    FakeEventSource.last?.emit({ type: 'conversation_lock', locked: true, turnId: 'turn-1' })
+  );
   expect(stopButton()).toBeDefined();
 
   // A long tool call: no new message for longer than the settle window and the
@@ -147,6 +152,7 @@ test('Stop stays while the server holds the turn, calls cancel, and goes when th
 
   await act(async () => stopButton()?.click());
   expect(requests).toContain(`POST /api/conversations/${CONV}/cancel`);
+  expect(cancelBodies).toEqual([{ turnId: 'turn-1' }]);
 
   await act(async () => FakeEventSource.last?.emit({ type: 'conversation_lock', locked: false }));
   expect(stopButton()).toBeUndefined();

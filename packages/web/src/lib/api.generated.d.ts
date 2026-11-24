@@ -1268,7 +1268,7 @@ export interface paths {
     put?: never;
     /**
      * Stop the in-flight chat reply
-     * @description Aborts the provider call of the reply in progress. The partial reply stays in the conversation, followed by a `chat_interrupted` marker message. Queued messages still run. `cancelled` is false when nothing was in flight or the reply was already stopped.
+     * @description Aborts the provider call of the reply `turnId` names, the id its dispatch returned, while that reply is in progress. The partial reply stays in the conversation, followed by a `chat_interrupted` marker message. Queued messages still run. `cancelled` is false when that reply is not in progress (it ended or has not started) or was already stopped; the conversation's current reply then keeps running.
      */
     post: {
       parameters: {
@@ -1279,7 +1279,11 @@ export interface paths {
         };
         cookie?: never;
       };
-      requestBody?: never;
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CancelConversationBody'];
+        };
+      };
       responses: {
         /** @description Whether a reply was stopped */
         200: {
@@ -5914,6 +5918,7 @@ export interface components {
       conversationId: string;
       id: string;
       dispatched?: boolean;
+      turnId?: string;
     };
     CreateConversationBody: {
       codebaseId?: string;
@@ -5940,6 +5945,7 @@ export interface components {
     DispatchResponse: {
       accepted: boolean;
       status: string;
+      turnId: string;
     };
     SendMessageBody: {
       message: string;
@@ -5951,6 +5957,9 @@ export interface components {
     };
     CancelConversationResponse: {
       cancelled: boolean;
+    };
+    CancelConversationBody: {
+      turnId: string;
     };
     CodebaseListResponse: components['schemas']['Codebase'][];
     Codebase: {
@@ -6124,6 +6133,14 @@ export interface components {
       result?: {
         outcome?: string;
         asks?: string;
+        options?: {
+          /** @description The option's id: kebab-case, one token (e.g. 'keep-the-flag'). The answer names it. */
+          id: string;
+          /** @description What choosing this option does: the change or action that follows from it. */
+          does: string;
+          /** @description What this option costs: what is given up, what breaks, what has to follow. */
+          cost: string;
+        }[];
         waits?: string;
       };
     };

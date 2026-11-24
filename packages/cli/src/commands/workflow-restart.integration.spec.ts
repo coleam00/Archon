@@ -166,3 +166,153 @@ test.skipIf(process.platform === 'win32')(
   },
   120_000
 );
+
+/** Two git repositories under one scratch home, with `archon` on PATH as above. */
+async function twoRepos() {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-restart-')));
+  tempRoots.push(root);
+  const archonHome = join(root, 'home');
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'archon'), `#!/bin/sh\nexec '${process.execPath}' '${CLI_PATH}' "$@"\n`);
+  chmodSync(join(bin, 'archon'), 0o755);
+  const env = {
+    WORKFLOW_ID: '',
+    ARCHON_NODE_EXECUTION: '',
+    ARCHON_TRIGGER_HOST: '',
+    ARCHON_WEBHOOK_SOURCES: '',
+    DATABASE_URL: '',
+    ARCHON_HOME: archonHome,
+    GITHUB_TOKEN: '',
+    GH_TOKEN: '',
+    GITHUB_APP_ID: '',
+    PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`,
+  };
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = await run(
+      ['git', '-c', 'user.name=test', '-c', 'user.email=test@example.com', ...args],
+      cwd,
+      env
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  const repos = [join(root, 'app'), join(root, 'other')];
+  for (const repo of repos) {
+    mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+    writeFileSync(join(repo, '.archon', 'workflows', 'probe.yaml'), PROBE);
+    await git(repo, 'init', '-q', '-b', 'main');
+    await git(repo, 'add', '.');
+    await git(repo, 'commit', '-qm', 'init');
+    const added = await run(['archon', 'project', 'add'], repo, env);
+    expect(added.exitCode, added.stderr + added.stdout).toBe(0);
+  }
+  const rows = (): (Row & { codebase_id: string | null })[] => {
+    const database = new Database(join(archonHome, 'archon.db'), { readonly: true });
+    try {
+      return database
+        .query<Row & { codebase_id: string | null }, []>(
+          'SELECT id, workflow_name, status, working_path, adopted_from_run_id, metadata, codebase_id FROM remote_agent_workflow_runs ORDER BY started_at'
+        )
+        .all();
+    } finally {
+      database.close();
+    }
+  };
+  // What a start whose worktree could not be prepared leaves: failed, with no working path.
+  const failBeforeCheckout = (id: string, metadataPatch: Record<string, unknown> = {}) => {
+    const database = new Database(join(archonHome, 'archon.db'));
+    try {
+      const row = database
+        .query<{ metadata: string }, [string]>(
+          'SELECT metadata FROM remote_agent_workflow_runs WHERE id = ?'
+        )
+        .get(id);
+      const metadata = { ...(JSON.parse(row?.metadata ?? '{}') as object), ...metadataPatch };
+      database
+        .query(
+          "UPDATE remote_agent_workflow_runs SET status = 'failed', working_path = NULL, metadata = ? WHERE id = ?"
+        )
+        .run(JSON.stringify(metadata), id);
+    } finally {
+      database.close();
+    }
+  };
+  const [app = '', other = ''] = repos;
+  return { app, other, env, git, rows, failBeforeCheckout };
+}
+
+test.skipIf(process.platform === 'win32')(
+  "a restart invoked from another project starts in the run's project, on the base it started on",
+  async () => {
+    const { app, other, env, git, rows, failBeforeCheckout } = await twoRepos();
+    await git(app, 'checkout', '-q', '-b', 'release-1');
+    writeFileSync(join(app, 'release.txt'), 'release\n');
+    await git(app, 'add', '.');
+    await git(app, 'commit', '-qm', 'release');
+    const releaseHead = await git(app, 'rev-parse', 'HEAD');
+    await git(app, 'checkout', '-q', 'main');
+
+    const first = await run(
+      ['archon', 'workflow', 'run', '@restart-probe', '--base', 'release-1', '--input', 'note=x'],
+      app,
+      env
+    );
+    expect(first.exitCode, first.stderr + first.stdout).toBe(0);
+    const [started] = rows();
+    if (!started) throw new Error('The first run left no row');
+    failBeforeCheckout(started.id);
+
+    const restarted = await run(
+      ['archon', 'workflow', 'run', '--supersedes', started.id],
+      other,
+      env
+    );
+    expect(restarted.exitCode, restarted.stderr + restarted.stdout).toBe(0);
+    const next = rows().find(row => row.id !== started.id);
+    expect(next).toMatchObject({ codebase_id: started.codebase_id, status: 'paused' });
+    const metadata = JSON.parse(next?.metadata ?? '{}') as {
+      workflow_source?: { definitions?: { from?: string; branch?: string } };
+    };
+    expect(metadata.workflow_source?.definitions).toMatchObject({
+      from: 'base',
+      branch: 'release-1',
+    });
+    // Its worktree is cut from the base, not from the project's default branch.
+    await git(next?.working_path ?? '', 'merge-base', '--is-ancestor', releaseHead, 'HEAD');
+  },
+  120_000
+);
+
+test.skipIf(process.platform === 'win32')(
+  'a restart of a stage that worked on a copy keeps the copy hand-off it was given',
+  async () => {
+    const { app, env, git, rows, failBeforeCheckout } = await twoRepos();
+    const first = await run(
+      ['archon', 'workflow', 'run', '@restart-probe', '--no-worktree', '--input', 'note=x'],
+      app,
+      env
+    );
+    expect(first.exitCode, first.stderr + first.stdout).toBe(0);
+    const [started] = rows();
+    if (!started) throw new Error('The first run left no row');
+    const handoff = {
+      runId: '00000000-0000-4000-8000-000000000001',
+      branch: 'main',
+      commit: await git(app, 'rev-parse', 'HEAD'),
+      lane: 'copy',
+    };
+    failBeforeCheckout(started.id, { checkout_handoff: handoff });
+
+    const restarted = await run(
+      ['archon', 'workflow', 'run', '--supersedes', started.id],
+      app,
+      env
+    );
+    expect(restarted.exitCode, restarted.stderr + restarted.stdout).toBe(0);
+    const next = rows().find(row => row.id !== started.id);
+    expect(next?.status).toBe('paused');
+    expect(JSON.parse(next?.metadata ?? '{}')).toMatchObject({ checkout_handoff: handoff });
+  },
+  120_000
+);

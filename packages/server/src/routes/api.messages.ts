@@ -15,9 +15,16 @@ import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { isConversationOwnershipEnforced } from '../auth';
 import { type OrchestratorDispatch, persistUploadedFiles } from './api-message-dispatch';
 import { authorizeConversation, authorizeDispatchConversation } from './api-request-auth';
-import { apiError, getLog, jsonError, openApiRouteRegistrar } from './api-route-kit';
+import {
+  apiError,
+  getLog,
+  getValidatedBody,
+  jsonError,
+  openApiRouteRegistrar,
+} from './api-route-kit';
 import { toApiMessage } from './api-serializers';
 import {
+  cancelConversationBodySchema,
   cancelConversationResponseSchema,
   conversationIdParamsSchema,
   dispatchResponseSchema,
@@ -85,10 +92,18 @@ const cancelConversationRoute = createRoute({
   tags: ['Conversations'],
   summary: 'Stop the in-flight chat reply',
   description:
-    'Aborts the provider call of the reply in progress. The partial reply stays in the ' +
-    'conversation, followed by a `chat_interrupted` marker message. Queued messages still ' +
-    'run. `cancelled` is false when nothing was in flight or the reply was already stopped.',
-  request: { params: conversationIdParamsSchema },
+    'Aborts the provider call of the reply `turnId` names, the id its dispatch returned, ' +
+    'while that reply is in progress. The partial reply stays in the conversation, followed ' +
+    'by a `chat_interrupted` marker message. Queued messages still run. `cancelled` is false ' +
+    'when that reply is not in progress (it ended or has not started) or was already stopped; ' +
+    "the conversation's current reply then keeps running.",
+  request: {
+    params: conversationIdParamsSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: cancelConversationBodySchema } },
+    },
+  },
   responses: {
     200: {
       content: { 'application/json': { schema: cancelConversationResponseSchema } },
@@ -190,7 +205,8 @@ export function registerMessageRoutes(
     }
     const access = await authorizeDispatchConversation(c, conversationId);
     if ('error' in access) return access.error;
-    return c.json({ cancelled: lockManager.cancel(conversationId) });
+    const { turnId } = getValidatedBody(c, cancelConversationBodySchema);
+    return c.json({ cancelled: lockManager.cancel(conversationId, turnId) });
   });
 
   // GET /api/stream/__dashboard__ — dashboard SSE (workflow lifecycle events)

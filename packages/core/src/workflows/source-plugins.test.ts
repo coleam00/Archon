@@ -663,6 +663,10 @@ async function labelFixture(
           labelFailures.push({ bindingId: read.bindingId, label: read.label, number, reason: error.message });
           continue;
         }
+        if (added.added === null) {
+          labelFailures.push({ bindingId: read.bindingId, label: read.label, number, reason: 'no add' });
+          continue;
+        }
         const deliveryId = 'observe:label:' + number + ':' + added.added.id + ':' + read.bindingId;
         const receipt = {
           id: crypto.randomUUID(),
@@ -708,12 +712,12 @@ async function labelFixture(
 }
 
 /**
- * A forge with open items carrying the label, each with its latest label-added event id:
- * issues, except the pull requests in `prs`. An item in `updated` is listed with that
- * `updatedAt`; any other is listed without one.
+ * A forge with open items carrying the label, each with its latest label-added event id, or
+ * null while the forge records no add: issues, except the pull requests in `prs`. An item
+ * in `updated` is listed with that `updatedAt`; any other is listed without one.
  */
 function labelForge(
-  issues: Map<number, string>,
+  issues: Map<number, string | null>,
   failing = new Set<number>(),
   updated = new Map<number, string>(),
   prs = new Set<number>()
@@ -752,7 +756,10 @@ function labelForge(
       return {
         subject: { kind, ref: { repo, number } },
         name: label,
-        added: { id: issues.get(number) ?? 'none', at: '2026-01-01T00:00:00Z', actor: null },
+        added:
+          issues.get(number) === null
+            ? null
+            : { id: issues.get(number) ?? 'none', at: '2026-01-01T00:00:00Z', actor: null },
       };
     },
   };
@@ -817,44 +824,16 @@ describe('observing label bindings', () => {
     expect(second?.receipts).toEqual(['observe:label:6:event-2:binding-1']);
     expect(matched()).toBe(1);
 
-    // The same label state is a replay.
-    expect((await pass())[0]?.receipts).toEqual([]);
+    // The same label state is a replay, which the report names apart from new receipts.
+    expect((await pass())[0]).toMatchObject({
+      receipts: [],
+      replayed: ['observe:label:5:event-1:binding-1', 'observe:label:6:event-2:binding-1'],
+    });
 
     // Removed and added again: the forge's new event is a new delivery.
     issues.set(6, 'event-3');
     expect((await pass())[0]?.receipts).toEqual(['observe:label:6:event-3:binding-1']);
     expect(matched()).toBe(2);
-  });
-
-  test('a first pass that could not read an issue records no marker, so it seeds again', async () => {
-    const configPath = await labelFixture();
-    const store = receiptStore();
-    const sources = await loadWebhookSourcePlugins(configPath, store.dependencies);
-    const issues = new Map([
-      [5, 'event-1'],
-      [6, 'event-2'],
-    ]);
-    const failing = new Set([6]);
-    const observer = createItemWaitObserver({
-      sources,
-      store: waitStore([]),
-      forge: labelForge(issues, failing),
-    });
-    const start = Date.parse('2026-01-01T00:00:00.000Z');
-    const [first] = (await observer?.pass(new Date(start))) ?? [];
-    expect(first?.error).toContain(
-      "binding 'binding-1' label 'factory' on issue 6: events unavailable"
-    );
-    expect(store.receipts.has(MARKER)).toBe(false);
-
-    // Issue 6 carried the label before the binding was first seen, so it starts nothing.
-    failing.clear();
-    const [second] = (await observer?.pass(new Date(start + 15_000))) ?? [];
-    expect(second?.error).toBeUndefined();
-    expect(store.receipts.has(MARKER)).toBe(true);
-    expect([...store.receipts.values()].every(receipt => receipt.outcome === 'unmatched')).toBe(
-      true
-    );
   });
 
   test('the forge lists only a declared label, and reads only items that list returned, by kind', async () => {
@@ -975,6 +954,31 @@ describe('observing label bindings', () => {
     expect(await pass()).toMatchObject({ reads: ['list factory'], report: { receipts: [] } });
   });
 
+  test('an add the forge did not yet record is read again, and starts once it is', async () => {
+    const sources = await loadWebhookSourcePlugins(
+      await labelFixture(),
+      receiptStore().dependencies
+    );
+    const issues = new Map<number, string | null>();
+    const updated = new Map([[6, '2026-01-01T00:00:10Z']]);
+    const forge = labelForge(issues, new Set(), updated);
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    const start = Date.parse('2026-01-01T00:00:00.000Z');
+    await observer?.pass(new Date(start));
+
+    // The list shows issue 6's label before its event is readable.
+    issues.set(6, null);
+    const [missing] = (await observer?.pass(new Date(start + 15_000))) ?? [];
+    expect(missing?.error).toContain('on issue 6: no add');
+
+    // The issue is unchanged, but the event is readable now.
+    issues.set(6, 'event-1');
+    forge.reads.length = 0;
+    const [found] = (await observer?.pass(new Date(start + 30_000))) ?? [];
+    expect(forge.reads).toEqual(['list factory', 'added 6']);
+    expect(found?.receipts).toEqual(['observe:label:6:event-1:binding-1']);
+  });
+
   test('an issue listed without updatedAt is read on every pass', async () => {
     const sources = await loadWebhookSourcePlugins(
       await labelFixture(),
@@ -1050,6 +1054,7 @@ describe('observing label bindings', () => {
         labels: 0,
         reads: 0,
         receipts: [],
+        replayed: [],
         conflicts: 0,
         unserved: [],
         unservedBindings: [{ bindingId: 'pr-binding', reason: 'issues only' }],

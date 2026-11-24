@@ -19,6 +19,7 @@ import { workflowResourceSchema } from './resource-name';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
 import { modelRefSchema, type WorkflowModelRef } from './model-binding';
 import type { WorkflowPackMember } from './pack-settings';
+import { declaredAskOptionsSchema } from './ask-option';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -296,6 +297,13 @@ export const workflowResultContractSchema = z.strictObject({
    * the write that completes it. A workflow that declares it runs on an item.
    */
   asks: z.string().min(1).optional(),
+  /**
+   * The one set of options every ask of the workflow offers, with `asks`. An answer's option
+   * id routes what starts next, so the workflow owns the ids, what each does and what it
+   * costs; the model writes no options and recommends a declared id or none
+   * (`schemas/item-ask.ts`). Without it, each ask carries the options the model wrote.
+   */
+  options: declaredAskOptionsSchema.optional(),
   /**
    * A property of the returns node's output that holds what the run's item now waits for
    * outside Archon. The engine defines its schema (`schemas/item-wait.ts`) and adds it to

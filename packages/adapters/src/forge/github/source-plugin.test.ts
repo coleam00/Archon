@@ -1101,6 +1101,8 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
     const receipts = new Map<string, SourceReceiptAcceptance>();
     const issues = new Map<number, { id: string; at: string; kind?: 'pr' }>();
     const reads: string[] = [];
+    // Items whose label events the forge cannot read.
+    const failing = new Set<number>();
     const known = { users: (_id: string) => true };
     const forge = {
       commitChecks: async (): Promise<never> => {
@@ -1128,6 +1130,7 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
         label: string;
       }) {
         reads.push(`added ${String(input.number)}`);
+        if (failing.has(input.number)) throw new Error('events unavailable');
         const added = issues.get(input.number);
         return {
           subject: { kind: input.kind, ref: { repo, number: input.number } },
@@ -1185,7 +1188,7 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
       [...receipts.values()]
         .filter(receipt => receipt.outcome === 'matched')
         .map(receipt => receipt.receipt.deliveryId);
-    return { receipts, issues, reads, known, pass, matched };
+    return { receipts, issues, failing, reads, known, pass, matched };
   }
 
   test('an issue reopened after the first sight does not start the label it already had', async () => {
@@ -1199,6 +1202,19 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
     observed.issues.set(7, { id: 'event-8', at: later() });
     await observed.pass([intake()]);
     expect(observed.matched()).toEqual(['observe:label:github.com/owner/repo#7:event-8:intake']);
+  });
+
+  test('a label added while the first pass has a failed read starts once the read recovers', async () => {
+    const observed = install();
+    // Issue 5 carries the label before the binding is first seen, and its events fail to read.
+    observed.issues.set(5, { id: 'event-5', at: '2020-01-01T00:00:00Z' });
+    observed.failing.add(5);
+    expect((await observed.pass([intake()]))?.error).toContain('events unavailable');
+    // Issue 7 is labelled before the pass on which issue 5 reads again.
+    observed.issues.set(7, { id: 'event-7', at: later() });
+    observed.failing.clear();
+    expect((await observed.pass([intake()]))?.error).toBeUndefined();
+    expect(observed.matched()).toEqual(['observe:label:github.com/owner/repo#7:event-7:intake']);
   });
 
   test('changing the item mapping does not start an add already recorded', async () => {

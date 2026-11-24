@@ -82,7 +82,7 @@ curl http://localhost:3090/api/health
 | DELETE | `/api/conversations/{id}` | Soft-delete a conversation |
 | GET | `/api/conversations/{id}/messages` | List messages in a conversation |
 | POST | `/api/conversations/{id}/message` | Send a message to a conversation |
-| POST | `/api/conversations/{id}/cancel` | Stop the in-flight chat reply; returns whether a reply was stopped |
+| POST | `/api/conversations/{id}/cancel` | Stop the chat reply a turn id names; returns whether it was stopped |
 
 ### List Conversations
 
@@ -123,15 +123,17 @@ curl -X POST http://localhost:3090/api/conversations/{id}/message \
   -d '{"message": "What does this codebase do?"}'
 ```
 
-The message is dispatched to the orchestrator asynchronously. The response confirms dispatch -- actual AI responses arrive via SSE streaming or can be polled via the messages endpoint.
+The message is dispatched to the orchestrator asynchronously. The response confirms dispatch -- actual AI responses arrive via SSE streaming or can be polled via the messages endpoint. Its `turnId` names the reply this message started or queued; a stop names the reply by it. A conversation created with a `message` returns the same `turnId`, and the SSE `conversation_lock` event a reply emits when it starts carries its `turnId` too.
 
 ### Stop a Reply
 
 ```bash
-curl -X POST http://localhost:3090/api/conversations/{id}/cancel
+curl -X POST http://localhost:3090/api/conversations/{id}/cancel \
+  -H "Content-Type: application/json" \
+  -d '{"turnId": "<turnId from the send>"}'
 ```
 
-Aborts the provider call of the reply in progress, so it stops spending. The partial reply stays in the conversation, followed by a `Response stopped.` message with category `chat_interrupted`, and the next message continues the same conversation. Messages already queued behind the stopped reply still run. The response is `{"cancelled": true}` when a reply was stopped and `{"cancelled": false}` when nothing was in flight. It needs the same access as sending a message.
+Aborts the provider call of the reply `turnId` names while it is in progress, so it stops spending. The partial reply stays in the conversation, followed by a `Response stopped.` message with category `chat_interrupted`, and the next message continues the same conversation. Messages already queued behind the stopped reply still run, and a stop never stops them: it stops only the reply it names. The response is `{"cancelled": true}` when that reply was stopped and `{"cancelled": false}` when it is not in progress (it ended, has not started, or was already stopped). A request without `turnId` is refused with 400. It needs the same access as sending a message.
 
 ### Get Messages
 
