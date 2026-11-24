@@ -13,7 +13,7 @@ import {
 } from '@archon/forge/operations';
 import type { PrRef } from '@archon/forge';
 import { githubPages, githubRequest, location, type Fetch } from './api';
-import { applied, refused, unverified, type Submit } from './mutation-outcome';
+import { applied, readBackFailed, refused, unverified, type Submit } from './mutation-outcome';
 import { readIssue, subjectRecord } from './workitems';
 import { actor, userSchema } from './actor';
 
@@ -110,8 +110,8 @@ export async function upsertComment(
         `${root}/repos/${path}/issues/comments/${String(written.id)}`
       )
     );
-  } catch {
-    return unverified(request, 'Comment could not be read back', leaveBehind, subject);
+  } catch (cause) {
+    return readBackFailed(request, 'Comment could not be read back', cause, leaveBehind, subject);
   }
   const comment = commentRecord(ref, observed);
   if (

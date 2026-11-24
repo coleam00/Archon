@@ -15,7 +15,7 @@ import {
 import type { PrRef, RepoRef, SourceActor } from '@archon/forge';
 import { GitHubError, githubGraphql, repositoryPath, type Fetch } from './api';
 import { accountType } from './actor';
-import { applied, failure, refused, unverified } from './mutation-outcome';
+import { applied, failure, readBackFailed, refused, unverified } from './mutation-outcome';
 
 const graphqlActorSchema = z
   .object({
@@ -311,8 +311,8 @@ export async function resolveThread(
   let after: { resolved: boolean } | null;
   try {
     after = await readThread(fetchImpl, token, request.ref, request.thread);
-  } catch {
-    return unverified(request, 'Resolved thread could not be read back', leaveBehind);
+  } catch (cause) {
+    return readBackFailed(request, 'Resolved thread could not be read back', cause, leaveBehind);
   }
   return after?.resolved
     ? applied(request, { changed: true, thread: request.thread, resolved: true })

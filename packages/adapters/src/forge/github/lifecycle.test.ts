@@ -328,7 +328,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     });
   });
 
-  test('verification failed: the read-back after an acknowledged write could not run', async () => {
+  test('verification failed: a read-back that could not run keeps its cause', async () => {
     let submitted = false;
     const github = fakeGitHub({
       status: (url, method) => {
@@ -336,7 +336,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
           submitted = true;
           return undefined;
         }
-        return submitted && url.includes('/pulls/7') ? 500 : undefined;
+        return submitted && url.includes('/pulls/7') ? 429 : undefined;
       },
     });
     const response = await run(
@@ -345,7 +345,12 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     );
     expect(response).toMatchObject({
       ok: false,
-      mutation: { op: 'pr.edit-body', outcome: 'verification_failed' },
+      error: { kind: 'rate_limited', status: 429 },
+      mutation: {
+        op: 'pr.edit-body',
+        outcome: 'verification_failed',
+        leaveBehind: 'the pull request body may have changed',
+      },
     });
   });
 

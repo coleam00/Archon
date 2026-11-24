@@ -13,7 +13,14 @@ import {
 import type { ForgeSubjectRef, PrRef, RepoRef } from '@archon/forge';
 import { GitHubError, githubPages, githubRequest, location, type Fetch } from './api';
 import { actor, authorField, userSchema } from './actor';
-import { applied, failure, refused, unverified, type Submit } from './mutation-outcome';
+import {
+  applied,
+  failure,
+  readBackFailed,
+  refused,
+  unverified,
+  type Submit,
+} from './mutation-outcome';
 
 const labelSchema = z.object({
   name: z.string().min(1),
@@ -500,8 +507,8 @@ export async function editWorkItemBody(
   let after: Issue;
   try {
     after = await readIssue(fetchImpl, token, request.ref);
-  } catch {
-    return unverified(request, 'Edited issue could not be read back', leaveBehind);
+  } catch (cause) {
+    return readBackFailed(request, 'Edited issue could not be read back', cause, leaveBehind);
   }
   const observed = issueRecord(request.ref.repo, after, request.ref.number);
   return (after.body ?? '') === request.body

@@ -90,7 +90,7 @@ export async function handleGithubMutation(
   } catch (cause) {
     const error = githubErrorDetail(cause);
     if (progress.phase === 'acknowledged')
-      return unverified(request, error.message, 'the acknowledged write may remain');
+      return unverified(request, error, 'the acknowledged write may remain');
     if (
       progress.phase === 'submitted' &&
       !(cause instanceof GitHubError && cause.definitiveRefusal)

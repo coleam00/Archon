@@ -21,7 +21,7 @@ import type { PrRef } from '@archon/forge';
 import { githubPages, githubRequest, location, type Fetch } from './api';
 import { actor, userSchema } from './actor';
 import { readPullFiles } from './files';
-import { applied, refused, unverified, type Submit } from './mutation-outcome';
+import { applied, readBackFailed, refused, unverified, type Submit } from './mutation-outcome';
 import { prRecord, readPull } from './pull-requests';
 
 type SubmitRequest = Extract<ForgeMutationRequest, { op: 'pr.review.submit' }>;
@@ -332,8 +332,8 @@ export async function submitReview(
       )
     );
     comments = await reviewComments(fetchImpl, token, request.ref, review);
-  } catch {
-    return unverified(request, 'Review could not be read back', leaveBehind);
+  } catch (cause) {
+    return readBackFailed(request, 'Review could not be read back', cause, leaveBehind);
   }
   if (
     String(review.id) !== String(written.data.id) ||

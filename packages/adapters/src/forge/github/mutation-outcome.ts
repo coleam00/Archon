@@ -15,6 +15,7 @@ import {
   type ForgePrRecord,
   type ForgeResponse,
 } from '@archon/forge/operations';
+import { githubErrorDetail } from './api';
 
 /** Records how far a mutation's single write got: submitted, then acknowledged by GitHub. */
 export type Submit = (phase: 'submitted' | 'acknowledged') => void;
@@ -49,6 +50,32 @@ export function unknown(request: ForgeMutationRequest, error: ForgeError): Forge
     outcome: 'outcome_unknown',
   });
 }
+/** What a read-back saw, attached to a `verification_failed` response. */
+type Observed = {
+  pr?: ForgePrRecord;
+  comment?: ForgeCommentRecord;
+  workitem?: ForgeSubjectRecord;
+  label?: ForgeLabelRecord;
+  landed?: z.infer<typeof landedSchema>;
+};
+
+/** The read-back after an acknowledged write could not run: keep its cause behind the context. */
+export function readBackFailed(
+  request: ForgeMutationRequest,
+  context: string,
+  cause: unknown,
+  leaveBehind: string,
+  observed?: Observed
+): ForgeResponse {
+  const error = githubErrorDetail(cause);
+  return unverified(
+    request,
+    { ...error, message: `${context}: ${error.message}` },
+    leaveBehind,
+    observed
+  );
+}
+
 /**
  * A read-back that disagreed is an `invalid_response`; one that could not run passes
  * the forge's own error, so an access failure stays apart from an outage.
@@ -57,13 +84,7 @@ export function unverified(
   request: ForgeMutationRequest,
   cause: string | ForgeError,
   leaveBehind: string,
-  observed?: {
-    pr?: ForgePrRecord;
-    comment?: ForgeCommentRecord;
-    workitem?: ForgeSubjectRecord;
-    label?: ForgeLabelRecord;
-    landed?: z.infer<typeof landedSchema>;
-  }
+  observed?: Observed
 ): ForgeResponse {
   return failure(
     request.operationId,
