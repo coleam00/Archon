@@ -171,6 +171,8 @@ nodes:
       workflow_only: 'from-workflow',
     });
     expect(dispatchOf(run)?.pack).toBe('alpha');
+    // Only what the run was invoked with, so a re-run leaves the rest to their defaults.
+    expect(dispatchOf(run)?.supplied_inputs).toEqual(['supplied']);
   });
 
   it('a flat workflow has no pack and gets no settings', async () => {
