@@ -10,6 +10,13 @@
 import { loadStoreSelection } from '../config/store-selection';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { existsSync } from 'node:fs';
+import { relative } from 'node:path';
+import {
+  projectPackSettingsPath,
+  readProjectPackSettings,
+  validateProjectPackSettings,
+} from '@archon/workflows/pack-settings';
+import { groupProblems, loadPackDocument } from '@archon/workflows/pack-document';
 import {
   buildPackGraph,
   graphLink,
@@ -109,6 +116,29 @@ async function installedArrows(
   return installed;
 }
 
+/** The pack's declared settings with the project's values, and its settings file. */
+async function packSettings(
+  cwd: string,
+  packKey: string,
+  workflows: ReturnType<typeof packWorkflows>
+): Promise<Pick<PackGraph, 'settings' | 'settingsFile'>> {
+  // Every workflow of a pack carries its declaration, and the nearest scope's wins.
+  const pack = workflows.find(entry => entry.workflow.pack?.key === packKey)?.workflow.pack;
+  const problems = pack === undefined ? [] : await validateProjectPackSettings(cwd, pack);
+  const values =
+    pack !== undefined && problems.length === 0 ? await readProjectPackSettings(cwd, pack) : {};
+  return {
+    settings: Object.entries(pack?.settings ?? {}).map(([name, spec]) => ({
+      name,
+      description: spec.description ?? null,
+      type: spec.type,
+      default: spec.default ?? null,
+      value: values[name] ?? null,
+    })),
+    settingsFile: { path: relative(cwd, projectPackSettingsPath(cwd, packKey)), problems },
+  };
+}
+
 export async function readPackGraph(
   cwd: string,
   packKey: string,
@@ -134,5 +164,24 @@ export async function readPackGraph(
     workflows: [...discovered.workflows, ...(discovered.support ?? [])].map(e => e.workflow),
     discoveryErrors: discovered.errors,
   });
-  return { ...graph, ...copies };
+  // The nearest copy's document, as the nearest copy's bindings are the pack's.
+  const dir = copies.loaded[0]?.dir ?? null;
+  const read = dir === null ? null : await loadPackDocument(dir);
+  const problems =
+    read === null
+      ? []
+      : [
+          ...read.problems,
+          ...groupProblems(
+            read.groups,
+            graph.stages.filter(stage => stage.inFlow).map(stage => stage.workflow)
+          ),
+        ];
+  return {
+    ...graph,
+    ...copies,
+    document: read === null || read.document === null ? null : { path: read.document, problems },
+    groups: read === null || problems.length > 0 ? [] : read.groups,
+    ...(await packSettings(cwd, packKey, workflows)),
+  };
 }
