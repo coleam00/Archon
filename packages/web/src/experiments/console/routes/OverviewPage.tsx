@@ -68,35 +68,6 @@ export function flowCounts(
   });
 }
 
-/**
- * The columns whose stages hand work to an earlier column when a run ends: each pair once,
- * in column order. Read from the graph's outcome arrows.
- */
-export function sendsBack(
-  columns: readonly StageGroup[],
-  graph: Pick<PackGraph, 'arrows' | 'stages'>
-): { from: string; to: string }[] {
-  const workflowOf = new Map(graph.stages.map(stage => [stage.name, stage.workflow]));
-  const columnOf = (stage: string): number =>
-    columns.findIndex(column => column.stages.includes(workflowOf.get(stage) ?? stage));
-  const pairs = new Map<string, { from: number; to: number }>();
-  for (const arrow of graph.arrows) {
-    if (!('outcome' in arrow.from)) continue;
-    const from = columnOf(arrow.from.stage);
-    const to = columnOf(arrow.to);
-    if (from > to && to !== -1) pairs.set(`${String(from)}>${String(to)}`, { from, to });
-  }
-  return [...pairs.values()]
-    .sort((a, b) => a.from - b.from || a.to - b.to)
-    .flatMap(({ from, to }) => {
-      const source = columns[from];
-      const target = columns[to];
-      return source === undefined || target === undefined
-        ? []
-        : [{ from: source.name, to: target.name }];
-    });
-}
-
 /** What today's read says: items first started today, and items whose change merged today. */
 export function todayCounts(
   page: Pick<ItemPage, 'items'> | undefined,
@@ -188,13 +159,11 @@ function Headline({
 function Flow({
   board,
   flow,
-  back,
   done,
   landed,
 }: {
   board: string;
   flow: ReturnType<typeof flowCounts>;
-  back: ReturnType<typeof sendsBack>;
   done: number;
   landed: number;
 }): ReactElement {
@@ -243,11 +212,6 @@ function Flow({
           </Link>
         </li>
       </ol>
-      {back.length > 0 ? (
-        <p data-sends-back className="mt-2 text-console-11 text-text-tertiary">
-          ↩ Sends work back: {back.map(pair => `${pair.from} to ${pair.to}`).join(', ')}
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -263,7 +227,7 @@ function PackOverview({
   pack: string;
   moving: ItemRead[];
   asks: { count: number; oldest: string | undefined };
-  /** The top asks, drawn between the numbers and the flow. */
+  /** The top asks, drawn under the flow and the pack's numbers. */
   children?: ReactNode;
 }): ReactElement {
   const { data: graph, error } = useEntity<PackGraph>(K.packGraph(projectId, pack), () =>
@@ -311,19 +275,16 @@ function PackOverview({
             : `${String(counts.entered)} entered today${today.data?.next != null ? ', of the first read' : ''}`}
         </Tile>
       </div>
-      {graph?.metricViews == null ? null : (
-        <Headline projectId={projectId} views={graph.metricViews} />
-      )}
-
-      {children}
-
       <Flow
         board={`/console/p/${projectId}/board`}
         flow={flowCounts(columns, moving)}
-        back={graph === undefined ? [] : sendsBack(columns, graph)}
         done={done.data?.totals?.done ?? 0}
         landed={counts.landed}
       />
+      {graph?.metricViews == null ? null : (
+        <Headline projectId={projectId} views={graph.metricViews} />
+      )}
+      {children}
     </section>
   );
 }
@@ -351,6 +312,7 @@ export function OverviewPage(): ReactElement {
             {...itemAsks}
             asks={itemAsks.asks.slice(0, TOP_ASKS)}
             showProject={false}
+            compact={{ openAt: `/console/p/${projectId}/board` }}
           />
         </div>
         {itemAsks.asks.length > TOP_ASKS ? (
@@ -358,7 +320,7 @@ export function OverviewPage(): ReactElement {
             to="/console/needs-you"
             className="mt-2 inline-block text-console-12 text-accent-bright underline"
           >
-            All {itemAsks.asks.length} that need you
+            {itemAsks.asks.length - TOP_ASKS} more on Needs you
           </Link>
         ) : null}
       </section>

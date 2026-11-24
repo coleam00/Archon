@@ -49,9 +49,11 @@ const second = ask('ask:a2', 'Rename the column?');
 function Harness({
   listed,
   refusals = {},
+  compact,
 }: {
   listed: ItemAsk[];
   refusals?: Record<string, string>;
+  compact?: { openAt: string };
 }): ReactElement {
   const [answered, setAnswered] = useState<AnsweredAsk[]>([]);
   return (
@@ -66,6 +68,7 @@ function Harness({
           setAnswered(prev => [...prev, record]);
         }}
         onDismissItem={() => undefined}
+        compact={compact}
       />
     </MemoryRouter>
   );
@@ -177,6 +180,40 @@ test('an ask with no recommendation says so and marks no option recommended', as
     expect(view.container.textContent).not.toContain('Recommended:');
     expect(buttons(view.container).map(button => button.textContent)).toEqual(['keep', 'drop']);
   } finally {
+    await view.unmount();
+  }
+});
+
+test('the compact form is one row an ask: the recommended option answers it and Open leads to the full ask', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: unknown[] = [];
+  globalThis.fetch = Object.assign(
+    async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return Response.json({ ref: 'ask:a1', action: 'answer', unchanged: false, settled: false });
+    },
+    { preconnect: originalFetch.preconnect }
+  );
+  const view = await mount();
+  try {
+    const open = { ...second, recommendation: undefined };
+    await view.render(<Harness listed={[first, open]} compact={{ openAt: '/board' }} />);
+    const rows = [...view.container.querySelectorAll('[data-ask-ref]')];
+    expect(rows).toHaveLength(2);
+    // The full form's options and costs are not in a row.
+    expect(view.container.textContent).not.toContain('Old configs break.');
+    expect(rows.map(row => buttons(row).length)).toEqual([1, 0]);
+    expect(
+      rows.map(row => row.querySelector('a')?.getAttribute('href')?.startsWith('/board#'))
+    ).toEqual([true, true]);
+    const [recommended] = buttons(rows[0]!);
+    await act(async () => {
+      recommended?.click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(requests).toEqual([{ ref: 'ask:a1', choose: ['keep'] }]);
+  } finally {
+    globalThis.fetch = originalFetch;
     await view.unmount();
   }
 });

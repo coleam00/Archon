@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import type { ItemRead, PackGraph } from '../skills/items';
-import { flowCounts, sendsBack, todayCounts } from './OverviewPage';
+import type { ItemRead } from '../skills/items';
+import { flowCounts, todayCounts } from './OverviewPage';
 
 const columns = [
   { name: 'Make', stages: ['plan', 'build'] },
@@ -32,24 +32,6 @@ test('each column counts the items standing at its stages and the ones that wait
     ['Make', 2, 1],
     ['Check', 1, 0],
   ]);
-});
-
-test('a column sends work back when an outcome of its stage starts a stage of an earlier column', () => {
-  const stage = (name: string) => ({ name: `flow/${name}`, workflow: name });
-  const arrow = (from: object, to: string) => ({ from, to: `flow/${to}` });
-  const graph = {
-    stages: ['plan', 'build', 'check'].map(stage),
-    arrows: [
-      arrow({ stage: 'flow/plan', outcome: 'planned' }, 'build'),
-      arrow({ stage: 'flow/build', outcome: 'built' }, 'check'),
-      arrow({ stage: 'flow/check', outcome: 'return' }, 'build'),
-      arrow({ stage: 'flow/check', outcome: 'replan' }, 'plan'),
-      // An answer is not the end of a run: it draws no arrow back.
-      arrow({ stage: 'flow/check', settled: 'answered' }, 'plan'),
-    ],
-  } as unknown as Pick<PackGraph, 'arrows' | 'stages'>;
-  expect(sendsBack(columns, graph)).toEqual([{ from: 'Check', to: 'Make' }]);
-  expect(sendsBack(columns, { ...graph, arrows: graph.arrows.slice(0, 2) })).toEqual([]);
 });
 
 test('today counts the items first started today and the ones whose change merged today', () => {
