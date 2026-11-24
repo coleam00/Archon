@@ -2189,6 +2189,16 @@ describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#
     });
   });
 
+  it('records that the outcome was final, and only then', async () => {
+    const final = createMockStore();
+    await run(final, { stage: 'landed', why: 'merged' });
+    expect(completedMetadata(final)?.item_final).toBe(true);
+
+    const stopped = createMockStore();
+    await run(stopped, { stage: 'replan', why: 'x' });
+    expect(completedMetadata(stopped)).not.toHaveProperty('item_final');
+  });
+
   it.each([
     ['ended in a final outcome', { stage: 'landed', why: 'merged' }, {}],
     ['left an ask', { stage: 'replan', why: 'x', asks: [anAsk] }, { asks: true }],

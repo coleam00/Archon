@@ -38,6 +38,7 @@ import { projectAddCommand } from './project';
 import { workflowLinkCommand } from './workflow-link';
 import { workflowItemsCommand } from './workflow-items';
 import { workflowLandingCommand } from './workflow-landing';
+import { workflowTitleCommand } from './workflow-title';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
@@ -737,6 +738,29 @@ test.serial(
     const again = await link({ end: recorded.id });
     expect(again.exitCode).toBe(1);
     expect(JSON.parse(again.stdout)).toEqual({ ok: false, error: 'already_ended' });
+  }
+);
+
+test.serial(
+  'a title set on an item is read with it, and setting it again replaces it',
+  async () => {
+    const title = (request: Parameters<typeof workflowTitleCommand>[2]) =>
+      invoke(host => workflowTitleCommand(host, projectRoot, request, true));
+    succeeded(await title({ item: 'item-1', text: 'First try' }));
+    // By the run's own item, as a script sets it.
+    const onItem = runsWithItems().find(row => row.item_key === 'item-1');
+    if (!onItem) throw new Error('Expected a run on item-1');
+    expect(succeeded(await title({ itemOf: onItem.id, text: '  Ship the order  ' }))).toMatchObject(
+      {
+        key: 'item-1',
+        title: 'Ship the order',
+      }
+    );
+    expect((await readItemJson('item-1')).item.title).toBe('Ship the order');
+
+    const blank = await title({ item: 'item-1', text: '   ' });
+    expect(blank.exitCode).toBe(1);
+    expect((await readItemJson('item-1')).item.title).toBe('Ship the order');
   }
 );
 

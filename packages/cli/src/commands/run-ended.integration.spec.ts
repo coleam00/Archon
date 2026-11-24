@@ -397,7 +397,10 @@ describe('a run-ended binding', () => {
     mkdirSync(join(pack, '.pack'), { recursive: true });
     writeFileSync(
       join(pack, '.pack', 'pack.yaml'),
-      `bindings:
+      `inputs:
+  greeting: { default: hi, description: How the pack greets. }
+  farewell: { default: bye }
+bindings:
   build:
     workflow: chain-build
     resource: build
@@ -430,8 +433,24 @@ describe('a run-ended binding', () => {
     expect(written.runEnded).toEqual([]);
     const graph = async () =>
       packGraphSchema.parse(JSON.parse(await fixture.cli(['pack', 'graph', 'chain', '--json'])));
+    // The project sets one of the pack's two settings.
+    mkdirSync(join(fixture.projectRoot, '.archon', 'packs'), { recursive: true });
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'packs', 'chain.yaml'),
+      'settings:\n  greeting: hello\n'
+    );
     const declared = await graph();
     expect(declared.stages.map(stage => stage.name).sort()).toEqual(['chain-build', 'chain-plan']);
+    expect(
+      declared.settings.map(({ name, default: fallback, value }) => [name, fallback, value])
+    ).toEqual([
+      ['greeting', 'hi', 'hello'],
+      ['farewell', 'bye', null],
+    ]);
+    expect(declared.settingsFile).toEqual({
+      path: join('.archon', 'packs', 'chain.yaml'),
+      problems: [],
+    });
     expect(declared.arrows).toEqual([
       {
         from: { stage: 'chain-plan', outcome: 'planned' },
@@ -452,6 +471,10 @@ describe('a run-ended binding', () => {
       runEnded: { workflowName: string; problems: string[] }[];
     };
     expect(listed.runEnded).toMatchObject([{ workflowName: 'chain-build', problems: [] }]);
+    // The registered binding's resource is listed with the stage it starts; nothing runs yet.
+    expect((await graph()).capacity.map(slot => [slot.stages, slot.held, slot.limit])).toEqual([
+      [['chain-build'], 0, null],
+    ]);
     const [arrow] = (await graph()).arrows;
     expect(arrow).toMatchObject({ active: true, declared: { binding: 'build', problems: [] } });
     if (!arrow?.active) throw new Error('the copied file did not activate the arrow');
@@ -486,6 +509,8 @@ describe('a run-ended binding', () => {
       runId: runs[0]?.id,
       sourceInstanceId: arrowId,
     });
+    // The build's start recorded its slot's capacity, and the ended run holds it no longer.
+    expect((await graph()).capacity.map(slot => [slot.held, slot.limit])).toEqual([[0, 1]]);
   }, 90_000);
 
   test('a linked binding starts the stage on the order each time a member ends, naming the member', async () => {

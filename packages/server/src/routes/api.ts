@@ -8,6 +8,7 @@ import {
 } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as codebaseDb from '@archon/core/db/codebases';
+import { listSlotOccupancy } from '@archon/core/db/resource-slots';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
@@ -146,6 +147,7 @@ export function registerApiRoutes(
           loadConfig,
           providers: providerRegistry,
           triggersDirectory: getTriggersPath,
+          slotOccupancy: listSlotOccupancy,
           projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
           projectOf: path => registeredProjectForPath(path, codebaseDb),
         },
