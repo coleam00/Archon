@@ -1865,6 +1865,39 @@ describe('DELETE /api/workflows/:name', () => {
     }
   });
 
+  test("a malformed root manifest leaves the project's other workflows reachable", async () => {
+    const testDir = join(tmpdir(), `wf-pack-folder-malformed-${Date.now()}`);
+    const flatFile = join(testDir, '.archon', 'workflows', 'other.yaml');
+    await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+    await writeFile(join(testDir, 'archon-plugin.json'), '{ not json');
+    await writeFile(flatFile, 'name: other\ndescription: Before\nnodes: []\n');
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementation(async () => [{ default_cwd: testDir }]);
+
+      const fetched = await app.request(`/api/workflows/other?cwd=${testDir}`);
+      expect(fetched.status).toBe(200);
+
+      const saved = await app.request(`/api/workflows/other?cwd=${testDir}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ definition: { name: 'other', description: 'After', nodes: [] } }),
+      });
+      expect(saved.status).toBe(200);
+      expect(await readFile(flatFile, 'utf-8')).toContain('description: After');
+
+      const deleted = await app.request(`/api/workflows/other?cwd=${testDir}`, {
+        method: 'DELETE',
+      });
+      expect(deleted.status).toBe(200);
+      await expect(access(flatFile)).rejects.toThrow();
+    } finally {
+      mockListCodebases.mockImplementation(async () => [{ default_cwd: '/tmp/project' }]);
+      await removeTempTree(testDir);
+    }
+  });
+
   test('refuses to delete when the name matches a malformed packaged workflow folder', async () => {
     const testDir = join(tmpdir(), `wf-delete-crowded-packaged-${Date.now()}`);
     const workflowsRoot = join(testDir, '.archon', 'workflows');
