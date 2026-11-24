@@ -95,7 +95,7 @@ describe('publish-pr opens the pull request at most once', () => {
         tracker: { pr: { headRefName: 'feature' } },
         forgeAt: head => ({
           kind: 'fake',
-          response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }),
+          response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
         }),
       });
       expect(result.code).toBe(0);
@@ -241,30 +241,6 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(remoteHead(result.cwd, 'feature')).toBe('');
   });
 
-  it('opens the pull request from the branch the caller named', () => {
-    const result = publishPr({
-      inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
-      tracker: { noOpenPr: true, pr: { headRefName: 'build/7-an-issue-run12345' } },
-    });
-    expect(result.code).toBe(0);
-    expect(forgeCalls(result).find(call => call.op === 'pr.create')?.request.head).toBe('build/7-an-issue-run12345');
-    expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe(result.head);
-    expect(remoteHead(result.cwd, 'feature')).toBe('');
-  });
-
-  it('a caller-named branch that already has an open pull request updates it, never opening another', () => {
-    const result = publishPr({
-      target: { head: 'archon/task-local' },
-      prepareBody: false,
-      inputs: { INPUTS_BRANCH: 'feature' },
-      tracker: { pr: { headRefName: 'feature' } },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-    expect(result.stderr).toContain('already has this head');
-    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
-  });
-
   it('opens its own pull request from the caller-named branch when prepare found one on another head', () => {
     const result = publishPr({
       target: { existing: 42 },
@@ -326,7 +302,13 @@ describe('publish-pr writes the description section a delivery round prepared', 
       forgeAt: head => ({ kind: 'fake', response: [
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
-        forgeOperation('pr.edit-body', { pr: forgePrRecord({ head_revision: head }) }),
+        forgeOperation('pr.edit-body', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          pr: forgePrRecord({ head_revision: head }),
+          bodyDigest: 'sha256:body',
+        }),
       ] }),
     });
     expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });

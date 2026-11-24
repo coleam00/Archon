@@ -59,7 +59,6 @@ Each stage picks its model from a concern alias, falling back to the tier it has
 | `@discoveries` | the discoveries decision | `large` |
 | `@split` | the split queue's slicing | `large` |
 | `@test-value-judge` | the test-value metric's judge | `large` |
-| `@review-eval-judge` | the review bench's judge | `large` |
 
 ```bash
 archon ai alias set @reviewer codex gpt-6.1-sol                                   # every run

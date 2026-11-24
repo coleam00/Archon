@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { FakePr, MergeForgeSetup } from './fixtures/fake-merge-forge';
 import { trackTempRoots } from './temp-roots';
 import type { BuildRecord } from '../../workflows/sdlc/.shared/build';
 import { gateRefusals, type MergeRecord, type MergeStart, type PrFacts } from '../../workflows/sdlc/.shared/merge';
@@ -189,81 +190,18 @@ function stored(at: Install, number = SUBJECT.number): { revision: number; value
   });
 }
 
-/** The pull request the forge reports, and what a merge does to it. */
-interface FakePr {
-  readonly state?: 'OPEN' | 'MERGED' | 'CLOSED';
-  readonly headRefOid?: string;
-  /** CI at the head; `unknown` is a forge unit state that is neither green nor pending. */
-  readonly checks?: 'green' | 'pending' | 'red' | 'unknown';
-  readonly threads?: number;
-  /** The default branch's head as the pull request's merge state reports it. */
-  readonly baseRevision?: string;
-  /** The merge is accepted and the pull request stays open, as when the forge queues merges. */
-  readonly queuesMerge?: boolean;
-  /** The merge is applied but names no landed commit, which the contract allows. */
-  readonly landsNoCommit?: boolean;
-  /** Commits of the default branch the head lacks. */
-  readonly behind?: number;
-  /** The head conflicts with the default branch. */
-  readonly conflicts?: boolean;
-  /** CI on the default branch's head; green when unset. */
-  readonly baseChecks?: 'green' | 'red' | 'pending';
-  readonly baseUnreadable?: boolean;
-  /** The head `pr.merge-state` reports, when it answers about another commit than `pr.view`. */
-  readonly mergeStateHead?: string;
-  /** The revision `checks.state` reports, when it answers about another commit than `pr.view`. */
-  readonly checksRevision?: string;
-  /** The paths `pr.files` reports the pull request changes. */
-  readonly files?: readonly string[];
-  /** The revision `pr.files` reports, when the head moved between the gate's reads. */
-  readonly filesRevision?: string;
-}
-
-/**
- * Answers the merge queue's `archon forge` operations through the fake archon command,
- * logging each call it answers to `{ARTIFACTS}/forge-gh.log`.
- */
+/** Installs the merge facts' forge (./fixtures/fake-merge-forge.ts), logging to `{ARTIFACTS}/forge-gh.log`. */
 function forgePreload(pr: FakePr): string {
+  const setup: MergeForgeSetup = {
+    command: FAKE_ARCHON,
+    log: '{ARTIFACTS}/forge-gh.log',
+    head: HEAD,
+    base: OLD,
+    prUrlPrefix: PR_URL.replace(/42$/, ''),
+  };
   return `
-const forgePr = { state: 'OPEN', headRefOid: ${JSON.stringify(HEAD)}, checks: 'green', threads: 0, mergeCommit: null, ...${JSON.stringify(pr)} };
-const harness = Bun.spawnSync.bind(Bun);
-const forgeOp = (op, request) => {
-  appendFileSync('{ARTIFACTS}/forge-gh.log', 'forge ' + op + (op === 'pr.merge' ? ' ' + request.method + ' ' + request.conditions.head : '') + '\\n');
-  const out = (ok, value) => ({ exitCode: ok ? 0 : 1, stdout: Buffer.from(JSON.stringify(ok ? { operationId: 'op', ok, result: { op, value } } : { operationId: 'op', ok, ...value })), stderr: Buffer.from('') });
-  const failed = (message, mutation) => out(false, { error: { kind: 'forge_error', message }, ...(mutation ? { mutation } : {}) });
-  const ref = request.ref ?? request.subject?.ref ?? request.selector?.ref;
-  const units = state => [{ unit: { kind: 'check', id: '1', name: 'test' }, state }];
-  const state = () => forgePr.state.toLowerCase();
-  // The harness's forge resolves a pull request URL.
-  if (op === 'resolve') return null;
-  if (op === 'checks.commit') return forgePr.baseUnreadable ? failed('HTTP 502 reading base') : out(true, { repo: request.repo, branch: 'dev', revision: ${JSON.stringify(OLD)}, units: units(forgePr.baseChecks ?? 'green') });
-  if (op === 'pr.merge') {
-    if (request.conditions.head !== forgePr.headRefOid) return failed('Head branch was modified', { op, target: ref, outcome: 'refused' });
-    if (forgePr.queuesMerge) return failed('the pull request reads back open', { op, target: ref, outcome: 'verification_failed', leaveBehind: 'a queued merge' });
-    forgePr.state = 'MERGED';
-    forgePr.mergeCommit = '3333333333333333333333333333333333333333';
-    return out(true, { target: ref, outcome: 'applied', changed: true, method: request.method, conditions: request.conditions, enforcedConditions: ['head'], landed: { commit: forgePr.landsNoCommit ? null : forgePr.mergeCommit, tree: null, parents: null } });
-  }
-  if (op === 'pr.view') {
-    appendFileSync('{ARTIFACTS}/forge-gh.log', 'snapshot\\n');
-    const url = ${JSON.stringify(PR_URL.replace(/42$/, ''))} + ref.number;
-    return out(true, { title: 'Fix the thing', body: '', pr: { schemaVersion: 1, repo: ref.repo, number: ref.number, url, head: 'feature', base: 'dev', is_draft: false, state: state(), head_repo: ref.repo, head_revision: forgePr.headRefOid, base_revision: null, maintainer_can_modify: null } });
-  }
-  if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.mergeStateHead ?? forgePr.headRefOid, base_branch: 'dev', base_revision: forgePr.baseRevision ?? ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
-  if (op === 'checks.state') return out(true, { ref, revision: forgePr.checksRevision ?? forgePr.headRefOid, units: units(forgePr.checks) });
-  if (op === 'pr.files') return out(true, { ref, head_revision: forgePr.filesRevision ?? forgePr.headRefOid, files: (forgePr.files ?? []).map(path => ({ path, previous_path: null, status: 'modified', patch: null })) });
-  if (op === 'pr.threads') return out(true, { ref, threads: Array.from({ length: forgePr.threads }, (_, index) => ({ id: 'thread-' + index, resolved: false, comments: [{ url: 'thread' }] })) });
-  if (op === 'workitem.comments') return out(true, { comments: comments.filter(row => row.issue === undefined).map(row => ({
-    id: String(row.id), body: row.body, url: ${JSON.stringify(PR_URL)} + '#issuecomment-' + row.id,
-    author: row.author === undefined ? null : { host: ref.repo.host, id: '1', login: row.author },
-  })) });
-  // Issue reads and writes go to the harness's stateful fake forge.
-  return null;
-};
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  if (argv[1] === ${JSON.stringify(FAKE_ARCHON)} && argv[2] === 'forge') return forgeOp(argv[3], JSON.parse(readFileSync(argv[argv.indexOf('--data-file') + 1], 'utf8'))) ?? harness(argv, settings);
-  return harness(argv, settings);
-} });
+import { installMergeForge } from ${JSON.stringify(resolve(import.meta.dir, 'fixtures/fake-merge-forge.ts'))};
+installMergeForge(${JSON.stringify(pr)}, ${JSON.stringify(setup)});
 `;
 }
 
