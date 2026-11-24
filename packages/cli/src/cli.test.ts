@@ -1957,6 +1957,16 @@ describe('pre-dispatch gates --json error envelope', () => {
           envelope: { id: runId, codebase_id: 'codebase' },
         });
       }
+      // A short prefix resolves only in a project: refused here with the full id named,
+      // and resolved when the caller selects the run's project.
+      const prefix = read(['get', runId.slice(0, 8)]);
+      expect(prefix.status).toBe(1);
+      expect(prefix.envelope().error).toContain('pass the full run id');
+      const scoped = read(['get', runId.slice(0, 8), '--chat-project-id', 'codebase']);
+      expect({ status: scoped.status, envelope: scoped.envelope() }).toMatchObject({
+        status: 0,
+        envelope: { id: runId },
+      });
       // Each read answered for the run; the gate would have refused the directory.
       const missingGet = read(['get', missing]);
       expect({ status: missingGet.status, envelope: missingGet.envelope() }).toMatchObject({

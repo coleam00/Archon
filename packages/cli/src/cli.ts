@@ -11,7 +11,7 @@
 // any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
 import '@archon/paths/strip-cwd-env-boot';
 // Capture explicit chat scope before loading Archon env or command modules.
-import './workflow-scope';
+import { readChatProjectScope } from './workflow-scope';
 // Load Archon env before command imports. loadCliEnv preserves inherited workflow
 // identity and prevents repository env from redirecting the user's stored gh login.
 import { loadCliEnv } from './load-cli-env';
@@ -424,8 +424,8 @@ const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing'];
 
 /**
  * Reads of one run by id. A full run id names one run in the whole store, so these
- * resolve no project for it and run from any directory. A short prefix resolves in the
- * directory's project, and outside one is passed through to the read. `wait --item`
+ * resolve no project for it and run from any directory. A short prefix resolves only in
+ * the directory's project or the selected chat project. `wait --item`
  * resolves its item in the project, so it is not one.
  */
 const BY_ID_READS = ['get', 'logs', 'artifacts', 'wait'];
@@ -482,7 +482,17 @@ async function resolveRegisteredCwd(
     const host = await createCliWorkflowHost();
     const { codebase, repoRoot } = await resolveCodebaseForPath(realCwd, host.records.codebases);
     if (!repoRoot && codebase?.kind !== 'folder') {
-      if (isByIdRead(ctx)) return realCwd;
+      // Full ids returned before project resolution, so a by-id read here names a short
+      // prefix. Prefixes resolve within one project: the selected chat project when one is
+      // named, otherwise there is no project to resolve it in.
+      if (isByIdRead(ctx)) {
+        if (readChatProjectScope() !== undefined) return realCwd;
+        return await fail(
+          ctx.json,
+          `Error: Short run id '${ctx.positionals[2] ?? ''}' resolves only in the run's project.\n` +
+            'Run from the project directory, or pass the full run id.'
+        );
+      }
       return await fail(
         ctx.json,
         'Error: Not in a git repository.\n' +
