@@ -1,11 +1,9 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
-import { getArchonHome } from '@archon/paths';
 import {
   drainResourceStartHost,
   isPreparationStageFailure,
@@ -43,16 +41,8 @@ import {
 } from '../utils/detached-run-control';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { addTriggerFile } from '../triggers/add-trigger-file';
-import {
-  inspectNativeSchedule,
-  installNativeSchedule,
-  listNativeSchedules,
-  removeNativeSchedule,
-  scheduleLabel,
-  type InstalledSchedule,
-  type NativeScheduleOptions,
-  type NativeScheduleTarget,
-} from '../triggers/native-schedule';
+import type { NativeScheduleOptions } from '../triggers/native-schedule';
+import { isScheduleOperation, scheduleTrigger } from './trigger-schedule';
 import { fireConfig } from '../triggers/fire-binding-check';
 import { resolveCliUserId } from './auth';
 import { readCallingNode } from '../utils/calling-node';
@@ -61,18 +51,10 @@ import { checkTriggers } from './trigger-check';
 
 export { spawnAdmitted } from '../utils/spawn-admitted';
 
-/** A configuration a clock can start. One without `schedule` is fire-only and is not this. */
-type TimerTriggerConfig = TriggerConfig & {
-  schedule: NonNullable<TriggerConfig['schedule']>;
-};
 /** The input names a binding maps, for a message that tells the operator what to pass. */
 function mappedNames(inputs: Readonly<Record<string, unknown>> | undefined): string {
   const names = Object.keys(inputs ?? {});
   return names.length === 0 ? 'it maps none' : names.join(', ');
-}
-
-function isTimerConfig(config: TriggerConfig): config is TimerTriggerConfig {
-  return config.schedule !== undefined;
 }
 
 async function loadFireConfig(path: string): Promise<TriggerConfig> {
@@ -662,115 +644,20 @@ async function withdrawTrigger(host: WorkflowHost, args: string[]): Promise<void
   await writeJsonLine({ requestId: args[0], withdrawn: true });
 }
 
-function triggerScheduleId(
-  archonHome: string,
-  sourceInstanceId: string,
-  bindingId: string
-): string {
-  return createHash('sha256')
-    .update(JSON.stringify([archonHome, sourceInstanceId, bindingId]))
-    .digest('hex');
-}
-
-/**
- * The binding's installed jobs, found by the home each job records rather than by the
- * caller's spelling of ARCHON_HOME: `listNativeSchedules` decides which jobs belong to this
- * install, and a job's id is the hash of the home it was installed under. So `/x/`, `/x` and
- * a symlink to it all find the same job, including one installed before this lookup existed.
- * A job whose definition cannot be read has no recorded home; it matches only under the
- * current spelling, the one label we can still compute.
- */
-async function installedTriggerJobs(
-  config: TriggerConfig,
-  schedules: NativeScheduleOptions
-): Promise<{ target: NativeScheduleTarget; schedule: InstalledSchedule }[]> {
-  const matches: { target: NativeScheduleTarget; schedule: InstalledSchedule }[] = [];
-  for (const schedule of await listNativeSchedules(getArchonHome(), schedules)) {
-    const archonHome = 'archonHome' in schedule ? schedule.archonHome : getArchonHome();
-    const id = triggerScheduleId(archonHome, config.sourceInstanceId, config.binding.bindingId);
-    if (schedule.label === scheduleLabel(id))
-      matches.push({ target: { id, archonHome }, schedule });
-  }
-  return matches;
-}
-
-async function scheduleTrigger(
+async function scheduleTriggerCommand(
   host: WorkflowHost,
   args: string[],
   options: TriggerOptions,
   schedules: NativeScheduleOptions
 ): Promise<void> {
   const operation = args[0];
-  if (
-    !options.config ||
-    (operation !== 'install' && operation !== 'remove' && operation !== 'status')
-  )
+  if (!options.config || !isScheduleOperation(operation))
     throw new Error(
       'Usage: archon trigger schedule <install|remove|status> --config <timer-binding.json>'
     );
   const config = await loadFireConfig(options.config);
-  const bindingId = config.binding.bindingId;
-  const installed = await installedTriggerJobs(config, schedules);
-  // Remove and status need no schedule, so a timer installed before the file lost its
-  // `schedule` can still be inspected and removed.
-  if (operation === 'status') {
-    const [first, ...others] = installed;
-    const status = first ? await inspectNativeSchedule(first.target, schedules) : undefined;
-    await writeJsonLine({
-      bindingId,
-      schedule: operation,
-      ...(status ? { installed: true, ...status } : { installed: false }),
-      ...(others.length > 0 ? { duplicates: others.map(job => job.schedule.definition) } : {}),
-    });
-    return;
-  }
-  if (operation === 'remove') {
-    if (installed.length === 0)
-      throw new Error(`No timer is installed for binding '${bindingId}' under this ARCHON_HOME.`);
-    for (const job of installed) await removeNativeSchedule(job.target, schedules);
-    await writeJsonLine({
-      bindingId,
-      schedule: operation,
-      removed: installed.map(job => job.schedule.definition),
-    });
-    return;
-  }
-  if (!isTimerConfig(config))
-    throw new Error(
-      `Binding '${bindingId}' is fire-only: its configuration has no schedule, so there is no timer to install. Start it with: archon trigger fire --config ${options.config}`
-    );
-  const id = triggerScheduleId(getArchonHome(), config.sourceInstanceId, bindingId);
-  const elsewhere = installed.filter(job => job.target.id !== id);
-  if (elsewhere.length > 0)
-    throw new Error(
-      `Binding '${bindingId}' already has a timer installed under another spelling of this ARCHON_HOME: ${elsewhere.map(job => job.schedule.definition).join(', ')}. ` +
-        `Remove it (\`archon trigger schedule remove --config ${options.config}\`), then install again.`
-    );
-  await assertKnownRunAsUser(host, config);
-  await installTimer(config, id, resolve(options.config), schedules);
-  await writeJsonLine({ bindingId, schedule: operation });
-}
-
-/** Only a timer configuration can be installed; the type refuses a fire-only one. */
-async function installTimer(
-  config: TimerTriggerConfig,
-  scheduleId: string,
-  configPath: string,
-  schedules: NativeScheduleOptions
-): Promise<void> {
-  const [executable, ...prefix] = cliProgramArguments();
-  await installNativeSchedule(
-    {
-      id: scheduleId,
-      programArguments: [executable, ...prefix, 'trigger', 'fire', '--config', configPath],
-      workingDirectory: config.binding.launch.cwd,
-      archonHome: getArchonHome(),
-      path: process.env.PATH ?? '',
-      schedule: config.schedule,
-      output: 'log',
-      removeCommand: `archon trigger schedule remove --config ${configPath}`,
-    },
-    schedules
+  await scheduleTrigger(operation, options.config, config, schedules, () =>
+    assertKnownRunAsUser(host, config)
   );
 }
 
@@ -833,7 +720,7 @@ export async function triggerCommand(
     case 'withdraw':
       return withdrawTrigger(host, args);
     case 'schedule':
-      return scheduleTrigger(host, args, options, dependencies.schedules ?? {});
+      return scheduleTriggerCommand(host, args, options, dependencies.schedules ?? {});
     default:
       throw new Error(
         'Usage: archon trigger <fire|drain|execute|list|add|check|inspect|withdraw|recover-preparation|schedule|whoami>'

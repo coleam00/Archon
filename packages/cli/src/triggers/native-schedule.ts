@@ -237,7 +237,10 @@ export async function installedLabels(directory: string, suffix: string): Promis
     .sort();
 }
 
-/** Reads each job's definition with `read`; a file `read` cannot parse is kept, as unreadable. */
+/**
+ * Reads each job's definition with `read`. A file that cannot be read or parsed is kept, as
+ * unreadable, so one bad file does not hide every other job from the listing.
+ */
 export async function readInstalled(
   labels: readonly string[],
   definition: (label: string) => string,
@@ -247,15 +250,21 @@ export async function readInstalled(
   const installed: InstalledSchedule[] = [];
   for (const label of labels) {
     const path = definition(label);
-    const contents = await readExisting(path);
-    // Deleted between the listing and the read: nothing is installed under it any more.
-    if (contents === undefined) continue;
-    const job = read(contents.toString('utf8'));
+    let contents: Buffer | undefined;
+    let readError: string | undefined;
+    try {
+      contents = await readExisting(path);
+      // Deleted between the listing and the read: nothing is installed under it any more.
+      if (contents === undefined) continue;
+    } catch (error) {
+      readError = `${path} cannot be read: ${errorMessage(error)}`;
+    }
+    const job = contents === undefined ? undefined : read(contents.toString('utf8'));
     installed.push({
       label,
       definition: path,
       removeByHand: removeByHand(label),
-      ...(job ?? { unreadable: `${path} is not a job definition Archon wrote` }),
+      ...(job ?? { unreadable: readError ?? `${path} is not a job definition Archon wrote` }),
     });
   }
   return installed;
@@ -438,15 +447,24 @@ export async function listNativeSchedules(
   const platform = options.platform ?? process.platform;
   const backend = backendFor(platform, archonHome, options);
   if (!backend) return [];
-  // ARCHON_HOME is taken as written, so another spelling of the same directory (a trailing
-  // slash, a symlink) is the same install. Compare the directory, not the text.
-  const { resolve } = platform === 'win32' ? win32 : posix;
-  // A home that no longer exists has no real path; its resolved text is all there is.
-  const identity = (path: string): Promise<string> => realpath(path).catch(() => resolve(path));
-  const home = await identity(archonHome);
+  const home = await archonHomeIdentity(archonHome, platform);
   const installed: InstalledSchedule[] = [];
   for (const entry of await backend.installed())
-    if (!('archonHome' in entry) || (await identity(entry.archonHome)) === home)
+    if (!('archonHome' in entry) || (await archonHomeIdentity(entry.archonHome, platform)) === home)
       installed.push(entry);
   return installed;
+}
+
+/**
+ * Which install an `ARCHON_HOME` names. It is taken as written, so another spelling of the
+ * same directory (a trailing slash, a symlink) is the same install: this is the directory,
+ * not the text. A home that no longer exists has no real path; its resolved text is all
+ * there is.
+ */
+export function archonHomeIdentity(
+  archonHome: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<string> {
+  const { resolve } = platform === 'win32' ? win32 : posix;
+  return realpath(archonHome).catch(() => resolve(archonHome));
 }

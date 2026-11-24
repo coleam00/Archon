@@ -1,12 +1,14 @@
 // @archon-test-isolated
+// @archon-test-windows
 /**
  * `archon trigger schedule` finds a binding's timer by the install it belongs to, however
  * ARCHON_HOME is spelled, and a remove that finds nothing fails.
  */
 import { afterEach, expect, spyOn, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { loadConfig } from '@archon/core/config/config-loader';
@@ -16,7 +18,7 @@ import {
   createInMemoryWorkflowHostStore,
   createInMemoryWorkflowStore,
 } from '../test-support/workflow-store';
-import type { NativeScheduleOptions } from '../triggers/native-schedule';
+import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
 import { triggerCommand } from './trigger';
 
 const tempRoots = trackTempRoots();
@@ -31,8 +33,9 @@ async function fixture() {
   const root = tempRoots(await realpath(await mkdtemp(join(tmpdir(), 'archon-trigger-schedule-'))));
   const home = join(root, 'home');
   const linked = join(root, 'linked-home');
-  const launchAgents = join(root, 'LaunchAgents');
+  const otherHome = join(root, 'other-home');
   await mkdir(home);
+  await mkdir(otherHome);
   await symlink(home, linked);
   const records = createInMemoryWorkflowHostStore();
   const store = createInMemoryWorkflowStore(records);
@@ -70,17 +73,29 @@ async function fixture() {
       schedule: { intervalSeconds: 1800, runAtLoad: false },
     })
   );
-  const schedules: NativeScheduleOptions = {
-    platform: 'darwin',
-    uid: 501,
-    launchAgentsDirectory: launchAgents,
-    runCommand: async () => undefined,
-  };
-  /** Runs one `schedule` operation with ARCHON_HOME spelled `archonHome`; returns what it printed. */
-  const schedule = async (
-    operation: string,
-    archonHome: string
-  ): Promise<Record<string, unknown>> => {
+  const runCommand: NativeScheduleOptions['runCommand'] = async () => undefined;
+  // A job is validated by its scheduler's path rules, so the scheduler must accept this
+  // host's paths: Task Scheduler on Windows, launchd elsewhere. Task Scheduler keeps a job's
+  // files under the home it was installed for; launchd keeps every home's in one directory.
+  const { schedules, jobDirectory, suffix } =
+    process.platform === 'win32'
+      ? {
+          schedules: { platform: 'win32', windowsUserId: 'me', runCommand } as const,
+          jobDirectory: join(home, 'schedules'),
+          suffix: '.xml',
+        }
+      : {
+          schedules: {
+            platform: 'darwin',
+            uid: 501,
+            launchAgentsDirectory: join(root, 'LaunchAgents'),
+            runCommand,
+          } as const,
+          jobDirectory: join(root, 'LaunchAgents'),
+          suffix: '.plist',
+        };
+  /** Runs one `schedule` operation with ARCHON_HOME spelled `archonHome`; resolves to what it printed. */
+  const run = async (operation: string, archonHome: string): Promise<string> => {
     process.env.ARCHON_HOME = archonHome;
     let printed = '';
     const stdout = spyOn(process.stdout, 'write').mockImplementation(((
@@ -99,18 +114,38 @@ async function fixture() {
     } finally {
       stdout.mockRestore();
     }
-    return JSON.parse(printed) as Record<string, unknown>;
+    return printed;
   };
+  const schedule = async (operation: string, archonHome: string) =>
+    JSON.parse(await run(operation, archonHome)) as Record<string, unknown>;
   const jobFiles = async (): Promise<string[]> =>
-    (await readdir(launchAgents).catch(() => [])).filter(name =>
-      name.startsWith('com.archon.trigger.')
+    (await readdir(jobDirectory).catch(() => [])).filter(
+      name => name.startsWith('com.archon.trigger.') && name.endsWith(suffix)
     );
-  return { home, linked, schedule, jobFiles };
+  /** A job as Archon named it before the id was taken from the home's identity. */
+  const installLegacy = async (archonHome: string): Promise<void> => {
+    await installNativeSchedule(
+      {
+        id: createHash('sha256')
+          .update(JSON.stringify([archonHome, 'timer', 'timer']))
+          .digest('hex'),
+        programArguments: [process.execPath, 'trigger', 'fire', '--config', configPath],
+        workingDirectory: root,
+        archonHome,
+        path: process.env.PATH ?? '',
+        schedule: { intervalSeconds: 1800, runAtLoad: false },
+        output: 'log',
+        removeCommand: `archon trigger schedule remove --config ${configPath}`,
+      },
+      schedules
+    );
+  };
+  return { home, linked, otherHome, run, schedule, jobFiles, installLegacy };
 }
 
 test('status and remove find a timer installed under another spelling of the same home', async () => {
   const { home, linked, schedule, jobFiles } = await fixture();
-  await schedule('install', `${home}/`);
+  await schedule('install', `${home}${sep}`);
   expect(await jobFiles()).toHaveLength(1);
 
   expect(await schedule('status', home)).toMatchObject({ installed: true });
@@ -121,16 +156,43 @@ test('status and remove find a timer installed under another spelling of the sam
   expect(await jobFiles()).toEqual([]);
 });
 
-test('install under another spelling refuses instead of adding a second job', async () => {
-  const { home, schedule, jobFiles } = await fixture();
-  await schedule('install', `${home}/`);
+test('every spelling of a home installs the one job', async () => {
+  const { home, linked, schedule, jobFiles } = await fixture();
+  await schedule('install', `${home}${sep}`);
   const [installed] = await jobFiles();
 
-  await expect(schedule('install', home)).rejects.toThrow();
+  await schedule('install', home).catch(() => undefined);
+  await schedule('install', linked).catch(() => undefined);
+  expect(await jobFiles()).toEqual([installed]);
+
+  await schedule('remove', home);
+  await schedule('install', linked);
   expect(await jobFiles()).toEqual([installed]);
 });
 
+test('a timer installed before the id followed the home identity is found and not duplicated', async () => {
+  const { home, linked, schedule, jobFiles, installLegacy } = await fixture();
+  for (const spelling of [home, linked]) {
+    await installLegacy(`${home}${sep}`);
+    expect(await schedule('status', spelling)).toMatchObject({ installed: true });
+    await expect(schedule('install', spelling)).rejects.toThrow();
+    expect(await jobFiles()).toHaveLength(1);
+    await schedule('remove', spelling);
+    expect(await jobFiles()).toEqual([]);
+  }
+});
+
+test('another home sharing the scheduler does not see or remove this home’s timer', async () => {
+  const { home, otherHome, schedule, run, jobFiles } = await fixture();
+  await schedule('install', home);
+  const installed = await jobFiles();
+
+  expect(await schedule('status', otherHome)).toMatchObject({ installed: false });
+  await expect(run('remove', otherHome)).rejects.toThrow();
+  expect(await jobFiles()).toEqual(installed);
+});
+
 test('remove with no timer installed fails rather than reporting a removal', async () => {
-  const { home, schedule } = await fixture();
-  await expect(schedule('remove', home)).rejects.toThrow();
+  const { home, run } = await fixture();
+  await expect(run('remove', home)).rejects.toThrow();
 });
