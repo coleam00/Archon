@@ -117,13 +117,14 @@ export async function serveProvider(
           ? {
               nativeTools: nativeTools.map(spec => ({
                 ...spec,
-                handler: async (input): Promise<string> =>
+                handler: async (input, call): Promise<string> =>
                   rpc.parse(
                     toolCallResponseSchema,
                     await rpc.request('_archon/tool_call', {
                       sessionId: params.sessionId,
                       name: spec.name,
                       input,
+                      providerCallId: call?.providerCallId,
                     })
                   ).text,
               })),

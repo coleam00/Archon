@@ -3,8 +3,6 @@ import { Type, StringEnum, type TSchema } from '@earendil-works/pi-ai';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { NativeTool, NativeToolInputSchema, NativeToolProperty } from '../../types';
 
-type TObject = ReturnType<typeof Type.Object>;
-
 function typeBoxFieldForProperty(prop: NativeToolProperty): TSchema {
   switch (prop.kind) {
     case 'string':
@@ -22,12 +20,13 @@ function typeBoxFieldForProperty(prop: NativeToolProperty): TSchema {
 }
 
 /**
- * Map a native tool's typed input shape to the TypeBox object Pi's `defineTool`
- * expects. Deliberately flat: a property is a string, a string enum, or a
- * boolean, and `required` decides whether it is optional.
+ * Map a native tool's input shape to the TypeBox schema Pi's `defineTool` expects.
+ * An authored JSON Schema passes through as written. The flat form is a string, a
+ * string enum, or a boolean per property, and `required` decides whether it is optional.
  */
-export function nativeToolInputToTypeBox(input: NativeToolInputSchema): TObject {
+export function nativeToolInputToTypeBox(input: NativeToolInputSchema): TSchema {
   nativeToolInputParser(input);
+  if ('jsonSchema' in input) return Type.Unsafe(input.jsonSchema);
   const shape: Record<string, TSchema> = {};
   for (const [key, prop] of Object.entries(input.properties)) {
     let field = typeBoxFieldForProperty(prop);
@@ -53,13 +52,15 @@ export function buildPiNativeToolDefinitions(nativeTools: NativeTool[]): ToolDef
       description: spec.description,
       parameters: nativeToolInputToTypeBox(spec.inputSchema),
       execute: async (
-        _toolCallId,
+        toolCallId,
         params
       ): Promise<{ content: { type: 'text'; text: string }[]; details: undefined }> => ({
         content: [
           {
             type: 'text',
-            text: await spec.handler(nativeToolInputParser(spec.inputSchema).parse(params)),
+            text: await spec.handler(nativeToolInputParser(spec.inputSchema).parse(params), {
+              providerCallId: toolCallId,
+            }),
           },
         ],
         details: undefined,

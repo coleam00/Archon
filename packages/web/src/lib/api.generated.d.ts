@@ -6335,6 +6335,20 @@ export interface components {
           maxTurns?: number;
         };
       };
+      tools?: {
+        [key: string]: {
+          description: string;
+          script: string;
+          input_schema: {
+            [key: string]: unknown;
+          };
+          output_schema: {
+            [key: string]: unknown;
+          };
+          timeout?: number;
+          deps?: string[];
+        };
+      };
       pi?: {
         enableExtensions?: boolean;
         interactive?: boolean;

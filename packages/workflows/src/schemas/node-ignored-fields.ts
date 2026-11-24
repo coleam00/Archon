@@ -36,6 +36,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'skills',
   'plugins',
   'agents',
+  'tools',
   'pi',
   'effort',
   'maxBudgetUsd',

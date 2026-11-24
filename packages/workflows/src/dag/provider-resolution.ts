@@ -605,8 +605,9 @@ function reportedEffort(
  * would produce output from a setup its author did not intend, so a mismatch fails
  * the run instead of warning like the other capability axes. An `mcp:` or skill
  * declared `optional: true` names no requirement; resolution records its absence.
+ * `tools:` is honoured by the `nativeTools` capability.
  */
-export const SCOPED_CAPABILITIES = ['mcp', 'skills', 'plugins'] as const;
+export const SCOPED_CAPABILITIES = ['mcp', 'skills', 'plugins', 'nativeTools'] as const;
 
 export type ScopedCapability = (typeof SCOPED_CAPABILITIES)[number];
 
@@ -622,6 +623,8 @@ export function namesScopedCapability(node: DagNode, capability: ScopedCapabilit
       );
     case 'plugins':
       return 'plugins' in node && (node.plugins?.length ?? 0) > 0;
+    case 'nativeTools':
+      return node.kind === 'agent' && node.tools !== undefined;
   }
 }
 

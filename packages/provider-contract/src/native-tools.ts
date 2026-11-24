@@ -20,8 +20,16 @@ function zodFieldForProperty(prop: NativeToolProperty): z.ZodType<string | boole
   }
 }
 
-export function nativeToolInputParser(input: NativeToolInputSchema) {
+/**
+ * The Zod parser a provider checks a call's arguments with and derives the advertised
+ * JSON Schema from. An authored `jsonSchema` rides along as metadata, so it is advertised
+ * as written while the parser accepts any object: the tool's handler validates it.
+ */
+export function nativeToolInputParser(
+  input: NativeToolInputSchema
+): z.ZodType<Record<string, unknown>> {
   nativeToolInputSchema.parse(input);
+  if ('jsonSchema' in input) return z.looseObject({}).meta(input.jsonSchema);
   const shape: Record<string, z.ZodType<string | boolean | undefined>> = {};
   for (const [key, prop] of Object.entries(input.properties)) {
     let field = zodFieldForProperty(prop);
