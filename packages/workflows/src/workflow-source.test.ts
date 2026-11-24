@@ -244,6 +244,8 @@ describe('captureWorkflowSource', () => {
     await writeFile(join(source, '.archon', 'scripts', '__pycache__', 'main.pyc'), 'junk');
     await mkdir(join(source, '.archon', 'scripts', 'node_modules', 'dep'), { recursive: true });
     await writeFile(join(source, '.archon', 'scripts', 'node_modules', 'dep', 'i.js'), 'dep();');
+    await mkdir(join(source, '.archon', 'scripts', '.venv', 'lib'), { recursive: true });
+    await writeFile(join(source, '.archon', 'scripts', '.venv', 'lib', 'dep.py'), 'dep()');
 
     const capture = await captureWorkflowSource({
       sourceRoot: source,
@@ -260,6 +262,9 @@ describe('captureWorkflowSource', () => {
         'utf-8'
       )
     ).toBe('dep();');
+    expect(
+      await readFile(join(capture.anchor.root, 'project/.archon/scripts/.venv/lib/dep.py'), 'utf-8')
+    ).toBe('dep()');
     await expect(
       readFile(join(capture.anchor.root, 'project/.archon/scripts/__pycache__/main.pyc'), 'utf-8')
     ).rejects.toThrow();
@@ -494,6 +499,46 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
     const capture = await loadWorkflowSource(captureRoot, digest);
     expect(capture.manifest.digest).toBe(digest);
   });
+});
+
+/**
+ * Captures written before `.env` files were left out still hold them, and their recorded
+ * digest covers them. Verification must hash what the capture holds, not what a new
+ * capture would take, or every such paused run fails its resume.
+ */
+test('a capture that holds a .env from before the exclusion still verifies and loads', async () => {
+  const captureRoot = join(await createTempRoot(), 'runs', 'pre-exclusion-run');
+  const files: readonly (readonly [string, string])[] = [
+    ['project/.archon/workflows/alpha.yaml', 'name: alpha\n'],
+    ['project/.archon/scripts/read-env.ts', 'console.log(1);\n'],
+    ['project/.archon/scripts/.env', 'SECRET=1\n'],
+  ];
+  for (const [relPath, content] of files) {
+    const target = join(captureRoot, ...relPath.split('/'));
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content);
+  }
+  const digest = '6fcb455797e87fa576967fbbfa46add0e92b94d0903330593e92a78693289d51';
+  await writeFile(
+    join(captureRoot, 'manifest.json'),
+    `${JSON.stringify({
+      version: 1,
+      engine_version: '0.0.0-pre-exclusion',
+      origin: '/somewhere/else',
+      captured_at: '2026-01-01T00:00:00.000Z',
+      digest,
+      file_count: files.length,
+      byte_count: 39,
+      scopes: ['project'],
+      source_config: DEFAULT_WORKFLOW_SOURCE_CONFIG,
+    })}\n`
+  );
+
+  const capture = await loadWorkflowSource(captureRoot, digest);
+  expect(capture.manifest.digest).toBe(digest);
+  expect(await readFile(join(captureRoot, 'project', '.archon', 'scripts', '.env'), 'utf-8')).toBe(
+    'SECRET=1\n'
+  );
 });
 
 describe('resolving against a capture instead of the target', () => {

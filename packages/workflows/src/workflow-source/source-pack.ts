@@ -8,7 +8,7 @@ import {
 } from '@archon/plugin-manifest';
 import { hasGitMarker, runGit } from '../checkout-observation';
 import { isReservedScopeDirName } from '../workflow-discovery/pack-layout';
-import { isDirectory, listTree, skipsEnvFile, type TreeFile, type TreeListing } from './tree';
+import { isDirectory, isEnvFile, listTree, type TreeFile, type TreeListing } from './tree';
 
 /**
  * A pack's own folder given as the workflow source: the folder whose root holds a
@@ -103,7 +103,7 @@ export async function loadablePackFolder(dir: string): Promise<SourcePackFolder 
  * files plus untracked ones git does not ignore, so a root `.env`, `node_modules` or build
  * output stay out; outside git, the whole tree. It never holds the folder's own `.archon/`,
  * whose source directories the capture freezes as for any project, or a `.env` file
- * (`skipsEnvFile`, the rule every capture job holds; `listTree` applies it to the rest).
+ * (`isEnvFile`, the rule every capture job holds).
  *
  * A manifest that does not read as a pack (invalid, or ambiguous with a nested copy)
  * freezes only the manifest, so the captured read reports the load error live discovery
@@ -115,22 +115,23 @@ export async function sourcePackFiles(dir: string): Promise<TreeListing | null> 
     pack = await sourcePackFolder(dir);
   } catch {
     // Discovery reports this same failure as a load error for the pack, from the copy.
-    return listingOf(dir, [PLUGIN_MANIFEST_FILE]);
+    return listingOf(await filesAt(dir, PLUGIN_MANIFEST_FILE));
   }
   if (pack === null) return null;
-  const relPaths = hasGitMarker(dir)
-    ? await gitPackFiles(dir)
-    : (await listTree(dir)).files.map(file => file.relPath);
-  return listingOf(
-    dir,
-    relPaths.filter(
-      path => path.split(/[\\/]/)[0] !== '.archon' && !skipsEnvFile(path, join(dir, path))
-    )
-  );
+  const candidates = hasGitMarker(dir) ? await gitPackFiles(dir) : await treeFiles(dir);
+  // `.archon/` is dropped before `.env` files are split out, so a secrets file there is
+  // reported by the project job that would copy it, or not at all.
+  return listingOf(candidates.filter(file => file.relPath.split(/[\\/]/)[0] !== '.archon'));
 }
 
-/** The folder's tracked files and the untracked ones git does not ignore, relative to it. */
-async function gitPackFiles(dir: string): Promise<string[]> {
+/** Every file in a non-git folder, `.env` files included; `listingOf` splits them out. */
+async function treeFiles(dir: string): Promise<TreeFile[]> {
+  const { files, skippedEnvFiles } = await listTree(dir);
+  return [...files, ...skippedEnvFiles];
+}
+
+/** The folder's tracked files and the untracked ones git does not ignore. */
+async function gitPackFiles(dir: string): Promise<TreeFile[]> {
   const result = await runGit(dir, [
     'ls-files',
     '-z',
@@ -141,24 +142,27 @@ async function gitPackFiles(dir: string): Promise<string[]> {
   if (result.code !== 0) {
     throw new Error(`Cannot list the pack folder ${dir} with git (exit ${String(result.code)})`);
   }
-  return [...new Set(result.stdout.toString('utf8').split('\0').filter(Boolean))];
-}
-
-/**
- * A listing of `relPaths` under `dir`. A path gone since git listed it (a tracked file
- * deleted in the checkout) is skipped; a directory (a submodule) is listed whole.
- */
-async function listingOf(dir: string, relPaths: readonly string[]): Promise<TreeListing> {
+  const relPaths = new Set(result.stdout.toString('utf8').split('\0').filter(Boolean));
   const files: TreeFile[] = [];
   for (const relPath of relPaths) files.push(...(await filesAt(dir, relPath)));
+  return files;
+}
+
+/** A listing of `candidates`, with its `.env` files split out and its parent directories. */
+function listingOf(candidates: readonly TreeFile[]): TreeListing {
+  const files = candidates.filter(file => !isEnvFile(file.relPath));
+  const skippedEnvFiles = candidates.filter(file => isEnvFile(file.relPath));
   const dirs = new Set<string>(['']);
   for (const { relPath } of files) {
     for (let parent = dirname(relPath); parent !== '.'; parent = dirname(parent)) dirs.add(parent);
   }
-  return { dirs: [...dirs], files };
+  return { dirs: [...dirs], files, skippedEnvFiles };
 }
 
-/** The files at one listed path: none when it is gone, every file under a directory. */
+/**
+ * The files at one listed path: none when it is gone (a tracked file deleted in the
+ * checkout), every file under a directory (a submodule), `.env` files included.
+ */
 async function filesAt(dir: string, relPath: string): Promise<TreeFile[]> {
   const absPath = join(dir, relPath);
   let info: Awaited<ReturnType<typeof stat>>;
@@ -170,6 +174,9 @@ async function filesAt(dir: string, relPath: string): Promise<TreeFile[]> {
   }
   if (info.isFile()) return [{ relPath, absPath, size: info.size, mtimeMs: info.mtimeMs }];
   if (!info.isDirectory()) return [];
-  const nested = await listTree(absPath);
-  return nested.files.map(file => ({ ...file, relPath: join(relPath, file.relPath) }));
+  const { files, skippedEnvFiles } = await listTree(absPath);
+  return [...files, ...skippedEnvFiles].map(file => ({
+    ...file,
+    relPath: join(relPath, file.relPath),
+  }));
 }

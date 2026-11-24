@@ -18,7 +18,7 @@ import {
 import { parsePackagedResourceReference } from '../packaged-workflow';
 import type { DigestEntry } from './manifest';
 import { BUNDLED_SCOPE_DIR } from './roots';
-import type { TreeFile, TreeListing } from './tree';
+import { isEnvFile, logSkippedEnvFile, type TreeFile, type TreeListing } from './tree';
 
 /**
  * One bundled file, held ready to be written into a capture.
@@ -49,16 +49,24 @@ export interface BundledScope {
   readonly dirs: readonly string[];
   readonly files: readonly BundledFile[];
   readonly byteCount: number;
+  /**
+   * Bundled `.env` files left out (`isEnvFile`), as the source path or, for a binary's
+   * constants, the bundled path. Logged by each capture that would have written them.
+   */
+  readonly skippedEnvFiles: readonly string[];
 }
 
 /** Accumulator shared by both branches that build a {@link BundledScope}. */
 function bundledScopeBuilder(): {
   add: (relPath: string, content: string | Buffer) => void;
   addDir: (relPath: string) => void;
+  /** Leave out a `.env` file at `relPath`, reported as `path`; false for any other file. */
+  skipsEnvFile: (relPath: string, path: string) => boolean;
   result: () => Omit<BundledScope, 'key' | 'stamp'>;
 } {
   const dirs: string[] = [];
   const files: BundledFile[] = [];
+  const skippedEnvFiles: string[] = [];
   let byteCount = 0;
 
   const seen = new Set<string>();
@@ -71,6 +79,11 @@ function bundledScopeBuilder(): {
 
   return {
     addDir,
+    skipsEnvFile: (relPath, path): boolean => {
+      if (!isEnvFile(relPath)) return false;
+      skippedEnvFiles.push(path);
+      return true;
+    },
     add: (relPath, content): void => {
       addDir(dirname(relPath));
       files.push({
@@ -80,7 +93,7 @@ function bundledScopeBuilder(): {
       });
       byteCount += Buffer.byteLength(content);
     },
-    result: () => ({ dirs, files, byteCount }),
+    result: () => ({ dirs, files, byteCount, skippedEnvFiles }),
   };
 }
 
@@ -94,7 +107,10 @@ function bundledScopeBuilder(): {
  * resolver needs a second way to find them.
  */
 function readBundledConstants(): Omit<BundledScope, 'key' | 'stamp'> {
-  const { add: write, result } = bundledScopeBuilder();
+  const { add, skipsEnvFile, result } = bundledScopeBuilder();
+  const write = (relPath: string, content: string): void => {
+    if (!skipsEnvFile(relPath, join(BUNDLED_SCOPE_DIR, relPath))) add(relPath, content);
+  };
 
   for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     // The generator owns authored extensions and legacy subfolders, too.
@@ -130,10 +146,13 @@ function readBundledConstants(): Omit<BundledScope, 'key' | 'stamp'> {
 async function readBundledSources(
   files: readonly BundleSourceFile[]
 ): Promise<Omit<BundledScope, 'key' | 'stamp'>> {
-  const { add, addDir, result } = bundledScopeBuilder();
+  const { add, addDir, skipsEnvFile, result } = bundledScopeBuilder();
   addDir('workflows');
   addDir(join('commands', 'defaults'));
-  for (const file of files) add(file.relativePath, await readBundleContent(file));
+  for (const file of files) {
+    if (!skipsEnvFile(file.relativePath, file.sourcePath))
+      add(file.relativePath, await readBundleContent(file));
+  }
   return result();
 }
 
@@ -147,7 +166,9 @@ let bundledScope: BundledScope | undefined;
  * is the cost being removed here, and every capture is still digest-verified against the
  * bytes it actually contains before anything executes from it.
  */
-function stampListings(listings: readonly { name: string; listing: TreeListing }[]): string {
+function stampListings(
+  listings: readonly { name: string; listing: Pick<TreeListing, 'dirs' | 'files'> }[]
+): string {
   const hash = createHash('sha256');
   for (const { name, listing } of listings) {
     hash.update(`scope\0${name}\n`);
@@ -198,6 +219,7 @@ export async function resolveBundledScope(): Promise<BundledScope | undefined> {
 
 /** Write this build's bundled bytes into a staged capture. */
 export async function writeBundledScope(scope: BundledScope, staging: string): Promise<void> {
+  for (const path of scope.skippedEnvFiles) logSkippedEnvFile(path);
   for (const dir of scope.dirs) await mkdir(join(staging, dir), { recursive: true });
   for (const file of scope.files) await writeFile(join(staging, file.relPath), file.content);
 }

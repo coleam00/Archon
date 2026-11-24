@@ -36,6 +36,7 @@ import { WORKFLOW_SOURCE_METADATA_KEY } from './schemas/workflow-run';
 import { isAgentNode, type ResolvedWorkflow, type WorkflowPack } from './schemas';
 import type { WorkflowDeps } from './deps';
 import * as bundleInventory from './defaults/bundle-inventory';
+import { getLog as getSourceLog } from './workflow-source/log';
 
 // A fake bundled pack stands in for the shipped one. Its workflow declares an MCP file
 // so the checkout-only MCP assertion below has a bundled node to hold to.
@@ -152,6 +153,28 @@ nodes:
       '.shared/util.ts': 'export const util = 1;\n',
     },
   };
+}
+
+/**
+ * Watch the capture's warnings while `act` runs. Returns how often each `path` was
+ * reported and every warning as text, so a test can check what was named without
+ * holding the message wording.
+ */
+async function captureWarnings(
+  act: () => Promise<unknown>
+): Promise<{ reported: (path: string) => number; text: string }> {
+  const warn = spyOn(getSourceLog(), 'warn');
+  try {
+    await act();
+    const calls = warn.mock.calls as unknown[][];
+    return {
+      reported: path =>
+        calls.filter(([fields]) => (fields as { path?: string } | undefined)?.path === path).length,
+      text: JSON.stringify(calls),
+    };
+  } finally {
+    warn.mockRestore();
+  }
 }
 
 const discover = (): ReturnType<typeof discoverWorkflowsWithConfig> =>
@@ -392,23 +415,48 @@ nodes:
     );
   });
 
-  test('no scope of a capture holds a .env file, and the run still resolves its pack', async () => {
-    await install({
-      ...reviewKit(),
-      files: { ...reviewKit().files, 'review/scripts/.env': 'SECRET=1\n' },
-    });
+  test('no scope of a capture holds a .env file, each is reported by path, and the run still resolves its pack', async () => {
+    const secret = 'SECRET=never-in-a-log';
+    const installedEnv = 'review/scripts/.env';
+    await install({ ...reviewKit(), files: { ...reviewKit().files, [installedEnv]: secret } });
+    const projectEnv = join(project, '.archon', 'scripts', '.env');
+    const projectEnvLocal = join(project, '.archon', 'scripts', '.env.local');
     await mkdir(join(project, '.archon', 'scripts'), { recursive: true });
     await writeFile(join(project, '.archon', 'scripts', 'main.ts'), 'console.log(1);\n');
-    await writeFile(join(project, '.archon', 'scripts', '.env'), 'SECRET=1\n');
-    await writeFile(join(project, '.archon', 'scripts', '.env.local'), 'SECRET=1\n');
+    await writeFile(projectEnv, secret);
+    await writeFile(projectEnvLocal, secret);
+    const homeEnv = join(home, 'scripts', '.env');
     await mkdir(join(home, 'scripts'), { recursive: true });
     await writeFile(join(home, 'scripts', 'tool.ts'), 'console.log(1);\n');
-    await writeFile(join(home, 'scripts', '.env'), 'SECRET=1\n');
+    await writeFile(homeEnv, secret);
+    // A bundled file the shared inventory selects by its extension.
+    const bundledEnv = join(bundleRoot, 'fake', '.shared', '.env.md');
+    await mkdir(dirname(bundledEnv), { recursive: true });
+    await writeFile(bundledEnv, secret);
 
-    const capture = await captureWorkflowSource({
-      sourceRoot: project,
-      captureRoot: join(home, 'runs', 'run-1'),
-    });
+    let capture: WorkflowSourceCapture | undefined;
+    try {
+      const warnings = await captureWarnings(async () => {
+        capture = await captureWorkflowSource({
+          sourceRoot: project,
+          captureRoot: join(home, 'runs', 'run-1'),
+        });
+      });
+      for (const path of [
+        projectEnv,
+        projectEnvLocal,
+        homeEnv,
+        bundledEnv,
+        join(packTreePath(join(home, 'plugins'), ID, COMMIT_A), installedEnv),
+      ]) {
+        expect(warnings.reported(path)).toBe(1);
+      }
+      expect(warnings.text).not.toContain(secret);
+    } finally {
+      await rm(dirname(bundledEnv), { recursive: true, force: true });
+    }
+    if (capture === undefined) throw new Error('capture did not complete');
+
     const root = capture.anchor.root;
     for (const kept of [
       'project/.archon/scripts/main.ts',
@@ -422,6 +470,7 @@ nodes:
       'project/.archon/scripts/.env.local',
       'global/scripts/.env',
       'installed/acme.review-kit/review/scripts/.env',
+      'bundled/workflows/fake/.shared/.env.md',
     ]) {
       await expect(access(join(root, left))).rejects.toThrow();
     }
@@ -876,6 +925,25 @@ describe('a pack folder given as the source', () => {
     expect(await packDirectory(liveSourceRoots(folder), { source: 'project', key: 'team' })).toBe(
       team
     );
+  });
+
+  test('a non-git pack folder reports each .env once, by the job that would copy it', async () => {
+    const folder = await packFolder('local');
+    const rootEnv = join(folder, '.env');
+    const scriptsEnv = join(folder, '.archon', 'scripts', '.env');
+    const fixturesEnv = join(folder, '.archon', 'fixtures', '.env');
+    for (const path of [rootEnv, scriptsEnv, fixturesEnv]) {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, 'SECRET=1\n');
+    }
+
+    const warnings = await captureWarnings(() =>
+      captureWorkflowSource({ sourceRoot: folder, captureRoot: join(home, 'runs', 'run-1') })
+    );
+    expect(warnings.reported(rootEnv)).toBe(1);
+    expect(warnings.reported(scriptsEnv)).toBe(1);
+    // No capture job copies `.archon/fixtures/`, so nothing was left out of one.
+    expect(warnings.reported(fixturesEnv)).toBe(0);
   });
 
   test('a capture from a git checkout of a pack holds what an install would, and no .env', async () => {

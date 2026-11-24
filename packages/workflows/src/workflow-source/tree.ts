@@ -25,15 +25,18 @@ const SKIP_DIRECTORIES = new Set(['.git', '__pycache__']);
 /**
  * True for a `.env` or `.env.*` file, which no capture holds from any scope. It is
  * secrets, not source: a script gets its environment from the engine, never from a file
- * beside it, and a copy here would outlive a rotation in every run's capture. The skip is
- * logged with the path, never the contents, so a script that did read a sibling `.env`
- * is not a silent difference.
+ * beside it, and a copy here would outlive a rotation in every run's capture. A walk
+ * records each one it leaves out (`TreeListing.skippedEnvFiles`) and the copy logs it, so
+ * a script that did read a sibling `.env` is not a silent difference.
  */
-export function skipsEnvFile(relPath: string, absPath: string): boolean {
+export function isEnvFile(relPath: string): boolean {
   const name = basename(relPath);
-  if (name !== '.env' && !name.startsWith('.env.')) return false;
-  getLog().warn({ path: absPath }, 'workflow.source_capture_env_skipped');
-  return true;
+  return name === '.env' || name.startsWith('.env.');
+}
+
+/** Log one `.env` file a capture left out: the path, never the contents. */
+export function logSkippedEnvFile(path: string): void {
+  getLog().warn({ path }, 'workflow.source_capture_env_skipped');
 }
 
 /** Project-relative directories that hold executable source. */
@@ -94,10 +97,15 @@ export interface TreeListing {
   /** Every directory in the tree, relative to the root, `''` for the root itself. */
   readonly dirs: readonly string[];
   readonly files: readonly TreeFile[];
+  /**
+   * `.env` files the walk left out (`isEnvFile`). The copy logs them, so a file is
+   * reported once by the job that would have copied it, not by every walk that saw it.
+   */
+  readonly skippedEnvFiles: readonly TreeFile[];
 }
 
 /**
- * Recursively list `root`, skipping cache directories and `.env` files (`skipsEnvFile`).
+ * Recursively list `root`, skipping cache directories and `.env` files (`isEnvFile`).
  *
  * Directory symlinks are followed rather than preserved, so a link pointing at one of its
  * own ancestors would otherwise re-enter the same tree: the walk only stops when the kernel
@@ -108,6 +116,7 @@ export interface TreeListing {
 export async function listTree(root: string): Promise<TreeListing> {
   const dirs: string[] = [];
   const files: TreeFile[] = [];
+  const skippedEnvFiles: TreeFile[] = [];
 
   const walk = async (dir: string, rel: string, ancestors: ReadonlySet<string>): Promise<void> => {
     dirs.push(rel);
@@ -133,9 +142,8 @@ export async function listTree(root: string): Promise<TreeListing> {
       }
 
       if (!info.isFile()) continue; // sockets, fifos, devices — nothing a workflow reads
-      if (skipsEnvFile(relPath, absPath)) continue;
-
-      files.push({ relPath, absPath, size: info.size, mtimeMs: info.mtimeMs });
+      const file = { relPath, absPath, size: info.size, mtimeMs: info.mtimeMs };
+      (isEnvFile(relPath) ? skippedEnvFiles : files).push(file);
     }
   };
 
@@ -143,7 +151,7 @@ export async function listTree(root: string): Promise<TreeListing> {
   // top of the tree is caught at depth one.
   const rootCanonical = await realpath(root).catch(() => root);
   await walk(root, '', new Set([rootCanonical]));
-  return { dirs, files };
+  return { dirs, files, skippedEnvFiles };
 }
 
 async function statOrSkip(absPath: string): Promise<Stats | undefined> {
@@ -178,11 +186,15 @@ async function enterableDirectory(
   return canonical;
 }
 
-/** Copy a listed tree into `to`. Empty directories are recreated too. */
+/**
+ * Copy a listed tree into `to`. Empty directories are recreated too. Each `.env` file the
+ * listing left out is logged here, by the one job that would have copied it.
+ */
 export async function copyListing(
   listing: TreeListing,
   to: string
 ): Promise<{ files: number; bytes: number }> {
+  for (const file of listing.skippedEnvFiles) logSkippedEnvFile(file.absPath);
   for (const dir of listing.dirs) await mkdir(join(to, dir), { recursive: true });
   let bytes = 0;
   for (const file of listing.files) {
