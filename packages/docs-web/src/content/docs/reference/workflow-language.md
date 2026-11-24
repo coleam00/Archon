@@ -1723,8 +1723,9 @@ nodes:
 parent's item. It returns `null` for a run on no item. A withdrawn ruling stays in the
 list with `withdrawn` set; what a ruling means is for the reading node to judge. `links`
 holds every link from or to the item, each with its `direction` and the `other` item; an
-ended link stays with `ended` set, and the engine acts on no link. Like
-`state`, it runs on the host: a container-isolated node cannot call it.
+ended link stays with `ended` set. An active `part_of` sets where an item lands, and a
+trigger can start a stage on the items linked to one whose run ended; [`workflow
+link`](/reference/cli/#workflow-link) says how. Like `state`, it runs on the host: a container-isolated node cannot call it.
 
 Each run's `workflow` is the name it was started under. For a workflow in a pack in the
 project that is its `name:` (`stage-check`); for the same pack installed with
