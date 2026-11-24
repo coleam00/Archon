@@ -451,16 +451,32 @@ describe('validateProjectPackSettings file settings', () => {
     await onlyError(policy, 'policy', 'docs/review.md/');
   });
 
-  it('checks a path through a directory symlink and .. the way the filesystem opens it', async () => {
-    // docs/current -> versions/v2, so docs/current/../policy.md is versions/policy.md; a
-    // normalized path would be docs/policy.md, which does not exist.
-    await mkdir(join(cwd, 'versions', 'v2'), { recursive: true });
-    await writeFile(join(cwd, 'versions', 'policy.md'), 'be kind\n');
+  // POSIX only: there `..` applies after the link is followed, which is what tells a
+  // checked-as-written path from a normalized one. Windows folds `..` before it reaches the
+  // link, so on Windows both spellings name docs/policy.md and the case shows nothing.
+  it.skipIf(process.platform === 'win32')(
+    'checks a path through a directory symlink and .. the way the filesystem opens it',
+    async () => {
+      // docs/current -> versions/v2, so docs/current/../policy.md is versions/policy.md; a
+      // normalized path would be docs/policy.md, which does not exist.
+      await mkdir(join(cwd, 'versions', 'v2'), { recursive: true });
+      await writeFile(join(cwd, 'versions', 'policy.md'), 'be kind\n');
+      await mkdir(join(cwd, 'docs'), { recursive: true });
+      await symlink(join(cwd, 'versions', 'v2'), join(cwd, 'docs', 'current'));
+      await writeProject('settings:\n  policy: docs/current/../policy.md\n');
+      expect(await validateProjectPackSettings(cwd, policy)).toEqual([]);
+    }
+  );
+
+  it('reports a project value naming a missing file even when the default exists', async () => {
     await mkdir(join(cwd, 'docs'), { recursive: true });
-    // 'junction' lets Windows create it without privileges; other platforms ignore the type.
-    await symlink(join(cwd, 'versions', 'v2'), join(cwd, 'docs', 'current'), 'junction');
-    await writeProject('settings:\n  policy: docs/current/../policy.md\n');
-    expect(await validateProjectPackSettings(cwd, policy)).toEqual([]);
+    await writeFile(join(cwd, 'docs', 'default.md'), 'be kind\n');
+    await writeProject('settings:\n  policy: docs/override.md\n');
+    await onlyError(
+      packWith({ policy: { type: 'string', file: true, default: 'docs/default.md' } }),
+      'policy',
+      'docs/override.md'
+    );
   });
 
   it('accepts an existing relative or absolute file, and a value the project clears', async () => {
