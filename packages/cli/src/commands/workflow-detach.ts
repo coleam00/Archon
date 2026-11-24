@@ -18,6 +18,7 @@ import { sealWorkflowRunConfig } from '@archon/core/config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
+import { resolveRunStartInputs } from '@archon/workflows/pack-settings';
 import { refusePendingStart } from '@archon/workflows/start-refusal';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -554,6 +555,10 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
   // No reserved id: this process's own capture is discarded on the way out, and
   // reusing its id would point the child's capture at a directory this process is
   // about to reclaim. The row's generated id is what the child files under.
+  // The run's complete `$INPUTS`, as its child's dispatch resolves them, so the refusal below
+  // judges a pack setting's value as the child will. A pack setting the project must set and
+  // does not refuses here, before any row exists.
+  const { inputs: startInputs } = await resolveRunStartInputs(cwd, workflow, resolvedInputs);
   const launchToken = crypto.randomUUID();
   let created: WorkflowRun;
   try {
@@ -587,11 +592,11 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
       `Failed to create the workflow run: ${(withItemHint(error) as Error).message}\nNothing was started.`
     );
   }
-  // Every refusal admission would make on this row (a broken run-ended binding, asks
-  // with no item) is made here, before the fork, so the caller hears it instead of an
-  // acknowledgement. Read on the created row, which carries the item the store resolved
-  // from --item; the child's admission checks again before its claim (#5783).
-  const refusal = await refusePendingStart(host.deps, workflow, created);
+  // Every refusal admission would make on this row (a broken run-ended binding, asks or an
+  // unsupplied result_of input with no item) is made here, before the fork, so the caller
+  // hears it instead of an acknowledgement. Read on the created row, which carries the item
+  // the store resolved from --item; the child's admission checks again before its claim (#5783).
+  const refusal = await refusePendingStart(host.deps, workflow, created, startInputs);
   if (refusal) throw new Error(`${refusal}\nNothing was started.`);
   return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
 }
