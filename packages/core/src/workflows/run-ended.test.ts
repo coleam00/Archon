@@ -760,3 +760,48 @@ describe('the outcomes after which an item stops', () => {
     expect(stops).toEqual([{ project: 'acme/widgets', workflow: 'deliver', outcome: 'replan' }]);
   });
 });
+
+test('each binding of a project reads the workflows of its own definition source', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-sources-')));
+  const deps = {
+    loadConfig: async () => ({
+      assistant: 'claude' as const,
+      assistants: { claude: {}, codex: {} },
+      commands: {},
+    }),
+    providers: providerRegistry,
+    projectOf: async () => null,
+    projectKeyOf: async () => 'acme/widgets',
+  };
+  const fireOnly = async (name: string) => {
+    const source = join(root, `${name}-source`);
+    await mkdir(join(source, '.archon', 'workflows'), { recursive: true });
+    await writeFile(
+      join(source, '.archon', 'workflows', `${name}.yaml`),
+      `name: ${name}\ndescription: ${name}\nreturns: { node: result, outcome: stage }\nnodes:\n  - id: result\n    bash: echo '{}'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [replan] }\n      required: [stage]\n`
+    );
+    return {
+      file: `${name}.json`,
+      sourceInstanceId: name,
+      binding: {
+        bindingId: name,
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: 'r',
+        overlap: 'queue' as const,
+        launch: {
+          cwd: root,
+          discoveryCwd: source,
+          workflowName: name,
+          inputs: {},
+          isolation: { kind: 'default' as const },
+        },
+      },
+    };
+  };
+
+  const stops = await runEndedStops([await fireOnly('alpha'), await fireOnly('beta')], deps);
+
+  expect(stops.map(stop => stop.workflow).sort()).toEqual(['alpha', 'beta']);
+});

@@ -762,46 +762,48 @@ export interface RunEndedStop {
  * declares neither `returns.asks` nor `returns.waits`, so nothing follows it. The workflows
  * read are the ones the bindings name, ended, asking or started, including the workflows a
  * binding without `on` (fire-only or timer) starts; a workflow no binding names is not read.
- * A report, not a problem: the attention queue lists the item when it stops.
+ * Each binding's workflows are read from its own definitions (`discoverBindingWorkflows`), as
+ * its check and its start read them, so bindings of one project with different sources each
+ * count; what is bound is project-wide. A report, not a problem: the attention queue lists
+ * the item when it stops.
  */
 export async function runEndedStops(
   bindings: readonly (OnBinding | OnBindingFile)[],
   deps: BindingDefinitionsDeps & Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<RunEndedStop[]> {
-  const projects = new Map<
-    string,
-    { first: OnBindingFile; named: Set<string>; bound: Set<string> }
-  >();
+  const read: { project: string; candidate: OnBindingFile; named: string[] }[] = [];
+  const bound = new Set<string>();
   for (const candidate of bindings) {
     // A binding whose checkout is gone never starts; `runEndedTriggerCheck` reports it.
     if (!existsSync(candidate.binding.launch.cwd)) continue;
     const project = (await bindingProjectKey(candidate, deps)) ?? candidate.binding.launch.cwd;
-    const entry = projects.get(project) ?? { first: candidate, named: new Set(), bound: new Set() };
-    projects.set(project, entry);
-    entry.named.add(candidate.binding.launch.workflowName);
+    const named = [candidate.binding.launch.workflowName];
     if ('runEnded' in candidate) {
-      entry.named.add(candidate.runEnded.workflowName);
-      entry.bound.add(
-        JSON.stringify([candidate.runEnded.workflowName, candidate.runEnded.outcome])
+      named.push(candidate.runEnded.workflowName);
+      bound.add(
+        JSON.stringify([project, candidate.runEnded.workflowName, candidate.runEnded.outcome])
       );
-    } else if ('asksSettled' in candidate) entry.named.add(candidate.asksSettled.workflowName);
+    } else if ('asksSettled' in candidate) named.push(candidate.asksSettled.workflowName);
+    read.push({ project, candidate, named });
   }
-  const stops: RunEndedStop[] = [];
-  for (const [project, { first, named, bound }] of projects) {
-    const read = await discoverBindingWorkflows(first.binding.launch, deps);
-    // A project whose definitions cannot be read is reported by the binding checks.
-    if ('refused' in read) continue;
-    for (const { workflow } of read.discovered.workflows) {
-      if (!named.has(workflow.name)) continue;
+  const stops = new Map<string, RunEndedStop>();
+  for (const { project, candidate, named } of read) {
+    const found = await discoverBindingWorkflows(candidate.binding.launch, deps);
+    // Definitions that cannot be read are reported by the binding checks.
+    if ('refused' in found) continue;
+    for (const { workflow } of found.discovered.workflows) {
+      if (!named.includes(workflow.name)) continue;
       if (workflow.result?.asks !== undefined || workflow.result?.waits !== undefined) continue;
       const outcome = declaredOutcome(workflow);
       if (outcome === undefined) continue;
-      for (const value of outcomeValues(outcome.form))
-        if (!isFinalOutcome(workflow, value) && !bound.has(JSON.stringify([workflow.name, value])))
-          stops.push({ project, workflow: workflow.name, outcome: value });
+      for (const value of outcomeValues(outcome.form)) {
+        const key = JSON.stringify([project, workflow.name, value]);
+        if (!isFinalOutcome(workflow, value) && !bound.has(key))
+          stops.set(key, { project, workflow: workflow.name, outcome: value });
+      }
     }
   }
-  return stops;
+  return [...stops.values()];
 }
 
 /**

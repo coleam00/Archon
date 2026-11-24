@@ -226,7 +226,7 @@ test('a stopped item names its stage and outcome, and its commands work from any
     ...base,
     kind: 'stopped',
     ref: 'stopped:run-9',
-    item: { id: 'i-1', projectKey: 'acme/web', key: 'issue-42' },
+    item: { id: 'i-1', projectKey: 'acme/web', key: 'release 1' },
     stoppedIn: { runId: 'run-9', workflow: 'deliver', outcome: 'replan' },
     summary: 'The plan missed the schema change.',
     checkout: '/srv/acme web',
@@ -236,5 +236,8 @@ test('a stopped item names its stage and outcome, and its commands work from any
   expect(block).toContain('The plan missed the schema change.');
   // Read through the run, and started in the project's checkout, whatever the reader's directory.
   expect(block).toContain('archon workflow runs --item-of run-9');
-  expect(block).toContain("archon workflow run <workflow> --item issue-42 --cwd '/srv/acme web'");
+  // Each value one shell word, whatever it holds.
+  expect(block).toContain(
+    "archon workflow run <workflow> --item 'release 1' --cwd '/srv/acme web'"
+  );
 });

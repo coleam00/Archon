@@ -163,7 +163,7 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
   );
   if (item.item !== undefined) {
     const cwd = item.checkout === null ? '' : ` --cwd ${shellWord(item.checkout)}`;
-    const start = command(`run <workflow> --item ${item.item.key}${cwd}`);
+    const start = command(`run <workflow> --item ${shellWord(item.item.key)}${cwd}`);
     lines.push(
       `run a stage on it, which closes this: ${start}${item.checkout === null ? ", from the item's project" : ''}`
     );
