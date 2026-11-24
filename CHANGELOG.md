@@ -81,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `archon workflow run --supersedes <run-id>` with no workflow name starts the run again in its own project from any directory, on the base branch its definitions were read from (an explicit `--base` wins), and a restarted stage that worked on a copy keeps its checkout hand-off, so a later hand-off selects the original checkout and not the restart's throwaway worktree. It used to start in the invoking directory's project, on that project's default base, and record no hand-off. (#6119, #6120, #6170)
 - `archon workflow run --detach` is refused with the reason (exit 1, `{ "ok": false, "error" }` under `--json`) when the run's child would refuse it before its first node: a registered `--branch` worktree on another branch or without `--from` in its history, or an `--item` run with a broken run-ended binding. It used to acknowledge a started run that the child then refused, with the reason only in the child's log. (#5783)
 - `archon workflow run --detach` of a workflow that declares `returns.asks`, started without `--item`, is refused in the command's result instead of acknowledging a run its child then cancels. (#5844)
 

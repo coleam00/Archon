@@ -26,6 +26,7 @@ import {
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
+import { CHECKOUT_HANDOFF_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
 import {
   CONTINUATION_METADATA_KEY,
   SUBRUN_METADATA_KEYS,
@@ -745,6 +746,9 @@ function createSetupRun(
         ? { [SUBRUN_METADATA_KEYS.inputs]: admission.resolvedInputs }
         : {}),
       ...(declaration ? { [CONTINUATION_METADATA_KEY]: declaration.stamp } : {}),
+      ...(request.options.checkoutHandoff
+        ? { [CHECKOUT_HANDOFF_METADATA_KEY]: { ...request.options.checkoutHandoff } }
+        : {}),
     },
     ...(declaration ? { adopted_from_run_id: declaration.runId } : {}),
     ...(request.options.item === undefined ? {} : { item_key: request.options.item }),
