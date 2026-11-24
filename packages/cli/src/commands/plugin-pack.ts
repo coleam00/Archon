@@ -180,6 +180,10 @@ function assertPackTree(
   manifest: WorkflowPackManifest,
   files: ReadonlySet<string>
 ): void {
+  if (manifest.document !== undefined && !files.has(manifest.document))
+    throw new Error(
+      `Refusing ${ref.id}: document names ${manifest.document}, which is not in the pack`
+    );
   for (const [name, path] of Object.entries(manifest.entrypoints)) {
     const folder = `${path.split('/')[0]}/`;
     const yamls = [...files].filter(
