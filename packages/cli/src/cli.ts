@@ -422,6 +422,18 @@ const NO_GIT_COMMANDS = [
 /** Item reads and writes that take their item and project from `--item-of <run-id>`. */
 const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing'];
 
+/**
+ * Reads of one run by id. A full run id names one run in the whole store, so these
+ * resolve the directory's project when it has one (for short prefixes) and otherwise
+ * run from any directory. `wait --item` resolves its item in the project, so it is not one.
+ */
+const BY_ID_READS = ['get', 'logs', 'artifacts', 'wait'];
+function isByIdRead({ command, subcommand, values }: CliRouteContext): boolean {
+  return (
+    command === 'workflow' && BY_ID_READS.includes(subcommand ?? '') && values.item === undefined
+  );
+}
+
 function requiresGitRepo({ command, subcommand, values }: CliRouteContext): boolean {
   // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
   // directory's project, which need not be registered or a git repository. `workflow
@@ -465,6 +477,7 @@ async function resolveRegisteredCwd(
     const host = await createCliWorkflowHost();
     const { codebase, repoRoot } = await resolveCodebaseForPath(realCwd, host.records.codebases);
     if (!repoRoot && codebase?.kind !== 'folder') {
+      if (isByIdRead(ctx)) return realCwd;
       return await fail(
         ctx.json,
         'Error: Not in a git repository.\n' +

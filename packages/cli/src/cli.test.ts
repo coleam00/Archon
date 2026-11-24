@@ -1908,6 +1908,58 @@ describe('pre-dispatch gates --json error envelope', () => {
     }
   });
 
+  it('lets by-id run reads past the git gate, and keeps it for wait --item', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'archon-by-id-outside-'));
+    // A private copy of the seeded registry, so the run below stays out of other cases.
+    const home = mkdtempSync(join(tmpdir(), 'archon-by-id-home-'));
+    const runId = '6b50458b-0000-4000-8000-000000000000';
+    const missing = '7b50458b-0000-4000-8000-000000000000';
+    try {
+      copyFileSync(join(jsonEnvelopeHome, 'archon.db'), join(home, 'archon.db'));
+      const db = new Database(join(home, 'archon.db'));
+      try {
+        db.run(
+          "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('conversation', 'cli', 'by-id-test')"
+        );
+        db.run(
+          'INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status) VALUES (?, ?, ?, ?, ?)',
+          [runId, 'conversation', 'by-id-test', '', 'completed']
+        );
+      } finally {
+        db.close();
+      }
+      const read = (args: string[]) =>
+        spawnJsonError(['workflow', ...args, '--json', '--cwd', outside], { ARCHON_HOME: home });
+
+      const found = read(['get', runId]);
+      expect({ status: found.status, envelope: found.envelope() }).toMatchObject({
+        status: 0,
+        envelope: { id: runId },
+      });
+      // Each read answered for the run; the gate would have refused the directory.
+      expect(read(['get', missing])).toMatchObject({ status: 1 });
+      expect(read(['get', missing]).envelope()).toMatchObject({ ok: false, error: 'not_found' });
+      expect(read(['wait', missing]).envelope()).toMatchObject({ ok: false, error: 'not_found' });
+      expect(read(['artifacts', missing]).envelope().error).toContain('Workflow run not found');
+      const logs = spawnSync(
+        process.execPath,
+        [CLI_ENTRY, 'workflow', 'logs', missing, '--cwd', outside],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: home },
+        }
+      );
+      expect(logs.status).toBe(1);
+      expect(logs.stderr).toContain('Workflow run not found');
+
+      // `wait --item` resolves its item in the directory's project, so it still needs one.
+      expect(read(['wait', '--item', 'x']).envelope().error).toContain('Not in a git repository');
+    } finally {
+      await removeTempTree(outside);
+      await removeTempTree(home);
+    }
+  });
+
   it('leaves the default home untouched when the gate opens the registry', async () => {
     // Same command as the case above — the one route here that opens the
     // registry — but with the child's home directory pointed at a scratch tree,
