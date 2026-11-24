@@ -318,6 +318,8 @@ async function observingFixture(
     prNumber?: number;
     failed?: unknown[];
     failOnce?: boolean;
+    catchReads?: boolean;
+    reads?: number;
   },
   observe: unknown = { everySeconds: 60 }
 ) {
@@ -332,14 +334,25 @@ async function observingFixture(
   return {
   receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
   observe: async ({ waits, forge }) => {
-    if (config.prNumber) await forge.prReviews({ remote: waits[0].remote, number: config.prNumber });
-    else await forge.commitChecks({ remote: waits[0].remote, revision: config.revision ?? waits[0].about });
+    const once = async () => {
+      if (config.prNumber) await forge.prReviews({ remote: waits[0].remote, number: config.prNumber });
+      else await forge.commitChecks({ remote: waits[0].remote, revision: config.revision ?? waits[0].about });
+    };
+    const caught = [];
+    if (config.catchReads) {
+      for (let i = 0; i < (config.reads ?? 1); i++) {
+        try { await once(); }
+        catch (error) {
+          caught.push({ wait: { workflowName: waits[0].workflowName, event: waits[0].event, about: waits[0].about, itemKey: waits[0].itemKey }, reason: error.message });
+        }
+      }
+    } else await once();
     const failing = config.failOnce === true && !failedOnce;
     failedOnce = true;
     return {
       acceptances: config.acceptances.map(a => ({ ...a, receipt: { ...a.receipt, id: crypto.randomUUID() } })),
       unserved: [],
-      failed: failing || config.failOnce !== true ? (config.failed ?? []) : [],
+      failed: [...(failing || config.failOnce !== true ? (config.failed ?? []) : []), ...caught],
     };
   },
 };
@@ -350,7 +363,14 @@ async function observingFixture(
     configPath,
     JSON.stringify({
       version: 1,
-      sources: [{ sourceInstanceId: 'source-1', module: modulePath, config: plugin, observe }],
+      sources: [
+        {
+          sourceInstanceId: 'source-1',
+          module: modulePath,
+          config: { ...plugin, bindings: [{ wake: { workflow: 'host', wait: 'checks' } }] },
+          observe,
+        },
+      ],
     }),
     'utf8'
   );
@@ -413,7 +433,13 @@ describe('observing open item waits', () => {
     const forge = forgeReader();
     const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
     expect(observer?.observing).toEqual([
-      { sourceInstanceId: 'source-1', everySeconds: 60, labels: [], unservedBindings: [] },
+      {
+        sourceInstanceId: 'source-1',
+        everySeconds: 60,
+        labels: [],
+        unservedBindings: [],
+        wakes: [{ workflow: 'host', wait: 'checks' }],
+      },
     ]);
     expect(await observer?.pass(new Date())).toEqual([]);
     expect(forge.reads).toEqual([]);
@@ -663,7 +689,7 @@ async function labelFixture(
       try {
         listed = await forge.issuesWithLabel({ repo: read.repo, label: config.listLabel ?? read.label });
       } catch (error) {
-        labelFailures.push({ bindingId: read.bindingId, label: read.label, reason: error.message, ...(config.failureKind ? { kind: config.failureKind } : {}) });
+        labelFailures.push({ bindingId: read.bindingId, label: read.label, reason: error.message });
         continue;
       }
       const asks = config.asks ?? listed.items.map(item => ({ kind: item.kind, number: item.ref.number }));
@@ -672,7 +698,7 @@ async function labelFixture(
         try {
           added = await forge.labelAdded({ repo: read.repo, kind, number, label: read.label });
         } catch (error) {
-          labelFailures.push({ bindingId: read.bindingId, label: read.label, number, reason: error.message, ...(config.failureKind ? { kind: config.failureKind } : {}) });
+          labelFailures.push({ bindingId: read.bindingId, label: read.label, number, reason: error.message });
           continue;
         }
         if (added.added === null) {
@@ -849,8 +875,9 @@ test('one overdue report per observer process across repeated passes', async () 
   expect(report1?.unserved?.[0]?.reason).toContain('deadline passed at');
 
   // Second pass: same overdue wait should not be reported again (once per process)
-  const [report2] = (await observer?.pass(new Date(deadlineTime.getTime() + 60_000))) ?? [];
-  expect(report2?.unserved).toHaveLength(0);
+  const again = (await observer?.pass(new Date(deadlineTime.getTime() + 60_000))) ?? [];
+  expect(again).toEqual([]);
+  expect(forge.reads).toEqual([]);
 });
 
 test('active and overdue waits mixed: only active are read', async () => {
@@ -905,20 +932,9 @@ test('only-overdue waits with no labels perform zero plugin calls but report onc
   expect(acceptReceipt).not.toHaveBeenCalled();
 });
 
-const waited = {
-  workflowName: 'host',
-  event: 'checks',
-  about: REVISION,
-  itemKey: 'pr-7',
-};
-
 async function backedOff(kind: string, failOnce = false) {
   const configPath = await observingFixture(
-    {
-      acceptances: [acceptance()],
-      failed: [{ wait: waited, reason: 'slow down', kind }],
-      ...(failOnce ? { failOnce: true } : {}),
-    },
+    { acceptances: [acceptance()], catchReads: true },
     { everySeconds: 15 }
   );
   const sources = await loadWebhookSourcePlugins(configPath, {
@@ -928,10 +944,20 @@ async function backedOff(kind: string, failOnce = false) {
     getReceipt: async () => null,
   });
   const forge = forgeReader();
+  let calls = 0;
+  const throwing = {
+    ...forge,
+    commitChecks: async (input: { remote: string; revision: string }) => {
+      calls += 1;
+      forge.reads.push(input);
+      if (!failOnce || calls === 1) throw Object.assign(new Error('slow down'), { kind });
+      return {};
+    },
+  };
   const observer = createItemWaitObserver({
     sources,
     store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
-    forge,
+    forge: throwing,
   });
   return { forge, observer };
 }
@@ -970,15 +996,40 @@ test('repeated temporary failures wait longer, once per pass', async () => {
   expect(forge.reads).toHaveLength(3);
 });
 
+test('a temporary failure stops later forge reads in the same pass', async () => {
+  const configPath = await observingFixture(
+    { acceptances: [], catchReads: true, reads: 2 },
+    { everySeconds: 15 }
+  );
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt: mock(async () => ({ receiptId: 'unused', replay: false })),
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  let calls = 0;
+  const forge = {
+    ...forgeReader(),
+    commitChecks: async () => {
+      calls += 1;
+      throw Object.assign(new Error('slow down'), { kind: 'rate_limited' });
+    },
+  };
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
+    forge,
+  });
+  await observer?.pass(new Date('2026-06-01T00:00:00.000Z'));
+  expect(calls).toBe(1);
+});
+
 test.each(['not_found', 'unspecified'] as const)(
   'a %s failure does not pause the source',
   async label => {
     const kind = label === 'unspecified' ? undefined : label;
     const configPath = await observingFixture(
-      {
-        acceptances: [acceptance()],
-        failed: [{ wait: waited, reason: 'missing', ...(kind === undefined ? {} : { kind }) }],
-      },
+      { acceptances: [acceptance()], catchReads: true },
       { everySeconds: 15 }
     );
     const sources = await loadWebhookSourcePlugins(configPath, {
@@ -988,10 +1039,19 @@ test.each(['not_found', 'unspecified'] as const)(
       getReceipt: async () => null,
     });
     const forge = forgeReader();
+    const throwing = {
+      ...forge,
+      commitChecks: async (input: { remote: string; revision: string }) => {
+        forge.reads.push(input);
+        const error = new Error('missing');
+        if (kind !== undefined) Object.assign(error, { kind });
+        throw error;
+      },
+    };
     const observer = createItemWaitObserver({
       sources,
       store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
-      forge,
+      forge: throwing,
     });
     const start = Date.parse('2026-06-01T00:00:00.000Z');
     await observer?.pass(new Date(start));
@@ -1300,9 +1360,21 @@ describe('observing label bindings', () => {
   });
 
   test('a rate_limited label read pauses the source', async () => {
-    const configPath = await labelFixture({ failureKind: 'rate_limited' });
+    const configPath = await labelFixture();
     const sources = await loadWebhookSourcePlugins(configPath, receiptStore().dependencies);
-    const forge = labelForge(new Map([[5, 'event-1']]), new Set([5]));
+    const inner = labelForge(new Map([[5, 'event-1']]), new Set([5]));
+    const forge = {
+      ...inner,
+      labelAdded: async (input: Parameters<typeof inner.labelAdded>[0]) => {
+        try {
+          return await inner.labelAdded(input);
+        } catch (error) {
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+            kind: 'rate_limited',
+          });
+        }
+      },
+    };
     const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
     const start = Date.parse('2026-06-01T00:00:00.000Z');
     const [first] = (await observer?.pass(new Date(start))) ?? [];

@@ -8,14 +8,6 @@ import type {
 } from '@archon/forge';
 import { sourceReceiptAcceptanceSchema } from './schemas/resource-start';
 
-/** Same members as `temporaryErrorKinds`. Kept here so a bundled source plugin does not load `@archon/forge`. */
-const temporaryReadKinds = new Set<string>(['unavailable', 'rate_limited']);
-
-/** A forge read the host should retry later: `unavailable` or `rate_limited`, never message text. */
-export function isTemporaryReadKind(kind: string | undefined): boolean {
-  return kind !== undefined && temporaryReadKinds.has(kind);
-}
-
 export interface WebhookSourceRequest {
   body: string;
   headers: Record<string, string>;
@@ -93,20 +85,8 @@ export const sourceObservationSchema = z
     acceptances: z.array(sourceReceiptAcceptanceSchema),
     /** Waits this source binds but cannot observe, with why. */
     unserved: z.array(z.object({ wait: observedWaitSchema, reason: z.string().min(1) }).strict()),
-    /**
-     * Reads that failed; the other waits are still observed. `kind` is the forge error
-     * kind when the plugin has one. Absent on older plugins, and then it is not a
-     * temporary failure.
-     */
-    failed: z.array(
-      z
-        .object({
-          wait: observedWaitSchema,
-          reason: z.string().min(1),
-          kind: z.string().min(1).optional(),
-        })
-        .strict()
-    ),
+    /** Reads that failed; the other waits are still observed. */
+    failed: z.array(z.object({ wait: observedWaitSchema, reason: z.string().min(1) }).strict()),
     /**
      * The acceptances a label read made, each with the read it belongs to, so the engine
      * knows when every issue one read listed is recorded.
@@ -131,7 +111,6 @@ export const sourceObservationSchema = z
             label: z.string().min(1),
             number: z.number().int().positive().optional(),
             reason: z.string().min(1),
-            kind: z.string().min(1).optional(),
           })
           .strict()
       )

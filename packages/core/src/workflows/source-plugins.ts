@@ -19,7 +19,6 @@ import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import {
-  isTemporaryReadKind,
   type ObservedItemWait,
   type ObservedLabelRead,
   type SourceForgeReader,
@@ -28,6 +27,7 @@ import {
   type WebhookSourcePluginFactory,
   type WebhookSourceRequest,
 } from '@archon/workflows/webhook-source-plugin';
+import { declaredWakes, freshOverdue, isTemporaryForgeFailure, nextBackoff } from './observe-read';
 import {
   observedLabelsSchema,
   sourceObservationSchema,
@@ -73,6 +73,7 @@ export interface ObservingSource {
   everySeconds: number;
   labels: readonly ObservedLabelRead[];
   unservedBindings: readonly UnservedBinding[];
+  wakes: readonly { workflow: string; wait: string }[];
 }
 
 /**
@@ -106,7 +107,6 @@ export interface SourceObservationAdmitted {
   conflicts: number;
   unserved: SourceObservation['unserved'];
   failures: string[];
-  temporary: boolean;
 }
 
 export interface WebhookSourcePluginHost {
@@ -250,6 +250,7 @@ export async function loadWebhookSourcePlugins(
         sourceInstanceId: source.sourceInstanceId,
         everySeconds: source.observe.everySeconds,
         ...declaredLabels(source.sourceInstanceId, plugin),
+        wakes: declaredWakes(source.config),
       });
   }
 
@@ -380,9 +381,6 @@ export async function loadWebhookSourcePlugins(
               `binding '${bindingId}' label '${label}'${number === undefined ? '' : ` on issue ${String(number)}`}: ${reason}`
           ),
         ],
-        temporary: [...observation.failed, ...observation.labelFailures].some(entry =>
-          isTemporaryReadKind(entry.kind)
-        ),
       };
       const record = async (acceptance: SourceReceiptAcceptance): Promise<void> => {
         try {
@@ -503,10 +501,8 @@ export function createItemWaitObserver(input: {
   >();
   // Each unserved wait is logged once per process, not on every pass.
   const warned = new Set<string>();
-  // Track which overdue waits have been reported in unserved, once per observer process
-  const reportedOverdue = new Set<string>();
+  const seenOverdue = new Set<string>();
   const backoff = new Map<string, { failures: number; retryAt: number }>();
-  const BACKOFF_CAP_MS = 15 * 60 * 1000;
   let running = false;
 
   const ready = (source: ObservingSource, now: Date): boolean => {
@@ -521,15 +517,14 @@ export function createItemWaitObserver(input: {
       backoff.delete(source.sourceInstanceId);
       return;
     }
-    const failures = (backoff.get(source.sourceInstanceId)?.failures ?? 0) + 1;
-    const delay = Math.min(
-      BACKOFF_CAP_MS,
-      Math.max(source.everySeconds, 60) * 1000 * 2 ** (failures - 1)
+    const next = nextBackoff(
+      backoff.get(source.sourceInstanceId)?.failures ?? 0,
+      source.everySeconds,
+      now.getTime()
     );
-    const retryAt = now.getTime() + delay;
-    backoff.set(source.sourceInstanceId, { failures, retryAt });
+    backoff.set(source.sourceInstanceId, next);
     log.warn(
-      { sourceInstanceId: source.sourceInstanceId, retryAt: new Date(retryAt).toISOString() },
+      { sourceInstanceId: source.sourceInstanceId, retryAt: new Date(next.retryAt).toISOString() },
       'source_observe_backoff'
     );
   };
@@ -608,13 +603,27 @@ export function createItemWaitObserver(input: {
     const read = new Set<string>();
     const listKey = (host: string, path: string, label: string): string =>
       JSON.stringify([source.sourceInstanceId, host, path, label]);
+    let stopped = false;
+    let temporary = false;
+    const call = async <T>(key: string, run: () => Promise<T>): Promise<T> => {
+      if (stopped) throw new Error('forge reads paused after a temporary failure');
+      read.add(key);
+      try {
+        return await run();
+      } catch (error) {
+        if (isTemporaryForgeFailure(error)) {
+          stopped = true;
+          temporary = true;
+        }
+        throw error;
+      }
+    };
     const guarded: SourceForgeReader = {
       commitChecks: async request => {
         const key = JSON.stringify(['commit', request.remote, request.revision]);
         if (!commits.has(JSON.stringify([request.remote, request.revision])))
           throw new Error(`No open wait names commit '${request.revision}' of '${request.remote}'`);
-        read.add(key);
-        return forge.commitChecks(request);
+        return call(key, () => forge.commitChecks(request));
       },
       prReviews: async request => {
         const key = JSON.stringify(['pr', request.remote, String(request.number)]);
@@ -622,8 +631,7 @@ export function createItemWaitObserver(input: {
           throw new Error(
             `No open wait is on pull request ${String(request.number)} of '${request.remote}'`
           );
-        read.add(key);
-        return forge.prReviews(request);
+        return call(key, () => forge.prReviews(request));
       },
       issuesWithLabel: async request => {
         const { host, path } = request.repo;
@@ -632,8 +640,9 @@ export function createItemWaitObserver(input: {
           throw new Error(
             `No binding of this source names label '${request.label}' in '${host}/${path}'`
           );
-        read.add(JSON.stringify(['label', host, path, request.label]));
-        const result = await forge.issuesWithLabel({ repo: { host, path }, label: request.label });
+        const result = await call(JSON.stringify(['label', host, path, request.label]), () =>
+          forge.issuesWithLabel({ repo: { host, path }, label: request.label })
+        );
         const key = listKey(host, path, request.label);
         const items = listed.get(key) ?? new Map<string, string | undefined>();
         for (const item of result.items)
@@ -659,13 +668,16 @@ export function createItemWaitObserver(input: {
         const remembered = labelAddedMemo.get(key)?.get(item);
         if (updatedAt !== undefined && remembered?.updatedAt === updatedAt)
           return remembered.answer;
-        read.add(JSON.stringify(['label-added', host, path, request.label, item]));
-        const answer = await forge.labelAdded({
-          repo: { host, path },
-          kind: request.kind,
-          number: request.number,
-          label: request.label,
-        });
+        const answer = await call(
+          JSON.stringify(['label-added', host, path, request.label, item]),
+          () =>
+            forge.labelAdded({
+              repo: { host, path },
+              kind: request.kind,
+              number: request.number,
+              label: request.label,
+            })
+        );
         // An answer that names no add is not kept: the event can become readable after the
         // label shows in the list, with no change to `updatedAt` to say so.
         if (updatedAt !== undefined && answer.added !== null) {
@@ -696,10 +708,8 @@ export function createItemWaitObserver(input: {
       ...(error === undefined ? {} : { error }),
     });
     let result: ObservedSourceReport;
-    let temporary = false;
     try {
       const admitted = await sources.observe(source.sourceInstanceId, waits, guarded);
-      temporary = admitted.temporary;
       result = report(
         admitted,
         admitted.failures.length === 0 ? undefined : admitted.failures.join('; ')
@@ -737,32 +747,21 @@ export function createItemWaitObserver(input: {
     };
   };
 
-  const takeOverdue = (
-    overdue: readonly { wait: ObservedItemWait; deadlineAt: string }[]
-  ): SourceObservation['unserved'] => {
-    const fresh: SourceObservation['unserved'] = [];
-    for (const { wait, deadlineAt } of overdue) {
-      const key = JSON.stringify([wait, deadlineAt]);
-      if (!warned.has(key)) {
-        warned.add(key);
-        log.warn({ ...wait, deadlineAt }, 'source_observe_overdue');
-      }
-      if (reportedOverdue.has(key)) continue;
-      reportedOverdue.add(key);
-      fresh.push({ wait, reason: `deadline passed at ${deadlineAt}; polling stopped` });
-    }
-    return fresh;
-  };
-
   const readSource = async (
     source: ObservingSource,
     waits: readonly ObservedItemWait[],
-    overdue: number,
-    fresh: SourceObservation['unserved'],
+    overdue: readonly { wait: ObservedItemWait; deadlineAt: string }[],
     now: Date
   ): Promise<ObservedSourceReport | undefined> => {
+    const due = freshOverdue(source.sourceInstanceId, source.wakes, overdue, seenOverdue);
+    for (const { wait, deadlineAt } of due)
+      log.warn({ ...wait, deadlineAt }, 'source_observe_overdue');
+    const fresh = due.map(({ wait, deadlineAt }) => ({
+      wait,
+      reason: `deadline passed at ${deadlineAt}; polling stopped`,
+    }));
     const idle = waits.length === 0 && source.labels.length === 0;
-    if (idle && source.unservedBindings.length === 0 && overdue === 0) return undefined;
+    if (idle && source.unservedBindings.length === 0 && fresh.length === 0) return undefined;
     lastObserved.set(source.sourceInstanceId, now.getTime());
     if (idle) {
       settleBackoff(source, now, false);
@@ -787,9 +786,8 @@ export function createItemWaitObserver(input: {
       try {
         const { active: waits, overdue } = await openWaits(now);
         const reports: ObservedSourceReport[] = [];
-        const fresh = takeOverdue(overdue);
         for (const source of due) {
-          const report = await readSource(source, waits, overdue.length, fresh, now);
+          const report = await readSource(source, waits, overdue, now);
           if (report !== undefined) reports.push(report);
         }
         return reports;

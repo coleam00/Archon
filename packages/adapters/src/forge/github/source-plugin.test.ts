@@ -715,20 +715,42 @@ describe('GitHub source plugin observing open waits', () => {
     expect(observed.acceptances.map(a => a.bindings[0]?.itemKey)).toEqual(['pr-7']);
   });
 
-  test('completed checks are read once; a later item still gets its own delivery', async () => {
+  test('a re-run at the same commit is a new delivery', async () => {
     const { observe } = await observer([checksWake]);
-    const { forge, reads } = reader([unit('77', 'completed')]);
+    let calls = 0;
+    const forge = {
+      async commitChecks(input: { remote: string; revision: string }) {
+        calls += 1;
+        const id = calls === 1 ? '77' : '88';
+        return {
+          repo: { host: 'github.com', path: 'owner/repo' },
+          branch: null,
+          revision: input.revision,
+          units: [unit(id, 'completed')],
+          summary: {
+            state: 'green' as const,
+            counts: { total: 1, green: 1, red: 0, pending: 0, gated: 0, unknown: 0 },
+          },
+        };
+      },
+      async prReviews(): Promise<never> {
+        throw new Error('no review read expected');
+      },
+      async issuesWithLabel(): Promise<never> {
+        throw new Error('no label read expected');
+      },
+      async labelAdded(): Promise<never> {
+        throw new Error('no label read expected');
+      },
+    };
     const first = await observe({ labels: [], waits: [wait], forge });
-    const later = await observe({
-      labels: [],
-      waits: [wait, { ...wait, itemKey: 'pr-9' }],
-      forge,
-    });
-    expect(reads).toEqual([{ remote, revision }]);
-    expect(later.acceptances.map(entry => entry.receipt.deliveryId)).toEqual([
-      first.acceptances[0]?.receipt.deliveryId,
-      `observe:check:github.com/owner/repo@${revision}:check:77:completed:success:checks-done:pr-9`,
-    ]);
+    const second = await observe({ labels: [], waits: [wait], forge });
+    expect(calls).toBe(2);
+    expect(first.acceptances[0]?.receipt.deliveryId).toContain(':77:');
+    expect(second.acceptances[0]?.receipt.deliveryId).toContain(':88:');
+    expect(second.acceptances[0]?.receipt.deliveryId).not.toBe(
+      first.acceptances[0]?.receipt.deliveryId
+    );
   });
 
   test('pending, empty, failed, and unknown checks are read again, and so are reviews', async () => {
@@ -785,7 +807,7 @@ describe('GitHub source plugin observing open waits', () => {
     expect(reads).toHaveLength(2);
   });
 
-  test('a rate-limited check read keeps its kind', async () => {
+  test('a rate-limited check read is reported as a failure', async () => {
     const { observe } = await observer([checksWake]);
     const observed = await observe({
       labels: [],
@@ -809,7 +831,6 @@ describe('GitHub source plugin observing open waits', () => {
       {
         wait: { workflowName: 'host', event: 'checks', about: revision, itemKey: 'pr-7' },
         reason: 'slow down',
-        kind: 'rate_limited',
       },
     ]);
   });
