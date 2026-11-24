@@ -113,6 +113,8 @@ nodes:
     ['{ result_of: build, required: true }', 'required'],
     ['{ result_of: build, default: v }', 'default'],
     ['{ at: checkout }', 'at'],
+    ['{ result_of: build, required: true, default: v }', 'required'],
+    ['{ at: checkout, required: true, default: v }', 'at'],
   ])('refuses to load an input declared %s', (spec, key) => {
     const { workflow, error } = parseWorkflow(
       `

@@ -262,6 +262,8 @@ function validInputSpecs(
       getLog().warn({ filename, name, value: spec }, 'invalid_workflow_input_spec_ignored');
       continue;
     }
+    const contradiction = resultOfContradiction(name, parsed.data);
+    if (contradiction !== null) return contradiction;
     if (parsed.data.required === true && parsed.data.default !== undefined) {
       getLog().warn(
         { filename, name },
@@ -269,8 +271,6 @@ function validInputSpecs(
       );
       continue;
     }
-    const contradiction = resultOfContradiction(name, parsed.data);
-    if (contradiction !== null) return contradiction;
     valid[name] = parsed.data;
   }
   return valid;
