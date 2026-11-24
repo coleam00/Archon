@@ -19,6 +19,7 @@ import { kindedPackBinding } from './schemas/pack-bindings';
 import { loopBodyStepNamePrefix, resolvedBodyNodes } from './graph-plan';
 import { isComposeFanOutNode, isLoopGroupNode } from './schemas/node-guards';
 import { isBinaryBuild } from './defaults/bundled-defaults';
+import { packGroupSchema } from './pack-document';
 import { readsLinkedEntry } from './schemas/binding-input-source';
 import {
   asksSettledTriggerSchema,
@@ -56,6 +57,24 @@ const packGraphNodeSchema = z.object({
 
 const packGraphStageSchema = z.object({
   name: z.string(),
+  /**
+   * The stage's name within the pack: its authored `name:`, which a run of the stage
+   * records as `pack.workflow` (`runPack`). Match a run to its stage by this and the pack key.
+   */
+  workflow: z.string(),
+  /** A timer, event or fire binding of the pack starts the stage: work enters here. */
+  entry: z.boolean(),
+  /**
+   * The roles the stage's nodes name: each `@alias` of a `model:` preference list, with the
+   * tier or model the list ends in, which runs when no config defines the alias. The graph
+   * does not resolve them: a binding's run config, the project and the install each may.
+   */
+  roles: z.array(z.object({ role: z.string(), fallback: z.string() })),
+  /**
+   * Work flows through the stage: it is an entry, or an arrow leads to or from it. False for
+   * a workflow of the pack that only other workflows include or call, which no item stands at.
+   */
+  inFlow: z.boolean(),
   /** The returns node's id after include expansion, or null when the stage returns nothing. */
   returns: z.string().nullable(),
   outcome: z
@@ -173,6 +192,19 @@ export const packCopySchema = z.object({
 });
 export type PackCopy = z.infer<typeof packCopySchema>;
 
+/**
+ * One setting the pack declares (`.pack/pack.yaml` `inputs:`) and what this project sets it
+ * to. `value` is the project's own value from its settings file for the pack, null when it
+ * sets none and the `default` applies. Values are text, as every workflow input is.
+ */
+const packGraphSettingSchema = z.object({
+  name: z.string(),
+  description: z.string().nullable(),
+  type: z.enum(['string', 'bool', 'list', 'enum']),
+  default: z.string().nullable(),
+  value: z.string().nullable(),
+});
+
 export const packGraphSchema = z.object({
   pack: z.string(),
   /**
@@ -185,7 +217,49 @@ export const packGraphSchema = z.object({
    * `<owner>.<name>` beside a project pack `<name>`. Naming that key reads that copy.
    */
   otherCopies: z.array(packCopySchema),
+  /** In the order work flows through them: see `inFlowOrder`. */
   stages: z.array(packGraphStageSchema),
+  /**
+   * How work enters the pack: each timer, event or fire binding it declares, with the stage
+   * it starts. The graph does not say whether this install serves one; `trigger check` does.
+   */
+  entries: z.array(
+    z.object({ binding: z.string(), kind: z.enum(['timer', 'event', 'fire']), stage: z.string() })
+  ),
+  /**
+   * The document the pack's manifest names (`document`), as a path within the pack, with
+   * what is wrong with it; null for a pack that names none. See `pack-document.ts`.
+   */
+  document: z.object({ path: z.string(), problems: z.array(z.string()) }).nullable(),
+  /**
+   * How the pack groups its stages for display, from its document's frontmatter: each a
+   * name and stages by their `workflow` name, in order. Empty when the pack declares none
+   * or its declaration has a problem: a group may name only stages that are `inFlow`.
+   */
+  groups: z.array(packGroupSchema),
+  /**
+   * How much runs at once: each resource the pack's registered arrows start work on, with
+   * the stages they start there. `declared` is the capacity those files name, null when
+   * none does. `limit` is the capacity the slot recorded at its last start, which is what
+   * admission applies, null for a slot nothing has started on. `held` is how many runs that have
+   * not ended hold a slot now.
+   */
+  capacity: z.array(
+    z.object({
+      resource: z.string(),
+      stages: z.array(z.string()),
+      declared: z.number().int().nullable(),
+      limit: z.number().int().nullable(),
+      held: z.number().int(),
+    })
+  ),
+  /** The pack's declared settings with this project's values, in declaration order. */
+  settings: z.array(packGraphSettingSchema),
+  /**
+   * The project's settings file for the pack, as a path within the project, and what is
+   * wrong with it: an unknown key or a value of the wrong type. It may not exist.
+   */
+  settingsFile: z.object({ path: z.string(), problems: z.array(z.string()) }),
   arrows: z.array(packGraphArrowSchema),
   /** The body of each fan-out include a stage or another body names, once per workflow. */
   fanOutBlocks: z.array(z.object({ workflow: z.string(), nodes: z.array(packGraphNodeSchema) })),
@@ -362,6 +436,9 @@ function declaredFrom(binding: PackBinding): string | undefined {
 export interface InstalledArrow {
   file: string;
   sourceInstanceId: string;
+  /** The resource the file's starts take a slot of, and the capacity it declares for it. */
+  resource: string;
+  capacity: number | null;
   from: PackGraphArrowFrom;
   launchWorkflow: string;
   /**
@@ -373,7 +450,7 @@ export interface InstalledArrow {
   problems: readonly string[];
 }
 
-type Stage = Pick<ResolvedWorkflow, 'name' | 'returns' | 'result' | 'nodes'>;
+type Stage = Pick<ResolvedWorkflow, 'name' | 'returns' | 'result' | 'nodes' | 'pack'>;
 type GraphNode = PackGraph['stages'][number]['nodes'][number];
 
 /**
@@ -559,7 +636,28 @@ function graphArrows(input: GraphInput): PackGraphArrow[] {
   return arrows;
 }
 
-function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stages'][number] {
+/** Every `@alias` the nodes' model preference lists name, each once, with the list's last entry. */
+function stageRoles(nodes: Stage['nodes']): PackGraph['stages'][number]['roles'] {
+  const roles = new Map<string, { role: string; fallback: string }>();
+  const visit = (list: Stage['nodes']): void => {
+    for (const node of list) {
+      const model = 'model' in node ? node.model : undefined;
+      const fallback = Array.isArray(model) ? model.at(-1) : undefined;
+      if (Array.isArray(model) && fallback !== undefined)
+        for (const role of model.slice(0, -1))
+          roles.set(`${role}\0${fallback}`, { role, fallback });
+      if (isLoopGroupNode(node)) visit(resolvedBodyNodes(node.loop_group));
+    }
+  };
+  visit(nodes);
+  return [...roles.values()];
+}
+
+function graphStage(
+  stage: Stage,
+  started: ReadonlySet<string>,
+  flow: { entries: ReadonlySet<string>; arrows: readonly PackGraphArrow[] }
+): PackGraph['stages'][number] {
   const declared = declaredOutcome(stage);
   let outcome: PackGraph['stages'][number]['outcome'] = null;
   if (declared !== undefined) {
@@ -576,6 +674,12 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
   }
   return {
     name: stage.name,
+    workflow: stage.pack?.workflow ?? stage.name,
+    entry: flow.entries.has(stage.name),
+    roles: stageRoles(stage.nodes),
+    inFlow:
+      flow.entries.has(stage.name) ||
+      flow.arrows.some(arrow => arrow.from.stage === stage.name || arrow.to === stage.name),
     returns: stage.returns ?? null,
     outcome,
     asks: stage.result?.asks !== undefined,
@@ -584,12 +688,55 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
   };
 }
 
+/** The stages a timer, event or fire binding of the pack starts, in declaration order. */
+function entryStages(input: GraphInput): string[] {
+  const names = input.stages.map(stage => stage.name);
+  return Object.values(input.declared ?? {}).flatMap(binding =>
+    declaredFrom(binding) === undefined ? (packWorkflowName(names, binding.workflow) ?? []) : []
+  );
+}
+
+/**
+ * The stages in the order work flows through them, which the pack declares nowhere else:
+ * breadth-first along the outcome arrows, from the stages the pack's timer, event and fire
+ * bindings start, then from each stage no arrow leads to, then from each one only an
+ * answer leads to, then from any stage still unplaced. Arrows keep the order the pack
+ * declares its bindings in, so the order changes only when the pack does.
+ */
+function inFlowOrder(input: GraphInput, arrows: readonly PackGraphArrow[]): Stage[] {
+  const names = input.stages.map(stage => stage.name);
+  const entries = entryStages(input);
+  const led = (outcomeOnly: boolean): string[] => {
+    const to = arrows
+      .filter(arrow => arrow.from.stage !== arrow.to && (!outcomeOnly || 'outcome' in arrow.from))
+      .map(arrow => arrow.to);
+    return names.filter(name => !to.includes(name));
+  };
+  const next = (stage: string): string[] =>
+    arrows.filter(({ from }) => from.stage === stage && 'outcome' in from).map(arrow => arrow.to);
+  const ordered = new Set<string>();
+  for (const root of [...entries, ...led(false), ...led(true), ...names]) {
+    const pending = [root];
+    for (let name = pending.shift(); name !== undefined; name = pending.shift()) {
+      if (ordered.has(name) || !names.includes(name)) continue;
+      ordered.add(name);
+      pending.push(...next(name));
+    }
+  }
+  return [...ordered].flatMap(name => input.stages.find(stage => stage.name === name) ?? []);
+}
+
 /**
  * The graph of one pack from its stages (include-expanded), its declared bindings and the
  * install's run-ended and asks-settled files for its project. Which copies of the pack it
  * was read from is `packCopies`' answer, added by the reader that has the source roots.
  */
-export function buildPackGraph(input: GraphInput): Omit<PackGraph, 'loaded' | 'otherCopies'> {
+export function buildPackGraph(
+  input: GraphInput
+): Omit<
+  PackGraph,
+  'loaded' | 'otherCopies' | 'document' | 'groups' | 'settings' | 'settingsFile' | 'capacity'
+> {
   const arrows = graphArrows(input);
   // Only an outcome arrow starts something for an outcome; an asks arrow starts on answers.
   const started = new Set(
@@ -597,9 +744,20 @@ export function buildPackGraph(input: GraphInput): Omit<PackGraph, 'loaded' | 'o
       .filter(arrow => arrow.active && arrow.installed.problems.length === 0)
       .map(arrow => arrowKey(arrow.from, ''))
   );
+  const flow = { entries: new Set(entryStages(input)), arrows };
+  const staged = inFlowOrder(input, arrows).map(stage => graphStage(stage, started, flow));
   return {
     pack: input.packKey,
-    stages: input.stages.map(stage => graphStage(stage, started)),
+    entries: Object.entries(input.declared ?? {}).flatMap(([binding, declared]) => {
+      const { kind } = kindedPackBinding(declared);
+      if (kind === 'run_ended' || kind === 'asks_settled') return [];
+      const names = input.stages.map(stage => stage.name);
+      return [
+        { binding, kind, stage: packWorkflowName(names, declared.workflow) ?? declared.workflow },
+      ];
+    }),
+    // The workflows no item stands at come after the stages work flows through.
+    stages: [true, false].flatMap(inFlow => staged.filter(stage => stage.inFlow === inFlow)),
     arrows,
     fanOutBlocks: fanOutBlocks(input.stages, input.workflows),
     discoveryErrors: input.discoveryErrors.map(e => ({

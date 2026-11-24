@@ -285,6 +285,12 @@ export interface IWorkflowStore
   recordItemLanding(
     input: import('./schemas/item-landing').ItemLandingReport
   ): Promise<import('./schemas/item-landing').ItemLanding>;
+  /** Set the title of the item `key` names, writing the item on first use; again replaces it. */
+  recordItemTitle(input: {
+    projectKey: string;
+    key: string;
+    title: string;
+  }): Promise<import('./schemas/workflow-run').WorkflowItem>;
   /**
    * Every link from or to an item, ended ones included, in recording order. A row that does
    * not read is reported as unreadable in its place, not thrown.

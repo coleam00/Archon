@@ -20,6 +20,7 @@ import {
   linkItem,
   notice,
   recordLanding,
+  recordTitle,
   recordMerge,
   state,
   trigger,
@@ -71,7 +72,7 @@ if (command === 'forge') {
 } else if (command === 'workflow' && sub === 'items') {
   if (args.includes('broken')) answer({ ok: false, error: 'after is not a cursor this read returned' }, 1);
   else answer({ window: { since: 'a', until: 'b' }, items: [], next: null, args: args.slice(2) });
-} else if (command === 'workflow' && ['link', 'merged', 'landing'].includes(sub)) {
+} else if (command === 'workflow' && ['link', 'merged', 'landing', 'title'].includes(sub)) {
   writeFileSync(${JSON.stringify(join(root, 'write.json'))}, JSON.stringify(args.slice(1)));
   if (args.includes('missing')) answer({ ok: false, error: 'not_found' }, 1);
   else answer({ answered: sub });
@@ -245,6 +246,13 @@ test('item writes name the run, not an item, and return what the host printed', 
     commit,
     '--json',
   ]);
+  expect(sent(() => recordTitle('Ship the order'))).toEqual([
+    'title',
+    ...own,
+    '--text',
+    'Ship the order',
+    '--json',
+  ]);
   expect(sent(() => recordLanding('feature/x'))).toEqual([
     'landing',
     ...own,
@@ -285,7 +293,7 @@ test('the declaration alone type-checks a script against the forge and state con
   writeFileSync(declaration, scriptApiDeclaration);
   writeFileSync(
     script,
-    `import { ForgeError, ItemWriteError, forge, input, item, linkItem, outcomes, recordLanding, recordMerge, state, trigger } from 'archon:script';
+    `import { ForgeError, ItemWriteError, forge, input, item, linkItem, outcomes, recordLanding, recordMerge, recordTitle, state, trigger } from 'archon:script';
 const repo = { host: 'forge.example', path: 'team/repo' };
 const view = forge('pr.view', { selector: { kind: 'number', ref: { repo, number: 7 } } });
 export const head: string | undefined = view?.pr.head;
@@ -312,6 +320,7 @@ export const created: boolean = linkItem({ kind: 'part_of', to: 'parent' }).crea
 linkItem({ kind: 'part_of', to: 'a', from: 'b' });
 export const first: string = recordMerge({ change: 'pr', at: 'now' }).merge.change;
 export const lands: string = recordLanding('feature/x').branch;
+export const titled: string | null | undefined = recordTitle('Ship the order').title;
 export function refusal(error: unknown): string | undefined {
   return error instanceof ItemWriteError ? error.reason : undefined;
 }

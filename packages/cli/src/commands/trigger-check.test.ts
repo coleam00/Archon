@@ -22,7 +22,8 @@ import {
 } from '../test-support/workflow-store';
 import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
 import { triggerCommand } from './trigger';
-import { wakeLastPassPath, workflowWakeScheduleConfig, writeWakeLastPass } from './wake-schedule';
+import { wakeLastPassPath, writeWakeLastPass } from '@archon/core/workflows/wake-last-pass';
+import { workflowWakeScheduleConfig } from './wake-schedule';
 
 const tempRoots = trackTempRoots();
 const previousHome = process.env.ARCHON_HOME;

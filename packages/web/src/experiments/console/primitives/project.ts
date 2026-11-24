@@ -9,9 +9,14 @@ export interface Project {
   lastSyncedAt: string | null;
   /** 'folder' = runs in place without Archon-managed git (directory may have git); 'repo' = git repository. */
   kind: 'repo' | 'folder';
+  /**
+   * The workflow packs with a run on an item of the project, by pack key. Empty for a
+   * project with no item on a pack stage, and for a project read outside the list.
+   */
+  itemPacks: string[];
 }
 
-type RawCodebase = components['schemas']['Codebase'];
+type RawCodebase = components['schemas']['Codebase'] & { item_packs?: string[] };
 
 export function toProject(raw: RawCodebase): Project {
   return {
@@ -22,5 +27,6 @@ export function toProject(raw: RawCodebase): Project {
     repositoryUrl: raw.repository_url,
     lastSyncedAt: raw.updated_at,
     kind: raw.kind,
+    itemPacks: raw.item_packs ?? [],
   };
 }
