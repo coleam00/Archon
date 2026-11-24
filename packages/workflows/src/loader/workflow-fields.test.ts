@@ -109,22 +109,43 @@ nodes:
     expect(workflow?.inputs).toBeUndefined();
   });
 
-  it('drops a result_of input that also declares required or default, and at without result_of', () => {
+  it.each([
+    ['{ result_of: build, required: true }', 'required'],
+    ['{ result_of: build, default: v }', 'default'],
+    ['{ at: checkout }', 'at'],
+  ])('refuses to load an input declared %s', (spec, key) => {
     const { workflow, error } = parseWorkflow(
       `
 name: contradiction
-description: result_of with required or default
+description: a contradictory result_of input
 inputs:
-  needed: { result_of: build, required: true }
-  fallback: { result_of: build, default: v }
   read: { result_of: build }
-  bare_at: { at: checkout }
-  approval: { result_of: review, at: checkout }
+  prior: ${spec}
 nodes:
   - id: build
     prompt: "hi"
 `,
       'result-of-contradiction.yaml'
+    );
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain("'prior'");
+    expect(error?.error).toContain(`'${key}'`);
+    expect(error?.error).toContain(key === 'at' ? "without 'result_of'" : "'result_of'");
+  });
+
+  it('loads result_of inputs, with or without at', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: readers
+description: result_of inputs
+inputs:
+  read: { result_of: build }
+  approval: { result_of: review, at: checkout }
+nodes:
+  - id: build
+    prompt: "hi"
+`,
+      'result-of.yaml'
     );
     expect(error).toBeNull();
     expect(workflow?.inputs).toEqual({

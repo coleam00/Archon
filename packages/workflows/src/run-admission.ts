@@ -35,11 +35,7 @@ import {
   runLimitHold,
   waitForTurn,
 } from './resource-hold';
-import {
-  refuseResultInputsWithoutItem,
-  resolveResultInputs,
-  unsuppliedResultInputs,
-} from './run-result';
+import { resolveResultInputs, unsuppliedResultInputs } from './run-result';
 import {
   ConcurrencyConfigError,
   InstallHeldError,
@@ -149,16 +145,6 @@ async function startFreshRun(
   opts: ExecuteWorkflowOptions,
   dispatch: RunDispatch
 ): Promise<RunPhase<AdmittedRun>> {
-  const resultInputs = unsuppliedResultInputs(workflow, dispatch.startInputs);
-  const itemless = await refuseResultInputsWithoutItem(
-    deps,
-    platform,
-    conversationId,
-    workflow,
-    workflowRun,
-    resultInputs
-  );
-  if (itemless) return { stopped: true, result: itemless };
   const claimed = await claimPendingRun(
     deps,
     platform,
@@ -189,7 +175,7 @@ async function startFreshRun(
     platform,
     conversationId,
     run,
-    resultInputs,
+    unsuppliedResultInputs(workflow, dispatch.startInputs),
     claimed.value
   );
   if (resolved.stopped) return resolved;

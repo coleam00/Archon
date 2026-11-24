@@ -1,5 +1,6 @@
 import type { WorkflowDeps } from './deps';
-import type { ResolvedWorkflow } from './schemas';
+import { unsuppliedResultInputs } from './run-result';
+import { readSubrunMetadata, type ResolvedWorkflow } from './schemas';
 import type { WorkflowRun } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 
@@ -21,7 +22,8 @@ export async function refusePendingStart(
   const reason =
     (await brokenRunEndedBinding(deps, run)) ??
     itemResultWithoutItem(workflow, run, 'asks') ??
-    itemResultWithoutItem(workflow, run, 'waits');
+    itemResultWithoutItem(workflow, run, 'waits') ??
+    resultInputWithoutItem(workflow, run);
   if (reason === undefined) return undefined;
   await requireTerminalStatusWrite(
     // Before the claim another dispatcher may own this row: cancel it only while pending.
@@ -76,5 +78,23 @@ function itemResultWithoutItem(
   return {
     text: `Workflow '${workflow.name}' declares returns.${key} '${field}', so it runs on an item: start it with --item <key>`,
     site: `workflow.${key}_without_item_refused`,
+  };
+}
+
+/**
+ * A `result_of` input the run was not supplied is read from its item, so a run with no item
+ * is refused unless every such input is supplied. A `workflow:` child carries no item, so its
+ * parent must pass such an input through `with:`. Supplied means on the row: a launcher's
+ * `--input`, a parent's `with:` or a binding's mapping, and on a row the executor creates
+ * itself, the complete `$INPUTS` its dispatch resolved.
+ */
+function resultInputWithoutItem(workflow: ResolvedWorkflow, run: WorkflowRun): Refusal | undefined {
+  if (run.item_id !== null) return undefined;
+  const [first] = unsuppliedResultInputs(workflow, readSubrunMetadata(run.metadata).inputs);
+  if (first === undefined) return undefined;
+  const [input, { workflow: source }] = first;
+  return {
+    text: `Workflow '${workflow.name}' reads input '${input}' from result_of '${source}', which resolves from the run's item: start it with --item <key>, or supply '${input}'`,
+    site: 'workflow.result_inputs_without_item_refused',
   };
 }
