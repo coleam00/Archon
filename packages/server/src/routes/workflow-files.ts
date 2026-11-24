@@ -11,7 +11,11 @@ import {
 } from '@archon/workflows/pack-layout';
 import { parseWorkflow, parseYaml } from '@archon/workflows/loader';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
-import { loadablePackFolder } from '@archon/workflows/workflow-source';
+import {
+  AmbiguousSourcePackError,
+  type SourcePackFolder,
+  sourcePackFolder,
+} from '@archon/workflows/workflow-source';
 
 /** A workflow definition found by name: its text, where it came from, and how it parsed. */
 export interface WorkflowFile {
@@ -173,19 +177,32 @@ function singleMatch(matches: PackagedMatches, name: string): RawWorkflowFile | 
 }
 
 /**
- * A project workflow by name: under the project's workflow folder, or, when the project
- * root is itself a pack folder (`loadablePackFolder`), in that pack, as discovery lists it.
- * A name both hold is refused, as two packaged matches are: discovery loads neither, and
- * a save or delete must not pick one. A root manifest that does not read as a pack is no
+ * The project root as a pack folder. A root manifest that does not read as a pack is no
  * pack here: discovery reports it as that pack's load error, and the project's other
- * workflows still resolve.
+ * workflows still resolve. Two copies of the pack still fail every lookup, because
+ * discovery loads neither and a save or delete must not pick one.
+ */
+async function projectPackFolder(projectRoot: string): Promise<SourcePackFolder | null> {
+  try {
+    return await sourcePackFolder(projectRoot);
+  } catch (error) {
+    if (error instanceof AmbiguousSourcePackError) throw error;
+    return null;
+  }
+}
+
+/**
+ * A project workflow by name: under the project's workflow folder, or, when the project
+ * root is itself a pack folder (`sourcePackFolder`), in that pack, as discovery lists it.
+ * A name both hold is refused, as two packaged matches are: discovery loads neither, and
+ * a save or delete must not pick one.
  */
 export async function findProjectWorkflowAt(
   projectRoot: string,
   name: string
 ): Promise<RawWorkflowFile | null> {
   const found = await findWorkflowAt(join(projectRoot, getWorkflowFolderSearchPaths()[0]), name);
-  const pack = await loadablePackFolder(projectRoot);
+  const pack = await projectPackFolder(projectRoot);
   if (pack === null) return found;
   const matches: PackagedMatches = { files: [], folderErrors: [] };
   await collectPackMatches(pack.name, pack.dir, name, matches);

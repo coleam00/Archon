@@ -84,11 +84,10 @@ export async function sourcePackFolder(dir: string): Promise<SourcePackFolder | 
 }
 
 /**
- * `sourcePackFolder` for a reader that resolves a loaded pack's files by name (commands,
- * scripts, `$PACK_DIR`, the console's workflow lookup). A folder whose manifest fails to
- * read is no pack to it: discovery reports that failure as the pack's load error, so the
- * pack never loads and nothing resolves its files, while the project's other packs and
- * workflows still resolve.
+ * `sourcePackFolder` for a reader that resolves a loaded pack's files (commands, scripts,
+ * `$PACK_DIR`). A folder whose manifest fails to read is no pack to it: discovery reports
+ * that failure as the pack's load error, so the pack never loads and nothing resolves its
+ * files, while the project's other packs and workflows still resolve.
  */
 export async function loadablePackFolder(dir: string): Promise<SourcePackFolder | null> {
   try {
