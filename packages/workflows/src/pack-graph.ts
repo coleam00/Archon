@@ -186,6 +186,19 @@ export const packCopySchema = z.object({
 });
 export type PackCopy = z.infer<typeof packCopySchema>;
 
+/**
+ * One setting the pack declares (`.pack/pack.yaml` `inputs:`) and what this project sets it
+ * to. `value` is the project's own value from its settings file for the pack, null when it
+ * sets none and the `default` applies. Values are text, as every workflow input is.
+ */
+const packGraphSettingSchema = z.object({
+  name: z.string(),
+  description: z.string().nullable(),
+  type: z.enum(['string', 'bool', 'list', 'enum']),
+  default: z.string().nullable(),
+  value: z.string().nullable(),
+});
+
 export const packGraphSchema = z.object({
   pack: z.string(),
   /**
@@ -218,6 +231,13 @@ export const packGraphSchema = z.object({
    * or its declaration has a problem: a group may name only stages that are `inFlow`.
    */
   groups: z.array(packGroupSchema),
+  /** The pack's declared settings with this project's values, in declaration order. */
+  settings: z.array(packGraphSettingSchema),
+  /**
+   * The project's settings file for the pack, as a path within the project, and what is
+   * wrong with it: an unknown key or a value of the wrong type. It may not exist.
+   */
+  settingsFile: z.object({ path: z.string(), problems: z.array(z.string()) }),
   arrows: z.array(packGraphArrowSchema),
   /** The body of each fan-out include a stage or another body names, once per workflow. */
   fanOutBlocks: z.array(z.object({ workflow: z.string(), nodes: z.array(packGraphNodeSchema) })),
@@ -670,7 +690,7 @@ function inFlowOrder(input: GraphInput, arrows: readonly PackGraphArrow[]): Stag
  */
 export function buildPackGraph(
   input: GraphInput
-): Omit<PackGraph, 'loaded' | 'otherCopies' | 'document' | 'groups'> {
+): Omit<PackGraph, 'loaded' | 'otherCopies' | 'document' | 'groups' | 'settings' | 'settingsFile'> {
   const arrows = graphArrows(input);
   // Only an outcome arrow starts something for an outcome; an asks arrow starts on answers.
   const started = new Set(

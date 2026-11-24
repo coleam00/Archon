@@ -10,6 +10,7 @@ import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
 import { BoardPage } from './routes/BoardPage';
 import { NeedsYouPage } from './routes/NeedsYouPage';
+import { PackSettingsPage } from './routes/PackSettingsPage';
 import { MetricsPage } from './routes/metrics/MetricsPage';
 import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
@@ -124,6 +125,7 @@ export function ConsoleApp(): ReactElement {
             <Route path="*" element={<Navigate to="/console" replace />} />
             <Route path="p/:projectId" element={<RunsPage />} />
             <Route path="p/:projectId/board" element={<BoardPage />} />
+            <Route path="p/:projectId/packs/:pack/settings" element={<PackSettingsPage />} />
             <Route path="p/:projectId/chat" element={<ChatPage />} />
             <Route path="p/:projectId/metrics" element={<MetricsPage />} />
             <Route path="p/:projectId/metrics/details" element={<MetricsPage view="details" />} />

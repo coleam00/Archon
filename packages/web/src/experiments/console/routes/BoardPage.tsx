@@ -415,7 +415,17 @@ export function PackBoard({
   if (items.length === 0 && newest.data?.totals?.done === 0) return <></>;
   return (
     <section data-pack={pack} className="mb-6">
-      <h2 className="text-sm font-medium text-text-primary">{pack}</h2>
+      <h2 className="flex flex-wrap items-baseline gap-x-3 text-sm font-medium text-text-primary">
+        {pack}
+        <span data-pack-links className="text-console-11 font-normal text-text-tertiary">
+          <Link
+            className="underline hover:text-text-primary"
+            to={`/console/p/${encodeURIComponent(projectId)}/packs/${encodeURIComponent(pack)}/settings`}
+          >
+            Settings
+          </Link>
+        </span>
+      </h2>
       {error !== undefined ? (
         <p className="mt-1 text-console-12 text-error">{error.message}</p>
       ) : null}

@@ -11601,6 +11601,18 @@ export interface components {
         name: string;
         stages: string[];
       }[];
+      settings: {
+        name: string;
+        description: string | null;
+        /** @enum {string} */
+        type: 'string' | 'bool' | 'list' | 'enum';
+        default: string | null;
+        value: string | null;
+      }[];
+      settingsFile: {
+        path: string;
+        problems: string[];
+      };
       arrows: (
         | {
             from:

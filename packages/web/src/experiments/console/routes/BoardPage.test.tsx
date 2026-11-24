@@ -86,6 +86,8 @@ const graph: PackGraph = {
   document: null,
   groups: [],
   arrows: [],
+  settings: [],
+  settingsFile: { path: '.archon/packs/flow.yaml', problems: [] },
   fanOutBlocks: [],
   discoveryErrors: [],
 };

@@ -614,6 +614,8 @@ describe('a pack graph', () => {
       otherCopies: [],
       document: null,
       groups: [],
+      settings: [],
+      settingsFile: { path: '.archon/packs/chain.yaml', problems: [] },
       laterField: 1,
       stages: graph.stages.map(s => ({ ...s, laterField: true })),
     };
