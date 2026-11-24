@@ -116,9 +116,14 @@ function refItemLines(item: Ask): string[] {
     const [head = '', ...rest] = item.context.trim().split('\n');
     lines.push(`context: ${head}`, ...rest.map(line => `  ${line}`));
   }
-  // An ask that has no recommendation says so, so a reader does not look for one.
+  // An ask that has no recommendation says so, and why when its stage said, so a reader
+  // does not look for one.
   if (item.askedIn !== undefined && item.recommendation === undefined)
-    lines.push('recommended: none (choose an option)');
+    lines.push(
+      item.noRecommendation === undefined
+        ? 'recommended: none (choose an option)'
+        : `no recommendation: ${oneLine(item.noRecommendation)}`
+    );
   lines.push(...offerLines(item));
   for (const artifact of item.artifacts ?? [])
     lines.push(`artifact: ${artifact.path} (run ${artifact.run_id})`);

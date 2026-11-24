@@ -68,7 +68,9 @@ export async function askQueueItem(
     ],
     other: true,
     ...(ask.ask.recommendation === null
-      ? {}
+      ? ask.ask.no_recommendation === undefined
+        ? {}
+        : { noRecommendation: ask.ask.no_recommendation }
       : {
           recommendation: {
             option: ask.ask.recommendation.option,

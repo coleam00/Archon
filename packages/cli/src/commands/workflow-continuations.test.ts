@@ -77,7 +77,11 @@ const writeStdout = mock(async (value: string) => {
 mock.module('../utils/stdout', () => ({ writeStdout }));
 const realNativeSchedule = await import('../triggers/native-schedule');
 let fingerprint: string | undefined = 'engine';
-mock.module('../utils/engine-fingerprint', () => ({ engineFingerprint: () => fingerprint }));
+mock.module('../utils/engine-fingerprint', () => ({
+  engineFingerprint: () => fingerprint,
+  recordLoadedEngine: () => undefined,
+  engineChangedSinceLoad: () => false,
+}));
 const inspect = mock(
   async (): Promise<
     Awaited<ReturnType<typeof realNativeSchedule.inspectNativeSchedule>> | undefined
