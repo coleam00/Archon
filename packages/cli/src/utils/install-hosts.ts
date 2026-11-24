@@ -11,6 +11,7 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { drainResourceStartHost } from '@archon/core/workflows/resource-start-host';
 import { getTriggersPath, readTriggerFileHosts } from '@archon/core/workflows/run-ended';
 import type { StartedExecutor } from '@archon/core/workflows/start-executor';
+import { engineChangedSinceLoad } from './engine-fingerprint';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
   collectCredentialValues,
@@ -68,6 +69,9 @@ export async function drainInstallHosts(
         ...host,
         hostId,
         startAdmitted: requestId => options.dispatch(requestId, hostId),
+        // A resident process (a wake watch) updated under it leaves a failed preparation
+        // pending for a process on the installed engine.
+        engineChanged: engineChangedSinceLoad,
       });
     } catch (error) {
       failures.push({ hostId, error });

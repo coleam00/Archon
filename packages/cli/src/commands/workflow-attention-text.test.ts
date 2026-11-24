@@ -219,6 +219,14 @@ test('an ask with no recommendation says it has none and offers none to accept',
   expect(block).toContain('recommended: none (choose an option)');
   expect(block).not.toContain('--recommended');
   expect(block).toContain('archon workflow answer --ref ask:3 --choose <option>');
+  const reasoned = opened({
+    ...withoutRun,
+    ref: 'ask:3',
+    askedIn: { runId: 'run-plan', workflow: 'plan' },
+    noRecommendation: 'Only you can weigh the deadline.',
+  });
+  expect(reasoned).toContain('no recommendation: Only you can weigh the deadline.');
+  expect(reasoned).not.toContain('recommended: none');
 });
 
 test('a stopped item names its stage and outcome, and its commands work from any directory', () => {
