@@ -1,4 +1,4 @@
-/** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
+/** Workflow DAG simulation with caller-supplied outputs and opt-in trusted code execution. */
 import { formatSkipCause } from './skip-cause';
 import { createLogger, getArchonTempPath } from '@archon/paths';
 import { validateStructuredOutput } from './structured-output';
@@ -30,7 +30,13 @@ import {
   type DryRunResolution,
   type DryRunTraceEntry,
 } from './dry-run/schemas';
-import { isRecord, type DryRunStubs } from './dry-run/stubs';
+import {
+  assertDisjointStubs,
+  dryRunIterationStubsSchema,
+  isRecord,
+  type DryRunIterationStubs,
+  type DryRunStubs,
+} from './dry-run/stubs';
 import { simulateNodes } from './dry-run/simulate';
 
 export {
@@ -45,6 +51,8 @@ export {
   createDryRunStubScaffold,
   dryRunStubValueSchema,
   dryRunStubsSchema,
+  dryRunIterationStubsSchema,
+  type DryRunIterationStubs,
   loadDryRunStubs,
   writeDryRunStubScaffold,
   type DryRunStubValue,
@@ -124,6 +132,7 @@ interface DryRunOptions {
   userMessage: string;
   cwd: string;
   stubs?: DryRunStubs;
+  iterationStubs?: DryRunIterationStubs;
   /**
    * Caller-SUPPLIED input values, already validated against the workflow's declared
    * `inputs:` and pack settings at the invocation gate (`resolveTopLevelInputs`) — the
@@ -176,11 +185,13 @@ function createDryRunContext(
     execWorkspace: options.execWorkspace ?? options.cwd,
     sourceRoots: options.sourceRoots ?? liveSourceRoots(options.cwd),
     stubs: options.stubs ?? {},
+    iterationStubs: options.iterationStubs ?? {},
     checkoutProducers: collectCheckoutProducers(options.workflow.nodes),
     ...(inputs ? { inputs } : {}),
     loopBodyScopes: [],
     loopGroupPath: [],
     typedOutputs: [],
+    nodeOutcomes: [],
     artifactsDir: join(tempRoot, 'artifacts'),
     stateDir: join(tempRoot, 'state'),
     logDir: join(tempRoot, 'logs'),
@@ -203,6 +214,9 @@ function createDryRunContext(
 }
 
 export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResult> {
+  const iterationStubs = dryRunIterationStubsSchema.parse(options.iterationStubs ?? {});
+  assertDisjointStubs(options.stubs ?? {}, iterationStubs);
+  options = { ...options, iterationStubs };
   const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
   // The same layering a real run fixes at its start: pack defaults, then declared
   // defaults, then the project's `.archon/packs/` file, then supplied values.
@@ -254,7 +268,7 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
     trace: ctx.trace,
     missingStubs: [...ctx.missingStubs].sort(),
     toleratedMissingStubs: [...ctx.toleratedMissingStubs].sort(),
-    unusedStubs: Object.keys(ctx.stubs)
+    unusedStubs: [...new Set([...Object.keys(ctx.stubs), ...Object.keys(ctx.iterationStubs)])]
       .filter(id => !ctx.consumedStubs.has(id))
       .sort(),
     ...(summary ? { summary } : {}),

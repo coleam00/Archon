@@ -527,6 +527,38 @@ where the agent needs to remember what it already tried.
 
 ### Deterministic exit with `until_bash`
 
+#### Dry-run loop fixtures
+
+Prove a refusal/revision/acceptance route without an AI call. This minimal workflow reads the current review's typed verdict in its own completion probe:
+
+```yaml
+name: review-rounds
+description: Revise until the review accepts
+nodes:
+  - id: rounds
+    loop_group:
+      max_iterations: 4
+      until_bash: 'done=$verdict.output.done; test "$done" = true'
+      nodes:
+        - id: verdict
+          prompt: Review the revision
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+              note: { type: string }
+            required: [done, note]
+  - id: after
+    depends_on: [rounds]
+    prompt: Report $rounds.output
+```
+
+Place the [two-entry fixture](/reference/cli/#workflow-test) beside this workflow in `fixtures/`. `exec-code: true` runs the probe: a false verdict continues, a true verdict completes, and `after` reads the accepted result. The same sequence facility applies to `loop:`; its probe receives the previous iteration's text in `LOOP_PREV_OUTPUT`, while current structured judgment uses `until_field`. A group's probe reads current body outputs as `$verdict.output` and the prior body snapshot as `$LOOP_PREV.verdict.output`.
+
+False or omitted `exec-code` never runs probes and retains the first-iteration assumption. Enabled probes short-circuit when an output field or legacy signal already completes the loop. A short sequence repeats its last value; a never-true condition fails at `max_iterations`, or completes with the last output when `on_exhausted: complete` is declared. Body/probe failures never become exhaustion success. Static stubs still repeat verbatim, and an ordinary array remains one output.
+
+Fixture probes and unstubbed executable bodies run in a scratch checkout; they are trusted host code, not sandboxed code. The [CLI reference](/reference/cli/#workflow-test) covers local indexing, nesting, schema validation, strict probe references and observation files.
+
 Combine LLM work with a deterministic completion check:
 
 ```yaml

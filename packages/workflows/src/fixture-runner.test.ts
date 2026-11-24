@@ -156,6 +156,62 @@ function writeTempProject(options: TempFixtureOptions): { cwd: string; fixturePa
 }
 
 describe('parseFixtureFile', () => {
+  it('keeps literal arrays and wrapper objects separate from iteration metadata', () => {
+    const parsed = parseFixtureFile(
+      'fixture:\n  iteration-stubs:\n    verdict: [null, false, 7, [one, two], {done: true}]\nresults: [one, two]\nwrapper: {iterations: [one, two]}',
+      'sequence.stubs.yaml'
+    );
+    expect(parsed.iterationStubs).toEqual({
+      verdict: [null, false, 7, ['one', 'two'], { done: true }],
+    });
+    expect(parsed.stubs).toEqual({
+      results: ['one', 'two'],
+      wrapper: { iterations: ['one', 'two'] },
+    });
+  });
+
+  it.each(['[]', 'null', 'false', 'value', '[one]'])(
+    'rejects non-mapping iteration metadata: %s',
+    value => {
+      expect(() =>
+        parseFixtureFile(`fixture:\n  iteration-stubs: ${value}`, 'bad.stubs.yaml')
+      ).toThrow();
+    }
+  );
+
+  it.each(['[]', 'null', 'false', 'value', '{}'])('rejects invalid iteration arrays: %s', value => {
+    expect(() =>
+      parseFixtureFile(`fixture:\n  iteration-stubs:\n    verdict: ${value}`, 'bad.stubs.yaml')
+    ).toThrow('verdict');
+  });
+
+  it('rejects overlap without disclosing either value', () => {
+    let diagnostic = '';
+    try {
+      parseFixtureFile(
+        'fixture:\n  iteration-stubs:\n    verdict: [sequence-secret]\nverdict: static-secret',
+        'overlap.stubs.yaml'
+      );
+    } catch (error) {
+      diagnostic = (error as Error).message;
+    }
+    expect(diagnostic).toContain('overlap.stubs.yaml');
+    expect(diagnostic).toContain('verdict');
+    expect(diagnostic).not.toContain('sequence-secret');
+    expect(diagnostic).not.toContain('static-secret');
+  });
+
+  it('preserves prototype-named own keys and their payloads', () => {
+    const parsed = parseFixtureFile(
+      'fixture:\n  iteration-stubs:\n    __proto__:\n      - {__proto__: payload}\n    constructor: [first, last]',
+      'prototype.stubs.yaml'
+    );
+    expect(Object.keys(parsed.iterationStubs)).toEqual(['__proto__', 'constructor']);
+    const payload = parsed.iterationStubs.__proto__?.[0];
+    expect(
+      payload !== null && typeof payload === 'object' && Object.hasOwn(payload, '__proto__')
+    ).toBe(true);
+  });
   it('splits reserved keys from node stubs and applies defaults', () => {
     const parsed = parseFixtureFile(
       ['fixture:', '  expect: completed', 'node-a: "stub"', 'exec-code: false'].join('\n'),
@@ -222,6 +278,77 @@ describe('parseFixtureFile', () => {
 });
 
 describe('runFixtures', () => {
+  it.each(['completed', 'failed', 'exhausted'] as const)(
+    'replays a real isolated multi-iteration fixture: %s',
+    async mode => {
+      const onExhausted = mode === 'exhausted' ? 'complete' : 'fail';
+      const verdicts = mode === 'completed' ? [{ done: false }, { done: true }] : [{ done: false }];
+      const { cwd } = writeTempProject({
+        workflowName: 'rounds-wf',
+        body: Bun.YAML.stringify({
+          fixture: {
+            expect: mode === 'failed' ? 'failed' : 'completed',
+            ...(mode === 'failed'
+              ? { 'fail-node': 'rounds' }
+              : { reached: ['verdict', 'rounds', 'after'] }),
+            'iteration-stubs': { verdict: verdicts },
+            ...(mode === 'completed' ? { 'resolved-text-contains': { after: 'true' } } : {}),
+          },
+          'exec-code': true,
+          after: 'received',
+        }),
+        workflowYaml: Bun.YAML.stringify({
+          name: 'rounds-wf',
+          description: 'Exercise a dry-run review loop',
+          nodes: [
+            {
+              id: 'rounds',
+              loop_group: {
+                max_iterations: 3,
+                on_exhausted: onExhausted,
+                until_bash: 'touch probe-only; done=$verdict.output.done; test "$done" = true',
+                nodes: [
+                  {
+                    id: 'verdict',
+                    prompt: 'review',
+                    output_format: {
+                      type: 'object',
+                      properties: { done: { type: 'boolean' } },
+                      required: ['done'],
+                    },
+                  },
+                ],
+              },
+            },
+            { id: 'after', prompt: 'final $rounds.output', depends_on: ['rounds'] },
+          ],
+        }),
+      });
+      await execFileAsync('git', ['init', '-q'], { cwd });
+      await execFileAsync(
+        'git',
+        [
+          '-c',
+          'user.name=fixture',
+          '-c',
+          'user.email=fixture@test',
+          'commit',
+          '-q',
+          '--allow-empty',
+          '-m',
+          'init',
+        ],
+        { cwd }
+      );
+      const report = await runFixtures({ cwd, workflows: workflowsOnDisk(cwd, ['rounds-wf']) });
+      expect(report.failed).toBe(0);
+      expect(report.passed).toBe(1);
+      expect(report.results[0]?.outcome).toBe(mode === 'failed' ? 'failed' : 'completed');
+      expect(existsSync(join(cwd, 'probe-only'))).toBe(false);
+      if (mode === 'failed')
+        expect(report.results[0]?.nodeFailures?.[0]?.reason).toContain('max iterations (3)');
+    }
+  );
   const passingBody = ['fixture:', '  expect: completed', 'node-a: "stub output"', ''].join('\n');
 
   it('contains environment lookup failures in executable fixtures and continues stub fixtures', async () => {

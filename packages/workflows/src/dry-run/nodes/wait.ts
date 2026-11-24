@@ -13,7 +13,7 @@ import {
   type WaitNode,
 } from '../../schemas';
 import type { AttentionOption } from '../../schemas/wait-node';
-import { stubFor, type DryRunContext } from '../context';
+import { hasAuthoredStub, stubFor, type DryRunContext } from '../context';
 import { completedOutput, type DryRunStubValue } from '../stubs';
 
 export function simulateWait(
@@ -29,8 +29,8 @@ export function simulateWait(
   // An authored stub answers an attention wait, as an answer completes it in a real
   // run. Without one the simulation stops where the run would pause.
   const answer =
-    condition.kind === 'attention' && Object.hasOwn(ctx.stubs, node.id)
-      ? stubFor(node, ctx)
+    condition.kind === 'attention' && hasAuthoredStub(node, ctx)
+      ? stubFor(node, ctx, iteration)
       : undefined;
   if (answer !== undefined) {
     const hydrated = completedOutput(

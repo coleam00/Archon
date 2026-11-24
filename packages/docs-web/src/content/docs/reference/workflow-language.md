@@ -4259,6 +4259,8 @@ Check a workflow before it spends anything:
 - `archon workflow run <name> --dry-run --stubs <file>` walks the graph with outputs you supply, without creating a run or calling a provider. `--stubs-init <file>` writes a stub scaffold. See [Deterministic dry-run](/reference/cli/#deterministic-dry-run).
 - `archon workflow test <name>` replays the fixtures in the workflow's `fixtures/` folder and checks each declared outcome.
 
+For multi-round routes, `fixture.iteration-stubs` supplies a nonempty sequence per node, indexed by local loop iteration with the last entry repeating. Ordinary array outputs remain literal. Only fixture `exec-code: true` (or direct dry-run `--exec-code`) executes declared `until_bash` probes; false or omission preserves assumed first-iteration completion. See [Dry-run loop fixtures](/guides/loop-nodes/#dry-run-loop-fixtures) and the [fixture execution modes](/reference/cli/#workflow-test).
+
 [Build your first workflow](/getting-started/first-workflow/) walks through all three. After a run, `archon workflow get <run-id>`, `archon workflow logs <run-id>` and `archon workflow artifacts <run-id>` show what each node did and wrote.
 
 ## Deprecated node fields

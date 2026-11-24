@@ -473,7 +473,7 @@ implement:
   done: true
   green: true
   summary: "stub summary"
-exec-code: false             # true executes bash/script nodes for real (requires a git checkout)
+exec-code: false             # true executes unstubbed bodies and loop probes (requires a git checkout)
 ```
 
 Run them:
@@ -487,6 +487,22 @@ A reachable attention wait pauses the simulation unless the fixture stubs it; th
 stands in for the answer and must match the form's output, e.g.
 `review: { decision: approve, text: "" }`. Deprecated `approval:` gates auto-approve.
 
+For a multi-round route, put sequences in fixture metadata, never reinterpret an ordinary array output:
+
+```yaml
+fixture:
+  expect: completed
+  iteration-stubs:
+    verdict:
+      - { done: false }
+      - { done: true }
+exec-code: true
+```
+
+Each entry is selected by the innermost loop's iteration, with the final entry repeating. A skipped round does not shift later values; nested loops restart at entry 1 on each invocation. Entries must satisfy the reached node's `output_format`, and a node cannot have both a static stub and a sequence. Plain `--stubs` files and scaffolds remain static.
+
+Only `exec-code: true` executes `loop:` and `loop_group:` completion probes. False or omission preserves assumed first-iteration completion. An authored body stub suppresses the body, not an enabled probe. Field/signal completion short-circuits the probe; numeric nonzero continues until `max_iterations`. Default exhaustion fails; `on_exhausted: complete` keeps the last output. Probe provisioning, reference, timeout and signal failures fail immediately. Generated placeholders cannot invent probe success. Probes receive fresh typed-artifact and node-outcome observations, and require current output references to resolve.
+
 Expected-red fixtures are the important ones: a guard that has never been seen
 failing proves nothing. Prove reds red before trusting them. `workflow test`
 mirrors what a real run does with its two directories: named scripts and command
@@ -494,6 +510,7 @@ files come from one frozen capture of your working tree taken per invocation —
 uncommitted edits included, so authoring works as normal — while exec-code nodes
 execute against a scratch worktree of HEAD. So a script that reaches outside
 `.archon/` with a `__file__`-relative path fails the fixture exactly as it would
-fail the run, and nothing a node executes can touch your checkout. Exec-code
+fail the run. Ordinary checkout-relative writes stay in the scratch tree, but this is
+not a security sandbox: trusted host code can affect external paths and services. Exec-code
 fixtures require a git checkout and fail explicitly outside one. Validate
 load-time errors with `archon workflow list`.

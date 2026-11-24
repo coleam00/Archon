@@ -22,6 +22,51 @@ import { currentNodeScratchDir } from '../../workflow-variables';
 import type { NodeExecutionMetadata } from '../../schemas/node-execution';
 import type { ExecNode } from '../../schemas';
 import type { DryRunContext } from '../context';
+import type { InvocationListings } from '../../invocation-listings';
+
+export async function prepareCodeExecution(
+  ctx: DryRunContext,
+  inputEnv: NodeJS.ProcessEnv,
+  execution?: NodeExecutionMetadata,
+  probe?: InvocationListings & { loopPrevOutput: string }
+): Promise<{ env: NodeJS.ProcessEnv; credentialValues: string[] }> {
+  await mkdir(ctx.artifactsDir, { recursive: true });
+  await mkdir(ctx.stateDir, { recursive: true });
+  const nodeScratchDir = currentNodeScratchDir();
+  if (nodeScratchDir !== undefined) await mkdir(nodeScratchDir, { recursive: true });
+  const env = {
+    ...process.env,
+    ...ctx.envVars,
+    PYTHONDONTWRITEBYTECODE: '1',
+    PWD: ctx.execWorkspace,
+    OLDPWD: ctx.execWorkspace,
+    ...inputEnv,
+    ...buildExecNodeEnvironment({
+      artifactsDir: ctx.artifactsDir,
+      stateDir: ctx.stateDir,
+      logDir: ctx.logDir,
+      workflowId: 'dry-run',
+      baseBranch: 'dry-run-base',
+      userMessage: ctx.userMessage,
+      loopUserInput: '',
+      loopPrevOutput: probe?.loopPrevOutput ?? '',
+      rejectionReason: '',
+      issueContext: '',
+      typedArtifactsFile: probe?.typedArtifactsFile ?? '',
+      nodeOutcomesFile: probe?.nodeOutcomesFile ?? '',
+      nodeExecution: execution ?? null,
+      inputEnvKeys: Object.keys(inputEnv),
+    }),
+  };
+  return {
+    env,
+    credentialValues: collectCredentialValues(
+      env,
+      ctx.protectedEnvKeys,
+      ctx.protectedCredentialValues
+    ),
+  };
+}
 
 export async function executeCodeNode(
   node: ExecNode,
@@ -33,44 +78,7 @@ export async function executeCodeNode(
 ): Promise<ReturnType<typeof certifyExecOutput> | { error: string }> {
   try {
     const { command, args, input } = await resolveCodeInvocation(node, code, ctx);
-    // The executor pre-creates the artifacts dir it advertises; the simulator honors
-    // the same contract (#2617). Idempotent, and only reached when code executes, so
-    // a pure-stub dry run creates no directory.
-    await mkdir(ctx.artifactsDir, { recursive: true });
-    await mkdir(ctx.stateDir, { recursive: true });
-    const nodeScratchDir = currentNodeScratchDir();
-    if (nodeScratchDir !== undefined) await mkdir(nodeScratchDir, { recursive: true });
-    const env = {
-      ...process.env,
-      ...ctx.envVars,
-      PYTHONDONTWRITEBYTECODE: '1',
-      PWD: ctx.execWorkspace,
-      OLDPWD: ctx.execWorkspace,
-      ...inputEnv,
-      ...buildExecNodeEnvironment({
-        artifactsDir: ctx.artifactsDir,
-        stateDir: ctx.stateDir,
-        logDir: ctx.logDir,
-        workflowId: 'dry-run',
-        baseBranch: 'dry-run-base',
-        userMessage: ctx.userMessage,
-        loopUserInput: '',
-        loopPrevOutput: '',
-        rejectionReason: '',
-        issueContext: '',
-        // A dry run writes no artifacts and records no node state, so there is no
-        // listing to point at.
-        typedArtifactsFile: '',
-        nodeOutcomesFile: '',
-        nodeExecution: execution ?? null,
-        inputEnvKeys: Object.keys(inputEnv),
-      }),
-    };
-    const credentialValues = collectCredentialValues(
-      env,
-      ctx.protectedEnvKeys,
-      ctx.protectedCredentialValues
-    );
+    const { env, credentialValues } = await prepareCodeExecution(ctx, inputEnv, execution);
     let result: Awaited<ReturnType<typeof execFileAsync>>;
     try {
       result = await execFileAsync(command, args, {

@@ -18,7 +18,7 @@ import {
   type GraphPlan,
   type NodeOutput,
 } from '../schemas';
-import { recordFailed, recordSkipped, type DryRunContext } from './context';
+import { hasAuthoredStub, recordFailed, recordSkipped, type DryRunContext } from './context';
 import { simulateAgentOrExec } from './nodes/agent-exec';
 import { simulateGate } from './nodes/gate';
 import { simulateHalt } from './nodes/halt';
@@ -224,6 +224,7 @@ async function simulateLayerNode(
   const execution = await simulatedExecution(node, ctx);
   await simulateNode(node, outputs, ctx, iteration, execution);
   const result = outputs.get(node.id);
+  if (result !== undefined) recordNodeOutcome(node, result, ctx);
   if (result?.state === 'failed') ctx.interactionAdmission?.failed(node.id);
   // The real run's rule (`writeTypedArtifacts`): a completed node that declares a type.
   if (result?.state === 'completed' && node.output_type) {
@@ -241,6 +242,21 @@ async function simulateLayerNode(
   }
 }
 
+function recordNodeOutcome(node: DagNode, result: NodeOutput, ctx: DryRunContext): void {
+  ctx.nodeOutcomes.push({
+    node_id: [...ctx.loopGroupPath.map(frame => frame.groupId), node.id].join('.'),
+    state: result.state,
+    ...(ctx.loopGroupPath.length > 0 ? { loop_group_path: [...ctx.loopGroupPath] } : {}),
+    ...(result.state === 'failed' ? { error: result.error } : {}),
+    ...(result.state === 'skipped' ? { cause: result.cause } : {}),
+    ...(result.state === 'completed' &&
+    node.output_format !== undefined &&
+    'structuredOutput' in result
+      ? { output: result.structuredOutput }
+      : {}),
+  });
+}
+
 /**
  * The execution record a real run would give this node, when anything in the simulation
  * reads it: a node another binds with `$<node>.execution.checkoutStart`, or an exec node
@@ -252,7 +268,7 @@ async function simulatedExecution(
   node: DagNode,
   ctx: DryRunContext
 ): Promise<NodeExecutionMetadata | undefined> {
-  const executes = isExecNode(node) && ctx.execCode && !Object.hasOwn(ctx.stubs, node.id);
+  const executes = isExecNode(node) && ctx.execCode && !hasAuthoredStub(node, ctx);
   if (!executes && !ctx.checkoutProducers.has(node.id)) return undefined;
   if (!isExecNode(node) && !isAgentNode(node) && !isLoopNode(node)) return undefined;
   const checkoutStart = await observeCheckout(

@@ -33,7 +33,7 @@ export async function simulateAgentOrExec(
   execution?: NodeExecutionMetadata
 ): Promise<void> {
   const resolvedText = await resolveNodeText(node, outputs, ctx);
-  const stub = stubFor(node, ctx);
+  const stub = stubFor(node, ctx, iteration);
   if (stub === undefined && isExecNode(node) && ctx.execCode) {
     await executeLocally(node, resolvedText, outputs, ctx, iteration, execution);
     return;

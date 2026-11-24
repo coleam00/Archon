@@ -17,7 +17,7 @@
  *       implement: "task-123"
  *     wait-labels:               # exact resolved labels of an attention wait
  *       review: { area: delivery }
- *   exec-code: false             # execute script/bash nodes instead of stubbing
+ *   exec-code: false             # opt into unstubbed executable bodies and loop probes
  *
  * Every remaining key is a node-id → stub-output entry, exactly what
  * `workflow run --dry-run --stubs` accepts. The only execution path is
@@ -39,6 +39,8 @@ import { execFileAsync } from '@archon/git';
 import {
   RESERVED_FIXTURE_KEYS,
   dryRunStubsSchema,
+  dryRunIterationStubsSchema,
+  type DryRunIterationStubs,
   dryRunWorkflow,
   formatDryRunTraceLine,
   summarizeTraceEntry,
@@ -62,6 +64,7 @@ import { FIXTURE_SUFFIX, FIXTURES_DIR } from './fixture-layout';
 import { parseYaml } from './loader';
 import { attentionLabelsSchema } from './schemas/wait-node';
 import { fixtureResolvedTextFailure, fixtureWaitLabelsFailure } from './fixture-expectations';
+import { assertDisjointStubs } from './dry-run/stubs';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -84,6 +87,7 @@ export const fixtureDeclarationSchema = z
     inputs: z.record(z.string(), z.string()).optional(),
     'resolved-text-contains': z.record(z.string(), z.string()).optional(),
     'wait-labels': z.record(z.string(), attentionLabelsSchema).optional(),
+    'iteration-stubs': dryRunIterationStubsSchema.optional(),
   })
   .strict()
   .refine(decl => decl.expect !== 'failed' || decl['fail-node'] !== undefined, {
@@ -95,6 +99,7 @@ export interface ParsedFixtureFile {
   declaration: FixtureDeclaration;
   execCode: boolean;
   stubs: DryRunStubs;
+  iterationStubs: DryRunIterationStubs;
 }
 
 /** Split reserved metadata keys from node stubs; invalid metadata is a hard error, never silently stripped — a real node id could collide with a reserved key. */
@@ -127,7 +132,9 @@ export function parseFixtureFile(text: string, path: string): ParsedFixtureFile 
     }
     const result = fixtureDeclarationSchema.safeParse(value ?? {});
     if (!result.success) {
-      const issues = result.error.issues.map(issue => issue.message).join('; ');
+      const issues = result.error.issues
+        .map(issue => `${issue.path.join('.')}: ${issue.message}`)
+        .join('; ');
       throw new Error(`Invalid fixture '${path}': 'fixture' block — ${issues}`);
     }
     declaration = result.data;
@@ -140,7 +147,26 @@ export function parseFixtureFile(text: string, path: string): ParsedFixtureFile 
       .join('; ');
     throw new Error(`Invalid fixture '${path}': ${issues}`);
   }
-  return { declaration, execCode, stubs: stubsResult.data };
+  const iterationStubs = validateFixtureStubOwnership(
+    path,
+    stubsResult.data,
+    declaration['iteration-stubs']
+  );
+  return { declaration, execCode, stubs: stubsResult.data, iterationStubs };
+}
+
+function validateFixtureStubOwnership(
+  path: string,
+  stubs: DryRunStubs,
+  authored: DryRunIterationStubs | undefined
+): DryRunIterationStubs {
+  const iterationStubs = authored ?? {};
+  try {
+    assertDisjointStubs(stubs, iterationStubs);
+  } catch (error) {
+    throw new Error(`Invalid fixture '${path}': ${(error as Error).message}`);
+  }
+  return iterationStubs;
 }
 
 // Discovery walks user directories. This is a hang-guard margin for a pathological
@@ -682,6 +708,7 @@ async function checkFixture(
         userMessage: '',
         cwd: options.cwd,
         stubs: parsed.stubs,
+        iterationStubs: parsed.iterationStubs,
         ...(inputs ? { inputs } : {}),
         execCode,
         execWorkspace: workspace,

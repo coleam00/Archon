@@ -5,6 +5,172 @@ import { dryRunWorkflow, useDryRunFiles } from './dry-run-test-utils';
 const { commandFiles } = useDryRunFiles();
 
 describe('dry-run loops', () => {
+  test('attention and fan-out consumers select their local sequence entry', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'sequence-consumers',
+      nodes: [
+        {
+          id: 'rounds',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 2,
+            nodes: [
+              { id: 'children', workflow: 'other', fan_out: { items: '["a", "b"]' } },
+              { id: 'answer', wait: { attention: 'Answer' }, depends_on: ['children'] },
+              { id: 'finish', prompt: 'Answer: $answer.output.text', depends_on: ['answer'] },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      iterationStubs: {
+        children: [
+          ['first-a', 'first-b'],
+          ['last-a', 'last-b'],
+        ],
+        answer: [{ text: 'revise' }, { text: 'accept' }],
+        finish: ['continue', 'DONE'],
+      },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'children').map(entry => entry.output)
+    ).toEqual(['["first-a","first-b"]', '["last-a","last-b"]']);
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'finish').map(entry => entry.resolvedText)
+    ).toEqual(['Answer: revise', 'Answer: accept']);
+    const invalid = await dryRunWorkflow({
+      workflow,
+      iterationStubs: { children: [['only-one']] },
+    });
+    expect(invalid.outcome).toBe('failed');
+  });
+  test('selects single-node sequence entries by its own iteration and certifies reached entries', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'sequence-loop',
+      nodes: [
+        {
+          id: 'review',
+          loop: { prompt: 'review $LOOP_PREV_OUTPUT', max_iterations: 4, until_field: 'done' },
+          output_format: {
+            type: 'object',
+            properties: { done: { type: 'boolean' } },
+            required: ['done'],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      iterationStubs: {
+        review: [{ done: false }, { done: false }, { done: true }, 'unreachable-invalid'],
+      },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]?.resolvedText).toBe('review {"done":false}');
+    expect(result.trace[0]?.output).toBe('{"done":true}');
+    expect(result.unusedStubs).toEqual([]);
+    const failed = await dryRunWorkflow({
+      workflow,
+      iterationStubs: { review: [{ done: false }, { done: 'wrong' }] },
+    });
+    expect(failed.outcome).toBe('failed');
+  });
+
+  test('a skipped body node selects by iteration, not its number of visits', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'sequence-skips',
+      nodes: [
+        {
+          id: 'rounds',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            nodes: [
+              { id: 'switch', prompt: 'switch' },
+              {
+                id: 'optional',
+                prompt: 'work',
+                when: '$switch.output.take == true',
+                depends_on: ['switch'],
+              },
+              {
+                id: 'finish',
+                prompt: 'finish',
+                trigger_rule: 'all_done',
+                depends_on: ['optional'],
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      iterationStubs: {
+        switch: [{ take: true }, { take: false }, { take: true }],
+        optional: ['first', 'skipped', 'third'],
+        finish: ['continue', 'continue', 'DONE'],
+        unused: ['never'],
+      },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'optional').map(entry => entry.output)
+    ).toEqual(['first', undefined, 'third']);
+    expect(result.unusedStubs).toEqual(['unused']);
+  });
+
+  test('nested groups restart inner sequences on every outer iteration', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'nested-sequence',
+      nodes: [
+        {
+          id: 'outer',
+          loop_group: {
+            until: 'OUTER_DONE',
+            max_iterations: 2,
+            nodes: [
+              {
+                id: 'inner',
+                loop_group: {
+                  until: 'INNER_DONE',
+                  max_iterations: 3,
+                  nodes: [{ id: 'work', prompt: 'work' }],
+                },
+              },
+              { id: 'finish', prompt: 'finish', depends_on: ['inner'] },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      iterationStubs: { work: ['first', 'INNER_DONE'], finish: ['continue', 'OUTER_DONE'] },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'work').map(entry => entry.output)
+    ).toEqual(['first', 'INNER_DONE', 'first', 'INNER_DONE']);
+  });
+
+  test('programmatic declarations reject overlap and empty sequences', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'ambiguous-stubs',
+      nodes: [{ id: 'work', prompt: 'work' }],
+    });
+    await expect(
+      dryRunWorkflow({
+        workflow,
+        stubs: { work: 'static' },
+        iterationStubs: { work: ['sequence'] },
+      })
+    ).rejects.toThrow('both');
+    await expect(dryRunWorkflow({ workflow, iterationStubs: { work: [] } })).rejects.toThrow();
+  });
   test('simulates loop completion and max-iteration failure', async () => {
     const completing = makeTestWorkflow({
       name: 'loop-ok',

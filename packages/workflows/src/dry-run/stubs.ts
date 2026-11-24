@@ -59,6 +59,41 @@ export const dryRunStubsSchema = z.unknown().transform((value, ctx) => {
 });
 export type DryRunStubs = z.infer<typeof dryRunStubsSchema>;
 
+export const dryRunIterationStubsSchema = z.unknown().transform((value, ctx) => {
+  if (!isRecord(value)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'expected a mapping of node ids to iteration outputs',
+    });
+    return z.NEVER;
+  }
+  const entries: [string, DryRunStubValue[]][] = [];
+  for (const [id, candidate] of Object.entries(value)) {
+    if (!Array.isArray(candidate) || candidate.length === 0 || !candidate.every(isStubValue)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [id],
+        message: 'expected a nonempty array of iteration outputs',
+      });
+      continue;
+    }
+    entries.push([id, candidate]);
+  }
+  return Object.fromEntries(entries);
+});
+export type DryRunIterationStubs = z.infer<typeof dryRunIterationStubsSchema>;
+
+export function assertDisjointStubs(
+  stubs: DryRunStubs,
+  iterationStubs: DryRunIterationStubs
+): void {
+  for (const id of Object.keys(iterationStubs)) {
+    if (Object.hasOwn(stubs, id)) {
+      throw new Error(`Node '${id}' has both a static stub and fixture.iteration-stubs`);
+    }
+  }
+}
+
 /** Reserved keys of the `.stubs.yaml` fixture format (#2772); `loadDryRunStubs` rejects them so a fixture file is never mis-read as plain stubs. */
 export const RESERVED_FIXTURE_KEYS = new Set(['fixture', 'exec-code']);
 

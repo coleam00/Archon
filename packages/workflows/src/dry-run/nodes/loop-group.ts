@@ -6,7 +6,8 @@ import { loopGroupIterationOutput } from '../../dag/nodes/loop-group/loop-group-
 import { resolveNodeModelScope, type WorkflowModelScope } from '../../node-model-resolution';
 import { canSuspend, type LoopGroupNode, type NodeOutput } from '../../schemas';
 import { recordSkipped, recordFailed, withResolution, type DryRunContext } from '../context';
-import { completionReason, loopIterationCompletes } from '../loop-completion';
+import { completionReason } from '../loop-completion';
+import { evaluateLoopCompletion } from '../until-bash';
 import { simulateNodes } from '../simulate';
 
 export async function simulateLoopGroup(
@@ -96,8 +97,16 @@ export async function simulateLoopGroup(
       );
       return;
     }
+    const previousOutput = lastOutput;
     lastOutput = stripCompletionTags(iterationOutput, node.loop_group.until);
-    const groupCompletion = loopIterationCompletes(node.loop_group, { output: iterationOutput });
+    const groupCompletion = await evaluateLoopCompletion(
+      node,
+      { output: iterationOutput },
+      bodyOutputs,
+      ctx,
+      previousOutput,
+      [...outerLoopBodyScopes, iterScope]
+    );
     if (groupCompletion.kind !== 'incomplete') {
       const output = stripCompletionTags(iterationOutput, node.loop_group.until);
       outputs.set(node.id, { state: 'completed', output });
