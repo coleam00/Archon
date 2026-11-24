@@ -638,6 +638,7 @@ export async function runTelemetry({ subcommand, json }: CliRouteContext): Promi
 export async function runSkill({
   subcommand,
   positionals,
+  values,
   cwd,
   json,
 }: CliRouteContext): Promise<number> {
@@ -659,9 +660,14 @@ export async function runSkill({
   }
   const targetArg = positionals[2];
   const targetPath = targetArg ? resolve(targetArg) : cwd;
-  const { skillInstallCommand } = await loadRoute(() => import('../commands/skill'), {
-    providers: false,
-  });
+  const { packSkillInstallCommand, skillInstallCommand } = await loadRoute(
+    () => import('../commands/skill'),
+    { providers: false }
+  );
+  if (typeof values.pack === 'string') {
+    // The trusted plugins directory, as `archon plugin` uses, so repo env cannot redirect it.
+    return await packSkillInstallCommand(values.pack, targetPath, getPluginsPath());
+  }
   return await skillInstallCommand(targetPath);
 }
 

@@ -109,7 +109,7 @@ A provider plugin records its descriptor in the receipt and registers on the nex
 
 A chat plugin records its validated descriptor after an initialization-only handshake. On server restart, each usable chat receipt starts one supervised plugin process; a receipt that is unreadable or does not own its executable is logged and skipped until `update <id>` or `remove <id>` repairs it. Install, update, and removal take effect at the next restart. In Docker, `SLACK_BOT_TOKEN` declares offline provisioning of the image-provided Slack plugin: removing it while tokens remain configured reinstalls it on the next boot. Remove the tokens from every effective env source as well to keep Slack removed. Valid installed Slack releases are retained; image upgrades do not update them. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
 
-A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. With a readable receipt, `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. When repairing an unreadable receipt, `update` prints only the newly installed commit and cannot identify old trees at other commits. Inspect `ARCHON_HOME/plugins/packs/<id>/` and remove old trees manually only after confirming they are unused. Nothing updates in the background. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
+A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, if the manifest declares a `skill` whose folder holds no `SKILL.md`, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. With a readable receipt, `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. When repairing an unreadable receipt, `update` prints only the newly installed commit and cannot identify old trees at other commits. Inspect `ARCHON_HOME/plugins/packs/<id>/` and remove old trees manually only after confirming they are unused. Nothing updates in the background. A pack that ships an agent skill gets one more line naming it and the command that adds it to a project, `archon skill add --pack <id>`; installing the pack writes nothing into a project. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
 
 `copy` writes the installed tree to `.archon/workflows/<name>/` at the root of the repository you run it in (or `--cwd`); in a folder project, the directory itself. It refuses when that directory exists. The copy is an ordinary project workflow pack from then on: you own and edit it, and `update` or `remove` do not touch it.
 
@@ -132,6 +132,39 @@ The unified skill covers running and watching workflows, answering runs that nee
 decision, driving the SDLC pack's queues, setup and configuration, authoring, and
 prompt guidance. It is also installed automatically during
 `archon setup`. The former `skill install` verb is a deprecated alias that prints a warning.
+
+#### `skill add --pack <id> [path]`
+
+Install the agent skill an installed workflow pack ships, instead of `archon-cli`.
+The command copies the folder the pack's manifest names in `skill.path` to
+`.claude/skills/<name>/` and `.agents/skills/<name>/`, where `<name>` is
+`skill.name`. A rerun, for example after `archon plugin update <id>`, replaces both
+folders whole, so a file the pack dropped disappears. It leaves `archon-cli` and every
+other skill folder alone.
+
+```bash
+archon skill add --pack acme/tools/packs/review-kit
+```
+
+The skill is read from the installed pack's own `archon-plugin.json`, at the commit
+`archon plugin list` shows. The command exits 1 and writes nothing when the pack is not
+installed or its receipt is broken, when the plugin is not a workflow pack, when the
+pack declares no `skill`, when the skill folder holds no `SKILL.md`, and when another
+installed pack ships a skill with the same name. An installed pack skill is for your own
+agent: it does not change which skills a workflow node gets, which is still only the
+skills the node names.
+
+A pack declares its skill in its manifest:
+
+```json
+"skill": { "name": "review-kit", "path": "skill" }
+```
+
+`name` is the folder name in both skill roots, in lowercase words joined by `-`; the
+names `archon-cli`, `archon` and `manage-run` are refused, because `archon skill add`
+writes or deletes those folders. `path` is a folder relative to the plugin root, such as
+`skill` or `skills/review-kit`, holding a `SKILL.md` and any reference files. The field
+is optional.
 
 ### `serve`
 
@@ -2277,7 +2310,7 @@ Project pack settings in `.archon/packs/<pack>.yaml` are checked against each di
 
 A pack that declares [forge needs](/reference/workflow-language/#pack-forge-needs) gets a `pack_forge` warning for each listed capability no installed forge plugin advertises, and for a plugin that could not be discovered. It is a warning, not an error: which plugins are installed is a fact about this install, and a run of the pack is refused at start until one serves it.
 
-When the directory you run it in holds an `archon-plugin.json` (a plugin root, also one inside a repository), each key its manifest kind does not declare gets a `manifest_unknown_key` warning under the result named `archon-plugin.json`, with or without a workflow name, such as `unknown key 'compatibility.min' is ignored`. Archon ignores such keys when it installs or loads a plugin, so a manifest written for a newer Archon still works here; the warning is how a misspelled key shows up.
+When the directory you run it in holds an `archon-plugin.json` (a plugin root, also one inside a repository), each key its manifest kind does not declare gets a `manifest_unknown_key` warning under the result named `archon-plugin.json`, with or without a workflow name, such as `unknown key 'compatibility.min' is ignored`. Archon ignores such keys when it installs or loads a plugin, so a manifest written for a newer Archon still works here; the warning is how a misspelled key shows up. A workflow-pack manifest that declares a `skill` whose folder holds no `SKILL.md` gets a `manifest_skill` error there, because installing the pack would refuse it.
 
 Exit code: 0 = all valid, 1 = errors found.
 

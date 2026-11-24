@@ -353,6 +353,7 @@ Examples:
   archon workflow run archon-review --adopt <run-id> "Review the changes"
   archon skill add
   archon skill add /path/to/project
+  archon skill add --pack owner/repo
   archon plugin add coleam00/Archon/plugins/forge-github
 
 `;

@@ -80,6 +80,10 @@ export const orderedExamples: ExampleHelp[] = [
     owner: { command: 'skill', subcommand: 'add' },
   },
   {
+    text: 'archon skill add --pack owner/repo',
+    owner: { command: 'skill', subcommand: 'add' },
+  },
+  {
     text: 'archon plugin add coleam00/Archon/plugins/forge-github',
     owner: { command: 'plugin', subcommand: 'add' },
   },
