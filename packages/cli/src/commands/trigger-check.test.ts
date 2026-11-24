@@ -451,18 +451,15 @@ describe('schedule finds the binding timer however ARCHON_HOME is spelled', () =
     expect(await schedule('status')).toMatchObject({ installed: false });
   });
 
-  test('install under another spelling refuses instead of adding a second timer', async () => {
+  test('install under another spelling keeps the one timer the binding has', async () => {
     const { archonHome, alias, schedule, timerFiles } = await scheduleFixture();
     process.env.ARCHON_HOME = `${archonHome}${sep}`;
     await schedule('install');
     const installed = await timerFiles();
-    // The same spelling again is the same timer.
-    await schedule('install');
-    expect(await timerFiles()).toEqual(installed);
 
-    for (const spelling of [archonHome, alias]) {
+    for (const spelling of [`${archonHome}${sep}`, archonHome, alias]) {
       process.env.ARCHON_HOME = spelling;
-      await expect(schedule('install')).rejects.toThrow('archon trigger schedule remove --config');
+      await schedule('install');
       expect(await timerFiles()).toEqual(installed);
     }
   });

@@ -30,8 +30,6 @@ export interface ScheduleRequest {
   assertKnownRunAsUser: () => Promise<void>;
 }
 
-type InstalledTimer = NativeScheduleTarget & { definition: string };
-
 /** The id of the binding's timer installed with `ARCHON_HOME` spelled `archonHome`. */
 function timerId(archonHome: string, config: TriggerConfig): string {
   return createHash('sha256')
@@ -47,13 +45,12 @@ function timerId(archonHome: string, config: TriggerConfig): string {
 async function installedTimers(
   config: TriggerConfig,
   schedules: NativeScheduleOptions
-): Promise<InstalledTimer[]> {
+): Promise<NativeScheduleTarget[]> {
   const timers = [];
   for (const job of await listNativeSchedules(getArchonHome(), schedules)) {
     if (!('archonHome' in job)) continue;
     const id = timerId(job.archonHome, config);
-    if (job.label === scheduleLabel(id))
-      timers.push({ id, archonHome: job.archonHome, definition: job.definition });
+    if (job.label === scheduleLabel(id)) timers.push({ id, archonHome: job.archonHome });
   }
   return timers;
 }
@@ -62,9 +59,10 @@ export async function scheduleTimer(request: ScheduleRequest): Promise<void> {
   const { operation, config, schedules } = request;
   const archonHome = getArchonHome();
   const installed = await installedTimers(config, schedules);
-  const current = { id: timerId(archonHome, config), archonHome };
   // With none listed, this spelling's id still reaches a job whose file cannot be read.
-  const targets = installed.length > 0 ? installed : [current];
+  const [target, ...more] =
+    installed.length > 0 ? installed : [{ id: timerId(archonHome, config), archonHome }];
+  const targets = [target, ...more];
   const bindingId = config.binding.bindingId;
   if (operation === 'status')
     return writeJsonLine({
@@ -74,10 +72,11 @@ export async function scheduleTimer(request: ScheduleRequest): Promise<void> {
     });
   if (operation === 'remove') {
     let removed = false;
-    for (const target of targets) if (await removeNativeSchedule(target, schedules)) removed = true;
+    for (const job of targets) if (await removeNativeSchedule(job, schedules)) removed = true;
     return writeJsonLine({ bindingId, schedule: operation, removed });
   }
-  await installTimer(request, current, installed);
+  // An install under another spelling keeps the found job's, so it renders the same job.
+  await installTimer(request, target);
   await writeJsonLine({ bindingId, schedule: operation });
 }
 
@@ -93,36 +92,25 @@ async function timerStatus(
   return { installed: false };
 }
 
-async function installTimer(
-  request: ScheduleRequest,
-  current: NativeScheduleTarget,
-  installed: InstalledTimer[]
-): Promise<void> {
+async function installTimer(request: ScheduleRequest, target: NativeScheduleTarget): Promise<void> {
   const { config, configPath, schedules } = request;
   const bindingId = config.binding.bindingId;
-  const removeCommand = `archon trigger schedule remove --config ${configPath}`;
   if (!config.schedule)
     throw new Error(
       `Binding '${bindingId}' is fire-only: its configuration has no schedule, so there is no timer to install. Start it with: archon trigger fire --config ${configPath}`
-    );
-  const other = installed.find(job => job.archonHome !== current.archonHome);
-  if (other)
-    throw new Error(
-      `Binding '${bindingId}' already has a timer for this home, installed with ARCHON_HOME=${other.archonHome}: ${other.definition}. ` +
-        `Install with that ARCHON_HOME, or remove the timer (\`${removeCommand}\`) and install it again.`
     );
   await request.assertKnownRunAsUser();
   const [executable, ...prefix] = cliProgramArguments();
   await installNativeSchedule(
     {
-      id: current.id,
+      id: target.id,
       programArguments: [executable, ...prefix, 'trigger', 'fire', '--config', configPath],
       workingDirectory: config.binding.launch.cwd,
-      archonHome: current.archonHome,
+      archonHome: target.archonHome,
       path: process.env.PATH ?? '',
       schedule: config.schedule,
       output: 'log',
-      removeCommand,
+      removeCommand: `archon trigger schedule remove --config ${configPath}`,
     },
     schedules
   );
