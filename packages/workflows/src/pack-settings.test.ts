@@ -12,10 +12,11 @@ import { tmpdir } from 'os';
 import {
   readProjectPackSettings,
   packSettingValue,
+  validateProjectPackSettings,
   parsePackDeclaration,
   PackSettingsError,
 } from './pack-settings';
-import type { PackSettingSpec } from './schemas/pack-settings';
+import type { PackSettingSpec, WorkflowPack } from './schemas/pack-settings';
 import { discoverWorkflows } from './workflow-discovery';
 import { resolveTopLevelInputs } from './utils/workflow-requirements';
 import { WorkflowInputContractError } from './workflow-inputs';
@@ -82,7 +83,47 @@ describe('parsePackDeclaration', () => {
     });
   });
 
+  it('reads sections and file settings in the order the pack lists them', () => {
+    const declared = parsePackDeclaration(
+      'inputs:\n  review_policy:\n    section: Policies\n    file: true\n    default: docs/review.md\n  strict:\n    type: bool\n    section: Gates\n  plan_policy:\n    section: Policies\n    file: false\n  loose: {}\n',
+      'p/.pack/pack.yaml'
+    );
+    expect(declared).toEqual({
+      settings: {
+        review_policy: {
+          type: 'string',
+          section: 'Policies',
+          file: true,
+          default: 'docs/review.md',
+        },
+        strict: { type: 'bool', section: 'Gates' },
+        plan_policy: { type: 'string', section: 'Policies' },
+        loose: { type: 'string' },
+      },
+    });
+    expect(Object.keys(declared.settings ?? {})).toEqual([
+      'review_policy',
+      'strict',
+      'plan_policy',
+      'loose',
+    ]);
+    expect(Object.hasOwn(declared.settings?.plan_policy ?? {}, 'file')).toBe(false);
+  });
+
+  it('ignores an unknown key on an input and reports it as a warning', () => {
+    expect(
+      parsePackDeclaration(
+        'inputs:\n  tone:\n    secton: Style\n    default: calm\n',
+        'p/.pack/pack.yaml'
+      )
+    ).toEqual({
+      settings: { tone: { type: 'string', default: 'calm' } },
+      warnings: ["p/.pack/pack.yaml: input 'tone': unknown key 'secton' is ignored"],
+    });
+  });
+
   it.each([
+    ['inputs:\n  x:\n    type: bool\n    file: true\n', "input 'x' sets 'file' but is type 'bool'"],
     ['settings:\n  a: {}\n', "unknown key 'settings'"],
     ['inputs:\n  "bad name": {}\n', "input 'bad name' is not a valid name"],
     ['inputs:\n  forge:\n    type: enum\n', "input 'forge' is invalid"],
@@ -357,6 +398,56 @@ describe('readProjectPackSettings', () => {
   });
 });
 
+describe('validateProjectPackSettings file settings', () => {
+  const pack = {
+    key: 'alpha',
+    source: 'project' as const,
+    settings: {
+      policy: { type: 'string', file: true },
+      fallback: { type: 'string', file: true, default: '' },
+    },
+  } satisfies WorkflowPack;
+  const projectFile = (): string => join(cwd, '.archon', 'packs', 'alpha.yaml');
+
+  async function writeProject(yaml: string): Promise<void> {
+    await mkdir(join(cwd, '.archon', 'packs'), { recursive: true });
+    await writeFile(projectFile(), yaml);
+  }
+
+  it('reports a file setting whose path does not exist, naming the setting and the file', async () => {
+    await writeProject('settings:\n  policy: docs/review.md\n');
+    expect(await validateProjectPackSettings(cwd, pack)).toEqual([
+      `${projectFile()}: setting 'policy' names file 'docs/review.md', which does not exist (${join(cwd, 'docs', 'review.md')})`,
+    ]);
+  });
+
+  it('checks a declared default when the project sets nothing', async () => {
+    const withDefault = {
+      ...pack,
+      settings: { policy: { type: 'string', file: true, default: '/no/such/policy.md' } },
+    } satisfies WorkflowPack;
+    expect(await validateProjectPackSettings(cwd, withDefault)).toEqual([
+      `${projectFile()}: setting 'policy' names file '/no/such/policy.md', which does not exist (/no/such/policy.md)`,
+    ]);
+  });
+
+  it('reports a path that is a directory', async () => {
+    await writeProject('settings:\n  policy: .archon\n');
+    const [error] = await validateProjectPackSettings(cwd, pack);
+    expect(error).toContain("setting 'policy' names file '.archon', which is not a file");
+  });
+
+  it('accepts an existing file, an empty value and an unset setting', async () => {
+    expect(await validateProjectPackSettings(cwd, pack)).toEqual([]);
+    await mkdir(join(cwd, 'docs'), { recursive: true });
+    await writeFile(join(cwd, 'docs', 'review.md'), 'be kind\n');
+    await writeProject('settings:\n  policy: docs/review.md\n  fallback: ""\n');
+    expect(await validateProjectPackSettings(cwd, pack)).toEqual([]);
+    await writeProject(`settings:\n  policy: ${join(cwd, 'docs', 'review.md')}\n`);
+    expect(await validateProjectPackSettings(cwd, pack)).toEqual([]);
+  });
+});
+
 describe('discovery carries the pack', () => {
   async function writePackWorkflow(pack: string, name: string, yaml: string): Promise<void> {
     const dir = join(cwd, '.archon', 'workflows', pack, name);
@@ -392,6 +483,21 @@ describe('discovery carries the pack', () => {
     });
     // A `pack:` key in YAML cannot claim a pack: only discovery sets it.
     expect(byName.get('flat')?.pack).toBeUndefined();
+  });
+
+  it("adds a declaration's ignored input keys to each pack workflow's parse warnings", async () => {
+    await writeDeclaration('alpha', 'inputs:\n  tone:\n    secton: Style\n');
+    await writePackWorkflow(
+      'alpha',
+      'packed',
+      'name: packed\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    const { workflows, errors } = await discover();
+    expect(errors).toEqual([]);
+    expect(workflows[0]?.parseWarnings).toContain(
+      "alpha/.pack/pack.yaml: input 'tone': unknown key 'secton' is ignored"
+    );
+    expect(workflows[0]?.workflow.pack).not.toHaveProperty('warnings');
   });
 
   it('fails every workflow of a pack whose declaration is invalid, naming the file and key', async () => {
