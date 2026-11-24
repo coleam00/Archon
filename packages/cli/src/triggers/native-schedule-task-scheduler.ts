@@ -218,7 +218,7 @@ export function taskSchedulerBackend(
     },
     installed: async () =>
       readInstalled(
-        await installedLabels(join(archonHome, 'schedules'), '.cmd', '.xml'),
+        await installedLabels(join(archonHome, 'schedules'), '.cmd'),
         label => wrapperPath(archonHome, label),
         readTaskWrapper,
         label =>

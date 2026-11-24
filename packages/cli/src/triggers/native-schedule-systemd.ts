@@ -129,7 +129,7 @@ export function systemdBackend(run: RunCommand, options: NativeScheduleOptions):
     afterRemove: () => systemctl('daemon-reload'),
     installed: async () =>
       readInstalled(
-        await installedLabels(directory, '.service', '.timer'),
+        await installedLabels(directory, '.service'),
         label => paths(label)[1],
         readSystemdService,
         label =>

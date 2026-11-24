@@ -8,6 +8,7 @@ import { getArchonHome } from '@archon/paths';
 import type { TriggerConfig } from '@archon/workflows/schemas/resource-start';
 import {
   archonHomeIdentity,
+  LABEL_PREFIX,
   inspectNativeSchedule,
   installNativeSchedule,
   listNativeSchedules,
@@ -15,6 +16,7 @@ import {
   nativeScheduleFiles,
   removeNativeSchedule,
   scheduleLabel,
+  type InstalledSchedule,
   type NativeScheduleOptions,
   type NativeScheduleTarget,
 } from '../triggers/native-schedule';
@@ -52,8 +54,9 @@ interface TriggerScheduleJobs {
   /** This binding's installed jobs, each by its definition file. */
   jobs: { target: NativeScheduleTarget; definition: string }[];
   /**
-   * What stops a miss from being certain: Archon jobs whose definition is missing or cannot
-   * be read, each with how to remove it by hand, or why the jobs could not be listed at all.
+   * Trigger timers whose definition cannot be read, each with how to remove it by hand, or
+   * why the jobs could not be listed. Any of them may be this binding's, so a miss is not
+   * certain; they are reported, and never stop the operation asked for.
    */
   unresolved: string[];
 }
@@ -95,7 +98,7 @@ async function triggerScheduleJobs(
     jobs.push({ target: job, definition: nativeScheduleDefinition(job, schedules) ?? label });
   };
   for (const job of exact) if ((await nativeScheduleFiles(job, schedules)).length > 0) add(job);
-  let listed: Awaited<ReturnType<typeof listNativeSchedules>>;
+  let listed: InstalledSchedule[];
   try {
     listed = await listNativeSchedules(home, schedules);
   } catch (error) {
@@ -104,16 +107,39 @@ async function triggerScheduleJobs(
   }
   const unresolved: string[] = [];
   for (const entry of listed) {
-    if (found.has(entry.label)) continue;
-    if (!('archonHome' in entry)) {
-      unresolved.push(`${entry.unreadable} (remove it by hand: ${entry.removeByHand})`);
-      continue;
-    }
-    const legacyId = triggerScheduleId(entry.archonHome, sourceInstanceId, bindingId);
-    if (entry.label === scheduleLabel(legacyId))
-      add({ id: legacyId, archonHome: entry.archonHome });
+    const seen = found.has(entry.label) ? undefined : listedJob(entry, sourceInstanceId, bindingId);
+    if (seen && 'older' in seen) add(seen.older);
+    else if (seen) unresolved.push(seen.unresolved);
   }
   return { target, jobs, unresolved };
+}
+
+/**
+ * What one listed job says about this binding: its timer under the name an older version
+ * gave it, by the home its definition records; a trigger timer that cannot be read; or
+ * nothing.
+ */
+function listedJob(
+  entry: InstalledSchedule,
+  sourceInstanceId: string,
+  bindingId: string
+): { older: NativeScheduleTarget } | { unresolved: string } | undefined {
+  if (!('archonHome' in entry))
+    return isTriggerTimer(entry.label)
+      ? { unresolved: `${entry.unreadable} (remove it by hand: ${entry.removeByHand})` }
+      : undefined;
+  const id = triggerScheduleId(entry.archonHome, sourceInstanceId, bindingId);
+  return entry.label === scheduleLabel(id)
+    ? { older: { id, archonHome: entry.archonHome } }
+    : undefined;
+}
+
+/**
+ * A trigger timer's id is a bare sha256; wake and cleanup jobs share the label prefix but
+ * not that shape, so an unreadable one of theirs says nothing about a trigger timer.
+ */
+function isTriggerTimer(label: string): boolean {
+  return /^[0-9a-f]{64}$/.test(label.slice(LABEL_PREFIX.length));
 }
 
 /**
@@ -137,13 +163,6 @@ export async function scheduleTrigger(
   return scheduleInstall(config, configPath, found, schedules, assertKnownRunAsUser);
 }
 
-/** Why a binding with no job found may still have one; empty when the miss is certain. */
-function uncertainMiss(unresolved: readonly string[]): string {
-  return unresolved.length === 0
-    ? ''
-    : ` Archon cannot tell whether one of these is this binding's timer: ${unresolved.join('; ')}.`;
-}
-
 async function scheduleStatus(
   config: TriggerConfig,
   { jobs, unresolved }: TriggerScheduleJobs,
@@ -154,7 +173,10 @@ async function scheduleStatus(
   await writeJsonLine({
     bindingId: config.binding.bindingId,
     schedule: 'status',
-    ...(status ? { installed: true, ...status } : { installed: false }),
+    // 'unknown': no job was found, but an unreadable trigger timer may be this binding's.
+    ...(status
+      ? { installed: true, ...status }
+      : { installed: unresolved.length > 0 ? 'unknown' : false }),
     ...(others.length > 0 ? { duplicates: others.map(job => job.definition) } : {}),
     ...(unresolved.length > 0 ? { unresolved } : {}),
   });
@@ -171,7 +193,9 @@ async function scheduleRemove(
     if (await removeNativeSchedule(job.target, schedules)) removed.push(job.definition);
   if (removed.length === 0)
     throw new Error(
-      `No timer is installed for binding '${bindingId}' under this ARCHON_HOME.${uncertainMiss(unresolved)}`
+      unresolved.length === 0
+        ? `No timer is installed for binding '${bindingId}' under this ARCHON_HOME.`
+        : `Removed nothing for binding '${bindingId}': no timer of it was found, but Archon cannot tell whether one of these is it: ${unresolved.join('; ')}.`
     );
   await writeJsonLine({
     bindingId,
@@ -195,11 +219,6 @@ async function scheduleInstall(
       `Binding '${bindingId}' already has a timer installed for this ARCHON_HOME under the name an earlier Archon version gave it: ${older.map(job => job.definition).join(', ')}. ` +
         `Remove it (\`archon trigger schedule remove --config ${configPath}\`), then install again.`
     );
-  // A second timer on one binding starts its stage twice per tick, so a possible one refuses.
-  if (jobs.length === 0 && unresolved.length > 0)
-    throw new Error(
-      `Refusing to install a timer for binding '${bindingId}'.${uncertainMiss(unresolved)}`
-    );
   await assertKnownRunAsUser();
   const absoluteConfig = resolve(configPath);
   const [executable, ...prefix] = cliProgramArguments();
@@ -216,5 +235,9 @@ async function scheduleInstall(
     },
     schedules
   );
-  await writeJsonLine({ bindingId, schedule: 'install' });
+  await writeJsonLine({
+    bindingId,
+    schedule: 'install',
+    ...(unresolved.length > 0 ? { unresolved } : {}),
+  });
 }

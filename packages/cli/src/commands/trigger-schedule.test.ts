@@ -64,7 +64,7 @@ async function fixture() {
     configPath,
     JSON.stringify({
       version: 1,
-      sourceInstanceId: 'timer',
+      sourceInstanceId: 'source',
       binding: {
         bindingId: 'timer',
         bindingRevision: null,
@@ -131,7 +131,7 @@ async function fixture() {
     await installNativeSchedule(
       {
         id: createHash('sha256')
-          .update(JSON.stringify([archonHome, 'timer', 'timer']))
+          .update(JSON.stringify([archonHome, 'source', 'timer']))
           .digest('hex'),
         programArguments: [process.execPath, 'trigger', 'fire', '--config', configPath],
         workingDirectory: root,
@@ -225,20 +225,35 @@ test('repointing a symlink to another home does not move a timer installed throu
 
 // File modes do not stop reads on Windows.
 test.skipIf(process.platform === 'win32')(
-  'a job the listing cannot read stops a second install, and an exact job is still removed',
+  'an unreadable trigger timer is reported without blocking, and an exact job is still removed',
   async () => {
     const { home, linked, schedule, run, jobFiles, jobDirectory, installLegacy } = await fixture();
     await installLegacy(`${home}${sep}`);
     const [legacy] = await jobFiles();
+    // A wake job shares the label prefix; an unreadable one is no evidence about a trigger.
+    const wake = 'com.archon.trigger.workflow-wake-0.plist';
+    await writeFile(join(jobDirectory, wake), 'not a job');
     await chmod(join(jobDirectory, legacy), 0o000);
     try {
-      await expect(run('install', home)).rejects.toThrow();
+      expect(await schedule('status', home)).toMatchObject({
+        installed: 'unknown',
+        unresolved: [expect.stringContaining(legacy)],
+      });
       await expect(run('remove', home)).rejects.toThrow();
-      expect(await jobFiles()).toEqual([legacy]);
+      expect(await schedule('install', home)).toMatchObject({
+        unresolved: [expect.stringContaining(legacy)],
+      });
+      expect(await jobFiles()).toHaveLength(3);
     } finally {
       await chmod(join(jobDirectory, legacy), 0o600);
     }
     await schedule('remove', `${home}${sep}`);
+    expect(await jobFiles()).toEqual([wake]);
+    expect(await schedule('status', home)).toEqual({
+      bindingId: 'timer',
+      schedule: 'status',
+      installed: false,
+    });
 
     await schedule('install', home);
     // Searchable but not listable: the exact job is found by name.
@@ -248,7 +263,7 @@ test.skipIf(process.platform === 'win32')(
     } finally {
       await chmod(jobDirectory, 0o700);
     }
-    expect(await jobFiles()).toEqual([]);
+    expect(await jobFiles()).toEqual([wake]);
   }
 );
 
