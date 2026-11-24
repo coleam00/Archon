@@ -60,7 +60,8 @@ function source(
   unreadable: string[] = [],
   statuses: Record<string, WorkflowRun['status']> = {},
   queuedOn: string[] = [],
-  mergedIds: string[] = []
+  mergedIds: string[] = [],
+  finalRuns: string[] = []
 ): ItemWindowSource {
   return {
     branchOf: async () => null,
@@ -78,7 +79,11 @@ function source(
         const item = items.find(entry => entry.key === key);
         if (!item) return null;
         const runs = (runsByItem.get(item.id) ?? [])
-          .map(row => (statuses[row.id] === undefined ? row : { ...row, status: statuses[row.id] }))
+          .map(row => ({
+            ...row,
+            status: statuses[row.id] ?? row.status,
+            metadata: finalRuns.includes(row.id) ? { item_final: true } : row.metadata,
+          }))
           .map(row =>
             unreadable.includes(row.id)
               ? ({ type: 'degraded', reason: 'run_unreadable', runId: row.id } as const)
@@ -173,7 +178,7 @@ describe('reading items over a window', () => {
     expect(pages).toBe(3);
   });
 
-  test('each item says where it stands, and open keeps the ones something still moves', async () => {
+  test('each item says where it stands, and states keeps the ones asked for', async () => {
     const wide = { since: '2026-10-01T00:00:00Z', until: '2027-01-01T00:00:00Z' };
     // a: its first run still runs after a later one ended. b: its only run failed.
     // c: every run ended, and a start waits for admission.
@@ -184,57 +189,34 @@ describe('reading items over a window', () => {
       ['b', { runId: 'b1', state: 'failed' }],
       ['c', { runId: 'c2', state: 'queued' }],
     ]);
-    // Nothing moves an item whose runs all ended: it rests at its latest run.
-    const rested = await readItemWindow(source([], { b1: 'failed' }), PROJECT, wide);
+    // A run that ended with an outcome and nothing followed stopped its item: it is not done.
+    // Done is a recorded merge, whatever the last run did, or an outcome recorded as final.
+    const ended = (): ItemWindowSource => source([], { b1: 'failed' }, [], ['item-b'], ['c2']);
+    const rested = await readItemWindow(ended(), PROJECT, wide);
     expect(rested.items.map(read => [read.item.key, read.standing])).toEqual([
-      ['a', { runId: 'a2', state: 'resting' }],
-      ['b', { runId: 'b1', state: 'failed' }],
-      ['c', { runId: 'c2', state: 'resting' }],
+      ['a', { runId: 'a2', state: 'stopped' }],
+      ['b', { runId: 'b1', state: 'done' }],
+      ['c', { runId: 'c2', state: 'done' }],
     ]);
 
-    // A recorded merge rests the item, whatever its last run did.
-    const merged = await readItemWindow(
-      source([], { b1: 'failed' }, [], ['item-b']),
-      PROJECT,
-      wide
-    );
-    expect(merged.items.map(read => read.standing.state)).toEqual([
-      'resting',
-      'resting',
-      'resting',
-    ]);
-
-    // The filter holds across pages: a page fills with matching items only.
-    const keys = async (open: boolean): Promise<string[]> => {
+    // The filter holds across pages, most recently active first: c's last run ended after b's.
+    const keys = async (states: ('done' | 'stopped')[]): Promise<string[]> => {
       const found: string[] = [];
-      let page = await readItemWindow(source([], { b1: 'failed' }), PROJECT, {
-        ...wide,
-        open,
-        limit: 1,
-      });
+      let page = await readItemWindow(ended(), PROJECT, { ...wide, states, limit: 1 });
       for (;;) {
         found.push(...page.items.map(read => read.item.key));
         if (page.next === null) return found;
-        page = await readItemWindow(source([], { b1: 'failed' }), PROJECT, {
-          after: page.next,
-          open,
-          limit: 1,
-        });
+        page = await readItemWindow(ended(), PROJECT, { after: page.next, states, limit: 1 });
       }
     };
-    expect(await keys(true)).toEqual(['b']);
-    // Most recently active first: c's last run ended after a's.
-    expect(await keys(false)).toEqual(['c', 'a']);
+    expect(await keys(['stopped'])).toEqual(['a']);
+    expect(await keys(['done'])).toEqual(['c', 'b']);
     // The totals count the whole window, whatever the page holds.
-    const first = await readItemWindow(source([], { b1: 'failed' }), PROJECT, {
-      ...wide,
-      open: false,
-      limit: 1,
-    });
-    expect(first.totals).toEqual({ open: 1, resting: 2 });
+    const first = await readItemWindow(ended(), PROJECT, { ...wide, states: ['done'], limit: 1 });
+    expect(first.totals).toMatchObject({ done: 2, stopped: 1, running: 0 });
     // No run here recorded a pack, so no item is a pack's.
     const ofPack = await readItemWindow(source(), PROJECT, { ...wide, pack: 'flow' });
-    expect([ofPack.items, ofPack.totals]).toEqual([[], { open: 0, resting: 0 }]);
+    expect([ofPack.items, ofPack.totals?.done]).toEqual([[], 0]);
   });
 
   test('an item whose runs cannot all be read is reported as degraded, and the rest of it reads', async () => {

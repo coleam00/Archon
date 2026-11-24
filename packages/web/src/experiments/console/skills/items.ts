@@ -5,36 +5,45 @@ import { requestJson } from '../lib/http';
 export type ItemRead = components['schemas']['ItemRead'];
 export type PackGraph = components['schemas']['PackGraph'];
 
-/** A page of items and the cursor of the next one, null on the last. */
-export type ItemPage = Pick<components['schemas']['ItemWindow'], 'items' | 'next'>;
+export type ItemState = ItemRead['standing']['state'];
+
+/** A page of items, the cursor of the next one (null on the last), and the window's totals. */
+export type ItemPage = Pick<components['schemas']['ItemWindow'], 'items' | 'next' | 'totals'>;
 
 // The read lists the items with a run started in a window; this one holds every item.
 const EVERY_ITEM = '1970-01-01';
 
-/** One page of a project's items that are open (`open`) or at rest. */
+/**
+ * One page of a project's items standing in one of `states`, most recently active first;
+ * `pack` keeps the items standing at a run of that pack.
+ */
 export async function listItemsPage(
   projectId: string,
-  open: boolean,
-  after?: string
+  states: readonly ItemState[],
+  page: { after?: string; pack?: string; limit?: number } = {}
 ): Promise<ItemPage> {
   return requestJson('/api/items/window', 'get', {
     query: {
       project: projectId,
-      open: open ? 'true' : 'false',
-      limit: 100,
-      ...(after === undefined ? { since: EVERY_ITEM } : { after }),
+      states: states.join(','),
+      limit: page.limit ?? 100,
+      ...(page.pack === undefined ? {} : { pack: page.pack }),
+      ...(page.after === undefined ? { since: EVERY_ITEM } : { after: page.after }),
     },
   });
 }
 
-/** Every open item of a project. */
-export async function listOpenItems(projectId: string): Promise<ItemRead[]> {
+/** Every item of a project standing in one of `states`. */
+export async function listItems(
+  projectId: string,
+  states: readonly ItemState[]
+): Promise<ItemRead[]> {
   const items: ItemRead[] = [];
-  let page = await listItemsPage(projectId, true);
+  let page = await listItemsPage(projectId, states);
   for (;;) {
     items.push(...page.items);
     if (page.next === null) return items;
-    page = await listItemsPage(projectId, true, page.next);
+    page = await listItemsPage(projectId, states, { after: page.next });
   }
 }
 

@@ -13,6 +13,7 @@ import {
   type ItemReadSource,
 } from './item-read';
 import { MetricsQueryError, resolveMetricsWindow } from './metrics';
+import { ITEM_STANDING_STATES, type ItemStanding } from './item-standing';
 import { runPack } from './run-pack';
 import type { WorkflowItem } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
@@ -24,16 +25,28 @@ export const ITEM_WINDOW_MAX_LIMIT = 100;
  * `items` holds every run of each item, not only those that started in the window: a
  * per-item figure such as rounds per merged item needs the item's whole history.
  */
+const count = z.number().int();
+// One count per standing state; `satisfies` fails the build when a state is added without one.
+const stateCounts = {
+  running: count,
+  waiting: count,
+  queued: count,
+  failed: count,
+  stopped: count,
+  done: count,
+  resting: count,
+} satisfies Record<ItemStanding['state'], z.ZodNumber>;
+
 export const itemWindowSchema = z.object({
   window: z.object({ since: z.string().datetime(), until: z.string().datetime() }),
   items: z.array(itemReadSchema),
   /** Pass as `after` to read the next page; null on the last one. */
   next: z.string().nullable(),
   /**
-   * With `open` or `pack` in the query: how many items of the window (of that pack, when
-   * named) are open and how many rest, whatever the page holds. Null without either.
+   * With `states` or `pack` in the query: how many items of the window (of that pack, when
+   * named) stand in each state, whatever the page holds. Null without either.
    */
-  totals: z.object({ open: z.number().int(), resting: z.number().int() }).nullable(),
+  totals: z.object(stateCounts).nullable(),
 });
 export type ItemWindow = z.infer<typeof itemWindowSchema>;
 
@@ -41,18 +54,18 @@ export type ItemWindow = z.infer<typeof itemWindowSchema>;
  * A first page names its window (`since` and `until` in `archon metrics` syntax, both
  * optional); a later page names only the cursor it follows.
  *
- * `open` keeps the items that are open (`true`: their `standing.state` is not `resting`) or
- * the ones at rest (`false`). `pack` keeps the items whose standing run is a run of that
- * pack (`runPack`'s key). With either, every item of the window is placed, the page comes
- * most recently active first (when its standing run ended, or started), and the answer
- * carries `totals`. A cursor does not carry them, so each page names them again.
+ * `states` keeps the items whose `standing.state` is one of them. `pack` keeps the items
+ * whose standing run is a run of that pack (`runPack`'s key). With either, every item of the
+ * window is placed, the page comes most recently active first (when its standing run ended,
+ * or started), and the answer carries `totals`. A cursor does not carry them, so each page
+ * names them again.
  */
 export interface ItemWindowQuery {
   since?: string;
   until?: string;
   limit?: number;
   after?: string;
-  open?: boolean;
+  states?: readonly ItemStanding['state'][];
   pack?: string;
 }
 
@@ -64,7 +77,7 @@ const cursorSchema = z.strictObject({
   since: z.string().datetime(),
   until: z.string().datetime(),
   after: z.string(),
-  /** How many items of a placed read (`open`, `pack`) precede the page; `after` is then unused. */
+  /** How many items of a placed read (`states`, `pack`) precede the page; `after` is then unused. */
   offset: z.number().int().nonnegative().optional(),
 });
 
@@ -152,7 +165,7 @@ async function placed(source: ItemWindowSource, item: WorkflowItem, install: Ins
 }
 
 /**
- * A page of a placed read (`open`, `pack`): every item of the window is placed, which costs
+ * A page of a placed read (`states`, `pack`): every item of the window is placed, which costs
  * a few reads each, and only the page's items are read whole.
  */
 async function readPlacedPage(
@@ -162,14 +175,16 @@ async function readPlacedPage(
   page: { offset: number; limit: number },
   install: Install
 ): Promise<Pick<ItemWindow, 'items' | 'totals'> & { nextOffset: number | null }> {
-  const totals = { open: 0, resting: 0 };
+  const totals = Object.fromEntries(ITEM_STANDING_STATES.map(state => [state, 0])) as Record<
+    ItemStanding['state'],
+    number
+  >;
   const kept: { place: Awaited<ReturnType<typeof placed>>; at: number }[] = [];
   for (const item of await listWindow(source, range)) {
     const place = await placed(source, item, install);
     if (query.pack !== undefined && (place.run && runPack(place.run))?.key !== query.pack) continue;
-    const open = place.standing.state !== 'resting';
-    totals[open ? 'open' : 'resting'] += 1;
-    if (query.open === undefined || query.open === open)
+    totals[place.standing.state] += 1;
+    if (query.states === undefined || query.states.includes(place.standing.state))
       kept.push({
         place,
         at: (place.run?.completed_at ?? place.run?.started_at)?.getTime() ?? 0,
@@ -185,7 +200,7 @@ async function readPlacedPage(
 
 /**
  * One page of the project's items in the window. What the install holds for every item is
- * read once a page. Without `open` or `pack` the page follows the store's id order and reads
+ * read once a page. Without `states` or `pack` the page follows the store's id order and reads
  * only its own items; with one, see `ItemWindowQuery`.
  */
 export async function readItemWindow(
@@ -204,7 +219,7 @@ export async function readItemWindow(
       ...(next === undefined ? {} : { offset: next }),
     });
   const install = await readInstallFacts(source);
-  if (query.open !== undefined || query.pack !== undefined) {
+  if (query.states !== undefined || query.pack !== undefined) {
     const range = { projectKey, since, until };
     const page = await readPlacedPage(source, range, query, { offset, limit }, install);
     return {

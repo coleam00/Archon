@@ -16,8 +16,8 @@ import { isItemAsk } from '../primitives/run';
 import * as skill from '../skills';
 import {
   getPackGraph,
+  listItems,
   listItemsPage,
-  listOpenItems,
   type ItemPage,
   type ItemRead,
   type PackGraph,
@@ -33,8 +33,12 @@ const STATE: Record<State, { label: string; tone: string }> = {
   queued: { label: 'Queued', tone: 'text-text-secondary' },
   failed: { label: 'Failed', tone: 'text-error' },
   stopped: { label: 'Stopped', tone: 'text-error' },
+  done: { label: 'Done', tone: 'text-success' },
   resting: { label: 'At rest', tone: 'text-text-tertiary' },
 };
+
+/** Every state but the two an item ends in. */
+const OPEN = ['running', 'waiting', 'queued', 'failed', 'stopped'] as const;
 
 /** The run the engine says the item stands at. */
 function standingRun(read: ItemRead): ItemRead['runs'][number] | undefined {
@@ -53,8 +57,9 @@ function decisionReason(read: ItemRead): string {
   const [stop] = read.questions.flatMap(question =>
     question.kind === 'stopped' ? [question] : []
   );
-  if (stop === undefined) return `${stage} stopped`;
-  const ended = `${stage} ended ${stop.stoppedIn.outcome} and nothing follows`;
+  if (stop === undefined)
+    return `${stage} ended ${run?.outcome ?? 'with no outcome'} and nothing followed`;
+  const ended = `${stage} ended ${stop.stoppedIn.outcome} and nothing followed`;
   return stop.summary === null ? ended : `${ended}: ${stop.summary}`;
 }
 
@@ -214,8 +219,10 @@ function RestingItems({ projectId }: { projectId: string }): ReactElement {
     setBusy(true);
     setError(null);
     try {
-      const next = await listItemsPage(projectId, false, page?.next ?? undefined);
-      setPage({ items: [...(page?.items ?? []), ...next.items], next: next.next });
+      const next = await listItemsPage(projectId, ['done', 'resting'], {
+        after: page?.next ?? undefined,
+      });
+      setPage({ ...next, items: [...(page?.items ?? []), ...next.items] });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'The items could not be read.');
     } finally {
@@ -258,7 +265,7 @@ export function BoardPage(): ReactElement {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
   const project = projects?.find(candidate => candidate.id === projectId);
-  const open = useEntity<ItemRead[]>(K.board(projectId), () => listOpenItems(projectId));
+  const open = useEntity<ItemRead[]>(K.board(projectId), () => listItems(projectId, OPEN));
   const { data: attention } = useEntity<skill.RunsAttention>(
     K.runsAttention,
     skill.listRunsNeedingAttention

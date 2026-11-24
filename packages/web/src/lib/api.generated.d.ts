@@ -2387,9 +2387,9 @@ export interface paths {
           until?: string;
           limit?: number | null;
           after?: string;
-          /** @description Keep only the open items (true: standing.state is not resting) or only the ones at rest (false). With it the page comes most recently active first and the answer carries totals. Name it on every page; the cursor does not carry it. */
-          open?: 'true' | 'false';
-          /** @description Keep only the items whose standing run is a run of this pack, by pack key. Ordered and counted as with open. Name it on every page. */
+          /** @description Keep only the items whose standing.state is one of these, comma-separated (running, waiting, queued, failed, stopped, done, resting). With it the page comes most recently active first and the answer carries totals per state. Name it on every page; the cursor does not carry it. */
+          states?: string;
+          /** @description Keep only the items whose standing run is a run of this pack, by pack key. Ordered and counted as with states. Name it on every page. */
           pack?: string;
         };
         header?: never;
@@ -8307,7 +8307,7 @@ export interface components {
       standing: {
         runId: string | null;
         /** @enum {string} */
-        state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'resting';
+        state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'done' | 'resting';
       };
       runs: {
         id: string;
@@ -9036,7 +9036,7 @@ export interface components {
         standing: {
           runId: string | null;
           /** @enum {string} */
-          state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'resting';
+          state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'done' | 'resting';
         };
         runs: {
           id: string;
@@ -9756,7 +9756,12 @@ export interface components {
       }[];
       next: string | null;
       totals: {
-        open: number;
+        running: number;
+        waiting: number;
+        queued: number;
+        failed: number;
+        stopped: number;
+        done: number;
         resting: number;
       } | null;
     };
