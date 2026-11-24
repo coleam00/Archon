@@ -606,8 +606,11 @@ export interface IResourceStartStore {
   liftInstallHold(): Promise<InstallHold | null>;
   /** Every start the hold would keep: unprepared bindings, then queued requests. */
   listHeldStarts(): Promise<HeldStart[]>;
-  /** The unprepared binding starts on item `itemId`. A store without items returns none. */
-  listHeldItemStarts(itemId: string): Promise<HeldItemStart[]>;
+  /**
+   * The unprepared binding starts that name an item, each with the item it names. A store
+   * without items returns none.
+   */
+  listHeldItemStarts(): Promise<(HeldItemStart & { projectKey: string; itemKey: string })[]>;
   /**
    * The install's run limit (`concurrency.runs`), how many run trees count against it now and
    * the queued starts only it holds (`RunLimitState`); null when none is set. A store without
