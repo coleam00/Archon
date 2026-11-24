@@ -7663,6 +7663,7 @@ export interface components {
             /** @enum {string} */
             confidence?: 'low' | 'medium' | 'high';
           };
+          noRecommendation?: string;
           context?: string;
           artifacts?: {
             /** @enum {string} */
@@ -8022,6 +8023,7 @@ export interface components {
               /** @enum {string} */
               confidence?: 'low' | 'medium' | 'high';
             };
+            noRecommendation?: string;
             context?: string;
             artifacts?: {
               /** @enum {string} */
@@ -8496,6 +8498,7 @@ export interface components {
               /** @enum {string} */
               confidence?: 'low' | 'medium' | 'high';
             };
+            noRecommendation?: string;
             context?: string;
             artifacts?: {
               /** @enum {string} */
@@ -9210,6 +9213,7 @@ export interface components {
                 /** @enum {string} */
                 confidence?: 'low' | 'medium' | 'high';
               };
+              noRecommendation?: string;
               context?: string;
               artifacts?: {
                 /** @enum {string} */
@@ -9823,6 +9827,7 @@ export interface components {
                   /** @enum {string} */
                   confidence?: 'low' | 'medium' | 'high';
                 };
+                noRecommendation?: string;
                 context?: string;
                 artifacts?: {
                   /** @enum {string} */

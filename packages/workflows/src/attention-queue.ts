@@ -146,6 +146,8 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** The option with id `other` is the reserved one: an answer choosing it needs text. */
     other: z.literal(true).optional(),
     recommendation: attentionRecommendationSchema.optional(),
+    /** Why an ask has no recommendation, in its stage's words, when the stage gave a reason. */
+    noRecommendation: z.string().min(1).optional(),
     /** An ask's context: what is at stake and why it came up. */
     context: z.string().optional(),
     /** Artifacts an ask points its answerer to. */

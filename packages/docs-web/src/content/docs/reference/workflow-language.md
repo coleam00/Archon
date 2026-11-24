@@ -2538,9 +2538,10 @@ none. An ask holds:
 - `context`: what is at stake and why it came up.
 - `options`: at least two, each with a kebab-case `id`, what it `does` and what it `cost`s.
   The id `other` is reserved: every ask also offers it, answered with text.
-- `recommendation`: `{ option, why }`, where `option` names one of the ask's options, or
-  `null` when the stage has no basis to choose between them. The key is still required, so a
-  `bash:` or `script:` node writes `"recommendation": null` rather than leaving it out.
+- `recommendation`: `{ option, why }`, where `option` names one of the ask's options. When the
+  stage has no basis to choose between them, `option` is `null` and `why` says why it
+  recommends none. A whole `null` recommendation, with no reason, is still accepted. The key is
+  required either way, so a `bash:` or `script:` node writes it rather than leaving it out.
 - `artifacts`: [artifact pointers](#a-small-result-that-points-at-a-large-file) the operator
   should read to decide; empty when there are none.
 
@@ -2580,7 +2581,8 @@ returns:
   ask offers anyway. `options` without `asks` fails to load.
 - The node writes no options. Its ask schema has no `options` field, and
   `recommendation.option` is limited to the declared ids (an `enum`), with each option's
-  `does` and `cost` in its description. The recommendation may still be `null`.
+  `does` and `cost` in its description. The recommendation's `option` may still be `null`,
+  with its `why`, and so may the whole recommendation.
 - Output that carries `options`, or recommends an id outside the set, fails the node's output
   validation like any other schema miss: an agent node is asked again with the errors, and a
   `bash:` or `script:` node fails. Both errors name the declared ids. A wrong recommendation
@@ -2617,8 +2619,12 @@ What the engine does with them:
   them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
   --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
   tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
-- **An ask may carry no recommendation.** One whose `recommendation` is `null` shows as having
-  none in `archon workflow attention`, in the console and in the item's tracker comment.
+- **An ask may carry no recommendation.** One whose `recommendation` is `null`, or names no
+  option, shows as having none in `archon workflow attention`, in the console and in the
+  item's tracker comment. The stage's reason for recommending none (the `why` of a
+  recommendation whose `option` is `null`) shows in the recommendation's place: the stored ask
+  keeps it as `no_recommendation`, with `recommendation` stored as `null`, and the attention
+  item carries it as `noRecommendation`. The engine never writes a reason of its own.
   `workflow answer --ref <ref> --recommended` on it is refused, and the ask stays open: choose
   one of its options. An Archon binary from before this field could be `null` reports such an
   ask as unreadable and leaves it out of its queue; answer it with a binary that knows it.
