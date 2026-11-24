@@ -63,37 +63,40 @@ const versionRange = z
 
 // A kind joins this schema when its install path and wire contract exist.
 // Until then its manifest is rejected, rather than accepted and half-installed.
+//
+// Manifest and receipt objects strip keys they do not declare, so a newer
+// Archon can add a field without breaking an older binary that reads the same
+// pack or receipt. A change older binaries must not read past bumps
+// `schemaVersion`, which stays a literal.
 const manifestBase = {
   schemaVersion: z.literal(1),
   name: pluginName,
   description: z.string().min(1),
   // A semver range checked against the running Archon at install time.
-  compatibility: z.object({ archon: versionRange }).strict().optional(),
+  compatibility: z.object({ archon: versionRange }).optional(),
 };
 
-export const providerManifestSchema = z
-  .object({
-    ...manifestBase,
-    kind: z.literal('provider'),
-    executable: z
-      .string()
-      .regex(/^archon-provider-[a-z0-9]+(?:-[a-z0-9]+)*$/, 'must be archon-provider-<name>'),
-  })
-  .strict();
+export const providerManifestSchema = z.object({
+  ...manifestBase,
+  kind: z.literal('provider'),
+  executable: z
+    .string()
+    .regex(/^archon-provider-[a-z0-9]+(?:-[a-z0-9]+)*$/, 'must be archon-provider-<name>'),
+});
 
-export const chatManifestSchema = z
-  .object({
-    ...manifestBase,
-    kind: z.literal('chat'),
-    executable: z
-      .string()
-      .regex(/^archon-chat-[a-z0-9]+(?:-[a-z0-9]+)*$/, 'must be archon-chat-<name>'),
-  })
-  .strict();
+export const chatManifestSchema = z.object({
+  ...manifestBase,
+  kind: z.literal('chat'),
+  executable: z
+    .string()
+    .regex(/^archon-chat-[a-z0-9]+(?:-[a-z0-9]+)*$/, 'must be archon-chat-<name>'),
+});
 
-export const forgeManifestSchema = z
-  .object({ ...manifestBase, kind: z.literal('forge'), executable: forgeExecutable })
-  .strict();
+export const forgeManifestSchema = z.object({
+  ...manifestBase,
+  kind: z.literal('forge'),
+  executable: forgeExecutable,
+});
 
 /**
  * `<workflow folder>/<file>.yaml`, relative to the plugin root. The plugin root
@@ -109,26 +112,24 @@ const entrypointPath = z
   )
   .refine(path => !path.includes('..'), 'must stay inside its workflow folder');
 
-export const workflowPackManifestSchema = z
-  .object({
-    ...manifestBase,
-    kind: z.literal('workflow-pack'),
-    /**
-     * The pack's public workflows, keyed by the name each is dispatched as
-     * (`owner/plugin:<key>`). Every other workflow in the pack is support:
-     * composable from inside the pack, never dispatchable.
-     */
-    entrypoints: z
-      .record(pluginName, entrypointPath)
-      .refine(entries => Object.keys(entries).length > 0, 'must declare at least one entrypoint')
-      // One workflow has one public name; two names for one file would leave one of
-      // them unresolvable.
-      .refine(
-        entries => new Set(Object.values(entries)).size === Object.keys(entries).length,
-        'each entrypoint must name a different workflow file'
-      ),
-  })
-  .strict();
+export const workflowPackManifestSchema = z.object({
+  ...manifestBase,
+  kind: z.literal('workflow-pack'),
+  /**
+   * The pack's public workflows, keyed by the name each is dispatched as
+   * (`owner/plugin:<key>`). Every other workflow in the pack is support:
+   * composable from inside the pack, never dispatchable.
+   */
+  entrypoints: z
+    .record(pluginName, entrypointPath)
+    .refine(entries => Object.keys(entries).length > 0, 'must declare at least one entrypoint')
+    // One workflow has one public name; two names for one file would leave one of
+    // them unresolvable.
+    .refine(
+      entries => new Set(Object.values(entries)).size === Object.keys(entries).length,
+      'each entrypoint must name a different workflow file'
+    ),
+});
 
 export const pluginManifestSchema = z.discriminatedUnion('kind', [
   forgeManifestSchema,
@@ -136,6 +137,39 @@ export const pluginManifestSchema = z.discriminatedUnion('kind', [
   chatManifestSchema,
   workflowPackManifestSchema,
 ]);
+
+/**
+ * Dotted paths of keys in a raw manifest that its kind's schema does not
+ * declare, such as `skills` or `compatibility.min`. Readers ignore these keys;
+ * only `archon validate` calls this, so an author sees a typo instead of
+ * losing it silently. An unknown kind or a non-object returns `[]`: parsing
+ * reports those.
+ */
+export function unknownManifestKeys(raw: unknown): string[] {
+  if (!isRecord(raw)) return [];
+  const schema = pluginManifestSchema.options.find(option => option.shape.kind.value === raw.kind);
+  return schema ? unknownKeys(schema, raw, '') : [];
+}
+
+function unknownKeys(
+  schema: z.ZodObject,
+  value: Record<string, unknown>,
+  prefix: string
+): string[] {
+  return Object.entries(value).flatMap(([key, child]) => {
+    if (!Object.hasOwn(schema.shape, key)) return [prefix + key];
+    const field = schema.shape[key];
+    const inner = field instanceof z.ZodOptional ? field.unwrap() : field;
+    // Records such as `entrypoints` are not walked: their keys are names, not fields.
+    return inner instanceof z.ZodObject && isRecord(child)
+      ? unknownKeys(inner, child, `${prefix}${key}.`)
+      : [];
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 export type ChatManifest = z.infer<typeof chatManifestSchema>;
 export type ProviderManifest = z.infer<typeof providerManifestSchema>;
@@ -151,30 +185,26 @@ const commit = z.string().regex(/^[0-9a-f]{40}$/);
  * segment: `remove` deletes exactly these names, so a receipt must not be able
  * to name anything outside that directory.
  */
-const installedFile = z
-  .object({
-    path: z
-      .string()
-      .regex(/^[^/\\]+$/)
-      .refine(path => path !== '.' && path !== '..', 'must name a file'),
-    sha256,
-  })
-  .strict();
+const installedFile = z.object({
+  path: z
+    .string()
+    .regex(/^[^/\\]+$/)
+    .refine(path => path !== '.' && path !== '..', 'must name a file'),
+  sha256,
+});
 
-export const forgeReceiptSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    /** `owner/repo[/path]`, the location of the manifest. */
-    id: z.string().min(1),
-    manifest: forgeManifestSchema,
-    /** The release tag the files came from. */
-    tag: z.string().min(1),
-    /** The commit that tag resolved to at install time. */
-    commit,
-    installedAt: z.iso.datetime(),
-    files: z.array(installedFile).min(1),
-  })
-  .strict();
+export const forgeReceiptSchema = z.object({
+  schemaVersion: z.literal(1),
+  /** `owner/repo[/path]`, the location of the manifest. */
+  id: z.string().min(1),
+  manifest: forgeManifestSchema,
+  /** The release tag the files came from. */
+  tag: z.string().min(1),
+  /** The commit that tag resolved to at install time. */
+  commit,
+  installedAt: z.iso.datetime(),
+  files: z.array(installedFile).min(1),
+});
 
 export const providerReceiptSchema = forgeReceiptSchema.extend({
   manifest: providerManifestSchema,
@@ -191,17 +221,15 @@ export const chatReceiptSchema = forgeReceiptSchema.extend({
  * `packTreePath` in `./store`), so the receipt names the commit instead of a
  * file list, and `remove` deletes that tree.
  */
-export const workflowPackReceiptSchema = z
-  .object({
-    schemaVersion: z.literal(1),
-    id: z.string().min(1),
-    manifest: workflowPackManifestSchema,
-    /** Absent when the pack was installed from the default branch head. */
-    tag: z.string().min(1).optional(),
-    commit,
-    installedAt: z.iso.datetime(),
-  })
-  .strict();
+export const workflowPackReceiptSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string().min(1),
+  manifest: workflowPackManifestSchema,
+  /** Absent when the pack was installed from the default branch head. */
+  tag: z.string().min(1).optional(),
+  commit,
+  installedAt: z.iso.datetime(),
+});
 
 export const pluginReceiptSchema = z.union([
   forgeReceiptSchema,

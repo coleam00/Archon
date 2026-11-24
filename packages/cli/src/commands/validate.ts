@@ -30,6 +30,9 @@ import { workflowValidationConfig } from '@archon/workflows/validation-config';
 import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
 import { discoverInstalledForgePlugins } from './forge';
+import { PLUGIN_MANIFEST_FILE, unknownManifestKeys } from '@archon/plugin-manifest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 /**
  * Build ValidationConfig from the repo's .archon/config.yaml
@@ -147,6 +150,8 @@ async function collectWorkflowResults(
     );
   }
 
+  results.push(...(await unknownManifestKeyResults(cwd)));
+
   for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(
       workflow,
@@ -182,6 +187,32 @@ async function collectWorkflowResults(
   }
 
   return results;
+}
+
+/**
+ * Manifest keys this Archon ignores. Readers strip them so a newer Archon can add a
+ * field; the author still sees a typo here, as a warning that does not fail validate.
+ */
+async function unknownManifestKeyResults(cwd: string): Promise<WorkflowValidationResult[]> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(join(cwd, PLUGIN_MANIFEST_FILE), 'utf-8'));
+  } catch {
+    // No manifest is the common case. An unreadable or invalid pack manifest is already a
+    // load error from discovery, and another kind's manifest is not this command's subject.
+    return [];
+  }
+  const issues = unknownManifestKeys(raw).map(
+    (key): ValidationIssue => ({
+      level: 'warning',
+      field: 'manifest_unknown_key',
+      message: `unknown key '${key}' is ignored`,
+      hint: 'Check the spelling. A key a newer Archon reads is ignored by this one.',
+    })
+  );
+  return issues.length > 0
+    ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
+    : [];
 }
 
 /**

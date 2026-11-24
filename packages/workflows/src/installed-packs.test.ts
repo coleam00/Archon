@@ -73,6 +73,8 @@ interface PackFixture {
   commit: string;
   entrypoints: Record<string, string>;
   files: Record<string, string>;
+  /** Keys a newer Archon would write into the manifest and the receipt. */
+  newerKeys?: true;
 }
 
 /** Write a pack exactly where `archon plugin add` puts one. */
@@ -84,6 +86,7 @@ async function install(pack: PackFixture): Promise<void> {
     name: pack.name,
     description: 'fixture pack',
     entrypoints: pack.entrypoints,
+    ...(pack.newerKeys && { skills: ['review'], compatibility: { archon: '>=0.1.0', min: 1 } }),
   };
   const tree = packTreePath(pluginsDir, pack.id, pack.commit);
   for (const [path, content] of Object.entries({
@@ -103,6 +106,7 @@ async function install(pack: PackFixture): Promise<void> {
       manifest,
       commit: pack.commit,
       installedAt: new Date(0).toISOString(),
+      ...(pack.newerKeys && { installedBy: '0.99.0' }),
     })
   );
 }
@@ -286,6 +290,13 @@ nodes:
     expect(names(support ?? [])).toEqual([HELPER]);
     // Bundled workflows are still there, as before.
     expect(workflows.find(entry => entry.workflow.name === 'fake-review')?.source).toBe('bundled');
+  });
+
+  test('a pack and receipt written with keys this Archon does not know still load', async () => {
+    await install({ ...reviewKit(), newerKeys: true });
+    const { workflows, errors } = await discover();
+    expect(errors).toEqual([]);
+    expect(workflows.find(entry => entry.workflow.name === REVIEW)?.source).toBe('installed');
   });
 
   test('consumer parity: run, routing, validation and resume resolve the same installed workflow', async () => {
@@ -587,7 +598,7 @@ describe('installed pack boundaries', () => {
 /** A run row that recorded `capture` as its source. */
 describe('a pack folder given as the source', () => {
   /** A pack author's checkout of review-kit: the pack's own files, manifest at the root. */
-  async function packFolder(marker: string): Promise<string> {
+  async function packFolder(marker: string, extra: object = {}): Promise<string> {
     const kit = reviewKit(COMMIT_B, marker);
     const dir = join(dirname(project), 'review-kit-checkout');
     for (const [path, content] of Object.entries({
@@ -598,6 +609,7 @@ describe('a pack folder given as the source', () => {
         name: kit.name,
         description: 'fixture pack',
         entrypoints: kit.entrypoints,
+        ...extra,
       }),
     })) {
       await mkdir(dirname(join(dir, path)), { recursive: true });
@@ -660,6 +672,15 @@ describe('a pack folder given as the source', () => {
     expect(
       await loadCommandPrompt(deps, folder, scope.source.name, undefined, resumed?.roots)
     ).toEqual({ success: true, content: 'Scope the change (local).\n' });
+  });
+
+  test('loads when its manifest carries keys this Archon does not know', async () => {
+    const folder = await packFolder('local', { skills: ['review'] });
+    const live = await discoverFrom(folder);
+    expect(live.errors).toEqual([]);
+    expect(live.workflows.find(entry => entry.workflow.name === 'code-review')?.source).toBe(
+      'project'
+    );
   });
 
   test('names the copy it read and the other copy, and how to name each', async () => {

@@ -2261,6 +2261,8 @@ Project pack settings in `.archon/packs/<pack>.yaml` are checked against each di
 
 A pack that declares [forge needs](/reference/workflow-language/#pack-forge-needs) gets a `pack_forge` warning for each listed capability no installed forge plugin advertises, and for a plugin that could not be discovered. It is a warning, not an error: which plugins are installed is a fact about this install, and a run of the pack is refused at start until one serves it.
 
+When the directory holds an `archon-plugin.json`, each key its manifest kind does not declare gets a `manifest_unknown_key` warning under the result named `archon-plugin.json`, such as `unknown key 'compatibility.min' is ignored`. Archon ignores such keys when it installs or loads a plugin, so a manifest written for a newer Archon still works here; the warning is how a misspelled key shows up.
+
 Exit code: 0 = all valid, 1 = errors found.
 
 ### `validate commands [name]`

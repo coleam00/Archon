@@ -292,6 +292,47 @@ describe('validateWorkflowsCommand', () => {
     );
   });
 
+  test('names manifest keys this Archon ignores as warnings, and still exits 0', async () => {
+    const manifest = {
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: 'review-kit',
+      description: 'Review workflows',
+      entrypoints: { review: 'review/review.yaml' },
+    };
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
+    const manifestFile = join(validationCwd, 'archon-plugin.json');
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      await writeFile(manifestFile, JSON.stringify(manifest));
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(0);
+      expect(JSON.parse(String(write.mock.calls[0]?.[0])).results).toEqual([]);
+
+      await writeFile(
+        manifestFile,
+        JSON.stringify({ ...manifest, skils: [], compatibility: { archon: '>=0.1.0', min: 1 } })
+      );
+      write.mockClear();
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(0);
+      const warning = (key: string) => ({
+        level: 'warning',
+        field: 'manifest_unknown_key',
+        message: `unknown key '${key}' is ignored`,
+        hint: 'Check the spelling. A key a newer Archon reads is ignored by this one.',
+      });
+      expect(JSON.parse(String(write.mock.calls[0]?.[0])).results).toEqual([
+        {
+          workflowName: 'archon-plugin.json',
+          filename: 'archon-plugin.json',
+          valid: true,
+          issues: [warning('skils'), warning('compatibility.min')],
+        },
+      ]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('loose output schema warns and exits successfully', async () => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [
