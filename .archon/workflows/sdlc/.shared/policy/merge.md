@@ -1,7 +1,7 @@
 # Land policy
 
 This is the SDLC pack's default policy for landing a change. A project adds to it with
-its own `.archon/sdlc/policy/land.md`: the land stage reads this default first and the
+its own `.archon/sdlc/policy/merge.md`: the land stage reads this default first and the
 project's file after it, and where the two conflict, the project's line wins.
 
 The land stage merges on its own when the case is clear, and asks an operator when it

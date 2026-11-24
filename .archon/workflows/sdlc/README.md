@@ -111,7 +111,7 @@ pack's default in [`.shared/policy/`](.shared/policy) and then the project's
 | `build.md` | build | when the builder acts and when it asks |
 | `propose.md` | build, host | how a pull request is written |
 | `review-lens.md` | review lenses | how a lens works and reports, and which risks earn full review |
-| `land.md` | land | which pull requests merge by themselves and which are asked, and how they merge |
+| `merge.md` | land | which pull requests merge by themselves and which are asked, and how they merge |
 | `discoveries.md` | discoveries | what is filed, tracked, dropped or held |
 | `rulings.md` | plan, review, discoveries | answers the maintainers already gave |
 | `asks.md` | every stage | how a question to an operator is written |
@@ -119,7 +119,7 @@ pack's default in [`.shared/policy/`](.shared/policy) and then the project's
 | `ui-check.md` | the ux lens | how the project's app is started safely |
 
 The default land policy merges clear changes without asking. A project that wants every
-merge asked says so in its `land.md`; this repository's does.
+merge asked says so in its `merge.md`; this repository's does.
 
 ### 3. Models
 
