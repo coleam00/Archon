@@ -5,12 +5,11 @@
  */
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, symlink, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-  readPackSettingEntries,
   readProjectPackSettings,
   packSettingValue,
   validateProjectPackSettings,
@@ -121,8 +120,18 @@ describe('parsePackDeclaration', () => {
     expect(declared.warnings?.[0]).toContain('secton');
   });
 
+  it('refuses file: true on a non-string setting, naming the file and setting', () => {
+    const parse = (): unknown =>
+      parsePackDeclaration(
+        'inputs:\n  marked_bool:\n    type: bool\n    file: true\n',
+        'p/.pack/pack.yaml'
+      );
+    expect(parse).toThrow(PackSettingsError);
+    expect(parse).toThrow('marked_bool');
+    expect(parse).toThrow('p/.pack/pack.yaml');
+  });
+
   it.each([
-    ['inputs:\n  x:\n    type: bool\n    file: true\n', "input 'x'"],
     ['settings:\n  a: {}\n', "unknown key 'settings'"],
     ['inputs:\n  "bad name": {}\n', "input 'bad name' is not a valid name"],
     ['inputs:\n  forge:\n    type: enum\n', "input 'forge' is invalid"],
@@ -415,7 +424,7 @@ describe('validateProjectPackSettings file settings', () => {
   async function onlyError(pack: WorkflowPack, setting: string, file: string): Promise<void> {
     const errors = await validateProjectPackSettings(cwd, pack);
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain(`'${setting}'`);
+    expect(errors[0]).toContain(setting);
     expect(errors[0]).toContain(file);
   }
 
@@ -442,6 +451,18 @@ describe('validateProjectPackSettings file settings', () => {
     await onlyError(policy, 'policy', 'docs/review.md/');
   });
 
+  it('checks a path through a directory symlink and .. the way the filesystem opens it', async () => {
+    // docs/current -> versions/v2, so docs/current/../policy.md is versions/policy.md; a
+    // normalized path would be docs/policy.md, which does not exist.
+    await mkdir(join(cwd, 'versions', 'v2'), { recursive: true });
+    await writeFile(join(cwd, 'versions', 'policy.md'), 'be kind\n');
+    await mkdir(join(cwd, 'docs'), { recursive: true });
+    // 'junction' lets Windows create it without privileges; other platforms ignore the type.
+    await symlink(join(cwd, 'versions', 'v2'), join(cwd, 'docs', 'current'), 'junction');
+    await writeProject('settings:\n  policy: docs/current/../policy.md\n');
+    expect(await validateProjectPackSettings(cwd, policy)).toEqual([]);
+  });
+
   it('accepts an existing relative or absolute file, and a value the project clears', async () => {
     await mkdir(join(cwd, 'docs'), { recursive: true });
     await writeFile(join(cwd, 'docs', 'review.md'), 'be kind\n');
@@ -466,29 +487,44 @@ describe('validateProjectPackSettings file settings', () => {
   });
 
   it('does not treat a setting as a file because its description says it is a path', async () => {
-    const pack = packWith({ note: { type: 'string', description: 'Path to the review policy' } });
+    const { settings } = parsePackDeclaration(
+      'inputs:\n  note:\n    description: Path to the review policy\n',
+      'alpha/.pack/pack.yaml'
+    );
+    const pack = packWith(settings ?? {});
     await writeProject('settings:\n  note: docs/absent.md\n');
     expect(await validateProjectPackSettings(cwd, pack)).toEqual([]);
   });
 });
 
 describe('readPackSettingEntries', () => {
-  it('returns each setting in declared order with its declaration and the project value', async () => {
-    const declared = parsePackDeclaration(
-      'inputs:\n  review_policy:\n    description: the review policy\n    section: Policies\n    file: true\n    default: docs/review.md\n  strict:\n    type: bool\n    section: Gates\n  plan_policy:\n    section: Policies\n    file: true\n  loose:\n    default: x\n',
-      'alpha/.pack/pack.yaml'
+  it('returns each discovered setting in declared order with its declaration and the project value', async () => {
+    const pack = join(cwd, '.archon', 'workflows', 'alpha');
+    await mkdir(join(pack, '.pack'), { recursive: true });
+    await writeFile(
+      join(pack, '.pack', 'pack.yaml'),
+      'inputs:\n  review_policy:\n    description: the review policy\n    section: Policies\n    file: true\n    default: docs/review.md\n  strict:\n    type: bool\n    section: Gates\n  plan_policy:\n    section: Policies\n    file: true\n  loose:\n    default: x\n  tone:\n    default: calm\n'
+    );
+    await mkdir(join(pack, 'packed'), { recursive: true });
+    await writeFile(
+      join(pack, 'packed', 'packed.yaml'),
+      'name: packed\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
     );
     await mkdir(join(cwd, '.archon', 'packs'), { recursive: true });
     await writeFile(
       join(cwd, '.archon', 'packs', 'alpha.yaml'),
-      'settings:\n  plan_policy: docs/plan.md\n  strict: true\n'
+      'settings:\n  review_policy: docs/project-review.md\n  plan_policy: docs/plan.md\n  strict: true\n  loose: ""\n'
     );
-    const entries = await readPackSettingEntries(cwd, {
-      key: 'alpha',
-      source: 'project',
-      ...declared,
+    const { workflows, errors } = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
     });
-    expect(entries).toEqual([
+    expect(errors).toEqual([]);
+    const discovered = workflows[0]?.workflow.pack;
+    if (discovered === undefined) throw new Error('packed was not discovered with its pack');
+    // Read through the package entry point a host imports.
+    const { readPackSettingEntries } = await import('@archon/workflows/pack-settings');
+    expect(await readPackSettingEntries(cwd, discovered)).toEqual([
       {
         name: 'review_policy',
         spec: {
@@ -498,6 +534,7 @@ describe('readPackSettingEntries', () => {
           file: true,
           default: 'docs/review.md',
         },
+        value: 'docs/project-review.md',
       },
       { name: 'strict', spec: { type: 'bool', section: 'Gates' }, value: 'true' },
       {
@@ -505,7 +542,8 @@ describe('readPackSettingEntries', () => {
         spec: { type: 'string', section: 'Policies', file: true },
         value: 'docs/plan.md',
       },
-      { name: 'loose', spec: { type: 'string', default: 'x' } },
+      { name: 'loose', spec: { type: 'string', default: 'x' }, value: '' },
+      { name: 'tone', spec: { type: 'string', default: 'calm' } },
     ]);
   });
 });
