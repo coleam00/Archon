@@ -200,4 +200,50 @@ describe('trigger check refuses what a fire refuses', () => {
       expect.stringContaining("'build'")
     );
   });
+
+  test('an asks-settled option the asking workflow does not declare in returns.options is reported', async () => {
+    const root = track(await mkdtemp(join(tmpdir(), 'archon-binding-options-')));
+    const workflowsDir = join(root, '.archon', 'workflows');
+    await mkdir(workflowsDir, { recursive: true });
+    const asking = (options: string) =>
+      `name: plan\ndescription: plan\nreturns: { node: decide, asks: asks${options} }\nnodes:\n  - id: decide\n    bash: echo '{}'\n    output_format: { type: object, properties: {} }\n`;
+    await writeFile(
+      join(workflowsDir, 'build.yaml'),
+      'name: build\ndescription: build\nnodes:\n  - id: one\n    bash: echo one\n'
+    );
+    const check = (option: string) =>
+      asksSettledBindingCheck(
+        {
+          file: 'b.json',
+          sourceInstanceId: 'b',
+          binding: {
+            bindingId: 'b',
+            bindingRevision: null,
+            hostId: 'host',
+            runAsUserId: 'operator',
+            resource: 'r',
+            overlap: 'queue' as const,
+            launch: {
+              cwd: root,
+              workflowName: 'build',
+              inputs: {},
+              isolation: { kind: 'default' },
+            },
+          },
+          asksSettled: { workflowName: 'plan', settled: 'answered', option },
+        },
+        deps
+      );
+
+    await writeFile(
+      join(workflowsDir, 'plan.yaml'),
+      asking(', options: [{ id: land, does: d, cost: c }, { id: send-back, does: d, cost: c }]')
+    );
+    expect(await check('one-more-round')).toEqual([expect.stringContaining('one-more-round')]);
+    expect(await check('land')).toEqual([]);
+    expect(await check('other')).toEqual([]);
+
+    await writeFile(join(workflowsDir, 'plan.yaml'), asking(''));
+    expect(await check('one-more-round')).toEqual([]);
+  });
 });

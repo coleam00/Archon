@@ -126,7 +126,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `denied_tools` | string[] | unset | Tools to remove from the provider's tool filter, including any `allowed_tools` names. See [Tool Restrictions](#allowed_tools-and-denied_tools-for-tool-restrictions). Supported on Claude, Pi and Copilot |
 | `hooks` | object | unset | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string \| `{ path, optional }` | unset | Path to MCP server config JSON file: checkout first, then the declaring home workflow YAML's directory (its captured copy for captured runs). Other scopes use only the checkout. Claude/Codex/Copilot. Any other provider fails the run before it starts, unless the declaration is `{ path: ..., optional: true }`, which runs the node without the servers when the provider lacks MCP or the file is missing. See [MCP Servers](/guides/mcp-servers/#optional-servers) |
-| `skills` | string[] | unset | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
+| `skills` | (`string` \| `{ name, optional? }`)[] | unset | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. A string is required. On agent nodes, `{ name, optional: true }` skips a filesystem skill and records why if the provider cannot load named skills or Archon finds no such skill in its known roots. A skill installed only outside the provider's enabled roots is still passed. A required name fails preflight on an unsupported provider; an all-optional list does not. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`. See [Optional skills](/guides/skills/#optional-skills) |
 | `plugins` | string[] | unset | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | unset | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | unset | Reasoning depth. Every provider with a request-level reasoning control: Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
@@ -307,12 +307,15 @@ The ladder is the union of every provider's vocabulary. Codex accepts all eight 
 
 Archon type-checks the keys shown here and hands any other Claude sandbox setting, at any level of the block, to Claude as written. Archon does not catch a misspelled key.
 
-**settingSources** controls which filesystem setting sources a capable provider discovers. For Claude these are the project's `CLAUDE.md` and `.claude/` skills, commands and agents, and the user-level `~/.claude/`. For skills it controls eligibility, not activation: `skills:` selects the exact active set, and each declared skill must exist under an enabled source. Fewer sources give a leaner context and a faster node start:
+**settingSources** controls which filesystem setting sources a capable provider discovers. For Claude these are the project's `CLAUDE.md` and `.claude/` skills, commands and agents, and the user-level `~/.claude/`. For skills it controls eligibility, not activation: `skills:` declares the exact set the node may receive. An optional filesystem skill absent from all known skill roots is skipped and recorded in `skills_unavailable` (see [Optional skills](/guides/skills/#optional-skills)). A declared filesystem skill installed only under a disabled source or outside Claude's native roots is unreachable, not absent: even if optional, it is still passed to Claude and fails preflight. Required declarations keep their existing provider handling. Fewer sources give a leaner context and a faster node start:
 
 ```yaml
 - id: lean-review
   command: review
-  settingSources: []              # no setting sources; skills must be omitted or []
+  settingSources: []              # no filesystem setting sources
+  skills:
+    - name: playwright-cli
+      optional: true             # skipped only if absent; installed skills are unreachable
 
 - id: implement
   command: implement
@@ -339,7 +342,7 @@ The node fails before its first model turn when a named plugin is not installed,
 
 A Codex workflow node works the same way. It loads none of the user's Codex plugins and no ChatGPT apps, while the user's `config.toml` settings, hooks and `AGENTS.md` still load. A node names a plugin by the id `codex plugin list` prints, such as `github@openai-curated`. A named Codex plugin brings its skills, which the node body invokes as `$<plugin>:<skill>`, and its hooks. Its MCP servers reach the node only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-codex-plugin)), and its apps stay off. A named plugin is turned on for the node even if you turned plugins off globally in Codex. The node fails before its turn starts when a named plugin is not installed in the Codex home in use.
 
-`plugins:` on a provider that cannot load exactly the named plugins fails the run before any node starts, and `archon validate workflows` reports it as an error. A required `mcp:` and a non-empty `skills:` follow the same rule on a provider without that capability. An `mcp:` declared `optional: true` runs the node without its servers instead and records why (see [Optional Servers](/guides/mcp-servers/#optional-servers)).
+`plugins:` on a provider that cannot load exactly the named plugins fails the run before any node starts, and `archon validate workflows` reports it as an error. A required `mcp:` and a `skills` list that contains a required name follow the same rule on a provider without that capability. An `mcp:` declared `optional: true` runs the node without its servers instead and records why (see [Optional Servers](/guides/mcp-servers/#optional-servers)). A skill declared `{ name, optional: true }` runs the node without that skill and records why (see [Optional skills](/guides/skills/#optional-skills)).
 
 **Workflow-level defaults** (inherited by all Claude nodes unless overridden per-node):
 
@@ -2367,7 +2370,7 @@ nodes:
   and still resolve as `$INPUTS.<name>` / `INPUTS_<UPPER_SNAKE>`, they are simply never checked
   against a declaration, because there isn't one.
 - **`returns:`**: the **node id** whose output IS the workflow's result, written
-  `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field>, waits?: <field>, final?: [<outcome>], summary?: <field> }`. It selects by id, so it works for any node type
+  `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field>, options?: [...], waits?: <field>, final?: [<outcome>], summary?: <field> }`. It selects by id, so it works for any node type
   and even a **non-sink** node (a node other nodes depend on). For an `include:` block,
   `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still waits on every
   terminal node. For a `workflow:` sub-run child, the child's terminal output (threaded back as
@@ -2404,6 +2407,10 @@ nodes:
 
 - **`returns.asks`**: a property of the `returns:` node's output, defined and required by the engine, that holds the
   decisions the run leaves for an operator: its asks. See [Asks](#asks-decisions-a-run-leaves-on-its-item).
+
+- **`returns.options`**: with `asks`, the one set of options every ask of the workflow offers,
+  each with an `id`, what it `does` and what it `cost`s. See [Declared
+  options](#declared-options-one-set-for-every-ask).
 
 - **`returns.waits`**: a property of the `returns:` node's output, defined and required by the engine, that holds what
   the run's item now waits for outside Archon. See [Waits](#waits-what-an-item-waits-for-outside-archon).
@@ -2504,6 +2511,45 @@ node, when the returns node has no object `output_format` the engine enforces, w
 is a `loop_group` or a fan-out node, when `asks` names the same property as `outcome`, or when
 the node's `output_format` declares that property itself (`the engine defines this property;
 remove it from output_format`).
+
+#### Declared options: one set for every ask
+
+An answer's option id decides what starts next when an [asks-settled
+binding](/guides/workflow-triggers/#start-a-different-stage-for-each-option) names it, so the
+options are routing, not prose. A workflow can own them: `returns.options` declares the one set
+every ask it leaves offers.
+
+```yaml
+returns:
+  node: decide
+  asks: asks
+  options:
+    - { id: send-back, does: The builder continues with the answer., cost: Another round. }
+    - { id: take-as-is, does: The change goes on as it is., cost: Nothing more is built. }
+```
+
+- The set holds at least two options, no id twice, and not the reserved `other`, which every
+  ask offers anyway. `options` without `asks` fails to load.
+- The node writes no options. Its ask schema has no `options` field, and
+  `recommendation.option` is limited to the declared ids (an `enum`), with each option's
+  `does` and `cost` in its description. The recommendation may still be `null`.
+- Output that carries `options`, or recommends an id outside the set, fails the node's output
+  validation like any other schema miss: an agent node is asked again with the errors, and a
+  `bash:` or `script:` node fails. Both errors name the declared ids. A wrong recommendation
+  reads `must be equal to one of the allowed values (send-back, take-as-is)`. An ask that
+  wrote its own options reads `must NOT have additional properties ('options')`, followed by
+  the note that `returns.options` supplies them and the ids every ask offers. (An
+  additional-property error quotes the object's `description`, when it has one, for any
+  output schema.)
+- When the run completes, each ask is stored with the declared options, `does` and `cost` as
+  the YAML wrote them, so `archon workflow attention`, the console and the item's tracker
+  comment show them like any ask's options.
+- `archon trigger check`, `archon pack bindings` and the check a bound start gets report an
+  asks-settled binding whose `option` is not a declared id (or `other`): no answer could start
+  it.
+
+A workflow that declares no options works as before: each ask carries the options its node
+wrote.
 
 What the engine does with them:
 

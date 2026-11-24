@@ -6124,6 +6124,14 @@ export interface components {
       result?: {
         outcome?: string;
         asks?: string;
+        options?: {
+          /** @description The option's id: kebab-case, one token (e.g. 'keep-the-flag'). The answer names it. */
+          id: string;
+          /** @description What choosing this option does: the change or action that follows from it. */
+          does: string;
+          /** @description What this option costs: what is given up, what breaks, what has to follow. */
+          cost: string;
+        }[];
         waits?: string;
         final?: string[];
         summary?: string;
@@ -6310,7 +6318,13 @@ export interface components {
             path: string;
             optional?: boolean;
           };
-      skills?: string[];
+      skills?: (
+        | string
+        | {
+            name: string;
+            optional?: boolean;
+          }
+      )[];
       plugins?: string[];
       agents?: {
         [key: string]: {
