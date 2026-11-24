@@ -8,7 +8,6 @@ import {
 } from '@archon/forge';
 import { normalizeGitHubWebhook, reviewState } from './normalize-event';
 export { githubSourceCapabilities as capabilities } from './normalize-event';
-import { SourceForgeReadError } from '../source-forge-reader';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import {
   mappedItemKey,
@@ -179,6 +178,7 @@ async function targetEvents(
       },
     })) satisfies { key: string; event: ForgeEvent }[];
     const read = { host: repo.host, events };
+    // A rerun at this revision is unseen until the process restarts: noticing it means reading again.
     if (
       remembered !== undefined &&
       repo.host === remembered.host &&
@@ -435,7 +435,16 @@ const errorText = (error: unknown): string =>
 
 function readError(error: unknown): { reason: string; kind?: string } {
   const reason = errorText(error);
-  return error instanceof SourceForgeReadError ? { reason, kind: error.kind } : { reason };
+  // The installed plugin is bundled, so the host's error class is a different copy.
+  const kind =
+    typeof error === 'object' &&
+    error !== null &&
+    'kind' in error &&
+    typeof error.kind === 'string' &&
+    error.kind.length > 0
+      ? error.kind
+      : undefined;
+  return kind === undefined ? { reason } : { reason, kind };
 }
 
 function withKind<T extends { reason: string }>(failure: T, kind: string | undefined): T {

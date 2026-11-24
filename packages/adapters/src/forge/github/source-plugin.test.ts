@@ -10,7 +10,6 @@ import {
 import { removeTempTree } from '@archon/paths/test-utils';
 import createGitHubWebhookSource from './source-plugin';
 import { githubWebhookSourceConfigSchema } from './source-config';
-import { SourceForgeReadError } from '../source-forge-reader';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import type { z } from '@hono/zod-openapi';
 
@@ -793,7 +792,7 @@ describe('GitHub source plugin observing open waits', () => {
       waits: [wait],
       forge: {
         commitChecks: async () => {
-          throw new SourceForgeReadError('rate_limited', 'slow down');
+          throw Object.assign(new Error('slow down'), { kind: 'rate_limited' });
         },
         prReviews: async () => {
           throw new Error('no review read expected');
