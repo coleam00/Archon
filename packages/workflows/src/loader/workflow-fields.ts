@@ -220,7 +220,9 @@ export function parseRequires(raw: unknown, filename: string): WorkflowRequireme
 /**
  * Parse optional inputs — the declared signature (#2470). Per-key warn-and-drop:
  * an invalid spec, a non-identifier name (env mangling needs identifier names), or
- * a contradictory `required: true` + `default:` pair is dropped with a warning. The
+ * a contradictory `required: true` + `default:` pair is dropped with a warning. A
+ * `result_of` input that also declares `required` or `default`, or `at` without
+ * `result_of`, is a load error: either reading would silently pick one meaning. The
  * surviving record is set only when non-empty. Absent/invalid block leaves `inputs`
  * undefined — a workflow with no declared inputs keeps Phase-1 behaviour untouched.
  */
@@ -239,6 +241,7 @@ export function parseInputs(
     return { value: undefined };
   }
   const valid = validInputSpecs(raw as Record<string, unknown>, filename);
+  if (typeof valid === 'string') return { error: valid };
   const collision = inputEnvKeyCollision(Object.keys(valid));
   if (collision !== null) return { error: collision };
   return { value: Object.keys(valid).length > 0 ? valid : undefined };
@@ -247,7 +250,7 @@ export function parseInputs(
 function validInputSpecs(
   rawInputs: Record<string, unknown>,
   filename: string
-): Record<string, WorkflowInputSpec> {
+): Record<string, WorkflowInputSpec> | string {
   const valid: Record<string, WorkflowInputSpec> = {};
   for (const [name, spec] of Object.entries(rawInputs)) {
     if (!INPUT_NAME_PATTERN.test(name)) {
@@ -259,6 +262,8 @@ function validInputSpecs(
       getLog().warn({ filename, name, value: spec }, 'invalid_workflow_input_spec_ignored');
       continue;
     }
+    const contradiction = resultOfContradiction(name, parsed.data);
+    if (contradiction !== null) return contradiction;
     if (parsed.data.required === true && parsed.data.default !== undefined) {
       getLog().warn(
         { filename, name },
@@ -266,23 +271,22 @@ function validInputSpecs(
       );
       continue;
     }
-    if (
-      parsed.data.result_of !== undefined &&
-      (parsed.data.required === true || parsed.data.default !== undefined)
-    ) {
-      getLog().warn({ filename, name }, 'contradictory_workflow_input_result_of_ignored');
-      continue;
-    }
-    if (parsed.data.at !== undefined && parsed.data.result_of === undefined) {
-      getLog().warn(
-        { filename, name },
-        'contradictory_workflow_input_at_without_result_of_ignored'
-      );
-      continue;
-    }
     valid[name] = parsed.data;
   }
   return valid;
+}
+
+/** A `result_of` input is filled from the item: a `required` or `default` contradicts it. */
+function resultOfContradiction(name: string, spec: WorkflowInputSpec): string | null {
+  if (spec.result_of === undefined) {
+    return spec.at === undefined
+      ? null
+      : `Input '${name}' declares 'at' without 'result_of': 'at' only says which result a result_of input reads`;
+  }
+  const other = spec.required === true ? 'required' : spec.default !== undefined ? 'default' : null;
+  return other === null
+    ? null
+    : `Input '${name}' declares both 'result_of' and '${other}': a result_of input is filled from the run's item, so it takes no '${other}'`;
 }
 
 /**

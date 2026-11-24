@@ -1849,9 +1849,9 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
 - A run with no item is refused before it does any work, unless every `result_of` input is
   supplied. A `workflow:` child carries no item, so its parent passes the value through
   `with:`.
-- `result_of` with `default:` or `required: true` is contradictory, and the input is dropped at
-  load with a warning. A dry run has no item and previews an unsupplied `result_of` input as
-  `null`.
+- `result_of` with `default:` or `required: true` is contradictory, and the workflow is refused
+  at load, naming the input and both keys. A dry run has no item and previews an unsupplied
+  `result_of` input as `null`.
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
 get a value from it, and `resultCommit`: the commit its result holds at.
@@ -1907,8 +1907,8 @@ inputs:
 - The commit is read from this run's starting checkout. A dirty checkout still reads at its
   HEAD commit, because a land merges commits, not worktree changes. A checkout at no commit
   reads `null`.
-- `at:` without `result_of:` is contradictory, and the input is dropped at load with a
-  warning. A dry run previews the input as `null`, as it does any unsupplied `result_of`.
+- `at:` without `result_of:` is contradictory, and the workflow is refused at load. A dry run
+  previews the input as `null`, as it does any unsupplied `result_of`.
 
 A result at a commit is not an approval by itself: it is whatever the stage returned there,
 and the reading node judges it. A land stage runs on the change's own checkout, for example
@@ -2475,7 +2475,10 @@ nodes:
   [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
   `stopped` until another run starts on the item, whatever its status. A run on no item, a run
   that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
-  workflow that declares no `final` has none, so every unbound outcome stops its item.
+  workflow that declares no `final` has none, so every unbound outcome stops its item. A run
+  whose end does start a binding also stops its item when admission refuses that start at
+  its [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item); the
+  listing then names the limit.
 
 - **`returns.summary`**: a string property of the `returns:` node's output that the attention
   queue shows, as one line, on a `stopped` item: why the stage stopped. The node's
@@ -2866,7 +2869,7 @@ same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
 `INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
 
 The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
-shape as a workflow's, plus a `type`. The file holds only `inputs:`,
+shape as a workflow's, plus a `type` and the optional `section` and `file` keys. The file holds only `inputs:`,
 [`bindings:`](#pack-bindings) and [`forge:`](#pack-forge-needs):
 
 ```yaml
@@ -2882,11 +2885,31 @@ inputs:
   reviewers:
     type: list            # comma-separated text, no empty items
     description: who to request reviews from
+  review_policy:
+    description: the project's review policy
+    section: Policies     # optional grouping name
+    file: true            # string only: the value is a path to a file
+    default: docs/review-policy.md
 ```
 
 The declaration sits in a dot folder so neither workflow loader reads it as a workflow. Values
 stay text, as every `--input` is. An invalid declaration fails every workflow of the pack at
 load, naming the file and the key.
+
+Two optional keys are for a reader that lists a pack's settings, such as a settings page:
+
+- `section:` names the group a setting belongs to. Settings with the same section belong
+  together, in the order the pack lists them; a setting without one belongs to a default group.
+  How groups are shown is the reader's choice. The engine does not interpret the name.
+- `file: true` says the value is a path to a file, relative to the project or absolute. It is
+  allowed only on a `string` setting. [`archon validate workflows`](/reference/cli/#validate-workflows-name)
+  reports a file setting whose value, or default when the project sets none, names a path that
+  does not exist or is not a file. An empty value is not an error. A run does not check the
+  file at start; the node that reads it does.
+
+An unknown key on a setting is ignored, so a pack can use a key a newer Archon adds, and
+`archon validate workflows` lists each one as a `parse_warning`. Releases before this one
+refuse an unknown key on a setting, so they fail to load a pack that sets `section:` or `file:`.
 
 A project sets the values in `.archon/packs/<pack>.yaml`, under `settings:` only:
 
@@ -2908,8 +2931,8 @@ that is after its worktree was created. A `required` setting must be set there, 
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
 Run [`archon validate workflows`](/reference/cli/#validate-workflows-name) to check project
-pack settings before starting a run. It reports invalid values and undeclared names against
-each discovered workflow's pack declaration. Required values that an invocation can supply
+pack settings before starting a run. It reports invalid values, undeclared names and missing
+files named by `file` settings against each discovered workflow's pack declaration. Required values that an invocation can supply
 are checked only at run start.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each

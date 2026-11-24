@@ -15,10 +15,14 @@
  */
 import { z } from 'zod';
 import type { ItemStartLimits } from '@archon/workflows/resource-start-store';
-import type {
-  ResourceStartBindingIntent,
-  StartLimit,
+import {
+  ASKS_SETTLED_SOURCE_ACTOR,
+  RUN_ENDED_SOURCE_ACTOR,
+  sourceReceiptInputSchema,
+  type ResourceStartBindingIntent,
+  type StartLimit,
 } from '@archon/workflows/schemas/resource-start';
+import { itemStoppedMetadata, type StoppedLimit } from '@archon/workflows/schemas/run-metadata';
 import {
   startLimitRefusal,
   startLimitStanding,
@@ -26,7 +30,7 @@ import {
   type StartLimitReset,
   type StartLimitRow,
 } from '@archon/workflows/start-limit';
-import { getDatabase } from './connection';
+import { getDatabase, getDialect } from './connection';
 import { lockAdmission, type TransactionQuery as Query } from './resource-slots';
 import { toHydratedTimestamp } from './timestamps';
 
@@ -159,13 +163,15 @@ function startLimitRow(row: StartLimitRequestRow): StartLimitRow {
  * transaction after `lockAdmission`, so two starts cannot both take the last one. Returns
  * what the start's request records, or why it is refused. A limited start on no item is
  * refused: the count is per item, and letting it through would start it without a limit.
- * A grant on no item raises nothing.
+ * A grant on no item raises nothing. A start refused at its limit may stop its item
+ * (`recordStartLimitStop`); `start` names the receipt, binding and launch it was for.
  */
 export async function countStartLimits(
   query: Query,
   item: { id: string; key: string } | null,
   limit: StartLimit | undefined,
-  grants: string | undefined
+  grants: string | undefined,
+  start: { receiptId: string; bindingId: string; persisted: ResourceStartBindingIntent }
 ): Promise<StartLimitColumns | { refused: string }> {
   const grantsLimit = item === null ? null : (grants ?? null);
   if (limit === undefined) return { startLimit: null, grantsLimit };
@@ -181,8 +187,59 @@ export async function countStartLimits(
     rows,
     await lastStartLimitReset(query, item.id, limit.resetOn)
   );
-  if (standing.left === 0) return { refused: startLimitRefusal(standing, item.key) };
+  if (standing.left === 0) {
+    const { name, starts, granted, used } = standing;
+    const { bindingId, persisted } = start;
+    const stop = {
+      name,
+      starts,
+      granted,
+      used,
+      bindingId,
+      workflow: persisted.launch.workflowName,
+    };
+    await recordStartLimitStop(query, start.receiptId, item.id, stop);
+    return { refused: startLimitRefusal(standing, item.key) };
+  }
   return { startLimit: JSON.stringify(limit), grantsLimit };
+}
+
+/**
+ * Record that a start refused at its limit stopped its item, inside the refusing
+ * transaction: on the completed run whose end (a run-ended binding) or settled asks (an
+ * asks-settled binding) caused the start, which is then the item's last step. The
+ * attention queue lists it as `stopped`, with the limit, while that run is the item's
+ * newest. A start caused by anything else (a fire, a schedule, a node) has no such run, and
+ * a run that still has an open ask or wait on the item is not stopped.
+ */
+async function recordStartLimitStop(
+  query: Query,
+  receiptId: string,
+  itemId: string,
+  limit: StoppedLimit
+): Promise<void> {
+  const receipt = (
+    await query<{ source_actor: unknown }>(
+      'SELECT source_actor FROM remote_agent_start_receipts WHERE id = $1',
+      [receiptId]
+    )
+  ).rows[0];
+  const actor = sourceReceiptInputSchema.shape.sourceActor.safeParse(
+    receipt === undefined ? null : parseStoredJson(receipt.source_actor)
+  );
+  const source = actor.success ? actor.data : undefined;
+  if (source?.source !== RUN_ENDED_SOURCE_ACTOR && source?.source !== ASKS_SETTLED_SOURCE_ACTOR)
+    return;
+  await query(
+    `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 3)}
+      WHERE id = $1 AND item_id = $2 AND status = 'completed'
+        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
+                         WHERE run_id = $4 AND closed_as IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
+                         WHERE run_id = $4 AND closed_as IS NULL)`,
+    // The run id twice: the runs table keys it as a UUID on PostgreSQL, asks and waits as text.
+    [source.id, itemId, JSON.stringify(itemStoppedMetadata(null, limit)), source.id]
+  );
 }
 
 /** See `IResourceStartStore.readItemStartLimits`. Each limit stands by its latest recorded spec. */

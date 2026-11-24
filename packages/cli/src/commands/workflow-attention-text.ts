@@ -160,7 +160,14 @@ const shellWord = (text: string): string =>
  */
 function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
   const { runId, workflow, outcome } = item.stoppedIn;
-  const lines = [`${workflow} ended as '${outcome}'; nothing started and it left no ask`];
+  const { limit } = item;
+  const lines =
+    limit === undefined
+      ? [`${workflow} ended as '${outcome}'; nothing started and it left no ask`]
+      : [
+          `${workflow} ended as '${outcome}'; its start of ${limit.workflow} was refused at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
+          `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
+        ];
   if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
   lines.push(
     `show the run: ${command(`get ${runId}`)}`,
@@ -168,7 +175,9 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
   );
   if (item.item !== undefined) {
     const cwd = item.checkout === null ? '' : ` --cwd ${shellWord(item.checkout)}`;
-    const start = command(`run <workflow> --item ${shellWord(item.item.key)}${cwd}`);
+    const start = command(
+      `run ${limit === undefined ? '<workflow>' : shellWord(limit.workflow)} --item ${shellWord(item.item.key)}${cwd}`
+    );
     lines.push(
       `run a stage on it, which closes this: ${start}${item.checkout === null ? ", from the item's project" : ''}`
     );

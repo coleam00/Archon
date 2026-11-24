@@ -804,6 +804,64 @@ describe('asks without an item', () => {
   });
 });
 
+describe('result_of inputs without an item', () => {
+  const reads = makeWorkflow({ name: 'reads', inputs: { prior: { result_of: 'build' } } });
+
+  it('refuses a pre-created row with no item and no supplied value, naming the input', async () => {
+    const store = makeStore();
+    const result = await startWorkflow({
+      store,
+      workflow: reads,
+      options: { preCreatedRun: makeRun({ status: 'pending', item_id: null }) },
+    });
+    if (result.success) throw new Error('Expected the run to be refused');
+    expect(result.error).toContain("reads input 'prior' from result_of 'build'");
+    expect(store.cancelWorkflowRun).toHaveBeenCalledWith(
+      'run-123',
+      { cancel_reason: 'precondition_failed' },
+      { pendingOnly: true }
+    );
+    expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('starts a pre-created row that carries the value, as a launcher supplies it', async () => {
+    const store = makeStore();
+    await startWorkflow({
+      store,
+      workflow: reads,
+      options: {
+        preCreatedRun: makeRun({
+          status: 'pending',
+          item_id: null,
+          metadata: { inputs: { prior: 'supplied' } },
+        }),
+      },
+    });
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
+  });
+
+  it('starts a pre-created row whose value its pack settings supply, as a foreground start does', async () => {
+    const store = makeStore();
+    await startWorkflow({
+      store,
+      workflow: makeWorkflow({
+        name: 'reads',
+        inputs: { prior: { result_of: 'build' } },
+        pack: {
+          key: 'stages',
+          workflow: 'reads',
+          source: 'project',
+          settings: { prior: { type: 'string', default: 'from-pack' } },
+        },
+      }),
+      options: { preCreatedRun: makeRun({ status: 'pending', item_id: null }) },
+    });
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
+  });
+});
+
 describe('run limit config', () => {
   it('an invalid concurrency number refuses the start with the config problem, not an ownership one', async () => {
     const invalid = new ConcurrencyConfigError(
