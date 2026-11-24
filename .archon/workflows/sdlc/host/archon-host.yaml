@@ -1,0 +1,93 @@
+name: archon-host
+description: |
+  Hand a reviewed pull request to its host. Answers and resolves the review threads the
+  builder settled, brings the description in line with the change, checks that it still
+  merges with its base, reads the host's checks once (or, in a project with no CI, runs
+  the full validation), and takes it out of draft. Changes nothing in the change.
+
+  Starts when the review approves a change, or when an operator takes a reviewed change
+  as it is. By hand, on the change's branch:
+  `archon workflow run archon-host --item issue-<n> --input issue=<n> --branch <head-branch>`.
+  `ready` starts the land stage; `return` sends the change back to its builder.
+
+mutates_checkout: false
+
+inputs:
+  issue:
+    description: The number of the issue whose change this is.
+  repo_host:
+    default: ""
+    description: The host of the repository. Empty means the checkout's `origin` remote.
+  repo_path:
+    default: ""
+    description: The repository on its host. Empty means the checkout's `origin` remote.
+  answers:
+    default: "None."
+    description: Every answer an operator gave on this item, oldest first.
+  build:
+    result_of: archon-build
+    description: What the last build of the item ended with. Read from the item.
+  review:
+    result_of: archon-review
+    description: What the last review of the item ended with. Read from the item.
+
+returns: { node: checks, outcome: outcome, asks: asks }
+
+nodes:
+  - id: threads
+    command: threads
+    model: ['@settle-threads', medium]
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        answered: { type: integer, minimum: 0 }
+        open:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              url: { type: string }
+              what: { type: string }
+            required: [url, what]
+        ask: { type: boolean }
+        summary: { type: string }
+      required: [answered, open, ask, summary]
+
+  - id: describe
+    command: describe
+    model: ['@update-pr-body', medium]
+    depends_on: [threads]
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        changed: { type: boolean }
+        summary: { type: string }
+      required: [changed, summary]
+
+  - id: checks
+    command: checks
+    model: ['@ci', medium]
+    depends_on: [threads, describe]
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        outcome: { type: string, enum: [ready, return, ask] }
+        state: { type: string, enum: [ready, pr_caused, other] }
+        pull_request: { type: string }
+        head: { type: string }
+        validation:
+          anyOf:
+            - type: 'null'
+            - type: object
+              additionalProperties: false
+              properties:
+                head: { type: string }
+                passed: { type: boolean }
+              required: [head, passed]
+        summary: { type: string }
+        report: { type: string, description: 'The absolute path of ci.md.' }
+      required: [outcome, state, pull_request, head, validation, summary, report]

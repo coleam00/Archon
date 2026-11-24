@@ -58,3 +58,8 @@ merge.
   reverted or fixed forward, or its failed jobs rerun when no recent merge touched the
   red code. The pack cannot rerun them itself: the forge reruns checks only on a pull
   request.
+
+## How it merges
+
+- **Squash.** A pull request merges as one squashed commit. A project that keeps its
+  commits says `merge` here instead.

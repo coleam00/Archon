@@ -336,3 +336,10 @@ bindings:
     overlap: queue
     run_ended: { workflow: archon-land, outcome: merged }
     inputs: *ended
+  discoveries-after-answers:
+    workflow: archon-discoveries
+    resource: discoveries
+    capacity: 1
+    overlap: queue
+    asks_settled: { workflow: archon-discoveries, settled: answered }
+    inputs: *asked

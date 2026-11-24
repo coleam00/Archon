@@ -1,12 +1,17 @@
 # Update the pull request description
 
-Bring the pull request's description in line with the final change. It was
-written when the draft opened; the base merge and correction rounds since then
-may have falsified claims in it, and a validation may have passed red it has to
+Bring the pull request's description in line with the change the review approved.
+It was written when the draft opened; the base merge and correction rounds since
+then may have falsified claims in it, and a check may have passed red it has to
 disclose. Your product is an accurate description, nothing else.
 
-The pull request: $INPUTS.pr. Its URL names the repository (host and
-`<owner>/<repo>`) and the number every command below uses. Read and write it
+The pull request is the builder's `pull_request`, and its report, `implementation.md`,
+is at the builder's `report` path:
+
+$INPUTS.build
+
+Its URL names the repository (host and `<owner>/<repo>`) and the number every command
+below uses. Read and write it
 through the Archon CLI, whose argv is the JSON string array in
 `$ARCHON_CLI_COMMAND`, run as `<argv...> forge <op> --json …`, with `<ref>` =
 `{"repo":{"host":…,"path":…},"number":…}`. Read with `pr.view` and
@@ -25,17 +30,18 @@ answer: report it, and never repeat it through another tool.
    claim that is still true. Do not rewrite from scratch, add sections other than
    step 4's, or narrate the correction history. Text between
    `<!-- archon-delivery-description -->` and `<!-- /archon-delivery-description -->`
-   is content the rounds published: keep both markers, and correct claims inside
-   them like any other.
-3. When `$ARTIFACTS_DIR/implementation.md` records a failing check the implementer
+   is content an earlier version of the pack published: keep both markers, and
+   correct claims inside them like any other.
+3. When the builder's `implementation.md` records a failing check it
    judged `inherited` or `environment`, the description must say so near the top:
    the check and why it is not this change's. Keep an existing disclosure that is
    still true.
 4. Link the issue the description references. Read that issue's body
    (`workitem.view`),
    including its dated "Current scope" sections, where the latest supersedes
-   earlier ones where they differ. What the latest review left open, as a JSON
-   list (empty text when no review judged coverage): `$INPUTS.contract_left`.
+   earlier ones where they differ. What the latest review left open is its
+   `contract_left`, a JSON list (`null` below when no review judged coverage):
+   $INPUTS.review
    The reference becomes `Closes #N`, replacing a `Refs #N`, only when that list
    is empty (`[]`) and no dated ruling says the issue stays open or the pull
    request references it without closing it. Otherwise it gets a non-closing
@@ -52,8 +58,10 @@ answer: report it, and never repeat it through another tool.
    `{"ref":<ref>,"body":<description>}` to `$ARTIFACTS_DIR/pr-body-final.json` and
    pass it to `pr.edit-body` with `--data-file`. When nothing changed, edit nothing.
 
-Never modify files in the checkout, commit, push, change the pull request's draft
-state, or touch the review comment.
+Read the propose policy first (`propose.md`, `.archon/sdlc/policy/` over the default
+in `$PACK_DIR/.shared/policy/`): a claim you correct keeps to it. Never modify files in
+the checkout, commit, push, change the pull request's draft state, or touch the review
+comment.
 
 ## Output
 

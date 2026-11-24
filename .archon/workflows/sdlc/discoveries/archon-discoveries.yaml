@@ -1,225 +1,55 @@
 name: archon-discoveries
 description: |
-  Drain the discoveries finished runs recorded outside their own scope. Each pass
-  claims the oldest finished runs with undecided discovery records, and one agent
-  verifies every record against the default branch, merges duplicates across runs
-  and with earlier decisions, and decides each one: file an issue with a full brief,
-  track it on the open issue that already covers it (with a marked evidence comment
-  only when it adds something), drop it with a reason, ask a maintainer, or wait
-  while the code it is about is still on an open pull request. The nodes
-  after the agent perform only the writes it declared and read them back. Each
-  drained run's state document records the refs decided for it and any question
-  asked with its answer, so a record is decided once; a filed issue carries its
-  key's marker, so filing a key again recovers that issue.
+  Decide what the runs that built a landed change noticed outside it: verify each
+  record against the landing branch, and file it as a new issue (with a marker, so it
+  is filed once), add its evidence to the issue that already covers it, drop it, leave
+  it for later, or ask. Files at most three issues a pass, and labels none: a
+  maintainer decides what is triaged. Changes nothing in the checkout.
 
-  Use when: an operator drains discoveries by hand, or a schedule binding the
-  operator installed starts it (see
-  https://archon.diy/guides/sdlc-operations/#discoveries). The pack installs no binding.
-  NOT for: delivering the filed work (intake triages each filed issue), or reading
-  one run's discoveries (its terminal report lists them).
+  Starts when a change lands, or by hand on an item whose change landed:
+  `archon workflow run archon-discoveries --item issue-<n> --input issue=<n>`.
 
-inputs:
-  repo_host:
-    default: ""
-    description: >-
-      The forge host of the repository the runs worked on, such as github.com. Empty,
-      with repo_path empty too, resolves the repository from the checkout's git remotes.
-  repo_path:
-    default: ""
-    description: The owner/name path of that repository.
-  since:
-    default: ""
-    description: Drain only runs that finished at or after this ISO-8601 time; empty is unbounded.
-  until:
-    default: ""
-    description: Drain only runs that finished at or before this ISO-8601 time; empty is unbounded.
-  limit:
-    default: "20"
-    description: The most runs one pass decides, oldest first.
-
-returns: outcome
-
-# Read-only: runs in the launch checkout beside any other run, and creates no worktree.
-worktree:
-  enabled: false
+model: ['@discoveries', large]
 mutates_checkout: false
 
-nodes:
-  # Builds the queue and claims the queued runs.
-  - id: facts
-    script: facts
-    runtime: bun
-    output_format:
-      type: object
-      properties:
-        path: { type: string, enum: [idle, decide] }
-        repo:
-          type: object
-          properties:
-            host: { type: string }
-            path: { type: string }
-          required: [host, path]
-        base:
-          type: object
-          properties:
-            branch: { type: string }
-            sha: { type: string }
-          required: [branch, sha]
-      required: [path, repo, base]
+inputs:
+  issue:
+    description: The number of the issue whose change landed.
+  repo_host:
+    default: ""
+    description: The host of the repository. Empty means the checkout's `origin` remote.
+  repo_path:
+    default: ""
+    description: The repository on its host. Empty means the checkout's `origin` remote.
+  answers:
+    default: "None."
+    description: Every answer an operator gave on this item, oldest first.
+  review:
+    result_of: archon-review
+    description: What the latest review of the item ended with, with its accepted discoveries.
 
-  # Reads code at the base commit with git show and git grep; the checkout stays as
-  # it was. The engine fails this node if the agent modifies it.
+returns: { node: decide, outcome: outcome, asks: asks }
+
+nodes:
   - id: decide
-    command: decide
-    depends_on: [facts]
-    when: "$facts.output.path == 'decide'"
-    model: ['@discoveries', large]
-    mutates_checkout: false
-    with:
-      base_sha: "$facts.output.base.sha"
-      repo: "$facts.output.repo.host/$facts.output.repo.path"
+    command: discoveries
     output_format:
       type: object
+      additionalProperties: false
       properties:
+        outcome: { type: string, enum: [decided, ask] }
         decisions:
           type: array
           items:
-            anyOf:
-              - type: object
-                additionalProperties: false
-                properties:
-                  outcome: { type: string, enum: [file] }
-                  key: &key { type: string, pattern: '^[a-z0-9][a-z0-9-]{2,80}$' }
-                  refs: &refs { type: array, items: { type: string }, minItems: 1 }
-                  title: &title { type: string, pattern: '\S' }
-                  body: { type: string, pattern: '\S' }
-                  reason: &reason { type: string, pattern: '\S' }
-                required: [outcome, key, refs, title, body, reason]
-              - type: object
-                additionalProperties: false
-                properties:
-                  outcome: { type: string, enum: [track] }
-                  key: *key
-                  refs: *refs
-                  title: *title
-                  issue:
-                    type: object
-                    properties:
-                      repo:
-                        type: object
-                        properties:
-                          host: { type: string }
-                          path: { type: string }
-                        required: [host, path]
-                      number: { type: integer, minimum: 1 }
-                    required: [repo, number]
-                  # Evidence the issue does not hold yet, posted as one marked comment
-                  # per key; null posts nothing.
-                  comment: { type: [string, 'null'] }
-                  reason: *reason
-                required: [outcome, key, refs, title, issue, comment, reason]
-              - type: object
-                additionalProperties: false
-                properties:
-                  outcome: { type: string, enum: [drop] }
-                  key: *key
-                  refs: *refs
-                  title: *title
-                  reason: *reason
-                required: [outcome, key, refs, title, reason]
-              - type: object
-                additionalProperties: false
-                properties:
-                  outcome: { type: string, enum: [ask] }
-                  key: *key
-                  refs: *refs
-                  title: *title
-                  question: { type: string, pattern: '\S' }
-                  recommendation: { type: string, pattern: '\S' }
-                required: [outcome, key, refs, title, question, recommendation]
-              # Not decided this pass: the refs stay queued for a later one.
-              - type: object
-                additionalProperties: false
-                properties:
-                  outcome: { type: string, enum: [wait] }
-                  key: *key
-                  refs: *refs
-                  title: *title
-                  reason: *reason
-                required: [outcome, key, refs, title, reason]
-        summary: { type: string }
-      required: [decisions, summary]
-
-  - id: outcome
-    script: outcome
-    runtime: bun
-    depends_on: [facts, decide]
-    trigger_rule: none_failed_min_one_success
-    with:
-      path: "$facts.output.path"
-      repo: { from: "$facts.output.repo" }
-      decisions: { from: "$decide.output.decisions", if_skipped: null }
-      summary: { from: "$decide.output.summary", if_skipped: null }
-    output_format:
-      type: object
-      properties:
-        summary: { type: string }
-        # Issues filed or recovered, and issues a discovery is tracked by (the
-        # evidence comment's URL when one was posted).
-        written:
-          type: array
-          items:
             type: object
+            additionalProperties: false
             properties:
+              outcome: { type: string, enum: [file, track, drop, wait, ask] }
               key: { type: string }
-              outcome: { type: string, enum: [file, track] }
-              url: { type: string }
-            required: [key, outcome, url]
-        dropped:
-          type: array
-          items:
-            type: object
-            properties:
-              key: { type: string }
+              title: { type: string }
+              refs: { type: array, items: { type: string } }
+              issue: { type: string }
               reason: { type: string }
-            required: [key, reason]
-        asked: { type: array, items: { type: string } }
-        # Discoveries left undecided for a later pass.
-        waiting:
-          type: array
-          items:
-            type: object
-            properties:
-              key: { type: string }
-              reason: { type: string }
-            required: [key, reason]
-        # The asked items, numbered with their recommendations; empty when none.
-        question: { type: string }
-      required: [summary, written, dropped, asked, waiting, question]
-
-  # One attention item per pass, whatever the number of questions. A paused run
-  # gives its resource slot back, so the next scheduled pass is not blocked.
-  - id: ask
-    depends_on: [outcome]
-    when: "$outcome.output.question != ''"
-    wait:
-      attention: "$outcome.output.question"
-      form: message
-      labels:
-        stage: discoveries
-        kind: question
-        item: ""
-        pr: ""
-
-  - id: answer
-    script: answer
-    runtime: bun
-    depends_on: [outcome, ask]
-    with:
-      keys: { from: "$outcome.output.asked" }
-      text: "$ask.output.text"
-    output_format:
-      type: object
-      properties:
-        answered: { type: array, items: { type: string } }
-      required: [answered]
+            required: [outcome, key, title, refs, issue, reason]
+        summary: { type: string }
+      required: [outcome, decisions, summary]
