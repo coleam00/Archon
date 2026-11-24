@@ -48,7 +48,10 @@ if (command === 'forge') {
   else if (request.fail)
     answer({ operationId: 'x', ok: false, error: { kind: 'conflict', message: 'head moved' },
       mutation: { op: sub, target: request.ref, outcome: 'refused' } }, 1);
-  else answer({ operationId: 'x', ok: true, result: { op: sub, value: { echoed: request } } }, request.exit ?? 0);
+  else {
+    if (request.reason) process.stderr.write(request.reason);
+    answer({ operationId: 'x', ok: true, result: { op: sub, value: { echoed: request } } }, request.exit ?? 0);
+  }
 } else if (command === 'state' && args.includes('--held')) {
   answer({ ok: false, error: 'not held', code: 3, reason: 'lease_not_held' }, 3);
 } else if (command === 'state' && sub === 'claim') {
@@ -100,14 +103,16 @@ function thrownBy(run: () => unknown): unknown {
 
 const ref = { repo: { host: 'forge.example', path: 'team/repo' }, number: 7 };
 
-test('forge returns the result, and a completed operation the host could not audit', () => {
+test('forge returns the result, and a completed operation the host could not record', () => {
   expect(forge('pr.ready', { ref })).toEqual({ echoed: { ref } } as never);
   const stderr = spyOn(console, 'error').mockImplementation(() => undefined);
   try {
-    expect(forge('pr.ready', { ref, exit: 2 } as never)).toEqual({
-      echoed: { ref, exit: 2 },
+    const reason = 'merged it but the item record could not be written: store unavailable';
+    expect(forge('pr.ready', { ref, exit: 2, reason } as never)).toEqual({
+      echoed: { ref, exit: 2, reason },
     } as never);
-    expect(stderr).toHaveBeenCalledTimes(1);
+    // The host's own reason reaches the script, not a generic warning in its place.
+    expect(stderr.mock.calls).toEqual([[reason]]);
   } finally {
     stderr.mockRestore();
   }

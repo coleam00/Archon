@@ -215,10 +215,11 @@ export function forge<Op extends keyof ForgeOperations>(
   if (!isRecord(result) || result.op !== op) throw failed(command, answer);
   // Exit 2 with a result: the operation completed and the host could not record it, in
   // the run's audit or on the run's item. Reporting a performed write as a failure would
-  // invite a retry.
+  // invite a retry, so the result is returned and the host's own reason is passed on.
   if (answer.code === 2)
     console.error(
-      `forge ${op} completed, but the host could not record it in the run's audit or on its item.`
+      answer.stderr ||
+        `forge ${op} completed, but the host could not record it in the run's audit or on its item.`
     );
   else if (answer.code !== 0) throw failed(command, answer);
   return result.value as ForgeOperations[Op]['result'];
