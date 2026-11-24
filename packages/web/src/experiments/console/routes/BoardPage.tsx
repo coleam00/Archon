@@ -6,7 +6,8 @@
  * It decides nothing. Where an item is and whether it is open is the item read's
  * `standing`, the stages and their order are the pack graph's, and an ask is drawn and
  * answered by the component the runs page uses. How stages are grouped into columns is the
- * pack's to say: the board is handed the groups as data and names none itself.
+ * pack's to say, in its own document: the graph read carries the groups and the board names
+ * none itself.
  */
 import { useState, type ReactElement } from 'react';
 import { Link, useParams } from 'react-router';
@@ -168,14 +169,8 @@ function stageLine(items: ItemRead[]): string {
     .join(' · ');
 }
 
-/**
- * How a pack groups its stages into columns for display: a name and its stages, by their
- * names within the pack, in order. The pack declares it; without it each stage is a column.
- */
-export interface StageGroup {
-  name: string;
-  stages: readonly string[];
-}
+/** A column: a group the pack declares, or one stage, with its stages by their names in the pack. */
+type StageGroup = PackGraph['groups'][number];
 
 /**
  * One column with its items. An empty column collapses to a narrow heading, so the pack's
@@ -307,18 +302,17 @@ function DoneColumn({
 
 /**
  * A pack's columns, each with the open items standing at it, then Done. A column is a group
- * the pack declares, or a stage of the graph that no group holds, in the graph's order.
+ * the pack's document declares (the graph read carries them), or a stage of the graph that
+ * no group holds, in the graph's order.
  */
 export function PackBoard({
   projectId,
   pack,
   items,
-  groups = [],
 }: {
   projectId: string;
   pack: string;
   items: ItemRead[];
-  groups?: readonly StageGroup[];
 }): ReactElement {
   const { data: graph, error } = useEntity<PackGraph>(K.packGraph(projectId, pack), () =>
     getPackGraph(projectId, pack)
@@ -329,6 +323,7 @@ export function PackBoard({
   const stageOf = (read: ItemRead): string | undefined => standingRun(read)?.pack?.workflow;
   // A workflow of the pack that only other workflows call is not a stage an item stands at.
   const stages = (graph?.stages ?? []).filter(stage => stage.inFlow).map(stage => stage.workflow);
+  const groups: readonly StageGroup[] = graph?.groups ?? [];
   const grouped = new Set(groups.flatMap(group => group.stages));
   const columns: StageGroup[] = [
     ...groups.map(group => ({ ...group, stages: group.stages.filter(s => stages.includes(s)) })),

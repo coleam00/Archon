@@ -219,7 +219,10 @@ test('each open item is under the stage it stands at, in the order the pack grap
 });
 
 test('stages a pack groups share a column, and each card there says its own stage', () => {
-  set(K.packGraph('web', 'flow'), graph);
+  set(K.packGraph('web', 'flow'), {
+    ...graph,
+    groups: [{ name: 'Make', stages: ['plan', 'build'] }],
+  });
   set(K.boardDone('web', 'flow'), { items: [], next: null, totals: NONE });
   const page = render(
     '/console/p/web/board',
@@ -227,7 +230,6 @@ test('stages a pack groups share a column, and each card there says its own stag
       projectId="web"
       pack="flow"
       items={[item('issue-1', 'build', 'running'), item('issue-2', 'plan', 'queued')]}
-      groups={[{ name: 'Make', stages: ['plan', 'build'] }]}
     />
   );
   expect(
