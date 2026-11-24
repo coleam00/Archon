@@ -392,6 +392,9 @@ export async function createFileWorkflowStore(
     recordItemLanding: async () => {
       throw new FileStoreUnsupportedError('items');
     },
+    recordItemTitle: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listItemLinks: async () => {
       throw new FileStoreUnsupportedError('items');
     },

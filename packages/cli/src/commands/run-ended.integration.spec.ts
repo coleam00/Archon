@@ -397,7 +397,10 @@ describe('a run-ended binding', () => {
     mkdirSync(join(pack, '.pack'), { recursive: true });
     writeFileSync(
       join(pack, '.pack', 'pack.yaml'),
-      `bindings:
+      `inputs:
+  greeting: { default: hi, description: How the pack greets. }
+  farewell: { default: bye }
+bindings:
   build:
     workflow: chain-build
     resource: build
@@ -430,8 +433,24 @@ describe('a run-ended binding', () => {
     expect(written.runEnded).toEqual([]);
     const graph = async () =>
       packGraphSchema.parse(JSON.parse(await fixture.cli(['pack', 'graph', 'chain', '--json'])));
+    // The project sets one of the pack's two settings.
+    mkdirSync(join(fixture.projectRoot, '.archon', 'packs'), { recursive: true });
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'packs', 'chain.yaml'),
+      'settings:\n  greeting: hello\n'
+    );
     const declared = await graph();
     expect(declared.stages.map(stage => stage.name).sort()).toEqual(['chain-build', 'chain-plan']);
+    expect(
+      declared.settings.map(({ name, default: fallback, value }) => [name, fallback, value])
+    ).toEqual([
+      ['greeting', 'hi', 'hello'],
+      ['farewell', 'bye', null],
+    ]);
+    expect(declared.settingsFile).toEqual({
+      path: join('.archon', 'packs', 'chain.yaml'),
+      problems: [],
+    });
     expect(declared.arrows).toEqual([
       {
         from: { stage: 'chain-plan', outcome: 'planned' },

@@ -8,6 +8,10 @@ import { KeymapHelp } from './components/KeymapHelp';
 import { BuilderConnected } from './builder/BuilderConnected';
 import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
+import { BoardPage } from './routes/BoardPage';
+import { NeedsYouPage } from './routes/NeedsYouPage';
+import { PackSettingsPage } from './routes/PackSettingsPage';
+import { PackSetupPage } from './routes/PackSetupPage';
 import { MetricsPage } from './routes/metrics/MetricsPage';
 import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
@@ -111,6 +115,7 @@ export function ConsoleApp(): ReactElement {
         <main className="flex min-w-0 flex-1 flex-col">
           <Routes>
             <Route index element={<RunsPage />} />
+            <Route path="needs-you" element={<NeedsYouPage />} />
             <Route path="metrics" element={<MetricsPage />} />
             <Route path="metrics/details" element={<MetricsPage view="details" />} />
             <Route path="settings" element={<SettingsPage />} />
@@ -120,6 +125,9 @@ export function ConsoleApp(): ReactElement {
             <Route path="r/:runId" element={<RunDetailPage />} />
             <Route path="*" element={<Navigate to="/console" replace />} />
             <Route path="p/:projectId" element={<RunsPage />} />
+            <Route path="p/:projectId/board" element={<BoardPage />} />
+            <Route path="p/:projectId/packs/:pack/setup" element={<PackSetupPage />} />
+            <Route path="p/:projectId/packs/:pack/settings" element={<PackSettingsPage />} />
             <Route path="p/:projectId/chat" element={<ChatPage />} />
             <Route path="p/:projectId/metrics" element={<MetricsPage />} />
             <Route path="p/:projectId/metrics/details" element={<MetricsPage view="details" />} />
