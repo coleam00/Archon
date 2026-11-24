@@ -3,8 +3,8 @@ description: |
   Land one ready pull request on the item's landing branch. One agent reads the pull
   request, its checks, its threads and the base branch on the host, judges it against
   the project's land policy, and either merges it pinned to the head whose checks it
-  read, sends it back to its builder, or asks an operator. After a merge, the merge is
-  recorded on the item as the forge reports it.
+  read, sends it back to its builder, or asks an operator. The forge records the merge
+  and its landing branch on the item itself.
 
   Starts when the host stage hands a pull request off ready, when an operator takes a
   change as it is, or when an operator answers `land`. By hand, on the change's branch:
@@ -53,19 +53,6 @@ nodes:
         reason: { type: string }
         brief: { type: string }
         base: { type: string }
+        recorded: { type: boolean, description: 'With merged: whether the merge response says it recorded the merge on the item. False otherwise.' }
         report: { type: string, description: 'The absolute path of land.md, or empty.' }
-      required: [outcome, pull_request, head, class, reran, reason, brief, base, report]
-
-  # The merge is recorded from what the forge reports, not from what the agent said.
-  - id: record
-    script: record
-    runtime: bun
-    depends_on: [land]
-    when: "$land.output.outcome == 'merged'"
-    with:
-      change: $land.output.pull_request
-    output_format:
-      type: object
-      properties:
-        recorded: { type: string }
-      required: [recorded]
+      required: [outcome, pull_request, head, class, reran, reason, brief, base, recorded, report]

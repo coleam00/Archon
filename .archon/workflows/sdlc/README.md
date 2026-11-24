@@ -8,7 +8,7 @@ an issue is its item's runs, outcomes, asks and answers, which
 `archon workflow runs --item issue-<n>` reads.
 
 It is also the reference for building a pack of your own on Archon. Its prompts carry the
-judgment; its YAML only wires the stages; it has one short script, and no tests.
+judgment; its YAML only wires the stages; it has no scripts and no tests.
 
 An **operator** is whoever runs the pack: a person, or more often that person's agent.
 
@@ -24,7 +24,7 @@ An **operator** is whoever runs the pack: a person, or more often that person's 
 | `archon-build` | Builds the change, commits, pushes and opens a draft pull request; when the change comes back, continues it in the same session on the same branch. | Plan `planned`, investigate `rooted`, link or split `build`; a return from review, host or land; a `send-back` or `one-more-round` answer; its own answers | `built` (review); `replan`; `ask` |
 | `archon-review` | Seven lenses (scope, seams, code, tests, errors, docs, ux) and a simplify pass beside them, three verifiers on the blocking findings, and one verdict; a smaller shape simplify names goes back to the builder; posts the report on the pull request. Also reviews any pull request by hand. | Build `built` | `approve` (host); `return` (build); `replan`; `ask`. By hand: `ready`, `not_ready` |
 | `archon-host` | Answers the review threads the builder settled, updates the description, checks the merge with the base, reads CI once and takes the pull request out of draft. | Review `approve`; a `take-as-is` answer on a review ask | `ready` (land); `return` (build); `ask` |
-| `archon-land` | Judges the pull request against the project's land policy, merges it pinned to the head whose checks it read, and records the merge on the item. | Host `ready`; a `take-as-is` answer on a host ask; a `land` answer | `merged` (discoveries); `return` (build); `ask` |
+| `archon-land` | Judges the pull request against the project's land policy, merges it pinned to the head whose checks it read, and the forge records the merge on the item. | Host `ready`; a `take-as-is` answer on a host ask; a `land` answer | `merged` (discoveries); `return` (build); `ask` |
 | `archon-discoveries` | Verifies what the item's runs noticed outside their change, and files, tracks, drops or holds each one. Files at most three issues a pass and labels none. | Land `merged`; its own answers | `decided`; `ask` |
 
 ### How the bindings chain them
@@ -206,8 +206,8 @@ The pack is a pattern, not a framework. To build a pack of your own:
 5. **Put opinions in policy text**, read from `$PACK_DIR/.shared/policy/` and the
    project's override, and typed values only where a value must be exact.
 6. **Write a script only where an agent cannot do the job**: a plain fact read at a
-   boundary, or a write that must come from the forge's own record. Here that is one:
-   `land/scripts/record.ts`, which records the merge as the forge reports it.
+   boundary, or a write that must come from the forge's own record. This pack has none:
+   a merge an agent makes through the forge records itself on the item.
 
 7. **Keep your names your own.** Another pack may run on the same install. A run-ended
    binding matches the ended run's workflow name alone, so a stage named `plan` in two

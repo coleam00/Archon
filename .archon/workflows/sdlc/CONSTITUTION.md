@@ -8,7 +8,7 @@ YAML coordinates, code computes, agents judge. A stage is an agent node with a p
 
 ## A script is the last resort
 
-Before writing a script, try an agent on the job: most of the pack's work is judgment, and a script that judges freezes one guess into code. A script gives plain facts or acts at a boundary where an agent's word is not enough, such as recording a merge as the forge reports it. Every script says in its first lines why an agent cannot do its job. The pack has one.
+Before writing a script, try an agent on the job: most of the pack's work is judgment, and a script that judges freezes one guess into code. A script gives plain facts or acts at a boundary where an agent's word is not enough. Every script says in its first lines why an agent cannot do its job. The pack has none.
 
 ## Nodes talk in typed values
 

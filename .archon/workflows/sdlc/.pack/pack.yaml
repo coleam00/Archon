@@ -11,7 +11,7 @@ inputs:
       the pull request. none: the project has no CI, so the host stage runs the full
       validation itself and the land stage merges only the commit it validated.
 
-# The forge operations the pack's agents and its one script call. The engine checks
+# The forge operations the pack's agents call. The engine checks
 # them when a run of any pack workflow starts, before a worktree, a slot or a node: the
 # project's forge plugin must advertise every one and have a credential the forge
 # accepts. `repository` names the inputs a run names its repository in.

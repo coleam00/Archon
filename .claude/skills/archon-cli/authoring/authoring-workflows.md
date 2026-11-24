@@ -184,7 +184,7 @@ acts on it.
 
 Test at the same seams. A script that keeps a rule worth testing gets a test at its
 tool boundary: it writes an issue once, reads back a pushed head, merges only what was
-approved. The bundled SDLC pack has one script and no tests. Agent judgment is
+approved. The bundled SDLC pack has no scripts and no tests. Agent judgment is
 checked by outcome, through dry-run fixtures (`archon workflow test`) and real runs,
 never by a test that pins a prompt's wording, the YAML's shape or the route a run
 takes. Do not retest what the engine owns (`when:`, includes, loops, output

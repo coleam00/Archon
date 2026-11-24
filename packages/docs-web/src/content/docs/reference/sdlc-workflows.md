@@ -104,7 +104,7 @@ Hands a reviewed pull request to its host in three agent steps: it answers and r
 
 ### `archon-land`
 
-One agent judges the ready pull request against the project's land policy: the base branch's CI, the review's verdict at the head, conflicts, CI at the head (waiting up to 30 minutes for pending checks, and rerunning red outside the change once), open threads, and whether the change is clear or must be asked. A clear one, or one an operator approved at its head, it merges with `pr.merge` pinned to the head whose checks it read, after setting the issue keyword. A script then records the merge on the item as the forge reports it. Land runs one at a time per repository.
+One agent judges the ready pull request against the project's land policy: the base branch's CI, the review's verdict at the head, conflicts, CI at the head (waiting up to 30 minutes for pending checks, and rerunning red outside the change once), open threads, and whether the change is clear or must be asked. A clear one, or one an operator approved at its head, it merges with `pr.merge` pinned to the head whose checks it read, after setting the issue keyword. The merge records itself and its landing branch on the item. Land runs one at a time per repository.
 
 - **Started by** host `ready`, a `take-as-is` answer on a host ask, or a `land` answer. By hand: `--branch <head-branch>`.
 - **Inputs**: `issue`; reads the last host, review and land results from the item.
