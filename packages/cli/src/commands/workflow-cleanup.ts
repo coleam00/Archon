@@ -143,16 +143,25 @@ export async function workflowOrphanCleanupCommand(
   console.log(
     `Found ${String(orphans.length)} path(s), ${formatBytes(total)}, of runs this store has no row for.`
   );
+  const kind = options.storeKind ?? (await selectedStoreKind());
+  // A PostgreSQL database leaves nothing in ARCHON_HOME to detect, so a shell without
+  // DATABASE_URL lists its runs' files here. Say so before anything is removed.
+  if (kind !== 'postgresql')
+    console.log(
+      `This command opened the ${kind === 'files' ? 'file store' : 'SQLite database'} and cannot check a PostgreSQL database it did not open. ` +
+        'If runs of this home live in one, these paths may include their files: run this command with that DATABASE_URL set.'
+    );
   if (!options.yes) {
     console.log('Nothing was removed. Run again with --yes to remove them.');
     return 0;
   }
-  const other = await otherStoreHistory(options.storeKind ?? (await selectedStoreKind()));
+  const other = await otherStoreHistory(kind);
   if (other) {
     console.error(
       `Refusing to remove: this ARCHON_HOME also holds ${other}. Its runs have no row in the ` +
-        'store this command opened, so their files are in the list above. Move that history ' +
-        'out of ARCHON_HOME first, or remove the paths you have checked by hand.'
+        'store this command opened, so their files are in the list above. Removing those paths ' +
+        'deletes the artifacts and logs of runs that history still holds, even after the ' +
+        'history is moved out of ARCHON_HOME. Remove by hand only the paths you have checked.'
     );
     return 1;
   }

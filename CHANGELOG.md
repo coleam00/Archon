@@ -81,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `archon workflow cleanup --orphans` no longer tells an operator to move another store's history out of `ARCHON_HOME`, which made the next `--yes` delete the files of every run that history holds; the refusal now says removing those paths deletes them. When it opened SQLite or the file store, it also says before removing that it could not check a PostgreSQL database. (#6172)
 - `archon workflow run --detach` is refused with the reason (exit 1, `{ "ok": false, "error" }` under `--json`) when the run's child would refuse it before its first node: a registered `--branch` worktree on another branch or without `--from` in its history, or an `--item` run with a broken run-ended binding. It used to acknowledge a started run that the child then refused, with the reason only in the child's log. (#5783)
 - `archon workflow run --detach` of a workflow that declares `returns.asks`, started without `--item`, is refused in the command's result instead of acknowledging a run its child then cancels. (#5844)
 

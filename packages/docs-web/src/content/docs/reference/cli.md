@@ -2210,7 +2210,13 @@ row in the selected store, with each size and the total. It leaves a path that c
 the last 6 hours, because a container run's frozen source can exist before its row does.
 It says how many paths it left this way and when to run it again to list them. Only
 `--yes` removes the listed paths. `--yes` is refused while this `ARCHON_HOME` also holds
-the other store's history, because those runs have no row here.
+the other store's history, because those runs have no row here. Moving that history out of
+`ARCHON_HOME` does not make its runs' files safe to remove: they still belong to its rows.
+
+A PostgreSQL database leaves nothing in `ARCHON_HOME` to detect. When the command opened
+SQLite or the file store, it says that it could not check a PostgreSQL database. If runs of
+this home live in one, run `--orphans` with that `DATABASE_URL` set: from a shell without
+it, every PostgreSQL run's files are listed, and `--yes` removes them.
 
 ### `workflow reset-sessions`
 
