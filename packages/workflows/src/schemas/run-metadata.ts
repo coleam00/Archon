@@ -226,6 +226,23 @@ export function readItemStopped(
   return { summary: typeof summary === 'string' ? summary : null };
 }
 
+/**
+ * Set by the completing write of a top-level run on an item that completed with an outcome
+ * its workflow declares final (`returns.final`): the item needs nothing more. A run that
+ * completed before this key existed carries neither it nor a stop, so a reader cannot tell
+ * that its outcome was final. Older binaries ignore the key.
+ */
+export const ITEM_FINAL_METADATA_KEY = 'item_final';
+
+export function itemFinalMetadata(): Record<string, unknown> {
+  return { [ITEM_FINAL_METADATA_KEY]: true };
+}
+
+/** True when the completed run recorded that its outcome was final. */
+export function readItemFinal(metadata: Record<string, unknown>): boolean {
+  return metadata[ITEM_FINAL_METADATA_KEY] === true;
+}
+
 export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
 
 export const ISOLATION_ENV_ID_METADATA_KEY = 'isolation_env_id';

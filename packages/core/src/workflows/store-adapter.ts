@@ -16,7 +16,6 @@ import {
 } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
-import type { HeldItemStart } from '@archon/workflows/resource-start-store';
 import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
@@ -145,19 +144,18 @@ const launchProjectKeyOf = launchProjectKey(cwd => registeredProjectKeyForPath(c
 const launchProjectOf = (cwd: string) => registeredProjectForPath(cwd, codebaseDb);
 
 /**
- * The held binding starts on item `itemId`: those naming its key whose checkout is in its
- * project. A binding is resolved to a project only when it is prepared, so the checkout
- * decides it here the way it will then.
+ * The held binding starts that name an item, each with that item. A binding is resolved to
+ * a project only when it is prepared, so its checkout decides the project here the way it
+ * will then.
  */
-async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
-  const item = await itemsDb.getItem(itemId);
-  if (!item) return [];
-  const held: HeldItemStart[] = [];
+async function listHeldItemStarts(): ReturnType<IWorkflowStore['listHeldItemStarts']> {
+  const held: Awaited<ReturnType<IWorkflowStore['listHeldItemStarts']>> = [];
   for (const start of await installHold.listHeldStarts()) {
-    if (start.kind !== 'trigger' || start.itemKey !== item.key || start.cwd === null) continue;
-    if ((await launchProjectKeyOf(start.cwd)) !== item.projectKey) continue;
-    const { receiptId, bindingId, hostId, workflow, receivedAt } = start;
-    held.push({ receiptId, bindingId, hostId, workflow, receivedAt });
+    if (start.kind !== 'trigger' || start.itemKey === null || start.cwd === null) continue;
+    const { receiptId, bindingId, hostId, workflow, receivedAt, itemKey } = start;
+    const projectKey = await launchProjectKeyOf(start.cwd);
+    if (projectKey !== null)
+      held.push({ receiptId, bindingId, hostId, workflow, receivedAt, itemKey, projectKey });
   }
   return held;
 }
@@ -223,6 +221,7 @@ export function createWorkflowStore(): IWorkflowStore {
     recordItemMerge: itemMergesDb.recordItemMerge,
     getItemLanding: itemLandingsDb.getItemLanding,
     recordItemLanding: itemLandingsDb.recordItemLanding,
+    recordItemTitle: itemsDb.recordItemTitle,
     listItemLinks: itemLinksDb.listItemLinks,
     recordItemLink: itemLinksDb.recordItemLink,
     endItemLink: itemLinksDb.endItemLink,
