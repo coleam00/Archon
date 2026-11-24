@@ -11490,6 +11490,9 @@ export interface components {
       }[];
       stages: {
         name: string;
+        workflow: string;
+        entry: boolean;
+        inFlow: boolean;
         returns: string | null;
         outcome: {
           field: string;
@@ -11516,6 +11519,20 @@ export interface components {
             workflow: string;
           } | null;
         }[];
+      }[];
+      entries: {
+        binding: string;
+        /** @enum {string} */
+        kind: 'timer' | 'event' | 'fire';
+        stage: string;
+      }[];
+      document: {
+        path: string;
+        problems: string[];
+      } | null;
+      groups: {
+        name: string;
+        stages: string[];
       }[];
       arrows: (
         | {
