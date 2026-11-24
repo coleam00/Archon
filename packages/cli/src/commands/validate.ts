@@ -90,12 +90,17 @@ function formatWorkflowResult(result: WorkflowValidationResult): string {
 /**
  * Validate all workflows or a specific workflow.
  * Returns exit code: 0 = all valid, 1 = errors found.
+ *
+ * `pluginRoot` is the directory whose `archon-plugin.json` is checked: the directory
+ * the operator ran from, before `cwd` was resolved to the project root, so a plugin in
+ * a repository subdirectory is checked too.
  */
 export async function validateWorkflowsCommand(
   cwd: string,
   name?: string,
   json?: boolean,
-  forgeTrustedEnv: NodeJS.ProcessEnv = process.env
+  forgeTrustedEnv: NodeJS.ProcessEnv = process.env,
+  pluginRoot: string = cwd
 ): Promise<number> {
   const config = await buildValidationConfig(cwd);
   const results = await collectWorkflowResults(cwd, config, forgeTrustedEnv);
@@ -109,6 +114,8 @@ export async function validateWorkflowsCommand(
       return 1;
     }
   }
+  // The manifest is not a workflow, so the name filter does not apply to it.
+  filteredResults.push(...(await unknownManifestKeyResults(pluginRoot)));
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -149,8 +156,6 @@ async function collectWorkflowResults(
       )
     );
   }
-
-  results.push(...(await unknownManifestKeyResults(cwd)));
 
   for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(

@@ -2800,6 +2800,66 @@ mock.module(setupPath, () => ({
   }
 });
 
+// The route resolves cwd to the Git root before validate runs, and a named workflow
+// filters results; neither may hide a plugin manifest's unknown keys.
+it('validate names unknown keys in the manifest of the plugin directory it runs in', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-validate-manifest-'));
+  const repo = join(root, 'repo');
+  const home = join(root, 'home');
+  const plugin = join(repo, 'packs', 'probe');
+  mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+  mkdirSync(plugin, { recursive: true });
+  mkdirSync(join(home, 'archon.db'), { recursive: true });
+  expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0);
+  writeFileSync(
+    join(repo, '.archon', 'config.yaml'),
+    'defaults:\n  loadDefaultCommands: false\n  loadDefaultWorkflows: false\n'
+  );
+  writeFileSync(
+    join(repo, '.archon', 'workflows', 'probe.yaml'),
+    'name: probe\ndescription: Probe\nnodes:\n  - id: probe\n    bash: echo probe\n'
+  );
+  writeFileSync(
+    join(plugin, 'archon-plugin.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: 'probe-kit',
+      description: 'Probe pack',
+      entrypoints: { probe: 'probe/probe.yaml' },
+      skils: [],
+      compatibility: { archon: '>=0.1.0', min: 1 },
+    })
+  );
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'validate', 'workflows', 'probe', '--json'],
+      {
+        cwd: plugin,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      }
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const { results } = JSON.parse(result.stdout) as {
+      results: { workflowName: string; issues: { field: string; message: string }[] }[];
+    };
+    expect(results.map(r => r.workflowName).sort()).toEqual(['archon-plugin.json', 'probe']);
+    expect(
+      results.find(r => r.workflowName === 'archon-plugin.json')?.issues.map(i => i.message)
+    ).toEqual(["unknown key 'skils' is ignored", "unknown key 'compatibility.min' is ignored"]);
+  } finally {
+    await removeTempTree(root);
+  }
+}, 30_000);
+
 it.each([true, false])(
   'file-only commands inspect local files without a registry (Git: %s)',
   async initGit => {
