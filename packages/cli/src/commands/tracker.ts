@@ -17,7 +17,9 @@ import { writeStdout } from '../utils/stdout';
 export async function activateConfiguredTracker(
   forgeTrustedEnv: NodeJS.ProcessEnv
 ): Promise<ItemTracker | undefined> {
-  const { itemTracker } = await loadConfig();
+  // Host creation runs this for every command, so reading the tracker config must not
+  // create the global config.
+  const { itemTracker } = await loadConfig(undefined, { readOnly: true });
   if (!itemTracker) return undefined;
   const tracker = new ItemTracker(itemTracker, hostItemTrackerForge(forgeTrustedEnv));
   await tracker.activate();
@@ -93,7 +95,9 @@ export async function trackerReleaseCommand(
   options: { json: boolean; stdout?: typeof writeStdout }
 ): Promise<number> {
   const stdout = options.stdout ?? writeStdout;
-  const tracked = (await loadConfig()).itemTracker?.projects.some(p => p.project === project);
+  const tracked = (await loadConfig(undefined, { readOnly: true })).itemTracker?.projects.some(
+    p => p.project === project
+  );
   if (!tracked) {
     await stdout(
       options.json
