@@ -1,0 +1,14 @@
+# The checks this repository declares for the factory pack (settings: checks_file).
+# The pack runs each to its end by script on every check round's commit, as a shadow:
+# the results are recorded beside the three reviews and nothing acts on them yet.
+# Only fast checks that write nothing to the tree. CI runs the full suites.
+# Timed on main 2026-11-18 (Windows): type-check 141 s, lint 83 s, format 2 s, web tests 17 s.
+checks:
+  - name: type-check
+    run: bun run type-check
+  - name: lint
+    run: bun run lint
+  - name: format
+    run: bun run format:check
+  - name: web tests
+    run: bun run --cwd packages/web test
