@@ -723,7 +723,7 @@ An ask's options can lead to different stages. `"option": "<id>"` in `on.asksSet
 
 The rules:
 
-- `option` is one option `id`, as the ask declared it, and takes `"settled": "answered"`: a withdrawn ask chose nothing.
+- `option` is one option `id`, as the ask declared it, and takes `"settled": "answered"`: a withdrawn ask chose nothing. When the asking workflow [declares its options](/reference/workflow-language/#declared-options-one-set-for-every-ask), `archon trigger check` reports an `option` that is not one of them (or `other`): no answer would start the binding.
 - The binding starts when the set has at least one answered ask and every answered ask chose that option. Withdrawn asks are not counted. The engine compares the chosen option's `id` and never reads answer text.
 - A set whose answered asks chose different options matches no binding with `option`. Neither does an answer that chose no option the ask offers, such as a text-only answer. The reserved `other` is an option, so a binding may name it.
 - A binding without `option` starts as before, whatever was chosen.
