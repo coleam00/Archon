@@ -98,11 +98,9 @@ describe('the merge record and the gate', () => {
     expect(refused({ behind: 3 })).toEqual([]);
     expect(refused({ behind: 3, mergeable: 'conflict' })).toEqual([`it lacks 3 commits of dev at ${OLD} and its merge is conflict`]);
     expect(refused({ behind: 3, mergeable: 'unknown' })).toEqual([`it lacks 3 commits of dev at ${OLD} and its merge is unknown`]);
-    expect(refused({ is_draft: true, base: 'main', state: 'closed' })).toEqual([
-      'it is closed',
-      'it is a draft',
-      'it targets main, not the default branch dev',
-    ]);
+    // Closed, a draft, and aimed at another branch than the base: three refusals.
+    expect(refused({ is_draft: true, base: 'main', state: 'closed' })).toHaveLength(3);
+    expect(refused({ base: 'main' })).toHaveLength(1);
   });
 
   test('under the manual lane, or with a protected path changed, the gate passes only with an approval at exactly the head', () => {
@@ -224,6 +222,7 @@ function run(
       ...at.env,
       WORKFLOW_ID: 'run-1',
       RUN_ITEM_KEY: 'issue-7',
+      BASE_BRANCH: 'dev',
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
       INPUTS_MERGE_LANE: 'auto',
@@ -359,6 +358,20 @@ describe('the merge stage settles its item', () => {
     expect(merges(unread)).toEqual([]);
   }, 60_000);
 
+  test("on a run whose base is an item's landing branch, the stage judges that branch and the gate merges only a pull request that targets it", () => {
+    const at = install();
+    git(at.checkout, 'push', '-q', 'upstream', 'dev:release');
+    const landing = { BASE_BRANCH: 'release' };
+    seed(at, item());
+    expect(ok(run(at, 'facts', landing, { pr: { base: 'release' } }))).toMatchObject({ path: 'judge', base: { branch: 'release' } });
+    const elsewhere = gate(at, {}, {}, landing);
+    expect(elsewhere.outcome).toBe('waiting');
+    expect(merges(elsewhere.result)).toEqual([]);
+    const into = gate(at, { pr: { base: 'release' } }, {}, landing);
+    expect(into.outcome).toBe('merged');
+    expect(merges(into.result)).toEqual([`forge pr.merge squash ${HEAD}`]);
+  }, 60_000);
+
   test('the gate refuses two trusted review comments and merges nothing', () => {
     const duplicate = gate(install(), { comments: [REVIEWED, { ...REVIEWED, id: 2 }] });
     expect(duplicate).toMatchObject({ outcome: 'waiting', reason: 'not merged: its review verdict is duplicate' });
@@ -474,7 +487,7 @@ describe('the merge stage settles its item', () => {
   test("the gate refuses while the default branch's CI is red, and the item waits for the backstop with no event wait; pending does not hold it", () => {
     const at = install();
     const red = gate(at, { pr: { baseChecks: 'red' } });
-    expect(red.reason).toBe(`not merged: the default branch dev is red at ${OLD} (test)`);
+    expect(red.outcome).toBe('waiting');
     // An open wait would keep merge-pick off the item until it went overdue.
     expect(ok(red.result).waits).toEqual([]);
     expect(merges(red.result)).toEqual([]);

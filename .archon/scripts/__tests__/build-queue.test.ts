@@ -250,6 +250,7 @@ function run(
       INPUTS_NUMBER: '7',
       INPUTS_READ_AT: READ_AT,
       RUN_ITEM_KEY: 'issue-7',
+      BASE_BRANCH: 'dev',
       ...inputs,
     },
   });
@@ -873,5 +874,13 @@ describe('the build queue checkout', () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("a fresh round must start on dev, but the checkout's HEAD is not on it");
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
+  }, 60_000);
+
+  test("a fresh round on an item with a landing branch starts on that branch, the run's base, not the default branch", () => {
+    const at = install();
+    git(at.checkout, 'push', '-q', 'upstream', 'feature:release');
+    const pr = JSON.stringify({ repo: PR.repo, number: 42 });
+    const fresh = { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr, BASE_BRANCH: 'release' };
+    expect(ok(run(at, 'checkout', fresh))).toEqual({ head: null, reviewed: null, pull_request: null, prior_report: '' });
   }, 60_000);
 });

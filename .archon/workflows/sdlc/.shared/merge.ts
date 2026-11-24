@@ -15,6 +15,7 @@ import { type QualifiedPr } from './identity.ts';
 import { record } from './inputs.ts';
 import { forge } from 'archon:script';
 import { viewPr } from './pr.ts';
+import { fetchBranch, runBase } from './remote.ts';
 import { type DecisionEntry, withDecision } from './queue.ts';
 import { type ContractCoverage, type ReviewStamp, readReviewStamp } from './review-comment.ts';
 import { itemKey, type WorkItem } from './workitem.ts';
@@ -145,7 +146,7 @@ export const ASK_OPTIONS = [
   {
     id: 'merge',
     does: 'Approves the pull request at the head that was asked about. The merge stage runs again and merges it if the gate still holds there.',
-    cost: 'The change lands on the default branch as it is.',
+    cost: 'The change lands on its base branch as it is.',
   },
   {
     id: 'return',
@@ -267,7 +268,7 @@ const WAIT_MINUTES = 60;
  * not.
  *
  * Anything else a pull request waits for has no event the pack can bind, and the
- * backstop reads it. A red default branch is one: every pull request it holds back would
+ * backstop reads it. A red base branch is one: every pull request it holds back would
  * wait on the same commit, the engine starts nothing for an event that meets waits on
  * two items, and a fix lands as a new commit no wait names.
  */
@@ -278,13 +279,15 @@ export function eventWaits(facts: PrFacts, ci: CiMode, reran: boolean): EventWai
   return [];
 }
 
-/** The default branch, its head commit and the checks on it. */
+/**
+ * The run's base branch (`runBase`), its head commit and the checks on it. The forge
+ * reads checks only at a revision or on the default branch, so the head is fetched first.
+ */
 export function readBase(repo: QualifiedPr['repo']): BaseFacts {
-  const value = forge('checks.commit', { repo, at: { kind: 'default_branch' } });
-  if (typeof value?.branch !== 'string' || typeof value.revision !== 'string') {
-    throw new Error(`${repo.path} reports no default branch`);
-  }
-  return { branch: value.branch, head: value.revision, checks: checksOf(value.units) };
+  const branch = runBase();
+  const value = forge('checks.commit', { repo, at: { kind: 'revision', revision: fetchBranch(repo, branch) } });
+  if (typeof value?.revision !== 'string') throw new Error(`${repo.path} reports no head for ${branch}`);
+  return { branch, head: value.revision, checks: checksOf(value.units) };
 }
 
 interface Comment {
@@ -438,16 +441,17 @@ function ciRefusal(checks: Checks, head: string, ci: CiTrust): string | null {
 /**
  * Why the pull request may not merge at `head`; empty when it may. It needs a Ready
  * verdict given at the head and what the project's `ci` setting trusts there, on a
- * default branch whose CI is not red: green forge checks under `forge`, a passing
+ * base branch whose CI is not red: green forge checks under `forge`, a passing
  * validation delivery recorded at that same head under `none`. The stage never pushes,
  * so a verdict for another commit means someone else pushed after the review. Pending CI
- * on the default branch does not hold a merge. Whether an open review thread holds the
+ * on the base branch does not hold a merge. Whether an open review thread holds the
  * merge is the judge's call, from the thread facts it reads. Under the manual lane, or
  * with a protected path changed, a maintainer's approval at `head` is required. The rest
- * keep the merge on an open, non-draft pull request into the default branch
- * (`base.branch`, read by `readBase`) at exactly the commit that was judged, and that commit
- * either containing its base's head or merging into it with no conflict. The merge state is
- * about the pull request's own base, so the target check is what makes that base the default.
+ * keep the merge on an open, non-draft pull request into the base branch
+ * (`base.branch`, read by `readBase`: the run's `$BASE_BRANCH`) at
+ * exactly the commit that was judged, and that commit either containing its base's head or
+ * merging into it with no conflict. The merge state is about the pull request's own base, so
+ * the target check is what makes that base the one `base` read.
  */
 export function gateRefusals(
   facts: PrFacts,
@@ -460,7 +464,7 @@ export function gateRefusals(
   if (facts.state !== 'open') refusals.push(`it is ${facts.state}`);
   if (facts.is_draft) refusals.push('it is a draft');
   if (facts.base !== base.branch) {
-    refusals.push(`it targets ${facts.base}, not the default branch ${base.branch}`);
+    refusals.push(`it targets ${facts.base}, not the base branch ${base.branch}`);
   }
   if (facts.head_revision !== head) refusals.push(`its head is ${facts.head_revision}, not ${head}`);
   if (facts.behind > 0 && facts.mergeable !== 'clean') {
@@ -474,7 +478,7 @@ export function gateRefusals(
   const unvalidated = ciRefusal(facts.checks, head, ci);
   if (unvalidated !== null) refusals.push(unvalidated);
   if (base.checks.state === 'red') {
-    refusals.push(`the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')})`);
+    refusals.push(`the base branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')})`);
   }
   if (lane.approved !== head) {
     if (lane.manual) refusals.push('the merge lane is manual and no maintainer approved it at this head');

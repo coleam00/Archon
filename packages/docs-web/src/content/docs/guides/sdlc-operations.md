@@ -130,7 +130,7 @@ Two bindings in the GitHub source plugin's configuration start intake: `intake-i
 ### How a round runs
 
 - **Route.** The route agent is the one judge before a round spends. Intake triaged the item, and the round does not triage it again. The agent checks that a run can start from the issue body, read with its dated "Current scope" sections, and that triage's verdict still holds on the current checkout, asking for a re-triage when it does not. It proves a bug's symptom before the item's first round, declares the round's route, and writes the brief the round starts from. A bug that needs a browser is reproduced with the browser tool the UI check policy names (`playwright-cli`, or `agent-browser`, which Archon's Docker image ships). The route is triage's on the item's first round. A later round that continues its pull request is `continue`, and goes back to `plan` only when a review asked for a different design or the scope changed.
-- **The pull request.** The queue reports the open pull request in the item's repository as the candidate, and the route agent declares whether the round continues it, unless a dated scope section or a recorded answer supersedes it. Delivery finishes a continued pull request whichever route the round takes, pushing onto its head so the same pull request updates. A superseded one is never checked out or pushed to: the round starts fresh, refusing a checkout that is not on the default branch, and its brief asks for the old pull request to be closed as superseded once the replacement opens. A closed or merged pull request, or one from a fork, is asked about; a round launched anyway never continues it. A round that continues none opens its pull request from `build/<issue>-<slug>-<run>`, a name never reused.
+- **The pull request.** The queue reports the open pull request in the item's repository as the candidate, and the route agent declares whether the round continues it, unless a dated scope section or a recorded answer supersedes it. Delivery finishes a continued pull request whichever route the round takes, pushing onto its head so the same pull request updates. A superseded one is never checked out or pushed to: the round starts fresh, refusing a checkout that is not on the run's base branch (the item's landing branch when it has one), and its brief asks for the old pull request to be closed as superseded once the replacement opens. A closed or merged pull request, or one from a fork, is asked about; a round launched anyway never continues it. A round that continues none opens its pull request from `build/<issue>-<slug>-<run>`, a name never reused.
 - **One round.** A round is `archon-ship` after its triage: investigate or plan when the route needs it, then the delivery tail.
 - **The first review of a continued pull request.** A round that continues a pull request an earlier round already reviewed does not review it from the start. Its first review gets the report that round published. It checks that report's findings and reviews what changed since the commit it reviewed. Each published review is kept in its run's artifacts under `review/published/`: the report, its findings and the commit it reviewed. The queue finds that set in the artifacts of the item's earlier rounds: it must name the commit the pull request's review comment names and hold the report that comment shows. The first review reads the whole change when the pull request has no review comment from a maintainer account, when no earlier round on this machine kept that review (another install published it, a review run by hand replaced it, or the artifacts are gone), or when the pull request's history was rewritten after the review. To get a full review of a pull request the queue would continue, run `archon-review` on it yourself without `prior_report`: its report replaces the comment, so the queue's next round reviews the whole change too.
 - **The decision.** An agent reads how the round ended and decides:
@@ -233,7 +233,9 @@ The run refuses before it starts when the forge plugin lacks an operation the st
 
 ### What it reads
 
-The run reads the pull request's head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the head, and the review verdict. Every read that names a commit must name the head. Under [`ci: none`](#pack-settings) it also reads the latest validation the item's build rounds recorded: the commit and whether it passed.
+The stage judges and merges against the base branch: the branch the issue's item lands on ([`workflow landing`](/reference/cli/#workflow-landing)), else the default branch.
+
+The run reads the pull request's head, how many commits of the base branch it lacks, whether it merges cleanly, CI and unresolved review threads at the head, and the review verdict. Every read that names a commit must name the head. Under [`ci: none`](#pack-settings) it also reads the latest validation the item's build rounds recorded: the commit and whether it passed.
 
 Only a review comment a listed maintainer wrote counts (`.archon/sdlc/policy/maintainers.json` on the default branch); verdicts from other authors are ignored. So the login that authors the pack's published reviews must be on the list, and anyone on it can publish a verdict that passes the gate. A pull request with two trusted review comments has no verdict.
 
@@ -243,26 +245,26 @@ A failed read fails the run, and the item stays as it was. The [backstop](#the-s
 
 One agent decides the pull request. The stage never pushes, never changes its checkout and never waits for CI.
 
-- **Merge.** A Ready pull request with green CI that the forge reports merges cleanly into the default branch merges, even when it is behind.
-- **Return.** What the build queue can fix goes back to it with a brief: a verdict that is not Ready or is for another commit (a push after the review), a conflict with the default branch, an unresolved thread that raises a defect in the change, and red the change caused. On a conflict the round merges the default branch in and resolves it, regenerating generated files with their owning script.
+- **Merge.** A Ready pull request with green CI that the forge reports merges cleanly into the base branch merges, even when it is behind.
+- **Return.** What the build queue can fix goes back to it with a brief: a verdict that is not Ready or is for another commit (a push after the review), a conflict with the base branch, an unresolved thread that raises a defect in the change, and red the change caused. On a conflict the round merges the base branch in and resolves it, regenerating generated files with their owning script.
 - **Rerun.** Red CI in code a pull request does not touch gets one rerun of its failed jobs, counted only when the forge reports it applied. The record stores the head it re-ran at, so the stage never reruns twice at one head, and the run ends waiting for a check there. Red again after it counts as the change's, and the pull request goes back.
-- **Ask.** An unclear pull request is asked about as soon as its verdict is Ready at its head, even while its CI is pending or it conflicts. The approval is pinned to that head and the run the answer starts merges it once the gate passes. An approval carries to a later head only when the agent judges that everything since the approved head is merges of the default branch and their conflict resolutions, and the verdict is Ready at the later head. Any doubt voids it.
-- **Wait.** A pull request whose checks still run, or that a red default branch holds back, waits. The run ends and holds nothing; see [what it waits for](#what-it-waits-for).
+- **Ask.** An unclear pull request is asked about as soon as its verdict is Ready at its head, even while its CI is pending or it conflicts. The approval is pinned to that head and the run the answer starts merges it once the gate passes. An approval carries to a later head only when the agent judges that everything since the approved head is merges of the base branch and their conflict resolutions, and the verdict is Ready at the later head. Any doubt voids it.
+- **Wait.** A pull request whose checks still run, or that a red base branch holds back, waits. The run ends and holds nothing; see [what it waits for](#what-it-waits-for).
 
 The agent measures the diff with git against the merge base, not the forge's counts.
 
 ### The gate
 
-The agent declares whether the pull request merges. A script node then reads the pull request and the default branch fresh and merges it through one gate, which refuses unless:
+The agent declares whether the pull request merges. A script node then reads the pull request and the base branch fresh and merges it through one gate, which refuses unless:
 
 - the verdict says Ready for the head;
 - what the [`ci` setting](#pack-settings) trusts passes at the head: green CI, or a passing validation recorded at that head;
-- the default branch's CI is not red (pending does not hold a merge);
-- the pull request is open, not a draft, into the default branch, at the head the agent named;
-- that head contains the default branch's head, or the forge reports it merges cleanly;
+- the base branch's CI is not red (pending does not hold a merge);
+- the pull request is open, not a draft, into the base branch, at the head the agent named;
+- that head contains the base branch's head, or the forge reports it merges cleanly;
 - under `merge_lane: manual`, or when the pull request changes a path `protected_paths` matches, the work item holds a maintainer's approval at exactly that head.
 
-Open review threads are the agent's judgment, not the gate's: it holds a merge only for a thread that raises a defect in code the pull request changes or makes reachable. The gate merges pinned to that head, by squash unless `--input merge_method=merge` asks for a merge commit. A merge moves the default branch, so the forge may not have computed the next pull request's merge yet: the script reads it again a few times before it refuses. A pull request the gate refuses, or whose merge the forge cannot verify, as when it queues merges, is recorded as waiting with the gate's reasons, and a later run decides it again.
+Open review threads are the agent's judgment, not the gate's: it holds a merge only for a thread that raises a defect in code the pull request changes or makes reachable. The gate merges pinned to that head, by squash unless `--input merge_method=merge` asks for a merge commit. A merge moves the base branch, so the forge may not have computed the next pull request's merge yet: the script reads it again a few times before it refuses. A pull request the gate refuses, or whose merge the forge cannot verify, as when it queues merges, is recorded as waiting with the gate's reasons, and a later run decides it again.
 
 The forge, not the agent, says what merged: a pull request that reads back merged after the agent ran is recorded merged at the head the forge merged, whatever was declared, and a closed one is parked.
 
@@ -274,7 +276,7 @@ A run that cannot merge yet ends with outcome `waiting`. It holds no slot, no se
 
 A check at any other commit, such as an older head, meets no wait and starts nothing. Each completed check is its own event, so a run woken while other checks still run waits again without the agent. A red check wakes the agent. Each wait is expected within 60 minutes; past that the item is listed in `archon workflow attention` as an overdue wait, and the next backstop pass starts it.
 
-A red default branch asks nobody. Nothing merges, the run's summary and a notice labelled `kind=base-red` carry the agent's diagnosis: the failing checks and what each points at, the pull requests merged since the branch was green, the one it suspects, and whether to rerun, revert or fix forward. It recommends a rerun by hand when no recent merge touched the red code: the forge's rerun acts only on a pull request, so the pack never reruns the default branch. A red default branch leaves no wait: every pull request it holds back would wait on the same commit, and the engine starts nothing for an event that meets waits on more than one item. The items wait for the backstop, which reads them after a rerun or a fix alike.
+A red base branch asks nobody. Nothing merges, the run's summary and a notice labelled `kind=base-red` carry the agent's diagnosis: the failing checks and what each points at, the pull requests merged since the branch was green, the one it suspects, and whether to rerun, revert or fix forward. It recommends a rerun by hand when no recent merge touched the red code: the forge's rerun acts only on a pull request, so the pack never reruns the default branch. A red base branch leaves no wait: every pull request it holds back would wait on the same commit, and the engine starts nothing for an event that meets waits on more than one item. The items wait for the backstop, which reads them after a rerun or a fix alike.
 
 Everything else a pull request can wait for has no forge event the pack binds. The backstop covers it: every 30 minutes `archon-merge-pick` starts a merge run on each item the stage has, except one whose ask is open, one waiting on a check that is not yet overdue, one with a merge run already queued or running, and one whose newest merge run failed. That is how these get read:
 
@@ -283,7 +285,7 @@ Everything else a pull request can wait for has no forge event the pack binds. T
 - the forge finishing its computation of whether the pull request merges;
 - a new review verdict, which is a comment and not a forge review;
 - a validation recorded under `ci: none`;
-- a red default branch, fixed by a new commit or a rerun;
+- a red base branch, fixed by a new commit or a rerun;
 - a hand-off or a check event that was lost.
 
 The backstop reads no pull request and runs no agent. Each run it starts does.
@@ -312,7 +314,7 @@ To ask for something else, choose the nearest option and say it in the text. Tex
 
 ### The stage's bindings
 
-Every start of the merge stage shares the resource `merge` with a capacity of 1 and `overlap: queue`. A run judges the default branch and merges against it, so a second run beside it would merge against a base it has not judged; pull requests therefore merge one at a time, in the order their starts arrived. A run never changes its checkout, so every binding runs in the launch checkout.
+Every start of the merge stage shares the resource `merge` with a capacity of 1 and `overlap: queue`. A run judges the base branch and merges against it, so a second run beside it would merge against a base it has not judged; pull requests therefore merge one at a time, in the order their starts arrived. A run never changes its checkout, so every binding runs in the launch checkout.
 
 | Binding | Starts a merge run when |
 | --- | --- |

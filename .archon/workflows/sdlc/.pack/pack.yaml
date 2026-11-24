@@ -201,7 +201,7 @@ bindings:
       repo_host: { repo: host }
       repo_path: { repo: path }
   # The merge stage runs once per issue, on the issue's item, and every start of it below
-  # shares one slot: a run judges the default branch and merges against it, so a second
+  # shares one slot: a run judges its base branch and merges against it, so a second
   # run beside it would merge against a base it has not judged. Queued, not skipped: each
   # start is an item's hand-off. This binding is fire-only: the backstop fires it.
   merge-queue:
@@ -224,7 +224,7 @@ bindings:
       repo_path: { input: repo_path }
   # A merge run whose pull request's checks still run ends waiting for a check at its
   # head, and a completed check there starts it again. A check names no pull request,
-  # so the binding maps no item: the wait's commit finds it. A red default branch leaves
+  # so the binding maps no item: the wait's commit finds it. A red base branch leaves
   # no wait: every pull request it holds would wait on one commit, which the engine
   # cannot route to one item, so merge-pick starts them again.
   merge-after-checks:
