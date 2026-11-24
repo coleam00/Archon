@@ -158,11 +158,25 @@ function exclusion(
   return undefined;
 }
 
+function skippedAfterExecution(fold: DagUsageFold, observation: DagUsageObservation): boolean {
+  return (
+    observation.eventType === 'node_skipped' &&
+    fold.observations.some(
+      prior =>
+        prior.path === observation.path &&
+        prior.invocationId === observation.invocationId &&
+        executedObservation(prior) &&
+        exclusion(prior) === undefined
+    )
+  );
+}
+
 function excludedNodes(fold: DagUsageFold): UsageCoverage['excluded'] {
   return fold.observations.flatMap(observation => {
     const reason = exclusion(observation);
     if (
       !aiObservation(observation, fold.observations) ||
+      skippedAfterExecution(fold, observation) ||
       reason === undefined ||
       observation.eventType === 'node_started'
     )

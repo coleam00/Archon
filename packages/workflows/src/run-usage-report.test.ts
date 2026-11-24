@@ -526,4 +526,38 @@ describe('recorded usage coverage', () => {
     );
     expect(result.coverage.inputTokens.state).toBe('complete');
   });
+
+  it('does not exclude paid loop work when its approval gate is skipped after execution', () => {
+    const start = startNodeExecution({
+      runId: 'run',
+      path: 'loop',
+      node: {
+        id: 'loop',
+        kind: 'loop',
+        loop: { prompt: 'p', until: 'DONE', max_iterations: 2, fresh_context: false },
+      },
+      invocation: newNodeInvocation(),
+      provider: 'claude',
+    });
+    const skipped = finishNodeExecution(
+      start,
+      {
+        status: 'skipped',
+        reason: 'trigger_rule',
+        cause: { kind: 'upstream_failed', origin: 'peer' },
+      },
+      { costUsd: 0.25, tokens: { input: 4, output: 2 } }
+    );
+    const result = report([
+      serializeNodeStateRecord(start),
+      serializeDeferredNodeUsage(skipped),
+      serializeNodeStateRecord(skipped),
+    ]);
+    expect(result.coverage.usd).toMatchObject({
+      state: 'complete',
+      aiNodes: 1,
+      contributedAiNodes: 1,
+    });
+    expect(result.coverage.excluded).toEqual([]);
+  });
 });
