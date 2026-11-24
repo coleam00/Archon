@@ -188,6 +188,7 @@ mock.module('@archon/git', () => ({
   hasUncommittedChangesStrict: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
   getDefaultBranch: mockGetDefaultBranch,
+  getDefaultRemote: async () => 'origin',
   isBranchMerged: mockIsBranchMerged,
   isPatchEquivalent: mockIsPatchEquivalent,
   localBranchExists: mockLocalBranchExists,
@@ -217,10 +218,20 @@ export class MockContainerBackend {
 export const mockReleaseVerificationImages = mock<typeof Isolation.releaseRunVerificationImages>(
   async () => undefined
 );
-const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } =
-  await import('@archon/isolation');
-mock.module('@archon/isolation', () => ({
+const {
   generatedTaskBranch,
+  validateWorktreeConfig,
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+} = await import('@archon/isolation');
+mock.module('@archon/isolation', () => ({
+  checkWorktreeStartable: mock(async () => undefined),
+  readWorktreeBaseBranch: () => undefined,
+  generatedTaskBranch,
+  validateWorktreeConfig,
+  resolveWorktreeBase: mock(async () => {
+    throw new Error('resolveWorktreeBase is not mocked here');
+  }),
   refuseUnappliedStartPoint: mock(async () => undefined),
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
@@ -250,6 +261,11 @@ export const mockListByCodebaseWithAge =
   mock<typeof IsolationEnvironmentDb.listByCodebaseWithAge>();
 export const mockListActiveContainerEnvironments =
   mock<typeof IsolationEnvironmentDb.listActiveContainerEnvironments>();
+// The real settlement list, read before the module is mocked, so the mocks below cannot
+// drift from the statuses production derives from the workflow-run schema.
+const { SETTLEABLE_WORKFLOW_STATUSES } = await import('../../db/isolation-env-users');
+const isSettleable = (status: string): boolean =>
+  (SETTLEABLE_WORKFLOW_STATUSES as readonly string[]).includes(status);
 mock.module('../../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   updateStatus: mock(() => Promise.resolve()),
@@ -259,7 +275,7 @@ mock.module('../../db/isolation-environments', () => ({
     remove: Parameters<typeof IsolationEnvironmentDb.withWorktreeRegistration>[1]
   ) => remove(() => mockMarkWorktreeDestroyed(env)),
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
-  isSettleableRunStatus: (status: string) => status === 'failed',
+  isSettleableRunStatus: isSettleable,
   getById: mockGetById,
   listByCodebase: mockListByCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
@@ -268,10 +284,33 @@ mock.module('../../db/isolation-environments', () => ({
   createIsolationStore: () => ({}),
 }));
 
+export const mockGetWaitingHandoffOfEnv =
+  mock<() => Promise<import('../../db/isolation-env-users').WaitingHandoff | null>>();
+// getEnvUse in one read; tests drive its runs through mockGetLiveRunOwningEnv, called as
+// the separate reads were: the released owner is asked for only behind a failed owner.
+mock.module('../../db/isolation-env-users', () => ({
+  getEnvUse: async (
+    envId: string,
+    release?: import('../../db/isolation-env-users').FailedRunRelease
+  ) => {
+    const owner = await mockGetLiveRunOwningEnv(envId);
+    const releasedOwner =
+      release && owner && isSettleable(owner.status)
+        ? await mockGetLiveRunOwningEnv(envId, release)
+        : null;
+    return { owner, releasedOwner, handoff: await mockGetWaitingHandoffOfEnv() };
+  },
+  liveRunOwnerSql: mock(),
+  runOwnsEnvSql: mock(),
+  SETTLEABLE_WORKFLOW_STATUSES,
+}));
+
 export const mockGetWorkflowRun = mock<typeof WorkflowDb.getWorkflowRun>(async () => null);
 export const mockGetRunIdsByIsolationEnvId = mock<typeof WorkflowDb.getRunIdsByIsolationEnvId>();
 export const mockGetRunByIsolationEnvId = mock<typeof WorkflowDb.getRunByIsolationEnvId>();
 mock.module('../../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getWorkflowRun: mockGetWorkflowRun,
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
@@ -345,6 +384,7 @@ export function resetCleanupMocks(): void {
   mockListAllActiveWithCodebase.mockReset().mockResolvedValue([]);
   mockMarkWorktreeDestroyed.mockReset().mockResolvedValue(undefined);
   mockGetLiveRunOwningEnv.mockReset().mockResolvedValue(null);
+  mockGetWaitingHandoffOfEnv.mockReset().mockResolvedValue(null);
   mockGetById.mockReset().mockResolvedValue(null);
   mockListByCodebase.mockReset().mockResolvedValue([]);
   mockListByCodebaseWithAge.mockReset().mockResolvedValue([]);

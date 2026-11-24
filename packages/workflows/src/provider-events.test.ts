@@ -55,6 +55,7 @@ async function makeHandler(
       thresholdMs: 0,
       env: {},
     }),
+    stallMessages: { refused: async () => undefined },
     store: {
       createWorkflowEvent: mock(async (event: Parameters<CreateEvent>[0]) => {
         rows.push(event);

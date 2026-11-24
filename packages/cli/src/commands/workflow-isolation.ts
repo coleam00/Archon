@@ -17,8 +17,11 @@ import {
   type ExecutionContext,
   type IsolationEnvironmentRow,
   type PreparedEnv,
+  readWorktreeBaseBranch,
 } from '@archon/isolation';
 import * as git from '@archon/git';
+import type { LaunchBase } from './workflow-run-config';
+import type { RunWorkspace } from './workflow-run-launch';
 import { mkdir } from 'node:fs/promises';
 import { loadRepoConfig } from '@archon/core/config/config-loader';
 import type { OverlayMode } from '@archon/workflows/container-context';
@@ -138,18 +141,18 @@ function folderWorktreeOptionError(): Error {
 }
 
 /**
- * Warn that `--base` is only HALF applied when an existing worktree is adopted
- * by `--branch` reuse: its cut-from is already fixed, but the
- * override still reaches `$BASE_BRANCH` and retargets the PR.
+ * Warn that a base override (`--base`, or the item's landing branch) is only HALF applied
+ * when an existing worktree is adopted by `--branch` reuse: its cut-from is already fixed,
+ * but the override still reaches `$BASE_BRANCH` and retargets the PR.
  */
-export function warnBaseOverrideOnReuse(workingPath: string, flagBase: string): void {
+export function warnBaseOverrideOnReuse(workingPath: string, base: LaunchBase): void {
   getLog().warn(
-    { path: workingPath, baseBranch: flagBase },
+    { path: workingPath, baseBranch: base.branch, source: base.source },
     'worktree.reuse_base_override_partial'
   );
   console.warn(
     `Warning: Reusing existing worktree at ${workingPath}. ` +
-      `--base ${flagBase} did not change the cut-from (worktree already exists); ` +
+      `${base.source === '--base' ? `--base ${base.branch}` : `The ${base.source} (${base.branch})`} did not change the cut-from (worktree already exists); ` +
       'it still applies to the PR target.'
   );
 }
@@ -236,9 +239,10 @@ export function assertWorkflowNotWorktreePinnedForFolder(
  * Registered folders own descendants unless a nested repository starts inside
  * them. Repository checkouts resolve through Git identity.
  *
- * One implementation because two callers need the same answer: the `--detach`
+ * One implementation because three callers need the same answer: the `--detach`
  * pre-flight, which must resolve the project before it can create the run row or
- * refuse an adoption (#2872), and the run path itself. Registration is idempotent,
+ * refuse an adoption (#2872), the run path itself, and `archon project add`, which
+ * performs this registration ahead of the first run. Registration is idempotent,
  * so the detached child's own call finds what the parent registered.
  *
  * Explicit folder selection fails on unknown or conflicting registration. Any lookup
@@ -251,20 +255,50 @@ export async function resolveRunCodebase(
   options: RunCodebaseOptions
 ): Promise<{
   codebase: Codebase | null;
+  /** True only when THIS call created the project row. */
+  registered: boolean;
   /** Set only when THIS call registered a new folder project. */
   registeredFolder?: RegisteredFolder;
 }> {
-  cwd = await canonicalizeProjectPath(cwd);
-  const { codebase, repoRoot } = await findRunCodebase(host, cwd, options);
+  const { codebase, repoRoot, cwd: projectCwd } = await findLaunchCodebase(host, cwd, options);
   if (options.codebaseId && !codebase)
     throw new Error(`Project "${options.codebaseId}" no longer exists.`);
 
   await assertInheritedWorkflowCodebase(host, codebase?.id);
   assertRegistrationOptions(options, codebase, repoRoot);
 
-  if (codebase || !(options.folder || repoRoot)) return { codebase };
-  return registerRunCodebase(host, cwd, options, repoRoot);
+  if (codebase || !(options.folder || repoRoot)) return { codebase, registered: false };
+  return registerRunCodebase(host, projectCwd, options, repoRoot);
 }
+
+/**
+ * The one answer to "which project is this start on": the project `--project` names,
+ * else the folder or repository of `cwd`. Read-only, so a lookup that must agree with
+ * the run's own project (the item a fresh start takes its config from) asks it here
+ * instead of resolving `cwd` a second way. `codebase` is null when nothing is registered
+ * yet; `repoRoot` and the canonical `cwd` are what registration needs after that.
+ */
+export function findLaunchCodebase(
+  host: WorkflowHost,
+  cwd: string,
+  options: RunCodebaseOptions
+): Promise<LaunchCodebase> {
+  // One answer per invocation: selection reads it to plan the run's definitions, and the
+  // launch reads it again to register and isolate, before anything registers the project.
+  const cached = launchLookups.get(options);
+  if (cached?.cwd === cwd) return cached.found;
+  const found = (async () => {
+    const canonicalCwd = await canonicalizeProjectPath(cwd);
+    return { ...(await findRunCodebase(host, canonicalCwd, options)), cwd: canonicalCwd };
+  })();
+  launchLookups.set(options, { cwd, found });
+  // A failed lookup is not remembered, so a retry asks again.
+  found.catch(() => launchLookups.delete(options));
+  return found;
+}
+
+type LaunchCodebase = { codebase: Codebase | null; repoRoot: string | null; cwd: string };
+const launchLookups = new WeakMap<object, { cwd: string; found: Promise<LaunchCodebase> }>();
 
 type RunCodebaseOptions = Pick<
   WorkflowRunOptions,
@@ -340,7 +374,7 @@ async function registerRunCodebase(
   cwd: string,
   options: RunCodebaseOptions,
   repoRoot: string | null
-): Promise<{ codebase: Codebase; registeredFolder?: RegisteredFolder }> {
+): Promise<{ codebase: Codebase; registered: boolean; registeredFolder?: RegisteredFolder }> {
   try {
     const result = options.folder
       ? await registerFolder(host.records.codebases, cwd)
@@ -350,11 +384,15 @@ async function registerRunCodebase(
     const codebase = await host.records.codebases.getCodebase(result.codebaseId);
     if (!codebase)
       throw new Error(`Registered project "${result.codebaseId}" could not be read back.`);
-    if (result.alreadyExisted) return { codebase };
+    if (result.alreadyExisted) return { codebase, registered: false };
     getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
     return options.folder
-      ? { codebase, registeredFolder: { name: result.name, defaultCwd: result.defaultCwd } }
-      : { codebase };
+      ? {
+          codebase,
+          registered: true,
+          registeredFolder: { name: result.name, defaultCwd: result.defaultCwd },
+        }
+      : { codebase, registered: true };
   } catch (error) {
     if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
     const err = error as Error;
@@ -599,17 +637,31 @@ async function containerMounts(
 }
 
 /**
+ * Run in a worktree this launch reuses (`--branch` again, or `--adopt`). Its record keeps
+ * the base it was cut from, which the run reports as `$BASE_BRANCH`: without a remote
+ * there is nothing else to detect it from.
+ */
+export function useReusedWorktree(
+  workspace: Pick<RunWorkspace, 'workingCwd' | 'isolationEnvId' | 'cut'>,
+  env: IsolationEnvironmentRow
+): void {
+  workspace.workingCwd = env.working_path;
+  workspace.isolationEnvId = env.id;
+  workspace.cut = { resolvedBaseBranch: readWorktreeBaseBranch(env.metadata) };
+}
+
+/**
  * Warn about what an explicit `--branch` reuse of a healthy worktree does not apply:
  * a `--base` cut-from, and a base the worktree was not cut from.
  */
 export async function warnOnReusedWorktree(
   existingEnv: IsolationEnvironmentRow,
   codebase: Codebase,
-  flagBase: string | undefined,
+  base: LaunchBase | undefined,
   codebaseDefaultBranch: string | undefined
 ): Promise<void> {
-  if (flagBase) {
-    warnBaseOverrideOnReuse(existingEnv.working_path, flagBase);
+  if (base) {
+    warnBaseOverrideOnReuse(existingEnv.working_path, base);
   }
   // Validate base branch before reuse (warning-only — non-blocking)
   try {
@@ -618,13 +670,13 @@ export async function warnOnReusedWorktree(
     const repoPath = git.toRepoPath(codebase.default_cwd);
     const remote = repoConfig?.worktree?.remote?.trim() || (await git.getDefaultRemote(repoPath));
     if (!remote) throw new Error('Set worktree.remote to select a git remote.');
-    // Four-level fallback: --base override → repo config → codebase default →
+    // Four-level fallback: base override (--base or the item's landing branch) → repo config → codebase default →
     // git auto-detect. Mirrors WorktreeProvider and executeWorkflow, so the
     // reuse check validates against the base this dispatch actually asked
     // for instead of reporting a mismatch nobody requested.
     let configuredBase: git.BranchName;
-    if (flagBase) {
-      configuredBase = git.toBranchName(flagBase);
+    if (base) {
+      configuredBase = git.toBranchName(base.branch);
     } else if (rawBase) {
       configuredBase = git.toBranchName(rawBase);
     } else if (codebaseDefaultBranch) {

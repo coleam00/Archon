@@ -10,12 +10,13 @@ import {
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths/logger';
+import { FileStoreUnsupportedError } from './errors';
 import {
   preparedWorkflowLaunchSchema,
   type ResourceStartDisposition,
 } from '../schemas/resource-start';
+import { drainableStarts } from '../host-start-decision';
 import {
-  drainableStarts,
   compareCodeUnits,
   type ReusableCheckout,
   type ResourceCapacityOverride,
@@ -130,6 +131,16 @@ export function createFileAdmissionStore(
     };
   }
   return {
+    // The file store keeps no install hold: it is never set, and setting it is refused.
+    getInstallHold: async () => null,
+    setInstallHold: async () => {
+      throw new FileStoreUnsupportedError('install hold');
+    },
+    liftInstallHold: async () => null,
+    listHeldStarts: async () => [],
+    listHeldItemStarts: async () => [],
+    // The file store keeps no run limit: `assertFileStoreConfiguration` refuses the key.
+    getRunLimit: async () => null,
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
     admitPendingRun: ({ resource, capacity, launch }) =>
       write(tx => tx.admitPending(resource, capacity, preparedWorkflowLaunchSchema.parse(launch))),
@@ -143,11 +154,19 @@ export function createFileAdmissionStore(
         }
         return admitted;
       }),
+    // No start names an item here (`FileStoreUnsupportedError('items')`).
+    listSkippedItemStarts: async () => [],
+    readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
+    listWaitedItemHolders: async () => [],
     getResourceStartRequest: id =>
       query(async tx => {
         const row = await tx.request(id);
         return row ? inspect(row) : null;
       }),
+    // The file store refuses items, so no start on it names one.
+    listQueuedItemStarts: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listQueuedResourceStartsForHost: hostId =>
       query(async () => {
         const queued: { inspection: QueuedResourceStartInspection; position: number }[] = [];

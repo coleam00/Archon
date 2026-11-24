@@ -18,7 +18,6 @@ import type {
 } from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
-import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/workflow-source';
 import {
   dryRunWorkflow,
@@ -29,6 +28,7 @@ import {
 import { resolveCliUserId } from '../utils/cli-user';
 import { writeJsonLine, writeStdout } from '../utils/stdout';
 import { getLog, type WorkflowRunOptions } from './workflow-shared';
+import { readSuppliedInputs } from './workflow-run-admission';
 
 export async function resolveDryRunEnvironment(
   host: WorkflowHost,
@@ -131,7 +131,9 @@ export async function runDryRun(
   userMessage: string,
   options: WorkflowRunOptions,
   runConfig: WorkflowRunConfigInput | undefined,
-  modelOverrides: RunModelOverrides | undefined
+  modelOverrides: RunModelOverrides | undefined,
+  /** The composed definitions a real run would capture, when they are base plus local. */
+  definitionsRoot?: string
 ): Promise<void> {
   assertDryRunFlags(options);
 
@@ -140,10 +142,7 @@ export async function runDryRun(
   // with the same errors (undeclared key, missing required) before any trace output.
   // Only the supplied entries travel; the simulator layers pack settings and declared
   // defaults under them through `resolveRunStartInputs`, the merge a real run starts with.
-  const dryRunInputs = resolveTopLevelInputs(
-    workflow,
-    options.inputs ? parseInputAssignments(options.inputs) : undefined
-  );
+  const dryRunInputs = resolveTopLevelInputs(workflow, await readSuppliedInputs(options));
 
   // Relative stub paths resolve from `--cwd`, as the CLI reference states. They are the
   // operator's dry-run inputs, not part of the workflow's source, so `--workflow-source`
@@ -174,7 +173,8 @@ export async function runDryRun(
   // The target workspace, never the authoring root: `--exec-code` runs real bash and
   // script nodes, and running them in the checkout the workflow was merely READ from
   // would mutate the author's tree instead of the one they aimed the dry run at.
-  const dryRunFileConfig = await host.deps.loadConfig(cwd);
+  // Read where a real run reads it: its definitions when they are base plus local.
+  const dryRunFileConfig = await host.deps.loadConfig(definitionsRoot ?? cwd);
   const dryRunConfig = options.execCode
     ? await resolveDryRunEnvironment(host, cwd, dryRunFileConfig, runConfig?.layer)
     : applyWorkflowRunConfigLayer(dryRunFileConfig, runConfig?.layer);
@@ -182,9 +182,11 @@ export async function runDryRun(
   // (`commands.folder`, `defaults.loadDefaultCommands`) come from where the workflow was
   // discovered, as a real run's capture reads them (`prepareWorkflowSource`). Not caught:
   // a malformed source config fails here for the same reason as above.
-  const sourceRoot = options.discoveryCwd ?? cwd;
+  const sourceRoot = options.discoveryCwd ?? definitionsRoot ?? cwd;
   const sourceFileConfig =
-    sourceRoot === cwd ? dryRunFileConfig : await host.deps.loadConfig(sourceRoot);
+    sourceRoot === (definitionsRoot ?? cwd)
+      ? dryRunFileConfig
+      : await host.deps.loadConfig(sourceRoot);
   const sourceRoots = liveSourceRoots(sourceRoot, workflowSourceConfigFrom(sourceFileConfig));
   const dryRunBaseProfile = await buildDryRunBaseProfile(host, dryRunFileConfig, runConfig);
   const dryRunModelOverrides = resolveRunModelOverrides(

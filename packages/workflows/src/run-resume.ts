@@ -5,6 +5,7 @@ import type { WorkflowRun, WorkflowRunNodeSession } from './schemas';
 import {
   isApprovalContext,
   isScheduledWorkflowResume,
+  isOperatorPaused,
   isWorkflowWaitContext,
   readPauseCause,
   readSourceRelease,
@@ -28,7 +29,7 @@ export interface ResumableRunInspection {
 /**
  * Why a run resumes. `continue_after_wait` continues a run that paused at a node that
  * waits on purpose: an attention, time or event wait, an approval gate, or children it is
- * blocked on. The run had moved past any node that failed before that pause, so those
+ * blocked on; or one an operator paused at a node boundary. The run had moved past any node that failed before that pause, so those
  * failures replay. `retry_failed` covers everything else, where the failures are what
  * stopped the run: a failed run an operator resumes, a provider-limit pause, a released
  * source, or a pause with no recorded cause. Those failed nodes run again, as they always
@@ -44,7 +45,7 @@ export type ResumeCause = 'continue_after_wait' | 'retry_failed';
 function resumeCauseOf(candidate: WorkflowRun, resumed: WorkflowRun): ResumeCause {
   if (candidate.status !== 'paused') return 'retry_failed';
   const cause = readPauseCause(resumed.metadata);
-  return cause === 'wait' || cause === 'gate' || cause === 'child'
+  return cause === 'wait' || cause === 'gate' || cause === 'child' || cause === 'operator'
     ? 'continue_after_wait'
     : 'retry_failed';
 }
@@ -89,6 +90,9 @@ export async function inspectResumableRun(
   // Released before its first node could read source (#4209): nothing completed yet.
   const hasSourceRelease =
     candidate.status === 'paused' && readSourceRelease(candidate.metadata) !== undefined;
+  // Every node of the layers before the pause may have failed: nothing completed, yet the
+  // run continues past them.
+  const hasOperatorPause = isOperatorPaused(candidate);
   // A valid composed instance start is always preceded by its durable fan-out plan.
   // Do not treat an arbitrary unresolved node_started row as resumable: ordinary nodes
   // have no ambiguity guard and replaying one could duplicate its side effects.
@@ -106,6 +110,7 @@ export async function inspectResumableRun(
     !hasWaitState &&
     !hasScheduledResume &&
     !hasSourceRelease &&
+    !hasOperatorPause &&
     !hasFanOutRecoveryState &&
     !(await hasUnexecutedSourceRelease(deps, candidate))
   ) {

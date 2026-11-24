@@ -17,10 +17,10 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 const mockLoadRepoConfig = mock(() => Promise.resolve(null));
 const mockLoadConfig = mock(() =>
   Promise.resolve({
-    assistant: 'claude',
+    assistant: 'claude' as string | undefined,
     aliases: {},
     tiers: {},
-    assistants: { claude: {} },
+    assistants: { claude: {} } as Record<string, object>,
     envVars: undefined as Record<string, string> | undefined,
   })
 );
@@ -72,6 +72,7 @@ describe('validateWorkflowsCommand', () => {
     });
     entry.workflow.pack = {
       key: 'example',
+      workflow: entry.workflow.name,
       source: 'project',
       settings: {
         ci: { type: 'enum', values: ['forge', 'none'] },
@@ -117,7 +118,7 @@ describe('validateWorkflowsCommand', () => {
         reviewers: { type: 'list' },
       },
     } as const;
-    entry.workflow.pack = pack;
+    entry.workflow.pack = { ...pack, workflow: entry.workflow.name };
     for (const kind of ['array', 'mapping']) {
       const settings = Object.keys(pack.settings).map(name => {
         const value = kind === 'array' ? `[*${name}]` : `{self: *${name}}`;
@@ -182,11 +183,84 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test('warns about a declared forge operation no installed plugin advertises', async () => {
+    const entry = discoverPackWorkflow();
+    entry.workflow.pack = {
+      key: 'example',
+      workflow: entry.workflow.name,
+      source: 'project',
+      forge: { operations: ['pr.view', 'made.up'] },
+    };
+    // An install with only the source GitHub plugin, which advertises `pr.view`.
+    const home = join(validationCwd, 'home');
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, 'config.yaml'), 'forge:\n  scanPath: false\n');
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(
+        await validateWorkflowsCommand(validationCwd, 'packed', true, {
+          HOME: home,
+          ARCHON_HOME: home,
+          PATH: process.env.PATH,
+        })
+      ).toBe(0);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0]));
+      expect(output.results[0].issues).toEqual([
+        expect.objectContaining({
+          level: 'warning',
+          field: 'pack_forge',
+          message: expect.stringContaining(
+            "pack 'example' needs forge operation 'made.up', which no installed forge plugin advertises (installed: github"
+          ),
+        }),
+      ]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('accepts valid or absent pack settings without requiring invocation inputs', async () => {
     discoverPackWorkflow();
     expect(await validateWorkflowsCommand(validationCwd)).toBe(0);
     await writePackSettings('settings:\n  ci: none\n  merge_lane: manual\n');
     expect(await validateWorkflowsCommand(validationCwd, 'packed')).toBe(0);
+  });
+
+  test('accepts an optional skill that is not installed', async () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = validationCwd;
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        makeTestWorkflowWithSource(
+          {
+            name: 'optional-skill',
+            provider: 'claude',
+            nodes: [
+              {
+                id: 'step1',
+                prompt: 'hello',
+                skills: [{ name: 'playwright-cli', optional: true }],
+              },
+            ],
+          },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+
+    try {
+      const exitCode = await validateWorkflowsCommand(validationCwd);
+
+      expect(exitCode).toBe(0);
+      const logged = JSON.stringify(mockConsoleLog.mock.calls);
+      expect(logged).toContain('1 valid, 0 with errors');
+      expect(logged).not.toContain('with warnings');
+      expect(logged).not.toContain('playwright-cli');
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
   });
 
   test('passes effective Claude config dir and user setting source into resource validation', async () => {
@@ -455,6 +529,47 @@ describe('validateWorkflowsCommand', () => {
     } finally {
       write.mockRestore();
     }
+  });
+
+  test('missing default assistant fails an unqualified prompt and passes bash and script', async () => {
+    mockLoadConfig.mockResolvedValue({
+      assistant: undefined,
+      aliases: {},
+      tiers: {},
+      assistants: {},
+      envVars: undefined,
+    });
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        makeTestWorkflowWithSource(
+          { name: 'needs-provider', nodes: [{ id: 'draft', prompt: 'Write the change.' }] },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+
+    expect(await validateWorkflowsCommand(validationCwd)).toBe(1);
+    expect(mockConsoleLog.mock.calls.flat().join('\n')).toContain('draft');
+
+    mockConsoleLog.mockClear();
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        makeTestWorkflowWithSource(
+          {
+            name: 'deterministic',
+            nodes: [
+              { id: 'shell', bash: 'true' },
+              { id: 'job', script: 'console.log(1)', runtime: 'bun' },
+            ],
+          },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+
+    expect(await validateWorkflowsCommand(validationCwd)).toBe(0);
   });
 
   afterEach(async () => {

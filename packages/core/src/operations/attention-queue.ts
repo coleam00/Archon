@@ -5,30 +5,49 @@
 import { canonicalizeProjectPath } from '@archon/paths';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
-  openAskItems,
   projectRef,
-  type AskItemStore,
   type AttentionQueueSource,
   type ProjectRef,
 } from '@archon/workflows/attention-queue';
+import {
+  overdueWaitItems,
+  type WaitItemStore,
+  openAskItems,
+  type AskItemStore,
+} from '@archon/workflows/queue-items-without-run';
 import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
+import { observeRunOwner, observeStartExecutor } from '../services/run-attention-watch';
+import type { StartExecutorObserver } from '@archon/workflows/resource-start-store';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import type { IWorkflowHostStore } from '../workflows/host-store';
 
 /**
  * The queue's source on a host, keeping the store's type so a reader that needs more of
  * the store (`readItem`) takes the same source. A run's branch is the newest isolation record for its
  * checkout path; a paused run holds that path, so no later checkout can have taken it.
- * The items no run holds are the open asks completed runs left.
+ * The items no run holds are the open asks completed runs left and their overdue waits. An item holder's owner is
+ * observed by the rule `workflow wait` uses (`observeRunOwner`), so the queue lists a
+ * holder whose owner is gone and an item read says so; observing never changes the run.
+ * A pending admitted start's executor is observed by `observeStartExecutor`, so an item
+ * read tells a start that is starting from one nobody runs.
  */
-export function attentionQueueSource<Store extends AttentionQueueSource['store'] & AskItemStore>(
+export function attentionQueueSource<
+  Store extends AttentionQueueSource['store'] &
+    AskItemStore &
+    WaitItemStore &
+    Pick<IWorkflowStore, 'listWaitedItemHolders'>,
+>(
   store: Store,
   isolation: Pick<IWorkflowHostStore['isolation'], 'findLatestByCodebaseAndWorkingPath'>
-): AttentionQueueSource & { store: Store } {
+): AttentionQueueSource & { store: Store; startExecutor: StartExecutorObserver } {
   return {
     store,
-    itemsWithoutRun: () => openAskItems(store),
+    itemsWithoutRun: async () => [
+      ...(await openAskItems(store)),
+      ...(await overdueWaitItems(store)),
+    ],
     branchOf: async run =>
       run.codebase_id === null || run.working_path === null
         ? null
@@ -39,6 +58,11 @@ export function attentionQueueSource<Store extends AttentionQueueSource['store']
               new Date()
             )
           )?.branch_name ?? null),
+    ownerLost: {
+      holders: () => store.listWaitedItemHolders(),
+      observe: run => observeRunOwner(store, run),
+    },
+    startExecutor: { observe: run => observeStartExecutor(store, run) },
   };
 }
 

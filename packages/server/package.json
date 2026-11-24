@@ -8,7 +8,6 @@
     "provision:docker": "bun ../../scripts/provision-docker-plugins.ts",
     "start": "bun src/index.ts",
     "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit",
     "generate:api-types": "bun src/scripts/generate-api-types.ts",
     "check:api-types": "bun src/scripts/generate-api-types.ts --check",
     "setup-auth": "bun src/scripts/setup-auth.ts"
@@ -17,6 +16,7 @@
     "@archon/adapters": "workspace:*",
     "@archon/chat-contract": "workspace:*",
     "@archon/core": "workspace:*",
+    "@archon/forge": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
@@ -89,11 +89,13 @@
       "src/routes/api.metrics.test.ts"
     ],
     [
+      "src/routes/api.packs.test.ts"
+    ],
+    [
       "src/routes/api.config.project.test.ts"
     ],
     [
-      "src/services/workflow-resume-service.test.ts",
-      "src/services/webhook-source-plugins.test.ts"
+      "src/services/workflow-resume-service.test.ts"
     ],
     [
       "src/services/resource-start-hosting.integration.test.ts"

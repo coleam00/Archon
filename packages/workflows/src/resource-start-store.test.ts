@@ -3,11 +3,12 @@ import { expect, test } from 'bun:test';
 import {
   heldCheckouts,
   resourceResumeBlocker,
-  drainableStarts,
   resourceStartBlocker,
   type ResourceSlotOccupancy,
 } from './resource-start-store';
+import { drainableStarts } from './host-start-decision';
 import type { PreparedWorkflowLaunch } from './schemas/resource-start';
+import { itemHoldKey } from './item-hold';
 
 function launch(guard = true, branch?: string): PreparedWorkflowLaunch {
   return {
@@ -34,6 +35,7 @@ const slot = (): ResourceSlotOccupancy => ({
   queue: [],
   heldCheckouts: new Map(),
   foreignHeldCheckouts: new Map(),
+  heldItems: new Map(),
 });
 test('local checkout occupancy takes precedence, including for read-only starts', () => {
   const guarded = launch(),
@@ -45,11 +47,12 @@ test('local checkout occupancy takes precedence, including for read-only starts'
       resourceStartBlocker(
         { ...slot(), heldCheckouts: local, foreignHeldCheckouts: foreign },
         incoming,
-        'host'
+        'host',
+        null
       )
     ).toEqual({ kind: 'run', id: 'local' });
   expect(
-    resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, readonly, 'host')
+    resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, readonly, 'host', null)
   ).toBeNull();
 });
 test('foreign observations retain the first holder and match registration workflow identity at its path', () => {
@@ -65,7 +68,7 @@ test('foreign observations retain the first holder and match registration workfl
   );
   for (const incoming of [launch(), launch(true, 'reusable')])
     expect(
-      resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, incoming, 'host')
+      resourceStartBlocker({ ...slot(), foreignHeldCheckouts: foreign }, incoming, 'host', null)
     ).toEqual({
       kind: 'run',
       id: 'oldest',
@@ -74,7 +77,8 @@ test('foreign observations retain the first holder and match registration workfl
     resourceStartBlocker(
       { ...slot(), foreignHeldCheckouts: foreign },
       launch(true, 'elsewhere'),
-      'host'
+      'host',
+      null
     )
   ).toBeNull();
 });
@@ -85,6 +89,7 @@ test('drains reserve local checkouts even for read-only admissions and pass over
     id,
     launch,
     hostId,
+    itemId: null,
   });
   const occupied = {
     ...slot(),
@@ -102,17 +107,17 @@ test('drains reserve local checkouts even for read-only admissions and pass over
 });
 
 test('a free slot goes to a new start before an older start of another host, never of its own', () => {
-  const queue = [{ id: 'older', hostId: 'other', launch: launch(false) }];
+  const queue = [{ id: 'older', hostId: 'other', launch: launch(false), itemId: null }];
   const free = { ...slot(), capacity: 1, queue };
   // A hand start shares a host with no queued request, so it takes the free slot.
-  expect(resourceStartBlocker(free, launch(false), 'direct-start')).toBeNull();
-  expect(resourceStartBlocker(free, launch(false), 'other')).toEqual({
+  expect(resourceStartBlocker(free, launch(false), 'direct-start', null)).toBeNull();
+  expect(resourceStartBlocker(free, launch(false), 'other', null)).toEqual({
     kind: 'request',
     id: 'older',
   });
   // Waiting for a slot, order holds: a full slot blocks the new start whatever the host.
   const full = { ...free, holders: [{ id: 'holder' }] };
-  expect(resourceStartBlocker(full, launch(false), 'direct-start')).toEqual({
+  expect(resourceStartBlocker(full, launch(false), 'direct-start', null)).toEqual({
     kind: 'run',
     id: 'holder',
   });
@@ -120,7 +125,7 @@ test('a free slot goes to a new start before an older start of another host, nev
 
 test('failed resume ignores foreign-blocked promises but yields to runnable read-only ones', () => {
   const foreign = heldCheckouts([{ id: 'foreign', working_path: '/shared' }], []);
-  const queue = [{ id: 'queued', hostId: 'host', launch: launch() }];
+  const queue = [{ id: 'queued', hostId: 'host', launch: launch(), itemId: null }];
   const failed = { id: 'failed', metadata: {}, status: 'failed' as const };
   expect(
     resourceResumeBlocker({ ...slot(), foreignHeldCheckouts: foreign, queue }, failed)
@@ -136,7 +141,12 @@ for (const guard of ['false', null]) {
     const malformed = launch();
     malformed.run.metadata.admission_checkout_guard = guard;
     const valid = launch();
-    const queue = [malformed, valid].map(launch => ({ id: launch.run.id, hostId: 'host', launch }));
+    const queue = [malformed, valid].map(launch => ({
+      id: launch.run.id,
+      hostId: 'host',
+      launch,
+      itemId: null,
+    }));
     const logs: string[] = [];
     setLogSink(line => logs.push(line));
     try {
@@ -144,11 +154,11 @@ for (const guard of ['false', null]) {
         slot(),
         { ...slot(), heldCheckouts: heldCheckouts([{ id: 'local', launch: malformed }]) },
       ])
-        expect(() => resourceStartBlocker(occupied, malformed, 'host')).toThrow(
+        expect(() => resourceStartBlocker(occupied, malformed, 'host', null)).toThrow(
           'expected a boolean'
         );
       expect(drainableStarts({ ...slot(), queue }, 'host')).toEqual([queue[1]!]);
-      expect(resourceStartBlocker({ ...slot(), queue }, launch(), 'host')).toEqual({
+      expect(resourceStartBlocker({ ...slot(), queue }, launch(), 'host', null)).toEqual({
         kind: 'request',
         id: valid.run.id,
       });
@@ -184,7 +194,7 @@ test('local holders project registered path and branch aliases before and after 
       for (const guard of [true, false]) {
         for (const incoming of [launch(guard), launch(guard, 'reusable')])
           expect(
-            resourceStartBlocker({ ...slot(), heldCheckouts: local }, incoming, 'host')
+            resourceStartBlocker({ ...slot(), heldCheckouts: local }, incoming, 'host', null)
           ).toEqual({
             kind: 'run',
             id: 'local',
@@ -206,6 +216,7 @@ test('drains reserve registered aliases in both orders, including read-only and 
       const queue = [...ordered, independent, different].map(launch => ({
         id: launch.run.id,
         hostId: 'host',
+        itemId: null,
         launch,
       }));
       expect(
@@ -236,20 +247,22 @@ test('unknown foreign checkout identity only blocks guarded shared checkouts', (
         foreignHeldCheckouts: heldCheckouts([{ id: 'known', working_path: '/shared' }]),
       },
       launch(),
-      'host'
+      'host',
+      null
     )
   ).toEqual({ kind: 'run', id: 'known' });
   for (const incoming of [launch(), launch(true, 'explicit')])
-    expect(resourceStartBlocker(occupied, incoming, 'host')).toEqual({
+    expect(resourceStartBlocker(occupied, incoming, 'host', null)).toEqual({
       kind: 'run',
       id: 'unknown',
     });
   for (const incoming of [readOnly, branchless])
-    expect(resourceStartBlocker(occupied, incoming, 'host')).toBeNull();
+    expect(resourceStartBlocker(occupied, incoming, 'host', null)).toBeNull();
   const guarded = launch();
   const queue = [guarded, readOnly, branchless].map(launch => ({
     id: launch.run.id,
     hostId: 'host',
+    itemId: null,
     launch,
   }));
   expect(drainableStarts({ ...occupied, queue }, 'host')).toEqual(queue.slice(1));
@@ -259,8 +272,52 @@ test('unknown foreign checkout identity only blocks guarded shared checkouts', (
     kind: 'request',
     id: readOnly.run.id,
   });
-  expect(resourceStartBlocker({ ...occupied, queue }, branchless, 'host')).toEqual({
+  expect(resourceStartBlocker({ ...occupied, queue }, branchless, 'host', null)).toEqual({
     kind: 'request',
     id: readOnly.run.id,
   });
+});
+
+test('an item held for a workflow blocks its starts whatever the capacity, and a drain admits one per item', () => {
+  const onItem = (id: string, itemId: string | null, workflow = 'test') => {
+    const start = launch(false);
+    start.run.workflow_name = workflow;
+    // A worktree lane without a branch has a checkout of its own, so only the item rule applies.
+    start.execution.isolation = { kind: 'worktree' };
+    return { id, hostId: 'host', launch: { ...start, run: { ...start.run, id } }, itemId };
+  };
+  const held = new Map([[itemHoldKey('test', 'k1'), 'holder']]);
+  // A new start on a held item is blocked by the holding run even with free slots.
+  expect(
+    resourceStartBlocker({ ...slot(), heldItems: held }, onItem('new', 'k1').launch, 'host', 'k1')
+  ).toEqual({ kind: 'run', id: 'holder' });
+  expect(
+    resourceStartBlocker({ ...slot(), heldItems: held }, onItem('new', 'k2').launch, 'host', 'k2')
+  ).toBeNull();
+  // The held start keeps its place and does not stall the queue behind it; two queued
+  // starts on one free item admit only the first.
+  const queue = [
+    onItem('held', 'k1'),
+    onItem('first-k3', 'k3'),
+    onItem('second-k3', 'k3'),
+    onItem('other-workflow', 'k1', 'review'),
+    onItem('no-item', null),
+  ];
+  expect(
+    drainableStarts({ ...slot(), capacity: 10, heldItems: held, queue }, 'host').map(
+      start => start.id
+    )
+  ).toEqual(['first-k3', 'other-workflow', 'no-item']);
+});
+
+test('two read-only copies of one handed-off commit hold no checkout of each other', () => {
+  const copy = (): PreparedWorkflowLaunch => {
+    const base = launch(false);
+    return {
+      ...base,
+      execution: { ...base.execution, isolation: { kind: 'worktree', fromBranch: 'c'.repeat(40) } },
+    };
+  };
+  const held = heldCheckouts([{ id: 'first-check', launch: copy() }]);
+  expect(resourceStartBlocker({ ...slot(), heldCheckouts: held }, copy(), 'host', null)).toBeNull();
 });

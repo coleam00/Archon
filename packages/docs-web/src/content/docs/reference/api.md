@@ -82,6 +82,7 @@ curl http://localhost:3090/api/health
 | DELETE | `/api/conversations/{id}` | Soft-delete a conversation |
 | GET | `/api/conversations/{id}/messages` | List messages in a conversation |
 | POST | `/api/conversations/{id}/message` | Send a message to a conversation |
+| POST | `/api/conversations/{id}/cancel` | Stop the in-flight chat reply; returns whether a reply was stopped |
 
 ### List Conversations
 
@@ -123,6 +124,14 @@ curl -X POST http://localhost:3090/api/conversations/{id}/message \
 ```
 
 The message is dispatched to the orchestrator asynchronously. The response confirms dispatch -- actual AI responses arrive via SSE streaming or can be polled via the messages endpoint.
+
+### Stop a Reply
+
+```bash
+curl -X POST http://localhost:3090/api/conversations/{id}/cancel
+```
+
+Aborts the provider call of the reply in progress, so it stops spending. The partial reply stays in the conversation, followed by a `Response stopped.` message with category `chat_interrupted`, and the next message continues the same conversation. Messages already queued behind the stopped reply still run. The response is `{"cancelled": true}` when a reply was stopped and `{"cancelled": false}` when nothing was in flight. It needs the same access as sending a message.
 
 ### Get Messages
 
@@ -241,6 +250,7 @@ Returns the active isolation environments (worktrees and containers) associated 
 | POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
 | PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
 | DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
+| GET | `/api/packs/{pack}/graph` | A pack's [stage graph](/guides/workflow-triggers/#see-how-a-packs-stages-connect) as `PackGraph`: its stages with their outcomes and nodes, and the run-ended arrows between them, each active or declared and inactive. `codebaseId` (required) names the project the pack is discovered from and its arrows launch in; `workflowSource` (an absolute directory, optional) discovers the pack there instead, as a binding's `launch.discoveryCwd` does. 400 for a relative `workflowSource`; 404 for an unknown codebase or a pack with no workflow there; 422 naming the file for a trigger file that cannot be read, or for run-ended files under `store: files`. The same read as `archon pack graph --json` |
 | DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes`, and returns `403` when conversations are private ([Security](/reference/security/#adapter-authorization)); there `scope` must name an existing conversation, and a web or CLI one must be the caller's own (chat and forge conversations need no ownership) |
 
 #### List Workflows
@@ -313,12 +323,12 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 |--------|------|-------------|
 | POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart). A start the engine refuses (a workflow that does not resolve, a missing required input, an undeclared input, an unmet `requires:`) returns **400** with the engine's reason, and nothing is written or queued; for the input refusals it is the text `archon workflow run` prints. A start that names `adopt_run_id`, whose conversation sits in a worktree, or that continues a paused run of the same workflow in the conversation, is judged on the definition it will run and is answered on the conversation after a **200** |
 | GET | `/api/workflows/runs` | List workflow runs |
-| GET | `/api/workflows/runs/{runId}` | Get run details with events (provider events are served by the route below). `run.nodes[]` is the engine's per-node state; a `workflow:` fan-out node also carries `fan_out_outcome`, its [per-slot record and tally](/reference/workflow-language/#a-completed-fan-out-node-is-not-completed-child-work). See [node execution records](/reference/node-execution/) for event fields, reporting availability, and cost scope |
+| GET | `/api/workflows/runs/{runId}` | Get run details with events (provider events are served by the route below). `run.nodes[]` is the engine's per-node state; a `workflow:` fan-out node also carries `fan_out_outcome`, its [per-slot record and tally](/reference/workflow-language/#a-completed-fan-out-node-is-not-completed-child-work). A loop body node in `nodes[]` holds its latest round; `run.loop_rounds[]` lists every round of each `loop_group` the run entered, with its body nodes' state, timing and output, and is absent for a run with no loop. See [node execution records](/reference/node-execution/) for event fields, reporting availability, and cost scope |
 | GET | `/api/workflows/runs/{runId}/provider-events` | The run's provider events as `{events: ProviderEventRecord[]}`: each is `{runId, stepName, attemptId, seq, observedAt, event}`, grouped by node and in emission order within one. `?step=` limits it to one node. `?attemptId=&afterSeq=` (both, and with `step`) returns only the events after that one: the attempt's later events and every later attempt's. Rows written before the engine recorded envelopes come back translated, with `attemptId: null`. Returns **400** for a partial cursor |
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/artifacts/{runId}/{filename}` | Read an artifact's text content; encode the complete relative filename, including slashes, as one path value |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
-| POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow: a run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when no owner answers (abandon it once its process is gone) or the owner cannot be stopped; **400** for a run that is not running |
+| POST | `/api/workflows/runs/{runId}/cancel` | Cancel a pending or running workflow: a pending run that no process on this machine is starting is cancelled before it starts (it cannot see a starter on another machine that shares the database; see the [cancel reference](/reference/cli/#workflow-cancel)); a running run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when a process is starting the pending run, when no owner answers for a running run (abandon it once its process is gone), or when the owner cannot be stopped; **400** for a run that is neither pending nor running |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow, or a running one whose owner is gone (400 when an owner still answers). A run started outside the web UI resumes on the server and returns **409** with the reason, leaving the run unchanged, when its resource is full: a paused run that is ready to continue keeps its place and a continuation host continues it, and a failed run stays failed until it is resumed again. A run started from a web conversation reports the same wait in that conversation |
 | POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first, attempts to cancel discovered `workflow:` descendants except completed and cancelled runs within the [500-parent expansion bound](/reference/workflow-language/#max_parallel-bounds-concurrency-not-count), and attempts to remove the worktrees those runs created, keeping their branches. Owner warnings retain affected checkouts: inspect them (`lsof` when output is still held), resolve the warning, then abandon the cancelled run again to retry removal. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped or the run cannot be abandoned. A silent descendant also retains its checkout and the selected root's checkout, even if the root's owner stopped; each descendant needs its own owner check. If the selected sub-run has no answering endpoint, cancellation succeeds but its subtree's owned checkouts remain: silence does not prove the enclosing execution stopped. Inspect the owning execution and stop or abandon it only if you intend to stop its whole scope; repeated child-only abandonment may still retain the checkouts. |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — approve the child) |
@@ -326,7 +336,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/runs/{runId}/respond` | Resolve a paused gate with one of its declared decisions |
 | POST | `/api/workflows/runs/{runId}/answer` | Answer a paused attention wait in its declared form, naming the exact occurrence; `recommended: true` chooses the option it recommends, and `as` records a self-declared answerer |
 | POST | `/api/workflows/runs/{runId}/signal` | Signal an external event wait; use `occurrence` for an exact match |
-| DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
+| DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run, its events and [its files](/reference/database/#a-runs-files-on-disk). Returns **400** with the reason, and deletes nothing, for a run that is not terminal, left asks or waits open on its item, has a `workflow:` sub-run, at any depth, that has not ended, or is adopted by a run that has not ended. A **200** means the row is deleted; `files.failed` lists each path still on disk with its error, and `files.unlocated` names a run whose files could not be located |
 
 For `/signal`, send `{ "event": "checks.complete", "occurrence": "<metadata.wait.pauseId>", "payload": { "conclusion": "success" } }`. The occurrence identifies the exact wait, including when deadlines repeat. The legacy `resumeAt` selector remains accepted and is required when `occurrence` is omitted; it cannot distinguish two occurrences with the same event and deadline. If both selectors are supplied, both must match. Waits persisted without a `pauseId` can still be signaled using `resumeAt`.
 
@@ -487,9 +497,10 @@ These routes record the decision and return. The server's continuation scheduler
 | GET | `/api/runs/attention/stream` | Stream the attention queue as server-sent events; `level=quiet\|notices\|protocol` selects how much, and `Last-Event-ID` resumes ([stream over HTTP](/getting-started/operate/#stream-over-http)) |
 | GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
-| POST | `/api/attention/answer` | Answer the item a queue `ref` names, from `{ ref, choose?, recommended?, text? }`; `recommended: true` takes the place of `choose`. The only way to answer an [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left. 200 with `{ ref, action: "answer", unchanged, settled? }`, where `settled` is true when the answer closed the last open ask of its set, or with `runId`, `continues` and `cancelled` for an item a paused run holds; 400 when the answer does not fit the item; 404 when nothing the caller may answer has the ref; 409 when the item is closed, moved, takes no answer, or was answered differently |
-| POST | `/api/attention/withdraw` | Withdraw an ask by its `ref`, from `{ ref }`; it closes unanswered. 200 with `{ ref, action: "withdraw", unchanged, settled? }`; 400 for an item a paused run holds, which is answered instead; 404 when nothing the caller may withdraw has the ref; 409 when the ask was already answered or replaced |
-| GET | `/api/items` | Read the [item](/reference/cli/#items) named by `key` in `project`: its runs, open questions, answers with rulings, and links, as `archon workflow runs --item --json` prints them; 404 when nothing has named the key. `project` takes a codebase id, a codebase name or a project key |
+| POST | `/api/attention/answer` | Answer the item a queue `ref` names, from `{ ref, choose?, recommended?, text? }`; `recommended: true` takes the place of `choose`. The only way to answer an [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left. 200 with `{ ref, action: "answer", unchanged, settled?, nothingStarted? }`, where `settled` is true when the answer closed the last open ask of its set and `nothingStarted: true` when that settlement started no [asks-settled binding](/guides/workflow-triggers/#start-a-different-stage-for-each-option), or with `runId`, `continues` and `cancelled` for an item a paused run holds; 400 when the answer does not fit the item; 404 when nothing the caller may answer has the ref; 409 when the item is closed, moved, takes no answer, or was answered differently |
+| POST | `/api/attention/withdraw` | Withdraw an ask, or the open [waits](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) a run left (`wait:<run-id>`), by its `ref`, from `{ ref }`; it closes unanswered, or unmet, and a withdrawn wait starts nothing. 200 with `{ ref, action: "withdraw", unchanged, settled?, nothingStarted? }`, as for an answer; 400 for an item a paused run holds, which is answered instead; 404 when nothing the caller may withdraw has the ref; 409 when the ask was already answered or replaced, or the waits already met or replaced |
+| GET | `/api/items` | Read the [item](/reference/cli/#items) named by `key` in `project`: its runs, open waits, open questions, answers with rulings, and links, as `archon workflow runs --item --json` prints them; 404 when nothing has named the key. `project` takes a codebase id, a codebase name or a project key |
+| GET | `/api/items/window` | A page of the project's items with a run started in a window, as `archon workflow items --json` prints it: `{ window, items, next }`. Takes `project`, and either `since`/`until` (`archon metrics` syntax, default the last 30 days) or the `after` cursor a page returned, and `limit` (1 to 100, default 20). 400 for an unknown project, a malformed window or limit, or a cursor that is not one this read returned or is for another project |
 | POST | `/api/items/rulings` | Record a ruling on the item named by `key` in `project`, from `{ project, key, text, as? }`: a decision made without a question, which every later read of the item shows with the answers. Writes the item if nothing named it yet. 201 with the ruling; 403 unless the caller is the operator or an admin; `as` declares the operator's name and is ignored for an identified user |
 | POST | `/api/items/rulings/{rulingId}/withdraw` | Withdraw a ruling, from `{ project?, as? }`. The ruling stays in the item read with `withdrawn` set. With `project`, a ruling on another project's item is refused with 400 and stays as it was; without it the id alone names the ruling. 200 with the ruling; 400 for an unknown project; 404 for no such ruling; 409 when it was already withdrawn; 403 unless the caller is the operator or an admin |
 
@@ -558,7 +569,8 @@ Process-owner liveness is `owner_observation`, which dashboard runs and the run 
 `archon workflow wait` uses for `owner_lost`: `reachable` when an owner answers,
 `unreachable` when the recorded owner is on the server's host and user and nothing answers,
 and `unknown` when the server cannot observe the owner (another host or user, no recorded
-owner, or no answer in time). It is `null` for a run that is not running. It is never stored
+owner, or no answer in time). It is observed for a running run and for a paused parent
+whose sub-run tree runs in its process, and is `null` for any other run. It is never stored
 and never changes `status`; how long a run has been quiet is not an input. The console shows
 a run whose owner is `unreachable` or `unknown` as not live and offers Abandon for
 `unreachable`.
@@ -579,14 +591,17 @@ curl 'http://localhost:3090/api/metrics?name=factory.prs_merged&since=7d'
 Query parameters, all optional: `since` (a duration such as `40m`, `24h`, `7d` or `2w`, or an ISO
 date or time; default 30 days before `until`), `until` (an ISO date or time; default now),
 `name`, `subject`, `codebaseId`, `compare` (an ISO date or time to split each
-instrument's records at) and `byModel` (a node id to split them by the model that ran it).
+instrument's records at), `byModel` (a node id to split them by the model that ran it) and
+`byDimension` (a dimension key to split them by the value each record carries for it).
 The window is half-open. It returns the same `MetricsReport` `archon metrics --json`
 prints: per name, its definition and one entry per instrument and `measured_by` with
 `value`, `n`, `interval`, `cost`, `latest` and a daily `series`, a `compare` block when
-`compare` is given or a `by_model` block when `byModel` is, plus `refused[]`. Returns
-**400** for a malformed window or `compare`, an empty `byModel`, `compare` with `byModel`, and a
-`byModel` node none of the window's existing producing runs ran, with the AI node ids they
-did run in the error. The node is not checked when no producing run still exists: a window
+`compare` is given without `byDimension`, a `by_model` block when `byModel` is, or a `by_dimension` block when
+`byDimension` is (each of its groups with its own `compare` block when `compare` is also
+given), plus `refused[]`. Returns **400** for a malformed window, `compare` or `byDimension`
+key, an empty `byModel`, `byModel` with `compare` or `byDimension`, a `byModel` node none
+of the window's existing producing runs ran, with the AI node ids they did run in the
+error, and a `byDimension` key no record in the window carries, with the keys they carry. The node is not checked when no producing run still exists: a window
 with no records returns an empty report, and records whose runs were all deleted are
 `unattributed`.
 

@@ -13,7 +13,6 @@
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit",
     "generate:schema": "bun src/scripts/generate-schema.ts",
     "check:schema": "bun src/scripts/generate-schema.ts --check"
   },

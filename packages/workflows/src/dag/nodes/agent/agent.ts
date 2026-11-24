@@ -31,6 +31,7 @@ import {
 import { bindAgentNode, type AgentBinding } from './agent-binding';
 import { loadAgentPrompt } from './agent-prompt';
 import { createAttemptState, type AgentAttemptState, type AgentPassContext } from './agent-stream';
+import { createStallMessenger } from '../../../stall-message';
 import { runUntilStructuredOutputValid } from './agent-reask';
 
 export async function executeAgentNode(
@@ -164,6 +165,16 @@ export async function executeAgentNode(
     nodeKey,
     nodeStartTime,
     staleResumeRetry: session.namedResumeSourceNodeId === undefined,
+    stallMessenger: createStallMessenger({
+      store: deps.store,
+      logDir,
+      runId: workflowRun.id,
+      stepName,
+      provider,
+      ...(iteration !== undefined ? { iteration } : {}),
+      capabilities: binding.capabilities,
+      policy: ctx.config.workflows,
+    }),
   };
 
   let result: WorkloadResult;
@@ -260,17 +271,25 @@ function attemptFailure(
 
 function attemptQueryOptions(
   ctx: RunLayersContext,
-  { nodeMcp, execution }: AgentBinding,
+  { nodeMcp, nodeSkills, execution }: AgentBinding,
   nodeOptions: SendQueryOptions | undefined,
   { resumeSessionId, resumeIntent }: AttemptSession,
   abortController: AbortController
 ): SendQueryOptions {
   const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
+  const loadMcp = nodeMcp.kind === 'load' || nodeMcp.kind === 'missing';
+  const declaredSkills = nodeSkills.names !== undefined;
   return {
     ...nodeOptions,
     env: { ...nodeOptions?.env, ...aiNodeEnvironment(ctx, execution) },
-    ...(nodeMcp.kind === 'load' || nodeMcp.kind === 'missing'
-      ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
+    ...(declaredSkills || loadMcp
+      ? {
+          nodeConfig: {
+            ...nodeOptions?.nodeConfig,
+            ...(declaredSkills ? { skills: nodeSkills.names } : {}),
+            ...(loadMcp ? { mcp: nodeMcp.path } : {}),
+          },
+        }
       : {}),
     abortSignal: abortController.signal,
     ...(resumeIntent === 'owner-continuation'

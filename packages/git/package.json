@@ -10,8 +10,7 @@
     "./archon-commit": "./src/archon-commit.ts"
   },
   "scripts": {
-    "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "test": "bun run ../../scripts/package-tests.ts"
   },
   "dependencies": {
     "@archon/paths": "workspace:*"
@@ -25,6 +24,7 @@
     ],
     [
       "src/exec.test.ts",
+      "src/lock-wait.test.ts",
       "src/github-host.test.ts",
       "src/refresh-worktree-index.test.ts",
       "src/worktree-path.test.ts"

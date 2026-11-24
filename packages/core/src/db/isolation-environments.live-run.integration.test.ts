@@ -15,7 +15,9 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { isolationStatusReadTests } from './isolation-status-read-harness';
 
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: () => ({
     info() {},
     warn() {},

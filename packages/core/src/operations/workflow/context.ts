@@ -34,6 +34,7 @@ export interface WorkflowOperationsDeps {
     | 'getRunAncestry'
     | 'persistWorkflowEvent'
     | 'cancelWorkflowRun'
+    | 'requestOperatorPause'
     | 'resolveApprovalGate'
     | 'resolveAndCancelApprovalGate'
     | 'answerAttentionWait'
@@ -43,6 +44,7 @@ export interface WorkflowOperationsDeps {
     | 'listWorkflowRuns'
     | 'findWorkflowRunsByIdPrefix'
     | 'signalWorkflowWait'
+    | 'getCodebase'
   > &
     RunActionStore;
   hostStore: { isolation: IIsolationStore };

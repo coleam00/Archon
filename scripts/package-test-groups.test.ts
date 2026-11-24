@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
+  hasWindowsTestDirective,
   parseTestPart,
   partitionTestGroups,
   resolvePackageTestConcurrency,
   resolvePackageTestGroups,
   TEST_ISOLATION_DIRECTIVE,
+  WINDOWS_TEST_DIRECTIVE,
 } from './package-test-groups';
 import weights from './test-weights.json';
 import { inspectPackage, isCollectedByRepositoryTest } from './test-inventory.test';
@@ -26,7 +28,7 @@ test('discovers suffixes and dot directories, partitions exact directives, and i
   const root = fixture();
   write(root, 'src/a.test.ts', TEST_ISOLATION_DIRECTIVE);
   write(root, 'src/b.spec.ts', `\uFEFF${TEST_ISOLATION_DIRECTIVE}\r\n`);
-  write(root, 'src/nested/c.test.tsx', `\n${TEST_ISOLATION_DIRECTIVE}`);
+  write(root, 'src/nested/c.test.tsx', `// ${TEST_ISOLATION_DIRECTIVE}`);
   write(root, 'src/.hidden/d.spec.tsx', `${TEST_ISOLATION_DIRECTIVE} extra`);
   write(root, 'src/not-a-test.ts');
   write(root, 'outside.test.ts');
@@ -43,6 +45,34 @@ test('discovers suffixes and dot directories, partitions exact directives, and i
   ]);
 });
 
+test('the Windows directive counts anywhere in the leading comment lines, and only there', () => {
+  expect(hasWindowsTestDirective(`${WINDOWS_TEST_DIRECTIVE}\nimport 'x';`)).toBe(true);
+  expect(
+    hasWindowsTestDirective(`\uFEFF${TEST_ISOLATION_DIRECTIVE}\r\n${WINDOWS_TEST_DIRECTIVE}\r\n`)
+  ).toBe(true);
+  expect(hasWindowsTestDirective(`import 'x';\n${WINDOWS_TEST_DIRECTIVE}`)).toBe(false);
+  expect(hasWindowsTestDirective(`/** doc */\n${WINDOWS_TEST_DIRECTIVE}`)).toBe(false);
+  expect(hasWindowsTestDirective(`${WINDOWS_TEST_DIRECTIVE} because`)).toBe(false);
+});
+
+test('an isolation directive below the Windows marker fails discovery instead of being ignored', () => {
+  const root = fixture();
+  write(root, 'src/a.test.ts', `${WINDOWS_TEST_DIRECTIVE}\r\n${TEST_ISOLATION_DIRECTIVE}\r\n`);
+  expect(() => resolvePackageTestGroups(root, {})).toThrow('below line 1');
+  // A manifest group names the file, which skips discovery's grouping but not this check.
+  expect(() => resolvePackageTestGroups(root, { testGroups: [['src/']] })).toThrow('below line 1');
+  // Past the leading comment lines the text is not a directive, such as a CRLF fixture's.
+  const padding = Array.from({ length: 20 }, (_, index) => `// ${String(index)}`).join('\r\n');
+  write(
+    root,
+    'src/a.test.ts',
+    `${padding}\r\nconst fixture = \`import 'x';\r\n${TEST_ISOLATION_DIRECTIVE}\r\n\`;\r\n`
+  );
+  expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);
+  write(root, 'src/a.test.ts', `${TEST_ISOLATION_DIRECTIVE}\n${WINDOWS_TEST_DIRECTIVE}\n`);
+  expect(resolvePackageTestGroups(root, {})).toEqual([['src/a.test.ts']]);
+});
+
 test('a direct mock.module() call without the directive fails discovery', () => {
   const root = fixture();
   const mocking = "mock.module('./value', () => ({}));\n";
@@ -56,10 +86,19 @@ test('a direct mock.module() call without the directive fails discovery', () => 
   expect(() => resolvePackageTestGroups(root, {})).toThrow('src/unmarked.test.ts');
 });
 
-test('legacy groups retain their order and malformed declarations fail', () => {
+test('legacy groups retain their order, other tests are discovered, and malformed declarations fail', () => {
   const root = fixture();
   const groups = [['src/z.test.ts', 'src/a.test.ts'], ['src/nested/']];
+  for (const file of ['src/z.test.ts', 'src/a.test.ts', 'src/nested/b.test.ts']) write(root, file);
   expect(resolvePackageTestGroups(root, { testGroups: groups })).toEqual(groups);
+  write(root, 'src/isolated.spec.ts', TEST_ISOLATION_DIRECTIVE);
+  write(root, 'src/new.spec.ts');
+  write(root, 'src/other.test.ts');
+  expect(resolvePackageTestGroups(root, { testGroups: groups })).toEqual([
+    ...groups,
+    ['src/isolated.spec.ts'],
+    ['src/new.spec.ts', 'src/other.test.ts'],
+  ]);
   for (const declaration of [
     null,
     { testGroups: [] },
@@ -141,7 +180,7 @@ test('inventory accepts independent additions and rejects invalid groups and sta
     JSON.stringify({ scripts: manifest.scripts, testGroups: [['src/missing.test.ts']] })
   );
   expect(inspectPackage(root)?.staleSelectors).toEqual(['src/missing.test.ts']);
-  expect(inspectPackage(root)?.missingTests).toEqual(['src/nested/two.test.ts', 'src/one.test.ts']);
+  expect(inspectPackage(root)?.missingTests).toEqual([]);
   write(root, 'package.json', JSON.stringify({ scripts: manifest.scripts, testGroups: [[]] }));
   expect(inspectPackage(root)?.unsupportedDeclarations.length).toBe(1);
   expect(

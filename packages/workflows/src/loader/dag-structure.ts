@@ -21,7 +21,7 @@ import {
   isNodeContextResume,
 } from '../schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from '../fan-out-identity';
-import { isBindingDirective } from '../schemas/node-bindings';
+import { isBindingDirective, isBindingDirectiveShape } from '../schemas/node-bindings';
 import { INPUTS_SCOPE } from '../reference-scopes';
 import {
   EXECUTION_CHECKOUT_REF_SOURCE,
@@ -29,7 +29,7 @@ import {
   parseWholeExecutionCheckoutRef,
   parseWholeOutputRef,
 } from '../output-ref';
-import { readComposedBindings } from '../compiled-command';
+import { readComposedBindings, readComposedMeta } from '../compiled-command';
 import { transitiveDepsLookup } from '../depends-on';
 import { indexDependencies } from '../graph-plan';
 import type { IncludeCommandContent } from '../compiled-command';
@@ -310,12 +310,19 @@ function checkFanOutItems(node: DagNode | IncludeDirective, scope: DagScope): st
  * one that can see a caller ref forwarded into a binding through `with:` — the child
  * was proven before that value was inserted, so a ref naming a parent node outside the
  * block's dependencies would otherwise reach the executor and fail the node mid-run.
+ *
+ * An include's binding directive (#5760) lands in the same places, plus a `workflow:`
+ * node's `with:` and the composed inputs a bash or script node reads from its env; those
+ * two carry only the directive here, since their plain values keep the lenient template
+ * path.
  */
 function checkBindings(node: DagNode | IncludeDirective, scope: DagScope): string | null {
   // Capture before narrowing: the include guard below would otherwise filter a
   // compose_fan_out node out of the binding check entirely.
   const composeFanOut = isComposeFanOutNode(node) ? node : undefined;
   if (isIncludeDirective(node)) return null;
+  const directiveError = composedDirectiveOrderError(node, scope);
+  if (directiveError !== null) return directiveError;
   if (isWorkflowNode(node)) return workflowNodeBindingError(node);
   const nodeWith = isExecNode(node)
     ? node.with
@@ -326,6 +333,18 @@ function checkBindings(node: DagNode | IncludeDirective, scope: DagScope): strin
   for (const [name, value] of Object.entries(nodeWith)) {
     const error = bindingOrderError(node, name, value, scope);
     if (error !== null) return error;
+  }
+  return null;
+}
+
+function composedDirectiveOrderError(node: DagNode, scope: DagScope): string | null {
+  const sources = [readComposedMeta(node)?.inputs, isWorkflowNode(node) ? node.with : undefined];
+  for (const source of sources) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      if (!isBindingDirectiveShape(value)) continue;
+      const error = bindingOrderError(node, name, value, scope);
+      if (error !== null) return error;
+    }
   }
   return null;
 }

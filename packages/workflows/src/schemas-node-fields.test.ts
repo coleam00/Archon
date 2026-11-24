@@ -70,6 +70,36 @@ describe('dagNodeSchema — mcp', () => {
   });
 });
 
+describe('dagNodeSchema — skills', () => {
+  const parseSkills = (skills: unknown) =>
+    dagNodeSchema.safeParse({ id: 'node', prompt: 'work', skills });
+
+  test('keeps a string entry as a required name', () => {
+    const result = parseSkills([' code-review ']);
+    expect(result.success && (result.data as DagNode).skills).toEqual(['code-review']);
+  });
+
+  test('parses the optional form and trims its name', () => {
+    const result = parseSkills([{ name: ' playwright-cli ', optional: true }]);
+    expect(result.success && (result.data as DagNode).skills).toEqual([
+      { name: 'playwright-cli', optional: true },
+    ]);
+  });
+
+  test('keeps an object without optional: true as a required entry', () => {
+    const result = parseSkills([{ name: 'code-review' }]);
+    expect(result.success && (result.data as DagNode).skills).toEqual([{ name: 'code-review' }]);
+  });
+
+  test('rejects a misspelled key instead of treating the skill as required', () => {
+    expect(parseSkills([{ name: 'playwright-cli', optinal: true }]).success).toBe(false);
+  });
+
+  test('rejects an empty name', () => {
+    expect(parseSkills([{ name: '', optional: true }]).success).toBe(false);
+  });
+});
+
 describe('approvalOnRejectSchema', () => {
   test.each([
     [

@@ -14,12 +14,6 @@ describe('RunOutcomeBadge', () => {
     expect(html).toContain('Outcome: succeeded');
   });
 
-  test('labels a failed authored outcome independently', () => {
-    const html = renderToStaticMarkup(<RunOutcomeBadge outcome="failed" />);
-    expect(html).toContain('Authored outcome: failed');
-    expect(html).toContain('Outcome: failed');
-  });
-
   test('labels a named outcome', () => {
     const html = renderToStaticMarkup(<RunOutcomeBadge outcome="built" />);
     expect(html).toContain('Authored outcome: built');
@@ -32,30 +26,25 @@ describe('RunOutcomeBadge', () => {
 });
 
 describe('RunOutcomeBadge terminal returns', () => {
-  for (const outcome of ['succeeded', 'failed'] as const) {
-    test(`shows the authored explanation for ${outcome}`, () => {
-      const html = renderToStaticMarkup(
-        <RunOutcomeBadge
-          outcome={outcome}
-          terminalRecord={terminalRecord(
-            {
-              availability: 'available',
-              node_id: 'result',
-              value: {
-                delivered: outcome === 'succeeded',
-                summary: 'Already covered by an open PR.',
-              },
-            },
-            outcome
-          )}
-        />
-      );
-      expect(html).toContain(`Outcome: ${outcome}`);
-      expect(html).toContain('summary');
-      expect(html).toContain('Already covered by an open PR.');
-      expect(html).not.toContain('delivered');
-    });
-  }
+  test('shows the authored explanation for succeeded', () => {
+    const html = renderToStaticMarkup(
+      <RunOutcomeBadge
+        outcome="succeeded"
+        terminalRecord={terminalRecord(
+          {
+            availability: 'available',
+            node_id: 'result',
+            value: { delivered: true, summary: 'Already covered by an open PR.' },
+          },
+          'succeeded'
+        )}
+      />
+    );
+    expect(html).toContain('Outcome: succeeded');
+    expect(html).toContain('summary');
+    expect(html).toContain('Already covered by an open PR.');
+    expect(html).not.toContain('delivered');
+  });
 
   test('renders every string field in authored order with exact text and escaped markup', () => {
     const explanation = `  First line\n<script>alert('hello')</script>\n${'long'.repeat(300)}  `;

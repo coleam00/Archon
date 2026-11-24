@@ -1,6 +1,7 @@
 import { access, readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter, extname, resolve } from 'node:path';
+import { envPath } from '@archon/paths/env-path';
 import type { PluginMetadata } from './operations';
 import { pluginMetadataSchema } from './operations';
 import {
@@ -76,7 +77,21 @@ async function scanDirectory(directory: string, source: string): Promise<Candida
   try {
     entries = await readdir(directory);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return [];
+    const unreadable = code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM';
+    // A PATH entry nobody chose as a plugin source may be a file or unreadable. It holds
+    // no plugins, and one such entry must not fail every forge operation.
+    if (unreadable && source !== 'plugin-dir') return [];
+    // A plugin directory the operator configured is their choice: say which one cannot
+    // be read rather than find no plugins in it.
+    if (unreadable) {
+      throw new PluginDiscoveryError(
+        'process_failed',
+        `forge plugin directory ${directory} cannot be read (${code})`,
+        { cause: error }
+      );
+    }
     throw error;
   }
   const candidates: CandidateInspection[] = [];
@@ -252,7 +267,7 @@ async function discoverCandidates(
   const dirs = [
     ...(options.pluginsDir !== undefined ? [options.pluginsDir] : []),
     ...config.pluginDirs,
-    ...(config.scanPath ? (env.PATH ?? env.Path ?? '').split(delimiter).filter(Boolean) : []),
+    ...(config.scanPath ? (envPath(env) ?? '').split(delimiter).filter(Boolean) : []),
   ];
   const configuredDirs = new Set(config.pluginDirs.map(dir => resolve(dir)));
   const scanned = (

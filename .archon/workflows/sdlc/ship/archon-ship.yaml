@@ -18,9 +18,6 @@ inputs:
     description: >-
       What to take through the pipeline — an issue, document, plan, report, or
       free-form request. When empty, the run's trigger message is the target.
-  ci:
-    default: "forge"
-    description: The pack's `ci` setting, forwarded to delivery; an includer passes its own.
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
@@ -57,17 +54,10 @@ inputs:
 returns: { node: build, outcome: delivered }
 
 nodes:
-  # Refuses the run before any agent spends when the forge plugin cannot
-  # act: no plugin for the host, or no usable credential.
-  - id: forge
-    script: forge-check
-    runtime: bun
-
   # The source is history, not a work order. Triage checks it against current
   # code and direction before deciding which kind of reasoning is still owed.
   - id: triage
     include: archon-triage-block
-    depends_on: [forge]
     with:
       target: "$INPUTS.target"
       publish: "$INPUTS.publish"
@@ -92,6 +82,5 @@ nodes:
       pull_request: "$INPUTS.pull_request"
       triage_pull_request: "$triage.output.decision.pull_request"
       branch: "$INPUTS.branch"
-      ci: "$INPUTS.ci"
       errors: "$INPUTS.errors"
       part: "$INPUTS.part"

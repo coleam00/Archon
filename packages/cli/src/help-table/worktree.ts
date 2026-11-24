@@ -18,7 +18,7 @@ export const worktreeHelp: HelpGroup = {
     {
       command: 'isolation',
       subcommand: 'cleanup',
-      spec: 'isolation cleanup --merged',
+      spec: 'isolation cleanup --merged [--json]',
       description: 'Remove worktrees covered by Git integration or a merged PR',
       scopedFlags: [
         {
@@ -35,7 +35,7 @@ export const worktreeHelp: HelpGroup = {
       command: 'isolation',
       subcommand: 'cleanup',
       spec: 'isolation cleanup schedule install|remove|status',
-      description: 'Manage the macOS timer that runs the merged cleanup',
+      description: 'Manage the OS timer that runs the merged cleanup',
       scopedFlags: [
         {
           spec: '--interval <seconds>',

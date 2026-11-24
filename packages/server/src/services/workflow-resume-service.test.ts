@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import { captureLogLines } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
-import { WorkflowNotResumableError, WorkflowResourceBusyError } from '@archon/workflows/store';
+import {
+  RunLimitError,
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+} from '@archon/workflows/store';
 import type { getConversationById } from '@archon/core/db/conversations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import {
@@ -59,6 +64,7 @@ const mockStartRunLiveOwner = mock<
 >(async runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
   return {
+    lease: testRunOwnerLease(runId),
     close: mockCloseRunLiveOwner,
     isStopRequested: () => false,
     registerTerminationPreparation: () => () => undefined,
@@ -773,6 +779,22 @@ describe('workflow continuation scanner', () => {
     });
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('a full run limit reports run_limit_full with its message', async () => {
+    const paused = run('limit-full', 'paused', {});
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
+      ok: true,
+      workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
+    });
+    const full = new RunLimitError({ limit: 1, live: 1 });
+    mockHydrateResumableRun.mockRejectedValueOnce(full);
+
+    await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toEqual({
+      kind: 'run_limit_full',
+      message: full.message,
+    });
   });
 
   test.each(['running', 'completed', 'failed', 'cancelled'] as const)(

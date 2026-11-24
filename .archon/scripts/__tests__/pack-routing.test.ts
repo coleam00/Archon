@@ -13,9 +13,9 @@ describe("deliver's report after a node failure", () => {
   const published = (...values: object[]): string =>
     JSON.stringify(values.map(value => ({ node: 'pr__publish', loop: [{ group: 'rounds', iteration: 1 }], at: '2026-11-06T10:00:00Z', value })));
   /** A report node's bindings after a node failure, in a run with no typed output. */
-  const FAILED = { INPUTS_OUTCOME: 'null', INPUTS_PULL_REQUESTS: '[]' };
+  const FAILED = { INPUTS_FLAG: 'ready', INPUTS_OUTCOME: 'null', INPUTS_PULL_REQUESTS: '[]' };
   const failedReport = (pullRequests: string, extra: Partial<Parameters<typeof runPackScript>[1]> = {}) =>
-    runPackScript('deliver/scripts/report', {
+    runPackScript('.shared/scripts/report', {
       ...extra,
       inputs: { ...FAILED, INPUTS_PULL_REQUESTS: pullRequests, ...extra.inputs },
     });
@@ -52,7 +52,7 @@ describe("deliver's report after a node failure", () => {
   });
 
   it('does not certify a URL without a complete PR record', () => {
-    const result = runPackScript('deliver/scripts/report', {
+    const result = runPackScript('.shared/scripts/report', {
       inputs: FAILED,
       artifacts: { 'pr-create-started': JSON.stringify({ pr: { url: PR_URL } }) },
     });
@@ -60,17 +60,17 @@ describe("deliver's report after a node failure", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ reason: 'pr_create_unresolved', pr_url: '' });
   });
 
-  for (const script of ['deliver/scripts/report', 'build-route/scripts/report']) {
+  for (const flag of ['ready', 'delivered']) {
     it.each(['unverified', 'unreadable'])(
-      'distinguishes an unresolved %s create from no PR', kind => {
-        const run = runPackScript(script, {
-          inputs: FAILED,
+      `distinguishes an unresolved %s create from no PR (${flag})`, kind => {
+        const run = runPackScript('.shared/scripts/report', {
+          inputs: { ...FAILED, INPUTS_FLAG: flag },
           artifacts: {
             'pr-create-started': kind === 'unverified' ? JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) : 'invalid JSON',
           },
         });
         expect(run.code).toBe(0);
-        expect(JSON.parse(run.stdout)).toMatchObject({ reason: 'pr_create_unresolved', pr_url: '' });
+        expect(JSON.parse(run.stdout)).toMatchObject({ [flag]: false, reason: 'pr_create_unresolved', pr_url: '' });
       }
     );
   }

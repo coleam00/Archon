@@ -69,11 +69,15 @@ function forbiddenBundleInput(input: string): boolean {
   const internal = repositoryInput(input);
   if (internal?.startsWith('packages/server/')) return true;
   if (internal?.startsWith('packages/adapters/')) {
-    // Declarations only: platform policies, and the GitHub source plugin's config schema
-    // that `pack bindings` checks an event binding against.
+    // Declarations, platform policies and the GitHub source plugin's config schema that
+    // `pack bindings` checks an event binding against, the item tracker, which a CLI
+    // process runs before it exits, and the forge reader `workflow wake` hands a source
+    // that observes waits. None of them is server or chat code.
     return (
       internal !== 'packages/adapters/src/platform-policies.ts' &&
       internal !== 'packages/adapters/src/forge/github/source-config.ts' &&
+      internal !== 'packages/adapters/src/forge/source-forge-reader.ts' &&
+      !internal.startsWith('packages/adapters/src/item-tracker/') &&
       !internal.endsWith('/policy.ts')
     );
   }

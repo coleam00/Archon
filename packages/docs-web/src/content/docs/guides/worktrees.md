@@ -23,6 +23,8 @@ A worktree separates checkouts. It is not an execution or security sandbox: comm
 
 Use `--branch` with a descriptive name for work that changes code; it makes worktrees and pull requests easy to identify. Use `--no-worktree` only for read-only work. A workflow can pin the choice with `worktree.enabled` in its YAML. Don't start two runs on the same branch at once: one branch maps to one worktree.
 
+A new worktree branches from the base, chosen as in [base branch precedence](/reference/cli/#base-branch-precedence), and Archon fetches that base from the remote first. A repository with no remote also gets worktrees: Archon fetches nothing and branches from a local branch, the configured base or else the branch you have checked out, and the run records which base it used. It needs at least one commit, and with nothing configured on a detached HEAD it refuses rather than guess. A repository with several remotes and no `origin` needs `worktree.remote`.
+
 By default, worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Set `worktree.path` in the repository's config for a repo-local location such as `.worktrees`, and add it to `.gitignore`.
 
 With `--branch`, Archon first reuses a healthy active task worktree registered in Archon for that project and branch, even at another path. Without that registration, worktree creation can still reuse a usable checkout at the configured target path. Both reuse paths verify the checkout is on the requested branch. A different branch or detached HEAD causes a refusal that names the requested branch, actual branch, and checkout path; Archon leaves the checkout unchanged. If no healthy active task registration was reused and another path holds the branch, creation fails with `branch_checked_out`, naming the holder, whether or not it is registered in Archon. Check whether a live Archon run still needs that checkout before freeing the branch. Once it is safe, preserve its changes, then detach it with `git -C <holder-path> switch --detach` or remove it before retrying. Archon leaves that checkout untouched. [Exact-branch continuation](/reference/cli/#continuing-an-existing-estate), such as `--adopt`, can reuse a Git-registered holder at another path.
@@ -36,12 +38,13 @@ Prepare dependencies and generated files before agents start, in the repository'
 ```yaml
 worktree:
   copyFiles: ['.env']
+  linkFiles: ['.serena/cache']  # shared by every worktree through a symlink
   postCreate:
     - bun install --frozen-lockfile
   postCreateTimeout: 300000     # per command, in milliseconds
 ```
 
-Commands run in order in the new checkout, after submodules and copied files. A command that exits nonzero, times out or cannot start stops worktree creation, and the error reports the exit code or timeout with the command's output. Both a healthy Archon-registered worktree and a usable existing checkout at the configured target path are reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. See [Configuration](/reference/configuration/) for every `worktree` option.
+Commands run in order in the new checkout, after submodules and copied files. A command that exits nonzero, times out or cannot start stops worktree creation, and the error reports the exit code or timeout with the command's output. Both a healthy Archon-registered worktree and a usable existing checkout at the configured target path are reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. A large git-ignored cache can be linked instead of copied, but every worktree then writes the same directory; see [linked files](/reference/configuration/#worktree-linked-files-worktreelinkfiles) for the trade-off and the ignore-pattern rule. See [Configuration](/reference/configuration/) for every `worktree` option.
 
 ## Inspect and clean up
 

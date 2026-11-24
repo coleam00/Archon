@@ -112,6 +112,7 @@ describe('assistant chunk coalescing', () => {
 
     const types = chunks.map(c => c.type);
     expect(types).toEqual([
+      'session',
       'agent_message_chunk',
       'tool_call',
       'tool_call_update',
@@ -183,6 +184,7 @@ describe('assistant chunk coalescing', () => {
     );
 
     expect(chunks.filter(c => c.type !== 'result')).toEqual([
+      { type: 'session', sessionId: 'session-coalesce' },
       { type: 'agent_thought_chunk', text: 'Let me think.' },
       { type: 'agent_message_chunk', text: 'The answer.' },
     ]);
@@ -231,7 +233,7 @@ describe('assistant chunk coalescing', () => {
       { type: 'agent_message_chunk', text: '\n\nFinal answer', continuesPreviousBlock: true },
       { type: 'agent_message_chunk', text: 'Separate block' },
     ]);
-    expect(chunks[1]).toEqual({
+    expect(chunks[2]).toEqual({
       type: 'warning',
       code: 'pi.extension_notify',
       message: 'pi extension info: Open http://host:8080/',

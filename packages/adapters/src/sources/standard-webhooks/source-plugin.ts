@@ -46,7 +46,15 @@ function verifySignature(request: WebhookSourceRequest, secret: Buffer): boolean
 }
 
 const bindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true })
+  .omit({
+    bindingRevision: true,
+    eventInputs: true,
+    checkoutFrom: true,
+    itemKey: true,
+    wake: true,
+    // Only an asks-settled binding grants a limit one more start.
+    grants: true,
+  })
   .extend({
     inputMapping: z.record(
       z.string().min(1),

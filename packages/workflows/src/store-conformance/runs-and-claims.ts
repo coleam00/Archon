@@ -4,6 +4,7 @@ import {
   ownerlessResumeCursor,
   WorkflowNotResumableError,
   type IWorkflowStore,
+  type OwnerlessResumeCursor,
 } from '../store';
 import { TERMINAL_WORKFLOW_STATUSES, readSourceRelease } from '../schemas/workflow-run';
 import type { WorkflowStoreHarness } from '../store-conformance';
@@ -17,6 +18,7 @@ import {
   running,
   types,
   rejection,
+  testRunOwnerLease,
 } from './fixtures';
 import { assertWorkflowClaimRace } from './races';
 import { describeResumeTransitionConformance } from './resume-transition';
@@ -61,6 +63,38 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       expect((await store.getWorkflowRun(run.id))?.metadata).toMatchObject({
         preserved: true,
         request: true,
+      });
+    });
+
+    test('pending metadata write merges only into a pending run', async () => {
+      const pending = await create(store, { metadata: { preserved: true } });
+      expect(await store.updateWorkflowRunMetadataIfPending(pending.id, { request: true })).toBe(
+        true
+      );
+      expect((await store.getWorkflowRun(pending.id))?.metadata).toMatchObject({
+        preserved: true,
+        request: true,
+      });
+      const run = await running(store);
+      const before = await store.getWorkflowRun(run.id);
+      expect(await store.updateWorkflowRunMetadataIfPending(run.id, { request: true })).toBe(false);
+      expect(await store.getWorkflowRun(run.id)).toEqual(before);
+    });
+
+    test('a metadata write merges top-level keys and keeps the nulls inside a value', async () => {
+      // A run's `$INPUTS` live in metadata, and an input can resolve to null, alone or
+      // inside an object: a resume must read the same null back (#5939).
+      const run = await create(store, {
+        metadata: { preserved: true, replaced: { stale: 1 } },
+      });
+      const inputs = { before: null, held: { commit: 'abc', result: null }, list: [null] };
+      await store.updateWorkflowRun(run.id, {
+        metadata: { inputs_values: inputs, replaced: { fresh: 2 } },
+      });
+      expect((await store.getWorkflowRun(run.id))?.metadata).toEqual({
+        preserved: true,
+        replaced: { fresh: 2 },
+        inputs_values: { before: null, held: { commit: 'abc', result: null }, list: [null] },
       });
     });
 
@@ -240,7 +274,7 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       );
       const read = await store.getWorkflowRun(run.id);
       if (!read) throw new Error('run missing');
-      const cursor = ownerlessResumeCursor(read);
+      const cursor = ownerlessResumeCursor(read, testRunOwnerLease(read.id));
       const resumed = await store.resumeWorkflowRun(run.id, cursor);
       expect(resumed.status).toBe('running');
       expect(executionClaim(resumed.metadata)).not.toBe(cursor.executionClaim);
@@ -248,17 +282,51 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       expect(await rejection(store.resumeWorkflowRun(run.id, cursor))).toBeInstanceOf(
         WorkflowNotResumableError
       );
-      expect((await store.resumeWorkflowRun(run.id, ownerlessResumeCursor(resumed))).status).toBe(
-        'running'
-      );
+      expect(
+        (
+          await store.resumeWorkflowRun(
+            run.id,
+            ownerlessResumeCursor(resumed, testRunOwnerLease(resumed.id))
+          )
+        ).status
+      ).toBe('running');
       await store.failWorkflowRun(run.id, 'failed');
       expect(
-        await rejection(store.resumeWorkflowRun(run.id, ownerlessResumeCursor(resumed)))
+        await rejection(
+          store.resumeWorkflowRun(
+            run.id,
+            ownerlessResumeCursor(resumed, testRunOwnerLease(resumed.id))
+          )
+        )
       ).toBeInstanceOf(WorkflowNotResumableError);
+    });
+    test('an ownerless resume needs a held live-owner lease for that run', async () => {
+      const run = await running(store);
+      const check = { kind: 'ownerless' as const, executionClaim: executionClaim(run.metadata) };
+      const refused: OwnerlessResumeCursor[] = [
+        // A careless caller that bypasses the type and never opened the endpoint.
+        check as OwnerlessResumeCursor,
+        { ...check, lease: testRunOwnerLease('another-run') },
+        { ...check, lease: testRunOwnerLease(run.id, { held: false }) },
+      ];
+      for (const cursor of refused) {
+        const error = await rejection(store.resumeWorkflowRun(run.id, cursor));
+        // A programming error, not a lost race a caller would quietly accept.
+        expect(error).toBeInstanceOf(Error);
+        expect(error).not.toBeInstanceOf(WorkflowNotResumableError);
+        const after = await store.getWorkflowRun(run.id);
+        expect(after?.status).toBe('running');
+        expect(executionClaim(after?.metadata ?? {})).toBe(check.executionClaim);
+      }
+      const resumed = await store.resumeWorkflowRun(run.id, {
+        ...check,
+        lease: testRunOwnerLease(run.id),
+      });
+      expect(executionClaim(resumed.metadata)).not.toBe(check.executionClaim);
     });
     test('one of concurrent ownerless resumes of a running run wins', async () => {
       const run = await running(store);
-      const cursor = ownerlessResumeCursor(run);
+      const cursor = ownerlessResumeCursor(run, testRunOwnerLease(run.id));
       const results = await eight(() =>
         store.resumeWorkflowRun(run.id, cursor).then(
           () => 'resumed',

@@ -4,7 +4,10 @@ import { makeRun } from './engine-contract-fixtures';
 import { readTerminalEvents } from './metrics-steps';
 import {
   MetricsByModelNodeError,
+  MetricsDimensionKeyError,
+  MetricsQueryError,
   queryMetrics,
+  resolveMetricsSplit,
   type MetricsQuery,
   type MetricsStore,
 } from './metrics';
@@ -23,7 +26,14 @@ let sequence = 0;
 /** One stored completion; `run` and `node` default to a fresh run and a bash node `count`. */
 function completion(
   metrics: unknown,
-  options: { run?: string; node?: string; type?: string; codebase?: string; at?: string } = {}
+  options: {
+    run?: string;
+    node?: string;
+    type?: string;
+    codebase?: string;
+    at?: string;
+    dimensions?: unknown;
+  } = {}
 ): MetricRecordRow {
   sequence += 1;
   return {
@@ -35,6 +45,7 @@ function completion(
     nodeType: options.type ?? 'bash',
     completedAt: options.at ?? '2026-10-02T12:00:00.000Z',
     metrics,
+    ...(options.dimensions === undefined ? {} : { metricDimensions: options.dimensions }),
   };
 }
 
@@ -856,6 +867,128 @@ describe('queryMetrics step models', () => {
       window
     );
     expect(report.metrics[0]?.instruments[0]?.cost).toMatchObject({ runs_partial_cost: 1 });
+  });
+});
+
+describe('queryMetrics dimension split', () => {
+  const routed = (value: number, subject: string, run: WorkflowRun, route?: string) => ({
+    record: merged(value, subject, [run]),
+    dimensions: route === undefined ? {} : { route },
+  });
+  const output = (records: ReturnType<typeof routed>[]) =>
+    completion(
+      records.map(({ record }) => record),
+      { dimensions: records.map(({ dimensions }) => dimensions) }
+    );
+  /** plan 1 and 1, deliver 1 and 0, one unrouted 0; each run before or after `cut`. */
+  function fixture() {
+    const runs = {
+      plan: [before({ total_cost_usd: 1 }), after({ total_cost_usd: 1 })],
+      deliver: [before({ total_cost_usd: 2 }), after({ total_cost_usd: 2 })],
+      none: [after()],
+    };
+    const records = [
+      routed(1, 'issue-1', runs.plan[0] as WorkflowRun, 'plan'),
+      routed(1, 'issue-2', runs.plan[1] as WorkflowRun, 'plan'),
+      routed(1, 'issue-3', runs.deliver[0] as WorkflowRun, 'deliver'),
+      routed(0, 'issue-4', runs.deliver[1] as WorkflowRun, 'deliver'),
+      routed(0, 'issue-5', runs.none[0] as WorkflowRun),
+    ];
+    return store([output(records)], { runs: Object.values(runs).flat() });
+  }
+
+  test('each value reports its own figures and cost against the other values', async () => {
+    const report = await queryMetrics(fixture(), { ...window, byDimension: 'route' });
+    const entry = report.metrics[0]?.instruments[0];
+    expect(entry?.n).toBe(5);
+    expect(entry?.compare).toBeUndefined();
+    const groups = entry?.by_dimension?.groups ?? [];
+    expect(entry?.by_dimension?.key).toBe('route');
+    expect(groups.map(group => (group.split === 'value' ? group.label : group.split))).toEqual([
+      'deliver',
+      'plan',
+      'none',
+    ]);
+    expect(groups[0]).toMatchObject({ value: 0.5, n: 2, delta_vs_rest: -0.5 });
+    expect(groups[0]?.cost).toMatchObject({ usd: 4, runs: 2 });
+    expect(groups[1]).toMatchObject({ value: 1, n: 2, delta_vs_rest: 0.5 });
+    expect(groups[1]?.cost).toMatchObject({ usd: 2, runs: 2 });
+    expect(groups[1]?.interval).not.toBeNull();
+    expect(groups[2]).toMatchObject({ value: 0, n: 1, delta_vs_rest: -0.75 });
+    expect(groups[2]?.cost).toMatchObject({ usd: null, runs: 1, runs_without_cost: 1 });
+  });
+
+  test('with a cut, each value carries its own cohorts', async () => {
+    const report = await queryMetrics(fixture(), {
+      ...window,
+      byDimension: 'route',
+      compareAt: cut,
+    });
+    const entry = report.metrics[0]?.instruments[0];
+    expect(entry?.compare).toBeUndefined();
+    const [deliver, plan, none] = entry?.by_dimension?.groups ?? [];
+    expect(deliver?.compare).toMatchObject({
+      before: { n: 1, value: 1 },
+      after: { n: 1, value: 0 },
+      delta: -1,
+    });
+    expect(plan?.compare).toMatchObject({ before: { n: 1, value: 1 }, after: { n: 1, value: 1 } });
+    expect(none?.compare).toMatchObject({ before: { n: 0 }, after: { n: 1, value: 0 } });
+  });
+
+  test('a key no record carries fails with the keys they carry', async () => {
+    const error = await queryMetrics(fixture(), { ...window, byDimension: 'size' }).catch(
+      (caught: unknown) => caught
+    );
+    expect(error).toBeInstanceOf(MetricsDimensionKeyError);
+    expect((error as MetricsDimensionKeyError).seenKeys).toEqual(['route']);
+  });
+
+  test('a key named like an Object property splits only the records that carry it', async () => {
+    const [carrier, other] = [after(), after()] as [WorkflowRun, WorkflowRun];
+    const rows = completion([merged(1, 'issue-1', [carrier]), merged(0, 'issue-2', [other])], {
+      dimensions: [{ constructor: 'plan' }, { route: 'deliver' }],
+    });
+    const report = await queryMetrics(store([rows], { runs: [carrier, other] }), {
+      ...window,
+      byDimension: 'constructor',
+    });
+    const groups = report.metrics[0]?.instruments[0]?.by_dimension?.groups ?? [];
+    expect(
+      groups.map(group => [group.split === 'value' ? group.label : group.split, group.n])
+    ).toEqual([
+      ['plan', 1],
+      ['none', 1],
+    ]);
+  });
+
+  test('stored dimensions that do not match the records one for one refuse the output', async () => {
+    const run = after();
+    const rows = completion([merged(1, 'issue-1', [run]), merged(0, 'issue-2', [run])], {
+      dimensions: [{ route: 'plan' }],
+    });
+    const report = await queryMetrics(store([rows], { runs: [run] }), window);
+    expect(report.metrics).toEqual([]);
+    expect(report.refused.map(refusal => refusal.reason)).toEqual(['invalid']);
+  });
+
+  test('a dimension split refuses a model split', () => {
+    expect(() => resolveMetricsSplit({ byModel: 'review', byDimension: 'route' })).toThrow(
+      MetricsQueryError
+    );
+    expect(resolveMetricsSplit({ byDimension: 'route', compare: '2026-10-04' })).toEqual({
+      byDimension: 'route',
+      compareAt: cut,
+    });
+  });
+
+  test('a stored record with a key this binary does not know is read without it', async () => {
+    const report = await queryMetrics(
+      store([completion([count(2, { measured_on: 'a later field' })])]),
+      window
+    );
+    expect(report.refused).toEqual([]);
+    expect(report.metrics[0]?.instruments[0]?.value).toBe(2);
   });
 });
 

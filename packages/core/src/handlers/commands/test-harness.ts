@@ -332,6 +332,8 @@ mock.module('../../db/sessions', () => ({
 }));
 
 mock.module('../../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getActiveWorkflowRun: mockGetActiveWorkflowRun,
@@ -427,10 +429,20 @@ export const mockIsolationDestroy = mock(
     })
 );
 
-const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } =
-  await import('@archon/isolation');
-mock.module('@archon/isolation', () => ({
+const {
   generatedTaskBranch,
+  validateWorktreeConfig,
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+} = await import('@archon/isolation');
+mock.module('@archon/isolation', () => ({
+  checkWorktreeStartable: mock(async () => undefined),
+  readWorktreeBaseBranch: () => undefined,
+  generatedTaskBranch,
+  validateWorktreeConfig,
+  resolveWorktreeBase: mock(async () => {
+    throw new Error('resolveWorktreeBase is not mocked here');
+  }),
   refuseUnappliedStartPoint: mock(async () => undefined),
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
@@ -483,7 +495,7 @@ mock.module('../../services/run-owner-stop', () => ({
 }));
 
 export const mockReclaimContainerEnv = mock(async () => undefined);
-export const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
+export const mockGetUseBlocker = mock<typeof CleanupRunLock.getUseBlocker>(() =>
   Promise.resolve(null)
 );
 export const mockGetWorktreeStatusBreakdown = mock<
@@ -505,7 +517,8 @@ mock.module('../../services/cleanup-service', () => ({
   getWorktreeStatusBreakdown: mockGetWorktreeStatusBreakdown,
 }));
 mock.module('../../services/cleanup/run-lock', () => ({
-  getLiveRunBlocker: mockGetLiveRunBlocker,
+  getUseBlocker: mockGetUseBlocker,
+  useBlockerLogFields: () => ({}),
   getCleanupRunLock: mock(),
   toUnpushedLock: mock(),
   countUnpushedCommits: mock(),
@@ -587,8 +600,8 @@ export function clearAllMocks(): void {
   mockIsolationEnvDbCreate.mockClear();
   mockIsolationEnvDbGet.mockClear();
   mockMarkWorktreeDestroyed.mockClear();
-  mockGetLiveRunBlocker.mockReset();
-  mockGetLiveRunBlocker.mockResolvedValue(null);
+  mockGetUseBlocker.mockReset();
+  mockGetUseBlocker.mockResolvedValue(null);
   // Cleanup service mocks
   mockCleanupMergedWorktrees.mockClear();
   mockCleanupStaleWorktrees.mockClear();

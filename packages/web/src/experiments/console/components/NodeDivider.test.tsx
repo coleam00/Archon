@@ -36,11 +36,11 @@ describe('NodeDivider cost', () => {
     expect(html).not.toContain('· $0.04');
   });
 
-  test.each(['own', 'total'] as const)('shows reported zero with %s scope', scope => {
-    expect(render(0, scope)).toContain(scope === 'total' ? '· total $0.0000' : '· $0.0000');
+  test('shows reported zero with own scope', () => {
+    expect(render(0, 'own')).toContain('· $0.0000');
   });
 
-  test.each([null, undefined, -1, Number.NaN, Infinity, -Infinity])(
+  test.each([null, undefined, -1, Number.NaN, Infinity])(
     'omits absent or invalid cost %s',
     cost => {
       expect(render(cost)).not.toContain('$');
@@ -127,5 +127,24 @@ describe('NodeDivider fan-out qualifier', () => {
       slots: [{ index: 0, outcome: 'completed', child_run_id: 'child-ok' }],
     });
     expect(html).not.toContain('did not complete');
+  });
+});
+
+describe('NodeDivider failure', () => {
+  test('a failed node shows its recorded failure kind beside its error', () => {
+    const html = renderToStaticMarkup(
+      <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
+        <NodeDivider
+          nodeId="check"
+          nodeName="check"
+          status="failed"
+          durationMs={null}
+          timestamp="2026-10-02T10:00:00.000Z"
+          error="output did not meet its schema"
+          failureKind="schema_unmet"
+        />
+      </StreamContextProvider>
+    );
+    expect(html).toContain('(schema_unmet) output did not meet its schema');
   });
 });

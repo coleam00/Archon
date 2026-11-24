@@ -3,20 +3,19 @@
  * mirror it, then close an item triage found resolved, then release the claim. A
  * close is checked before the first write; one the forge refuses leaves the item
  * BLOCKED for a maintainer instead. An item no route can start from gets triage's
- * questions as one marked comment. A closed issue gets the document write only. An
- * item the run leaves waiting for the build queue starts a build-queue pickup through
- * the operator's build-queue binding; if it does not start, the next build-queue run
- * takes the item.
+ * questions as one marked comment. A closed issue gets the document write only. The
+ * run's outcome is the stage it left the item at, and the `build-after-intake` binding
+ * in `.pack/pack.yaml` starts a build round from a build route. So an item left on a
+ * build route that waits for no round, as after an edit to an issue already built,
+ * returns `unchanged`, which starts nothing.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; INPUTS_TRIAGE,
- * the triage node's typed output, "null" when triage did not run;
- * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
+ * the triage node's typed output, "null" when triage did not run.
  */
 
-import { buildWaits } from '../../.shared/build.ts';
+import { buildWaits, LAUNCH_STAGES } from '../../.shared/build.ts';
 import { type ClosePlan, planClose } from '../../.shared/close.ts';
 import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
-import { nextPickup } from '../../.shared/follow-up.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { viewIssue } from '../../.shared/issue.ts';
@@ -35,7 +34,7 @@ import {
   type WorkItem,
 } from '../../.shared/workitem.ts';
 
-/** What the run returns. `outcome` is the run's outcome: the stage the item was left at, or `idle` when no item was claimed. */
+/** What the run returns. `outcome` is the run's outcome: the stage the item was left at, `unchanged` on a build route that waits for no round, or `idle` when no item was claimed. */
 type Outcome = NodeOutput<'archon-intake', 'outcome'>;
 
 /** Triage's verdict from its node's typed output, or null when triage did not run on this path. */
@@ -120,13 +119,9 @@ function labelDelta(
   };
 }
 
-/** Called once the claim is released, so the build-queue run this starts can claim the item. */
 function summary(item: QualifiedPr, next: WorkItem, runId: string): string {
   const latest = next.history.at(-1);
-  const stage = `Issue ${String(item.number)}: ${next.stage}${latest?.run_id === runId ? `; ${latest.summary}` : ''}`;
-  if (!buildWaits(next)) return stage;
-  const key = `${item.repo.host}/${item.repo.path}#${String(item.number)}:${runId}`;
-  return `${stage}; ${nextPickup(input('build_queue_binding'), key)}`;
+  return `Issue ${String(item.number)}: ${next.stage}${latest?.run_id === runId ? `; ${latest.summary}` : ''}`;
 }
 
 /** Say what intake did when it closed the issue or left it where no run can start. */
@@ -138,6 +133,11 @@ function announceOutcome(item: QualifiedPr, next: WorkItem, triage: TriageResult
   else if (next.stage === 'blocked' || next.stage === 'needs_contract') {
     announce(`Issue ${number}: no run can start; ${triage.summary}`, { ...labels, kind: 'blocked' });
   }
+}
+
+/** The stage the item is left at, or `unchanged` on a build route that waits for no round. */
+function runOutcome(next: WorkItem): Outcome['outcome'] {
+  return (LAUNCH_STAGES as readonly string[]).includes(next.stage) && !buildWaits(next) ? 'unchanged' : next.stage;
 }
 
 function main(): void {
@@ -197,7 +197,7 @@ function main(): void {
   emit({
     path: decision.path,
     item: item.number,
-    outcome: next.stage,
+    outcome: runOutcome(next),
     trust: next.trust,
     promoted: next.promoted !== null,
     labels,

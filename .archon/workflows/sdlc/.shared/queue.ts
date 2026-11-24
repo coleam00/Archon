@@ -1,44 +1,10 @@
 /**
- * What every pack queue after intake shares: the ask a queue raises when a decision is
- * not clear, and the decision entries it records on an item.
- *
- * An agent decides each item. A clear case acts on its own; anything unclear becomes
- * one ask that a person can decide without opening the run. The agent writes the wait's
- * own fields (the question, the options and the recommendation), and the queue's script
- * hands them to the wait unchanged. The answer is one of the options the agent declared,
- * or the wait's own `other` (`other: true`): the person's text is then the ruling, and
- * the queue does one fixed effect with it. The queue acts on the chosen option's
- * `value`, never on the answer's prose. An effect vocabulary belongs to the queue that
- * declares it.
+ * What every pack queue after intake shares: the decision entries it records on an
+ * item, the notice that says what it did, and the heading a maintainer's ruling is
+ * written under in the issue body.
  */
 
 import { notice } from 'archon:script';
-
-/** One answer the person can give, as the wait takes it. */
-export interface AskOption<Effect extends string> {
-  /** The id the answer carries: kebab-case, unique within the ask. */
-  readonly id: string;
-  readonly label: string;
-  /** What choosing it does, in plain words. */
-  readonly does: string;
-  readonly value: {
-    readonly effect: Effect;
-    /**
-     * The ruling written into the issue body as a dated "Current scope" section when
-     * this is chosen, so the next run and review read it as the contract. Empty writes
-     * no section.
-     */
-    readonly ruling: string;
-  };
-}
-
-/** The wait's fields, as the deciding agent wrote them. */
-export interface Ask<Effect extends string> {
-  /** Everything the person reads; its first sentence names the item and the decision. */
-  readonly question: string;
-  readonly options: readonly AskOption<Effect>[];
-  readonly recommendation: { readonly option: string; readonly why: string; readonly confidence: string };
-}
 
 /** One decision a queue recorded on an item, with the person's answer when it asked. */
 export interface DecisionEntry {
@@ -62,20 +28,6 @@ export function clipped(text: string): string {
 /** A queue's decisions with one more recorded: its reason clipped, the oldest dropped past the cap. */
 export function withDecision<Entry extends DecisionEntry>(prior: readonly Entry[] | undefined, entry: Entry): Entry[] {
   return [...(prior ?? []), { ...entry, reason: clipped(entry.reason) }].slice(-KEPT_DECISIONS);
-}
-
-/** The wait's reserved free-text option. */
-const OTHER = 'other';
-
-/**
- * The option an answer chose, by the answer's `decision`. An `other` answer chose none:
- * its text is the ruling, written into the issue body, and the queue does `effect` with it.
- */
-export function answeredChoice<Effect extends string>(ask: Ask<Effect>, decision: string, effect: Effect): AskOption<Effect> {
-  const option = ask.options.find(candidate => candidate.id === decision);
-  if (option !== undefined) return option;
-  if (decision !== OTHER) throw new Error(`the answer "${decision}" is none of the asked options`);
-  return { id: OTHER, label: 'Something else', does: 'Do what the answer text says.', value: { effect, ruling: '' } };
 }
 
 /**

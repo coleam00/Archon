@@ -46,6 +46,23 @@ describe("answering a select wait's reserved 'other' option", () => {
   });
 });
 
+describe('answering a message wait', () => {
+  test.each([undefined, '', '  \n'])('refuses it without text (%p)', text => {
+    expect(() =>
+      attentionAnswerFor(run, wait({ form: 'message', options: [] }), { choose: [], text })
+    ).toThrow('needs text');
+  });
+
+  test('records it with its text', () => {
+    expect(
+      attentionAnswerFor(run, wait({ form: 'message', options: [] }), {
+        choose: [],
+        text: 'Rebase first.',
+      })
+    ).toEqual({ text: 'Rebase first.' });
+  });
+});
+
 describe('accepting the recommendation', () => {
   const recommendation = { option: 'merge', why: 'Review is ready.' };
   const refusal = (fields: WaitFields, text?: string): RecommendationRefusedError => {

@@ -11,13 +11,15 @@ export const workflowRunSchema = z.object({
   conclusion: z.string().nullable(),
 });
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
+const listedWorkflowRunSchema = workflowRunSchema.extend({ workflow_id: z.number().int() });
+export type ListedWorkflowRun = z.infer<typeof listedWorkflowRunSchema>;
 
 export async function readWorkflowRuns(
   fetchImpl: Fetch,
   token: string,
   repo: RepoRef,
   revision: string
-): Promise<WorkflowRun[]> {
+): Promise<ListedWorkflowRun[]> {
   const { root, path } = location(repo);
   return githubPages(
     fetchImpl,
@@ -27,7 +29,7 @@ export async function readWorkflowRuns(
       const page = z
         .object({
           total_count: z.number().int().nonnegative(),
-          workflow_runs: z.array(workflowRunSchema),
+          workflow_runs: z.array(listedWorkflowRunSchema),
         })
         .parse(value);
       // GitHub caps filtered workflow-run searches at 1,000 results.

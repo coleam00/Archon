@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { expect, test } from 'bun:test';
 import { matchesForgeOperationResponse } from './response-match';
 
@@ -125,4 +126,47 @@ test('an applied review answers the request only when it echoes its commit, key 
   expect(answer({ commit: 'commit-b' })).toBe(false);
   expect(answer({ comments: [...placed].reverse() })).toBe(false);
   expect(answer({ comments: placed.slice(0, 1) })).toBe(false);
+});
+
+test('a stored attachment answers the request only when its digest, size and type are those of the bytes sent', () => {
+  const repo = { host: 'forge.example', path: 'team/repo' };
+  const bytes = Buffer.from('image bytes');
+  const request = {
+    operationId: 'attach',
+    op: 'attachment.put' as const,
+    repo,
+    contentType: 'image/png' as const,
+    content: bytes.toString('base64'),
+  };
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  const answer = (
+    overrides: { digest?: string; bytes?: number; contentType?: 'image/png' | 'image/gif' } = {}
+  ) =>
+    matchesForgeOperationResponse(
+      request,
+      {
+        operationId: 'attach',
+        ok: true,
+        result: {
+          op: 'attachment.put',
+          value: {
+            target: repo,
+            outcome: 'applied',
+            changed: true,
+            attachment: {
+              url: `https://forge.example/team/repo/blob/c1/${digest}.png?raw=true`,
+              digest: overrides.digest ?? digest,
+              bytes: overrides.bytes ?? bytes.byteLength,
+              contentType: overrides.contentType ?? 'image/png',
+            },
+          },
+        },
+      },
+      metadata,
+      'forge.example'
+    );
+  expect(answer()).toBe(true);
+  expect(answer({ digest: 'f'.repeat(64) })).toBe(false);
+  expect(answer({ bytes: bytes.byteLength + 1 })).toBe(false);
+  expect(answer({ contentType: 'image/gif' })).toBe(false);
 });

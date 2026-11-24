@@ -8,9 +8,7 @@
   },
   "scripts": {
     "cli": "bun src/cli.ts",
-    "test": "bun run ../../scripts/package-tests.ts",
-    "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/utils/setup-owner-stop.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-adopt-source.integration.spec.ts && bun test src/commands/workflow-dry-run-source.integration.spec.ts && bun test src/commands/workflow-container-resume.integration.spec.ts && bun test src/commands/workflow-resume-conversation.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-attention-watch.integration.spec.ts && bun test src/commands/workflow-completed-outcome.integration.spec.ts && bun test src/commands/workflow-item-asks.integration.spec.ts && bun test src/commands/workflow-interrupt.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts && bun test src/commands/workflow-wake.integration.spec.ts && bun test src/commands/isolation-cleanup-schedule.integration.spec.ts && bun test src/commands/workflow-codebase-resolution.integration.spec.ts && bun test src/commands/workflow-launch-config.integration.spec.ts",
-    "type-check": "bun x tsc --noEmit"
+    "test": "bun run ../../scripts/package-tests.ts"
   },
   "dependencies": {
     "@archon/adapters": "workspace:*",
@@ -47,6 +45,9 @@
       "src/routes/workflow-run.test.ts"
     ],
     [
+      "src/routes/workflow.test.ts"
+    ],
+    [
       "src/commands/image-chat-plugin.test.ts"
     ],
     [
@@ -60,9 +61,6 @@
     ],
     [
       "src/commands/publish-plugin.test.ts"
-    ],
-    [
-      "src/commands/workflow-provider-plugin.integration.spec.ts"
     ],
     [
       "src/commands/version.test.ts",
@@ -90,6 +88,9 @@
     ],
     [
       "src/commands/workflow.test.ts"
+    ],
+    [
+      "src/commands/workflow-cleanup.test.ts"
     ],
     [
       "src/commands/workflow-run-owned.test.ts",
@@ -130,6 +131,9 @@
     ],
     [
       "src/commands/workflow-wait.test.ts"
+    ],
+    [
+      "src/commands/workflow-item-runs.test.ts"
     ],
     [
       "src/commands/workflow-detach.test.ts"
@@ -175,9 +179,6 @@
       "src/commands/serve-binary.test.ts"
     ],
     [
-      "src/commands/serve-source.integration.spec.ts"
-    ],
-    [
       "src/commands/ai.test.ts"
     ],
     [
@@ -193,7 +194,7 @@
       "src/commands/metrics.test.ts"
     ],
     [
-      "src/since-refusal.integration.spec.ts"
+      "src/commands/tracker.test.ts"
     ],
     [
       "src/cli.test.ts",
@@ -205,13 +206,8 @@
       "src/utils/safe-console.test.ts",
       "src/utils/cli-start-telemetry.test.ts",
       "src/utils/cli-program-arguments.test.ts",
-      "src/utils/run-job-escape.test.ts"
-    ],
-    [
-      "src/utils/detached-run-control.integration.spec.ts"
-    ],
-    [
-      "src/utils/setup-owner-stop.integration.spec.ts"
+      "src/utils/run-job-escape.test.ts",
+      "src/utils/tracker-exit.test.ts"
     ],
     [
       "src/utils/detached-resume-receipt.test.ts"
@@ -223,56 +219,11 @@
       "src/utils/owned-run-lease.test.ts"
     ],
     [
-      "src/utils/detached-node-cli.integration.spec.ts"
-    ],
-    [
-      "src/telemetry-exit.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-terminal-event.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-continuation-provider.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-adopt-source.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-dry-run-source.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-container-resume.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-resume-conversation.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-wait.integration.spec.ts"
+      "src/utils/spawn-admitted.test.ts"
     ],
     [
       "src/commands/workflow-attention-text.test.ts",
       "src/commands/workflow-item-text.test.ts"
-    ],
-    [
-      "src/commands/workflow-attention.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-attention-watch.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-completed-outcome.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-item-asks.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-interrupt.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-transcript.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-node-summaries.spec.ts"
     ],
     [
       "src/adapters/cli-adapter.test.ts"
@@ -292,31 +243,16 @@
       "src/triggers/native-schedule.test.ts"
     ],
     [
-      "src/commands/trigger.integration.spec.ts"
+      "src/triggers/windows-hidden-desktop.test.ts"
     ],
     [
-      "src/commands/run-ended.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-detach-refusal.integration.spec.ts"
+      "src/triggers/add-trigger-file.test.ts"
     ],
     [
       "src/commands/workflow-continuations.test.ts"
     ],
     [
       "src/commands/workflow-continuation-source.test.ts"
-    ],
-    [
-      "src/commands/workflow-wake.integration.spec.ts"
-    ],
-    [
-      "src/commands/isolation-cleanup-schedule.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-codebase-resolution.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-github-app.integration.spec.ts"
     ],
     [
       "src/commands/user.test.ts"
@@ -329,32 +265,14 @@
       "src/commands/auth.test.ts"
     ],
     [
-      "src/commands/trigger-store.integration.spec.ts"
-    ],
-    [
-      "src/commands/trigger-poll.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-store.integration.spec.ts"
-    ],
-    [
       "src/test-support/workflow-store.conformance.test.ts"
-    ],
-    [
-      "src/test-support/detached-owner.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-launch-config.integration.spec.ts"
     ],
     [
       "src/commands/state.test.ts",
       "src/test-support/state-document-store.conformance.test.ts"
     ],
     [
-      "src/commands/state.integration.spec.ts"
-    ],
-    [
-      "src/commands/workflow-file-store.integration.spec.ts"
+      "src/commands/workflow-run-definitions.test.ts"
     ]
   ]
 }

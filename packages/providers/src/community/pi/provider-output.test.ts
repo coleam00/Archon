@@ -36,21 +36,22 @@ describe('PiProvider output', () => {
         model: 'google/gemini-2.5-pro',
       })
     );
-    expect(chunks.length).toBe(4);
-    expect(chunks[3]).toEqual({ type: 'settled' });
-    expect(chunks[0]).toEqual({
+    expect(chunks.length).toBe(5);
+    expect(chunks[4]).toEqual({ type: 'settled' });
+    expect(chunks[0]).toMatchObject({ type: 'session' });
+    expect(chunks[1]).toEqual({
       type: 'tool_call',
       toolCallId: 'call-1',
       name: 'read',
       rawInput: { path: '/x' },
     });
-    expect(chunks[1]).toEqual({
+    expect(chunks[2]).toEqual({
       type: 'tool_call_update',
       toolCallId: 'call-1',
       status: 'completed',
       output: 'contents',
     });
-    expect(chunks[2]).toMatchObject({ type: 'result' });
+    expect(chunks[3]).toMatchObject({ type: 'result' });
   });
 
   // Script an assistant text_delta followed by agent_end so the bridge has

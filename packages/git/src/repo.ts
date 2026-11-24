@@ -17,6 +17,7 @@ import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
+import { waitOutGitLocks } from './lock-wait';
 import { getDefaultBranch } from './branch';
 import type {
   RepoPath,
@@ -43,7 +44,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export async function fetchWithRetry(
   repoPath: RepoPath,
   fetchArgs: string[],
-  options: { timeout: number }
+  options: { timeout: number; env?: NodeJS.ProcessEnv }
 ): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -206,14 +207,19 @@ export async function syncWorkspace(
     }
   } else {
     // Hard-reset local working tree to match the remote — only safe for Archon-managed
-    // clones, never for a user's local working directory.
+    // clones, never for a user's local working directory. Two runs starting on one
+    // project reset the same clone at once; the second waits for the first's index lock.
     try {
-      await execFileAsync(
-        'git',
-        ['-C', workspacePath, 'reset', '--hard', `${remote}/${branchToSync}`],
-        {
-          timeout: 30000,
-        }
+      await waitOutGitLocks(
+        () =>
+          execFileAsync(
+            'git',
+            ['-C', workspacePath, 'reset', '--hard', `${remote}/${branchToSync}`],
+            {
+              timeout: 30000,
+            }
+          ),
+        { event: 'workspace_sync_reset', path: workspacePath }
       );
     } catch (error) {
       const err = error as Error;
@@ -241,9 +247,13 @@ async function fetchWorkspaceBranch(
   baseBranch: BranchName | undefined
 ): Promise<void> {
   try {
-    await fetchWithRetry(workspacePath, [remote, branchToSync], {
-      timeout: 60000,
-    });
+    // Name the destination: a bare branch updates `<remote>/<branch>` only when the remote's
+    // fetch refspec covers it, which a single-branch clone's does not for any other branch.
+    await fetchWithRetry(
+      workspacePath,
+      [remote, `+refs/heads/${branchToSync}:refs/remotes/${remote}/${branchToSync}`],
+      { timeout: 60000 }
+    );
   } catch (error) {
     const err = error as Error;
     if (baseBranch) {
@@ -706,7 +716,9 @@ async function readGlobalSafeDirectories(): Promise<{ source: string; value: str
 /**
  * Add a directory to git's global safe.directory config when git will need it.
  * Skipping new paths this user will own keeps concurrent setups off the global
- * config lock.
+ * config lock. Where they still meet (Windows, root, another owner), a setup waits
+ * out the other writer's config lock, bounded, and never removes it; each attempt
+ * reads the config again, so a grant another writer published is seen and kept.
  * Grants persist after setup failure: revocation could remove trust that a
  * concurrent setup accepted for the same path.
  * Uses execFileAsync (no shell interpolation) for safety.
@@ -714,32 +726,39 @@ async function readGlobalSafeDirectories(): Promise<{ source: string; value: str
 export async function addSafeDirectory(path: RepoPath): Promise<void> {
   if (await newPathOwnedByCurrentUser(path)) return;
   try {
-    const entries = await readGlobalSafeDirectories();
-    const values = entries.map(entry => entry.value);
-    const grants = entries.filter(entry => entry.value === path);
-    if (grants.length === 1 && values.indexOf(path) > values.lastIndexOf('')) return;
-    if (grants.length === 0 && !values.includes('')) {
-      await execFileAsync(
-        'git',
-        ['config', '--global', '--fixed-value', '--replace-all', 'safe.directory', path, path],
-        { timeout: 10000 }
-      );
-      return;
-    }
-    const home = process.env.HOME || homedir();
-    const homeConfig = join(home, '.gitconfig');
-    const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
-    const target = await realpath(
-      process.env.GIT_CONFIG_GLOBAL ?? (existsSync(homeConfig) ? homeConfig : xdgConfig)
-    );
-    // Publish effective trust before removing duplicate grants in earlier sources.
-    await editSafeDirectory(target, path, true);
-    for (const source of new Set(grants.map(entry => entry.source))) {
-      if ((await realpath(source)) !== target) await editSafeDirectory(source, path, false);
-    }
+    await waitOutGitLocks(() => grantSafeDirectory(path), {
+      event: 'add_safe_directory',
+      path,
+    });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, path }, 'add_safe_directory_failed');
     throw new Error(`Failed to add safe directory '${path}': ${err.message}`, { cause: err });
+  }
+}
+
+async function grantSafeDirectory(path: RepoPath): Promise<void> {
+  const entries = await readGlobalSafeDirectories();
+  const values = entries.map(entry => entry.value);
+  const grants = entries.filter(entry => entry.value === path);
+  if (grants.length === 1 && values.indexOf(path) > values.lastIndexOf('')) return;
+  if (grants.length === 0 && !values.includes('')) {
+    await execFileAsync(
+      'git',
+      ['config', '--global', '--fixed-value', '--replace-all', 'safe.directory', path, path],
+      { timeout: 10000 }
+    );
+    return;
+  }
+  const home = process.env.HOME || homedir();
+  const homeConfig = join(home, '.gitconfig');
+  const xdgConfig = join(process.env.XDG_CONFIG_HOME || join(home, '.config'), 'git/config');
+  const target = await realpath(
+    process.env.GIT_CONFIG_GLOBAL ?? (existsSync(homeConfig) ? homeConfig : xdgConfig)
+  );
+  // Publish effective trust before removing duplicate grants in earlier sources.
+  await editSafeDirectory(target, path, true);
+  for (const source of new Set(grants.map(entry => entry.source))) {
+    if ((await realpath(source)) !== target) await editSafeDirectory(source, path, false);
   }
 }

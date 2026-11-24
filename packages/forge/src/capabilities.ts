@@ -5,6 +5,7 @@ import {
   issueLifecycleEventSchema,
   labelChangedEventSchema,
   prLifecycleEventSchema,
+  reviewChangedEventSchema,
 } from './events';
 
 export const eventActionCapabilitySchema = z.union([
@@ -12,6 +13,7 @@ export const eventActionCapabilitySchema = z.union([
   prLifecycleEventSchema.pick({ kind: true, action: true }),
   labelChangedEventSchema.pick({ kind: true, action: true }),
   commentChangedEventSchema.pick({ kind: true, action: true }),
+  reviewChangedEventSchema.pick({ kind: true, action: true }),
   checkChangedEventSchema
     .pick({ kind: true, action: true })
     .extend({ unitKind: checkChangedEventSchema.shape.unit.shape.kind }),

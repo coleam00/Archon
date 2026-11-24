@@ -94,6 +94,8 @@ export {
 export {
   nodeMcpSchema,
   mcpDeclaration,
+  nodeSkillSchema,
+  skillDeclaration,
   loopGroupNodeSchema,
   loopGroupNodeConfigSchema,
   MAX_DURABLE_WAIT_MS,
@@ -135,6 +137,7 @@ export {
   inputEnvKey,
   bindingDirectiveSchema,
   isBindingDirective,
+  isBindingDirectiveShape,
   isTypedOutputsDirective,
 } from './node-bindings';
 export {
@@ -176,6 +179,7 @@ export type { TriggerRule, DagNodeBase, NodeContext } from './dag-node-base';
 export type {
   NodeMcp,
   McpDeclaration,
+  NodeSkill,
   LoopGroupNode,
   LoopGroupNodeConfig,
   DagNode,
@@ -265,6 +269,7 @@ export {
   WORKFLOW_SOURCE_METADATA_KEY,
   workflowSourceConfigSchema,
   workflowSourceMetadataSchema,
+  runDefinitionsSchema,
   readWorkflowSourceState,
   CONTINUATION_METADATA_KEY,
   CONTINUATION_MODES,
@@ -272,6 +277,8 @@ export {
   continuationInheritsEstate,
   EXECUTION_OWNER_METADATA_KEY,
   readExecutionOwner,
+  START_EXECUTOR_METADATA_KEY,
+  readStartExecutor,
   RUN_DISPATCH_METADATA_KEY,
   runDispatchMetadataSchema,
   readRunDispatchMetadata,
@@ -301,11 +308,14 @@ export type {
   GateAddress,
   LoopGateRunMetadata,
   WorkflowSourceMetadata,
+  RunDefinitions,
+  BaseRunDefinitions,
   WorkflowSourceConfig,
   WorkflowSourceState,
   ContinuationMode,
   ContinuationMetadata,
   ExecutionOwnerRecord,
+  StartExecutorRecord,
   RunDispatchMetadata,
 } from './workflow-run';
 
@@ -347,8 +357,18 @@ export {
   pauseCauseOfApproval,
   pauseCauseOfWait,
   readPauseCause,
+  isOperatorPaused,
   type PauseCause,
 } from './pause-cause';
+export {
+  OPERATOR_PAUSE_METADATA_KEY,
+  operatorPause,
+  describeOperatorPause,
+  operatorPauseSchema,
+  readOperatorPauseRecord,
+  type OperatorPause,
+  type OperatorPauseRecord,
+} from './operator-pause';
 export type { WorkflowRunOrigin } from './workflow-run';
 
 export * from './workflow-event';

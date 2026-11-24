@@ -7,6 +7,7 @@
  * must never collide with the "running" signal.
  */
 import type { Run } from '../primitives/run';
+import { formatDateTime } from './format';
 import type { components } from '@/lib/api.generated';
 
 export type RunStatus = Exclude<components['schemas']['WorkflowRun']['status'], 'pending'>;
@@ -45,6 +46,7 @@ export function runStatusLabel(run: Run): string {
     if (stopReason?.reason !== 'process_terminated') return statusLabel.failed;
     return stopReason.signal === undefined ? 'Interrupted' : `Interrupted (${stopReason.signal})`;
   }
+  if (run.status === 'paused' && run.operatorPause?.state === 'paused') return 'Paused by operator';
   if (run.status !== 'paused' || run.wait == null) return statusLabel[run.status];
   if (run.wait.kind === 'attention') return 'Waiting for action';
   if (run.wait.kind === 'quota') return 'Waiting for provider limit';
@@ -54,6 +56,7 @@ export function runStatusLabel(run: Run): string {
 // A stalled tool call outranks the owner state: it is the one the operator can act on.
 function runningStatusLabel(run: Run): string {
   if (run.toolCallAttention?.length) return 'Running · tool call needs attention';
+  if (run.operatorPause?.state === 'requested') return 'Running · pause requested';
   if (run.ownerObservation === 'unreachable') return 'Running · owner not answering';
   if (run.ownerObservation === 'unknown') return 'Running · owner unknown';
   return statusLabel.running;
@@ -88,6 +91,30 @@ export function ownerObservationHint(run: Run): string | null {
   if (run.ownerObservation === 'unknown')
     return "This server cannot observe the run's owner (another host or user, or no answer in time). Progress is not live here.";
   return null;
+}
+
+/**
+ * Who paused the run, when, and how to continue it; the console has no resume button for
+ * an operator pause, so it names the CLI command. Null when no operator pause applies.
+ */
+export function operatorPauseHint(run: Run): string | null {
+  const pause = run.operatorPause;
+  if (pause == null) return null;
+  const { by, via, at } = pause.requested;
+  // The generated type loses the answerer union to `unknown`; it is `{ declared }`,
+  // `{ userId }` or null.
+  const name =
+    typeof by === 'object' && by !== null
+      ? 'declared' in by
+        ? by.declared
+        : 'userId' in by
+          ? by.userId
+          : null
+      : null;
+  const who = typeof name === 'string' ? `${name} via ${via}` : via;
+  if (pause.state === 'requested')
+    return `Pause requested by ${who} at ${formatDateTime(at)}; the run pauses when its running nodes finish.`;
+  return `Paused by ${who} at ${formatDateTime(pause.pausedAt ?? at)}. Resume: archon workflow resume ${run.id}`;
 }
 
 /**

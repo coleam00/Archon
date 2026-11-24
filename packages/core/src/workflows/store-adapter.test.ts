@@ -29,6 +29,8 @@ const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
 
 mock.module('../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   insertWorkflowRun: async (): Promise<never> => {
@@ -135,6 +137,7 @@ mock.module('@archon/providers', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
+  loadRepoConfig: mock(() => Promise.resolve({})),
 }));
 
 // Per-user provider credentials mocks

@@ -8,6 +8,7 @@ import type { WebAdapter } from './adapters/web';
 import { registerApiRoutes } from './routes/api';
 import type { AppCommit } from './routes/schemas/system.schemas';
 import type { AttentionRouter } from './services/attention-router';
+import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import type { WebPushDestination } from './services/web-push';
 import {
   registerGiteaWebhookRoute,
@@ -15,7 +16,7 @@ import {
   registerGithubWebhookRoute,
   registerWebhookSourceRoutes,
 } from './routes/webhooks';
-import type { WebhookSourcePluginHost } from './services/webhook-source-plugins';
+import type { WebhookSourcePluginHost } from '@archon/core/workflows/source-plugins';
 import { parseGitCredentialPath } from './github-auth-bootstrap';
 import { getAuth, getSignupMode, isArchonOwnedAuthPath } from './auth';
 import type { PlatformAdapters } from './platform-adapters';
@@ -25,7 +26,11 @@ export interface ServerRouteDeps {
   webAdapter: WebAdapter;
   lockManager: ConversationLockManager;
   activePlatforms: readonly string[];
-  attention: { webPush: WebPushDestination; router: AttentionRouter };
+  attention: {
+    webPush: WebPushDestination;
+    router: AttentionRouter;
+    tracker: ItemTracker | undefined;
+  };
   adapters: PlatformAdapters;
   webhookSources: WebhookSourcePluginHost | undefined;
   requestResourceStartDrain: (() => void) | undefined;

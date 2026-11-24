@@ -1,11 +1,14 @@
 /**
  * The moment a run ends, the process that ended it starts the starts that end caused, on
- * the host each binding names, and drains its own trigger host when it serves one, so a
- * start queued behind the slot it released is admitted with no other command.
+ * the host each binding names, and drains the hosts it serves, so a start queued behind
+ * the slot it released is admitted with no other command. A close of an ask that settles
+ * its set is followed the same way when the settlement caused starts, under the id of the
+ * run that left the asks.
  *
- * It never drains a host it does not serve beyond its own run's starts: another host's
- * queue is that host's to drain. Nothing here is needed for correctness: the starts are
- * durable, and a crash before this leaves them for their host's next drain.
+ * Which hosts a process serves is the caller's to say (the CLI drains the hosts its
+ * install's trigger files name): another machine's queue is that machine's to drain.
+ * Nothing here is needed for correctness: the starts are durable, and a crash before this
+ * leaves them for their host's next drain.
  */
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '@archon/workflows/store';
@@ -21,11 +24,14 @@ export type TerminalWriters = Pick<
   | 'cancelFanOutRun'
   | 'resolveAndCancelApprovalGate'
   | 'cancelResumableRunsForConversation'
+  | 'answerItemAsk'
+  | 'withdrawItemAsk'
 >;
 
 /**
  * `store` with every terminal writer followed, when it won, by `afterRunEnded`, given the
- * starts a completion wrote (none for any other end). The end is already durable when it
+ * starts a completion wrote (none for any other end), and every close of an ask whose
+ * settlement wrote starts followed by it, given those starts. The end is already durable when it
  * is called, so a failure there is logged with the run and never thrown: the caller's run
  * did end.
  */
@@ -46,9 +52,11 @@ export function drainAfterRunEnds<S extends TerminalWriters>(
   return {
     ...store,
     completeWorkflowRun: async (id, completion, metadata, result) => {
-      // A completion that lost throws, so only a won one writes and starts its receipts.
-      await store.completeWorkflowRun(id, completion, metadata, result);
-      await after(id, result?.startReceipts);
+      // A completion that lost throws, so only a won one writes and starts its receipts:
+      // the ones the store wrote, which include the linked starts it resolved.
+      const written = await store.completeWorkflowRun(id, completion, metadata, result);
+      await after(id, written.startReceipts);
+      return written;
     },
     failWorkflowRun: async (id, ...rest) => {
       const result = await store.failWorkflowRun(id, ...rest);
@@ -74,6 +82,19 @@ export function drainAfterRunEnds<S extends TerminalWriters>(
       const cancelled = await store.cancelResumableRunsForConversation(...args);
       for (const run of cancelled) await after(run.id);
       return cancelled;
+    },
+    // An answer frees no slot, so only a settlement that caused starts is followed.
+    answerItemAsk: async input => {
+      const result = await store.answerItemAsk(input);
+      if (result.kind === 'closed' && result.startReceipts.length > 0)
+        await after(result.ask.runId, result.startReceipts);
+      return result;
+    },
+    withdrawItemAsk: async input => {
+      const result = await store.withdrawItemAsk(input);
+      if (result.kind === 'closed' && result.startReceipts.length > 0)
+        await after(result.ask.runId, result.startReceipts);
+      return result;
     },
   };
 }

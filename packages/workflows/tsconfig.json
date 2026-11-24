@@ -1,8 +1,14 @@
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "noEmit": true
-  },
-  "include": ["src/**/*", "src/defaults/text-imports.d.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*", "src/**/*.json"],
+  "exclude": ["node_modules", "dist"],
+  "references": [
+    { "path": "../forge" },
+    { "path": "../git" },
+    { "path": "../paths" },
+    { "path": "../plugin-manifest" },
+    { "path": "../provider-contract" },
+    { "path": "../providers" },
+    { "path": "../script-api" }
+  ]
 }

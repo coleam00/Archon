@@ -114,3 +114,30 @@ export function mcpDeclaration(mcp: NodeMcp | undefined): McpDeclaration | undef
     ? { path: mcp, optional: false }
     : { path: mcp.path, optional: mcp.optional === true };
 }
+
+/**
+ * One `skills:` entry: a name the node requires, or `{ name, optional: true }` for a
+ * skill the node runs without when its provider cannot load skills or no SKILL.md
+ * exists in the known skill roots. Strict so a misspelled key fails
+ * the load instead of silently meaning required. Only `optional: true` is optional.
+ */
+export const nodeSkillSchema = z.union([
+  z.string().min(1, 'each skill must be a non-empty string'),
+  z.strictObject({
+    name: z.string().min(1, "'skills.name' must be a non-empty string"),
+    optional: z.boolean().optional(),
+  }),
+]);
+
+export type NodeSkill = z.infer<typeof nodeSkillSchema>;
+
+export interface SkillDeclaration {
+  name: string;
+  optional: boolean;
+}
+
+export function skillDeclaration(skill: NodeSkill): SkillDeclaration {
+  return typeof skill === 'string'
+    ? { name: skill, optional: false }
+    : { name: skill.name, optional: skill.optional === true };
+}

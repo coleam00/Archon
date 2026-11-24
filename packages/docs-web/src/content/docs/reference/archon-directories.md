@@ -112,9 +112,12 @@ layout below. Existing projects keep their names and storage.
   artifacts path, relative cache path and `estimatedFreedBytes`: allocated blocks counted
   once per inode within that subtree. This is an estimate, not an exact free-space delta
   (hard links outside the subtree, shared storage and compression can affect reclamation).
+  On Windows, NTFS can report no allocation for recently written files, so the estimate
+  there can be 0 for a cache that held data.
   A failed measurement is logged and reports a null estimate if removal succeeds; failed
   removals are logged without changing the run's outcome.
-  `archon workflow cleanup` deletes old database run records, not these directories.
+  `archon workflow cleanup` deletes old runs together with these directories, their logs and
+  their frozen workflow sources (see [a run's files on disk](/reference/database/#a-runs-files-on-disk)).
 - `workspaces/<project>/logs/` - One JSONL execution log per run.
 - `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
   workflow in the project. Survives worktree teardown; never visible to git.

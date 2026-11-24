@@ -217,7 +217,9 @@ const TERMINAL_SUBTASK_STATUSES: ReadonlySet<string> = new Set(subtaskTerminalSt
  *  3. no `tool_call_update` arrives without an earlier `tool_call` for its id;
  *  4. every subtask's last status before `settled` is `completed`, `failed` or `stopped`,
  *     as reported by its runtime (verified by `checkBackgroundSettle`).
- *     A stream that never settles is reported by `checkSettled`.
+ *     A stream that never settles is reported by `checkSettled`;
+ *  5. a `session` chunk is optional, but comes at most once and before the first `result`,
+ *     and every `result` that names a session names the same one.
  */
 export async function checkEventVocabulary(cases: readonly ProviderTurnCase[]): Promise<string[]> {
   const violations: string[] = [];
@@ -239,7 +241,33 @@ export async function checkEventVocabulary(cases: readonly ProviderTurnCase[]): 
       violations.push(`${turnCase.name}: threw (${(error as Error).message})`);
       continue;
     }
-    violations.push(...toolAndSubtaskClosure(chunks).map(v => `${turnCase.name}: ${v}`));
+    violations.push(
+      ...[...toolAndSubtaskClosure(chunks), ...sessionAnnouncement(chunks)].map(
+        v => `${turnCase.name}: ${v}`
+      )
+    );
+  }
+  return violations;
+}
+
+/** Rule 5 over the chunks that parsed. */
+function sessionAnnouncement(chunks: readonly ProviderChunk[]): string[] {
+  const violations: string[] = [];
+  let announced: string | undefined;
+  let sawResult = false;
+  for (const chunk of chunks) {
+    if (chunk.type === 'session') {
+      if (announced !== undefined) violations.push('rule 5, session is announced twice');
+      else if (sawResult) violations.push('rule 5, session is announced after a result');
+      announced = chunk.sessionId;
+    } else if (chunk.type === 'result') {
+      sawResult = true;
+      if (announced !== undefined && chunk.sessionId && chunk.sessionId !== announced) {
+        violations.push(
+          `rule 5, a result names session ${chunk.sessionId}, not the announced ${announced}`
+        );
+      }
+    }
   }
   return violations;
 }
@@ -349,12 +377,19 @@ export interface ProviderForkCase extends ProviderTurnCase {
  * A fork continues its source in a new session and leaves the source unchanged, so two runs
  * that continue one session never write into it together. Every result of the fork turn
  * reports the source's context restored (`resumed: true`) and names a session other than
- * the source: the engine fails a named resume that gets either one wrong.
+ * the source: the engine fails a named resume that gets either one wrong. A `session` chunk,
+ * when sent, names the fork too: a reader may store it before any result arrives.
  */
 export async function checkForkedSession(forkTurn: ProviderForkCase): Promise<string[]> {
   const violations: string[] = [];
   try {
     for await (const chunk of forkTurn.run()) {
+      if (
+        chunkType(chunk) === 'session' &&
+        (chunk as { sessionId?: unknown }).sessionId === forkTurn.source
+      ) {
+        violations.push(`${forkTurn.name}: the session chunk names the source session, not a fork`);
+      }
       if (!isResultChunk(chunk)) continue;
       const { sessionId, resumed } = chunk as { sessionId?: unknown; resumed?: unknown };
       if (resumed !== true) {

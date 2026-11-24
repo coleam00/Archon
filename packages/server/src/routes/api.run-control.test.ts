@@ -21,7 +21,6 @@ import {
   mockRequestDetachedRunStop,
   mockHydrateResumableRun,
   mockExecuteWorkflow,
-  NOW_DATE,
   MOCK_RUNNING_RUN,
   MOCK_COMPLETED_RUN,
   MOCK_FAILED_RUN,
@@ -31,6 +30,7 @@ import {
 } from '../test/api-workflow-runs-harness';
 import { RUN_ACTIONS } from '@archon/core/operations/run-authorization';
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { WorkflowRunDeleteRefusedError } from '@archon/workflows/store';
 import type { RunActor } from '@archon/core';
 import * as sqlHost from '@archon/core/workflows/sql-host';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
@@ -179,7 +179,7 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
-  test('returns 400 for a pending run: nothing executes it yet, so abandon is the action', async () => {
+  test('cancels a pending run that no process is starting, before it starts', async () => {
     mockGetWorkflowRun.mockResolvedValue(MOCK_PENDING_RUN);
 
     const { app } = makeApp();
@@ -187,10 +187,12 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
       method: 'POST',
     });
 
-    expect(response.status).toBe(400);
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain("status 'pending'");
-    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body).toMatchObject({ success: true });
+    expect(body.message).toContain('had not started');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
   });
 
   test('returns 404 when run not found', async () => {
@@ -206,47 +208,21 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
     expect(body.error).toContain('not found');
   });
 
-  test('returns 400 when trying to cancel a completed run', async () => {
-    mockGetWorkflowRun.mockImplementation(async () => MOCK_COMPLETED_RUN);
+  test.each(['completed', 'failed', 'cancelled'] as const)(
+    'returns 400 when trying to cancel a %s run',
+    async status => {
+      mockGetWorkflowRun.mockImplementation(async () => ({ ...MOCK_COMPLETED_RUN, status }));
 
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs/run-uuid-2/cancel', {
-      method: 'POST',
-    });
-    expect(response.status).toBe(400);
+      const { app } = makeApp();
+      const response = await app.request('/api/workflows/runs/run-uuid-2/cancel', {
+        method: 'POST',
+      });
+      expect(response.status).toBe(400);
 
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('completed');
-  });
-
-  test('returns 400 when trying to cancel an already-cancelled run', async () => {
-    mockGetWorkflowRun.mockImplementation(async () => ({
-      ...MOCK_RUNNING_RUN,
-      status: 'cancelled' as const,
-    }));
-
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
-      method: 'POST',
-    });
-    expect(response.status).toBe(400);
-
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('cancelled');
-  });
-
-  test('returns 400 when trying to cancel a failed run', async () => {
-    mockGetWorkflowRun.mockImplementation(async () => ({
-      ...MOCK_RUNNING_RUN,
-      status: 'failed' as const,
-    }));
-
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
-      method: 'POST',
-    });
-    expect(response.status).toBe(400);
-  });
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toContain(`status '${status}'`);
+    }
+  );
 
   test('returns 500 when DB throws during cancel', async () => {
     await withRunInThisProcess(async runId => {
@@ -337,9 +313,10 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
       platform_conversation_id: 'cli-thread',
     });
     // No live owner endpoint exists for this id, so the operation finds the owner gone.
+    const runId = `run-killed-${crypto.randomUUID()}`;
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_RUNNING_RUN,
-      id: `run-killed-${crypto.randomUUID()}`,
+      id: runId,
       parent_conversation_id: null,
       working_path: '/tmp/worktrees/run-killed',
       metadata: { execution_claim: 'claim-checked' },
@@ -349,10 +326,12 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
       method: 'POST',
     });
     expect(response.status).toBe(200);
-    expect(mockHydrateResumableRun.mock.calls[0]?.[2]).toEqual({
-      kind: 'ownerless',
-      executionClaim: 'claim-checked',
-    });
+    // The checked claim reaches the store with the live-owner lease the route opened.
+    const cursor = mockHydrateResumableRun.mock.calls[0]?.[2];
+    expect(cursor?.kind).toBe('ownerless');
+    if (cursor?.kind !== 'ownerless') throw new Error('expected an ownerless cursor');
+    expect(cursor.executionClaim).toBe('claim-checked');
+    expect(cursor.lease.runId).toBe(runId);
   });
 
   test('returns 409 with the refusal when the run resource is busy', async () => {
@@ -796,22 +775,6 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
-  test('returns 409 when run is cancelled (non-resumable terminal)', async () => {
-    mockGetWorkflowRun.mockResolvedValue({
-      ...MOCK_RUNNING_RUN,
-      status: 'cancelled' as const,
-      completed_at: NOW_DATE,
-    });
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
-      method: 'POST',
-    });
-    expect(response.status).toBe(409);
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('Cannot abandon');
-    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
-  });
-
   test('reports container cleanup failure after successful abandonment', async () => {
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_RUNNING_RUN,
@@ -956,6 +919,44 @@ describe('DELETE /api/workflows/runs/:runId', () => {
     });
     expect(response.status).toBe(200);
     expect(mockDeleteWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
+  });
+
+  test('reports the file paths it could not remove beside the deleted row', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_COMPLETED_RUN);
+    const runFiles = await import('@archon/core/services/cleanup/run-files');
+    const failed = [{ path: '/archon/workspaces/o/r/logs/x.jsonl', error: 'EACCES: denied' }];
+    const removal = spyOn(runFiles, 'removeRunFiles').mockResolvedValueOnce({
+      removedBytes: 10,
+      failed,
+      unlocated: [],
+    });
+    try {
+      const { app } = makeApp();
+      const response = await app.request('/api/workflows/runs/run-uuid-2', { method: 'DELETE' });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        success: boolean;
+        message: string;
+        files: { failed: unknown[] };
+      };
+      expect(body.success).toBe(true);
+      expect(body.files.failed).toEqual(failed);
+      expect(body.message).toContain('1 of its file path(s) could not be removed');
+      expect(mockDeleteWorkflowRun).toHaveBeenCalledWith('run-uuid-2');
+    } finally {
+      removal.mockRestore();
+    }
+  });
+
+  test("returns 400 with the store's reason when the store refuses the delete", async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_COMPLETED_RUN);
+    const reason =
+      'Cannot delete workflow run run-uuid-2: its sub-runs have not ended: child (running).';
+    mockDeleteWorkflowRun.mockRejectedValueOnce(new WorkflowRunDeleteRefusedError(reason));
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-2', { method: 'DELETE' });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe(reason);
   });
 });
 
@@ -1111,8 +1112,10 @@ describe('starter or admin authorization on every HTTP run action', () => {
       setRequireRunIdentity(false);
     }
   });
+  // `pause` has no HTTP route; its authorization is tested at the operation.
+  const httpRunActions = RUN_ACTIONS.filter(action => action !== 'pause');
   for (const identity of ['another member', 'failed proxy identity'] as const) {
-    for (const action of RUN_ACTIONS) {
+    for (const action of httpRunActions) {
       test(`${action} returns 403 and performs no mutation for ${identity}`, async () => {
         setSessionUserId(identity === 'another member' ? 'member-b' : undefined);
         if (identity === 'failed proxy identity')

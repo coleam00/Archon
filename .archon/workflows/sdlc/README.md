@@ -44,7 +44,6 @@ If you are an agent doing this for a user:
 ```bash
 archon doctor
 archon validate workflows
-archon workflow list archon-forge-check
 ```
 
 `doctor` exits 0 when no check fails. `validate workflows` reports every bundled
@@ -79,14 +78,25 @@ the other cases.
 
 ### 3. Check the forge
 
+The pack lists the forge operations it calls in `.pack/pack.yaml`, under `forge:`. Archon
+checks them each time a run of a pack workflow starts, before a worktree or any agent: the
+plugin must advertise every one and have a credential the forge accepts in one read of the
+repository. That is the repository a run names in `repo_host` and `repo_path`, and
+otherwise one of the checkout's remotes. A refusal says what to fix: a missing plugin, an
+operation the plugin lacks, no credential, or one the forge rejects.
+
+To check without starting a run, name the operations to check. This example names three;
+pass the whole list from `.pack/pack.yaml` to check what a pack run checks:
+
 ```bash
-archon workflow run archon-forge-check
+archon forge check --json --data '{"host":"github.com","operations":["pr.view","pr.create","pr.merge"]}'
 ```
 
-It reads only. A pass names the credential source it used. A refusal says what to fix:
-a missing plugin, a plugin that lacks an operation the pack needs, or a credential that
-cannot read the repository. It proves read access; the first write proves write access.
-A run in a container has no path to the forge and refuses here.
+A `host` check contacts no forge; add `"repo":{"host":"github.com","path":"owner/repository"}`
+in place of `host` to also make the read a run's check makes. A pass names the credential
+source it used. Neither check proves what the token may write: each forge call of a run
+proves only the access it uses. A run in a container
+has no path to the forge and refuses when it starts.
 
 ### 4. Name the maintainers
 
@@ -230,7 +240,7 @@ archon ai alias unset @planner
 | `@review-code`, `@review-ux` | The code and UX review lenses | `@reviewer`, then `large` |
 | `@review-seams`, `@review-tests`, `@review-errors`, `@review-docs`, `@review-simplify` | The other review lenses | `@reviewer`, then `medium` |
 | `@review-route` | Choosing which lenses a change needs | `small` |
-| `@sweep` | The merge queue's judgment of each ready pull request | `large` |
+| `@merge` | The merge stage's judgment of a ready pull request | `large` |
 | `@discoveries` | Filing, tracking or dropping what runs noticed | `large` |
 | `@split` | Splitting a large item into issues | `large` |
 
@@ -256,7 +266,7 @@ archon workflow wait <run-id> --json
 `workflow wait` blocks until the run ends or needs an answer (step 9). If the shell
 that called it times out, run it again; never stop a run because a wait was cut short.
 Roughly, intake takes about 2 minutes, a build round 15 to 40 minutes, and a merge
-sweep about 2 minutes. These are typical times, not limits.
+run about 2 minutes. These are typical times, not limits.
 
 ```bash
 archon state get work/42
@@ -271,21 +281,26 @@ or `parked`), and `value.facts.merge.status` is the merge queue's (`waiting`, `a
 its status and its artifacts, not the stage's decision.
 
 ```bash
-archon workflow run archon-build-queue --input number=42 --detach
+archon workflow run archon-build-queue --input number=42 --item issue-42 --detach
 archon workflow wait <run-id> --json
 archon state get work/42
 ```
 
-The build queue works the issue toward a reviewed pull request, one round per run. A
-round that continues a pull request starts its review from the review the earlier round
-published, not from the start.
+The build queue works the issue toward a reviewed pull request, one round per run. The
+run is on the issue's item (`--item issue-42`), where the engine admits one build run at
+a time, so two runs never build one issue. A round that continues a pull request starts
+its review from the review the earlier round published, not from the start.
+`archon-build-pick` starts a build for every waiting issue, or for the work you describe
+in words: `archon workflow run archon-build-pick "build the retry fix"`.
 
 ```bash
-archon workflow run archon-merge-queue --detach
+archon workflow run archon-merge-queue --item issue-42 --detach
 archon workflow run archon-discoveries --detach
 ```
 
-The merge queue merges what the build queue finished and the gate allows. The
+The merge stage decides the issue's pull request, the one the build queue finished: it
+merges it when the gate allows, sends it back to the build queue, asks, or ends waiting
+for its checks. The run is on the issue's item, like the build run. The
 discoveries drain files, tracks or drops what runs noticed outside their task. After a
 merge, the clone's default branch is behind the remote: `git pull` brings the merged
 work.
@@ -307,8 +322,23 @@ archon workflow run archon-deliver --adopt <run-id> "#42: the flaky test is out 
 
 ```bash
 archon workflow attention
-archon workflow respond <run-id> <choice> "why"
+archon workflow respond <run-id> <choice> "why"                       # a paused run's question
+archon workflow answer --ref ask:<id> --choose <option> --text "why"   # an ask a finished run left on its item
 ```
+
+The build queue and the merge stage end their run and leave the question on the issue's
+item, so no run waits for you. A build answer starts the issue's next build run through
+the `build-after-answer` binding (step 10). Its options are the agent's, each one either
+continuing the work with a ruling, handing the pull request to the merge stage as it
+stands, or parking the item; an answer with text and no option continues with the text
+as the ruling. A merge answer starts the stage again through the `merge-after-answer`
+binding. Its ask always has three options: `merge`
+approves the pull request at the head that was asked about, `return` sends it back to
+the build queue with the answer's text as what to change, and `park` stops work on it.
+A merge answer with text and no option starts nothing. A withdrawn ask starts nothing
+either, and leaves the item asking. A parked pull request comes back when
+you start the merge stage on its item by hand: `archon trigger fire --config <the
+merge-queue binding file> --item issue-42`.
 
 Each item says what is being decided, the agent's recommendation and its evidence, the
 choices and what each does. The reason matters: a build or merge answer is written into
@@ -322,14 +352,38 @@ The pack installs no binding and starts nothing by itself. It declares the bindi
 recommends under `bindings:` in `.pack/pack.yaml`:
 
 - `intake-issues` and `intake-labels` start intake on GitHub issue and label events.
-- `build-queue`, `split-queue`, `merge-queue` and `discoveries` start the queues on a
-  schedule. Intake also starts the build queue for an item it routed, by firing the
-  `build-queue` file. The merge queue's schedule is short, and a sweep where nothing
-  changed runs no agent.
+- `split-queue` and `discoveries` start those queues on a schedule.
+- The merge stage runs once per issue, on the issue's item, and holds nothing while it
+  waits. `merge-after-build` starts it when a build round ends ready.
+  `merge-after-checks` starts it again when a check completes at the pull request's
+  head while its checks run. `merge-after-answer` starts it when its question is
+  answered. `merge-queue` starts it for one issue and has no schedule: `merge-pick`
+  fires it every 30 minutes for each waiting item no event will start, which is how a
+  resolved review thread, a draft marked ready, a fixed base branch or a lost event
+  gets read.
+- What follows a merge run is a binding on how it ended. `build-after-merge-return`
+  starts the issue's next build round when the stage returns its pull request.
+  `discoveries-after-merge` starts a discoveries drain after a merge.
+  `intake-after-merge` starts intake's re-triage of an issue its merged pull request
+  left open, for an install that sets `retriage_merged` to `true` in the `launch.inputs`
+  of the merge stage's binding files.
+- `build-queue` starts one build run for one issue. Nothing schedules it: the next three
+  bindings fire it or start the same workflow.
+- `build-after-intake` starts an issue's first build round when its intake run ends.
+- `build-after-answer` starts the issue's next build run when the build queue's
+  question is answered. That run writes the ruling into the issue body and records the
+  answer before any agent reads the issue, then runs the round on a continue.
+- `build-pick` starts a build for every waiting issue on a schedule, and
+  `build-pick-after-build` does when a build run ends, so a freed slot and a next round
+  do not wait for the schedule.
+- `intake` starts intake for one issue and has no schedule: a pick fires it for new
+  work its message files, a work order's untriaged members and a blocked item it sends
+  back to re-triage.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
-- `worktree-cleanup` removes merged worktrees, for an install that runs no server.
-  `archon isolation cleanup schedule install` schedules the same sweep with no workflow;
-  prefer it.
+
+An install that runs no server also needs the merged-worktree sweep a server runs by
+itself: `archon isolation cleanup schedule install` schedules it. It is an engine command,
+not a pack binding.
 
 **Ask the user** which to enable. Then write them as files:
 
@@ -341,7 +395,7 @@ archon pack bindings sdlc \
   --run-as <the id whoami printed> \
   --cwd /path/to/the/clone \
   --out /path/for/binding/files \
-  --only build-queue,merge-queue,discoveries
+  --only intake,build-queue,build-after-intake,build-after-answer,build-pick,build-pick-after-build,merge-queue,merge-after-build,merge-after-checks,merge-after-answer,build-after-merge-return,merge-pick,discoveries
 ```
 
 `--host` is the id of the execution host that starts the runs: a name you choose for
@@ -373,23 +427,29 @@ Registering a file starts runs, so ask first:
 - **An event binding** is one entry for the GitHub source plugin's `bindings` array on
   a running server with a webhook. See
   [Configure GitHub event starts](https://archon.diy/guides/workflow-triggers/#configure-github-event-starts).
-  Until then, run intake by hand for each new issue.
+  Until then, run intake by hand for each new issue. The merge stage's check
+  binding needs the webhook subscribed to check runs and commit statuses; without them a
+  pull request whose checks were running is read again only once its wait is an hour old
+  and the next `merge-pick` pass starts it. An install with no webhook can
+  [observe the waits instead](https://archon.diy/guides/workflow-triggers/#without-a-webhook)
+  from `archon workflow wake --watch`.
+- **A run-ended or asks-settled binding** is a whole file: `archon trigger add <file>`
+  registers it, and `archon trigger check` lists the registered ones with any problem.
 
 **Something has to continue a run after it is answered.** A run that paused for an
 answer continues only when a continuation host picks it up. A running `archon serve`
 is one. Without a server, install the wake timer, once per machine:
 
 ```bash
-archon workflow wake schedule install   # macOS
+archon workflow wake schedule install
 ```
 
-On Linux or Windows, run `archon workflow wake` from cron, systemd or Task Scheduler
-every minute. Without either, an answered run waits forever, and it keeps its place in
-the queue, so the runs behind it wait too.
+Without a server or the wake timer, an answered run waits forever, and it keeps its
+place in the queue, so the runs behind it wait too.
 
 **Ask the user** how many issues the factory works at once. The pack recommends 10 for
-intake and 10 for the build queue; the merge queue, the split queue and the discoveries
-drain run one pass at a time. Ten build runs at once is a lot for one machine, so set the
+intake and 10 for the build queue; the merge stage merges one pull request at a time,
+and the split queue and the discoveries drain run one pass at a time. Ten build runs at once is a lot for one machine, so set the
 number to what this one has, in `~/.archon/config.yaml`:
 
 ```yaml
@@ -409,7 +469,7 @@ bindings were written for. What to look at when choosing the build number:
   and reviewers do the same in scratch worktrees. Ten runs can mean ten test suites at
   once.
 - **Disk.** Each run has its own worktree with installed dependencies, and each review
-  round adds scratch worktrees that are removed when the round ends. Measured on Archon
+  round adds scratch worktrees; Archon removes each when the reviewer that made it ends. Measured on Archon
   itself: about 0.7 GB per worktree with dependencies, one or two scratch worktrees in a
   typical review round and up to six in a large one. Ten runs is roughly 15 to 20 GB in
   the usual case and up to about 50 GB when every run is in a large round. A full disk
@@ -436,7 +496,6 @@ The setup is complete when all of these hold:
 
 ```bash
 archon validate workflows                                                 # every workflow ok
-archon workflow run archon-forge-check                                    # passes
 git show origin/<default-branch>:.archon/sdlc/policy/maintainers.json    # lists the pack's account
 archon state get work/42                                                  # the item from step 8
 archon workflow attention                                                 # lists what waits for the user
@@ -524,13 +583,14 @@ remote's name ([`.shared/remote.ts`](.shared/remote.ts)).
 ### Deterministic scripts
 
 Every `script:` node here is TypeScript on Bun, under its own component's
-`scripts/` directory. Logic more than one of them needs lives once in
+`scripts/` directory, or under `.shared/scripts/` when several workflows run the same
+script. Logic more than one of them needs lives once in
 [`.shared/`](.shared), imported by relative path with the extension written
 (`../../.shared/report.ts`). That directory is reserved for modules, for the
-pack's default policy documents under `.shared/policy/`, and for `metric-views.json`, the
-overview cards the console metrics page shows (see the
+pack's default policy documents under `.shared/policy/`, for those shared scripts, and
+for `metric-views.json`, the overview cards the console metrics page shows (see the
 [metrics guide](https://archon.diy/guides/metrics/#overview-cards-a-pack-declares)): nothing
-in it is a workflow or a named script target, and a node that names one fails at load.
+in it is a workflow.
 
 The repository validates them where they live. `.archon/workflows/tsconfig.json`
 is the owning configuration: `bun run type-check` compiles that project. Lint
@@ -615,12 +675,12 @@ falling back to the pack's defaults"; triage names `triage.md`, and plan and rev
 synthesis name `rulings.md`, the answers a project's maintainers have already given,
 read before either stops to ask. The build queue's agents name `build.md`, what
 the queue may decide on its own, and its route and answer agents `rulings.md` too. The
-merge queue's sweep names `merge.md`, which pull requests merge on their own. Every
+merge stage's judge names `merge.md`, which pull requests merge on their own. Every
 agent that can raise an attention item names `attention.md`, what a person needs to
 decide without opening the run. Review's lenses and the simplify pass name
 `review-lens.md`, how a lens stays read-only and records findings and discoveries.
 Review's code and ux lenses name `ui-check.md`, how they start the project's app to use a
-user-facing change in a browser through the playwright-cli skill, which their prompts
+user-facing change in a browser through `playwright-cli` or `agent-browser`, which the policy
 names rather than a `skills:` entry for the reason the build queue's route does.
 Agents interpret
 them; anything that must be exact, such as label names, stays in code or typed configuration.
@@ -636,8 +696,8 @@ whose decision names no policy carries none of it.
 Each stage a person runs is one workflow, and a workflow that composes a stage includes
 that same file. A stage ends with its typed outcome as the run's result: whether it got
 there, and the report says why not. A stage that fails fails the run at the failed
-node. The composer owns what follows a stage's ending and asks through its own
-attention item when it needs a person, as the build queue does. A workflow that
+node. The composer owns what follows a stage's ending and, when it needs a person,
+ends with an ask on its item, as the build queue does. A workflow that
 includes `archon-deliver` keeps running after a failed delivery, because the report
 node completes either way, so it gates what follows on `$deliver.output.ready`.
 

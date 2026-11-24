@@ -1,0 +1,13 @@
+# Archon's settings for the software factory pack (Wirasm/archon-software-factory).
+# Each policy file is what this project's maintainers hold that stage to; a stage reads
+# the pack's default first and this project's file after it, and this project's line wins.
+settings:
+  plan_policy: .archon/factory/policy/plan.md
+  build_policy: .archon/factory/policy/build.md
+  review_policy: .archon/factory/policy/review.md
+  test_policy: .archon/factory/policy/tests.md
+  product_policy: .archon/factory/policy/product.md
+  propose_policy: .archon/factory/policy/propose.md
+  # What proves a change before a reviewer spends time on it. Not the full validation:
+  # CI is that. These are the checks a builder skipped on real runs.
+  validate_command: bun run type-check && bun run lint && bun run validate --only generated-files && bun run check:ratchet

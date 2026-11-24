@@ -2,7 +2,8 @@
  * Asks on an item (`remote_agent_item_asks`): the decisions a completed run left for an
  * operator. A row opens in the write that completes its run and closes once, as answered,
  * withdrawn or replaced. The asks one run left are a set; the write that closes the last
- * open one of a set records `asks_settled` on that run. The rows are the item's record of its
+ * open one of a set records `asks_settled` on that run, and writes the starts that settlement
+ * causes (asks-settled bindings) in the same transaction. The rows are the item's record of its
  * asks and outlive the run; the events are notices for readers of the run's event tail.
  * Nothing here logs an ask's text.
  */
@@ -18,10 +19,12 @@ import {
   type StoredItemAsk,
 } from '@archon/workflows/schemas/item-ask';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import { attentionAnswerSchema, type AttentionAnswer } from '@archon/workflows/schemas/run-wait';
 import { getDatabase, getDatabaseType, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { toHydratedTimestamp } from './timestamps';
+import { insertStartReceipt } from './start-receipt-writes';
 import { insertWorkflowEvent } from './workflow-events';
 import { getLog } from './workflow-run-shared';
 
@@ -133,7 +136,9 @@ function readAskOrThrow(row: AskRow): StoredItemAsk {
 /**
  * Open the asks a completed run left, inside the transaction that completes it, after
  * closing as `replaced` the asks still open from the same workflow on the same item.
- * Called only when that transaction won the run's change to `completed`.
+ * Called only when that transaction won the run's change to `completed`. Completions of
+ * one workflow on one item serialize, so an item has at most one open set per workflow:
+ * the last committed.
  */
 export async function openItemAsksForCompletedRun(
   query: TransactionQuery,
@@ -151,6 +156,14 @@ export async function openItemAsksForCompletedRun(
       throw new Error(`Run '${runId}' left asks but has no item; an ask belongs to an item`);
     return;
   }
+  // Completions of one workflow on one item serialize here, so the later one's replace
+  // sees the earlier set committed and closes it. Under PostgreSQL READ COMMITTED, two
+  // overlapping completions would each miss the other's uncommitted insert and both sets
+  // would stay open. SQLite has one writer, taken by the run's status update.
+  if (getDatabaseType() === 'postgresql')
+    await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      JSON.stringify(['item-asks', run.item_id, run.workflow_name]),
+    ]);
   const now = new Date().toISOString();
   await query(
     `UPDATE remote_agent_item_asks
@@ -201,6 +214,65 @@ export async function getItemAsk(id: string): Promise<StoredItemAsk | null> {
   return row === undefined ? null : readAskOrThrow(row);
 }
 
+/**
+ * Record that the set `runId` left is settled, and write the starts the settlement causes:
+ * they commit with it, so they exist exactly when it does, and a set settles once, so each
+ * is written once.
+ */
+async function recordSettlement(
+  query: TransactionQuery,
+  runId: string,
+  closedAs: readonly (string | null)[],
+  startsOnSettle: StartsOnSettle | undefined
+): Promise<readonly SourceReceiptAcceptance[]> {
+  const data: AsksSettledData = {
+    answered: closedAs.filter(as => as === 'answered').length,
+    withdrawn: closedAs.filter(as => as === 'withdrawn').length,
+  };
+  await insertWorkflowEvent(query, { workflow_run_id: runId, event_type: 'asks_settled', data });
+  if (startsOnSettle === undefined) return [];
+  // Read after this close, so the closing ask carries its answer.
+  const settledSet = await query<AskRow>(
+    'SELECT * FROM remote_agent_item_asks WHERE run_id = $1 ORDER BY position',
+    [runId]
+  );
+  const asking = await query<{ metadata: unknown }>(
+    'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
+    [runId]
+  );
+  const row = asking.rows[0];
+  const metadata = row === undefined ? undefined : jsonColumn(row.metadata);
+  const itemId = settledSet.rows[0]?.item_id;
+  // Every ask on the item, read here so this close's answer is in it. Degrading, not
+  // throwing: an old unreadable ask fails only a binding that reads the item's answers.
+  const itemAsks =
+    itemId === undefined
+      ? []
+      : readAsks(
+          (
+            await query<AskRow>(
+              `SELECT * FROM remote_agent_item_asks WHERE item_id = $1
+               ORDER BY created_at, run_id, position`,
+              [itemId]
+            )
+          ).rows
+        );
+  const receipts = startsOnSettle(
+    settledSet.rows.map(readAskOrThrow),
+    row === undefined
+      ? null
+      : {
+          metadata:
+            metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata)
+              ? (metadata as Record<string, unknown>)
+              : {},
+        },
+    itemAsks
+  );
+  for (const receipt of receipts) await insertStartReceipt(query, receipt);
+  return receipts;
+}
+
 type CloseWrite = { as: 'answered'; answer: AttentionAnswer } | { as: 'withdrawn' };
 
 /** What an earlier close means for this one: the same close changes nothing; another stands. */
@@ -214,9 +286,22 @@ function priorClose(ask: StoredItemAsk, write: CloseWrite): ItemAskCloseResult |
   return same ? { kind: 'unchanged', ask } : { kind: 'refused', ask };
 }
 
+/**
+ * Builds the starts a settled set causes, inside the settling transaction: the set's rows
+ * after this close, the metadata of the run that left them, null when it was deleted, and
+ * every ask on the set's item after this close, in the order they were left. See `createAsksSettledStarts`
+ * in core's workflows.
+ */
+export type StartsOnSettle = (
+  rows: readonly StoredItemAsk[],
+  run: { metadata: Record<string, unknown> } | null,
+  itemAsks: readonly AttentionRead<StoredItemAsk>[]
+) => readonly SourceReceiptAcceptance[];
+
 async function closeItemAsk(
   input: { askId: string } & ItemAskActInput,
-  write: CloseWrite
+  write: CloseWrite,
+  startsOnSettle: StartsOnSettle | undefined
 ): Promise<ItemAskCloseResult> {
   const lock = getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
   return getDatabase().withTransaction(async query => {
@@ -270,36 +355,34 @@ async function closeItemAsk(
     });
     const others = set.rows.filter(candidate => candidate.id !== input.askId);
     const settled = others.every(candidate => candidate.closed_as !== null);
-    if (settled) {
-      const closedAs = [write.as, ...others.map(candidate => candidate.closed_as)];
-      const data: AsksSettledData = {
-        answered: closedAs.filter(as => as === 'answered').length,
-        withdrawn: closedAs.filter(as => as === 'withdrawn').length,
-      };
-      await insertWorkflowEvent(query, {
-        workflow_run_id: runId,
-        event_type: 'asks_settled',
-        data,
-      });
-    }
+    const startReceipts = settled
+      ? await recordSettlement(
+          query,
+          runId,
+          [write.as, ...others.map(candidate => candidate.closed_as)],
+          startsOnSettle
+        )
+      : [];
     const after = await query<AskRow>('SELECT * FROM remote_agent_item_asks WHERE id = $1', [
       input.askId,
     ]);
     const closedRow = after.rows[0];
     if (closedRow === undefined)
       throw new Error(`Ask '${input.askId}' was closed but does not read back`);
-    return { kind: 'closed', ask: readAskOrThrow(closedRow), settled };
+    return { kind: 'closed', ask: readAskOrThrow(closedRow), settled, startReceipts };
   });
 }
 
 export function answerItemAsk(
-  input: { askId: string; answer: AttentionAnswer } & ItemAskActInput
+  input: { askId: string; answer: AttentionAnswer } & ItemAskActInput,
+  startsOnSettle?: StartsOnSettle
 ): Promise<ItemAskCloseResult> {
-  return closeItemAsk(input, { as: 'answered', answer: input.answer });
+  return closeItemAsk(input, { as: 'answered', answer: input.answer }, startsOnSettle);
 }
 
 export function withdrawItemAsk(
-  input: { askId: string } & ItemAskActInput
+  input: { askId: string } & ItemAskActInput,
+  startsOnSettle?: StartsOnSettle
 ): Promise<ItemAskCloseResult> {
-  return closeItemAsk(input, { as: 'withdrawn' });
+  return closeItemAsk(input, { as: 'withdrawn' }, startsOnSettle);
 }

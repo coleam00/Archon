@@ -1,4 +1,4 @@
-/** GitHub pull request reads and the create, body edit and draft-state mutations. */
+/** GitHub pull request reads and the create, body edit, draft-state and close mutations. */
 
 import { z } from 'zod';
 import {
@@ -11,7 +11,14 @@ import {
   type ForgeResponse,
 } from '@archon/forge/operations';
 import type { PrRef, RepoRef } from '@archon/forge';
-import { GitHubError, githubRequest, location, repositoryPath, type Fetch } from './api';
+import {
+  GitHubError,
+  githubErrorDetail,
+  githubRequest,
+  location,
+  repositoryPath,
+  type Fetch,
+} from './api';
 import { authorField, userSchema } from './actor';
 import { applied, failure, refused, unknown, unverified, type Submit } from './mutation-outcome';
 
@@ -270,6 +277,54 @@ export async function setDraftState(
   return pr.state === 'open' && pr.is_draft === draft
     ? applied(request, { changed: true, pr })
     : unverified(request, `${request.op} read-back did not match`, leaveBehind, { pr });
+}
+
+/** Closes without merging: the REST update never touches the head branch. */
+export async function closePullRequest(
+  request: Extract<ForgeMutationRequest, { op: 'pr.close' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: Submit
+): Promise<ForgeResponse> {
+  const before = prRecord(request.ref.repo, await readPull(fetchImpl, token, request.ref));
+  if (before.state === 'merged') {
+    return refused(
+      request,
+      { kind: 'conflict', message: 'A merged pull request cannot be closed' },
+      before
+    );
+  }
+  if (before.state === 'closed') return applied(request, { changed: false, pr: before });
+
+  const { root, path } = location(request.ref.repo);
+  submit('submitted');
+  await githubRequest(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/pulls/${String(request.ref.number)}`,
+    { method: 'PATCH', body: JSON.stringify({ state: 'closed' }) },
+    () => {
+      submit('acknowledged');
+    }
+  );
+  const leaveBehind = 'the pull request may be closed';
+  let after: Pull;
+  try {
+    after = await readPull(fetchImpl, token, request.ref);
+  } catch (cause) {
+    const error = githubErrorDetail(cause);
+    return unverified(
+      request,
+      { ...error, message: `Closed pull request could not be read back: ${error.message}` },
+      leaveBehind
+    );
+  }
+  // prRecord reads a merged pull request as merged, so a merge that raced the
+  // close cannot pass as closed.
+  const pr = prRecord(request.ref.repo, after);
+  return pr.state === 'closed'
+    ? applied(request, { changed: true, pr })
+    : unverified(request, 'Pull request close read-back did not match', leaveBehind, { pr });
 }
 
 export async function handleGithubPrView(

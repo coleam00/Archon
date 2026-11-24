@@ -314,3 +314,43 @@ describe('ConversationLockManager', () => {
     await drainUntilIdle(manager);
   });
 });
+
+describe('ConversationLockManager.cancel', () => {
+  test('does nothing when no handler is active', () => {
+    const manager = new ConversationLockManager(5);
+    expect(manager.cancel('conv-a')).toBe(false);
+  });
+
+  test("aborts only the active handler's signal; the queued one runs with its own", async () => {
+    const manager = new ConversationLockManager(5);
+    const log: string[] = [];
+    const signals: AbortSignal[] = [];
+    const first = gate(log, 'first');
+    const second = gate(log, 'second');
+    const recording =
+      (h: GatedHandler) =>
+      (signal: AbortSignal): Promise<void> => {
+        signals.push(signal);
+        return h.handler();
+      };
+
+    await manager.acquireLock('conv-a', recording(first));
+    await manager.acquireLock('conv-a', recording(second));
+    await drainUntilStarted(log, 1);
+
+    expect(manager.cancel('conv-a')).toBe(true);
+    expect(signals[0]?.aborted).toBe(true);
+    // A repeated stop is a no-op.
+    expect(manager.cancel('conv-a')).toBe(false);
+
+    first.release();
+    await drainUntilStarted(log, 2);
+    expect(log).toEqual(['first', 'second']);
+    expect(signals[1]?.aborted).toBe(false);
+
+    second.release();
+    await drainUntilIdle(manager);
+    // A stop after completion is a no-op.
+    expect(manager.cancel('conv-a')).toBe(false);
+  });
+});

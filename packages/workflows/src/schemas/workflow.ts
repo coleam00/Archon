@@ -18,7 +18,7 @@ import { jsonValueSchema } from '../output-ref';
 import { workflowResourceSchema } from './resource-name';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
 import { modelRefSchema, type WorkflowModelRef } from './model-binding';
-import type { WorkflowPack } from './pack-settings';
+import type { WorkflowPackMember } from './pack-settings';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -155,6 +155,19 @@ export const workflowInputSpecSchema = z.object({
   // logical type through the input contract instead of arriving as text.
   default: jsonValueSchema.optional(),
   description: z.string().optional(),
+  /**
+   * Fill this input, when the run is not supplied it, with the result of the latest
+   * completed run of the named workflow on the run's item: the value its `returns:` node
+   * completed with, or `null` when there is no such run or it has no readable result.
+   * Resolved once when the run starts; a run on no item is refused.
+   */
+  result_of: z.string().min(1).optional(),
+  /**
+   * With `result_of`: read the latest completed run of that workflow on the item whose
+   * result holds at the commit this run's checkout started on, as `{ commit, result }`, or
+   * `null`. Never the latest run in its place (#5769).
+   */
+  at: z.literal('checkout').optional(),
 });
 
 export type WorkflowInputSpec = z.infer<typeof workflowInputSpecSchema>;
@@ -245,7 +258,7 @@ export const workflowBaseSchema = z.object({
    * sub-run child. Selecting by id (not text) works for every node type,
    * including a non-sink node.
    *
-   * Authored as `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field> }`. The
+   * Authored as `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field>, waits?: <field> }`. The
    * loader keeps the node id here and the rest of the declaration in `result`.
    */
   returns: z.string().min(1).optional(),
@@ -283,6 +296,13 @@ export const workflowResultContractSchema = z.strictObject({
    * the write that completes it. A workflow that declares it runs on an item.
    */
   asks: z.string().min(1).optional(),
+  /**
+   * A property of the returns node's output that holds what the run's item now waits for
+   * outside Archon. The engine defines its schema (`schemas/item-wait.ts`) and adds it to
+   * the node's `output_format`; the waits a completed top-level run leaves open on its item
+   * in the write that completes it. A workflow that declares it runs on an item.
+   */
+  waits: z.string().min(1).optional(),
 });
 
 export type WorkflowResultContract = z.infer<typeof workflowResultContractSchema>;
@@ -309,7 +329,7 @@ export const workflowDefinitionSchema = z.preprocess(
  */
 export type WorkflowDefinition = z.infer<typeof workflowDefinitionSchema> & {
   prompt?: never;
-  pack?: WorkflowPack;
+  pack?: WorkflowPackMember;
 };
 
 /** Static execution plan attached after include expansion and graph validation. */
@@ -434,6 +454,8 @@ export type WorkflowExecutionResult =
       paused: true;
       workflowRunId: string;
       waitCursor?: ReturnType<typeof deadlineWaitCursor>;
+      /** An operator paused the run (`archon workflow pause`); only an explicit resume continues it. */
+      byOperator?: true;
     }
   | {
       success: true;

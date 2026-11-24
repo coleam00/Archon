@@ -19,6 +19,7 @@ import { resolveWorkflow } from '../graph-plan';
 import type { ResolvedWorkflow, WorkflowDefinition, WorkflowRun } from '../schemas';
 import type { CheckoutObservation } from '../schemas/checkout-observation';
 import type { IWorkflowStore, ObservabilityEventInput, PersistedNodeOutput } from '../store';
+import { workflowStoreDouble } from '../test-utils';
 import { substituteWorkflowVariables } from '../workflow-variables';
 
 // --- Mock logger ---
@@ -160,128 +161,75 @@ const unexpected = (name: string) => () => {
 };
 
 export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
-  return {
-    getWorkflowEventHead: mock(unexpected('event feed read')),
-    readWorkflowEventsAfter: mock(unexpected('event feed read')),
-    getStateDocument: mock(unexpected('getStateDocument')),
-    putStateDocument: mock(unexpected('putStateDocument')),
-    patchStateDocument: mock(unexpected('patchStateDocument')),
-    deleteStateDocument: mock(unexpected('deleteStateDocument')),
-    claimStateDocument: mock(unexpected('claimStateDocument')),
-    listStateRevisions: mock(unexpected('listStateRevisions')),
-    listStateDocuments: mock(unexpected('listStateDocuments')),
-    getStateDocuments: mock(unexpected('getStateDocuments')),
-    pruneStateRevisions: mock(unexpected('pruneStateRevisions')),
-    admitResourceStart: mock(unexpected('admitResourceStart')),
-    admitPendingRun: mock(unexpected('admitPendingRun')),
-    drainResourceStarts: mock(unexpected('drainResourceStarts')),
-    hasStartReceiptForDelivery: mock(unexpected('hasStartReceiptForDelivery')),
-    acceptStartReceipt: mock(unexpected('acceptStartReceipt')),
-    getStartReceipt: mock(unexpected('getStartReceipt')),
-    listStartReceipts: mock(unexpected('listStartReceipts')),
-    listPendingStartBindings: mock(unexpected('listPendingStartBindings')),
-    getResourceStartRequest: mock(unexpected('getResourceStartRequest')),
-    listQueuedResourceStartsForHost: mock(unexpected('listQueuedResourceStartsForHost')),
-    withdrawQueuedResourceStart: mock(unexpected('withdrawQueuedResourceStart')),
-    claimStartBindingPreparation: mock(unexpected('claimStartBindingPreparation')),
-    completeStartBindingPreparation: mock(unexpected('completeStartBindingPreparation')),
-    failStartBindingPreparation: mock(unexpected('failStartBindingPreparation')),
-    resetStartBindingPreparation: mock(unexpected('resetStartBindingPreparation')),
-    listDueWorkflowContinuations: mock(unexpected('listDueWorkflowContinuations')),
-    deferWorkflowContinuation: mock(unexpected('deferWorkflowContinuation')),
-    releaseRunForUnreadableSource: mock(unexpected('releaseRunForUnreadableSource')),
-    releasePausedRunSlot: mock(async () => ({ released: false })),
-    answerAttentionWait: mock(unexpected('answerAttentionWait')),
-    labelAttentionWait: mock(unexpected('labelAttentionWait')),
-    getWorkflowRunForAttention: mock(unexpected('getWorkflowRunForAttention')),
-    listAttentionQueueRows: mock(unexpected('listAttentionQueueRows')),
-    listAttentionWaitStarts: mock(unexpected('listAttentionWaitStarts')),
-    listWorkflowNoticeRows: mock(unexpected('listWorkflowNoticeRows')),
-    signalWorkflowWait: mock(unexpected('signalWorkflowWait')),
-    resolveApprovalGate: mock(unexpected('resolveApprovalGate')),
-    resolveAndCancelApprovalGate: mock(unexpected('resolveAndCancelApprovalGate')),
-    cancelResumableRunsForConversation: mock(unexpected('cancelResumableRunsForConversation')),
-    deleteWorkflowNodeSessions: mock(unexpected('deleteWorkflowNodeSessions')),
-    findOpenWorkRuns: mock(unexpected('findOpenWorkRuns')),
-    getItemRuns: mock(unexpected('getItemRuns')),
-    getItem: mock(unexpected('getItem')),
-    listItemRulings: mock(unexpected('listItemRulings')),
-    recordItemRuling: mock(unexpected('recordItemRuling')),
-    withdrawItemRuling: mock(unexpected('withdrawItemRuling')),
-    listItemLinks: mock(unexpected('listItemLinks')),
-    recordItemLink: mock(unexpected('recordItemLink')),
-    endItemLink: mock(unexpected('endItemLink')),
-    listOpenItemAsks: mock(unexpected('listOpenItemAsks')),
-    listItemAsks: mock(unexpected('listItemAsks')),
-    getItemAsk: mock(unexpected('getItemAsk')),
-    answerItemAsk: mock(unexpected('answerItemAsk')),
-    withdrawItemAsk: mock(unexpected('withdrawItemAsk')),
-    findAdoptingRuns: mock(unexpected('findAdoptingRuns')),
-    deleteOldWorkflowRuns: mock(unexpected('deleteOldWorkflowRuns')),
-    listWorkflowEvents: mock(unexpected('listWorkflowEvents')),
-    listEventsForRuns: mock(unexpected('listEventsForRuns')),
-    listMetricRecords: mock(unexpected('listMetricRecords')),
-    getWorkflowRunsByIds: mock(unexpected('getWorkflowRunsByIds')),
-    findWorkflowRunsByIdPrefix: mock(async () => []),
-    listWorkflowRuns: mock(unexpected('listWorkflowRuns')),
-    getActiveWorkflowRunByPath: mock(async () => null),
-    findChildRuns: mock(async () => []),
-    getRunAncestry: mock(async () => []),
-    createWorkflowRun: mock(async () => makeRun()),
-    claimPendingWorkflowRun: mock(async () => makeRun()),
-    recordWorkflowRunCheckoutBaseline: mock(
-      async (_id: string, baseline: CheckoutObservation) => baseline
-    ),
-    updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
-      async () => true
-    ),
-    updateWorkflowRun: mock(async () => undefined),
-    failWorkflowRun: mock(async () => ({ failed: true })),
-    getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
-    getWorkflowRunStatus: mock(async () => 'completed' as const),
-    setToolCallAttention: mock(async () => true),
-    createWorkflowEvent: mock(async () => undefined),
-    persistWorkflowEvent: mock(async () => undefined),
-    persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),
-    listProviderEvents: mock(async () => []),
-    getDagResumeSnapshot: mock(async () => ({
-      completedNodeOutputs: new Map(),
-      fanOutSnapshots: new Map(),
-      failedNodes: new Map(),
-      unresolvedNodeStarts: new Set<string>(),
-      budget: { workUnits: 0, spendUsd: 0 },
-      tokens: { input: 0, output: 0 },
-      costUsd: 0,
-    })),
-    resumeWorkflowRun: mock(async () => makeRun()),
-    recoverCancelledFanOutRun: mock(async () => makeRun()),
-    getCodebase: mock(async () => null),
-    getCodebaseEnvVars: mock(async () => ({})),
-    updateWorkflowActivity: mock(async () => undefined),
-    completeWorkflowRun: mock(async () => undefined),
-    pauseWorkflowRun: mock(async () => undefined),
-    pauseWorkflowRunForWait: mock(async () => undefined),
-    clearWorkflowWaitContext: mock(
-      async (id: string, _wait: unknown, completion: { stepName: string }) => ({
-        cleared: true as const,
-        nodeEvent: {
-          workflow_run_id: id,
-          event_type: 'node_completed' as const,
-          step_name: completion.stepName,
-          data: {},
-        },
-      })
-    ),
-    claimWriteback: mock(async () => ({ claimed: true })),
-    releaseWritebackClaim: mock(async () => undefined),
-    cancelWorkflowRun: mock(async () => ({ cancelled: false })),
-    cancelFanOutRun: mock(async () => ({ cancelled: false })),
-    listWorkflowNodeSessions: mock(async () => []),
-    listWorkflowRunNodeSessions: mock(async () => []),
-    upsertWorkflowRunNodeSession: mock(async () => undefined),
-    upsertWorkflowNodeSession: mock(async () => undefined),
-    ...overrides,
-  };
+  return workflowStoreDouble<IWorkflowStore>(
+    {
+      listSkippedItemStarts: mock(async () => []),
+      listWaitedItemHolders: mock(async () => []),
+      releasePausedRunSlot: mock(async () => ({ released: false })),
+      findWorkflowRunsByIdPrefix: mock(async () => []),
+      getActiveWorkflowRunByPath: mock(async () => null),
+      findChildRuns: mock(async () => []),
+      getRunAncestry: mock(async () => []),
+      createWorkflowRun: mock(async () => makeRun()),
+      claimPendingWorkflowRun: mock(async () => makeRun()),
+      recordWorkflowRunCheckoutBaseline: mock(
+        async (_id: string, baseline: CheckoutObservation) => baseline
+      ),
+      updateWorkflowRunMetadataIfRunning: mock<
+        IWorkflowStore['updateWorkflowRunMetadataIfRunning']
+      >(async () => true),
+      updateWorkflowRunMetadataIfPending: mock<
+        IWorkflowStore['updateWorkflowRunMetadataIfPending']
+      >(async () => true),
+      updateWorkflowRun: mock(async () => undefined),
+      failWorkflowRun: mock(async () => ({ failed: true })),
+      getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
+      getWorkflowRunStatus: mock(async () => 'completed' as const),
+      setToolCallAttention: mock(async () => true),
+      createWorkflowEvent: mock(async () => undefined),
+      persistWorkflowEvent: mock(async () => undefined),
+      persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),
+      listProviderEvents: mock(async () => []),
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
+        tokens: { input: 0, output: 0 },
+        costUsd: 0,
+      })),
+      resumeWorkflowRun: mock(async () => makeRun()),
+      recoverCancelledFanOutRun: mock(async () => makeRun()),
+      getCodebase: mock(async () => null),
+      getCodebaseEnvVars: mock(async () => ({})),
+      updateWorkflowActivity: mock(async () => undefined),
+      completeWorkflowRun: mock(async () => ({ startReceipts: [] })),
+      pauseWorkflowRun: mock(async () => undefined),
+      pauseWorkflowRunForWait: mock(async () => undefined),
+      clearWorkflowWaitContext: mock(
+        async (id: string, _wait: unknown, completion: { stepName: string }) => ({
+          cleared: true as const,
+          nodeEvent: {
+            workflow_run_id: id,
+            event_type: 'node_completed' as const,
+            step_name: completion.stepName,
+            data: {},
+          },
+        })
+      ),
+      claimWriteback: mock(async () => ({ claimed: true })),
+      releaseWritebackClaim: mock(async () => undefined),
+      cancelWorkflowRun: mock(async () => ({ cancelled: false })),
+      cancelFanOutRun: mock(async () => ({ cancelled: false })),
+      listWorkflowNodeSessions: mock(async () => []),
+      listWorkflowRunNodeSessions: mock(async () => []),
+      upsertWorkflowRunNodeSession: mock(async () => undefined),
+      upsertWorkflowNodeSession: mock(async () => undefined),
+      ...overrides,
+    },
+    method => mock(unexpected(method))
+  );
 }
 
 /** The data of every `type` event the run wrote through `createWorkflowEvent`. */

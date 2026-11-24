@@ -1,14 +1,16 @@
 // @archon-test-isolated
+// @archon-test-windows
 import { makeDeps, makePlatform } from './child-runs/test-utils';
 import { holdsPathLock, InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
-import { discoverWorkflows } from './workflow-discovery';
+import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
+import { prepareWorkflowSource } from './run-source';
 import { validateWorkflowResources } from './validator';
 import type { IWorkflowStore } from './store';
 import type { ResolvedWorkflow } from './schemas/workflow';
@@ -564,5 +566,107 @@ nodes:
     expect(approval).toBeDefined();
     const paused = children.find(c => c.status === 'paused');
     expect(String(approval?.childRunId ?? '')).toBe(paused?.id ?? '');
+  });
+
+  it("a base-definitions parent's child reads the parent's capture with what the run wrote in its checkout", async () => {
+    // The execution checkout: a git repository whose committed slot differs from the
+    // parent's captured one, so an unchanged file proves it came from the capture.
+    const git = (...args: string[]) => {
+      const done = Bun.spawnSync(['git', '-C', cwd, ...args]);
+      if (done.exitCode !== 0) throw new Error(done.stderr.toString());
+      return done.stdout.toString().trim();
+    };
+    await writeWorkflow('slot', slotYaml('slot', 'COMMITTED'));
+    git('init', '-q');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '.archon');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    const composed = join(cwd, '..', `${basename(cwd)}-composed`);
+    await mkdir(join(composed, '.archon', 'workflows'), { recursive: true });
+    const authored = join(cwd, '.archon', 'workflows', 'authored.yaml');
+    await writeFile(
+      join(composed, '.archon', 'workflows', 'parent.yaml'),
+      `name: parent
+description: runs a captured child, then one it writes
+nodes:
+  - id: sub
+    workflow: slot
+  - id: author
+    depends_on: [sub]
+    bash: |
+      cat > "${authored}" <<'YAML'
+      name: authored
+      description: written at runtime
+      nodes:
+        - id: emit
+          bash: echo "AUTHORED"
+      YAML
+      echo wrote
+  - id: later
+    depends_on: [author]
+    workflow: authored
+`
+    );
+    await writeFile(join(composed, '.archon', 'workflows', 'slot.yaml'), slotYaml('slot', 'BASE'));
+    const definitions = {
+      from: 'base' as const,
+      remote: 'origin',
+      branch: 'dev',
+      commit,
+      merge_base: commit,
+      checkout: cwd,
+      local_files: [],
+    };
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    try {
+      const preparedSource = await prepareWorkflowSource(deps, {
+        sourceRoot: composed,
+        origin: cwd,
+        includeProjectConfig: true,
+        definitions,
+      });
+      const { workflows } = await discoverWorkflowsWithConfig(
+        cwd,
+        deps.loadConfig,
+        providerRegistry,
+        preparedSource.roots
+      );
+      const parent = workflows.find(w => w.workflow.name === 'parent')?.workflow;
+      if (!parent) throw new Error('parent not discovered from the capture');
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        { conversationId: 'conv-db' },
+        { preparedSource }
+      );
+
+      expect(result.success).toBe(true);
+      const output = (step: string) =>
+        String(
+          store.events.find(e => e.event_type === 'node_completed' && e.step_name === step)?.data
+            ?.node_output
+        );
+      expect(output('sub')).toContain('BASE');
+      expect(output('later')).toContain('AUTHORED');
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'authored');
+      expect(child?.metadata.workflow_source).toMatchObject({
+        origin: cwd,
+        definitions: {
+          ...definitions,
+          run_files: {
+            checkout: cwd,
+            files: [{ path: '.archon/workflows/authored.yaml', change: 'added' }],
+          },
+        },
+      });
+    } finally {
+      await removeTempTree(composed);
+    }
   });
 });

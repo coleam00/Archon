@@ -31,6 +31,7 @@ export function isContinueSubcommand(subcommand: string | undefined): boolean {
 const KEPT_ON_CONTINUE = {
   model: 'the model bindings',
   input: 'the inputs',
+  'input-file': 'the inputs',
   base: 'the base branch',
 } as const;
 
@@ -54,7 +55,25 @@ export function rejectRunFlagsOnContinue(
 }
 
 /**
- * Accepts run configuration and trigger deployment configuration on their owning commands.
+ * Refuses `--input-file` on any command but `workflow run`, so `trigger fire`, whose own
+ * file form is `--inputs <file>`, cannot start work with the input silently dropped.
+ * Continuations are left to {@link rejectRunFlagsOnContinue}, which says why.
+ */
+export function rejectInputFileOutsideRun(
+  command: string | undefined,
+  subcommand: string | undefined,
+  inputFile: unknown
+): string | undefined {
+  if (inputFile === undefined) return undefined;
+  if (command === 'workflow' && (subcommand === 'run' || isContinueSubcommand(subcommand))) {
+    return undefined;
+  }
+  return 'Error: --input-file can only be used with workflow run.';
+}
+
+/**
+ * Accepts run configuration and trigger deployment configuration on their owning commands,
+ * and the run configuration `pack bindings` writes into every binding it generates.
  * `--config-from-run` names another run's run config, which only `workflow run` takes.
  */
 export function rejectConfigOutsideRun(
@@ -69,8 +88,21 @@ export function rejectConfigOutsideRun(
   }
   const triggerConfig =
     command === 'trigger' && (subcommand === 'fire' || subcommand === 'schedule');
-  if (config !== undefined && !triggerConfig && !workflowRun) {
-    return 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.';
+  const packBindings = command === 'pack' && subcommand === 'bindings';
+  if (config !== undefined && !triggerConfig && !workflowRun && !packBindings) {
+    return 'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.';
   }
   return undefined;
+}
+
+/** The flags another command would otherwise ignore, refused before any command runs. */
+export function rejectRunFlagsOutsideRun(
+  command: string | undefined,
+  subcommand: string | undefined,
+  values: { config?: unknown; 'config-from-run'?: unknown; 'input-file'?: unknown }
+): string | undefined {
+  return (
+    rejectConfigOutsideRun(command, subcommand, values.config, values['config-from-run']) ??
+    rejectInputFileOutsideRun(command, subcommand, values['input-file'])
+  );
 }

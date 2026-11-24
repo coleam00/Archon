@@ -125,10 +125,30 @@ async function resolveRunProject(route: WorkflowRoute): Promise<string | undefin
   }
 }
 
+/**
+ * Parse `--input-file name=path` with the `--input` grammar and resolve each path from the
+ * invocation's `--cwd`, as `--config` is. The cwd the run receives is normalized to the
+ * repository root, so resolving later would read `<root>/item.txt` for `--cwd <root>/briefs`.
+ */
+async function resolveInputFilePaths(
+  cwd: string,
+  assignments: string[] | undefined
+): Promise<Record<string, string> | undefined> {
+  if (!assignments) return undefined;
+  const { parseInputAssignments } = await import('@archon/workflows/workflow-inputs');
+  return Object.fromEntries(
+    Object.entries(parseInputAssignments(assignments, 'path')).map(([name, path]) => [
+      name,
+      resolve(cwd, path),
+    ])
+  );
+}
+
 function buildRunOptions(
   { values, cwd, json, detachedRunConfig }: WorkflowRoute,
   workflowSource: string | undefined,
-  codebaseId: string | undefined
+  codebaseId: string | undefined,
+  inputFiles: Record<string, string> | undefined
 ) {
   return {
     codebaseId,
@@ -166,6 +186,7 @@ function buildRunOptions(
     pauseAtGates: values['pause-at-gates'] as boolean | undefined,
     // Raw `name=value` assignments; parsed at the invocation gate (#2554).
     inputs: values.input as string[] | undefined,
+    inputFiles,
     modelAssignments: values.model as string[] | undefined,
     configPath: typeof values.config === 'string' ? resolve(cwd, values.config) : undefined,
     configFromRun: values['config-from-run'] as string | undefined,
@@ -181,7 +202,11 @@ export async function runWorkflowRun(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json } = route;
   const workflowName = positionals[2];
   if (!workflowName) {
-    return await fail(json, 'Usage: archon workflow run <name> [message]');
+    if (values.supersedes !== undefined) return await runRestart(route);
+    return await fail(
+      json,
+      'Usage: archon workflow run <name> [message]  (or: archon workflow run --supersedes <run-id>)'
+    );
   }
   const userMessage = positionals.slice(3).join(' ') || '';
   const worktreeConflict = worktreeFlagConflict(values);
@@ -190,12 +215,109 @@ export async function runWorkflowRun(route: WorkflowRoute): Promise<number> {
   if (codebaseId === 1) return 1;
   const workflowSource = await resolveWorkflowSource(route);
   if (workflowSource === 1) return 1;
+  const inputFiles = await resolveInputFilePaths(
+    route.cwd,
+    values['input-file'] as string[] | undefined
+  );
   await route.commands.workflowRunCommand(
     route.host,
     route.effectiveCwd,
     workflowName,
     userMessage,
-    buildRunOptions(route, workflowSource, codebaseId)
+    buildRunOptions(route, workflowSource, codebaseId, inputFiles)
+  );
+  return 0;
+}
+
+/** The flags whose values a nameless `--supersedes` takes from the run's record. */
+const RESTART_RECORD_FLAGS = [
+  'input',
+  'input-file',
+  'workflow-source',
+  'adopt',
+  'from',
+  'from-branch',
+] as const;
+
+/** The first flag the nameless `--supersedes` form refuses, as its refusal. */
+function restartFlagConflict(values: Record<string, unknown>): string | undefined {
+  const supplied = RESTART_RECORD_FLAGS.find(flag => values[flag] !== undefined);
+  if (supplied) {
+    return (
+      `Error: --supersedes without a workflow name takes --${supplied} from the run it supersedes.\n` +
+      `  Name the workflow to pass --${supplied}.`
+    );
+  }
+  // The detached child rebuilds its command from this argv, which names no workflow.
+  if (values.detach) {
+    return 'Error: --detach needs the workflow name; the nameless --supersedes form runs in the foreground.';
+  }
+  return worktreeFlagConflict(values);
+}
+
+/** The run `--supersedes` names, resolved in the launch project as the start resolves it. */
+async function supersededRun(route: WorkflowRoute, codebaseId: string | undefined) {
+  const { findLaunchCodebase } = await import('../commands/workflow-isolation');
+  const { resolveContinuationDeclaration } = await import('../commands/workflow-run-preflight');
+  const { codebase } = await findLaunchCodebase(route.host, route.effectiveCwd, { codebaseId });
+  const declaration = await resolveContinuationDeclaration(
+    route.host,
+    { supersedesRunId: route.values.supersedes as string },
+    codebase
+  );
+  if (!declaration || !('superseded' in declaration)) {
+    throw new Error('Expected --supersedes to resolve the run it supersedes.');
+  }
+  return declaration.superseded;
+}
+
+/**
+ * `workflow run --supersedes <run-id>` with no workflow name: start the run again as its
+ * record describes it, with its workflow, message, inputs, definitions source and lane
+ * (see `restartOfRun`). This is the line `workflow resume` prints for a run that failed
+ * before its checkout was prepared; it holds only the run id, so it pastes into any shell.
+ */
+async function runRestart(route: WorkflowRoute): Promise<number> {
+  const { host, values, json } = route;
+  const conflict = restartFlagConflict(values);
+  if (conflict) return await fail(json, conflict);
+  const codebaseId = await resolveRunProject(route);
+  if (codebaseId === 1) return 1;
+  const failed = await supersededRun(route, codebaseId);
+  const { restartOfRun } = await import('../commands/workflow-run-restart');
+  const restart = restartOfRun(failed);
+  if (restart.workflowSource !== undefined) {
+    const sourceConflict = workflowSourceConflict(values);
+    if (sourceConflict) return await fail(json, sourceConflict);
+    if (!(await isPathDirectory(restart.workflowSource))) {
+      return await fail(
+        json,
+        `Error: run ${failed.id} read its workflow from ${restart.workflowSource}, which is no longer a directory.`
+      );
+    }
+  }
+  const options = buildRunOptions(route, restart.workflowSource, codebaseId, undefined);
+  options.inputs = restart.inputs
+    ? Object.entries(restart.inputs).map(([name, value]) => `${name}=${value}`)
+    : undefined;
+  const { lane } = restart;
+  if (lane.kind === 'adopt') {
+    options.adoptRunId = lane.runId;
+    options.supersedesRunId = undefined;
+    // An adoption would take the hand-off run's item; the restart stays on the failed run's.
+    if (options.item === undefined && failed.item_id) {
+      options.item = (await host.deps.store.getItem(failed.item_id))?.key;
+    }
+  } else {
+    options.supersedesRunId = lane.runId;
+    options.fromBranch = lane.fromCommit;
+  }
+  await route.commands.workflowRunCommand(
+    host,
+    route.effectiveCwd,
+    restart.workflowName,
+    restart.userMessage,
+    options
   );
   return 0;
 }

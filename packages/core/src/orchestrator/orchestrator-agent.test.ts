@@ -795,6 +795,24 @@ describe('typed chat tools', () => {
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
+
+  test('a turn the operator stops after queueing a launch dispatches nothing', async () => {
+    const controller = new AbortController();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+      await options.nativeTools.find(t => t.name === 'invoke_workflow')!.handler(launch);
+      yield { type: 'agent_message_chunk', text: 'On it.' };
+      controller.abort();
+      throw new Error('Query aborted');
+    });
+    await handleMessage(makePlatform(), 'conv-1', 'fix the login bug', {
+      actor: operator,
+      abortSignal: controller.signal,
+    });
+
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
 });
 
 // ─── Natural-language approval routing ──────────────────────────────────────

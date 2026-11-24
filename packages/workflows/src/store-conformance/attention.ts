@@ -21,6 +21,7 @@ import {
   type AttentionQueueItem,
   type AttentionQueueSource,
   type ProjectRef,
+  heldRunOf,
 } from '../attention-queue';
 import { watchAttentionQueue, type AttentionStreamLine } from '../attention-watch';
 import {
@@ -408,7 +409,7 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
       expect(degraded).toEqual([]);
       const items = values.filter(isHeldByRun);
       const ids = (selected: readonly AttentionQueueItem[]): (string | undefined)[] =>
-        selected.map(item => item.run?.id);
+        selected.map(item => heldRunOf(item)?.id);
       const select = (
         query: Partial<Parameters<typeof selectAttentionQueue>[1]>
       ): AttentionQueueItem[] =>

@@ -9,7 +9,11 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabaseType, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
-import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
+import {
+  normalizeWorkflowRun,
+  parseJsonObject,
+  type WorkflowRunRow,
+} from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
 
 /**
@@ -112,6 +116,11 @@ export async function getItemRuns(
   );
   const runs = result.rows.map((run): AttentionRead<WorkflowRun> => {
     try {
+      // Elsewhere metadata that does not read is taken as empty; on an item that would read
+      // as a run that recorded nothing, such as no run config, so a later start would
+      // silently run without the item's config.
+      if (run.metadata !== null && parseJsonObject(run.metadata) === null)
+        throw new Error('unreadable metadata');
       return normalizeWorkflowRun(run);
     } catch {
       // Parser errors can quote stored data, including message text.
@@ -155,4 +164,43 @@ export async function getItem(id: string): Promise<WorkflowItem | null> {
   );
   const row = result.rows[0];
   return row ? { id: row.id, projectKey: row.project_key, key: row.key } : null;
+}
+
+/**
+ * The items of a project with one of their own runs started in `[since, until)`, ordered
+ * by id, after `afterItemId` when given. The order is the key a cursor resumes from, not a
+ * ranking.
+ */
+export async function listItemsInWindow(query: {
+  projectKey: string;
+  since: Date;
+  until: Date;
+  afterItemId: string | null;
+  limit: number;
+}): Promise<WorkflowItem[]> {
+  const params: unknown[] = [
+    query.projectKey,
+    query.since.toISOString(),
+    query.until.toISOString(),
+  ];
+  // Julian days compare SQLite's datetime('now') text with an ISO parameter correctly.
+  const [from, to] =
+    getDatabaseType() === 'sqlite'
+      ? ['julianday(r.started_at) >= julianday($2)', 'julianday(r.started_at) < julianday($3)']
+      : ['r.started_at >= $2::timestamptz', 'r.started_at < $3::timestamptz'];
+  let after = '';
+  if (query.afterItemId !== null) {
+    params.push(query.afterItemId);
+    after = `AND CAST(i.id AS TEXT) > $${String(params.length)}`;
+  }
+  params.push(query.limit);
+  const result = await pool.query<{ id: string; project_key: string; key: string }>(
+    `SELECT i.id, i.project_key, i.key FROM remote_agent_items i
+      WHERE i.project_key = $1 ${after}
+        AND EXISTS (SELECT 1 FROM remote_agent_workflow_runs r
+                     WHERE r.item_id = i.id AND ${from} AND ${to})
+      ORDER BY CAST(i.id AS TEXT) LIMIT $${String(params.length)}`,
+    params
+  );
+  return result.rows.map(row => ({ id: row.id, projectKey: row.project_key, key: row.key }));
 }

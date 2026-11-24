@@ -4,7 +4,8 @@ import { validateCloneUrl, type CloneCredentials } from './repo';
 import { toBranchName, type BranchName, type RepoPath } from './types';
 
 export type RemoteBranchTarget =
-  | { kind: 'local'; repoPath: RepoPath; remote: string }
+  /** `env` is what the remote read authenticates with; this process's env when unset. */
+  | { kind: 'local'; repoPath: RepoPath; remote: string; env?: NodeJS.ProcessEnv }
   | { kind: 'url'; url: string; credentials?: CloneCredentials };
 export type RemoteBranches =
   | { status: 'available'; defaultBranch: BranchName | null; branches: BranchName[] }
@@ -46,7 +47,11 @@ export async function validateBranchName(branch: string): Promise<void> {
 /** Read the remote advertisement, so a renamed default never depends on cached remote HEAD. */
 export async function inspectRemoteBranches(target: RemoteBranchTarget): Promise<RemoteBranches> {
   const { prefix, source, credentials, httpUrl } = await resolveRemoteTarget(target);
-  const { args, env } = gitCredentialOptions(httpUrl, credentials);
+  const { args, env } = gitCredentialOptions(
+    httpUrl,
+    credentials,
+    target.kind === 'local' ? target.env : undefined
+  );
   try {
     const { stdout } = await execFileAsync(
       'git',

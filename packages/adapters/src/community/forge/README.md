@@ -35,9 +35,10 @@ Hosts own platform policies in
 
 Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it. Your test file **must** run in its own `bun test` invocation to avoid polluting other tests.
 
-When adding a test for a bundled adapter that mocks modules, put it in its own
-`testGroups` entry in [`packages/adapters/package.json`](../../../package.json).
-The package test runner starts each group in a separate process. Do not combine tests
+When adding a test for a bundled adapter that mocks modules, make its first line
+exactly `// @archon-test-isolated`. The package test runner then starts it in its own
+process; `testGroups` in [`packages/adapters/package.json`](../../../package.json)
+only pin the files they already name. Do not combine tests
 that mock the same modules differently (such as `@archon/paths` or `@archon/git`).
 
 ### Lazy logger pattern

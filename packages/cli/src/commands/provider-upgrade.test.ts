@@ -18,6 +18,7 @@ import {
   type ProviderManifest,
 } from '@archon/plugin-manifest';
 import { MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { maintainedDescriptors } from '@archon/providers';
 import { createReleaseRepo, serveFixtureGit } from '../test-support/plugin-fixture';
 import type { PluginEnvironment } from './plugin-common';
@@ -118,7 +119,9 @@ async function assertUpgraded(env: PluginEnvironment, provider: MaintainedProvid
     )
   );
   expect(receipt.tag).toBe(tag);
-  expect(receipt).toMatchObject({ descriptor: { id: provider, protocol: 3, version } });
+  expect(receipt).toMatchObject({
+    descriptor: { id: provider, protocol: PROVIDER_PLUGIN_PROTOCOL, version },
+  });
   expect(await fs.readFile(join(env.pluginsDir, `archon-provider-${provider}${suffix}`))).toEqual(
     Buffer.from(artifactFor(provider))
   );
@@ -214,7 +217,7 @@ createInterface({ input: process.stdin }).on('line', line => {
       return new Response(null, { status: 404 });
     },
   });
-  await fs.writeFile(config, JSON.stringify({ protocol: 3 }));
+  await fs.writeFile(config, JSON.stringify({ protocol: PROVIDER_PLUGIN_PROTOCOL }));
 }, testTimeout(60_000));
 afterEach(() => {
   log.mockClear();
@@ -326,7 +329,7 @@ for (const kind of ['provider', 'forge', 'chat'] as const) {
         });
         const { descriptor, ...base } = oldReceipt('codex');
         const peers = {
-          provider: { ...base, descriptor: { ...descriptor, protocol: 3 } },
+          provider: { ...base, descriptor: { ...descriptor, protocol: PROVIDER_PLUGIN_PROTOCOL } },
           forge: {
             ...base,
             manifest: { ...base.manifest, kind: 'forge', executable: 'archon-forge-peer' },
@@ -424,13 +427,13 @@ integration.each([
     case 'future self':
       await writeReceipt(env, self.id, {
         ...self,
-        descriptor: { ...self.descriptor, protocol: 4 },
+        descriptor: { ...self.descriptor, protocol: PROVIDER_PLUGIN_PROTOCOL + 1 },
       });
       break;
     case 'future peer':
       await writeReceipt(env, peer.id, {
         ...peer,
-        descriptor: { ...peer.descriptor, protocol: 4 },
+        descriptor: { ...peer.descriptor, protocol: PROVIDER_PLUGIN_PROTOCOL + 1 },
       });
       break;
     case 'community self':
@@ -535,7 +538,7 @@ integration(
       expect(await snapshot(env)).toEqual(before);
       expect(await Bun.file(oldMarker).exists()).toBe(false);
     } finally {
-      await fs.writeFile(config, JSON.stringify({ protocol: 3 }));
+      await fs.writeFile(config, JSON.stringify({ protocol: PROVIDER_PLUGIN_PROTOCOL }));
     }
   },
   testTimeout(15_000)

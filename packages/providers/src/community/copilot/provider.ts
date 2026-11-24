@@ -603,6 +603,9 @@ export class CopilotProvider implements IAgentProvider {
     );
 
     try {
+      // Inside the try, so a caller that stops here still has the client stopped below.
+      // After a failed resume this is the fresh session, as the result will report.
+      yield { type: 'session', sessionId: session.sessionId };
       yield* closeOpenToolCalls(
         bridgeSession(
           session,

@@ -13,7 +13,10 @@ import {
 } from '@archon/core/operations/attention-queue';
 import { readItem, readItemOfRun } from '@archon/workflows/item-read';
 import { itemReadLines } from './workflow-item-text';
+import { servedHosts } from '../utils/install-hosts';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
+import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
+import { heldStartLine, readHeldStarts } from './workflow-held-starts';
 import { resolveDryRunEnvironment } from './workflow-dry-run';
 import { createCliWorkflowHost } from '../utils/workflow-host';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -31,6 +34,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import { operatorPause } from '@archon/workflows/schemas/operator-pause';
 import {
   loadWorkflows,
   projectWorkflowDescription,
@@ -56,6 +60,7 @@ import {
   transcriptUnavailableMessage,
 } from './workflow-transcript';
 import { printStatusRun, announceWaitAttached, writeWaitOutcome } from './workflow-inspect';
+import { findRunsCodebase, type RunsCodebase } from './workflow-item-runs';
 
 async function reportUnavailablePlugins(): Promise<void> {
   // Discovery reports scan failures alongside any independently loaded workflows.
@@ -347,6 +352,7 @@ export async function workflowStatusCommand(
   }
 
   const scopeFallback = !opts.all && !codebase;
+  const { hold, heldStarts } = await readHeldStarts(host, codebase?.id);
 
   if (opts.json) {
     if (!opts.verbose) {
@@ -357,6 +363,8 @@ export async function workflowStatusCommand(
           notice: notices.get(run.id) ?? null,
         })),
         scopeFallback,
+        hold,
+        heldStarts,
       });
       return;
     }
@@ -365,12 +373,23 @@ export async function workflowStatusCommand(
     await writeJsonLine({
       runs: runsOutput.map(run => ({ ...run, notice: notices.get(run.id) ?? null })),
       scopeFallback,
+      hold,
+      heldStarts,
     });
     return;
   }
 
   if (scopeFallback) {
     console.log('(not a registered project — showing all runs)');
+  }
+
+  if (hold) {
+    console.log(
+      `New runs are held on this install (${describeInstallHold(hold)}). Running runs continue; lift with: archon hold lift`
+    );
+    console.log(`\nHeld starts (${String(heldStarts.length)}):`);
+    if (heldStarts.length === 0) console.log('  none');
+    for (const start of heldStarts) console.log(heldStartLine(start));
   }
 
   if (runs.length === 0) {
@@ -533,7 +552,7 @@ export async function workflowRunsCommand(
   if (codebase instanceof Error) return refuseRuns(opts, codebase);
   // The open-work inbox contains terminal failed runs with no adopter or successor.
   try {
-    if (opts.item !== undefined) return await readItemRuns(host, opts.item, opts, codebase);
+    if (opts.item !== undefined) return await readItemCommand(host, opts.item, opts, codebase);
     if (opts.open) return await listOpenWorkRuns(host, opts, codebase);
     return await listRecentRuns(host, cwd, opts, codebase, statusFilter);
   } catch (error) {
@@ -561,7 +580,6 @@ interface RunsOptions {
   itemOf?: string;
   verbose?: boolean;
 }
-type RunsCodebase = Awaited<ReturnType<typeof findCodebaseForCheckoutPath>> | undefined;
 
 /** --json never throws — emit one parseable {ok:false} line (write-command contract). */
 async function refuseRuns(
@@ -583,24 +601,8 @@ function parseRunsStatus(status: string | undefined): WorkflowRunStatus | undefi
   );
 }
 
-async function findRunsCodebase(
-  host: WorkflowHost,
-  cwd: string,
-  opts: RunsOptions
-): Promise<RunsCodebase | Error> {
-  try {
-    const inherited = await inheritedWorkflowCodebase(host, opts.all);
-    if (inherited !== undefined || opts.all) return inherited;
-    return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
-    return new Error(`Failed to resolve workflow runs project: ${err.message}`, { cause: err });
-  }
-}
-
 /** Read one item: its runs, open questions and answers (`readItem`), oldest first. */
-async function readItemRuns(
+async function readItemCommand(
   host: WorkflowHost,
   item: string,
   opts: RunsOptions,
@@ -627,7 +629,8 @@ async function readItemRuns(
     await writeJsonLine(read);
     return 0;
   }
-  console.log(`\n${itemReadLines(read).join('\n')}\n`);
+  const served = await servedHosts();
+  console.log(`\n${itemReadLines(read, served).join('\n')}\n`);
   return 0;
 }
 
@@ -656,7 +659,8 @@ async function readItemOfRunCommand(
     await writeJsonLine(read);
     return 0;
   }
-  console.log(`\n${itemReadLines(read).join('\n')}\n`);
+  const served = await servedHosts();
+  console.log(`\n${itemReadLines(read, served).join('\n')}\n`);
   return 0;
 }
 
@@ -753,12 +757,21 @@ async function listRecentRuns(
     const activeNodes =
       run.active_nodes.length > 0 ? ` · active node(s): ${run.active_nodes.join(', ')}` : '';
     console.log(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${operatorPauseMark(run)}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
     );
   }
   printModelThroughput(report?.throughput);
   console.log('');
   return 0;
+}
+
+function operatorPauseMark(run: Pick<WorkflowRun, 'status' | 'metadata'>): string {
+  const state = operatorPause(run)?.state;
+  return state === 'paused'
+    ? ' · paused by an operator'
+    : state === 'requested'
+      ? ' · pause requested'
+      : '';
 }
 
 function authoredOutcome(

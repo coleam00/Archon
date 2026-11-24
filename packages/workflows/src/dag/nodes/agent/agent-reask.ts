@@ -6,7 +6,8 @@ import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
 import {
   formatWatchdogResetDiagnostic,
-  STRUCTURED_OUTPUT_MAX_REASKS,
+  structuredOutputCorrectionBlock,
+  structuredOutputMaxReasks,
   structuredOutputPass,
   NodeFailure,
 } from '../../ai-turn';
@@ -25,10 +26,13 @@ interface StructuredOutputMiss {
 }
 
 /**
- * Runs the attempt's stream passes. Best-effort providers (Pi/Copilot) get a bounded
- * validate-and-reask loop: a structured output that is missing or fails its schema re-runs the
- * stream with the errors appended, up to STRUCTURED_OUTPUT_MAX_REASKS times. Enforced providers
- * and nodes without output_format run exactly once. Exhaustion throws a NodeFailure.
+ * Runs the attempt's stream passes. A provider that declares `structuredOutputCorrection` gets a
+ * bounded validate-and-reask loop: a structured output that is missing or fails its schema is
+ * asked again with the errors, up to STRUCTURED_OUTPUT_MAX_REASKS times. 'fresh-session' (Pi,
+ * Copilot) re-runs the original prompt plus the errors in a throwaway session; 'same-session'
+ * (Codex) sends only the errors into the thread the failed answer ended in, so its work is kept.
+ * Other providers and nodes without output_format run exactly once. Exhaustion throws a
+ * NodeFailure.
  */
 export async function runUntilStructuredOutputValid(
   pc: AgentPassContext,
@@ -37,10 +41,7 @@ export async function runUntilStructuredOutputValid(
   resumeSessionId: string | undefined,
   forksNamedSource: boolean
 ): Promise<void> {
-  const maxReasks =
-    pc.capabilities.structuredOutput === 'best-effort' && pc.nodeOptions?.outputFormat
-      ? STRUCTURED_OUTPUT_MAX_REASKS
-      : 0;
+  const maxReasks = structuredOutputMaxReasks(pc.capabilities, !!pc.nodeOptions?.outputFormat);
   const total: AttemptUsage = { costUsd: undefined, tokens: undefined };
   let reaskAttempt = 0;
   let reaskPrompt = finalPrompt;
@@ -50,7 +51,12 @@ export async function runUntilStructuredOutputValid(
         pc,
         state,
         reaskPrompt,
-        structuredOutputPass(reaskAttempt, resumeSessionId, forksNamedSource)
+        structuredOutputPass(
+          reaskAttempt,
+          resumeSessionId,
+          forksNamedSource,
+          correctionThreadId(pc, state)
+        )
       );
     } finally {
       await state.watchdogResets.flush();
@@ -70,12 +76,39 @@ export async function runUntilStructuredOutputValid(
     // Don't reask after an idle-timeout/abort — those are genuine failures, not
     // validation misses; they fall through to a cause-specific throw.
     const canReask =
-      reaskAttempt < maxReasks && !state.cutOff && !pc.abortController.signal.aborted;
+      reaskAttempt < maxReasks &&
+      !state.cutOff &&
+      !pc.abortController.signal.aborted &&
+      hasSessionToCorrect(pc, state);
     if (!canReask) throw structuredOutputFailure(pc, state, miss);
     reaskAttempt++;
-    reaskPrompt = buildReaskPrompt(finalPrompt, miss.errors);
+    reaskPrompt = correctionPrompt(pc, finalPrompt, miss.errors);
     await emitReask(pc, reaskAttempt, maxReasks);
   }
+}
+
+/**
+ * The thread a same-session correction continues. state.sessionId is the node's thread:
+ * only a threading pass writes it.
+ */
+function correctionThreadId(pc: AgentPassContext, state: AgentAttemptState): string | undefined {
+  return pc.capabilities.structuredOutputCorrection === 'same-session'
+    ? state.sessionId
+    : undefined;
+}
+
+/** A same-session correction needs a session to continue; without one, the miss fails the node. */
+function hasSessionToCorrect(pc: AgentPassContext, state: AgentAttemptState): boolean {
+  return (
+    pc.capabilities.structuredOutputCorrection !== 'same-session' || state.sessionId !== undefined
+  );
+}
+
+/** Same-session: only the errors, since the thread already holds the task and its work. */
+function correctionPrompt(pc: AgentPassContext, finalPrompt: string, errors: string[]): string {
+  return pc.capabilities.structuredOutputCorrection === 'same-session'
+    ? structuredOutputCorrectionBlock(errors)
+    : buildReaskPrompt(finalPrompt, errors);
 }
 
 /** Adds a pass's usage to the attempt's, and leaves the cumulative usage on the state even when the pass threw. */
@@ -164,7 +197,7 @@ function structuredOutputFailure(
   const nodeId = pc.node.id;
   if (miss.payload === 'invalid') {
     return new NodeFailure(
-      'output_contract',
+      'schema_unmet',
       `Node '${nodeId}': output_format declared but the provider's structured output failed schema validation: ${miss.errors.join('; ')}`
     );
   }
@@ -177,24 +210,20 @@ function structuredOutputFailure(
     );
   }
   return new NodeFailure(
-    'output_contract',
+    'schema_unmet',
     `Node '${nodeId}': output_format declared but the provider returned no schema-valid structured output. ` +
       'The model likely replied with prose, refused, or emitted unparseable JSON.'
   );
 }
 
-// The original prompt plus a correction block listing the schema errors. The provider still
-// augments with the JSON schema itself (best-effort providers add their own JSON-only
-// instruction), so this only appends the per-attempt feedback.
+// A fresh-session correction: the original prompt plus a correction block listing the schema
+// errors. The provider still augments with the JSON schema itself (best-effort providers add
+// their own JSON-only instruction), so this only appends the per-attempt feedback.
 function buildReaskPrompt(finalPrompt: string, errors: string[]): string {
-  return (
-    `${finalPrompt}\n\n--- CORRECTION ---\n` +
-    `Your previous response did not satisfy the required JSON schema: ${errors.join('; ')}. ` +
-    'Respond again with ONLY a JSON object matching the schema — no prose, no code fences.'
-  );
+  return `${finalPrompt}\n\n${structuredOutputCorrectionBlock(errors)}`;
 }
 
-// Every reask is logged; the user is told once (first reask) so a best-effort provider being
+// Every reask is logged; the user is told once (first reask) so a provider being
 // auto-corrected isn't invisible.
 async function emitReask(pc: AgentPassContext, attempt: number, maxReasks: number): Promise<void> {
   const { node, ctx } = pc;

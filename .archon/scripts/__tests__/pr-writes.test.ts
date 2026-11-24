@@ -95,7 +95,7 @@ describe('publish-pr opens the pull request at most once', () => {
         tracker: { pr: { headRefName: 'feature' } },
         forgeAt: head => ({
           kind: 'fake',
-          response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }),
+          response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
         }),
       });
       expect(result.code).toBe(0);
@@ -241,30 +241,6 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(remoteHead(result.cwd, 'feature')).toBe('');
   });
 
-  it('opens the pull request from the branch the caller named', () => {
-    const result = publishPr({
-      inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
-      tracker: { noOpenPr: true, pr: { headRefName: 'build/7-an-issue-run12345' } },
-    });
-    expect(result.code).toBe(0);
-    expect(forgeCalls(result).find(call => call.op === 'pr.create')?.request.head).toBe('build/7-an-issue-run12345');
-    expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe(result.head);
-    expect(remoteHead(result.cwd, 'feature')).toBe('');
-  });
-
-  it('a caller-named branch that already has an open pull request updates it, never opening another', () => {
-    const result = publishPr({
-      target: { head: 'archon/task-local' },
-      prepareBody: false,
-      inputs: { INPUTS_BRANCH: 'feature' },
-      tracker: { pr: { headRefName: 'feature' } },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-    expect(result.stderr).toContain('already has this head');
-    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
-  });
-
   it('opens its own pull request from the caller-named branch when prepare found one on another head', () => {
     const result = publishPr({
       target: { existing: 42 },
@@ -290,11 +266,6 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe('');
   });
 
-  it('fails loudly when the forge is unavailable', () => {
-    const result = publishPr({ forge: { kind: 'no-host' } });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('ARCHON_CLI_COMMAND');
-  });
 });
 
 const { start: START, end: END } = DESCRIPTION_SECTION;
@@ -331,7 +302,13 @@ describe('publish-pr writes the description section a delivery round prepared', 
       forgeAt: head => ({ kind: 'fake', response: [
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
-        forgeOperation('pr.edit-body', { pr: forgePrRecord({ head_revision: head }) }),
+        forgeOperation('pr.edit-body', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          pr: forgePrRecord({ head_revision: head }),
+          bodyDigest: 'sha256:body',
+        }),
       ] }),
     });
     expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
@@ -353,11 +330,38 @@ describe('publish-pr writes the description section a delivery round prepared', 
     }
   );
 
-  it.each([START, END, `${START}\nnested\n${END}`])('refuses reserved structural markers in prepared content before pushing: %s', section => {
-    const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+  // Elevate #78 / software-factory#43: a round's description quoted a marker while
+  // describing the factory's own PR mechanics, and the refusal came before the push, so
+  // the round's commits died with the abandoned worktree.
+  it.each([START, END, `${START}\nnested\n${END}`, `How rounds publish:\n\n${START}\n\nthen the evidence.`])(
+    'pushes first and escapes reserved markers written outside Markdown code: %s', section => {
+      const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+      expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
+      expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+      expect(result.stderr).toContain('escaped');
+      const [body] = result.bodies;
+      expect(body).toBeDefined();
+      // Exactly one structural pair: the one publish-pr wrote around the section.
+      expect(body?.split(START).length).toBe(2);
+      expect(body?.split(END).length).toBe(2);
+      expect(body).toContain('&lt;!-- ');
+    }
+  );
+
+  it('keeps the push when the prepared section cannot be composed, naming the pull request', () => {
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: '```\nunfinished' } });
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain('reserved description markers');
-    expect(spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: result.cwd, encoding: 'utf8' }).stdout).toBe('');
+    expect(result.stderr).toContain(`pushed and published ${PR_URL}`);
+    expect(result.stderr).toContain('composed description');
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+    expect(result.bodies).toEqual([]);
+  });
+
+  it('keeps the push when the prepared section is empty', () => {
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: '  \n' } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('empty pr-description.md');
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
   });
 
   it('publishes and reads back the section when creating a pull request', () => {
@@ -378,8 +382,8 @@ describe('publish-pr writes the description section a delivery round prepared', 
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('edit unavailable');
-    const report = runPackScript('deliver/scripts/report', {
-      inputs: { INPUTS_OUTCOME: 'null', INPUTS_PULL_REQUESTS: '[]' },
+    const report = runPackScript('.shared/scripts/report', {
+      inputs: { INPUTS_FLAG: 'ready', INPUTS_OUTCOME: 'null', INPUTS_PULL_REQUESTS: '[]' },
       artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
     });
     expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });

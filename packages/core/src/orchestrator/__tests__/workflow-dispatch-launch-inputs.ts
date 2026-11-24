@@ -248,6 +248,61 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     expect(sent).toContain('starting fresh in the same worktree');
   });
 
+  const startFreshFromResumeMenu = async (
+    assertForge: ReturnType<typeof spyOn>
+  ): Promise<ReturnType<typeof makeForegroundPlatform>> => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeDispatchConversation({ cwd: '/worktrees/conv' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ id: 'empty-prior-run', status: 'paused' })])
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
+    const platform = makeForegroundPlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+    expect(assertForge).toHaveBeenCalledTimes(1);
+    expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+      cwd: '/repos/test-repo',
+      settingsCwd: '/worktrees/conv',
+    });
+    return platform;
+  };
+
+  test('a fresh run from the resume menu starts with the inputs naming the repository the forge check judged', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    try {
+      await startFreshFromResumeMenu(assertForge);
+      const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as { inputs?: unknown };
+      expect(opts.inputs).toEqual({ repo_host: 'github.com', repo_path: 'o/project' });
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
+  test('a forge refusal stops a fresh run from the resume menu before execution', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockRejectedValue(
+      new forgeAccess.ForgeRequirementError('test-workflow', 'factory', [
+        { reason: 'authorization', message: 'the forge rejected the credential' },
+      ])
+    );
+    try {
+      const platform = await startFreshFromResumeMenu(assertForge);
+      expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).toContain(
+        '(authorization)'
+      );
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
   test('calls dispatchBackgroundWorkflow for a fresh run on a background-default adapter', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
@@ -396,6 +451,54 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     } finally {
       factory.mockRestore();
       (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
+  });
+
+  test('foreground forge refusal stops before isolation or execution, reading the registered checkout', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const refusal = new forgeAccess.ForgeRequirementError('test-workflow', 'factory', [
+      { reason: 'no_forge_remote', message: 'the checkout has no git remote' },
+    ]);
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockRejectedValue(refusal);
+    const platform = makeForegroundPlatform();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeDispatchConversation({ cwd: '/worktrees/conv' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    try {
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+        cwd: '/repos/test-repo',
+        settingsCwd: '/repos/test-repo',
+      });
+      expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).toContain(
+        '(no_forge_remote)'
+      );
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
+  test('a fresh foreground run starts with the inputs naming the repository the forge check judged', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    try {
+      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+      });
+      const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as { inputs?: unknown };
+      expect(opts.inputs).toEqual({ repo_host: 'github.com', repo_path: 'o/project' });
+    } finally {
+      assertForge.mockRestore();
     }
   });
 

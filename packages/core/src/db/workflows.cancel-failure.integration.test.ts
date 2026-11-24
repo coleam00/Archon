@@ -84,8 +84,10 @@ test.each(
               expect(await store.cancelWorkflowRun(run.id)).toEqual({ cancelled: true });
               racedDuringNotification = true;
             } else if (race === 'fail') {
+              // The competing write reports the kind of the node the run failed at.
               expect(await store.failWorkflowRun(run.id, 'competing failure')).toEqual({
                 failed: true,
+                failureKind: 'exec_failed',
               });
               racedDuringNotification = true;
             }

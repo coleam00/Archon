@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { makeTestWorkflow } from './test-utils';
-import type { DryRunStubValue } from './dry-run';
+import { formatDryRunTrace, type DryRunStubValue } from './dry-run';
 import { dryRunWorkflow, createDryRunStubScaffold } from './dry-run-test-utils';
 
 describe('dry-run gates and waits', () => {
@@ -110,6 +110,191 @@ describe('dry-run gates and waits', () => {
       resolvedText: 'Rerun e2e-smoke (fail), then resume this run.',
     });
   });
+
+  test.each([
+    {
+      name: 'an unoffered recommendation',
+      declaration: {
+        recommendation: '$decide.output.recommendation',
+      },
+      question: 'Merge it?',
+      options: [{ id: 'hold' }],
+      expected: "'recommendation' names option 'ship', which the wait does not offer",
+    },
+    {
+      name: 'duplicate option ids',
+      declaration: {},
+      question: 'Merge it?',
+      options: [{ id: 'hold' }, { id: 'hold' }],
+      expected: "'hold' is declared more than once",
+    },
+    {
+      name: "an option using the reserved 'other' id",
+      declaration: { other: true },
+      question: 'Merge it?',
+      options: [{ id: 'other' }],
+      expected: "option id 'other' is reserved when 'other: true' is set",
+    },
+    {
+      name: 'an empty question',
+      declaration: {},
+      question: '',
+      options: [{ id: 'hold' }],
+      expected: "resolved 'attention' to an empty message",
+    },
+  ])(
+    'refuses $name with and without an answer stub',
+    async ({ declaration, question, options, expected }) => {
+      for (const answered of [false, true]) {
+        const result = await dryRunWorkflow({
+          workflow: makeTestWorkflow({
+            name: 'invalid-attention-ask',
+            nodes: [
+              { id: 'decide', bash: 'unused' },
+              {
+                id: 'ask',
+                depends_on: ['decide'],
+                wait: {
+                  attention: '$decide.output.question',
+                  form: 'select',
+                  options: '$decide.output.options',
+                  ...declaration,
+                },
+              },
+            ],
+          }),
+          stubs: {
+            decide: {
+              question,
+              options,
+              recommendation: { option: 'ship', why: 'Not offered.' },
+            },
+            ...(answered ? { ask: { decision: 'hold', text: '' } } : {}),
+          },
+        });
+
+        expect(result.outcome, `answered=${String(answered)}`).toBe('failed');
+        const failure = result.trace.find(entry => entry.state === 'failed');
+        expect(failure, `answered=${String(answered)}`).toMatchObject({
+          nodeId: 'ask',
+          nodeType: 'wait',
+          reason: expect.stringContaining(expected),
+        });
+      }
+    }
+  );
+
+  test('shows the complete resolved ask when it pauses or is answered', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'resolved-attention-ask',
+      nodes: [
+        { id: 'decide', bash: 'unused' },
+        {
+          id: 'ask',
+          depends_on: ['decide'],
+          wait: {
+            attention: '$decide.output.question',
+            form: 'select',
+            options: '$decide.output.options',
+            recommendation: '$decide.output.recommendation',
+            labels: { stage: 'deliver', area: '$decide.output.area' },
+            other: true,
+          },
+        },
+      ],
+    });
+    const decide = {
+      question: 'Merge it?',
+      options: [{ id: 'merge', label: 'Merge' }],
+      recommendation: { option: 'merge', why: 'Review is ready.', confidence: 'high' },
+      area: 'delivery',
+    };
+    const attentionAsk = {
+      form: 'select',
+      options: [
+        { id: 'merge', label: 'Merge' },
+        {
+          id: 'other',
+          label: 'Other',
+          does: 'None of these. The answer text says what to do instead.',
+        },
+      ],
+      recommendation: { option: 'merge', why: 'Review is ready.', confidence: 'high' },
+      labels: { stage: 'deliver', area: 'delivery' },
+      other: true,
+    };
+
+    for (const answered of [false, true]) {
+      const result = await dryRunWorkflow({
+        workflow,
+        stubs: {
+          decide,
+          ...(answered ? { ask: { decision: 'merge', text: 'go' } } : {}),
+        },
+      });
+      expect(result.outcome, `answered=${String(answered)}`).toBe(
+        answered ? 'completed' : 'paused'
+      );
+      expect(result.trace.at(-1), `answered=${String(answered)}`).toMatchObject({
+        nodeId: 'ask',
+        state: answered ? 'stubbed' : 'paused',
+        resolvedText: 'Merge it?',
+        attentionAsk,
+      });
+    }
+    expect(formatDryRunTrace(await dryRunWorkflow({ workflow, stubs: { decide } }))).toContain(
+      '"area":"delivery"'
+    );
+  });
+
+  test('keeps opaque option values out of ask previews while returning the chosen value', async () => {
+    const value = { token: 'private-option-token' };
+    const workflow = makeTestWorkflow({
+      name: 'private-option-value',
+      nodes: [
+        {
+          id: 'ask',
+          wait: {
+            attention: 'Merge it?',
+            form: 'select',
+            options: [{ id: 'merge', label: 'Merge', value }],
+          },
+        },
+      ],
+    });
+
+    for (const answered of [false, true]) {
+      const result = await dryRunWorkflow({
+        workflow,
+        stubs: answered ? { ask: { decision: 'merge', text: '' } } : {},
+      });
+      const ask = result.trace[0];
+      expect(ask.attentionAsk?.options).toEqual([{ id: 'merge', label: 'Merge' }]);
+      expect(JSON.stringify(ask.attentionAsk)).not.toContain(value.token);
+      if (answered) expect(JSON.parse(ask.output!)).toEqual({ decision: 'merge', text: '', value });
+      else expect(formatDryRunTrace(result)).not.toContain(value.token);
+    }
+  });
+
+  test.each([
+    { inputs: undefined, previewed: 'Prior was null.' },
+    { inputs: { prior: 'supplied' }, previewed: 'Prior was supplied.' },
+  ])(
+    'previews an unsupplied result_of input as null, a supplied one as given (%j)',
+    async ({ inputs, previewed }) => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'reader',
+          inputs: { prior: { result_of: 'build' } },
+          nodes: [{ id: 'recover', wait: { attention: 'Prior was $INPUTS.prior.' } }],
+        }),
+        ...(inputs ? { inputs } : {}),
+      });
+
+      expect(result.outcome).toBe('paused');
+      expect(result.trace.at(-1)).toMatchObject({ nodeId: 'recover', resolvedText: previewed });
+    }
+  );
 
   test('gate messages, cancel reasons and wait messages keep $ARGUMENTS literal, as a real run renders them', async () => {
     const preview = async (node: Record<string, unknown>): Promise<string | undefined> => {

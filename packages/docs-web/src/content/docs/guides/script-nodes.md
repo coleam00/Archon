@@ -172,7 +172,7 @@ Packaged scripts can import modules from their pack's `.shared/` directory. Keep
 
 ### Share code within a pack
 
-Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules, `.md` documents, the pack's [`metric-views.json`](/guides/metrics/#overview-cards-a-pack-declares) and its [shared scripts](#share-a-script-between-workflows-of-a-pack): its files are not workflows, and only those under `.shared/scripts/` are named script targets. Documents ship with the pack in every build, beside the modules. Any node reads one through `$PACK_DIR`, the pack's directory in the run's source: a prompt or command file names `$PACK_DIR/.shared/policy/triage.md`, and a `bash:` or `script:` node also gets `PACK_DIR` in its environment. See [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack). A packaged workflow that names an unavailable script, including a shared module, fails at load time.
+Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules, `.md` documents, the pack's [`metric-views.json`](/guides/metrics/#overview-cards-a-pack-declares) and [`item-metrics.json`](/guides/metrics/#item-metrics-a-pack-declares), and its [shared scripts](#share-a-script-between-workflows-of-a-pack): its files are not workflows, and only those under `.shared/scripts/` are named script targets. Documents ship with the pack in every build, beside the modules. Any node reads one through `$PACK_DIR`, the pack's directory in the run's source: a prompt or command file names `$PACK_DIR/.shared/policy/triage.md`, and a `bash:` or `script:` node also gets `PACK_DIR` in its environment. See [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack). A packaged workflow that names an unavailable script, including a shared module, fails at load time.
 
 ```text
 my-pack/
@@ -264,7 +264,11 @@ Archon provides the `archon:script` module to every `runtime: bun` script: named
 | `outcomes()` | The engine's listing of what each node of the run has recorded (`$NODE_OUTCOMES_FILE`) |
 | `trigger.fire(binding, inputs, options)` | Fires a trigger binding (`archon trigger fire`) and returns the admission its request got |
 | `notice(text, labels)` | Tells whoever watches attention with `--notices` what the run did (`archon workflow notice`). The run does not pause |
-| `item()` | The [item](/reference/cli/#items) the run belongs to (`archon workflow runs --item-of`): its runs, open questions, and answers with rulings, oldest first, and its links; `null` when the run is on no item. See [Reading the item a run belongs to](/reference/workflow-language/#reading-the-item-a-run-belongs-to) |
+| `item()` | The [item](/reference/cli/#items) the run belongs to (`archon workflow runs --item-of`): its runs, open questions, and answers with rulings, oldest first, and its links; `null` when the run is on no item. Each run's `pack` names its pack's `key` and its workflow's `name:` within the pack; `pack.workflow` is the same whether the pack is in the project or installed. See [Reading the item a run belongs to](/reference/workflow-language/#reading-the-item-a-run-belongs-to) |
+| `items(query?)` | The items of the run's project with a run started in a window (`archon workflow items`), each read as `item()` reads one, a page at a time: `{ window, items, next }`; pass `next` as `after` for the following page. See [Reading a project's items over a window](/reference/workflow-language/#reading-a-projects-items-over-a-window) |
+| `linkItem({ kind, to })`, `linkItem({ kind, from })` | Records a link (`archon workflow link`) from the run's own item to `to`, or to it from `from` |
+| `recordMerge({ change, at, commit? })` | Records that the run's own item's change merged (`archon workflow merged`) |
+| `recordLanding(branch)` | Records the branch the run's own item's change lands on (`archon workflow landing`) |
 
 Write `input('<name>')` with a string literal. Archon checks at load that every input a script reads is provided, and it reads `input('pr-number')` in the node's own script the way it reads `process.env.INPUTS_PR_NUMBER`. A computed name, or a read inside an imported module, is not checked.
 
@@ -293,6 +297,8 @@ Every function that calls the host throws `HostCommandError` when the CLI gives 
 
 **Notices.** `notice('Merged pull request 7', { kind: 'merged', pr: '7' })` records one line about what the run did; a reader of `archon workflow attention --watch --notices` sees it, and `--notices --since 24h` lists it later. Call it when something real happened, not on a pass that found nothing to do. The text is one line of at most 300 characters and a run may emit 50; past a bound the call throws `HostCommandError`, so catch it where a refused notice must not fail the node. See [Notices](/getting-started/operate/#notices-what-the-work-did).
 
+**Recording on the item.** `linkItem`, `recordMerge` and `recordLanding` run [`archon workflow link`](/reference/cli/#workflow-link), [`merged`](/reference/cli/#workflow-merged) and [`landing`](/reference/cli/#workflow-landing) with `--item-of` and the run's id, with the same refusals. So they write only on the item `item()` returns: the run's own item, or its root run's for a `workflow:` child, in that item's project whatever directory the script is in. A link goes from that item (`to:`) or to it (`from:`) and the other end is an item of the same project; a script cannot name another item to write on. They return what the command's `--json` form prints: `ItemLink & { created }`, `ItemMergeRecorded` (`{ merge, recorded }`) and `ItemLanding`. Recording a merge on an item that already carries one keeps the first and returns `recorded: false`; recording a landing again replaces it. A refusal throws `ItemWriteError`, a `HostCommandError` whose `reason` is the CLI's `error`, such as `self_link` or `unknown_kind`; on a run that is on no item it is `no_item`, and nothing is written.
+
 **Types in an editor.** `archon script types --out archon-script.d.ts` writes the module's declaration: every export above, and the request and result type of every forge operation. Include that file in the `tsconfig.json` that covers your scripts, and a wrong operation name, request field or result field is a compile error. The file describes the Archon that wrote it, so write it again after an upgrade; `--check` exits 1 when it is stale.
 
 **Outside a run.** Plain `bun` cannot resolve `archon:script`; only a run provides it. `archon script preload --out test/archon-script.preload.ts` writes the file a run uses, and then `bun --preload ./test/archon-script.preload.ts scripts/triage.ts` runs the script, and `bun test --preload ./test/archon-script.preload.ts` (or `preload` under `[test]` in `bunfig.toml`) lets a pack's tests import its scripts in-process.
@@ -301,7 +307,7 @@ The preload only makes the module resolve. A script still reads its inputs from 
 
 **Where it sits.** The script API is the author-facing entry of Archon's SDK family: what code running inside a workflow calls. It has no dependencies and speaks only the CLI wire. The host-facing entry, for a program that embeds the engine to define, run, govern and query workflows, is separate and is not part of this module. Every export of `archon:script` is public contract; the declaration `archon script types` writes is the complete list.
 
-**Container runs.** A script in a [container execution](/guides/container-isolation/) imports the module the same way, and `input`, `emit`, `refuse`, `outcomes` and the accessors work. A container run does not receive `ARCHON_CLI_COMMAND`, so `forge`, `state`, `trigger.fire`, `notice` and `item` throw `HostCommandError` there.
+**Container runs.** A script in a [container execution](/guides/container-isolation/) imports the module the same way, and `input`, `emit`, `refuse`, `outcomes` and the accessors work. A container run does not receive `ARCHON_CLI_COMMAND`, so `forge`, `state`, `trigger.fire`, `notice`, `item`, `linkItem`, `recordMerge` and `recordLanding` throw `HostCommandError` there.
 
 ### Frozen source integrity
 
@@ -515,11 +521,12 @@ parses the upstream classifier's JSON, filters, and forwards a clean payload:
       items:
         type: array
         items: { type: object }
+    required: [items]
 
 - id: filter
   script: |
-    const upstream = JSON.parse(process.env.UPSTREAM ?? '{}');
-    const high = (upstream.items ?? []).filter(i => i.severity === 'high');
+    const upstream = $classify.output;
+    const high = upstream.items.filter(i => i.severity === 'high');
     console.log(JSON.stringify(high));
   runtime: bun
   depends_on: [classify]
@@ -530,9 +537,8 @@ parses the upstream classifier's JSON, filters, and forwards a clean payload:
   when: "$filter.output != '[]'"
 ```
 
-*(Note: to actually populate `UPSTREAM` you'd inline-substitute
-`$classify.output` into the script body. The example above illustrates the
-shape.)*
+`$classify.output` is substituted as a JSON literal, so the script reads it by
+[direct assignment](#variable-substitution-in-scripts).
 
 ### Reusable helper in `~/.archon/scripts/`
 

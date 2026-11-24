@@ -33,11 +33,12 @@ import {
   findBundledWorkflow,
   findFlatWorkflowAt,
   findPackagedWorkflowAt,
+  findProjectWorkflowAt,
   findWorkflowAt,
   isBundledWorkflowsRoot,
   PackagedWorkflowFolderError,
 } from './workflow-files';
-import type { WorkflowFile } from './workflow-files';
+import type { RawWorkflowFile, WorkflowFile } from './workflow-files';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import {
   workflowListResponseSchema,
@@ -195,10 +196,21 @@ async function resolveWorkingDir(cwd: string | undefined): Promise<WorkingDir> {
   return { valid: true, path: codebases[0]?.default_cwd };
 }
 
-/** The workflows folder PUT and DELETE write to. */
+/**
+ * The workflows folder PUT and DELETE write to. A project target keeps its root, so an
+ * existing workflow of a pack folder project is found where discovery lists it.
+ */
 interface WorkflowTarget {
   source: 'project' | 'global';
   dir: string;
+  projectRoot?: string;
+}
+
+/** The existing workflow file a PUT or DELETE of `name` acts on. */
+function findTargetWorkflow(target: WorkflowTarget, name: string): Promise<RawWorkflowFile | null> {
+  return target.projectRoot !== undefined && !isBundledWorkflowsRoot(target.dir)
+    ? findProjectWorkflowAt(target.projectRoot, name)
+    : findWorkflowAt(target.dir, name);
 }
 
 async function resolveWorkflowTarget(
@@ -208,7 +220,11 @@ async function resolveWorkflowTarget(
   const workingDir = await resolveWorkingDir(query.cwd);
   if (!workingDir.valid) return { error: INVALID_CWD };
   const projectRoot = workingDir.path || getArchonHome();
-  return { source: 'project', dir: join(projectRoot, getWorkflowFolderSearchPaths()[0]) };
+  return {
+    source: 'project',
+    dir: join(projectRoot, getWorkflowFolderSearchPaths()[0]),
+    projectRoot,
+  };
 }
 
 /**
@@ -322,7 +338,7 @@ function workflowLookups(name: string, workingDir: string | undefined): Workflow
       find: () =>
         isBundledWorkflowsRoot(projectWorkflowsRoot)
           ? findFlatWorkflowAt(projectWorkflowsRoot, name)
-          : findWorkflowAt(projectWorkflowsRoot, name),
+          : findProjectWorkflowAt(workingDir, name),
     });
   }
   lookups.push(
@@ -395,7 +411,7 @@ async function saveWorkflowFile(
   target: WorkflowTarget,
   definition: z.infer<typeof saveWorkflowBodySchema>['definition']
 ): Promise<Response> {
-  const existing = await findWorkflowAt(target.dir, name);
+  const existing = await findTargetWorkflow(target, name);
   if (existing?.packaged === true && isBundledWorkflowsRoot(target.dir)) {
     return apiError(c, 400, `Cannot overwrite bundled default workflow: ${name}`);
   }
@@ -458,7 +474,7 @@ async function deleteWorkflowFiles(
   name: string,
   target: WorkflowTarget
 ): Promise<Response> {
-  const existing = await findWorkflowAt(target.dir, name);
+  const existing = await findTargetWorkflow(target, name);
   if (existing?.packaged === true) {
     if (isBundledWorkflowsRoot(target.dir)) {
       return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);

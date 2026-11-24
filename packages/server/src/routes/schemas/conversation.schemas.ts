@@ -100,3 +100,11 @@ export const dispatchResponseSchema = z
     status: z.string(),
   })
   .openapi('DispatchResponse');
+
+/** POST /api/conversations/:id/cancel response. */
+export const cancelConversationResponseSchema = z
+  .object({
+    /** Whether an in-flight reply was signalled to stop; false when nothing was running. */
+    cancelled: z.boolean(),
+  })
+  .openapi('CancelConversationResponse');

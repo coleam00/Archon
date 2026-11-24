@@ -34,8 +34,7 @@ export class NotAnIssueError extends Error {
 }
 
 function labelNames(values: unknown[]): string[] {
-  return values.map(value => {
-    const name = typeof value === 'string' ? value : record(value)?.name;
+  return values.map(name => {
     if (typeof name !== 'string' || name === '') throw new Error('the issue has an invalid label');
     return name;
   });

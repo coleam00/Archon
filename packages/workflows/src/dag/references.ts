@@ -9,6 +9,7 @@ import {
   inputEnvKey,
   isExecNode,
   isBindingDirective,
+  isBindingDirectiveShape,
   isTypedOutputsDirective,
 } from '../schemas';
 import {
@@ -28,6 +29,7 @@ import {
   assertSupportedOutputRefs,
   substituteTemplate,
   inputRefToken,
+  isAbsentInputForward,
   resolveInputValue,
 } from '../output-ref';
 import { readComposedMeta } from '../compiled-command';
@@ -88,7 +90,7 @@ export interface ShellInputContext {
  *     this node was authored in, stamped at expansion when it arrived through `include:`.
  *     These win: a node's own file is the nearer contract. This bag is their only channel
  *     into a shell or script: the include `$INPUTS` macro rewrites a bash body to a quoted
- *     reference to it and refuses an inline script body (#2115).
+ *     reference to it and refuses an inline script body (#2115). A directive (#5760) resolves.
  *   - node-local `with:` bindings on script nodes (#2637), the nearest contract.
  *
  * A composed value resolves like a `workflow:` node's `with:` template — workflow variables
@@ -113,25 +115,41 @@ export function inputEnvVars(
     // deterministic representation (strings raw, everything else JSON text).
     env[inputEnvKey(name)] = canonicalValueText(value);
   }
-  for (const [name, value] of Object.entries(readComposedMeta(node)?.inputs ?? {})) {
-    // Only strings can carry templates/refs; a typed composed value passes as-is.
-    env[inputEnvKey(name)] =
-      typeof value === 'string'
-        ? resolveValueTemplate(value, ctx, runInputs)
-        : canonicalValueText(value);
+  const ownWith =
+    isExecNode(node) && node.runtime !== 'sh' && node.with !== undefined ? node.with : undefined;
+  const composed = readComposedMeta(node);
+  for (const [name, value] of Object.entries(composed?.inputs ?? {})) {
+    // Overridden by the node's own binding below, so never resolved (it could fail the node).
+    if (
+      !Object.hasOwn(ownWith ?? {}, name) &&
+      !isAbsentInputForward(name, value, runInputs, composed?.forwarded ?? [])
+    )
+      env[inputEnvKey(name)] = composedInputText(node.id, name, value, ctx, runInputs);
   }
-  // Node-local bindings (#2637) — a script node's own `with:` map, resolved against
-  // upstream outputs. Third and NEAREST source: the node's own file is the nearest
-  // contract, so it wins over composed and run inputs (extends the documented order
-  // above). Resolution failures throw and fail the node — never a silent ''.
-  if (isExecNode(node) && node.runtime !== 'sh' && node.with !== undefined) {
+  // Node-local bindings (#2637): a script node's own `with:` map, the NEAREST source, so it
+  // wins over composed and run inputs. Resolution failures throw and fail the node.
+  if (ownWith !== undefined) {
     for (const [name, value] of Object.entries(
-      resolveNodeBindings(node.id, node.with, ctx, runInputs)
+      resolveNodeBindings(node.id, ownWith, ctx, runInputs)
     )) {
       env[inputEnvKey(name)] = canonicalValueText(value);
     }
   }
   return env;
+}
+
+/** Only strings carry templates/refs; a directive resolves; other typed values pass as-is. */
+function composedInputText(
+  nodeId: string,
+  name: string,
+  value: JsonValue,
+  ctx: ShellInputContext,
+  runInputs: Record<string, JsonValue> | undefined
+): string {
+  if (typeof value === 'string') return resolveValueTemplate(value, ctx, runInputs);
+  if (isBindingDirectiveShape(value))
+    return canonicalValueText(resolveBindingDirective(nodeId, name, value, ctx));
+  return canonicalValueText(value);
 }
 
 /** Project env cannot shadow inputs or engine-owned delivery keys (#2115). */

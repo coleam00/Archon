@@ -116,6 +116,9 @@ function refItemLines(item: Ask): string[] {
     const [head = '', ...rest] = item.context.trim().split('\n');
     lines.push(`context: ${head}`, ...rest.map(line => `  ${line}`));
   }
+  // An ask that has no recommendation says so, so a reader does not look for one.
+  if (item.askedIn !== undefined && item.recommendation === undefined)
+    lines.push('recommended: none (choose an option)');
   lines.push(...offerLines(item));
   for (const artifact of item.artifacts ?? [])
     lines.push(`artifact: ${artifact.path} (run ${artifact.run_id})`);
@@ -130,6 +133,15 @@ function refItemLines(item: Ask): string[] {
   if (item.askedIn !== undefined)
     lines.push(`withdraw: ${command(`answer --withdraw ${item.ref}`)}`);
   return lines;
+}
+
+/** What an overdue wait says: what the item waits for, since when, and how it closes. */
+function overdueWaitLines(item: Extract<AttentionQueueItem, { kind: 'overdue_wait' }>): string[] {
+  return [
+    `waits for ${item.waits.map(wait => `'${wait.event}' about ${wait.about}`).join(' or ')}, due ${item.deadline}`,
+    `left by run ${item.waitingIn.runId} (${item.waitingIn.workflow}), which completed; nothing is held while it waits`,
+    `the event still meets it when it arrives; run ${item.waitingIn.workflow} on the item again to replace it, or withdraw it: ${command(`answer --withdraw ${item.ref}`)}`,
+  ];
 }
 
 /** What an item a paused run holds says under its heading line. */
@@ -154,6 +166,11 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
         `needs a look: ${item.detail}`,
         `show more: ${command(`get ${run.id}`)}, then resume or abandon it`,
       ];
+    case 'owner_lost':
+      return [
+        `${item.observedStatus} but its owner is gone, holding item ${item.item?.key ?? '(unread)'}: later starts of ${run.workflow} on it wait behind it`,
+        `continue it: ${command(`resume ${run.id}`)}, or end it: ${command(`abandon ${run.id}`)}`,
+      ];
   }
 }
 
@@ -165,13 +182,18 @@ function headingLine(item: AttentionQueueItem): string {
   const project = item.project?.name ?? '(no project)';
   if (isHeldByRun(item)) {
     const paused =
-      item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
+      item.kind === 'owner_lost'
+        ? 'owner gone'
+        : item.pausedAt === null
+          ? 'pause time not recorded'
+          : `paused ${formatAge(item.pausedAt)} ago`;
     return `  ${item.run.id}  ${item.run.workflow}  ${project}  ${paused}`;
   }
   const opened =
     item.pausedAt === null ? 'open time not recorded' : `opened ${formatAge(item.pausedAt)} ago`;
   const key = item.item === undefined ? '' : `  item ${item.item.key}`;
-  return `  ${item.ref}  open ask  ${project}${key}  ${opened}`;
+  const what = item.kind === 'overdue_wait' ? 'overdue wait' : 'open ask';
+  return `  ${item.ref}  ${what}  ${project}${key}  ${opened}`;
 }
 
 /** One queue item as a block of text lines. */
@@ -189,7 +211,11 @@ export function attentionItemLines(
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
   // No run holds it, so no run command answers it: it is answered by its ref.
-  const body = isHeldByRun(item) ? itemBody(item, detail) : refItemLines(item);
+  const body = isHeldByRun(item)
+    ? itemBody(item, detail)
+    : item.kind === 'overdue_wait'
+      ? overdueWaitLines(item)
+      : refItemLines(item);
   for (const line of body) lines.push(`    ${line}`);
   return lines;
 }
@@ -274,11 +300,17 @@ export function attentionStreamText(
       return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
     case 'notice':
       return [noticeText(line)];
-    case 'owner_lost':
+    case 'owner_lost': {
+      // A run on an item holds it, so the later starts of its workflow on it wait behind it.
+      const held =
+        line.item == null
+          ? ''
+          : ` It holds item ${line.item}: later starts of ${line.workflow ?? 'its workflow'} on it wait behind it.`;
       return [
-        `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)} ` +
-          `Show more with ${command(`get ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,
+        `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)}${held} ` +
+          `Show more with ${command(`get ${line.runId}`)}, continue it with ${command(`resume ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,
       ];
+    }
     case 'ready':
       return [
         `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,

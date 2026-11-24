@@ -243,6 +243,7 @@ export async function handleMessage(
       workflows,
       config,
       cwd,
+      abortSignal: context.abortSignal,
     });
 
     // 5. Send to AI provider
@@ -278,7 +279,7 @@ export async function handleMessage(
       conversationId,
       conversation,
       pendingLaunch.launch,
-      turn.failed,
+      turn,
       context
     );
     await reportSourceWork(platform, conversationId, conversation, discoveredCodebase);
@@ -301,16 +302,16 @@ async function dispatchPendingLaunch(
   conversationId: string,
   conversation: Conversation,
   launch: ChatLaunch | null,
-  failed: boolean,
+  turn: Pick<ChatTurn, 'failed' | 'stopped'>,
   context: HandleMessageContext
 ): Promise<void> {
   // After the gate continuation: a launch has committed nothing yet, so unlike a resolved
-  // gate it is dropped when the turn throws or ends in an error result, and the user sees
-  // the error instead.
-  if (launch !== null && failed) {
+  // gate it is dropped when the turn throws, ends in an error result, or is stopped by the
+  // operator; the user sees the error or the stop instead.
+  if (launch !== null && (turn.failed || turn.stopped)) {
     getLog().info(
       { conversationId, workflowName: launch.entry.workflow.name },
-      'orchestrator.invoke_workflow_dropped_failed_turn'
+      'orchestrator.invoke_workflow_dropped_unfinished_turn'
     );
   } else if (launch !== null) {
     const { entry, codebase, prompt, inputs } = launch;
@@ -397,6 +398,7 @@ async function runChatTurn(
     startedAt: Date.now(),
     reported: false,
     failed: false,
+    stopped: false,
   };
   const turnInput = { ...input, turn };
   try {

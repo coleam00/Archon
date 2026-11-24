@@ -71,6 +71,51 @@ describe('readNodeRecordEvent', () => {
     expect(record?.rawUsage.tokens).toBe('bad');
   });
 
+  it('keeps the totals of a current record whose request evidence cannot be read', () => {
+    const envelope = { workflow_run_id: 'run-1', step_name: 'build', event_type: 'node_completed' };
+    const value = { input: 10, output: 5, calls: 'bad' };
+    const record = readNodeRecordEvent({
+      ...envelope,
+      data: {
+        ...metadata,
+        spend: { ...metadata.spend, tokens: { source: 'provider', value } },
+        tokens: value,
+      },
+    });
+    const expected = { input: 10, output: 5, callsPartial: true as const };
+    expect(record?.metadata?.spend.tokens).toEqual({ source: 'provider', value: expected });
+    expect(record?.rawUsage.tokens).toEqual(expected);
+    // Unrelated malformed metadata still refuses the record.
+    expect(() =>
+      readNodeRecordEvent({
+        ...envelope,
+        data: {
+          ...metadata,
+          invocation: null,
+          spend: { ...metadata.spend, tokens: { source: 'provider', value } },
+        },
+      })
+    ).toThrow();
+  });
+
+  it('keeps a deferred usage row whose request evidence cannot be read', () => {
+    const value = { input: 10, output: 5, calls: [{ input: 'x' }] };
+    const spend = { ...metadata.spend, tokens: { source: 'provider', value } };
+    const usage = readDeferredNodeUsageEvent({
+      workflow_run_id: 'run-1',
+      step_name: 'refine',
+      event_type: 'node_deferred_usage',
+      data: { spend, loopBaseline: spend, tokens: value },
+    });
+    const expected = {
+      source: 'provider' as const,
+      value: { input: 10, output: 5, callsPartial: true as const },
+    };
+    expect(usage?.data.spend?.tokens).toEqual(expected);
+    expect(usage?.data.loopBaseline?.tokens).toEqual(expected);
+    expect(usage?.rawUsage.tokens).toEqual(expected.value);
+  });
+
   it('reads a failed row whose provider failure class is newer than this binary', () => {
     // A newer binary may persist a failure class this one does not know. The row still
     // reads with its failure kind, and only the unknown provider failure is dropped.

@@ -14,15 +14,16 @@ want to work on unless setting up globally.
 archon --version      # CLI present?
 archon doctor         # installed providers, database, adapters
 archon doctor --full  # also probes the OpenCode runtime SDK
-archon workflow run archon-forge-check  # can the SDLC workflows reach the forge?
+archon forge check --data '{"remote":"git@github.com:owner/repository.git","operations":["pr.view","pr.merge"]}'  # can workflows reach the forge?
 ```
 
 If `doctor` is green, skip to Configuration. Only set up what is actually broken.
 
-`archon forge check --data '{"host":"github.com","operations":["pr.view","pr.merge"]}'`
-answers a narrower question without starting a run: whether a plugin serves the host,
-supports the named operations and has a credential. It runs no forge operation and
-exits 1 with the reason.
+The engine checks forge access when a pack workflow run starts. `archon forge check`
+answers the question without starting a run (see `reference/forge.md`, "Check forge access
+before a run spends"): the `remote` or `repo` form makes one read to verify access to the
+repository, while a `host` request confirms plugin and credential presence without running
+a forge operation.
 
 The first run in a checkout Archon has not seen registers the project before it
 starts. On an install with many projects that takes a few seconds.
@@ -149,7 +150,8 @@ worktree:
 Rules worth knowing before suggesting entries:
 
 - **Repo scope only.** `worktree` is read from `<repo>/.archon/config.yaml`.
-  Putting it in `~/.archon/config.yaml` parses and does nothing.
+  Putting it in `~/.archon/config.yaml` parses and does nothing, except
+  `worktree.linkFiles` (below).
 - **Copy the real gitignored file, never a tracked template.** Suggesting
   `.env.example` is wrong twice: a worktree already has it, and materialising a
   placeholder `.env` makes a server start against fake credentials instead of
@@ -164,6 +166,16 @@ Rules worth knowing before suggesting entries:
 Other common entries: `.vscode/`, `.claude/`, and local-only fixture or plans
 directories. Full semantics, including path-traversal rejection and the
 `worktree.path` interaction, are in `/reference/configuration/`.
+
+Large caches can be linked instead of copied. `worktree.linkFiles` makes each
+listed path a symlink to the canonical repo, so every worktree shares one
+directory. Shared means concurrent runs write the same data: suggest it only for
+data whose tool tolerates that. Ignore the path without a trailing slash
+(`.serena/cache`, not `.serena/cache/`): git sees a symlink as a file, and Archon
+removes a link git would not ignore. `linkFiles` may also be set in `~/.archon/config.yaml`
+for every project; a project's own `linkFiles` replaces that list, and `[]` turns
+it off. Windows refuses `linkFiles` (a junction is a real directory to git, so
+removing the worktree would delete the shared content); use `copyFiles` there.
 
 Prefer the typed commands over hand-editing when they exist — they validate:
 

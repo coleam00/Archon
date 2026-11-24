@@ -98,13 +98,46 @@ describe('parsePackDeclaration', () => {
   });
 });
 
+describe('parsePackDeclaration forge', () => {
+  it('reads the capability tokens the pack calls', () => {
+    expect(
+      parsePackDeclaration(
+        'forge:\n  operations: [pr.view, resolve:subject]\n',
+        'p/.pack/pack.yaml'
+      )
+    ).toEqual({ forge: { operations: ['pr.view', 'resolve:subject'] } });
+    expect(
+      parsePackDeclaration(
+        'forge:\n  operations: [pr.view]\n  repository: { host: repo_host, path: repo_path }\n',
+        'p/.pack/pack.yaml'
+      )
+    ).toEqual({
+      forge: { operations: ['pr.view'], repository: { host: 'repo_host', path: 'repo_path' } },
+    });
+  });
+
+  it.each([
+    ['forge:\n  operations: []\n', "'forge' is invalid at 'operations'"],
+    ['forge:\n  operations: [pr.view, 3]\n', "'forge' is invalid at 'operations.1'"],
+    ['forge:\n  operations: [pr.view]\n  host: github.com\n', "'forge' is invalid"],
+    [
+      'forge:\n  operations: [pr.view]\n  repository: { host: h, path: p, ref: r }\n',
+      "'forge' is invalid",
+    ],
+    ['forge: [pr.view]\n', "'forge' must be a mapping"],
+  ])('refuses %p, naming the file', (yaml, reason) => {
+    expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow(reason);
+    expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow('p/.pack/pack.yaml');
+  });
+});
+
 describe('parsePackDeclaration bindings', () => {
   const timer = (extra = ''): string =>
     `  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule: { interval_seconds: 60 }\n${extra}`;
 
   it('reads a timer, an event and a fire-only binding, applying the defaults', () => {
     const declared = parsePackDeclaration(
-      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n      next: { binding: follow-up }\n')}  follow-up:\n    workflow: sweep\n    resource: follow-up\n    overlap: queue\n  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    inputs:\n      number: { event: subject.number }\n`,
+      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n      next: { binding: follow-up }\n')}  follow-up:\n    workflow: sweep\n    resource: follow-up\n    overlap: queue\n    item: { field: number, prefix: issue- }\n  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    item: { field: subject.number }\n    inputs:\n      number: { event: subject.number }\n`,
       'p/.pack/pack.yaml'
     );
     expect(declared).toEqual({
@@ -131,6 +164,7 @@ describe('parsePackDeclaration bindings', () => {
           overlap: 'queue',
           isolation: { kind: 'default' },
           inputs: {},
+          item: { field: 'number', prefix: 'issue-' },
         },
         opened: {
           workflow: 'sweep',
@@ -141,7 +175,50 @@ describe('parsePackDeclaration bindings', () => {
           isolation: { kind: 'worktree' },
           event: { kind: 'issue.lifecycle', actions: ['opened'] },
           inputs: { number: { event: 'subject.number' } },
+          item: { field: 'subject.number' },
         },
+      },
+    });
+  });
+
+  it('reads a run-ended binding with its outcomes and the ended run inputs it maps', () => {
+    const declared = parsePackDeclaration(
+      `bindings:\n${timer()}  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [build, narrow] }\n    inputs:\n      issue: { input: issue }\n      verdict: { result: /verdict }\n      policy: docs/policy.md\n      next: { binding: sweep }\n      decided: { item: answers }\n`,
+      'p/.pack/pack.yaml'
+    );
+    expect(declared.bindings?.plan).toEqual({
+      workflow: 'plan',
+      resource: 'plan',
+      resource_scope: 'repo',
+      overlap: 'queue',
+      isolation: { kind: 'default' },
+      run_ended: { workflow: 'triage', outcome: ['build', 'narrow'] },
+      inputs: {
+        issue: { input: 'issue' },
+        verdict: { result: '/verdict' },
+        policy: 'docs/policy.md',
+        next: { binding: 'sweep' },
+        decided: { item: 'answers' },
+      },
+    });
+  });
+
+  it("reads an asks-settled binding that takes the asking run's checkout and its answers", () => {
+    const declared = parsePackDeclaration(
+      `bindings:\n  build-again:\n    workflow: build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: build, settled: answered, checkout: asking-run }\n    inputs:\n      decisions: { answers: true }\n      issue: { input: issue }\n      decided: { item: answers }\n`,
+      'p/.pack/pack.yaml'
+    );
+    expect(declared.bindings?.['build-again']).toEqual({
+      workflow: 'build',
+      resource: 'build',
+      resource_scope: 'repo',
+      overlap: 'queue',
+      isolation: { kind: 'default' },
+      asks_settled: { workflow: 'build', settled: 'answered', checkout: 'asking-run' },
+      inputs: {
+        decisions: { answers: true },
+        issue: { input: 'issue' },
+        decided: { item: 'answers' },
       },
     });
   });
@@ -149,10 +226,60 @@ describe('parsePackDeclaration bindings', () => {
   it.each([
     [timer('    inputs:\n      other: { binding: missing }\n'), "names unknown binding 'missing'"],
     [
+      `${timer()}${'  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'}  ref:\n    workflow: w\n    resource: x\n    overlap: skip\n    inputs:\n      p: { binding: plan }\n`,
+      "names run-ended binding 'plan'",
+    ],
+    [
+      timer('    inputs:\n      v: { result: /verdict }\n'),
+      'only a run-ended or asks-settled binding has a run to read',
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n    inputs:\n      d: { answers: true }\n',
+      'only an asks-settled binding has them',
+    ],
+    [
+      '  build:\n    workflow: build\n    resource: build\n    overlap: queue\n    isolation: { kind: worktree }\n    asks_settled: { workflow: build, settled: answered, checkout: asking-run }\n',
+      "binding 'build' is invalid at 'isolation'",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [done, done] }\n',
+      'outcomes must be distinct',
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: [] }\n',
+      "binding 'plan' is invalid at 'run_ended.outcome'",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, linked: { kind: owns, holder: to } }\n',
+      "binding 'plan' is invalid at 'run_ended.linked.kind'",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, checkout: ended-run, linked: { kind: part_of, holder: to } }\n',
+      "binding 'plan' is invalid at 'run_ended.checkout': A linked start takes no checkout",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, linked: { kind: part_of, holder: to } }\n    inputs:\n      d: { item: answers }\n',
+      "binding 'plan' input 'd' reads the item's answers, but a linked start is on a holder item",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done, linked: { kind: part_of, holder: to } }\n    inputs:\n      b: { entry: /brief }\n',
+      "binding 'plan' input 'b' reads a linked entry, but only a run-ended binding with linked.items has one per started item",
+    ],
+    [timer('    inputs:\n      d: { item: answers }\n'), "reads the item's answers, but only"],
+    [
+      '  build:\n    workflow: build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: build, settled: answered }\n    inputs:\n      m: { item: key }\n',
+      "binding 'build' input 'm' reads the ended run's item key, but only a run-ended binding has one",
+    ],
+    [
+      '  plan:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { outcome: done }\n',
+      "binding 'plan' is invalid at 'run_ended.workflow'",
+    ],
+    [
       timer('    inputs:\n      n: { event: subject.number }\n'),
       'only an event binding has an event',
     ],
-    [timer('    event: { kind: issue.lifecycle }\n'), "must not set both 'schedule'"],
+    [timer('    event: { kind: issue.lifecycle }\n'), "must set at most one of 'schedule'"],
+    [timer('    item: { field: number }\n'), 'Unrecognized key: "item"'],
     // A schedule key without its expression is a broken timer, never a fire-only binding.
     [
       '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule:\n',
@@ -259,6 +386,7 @@ describe('discovery carries the pack', () => {
     const byName = new Map(workflows.map(w => [w.workflow.name, w.workflow]));
     expect(byName.get('packed')?.pack).toEqual({
       key: 'alpha',
+      workflow: 'packed',
       source: 'project',
       settings: { tone: { type: 'string', default: 'calm' } },
     });

@@ -23,7 +23,7 @@ packages/cli/
 │   │   ├── workflow-query.ts # workflow list/test/status/get/runs/logs/wait
 │   │   ├── workflow-run-*.ts # workflow run: select, admit, launch, execute
 │   │   ├── isolation.ts    # isolation list/cleanup (list/merged-cleanup delegate to @archon/core/operations)
-│   │   ├── isolation-schedule.ts # isolation cleanup schedule: the macOS merged-cleanup timer
+│   │   ├── isolation-schedule.ts # isolation cleanup schedule: the merged-cleanup OS timer, installed through triggers/native-schedule
 │   │   ├── setup.ts        # setup command implementation
 │   │   ├── chat.ts         # chat command implementation
 │   │   ├── validate.ts     # validate command implementation
@@ -84,7 +84,7 @@ packages/cli/
 
 **Code:** `packages/cli/src/cli.ts`
 
-Repository env normally overrides home env. The CLI preserves the user-scope `GH_CONFIG_DIR` (including its absence), so repository env cannot redirect the stored gh login. Inside a workflow, inherited GitHub identity values take precedence over both env files, including empty values that disable host credentials. See [forge plugin configuration](/reference/forge/#plugin-configuration).
+Repository env normally overrides home env. The CLI preserves the user-scope `GH_CONFIG_DIR` (including its absence), so repository env cannot redirect the stored gh login. Inside a workflow, and in the start-time forge check of a pack that declares `forge:` (the check spawns the CLI with `ARCHON_RUN_GITHUB_IDENTITY=1`), inherited GitHub identity values take precedence over both env files, including empty values that disable host credentials. See [forge plugin configuration](/reference/forge/#plugin-configuration).
 
 **Project resolution:**
 
@@ -289,7 +289,10 @@ archon isolation cleanup [days] (default: 7)
 
 ## `isolation cleanup --merged` Flow
 
-1. `isolationCleanupMergedCommand` calls `cleanupMergedWorktrees` for each codebase.
+1. `isolationCleanupMergedCommand` calls `cleanupMergedEnvironments` for each codebase. When
+   the codebase's checkout directory does not exist, it returns `repository-gone` with the
+   codebase's worktree environments and does not sweep them; otherwise it runs
+   `cleanupMergedWorktrees`.
 2. `judgeBranchForRemoval` first checks base ancestry and patch equivalence, requiring
    coverage of both the branch ref and worktree HEAD. Otherwise it checks the branch-name PR. A merged PR authorizes
    removal only if its head covers every existing local tip: worktree HEAD and

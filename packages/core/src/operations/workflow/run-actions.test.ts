@@ -80,6 +80,28 @@ describe('resumeWorkflow', () => {
     );
   });
 
+  test('a run that failed before its checkout was prepared is refused with the line that restarts it', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'failed',
+        working_path: null,
+        workflow_name: "@it's $pack",
+        metadata: { inputs: { item: 'secret-value' } },
+      })
+    );
+
+    const error = await resumeWorkflow('run-1', operator).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ResumeRefusedError);
+    const refusal = error as InstanceType<typeof ResumeRefusedError>;
+    expect(refusal.reason).toBe('not_resumable');
+    // Only the run id: nothing in the line needs quoting in any shell.
+    expect(refusal.message).toEndWith(
+      'Start it again with: archon workflow run --supersedes run-1'
+    );
+    expect(refusal.message).not.toContain('secret-value');
+  });
+
   test('throws wrapped message when DB throws', async () => {
     mockGetWorkflowRun.mockRejectedValueOnce(new Error('connection reset'));
 

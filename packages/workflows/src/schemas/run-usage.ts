@@ -18,7 +18,12 @@ const fields = {
   unknown: 'total_tokens_unknown',
 } as const;
 
-const persistedTokensSchema = tokenUsageSchema.omit({ total: true, cost: true });
+const persistedTokensSchema = tokenUsageSchema.omit({
+  total: true,
+  cost: true,
+  calls: true,
+  callsPartial: true,
+});
 const tokenAxes = persistedTokensSchema.keyof().options;
 const tokenFields = {
   input: 'total_tokens_in',

@@ -1353,6 +1353,7 @@ describe('manage_run authorization refusal', () => {
           findWorkflowRunsByIdPrefix: async () => [run],
           persistWorkflowEvent: unexpected,
           cancelWorkflowRun: unexpected,
+          requestOperatorPause: unexpected,
           resolveApprovalGate: unexpected,
           resolveAndCancelApprovalGate: unexpected,
           answerAttentionWait: unexpected,
@@ -1361,6 +1362,7 @@ describe('manage_run authorization refusal', () => {
           deleteWorkflowNodeSessions: unexpected,
           signalWorkflowWait: unexpected,
           deleteWorkflowRun: unexpected,
+          getCodebase: unexpected,
         },
         hostStore: {
           isolation: {

@@ -10,6 +10,7 @@
 import type {
   SDKAssistantMessageError,
   SDKRateLimitInfo,
+  SDKResultMessage,
   SDKStartupFailureReason,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { ProviderFailure, ProviderFailureClass } from '@archon/provider-contract';
@@ -122,6 +123,11 @@ function classOfStartupFailure(reason: SDKStartupFailureReason): ProviderFailure
     case 'shell_tool_missing':
     case 'cli_version_too_old':
     case 'bypass_root':
+    case 'sandbox_required_unavailable':
+    case 'config_file_invalid': // every start is refused until the file is repaired
+    case 'initialize_not_first': // the host or a wrapper script wrote the wrong first line
+    case 'managed_settings_not_delivered':
+    case 'initialize_fields_not_delivered':
       return 'misconfigured';
     case 'worktree_unverified':
     case 'org_config_required_unavailable': // the org's required settings could not be loaded
@@ -142,12 +148,14 @@ function classOfStartupFailure(reason: SDKStartupFailureReason): ProviderFailure
 
 /** Classify an error result the SDK ended the turn with, when no API error preceded it. */
 export function classifyClaudeErrorResult(
-  subtype: string,
+  subtype: SDKResultMessage['subtype'],
   httpStatus: number | null | undefined,
   startupFailureReason: SDKStartupFailureReason | undefined,
   evidence: string
 ): ProviderFailure {
   if (subtype === 'error_max_budget_usd') return failureOf('budget_exceeded', evidence);
+  // The SDK's own structured-output retries ran out; a fresh attempt usually gets past it.
+  if (subtype === 'error_max_structured_output_retries') return failureOf('schema_unmet', evidence);
   if (startupFailureReason !== undefined) {
     return failureOf(classOfStartupFailure(startupFailureReason), evidence);
   }

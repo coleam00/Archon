@@ -94,6 +94,7 @@ export const {
   createWorkflowOperations,
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
+  PauseRefusedError,
   ResumeRefusedError,
   describeAbandonOwner,
   assertAnswerable,
@@ -140,10 +141,14 @@ export const store: WorkflowOperationsDeps['store'] = {
   persistWorkflowEvent: mockPersistWorkflowEvent,
   signalWorkflowWait: mock(async () => ({ signaled: true })),
   deleteWorkflowRun: mock(async () => undefined),
+  getCodebase: async () => null,
   getWorkflowRun: mockGetWorkflowRun,
   listWorkflowRuns: mockListWorkflowRuns,
   findWorkflowRunsByIdPrefix: async () => [],
   cancelWorkflowRun: mockCancelWorkflowRun,
+  requestOperatorPause: async () => {
+    throw new Error('Unexpected requestOperatorPause');
+  },
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
   findChildRuns: mockFindChildRuns,
   getRunAncestry: mockGetRunAncestry,

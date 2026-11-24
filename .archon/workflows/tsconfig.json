@@ -1,5 +1,10 @@
 {
   "extends": "../../scripts/tsconfig.json",
+  "compilerOptions": {
+    // Archon loads the directories under .archon/workflows as packs and discovers scripts
+    // under .archon/, so the build cache lives with the scripts project's, not beside this file.
+    "tsBuildInfoFile": "../../scripts/.tsbuild/pack-workflows.tsbuildinfo"
+  },
   "files": ["../../packages/script-api/src/archon-script.d.ts"],
   "include": ["*/.shared/**/*.ts", "*/*/scripts/**/*.ts"]
 }

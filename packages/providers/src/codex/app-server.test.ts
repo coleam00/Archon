@@ -355,7 +355,7 @@ describe('AppServerConnection', () => {
 
     fake.reply({
       id: 2,
-      result: { account: null, requiresOpenaiAuth: true, workspaceRouting: null },
+      result: { account: null, requiresOpenaiAuth: true, workspaceRouting: null, userId: null },
     });
     fake.reply({ id: 1, result: 'first' });
     expect(await first).toBe('first');
@@ -363,6 +363,7 @@ describe('AppServerConnection', () => {
       account: null,
       requiresOpenaiAuth: true,
       workspaceRouting: null,
+      userId: null,
     });
   });
 
@@ -374,13 +375,14 @@ describe('AppServerConnection', () => {
     fake.stdout.write('{"id":1,"result":"fi');
     await tick();
     fake.stdout.write(
-      'rst"}\n{"id":2,"result":{"account":null,"requiresOpenaiAuth":true,"workspaceRouting":null}}\n'
+      'rst"}\n{"id":2,"result":{"account":null,"requiresOpenaiAuth":true,"workspaceRouting":null,"userId":null}}\n'
     );
     expect(await first).toBe('first');
     expect(await second).toEqual({
       account: null,
       requiresOpenaiAuth: true,
       workspaceRouting: null,
+      userId: null,
     });
   });
 
@@ -669,7 +671,7 @@ describe('Codex native credential check', () => {
 
   for (const account of [
     { type: 'apiKey' },
-    { type: 'chatgpt', email: null, planType: 'plus' },
+    { type: 'chatgpt', email: null, planType: 'plus', workspaceName: null },
     { type: 'amazonBedrock', usesCodexManagedCredentials: false },
   ] as const) {
     test(`${account.type} account is usable`, async () => {
@@ -726,7 +728,7 @@ describe('Codex native credential check', () => {
         [
           { account: null },
           {
-            account: { type: 'chatgpt', email: null, planType: 'pro' },
+            account: { type: 'chatgpt', email: null, planType: 'pro', workspaceName: null },
             deferAccountRead: answer => {
               deadline.abort(new Error('caller deadline'));
               answer();

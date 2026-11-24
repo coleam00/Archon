@@ -10,6 +10,7 @@ import type { MessageChunk } from '@archon/provider-contract';
 import type { SkipCause } from './schemas';
 import type { FanOutOutcome } from './schemas/fan-out-outcome';
 import type { ProviderEventEnvelope } from './schemas/provider-event';
+import type { StallMessageEventData } from './schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -51,8 +52,11 @@ export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
     | 'node_error'
     | 'watchdog_reset'
     | 'exec_output'
-    | 'provider_event';
+    | 'provider_event'
+    | 'stall_message';
   workflow_id: string;
+  /** A `stall_message` row: the engine's message to a stalled session, or why there was none. */
+  stall_message?: StallMessageEventData;
   workflow_name?: string;
   step?: string;
   content?: string;

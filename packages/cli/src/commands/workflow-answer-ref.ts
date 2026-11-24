@@ -6,6 +6,8 @@
  */
 import {
   answerAttentionItem,
+  NOTHING_STARTED,
+  settledWithNothingStarted,
   withdrawAttentionItem,
   type AttentionItemAnswerResult,
   type AttentionItemWithdrawResult,
@@ -13,8 +15,17 @@ import {
 import { attentionQueueSource } from '@archon/core/operations/attention-queue';
 import type { AttentionAnswerRequest } from '@archon/core/operations/workflow-operations';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { existsSync } from 'node:fs';
+import {
+  ASKS_SETTLED_SOURCE_ACTOR,
+  readAsksCheckout,
+  type SourceReceiptAcceptance,
+} from '@archon/workflows/schemas/resource-start';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { cliActor } from '../utils/calling-node';
+import { servedHosts } from '../utils/install-hosts';
 import { writeJsonLine } from '../utils/stdout';
+import { admittedByText } from './workflow-item-text';
 
 export const WORKFLOW_ANSWER_REF_USAGE =
   'Usage: archon workflow answer --ref <ref> [--choose <id>... | --recommended] [--text <text>] [--as <name>] [--json]\n' +
@@ -33,14 +44,150 @@ type Outcome =
   | { ok: true; text: string; json: object }
   | { ok: false; error: string; code: string };
 
-function answered(ref: string, result: AttentionItemAnswerResult): Outcome {
+type SettledStarts = { text: string; json: object };
+const NO_STARTS: SettledStarts = { text: '', json: {} };
+
+/**
+ * What a settling close says about the starts it caused, read back from each receipt after
+ * this process tried to start them: a matched receipt is only a start that was written, so
+ * each binding is reported by where its preparation stands. A binding that matched but
+ * could not start is printed with its receipt and how to start the stage by hand.
+ */
+async function settledStarts(
+  receipts: readonly SourceReceiptAcceptance[],
+  store: AnswerStore,
+  readServed: () => Promise<ReadonlySet<string>>
+): Promise<SettledStarts> {
+  const itemKey = receipts.find(accepted => accepted.receipt.itemKey)?.receipt.itemKey ?? '<key>';
+  const states = (await Promise.all(receipts.map(accepted => startStates(accepted, store)))).flat();
+  const prepared = states.filter(state => state.kind === 'prepared');
+  const served = states.some(state => state.kind === 'waiting')
+    ? await readServed()
+    : new Set<string>();
+  const waiting = states.flatMap(state =>
+    state.kind === 'waiting'
+      ? [
+          {
+            receiptId: state.receiptId,
+            bindingId: state.bindingId,
+            hostId: state.hostId,
+            servedHere: state.hostId !== null && served.has(state.hostId),
+          },
+        ]
+      : []
+  );
+  const notStarted = states.flatMap(state =>
+    state.kind === 'not_started'
+      ? [{ receiptId: state.receiptId, bindingId: state.bindingId, reason: state.reason }]
+      : []
+  );
+  const recovery = notStarted.length > 0 ? await checkoutRecovery(receipts, store, itemKey) : '';
+  const lines = [
+    ...(prepared.length > 0
+      ? [
+          ` It prepared ${String(prepared.length)} bound stage start(s) on the item; archon workflow runs --item ${itemKey} shows them.`,
+        ]
+      : []),
+    ...waiting.map(({ receiptId, hostId }) =>
+      hostId === null
+        ? `\nA bound stage waits, but its binding names no host; receipt ${receiptId} records it (archon trigger inspect ${receiptId}).`
+        : `\nA bound stage waits on host '${hostId}': ${admittedByText(hostId, served)}. Receipt ${receiptId} records it.`
+    ),
+    ...notStarted.map(
+      ({ receiptId, reason }) =>
+        `\n\u26a0\ufe0f The next stage was not started: ${reason}. Receipt ${receiptId} records it (archon trigger inspect ${receiptId}). Fix what it names, then start the stage by hand with the inputs the binding should have passed: the answers as archon workflow runs --item ${itemKey} --json lists them, and the asking run's inputs and result. For a binding without checkout, put them in a file and run archon trigger fire --config <trigger file> --item ${itemKey} --inputs <file>. For one that takes the asking run's checkout (on.asksSettled.checkout), which a fire refuses: ${recovery}`
+    ),
+  ];
+  return {
+    text: lines.join(''),
+    json: {
+      ...(waiting.length > 0 ? { waiting } : {}),
+      ...(notStarted.length > 0 ? { notStarted } : {}),
+    },
+  };
+}
+
+type AnswerStore = Pick<IWorkflowStore, 'getStartReceipt' | 'getWorkflowRun'>;
+
+/**
+ * How to start a stage that takes the asking run's checkout by hand, from what that run
+ * recorded: adopt the run whose worktree holds the checkout (the asking run, or for a
+ * read-only asking stage the run whose checkout it was given, never its deleted copy), or
+ * run the asking workflow again when no checkout is left to hand over.
+ */
+async function checkoutRecovery(
+  receipts: readonly SourceReceiptAcceptance[],
+  store: AnswerStore,
+  itemKey: string
+): Promise<string> {
+  const actor = receipts.find(
+    accepted => accepted.receipt.sourceActor?.source === ASKS_SETTLED_SOURCE_ACTOR
+  )?.receipt.sourceActor;
+  const asking = actor ? await store.getWorkflowRun(actor.id) : null;
+  const recorded = asking ? readAsksCheckout(asking) : undefined;
+  if (recorded === undefined || !('handoff' in recorded) || !existsSync(recorded.worktree))
+    return `the checkout it left is gone or was never recorded, so run ${asking ? `'${asking.workflow_name}'` : 'the asking workflow'} again on the item.`;
+  const holder = recorded.handoff.runId;
+  return `run archon workflow run <stage> --adopt ${holder} --item ${itemKey} with an --input <name>=<value> for each input the binding maps, since --adopt carries the checkout and not the answers. Run ${holder} holds the checkout${holder === asking?.id ? '' : `, which the read-only asking run ${asking?.id ?? ''} was given`}; adoption continues its branch as it is now.`;
+}
+
+type StartState =
+  | { kind: 'prepared' }
+  | { kind: 'waiting'; receiptId: string; bindingId: string; hostId: string | null }
+  | { kind: 'not_started'; receiptId: string; bindingId: string | null; reason: string };
+
+/** Where each binding of one receipt stands, read back from the store. */
+async function startStates(
+  accepted: SourceReceiptAcceptance,
+  store: AnswerStore
+): Promise<StartState[]> {
+  const receiptId = accepted.receipt.id;
+  if (accepted.outcome !== 'matched')
+    return [
+      {
+        kind: 'not_started',
+        receiptId,
+        bindingId: null,
+        reason: accepted.reason ?? 'its binding was rejected',
+      },
+    ];
+  const inspected = await store.getStartReceipt(receiptId);
+  return (inspected?.bindings ?? []).map((binding): StartState => {
+    if (binding.status === 'complete') return { kind: 'prepared' };
+    if (binding.status === 'pending' || binding.status === 'preparing')
+      return { kind: 'waiting', receiptId, bindingId: binding.bindingId, hostId: binding.hostId };
+    return {
+      kind: 'not_started',
+      receiptId,
+      bindingId: binding.bindingId,
+      reason: binding.error ?? `its preparation is ${binding.status}`,
+    };
+  });
+}
+
+/** What a close says about its set: settled or not, and whether it started nothing. */
+export function settlement(
+  result: { settled: boolean; startReceipts: readonly SourceReceiptAcceptance[] },
+  starts: SettledStarts
+): SettledStarts {
+  if (!result.settled) return { text: starts.text, json: { settled: false, ...starts.json } };
+  const nothingStarted = settledWithNothingStarted(result);
+  return {
+    text: ` That was the last open ask of its set; the set is settled.${nothingStarted ? ` ${NOTHING_STARTED}` : ''}${starts.text}`,
+    json: { settled: true, ...(nothingStarted ? { nothingStarted: true } : {}), ...starts.json },
+  };
+}
+
+function answered(ref: string, result: AttentionItemAnswerResult, starts: SettledStarts): Outcome {
   switch (result.kind) {
-    case 'ask_answered':
+    case 'ask_answered': {
+      const settled = settlement(result, starts);
       return {
         ok: true,
-        text: `Answered ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}`,
-        json: { ok: true, ref, action: 'answer', settled: result.settled },
+        text: `Answered ${ref}.${settled.text}`,
+        json: { ok: true, ref, action: 'answer', ...settled.json },
       };
+    }
     case 'answered':
       return {
         ok: true,
@@ -86,14 +233,20 @@ function answered(ref: string, result: AttentionItemAnswerResult): Outcome {
   }
 }
 
-function withdrawn(ref: string, result: AttentionItemWithdrawResult): Outcome {
+function withdrawn(
+  ref: string,
+  result: AttentionItemWithdrawResult,
+  starts: SettledStarts
+): Outcome {
   switch (result.kind) {
-    case 'withdrawn':
+    case 'withdrawn': {
+      const settled = settlement(result, starts);
       return {
         ok: true,
-        text: `Withdrew ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}`,
-        json: { ok: true, ref, action: 'withdraw', settled: result.settled },
+        text: `Withdrew ${ref}.${settled.text}`,
+        json: { ok: true, ref, action: 'withdraw', ...settled.json },
       };
+    }
     case 'unchanged':
       return {
         ok: true,
@@ -117,6 +270,35 @@ function withdrawn(ref: string, result: AttentionItemWithdrawResult): Outcome {
   }
 }
 
+/**
+ * The starts a close's settlement caused, as they stand once this process tried them. The
+ * close has committed by now, so a failure to read them back is reported beside the
+ * recorded answer, naming the receipts, and never turns the command into a failure.
+ */
+export async function startsOf(
+  caused: readonly SourceReceiptAcceptance[],
+  store: AnswerStore,
+  readServed: () => Promise<ReadonlySet<string>>
+): Promise<SettledStarts> {
+  if (caused.length === 0) return NO_STARTS;
+  try {
+    return await settledStarts(caused, store, readServed);
+  } catch (error) {
+    const receiptIds = caused.map(accepted => accepted.receipt.id);
+    const message = (error as Error).message;
+    return {
+      text: `\n\u26a0\ufe0f The settlement recorded ${String(receiptIds.length)} bound stage start(s), but where they stand could not be read: ${message}. archon trigger inspect <receipt> shows each: ${receiptIds.join(', ')}.`,
+      json: { startsUnread: { receiptIds, error: message } },
+    };
+  }
+}
+
+function causedBy(
+  result: AttentionItemAnswerResult | AttentionItemWithdrawResult
+): readonly SourceReceiptAcceptance[] {
+  return result.kind === 'ask_answered' || result.kind === 'withdrawn' ? result.startReceipts : [];
+}
+
 export async function workflowAnswerRefCommand(
   host: WorkflowHost,
   request: WorkflowAnswerRefRequest,
@@ -131,18 +313,22 @@ export async function workflowAnswerRefCommand(
   let outcome: Outcome;
   try {
     if ('withdraw' in request) {
+      const result = await withdrawAttentionItem(deps, request.withdraw, actor, 'cli');
       outcome = withdrawn(
         request.withdraw,
-        await withdrawAttentionItem(deps, request.withdraw, actor, 'cli')
+        result,
+        await startsOf(causedBy(result), host.deps.store, servedHosts)
       );
     } else {
       const answer: AttentionAnswerRequest = {
         ...request.selection,
         ...(request.text === undefined ? {} : { text: request.text }),
       };
+      const result = await answerAttentionItem(deps, request.ref, answer, actor, 'cli');
       outcome = answered(
         request.ref,
-        await answerAttentionItem(deps, request.ref, answer, actor, 'cli')
+        result,
+        await startsOf(causedBy(result), host.deps.store, servedHosts)
       );
     }
   } catch (error) {

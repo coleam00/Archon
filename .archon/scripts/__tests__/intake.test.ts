@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -26,6 +26,10 @@ import {
   hostCli,
   type TrackerComment,
   type TrackerIssue,
+  type TrackerFake,
+  type TrackerSubject,
+  forgeCalls,
+  forgeRefusal,
   labelWrites,
   packScriptRunner,
   PR,
@@ -293,8 +297,9 @@ interface Event {
   readonly issueLabels?: readonly string[];
   readonly statuses?: Record<string, string>;
   readonly state?: 'open' | 'closed';
-  readonly stateReason?: string;
+  readonly stateReason?: TrackerSubject['state_reason'];
   readonly writeLost?: boolean;
+  readonly fail?: TrackerFake['fail'];
   /** Other issues on the tracker, such as the original a duplicate links to. */
   readonly others?: readonly TrackerIssue[];
   /** Comments already on the tracker's issues. */
@@ -321,6 +326,7 @@ function run(
       issueLabels: event.issueLabels ?? [],
       repositoryLabels: [],
       writeLost: event.writeLost,
+      fail: event.fail,
       issues: event.others,
       comments: event.comments,
     },
@@ -447,22 +453,14 @@ describe('the intake scripts', () => {
     });
     expect(stored(at).value.claim?.run_id).toBe('run-1');
 
-    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const applied = run(at, 'outcome', { runId: 'run-1' }, {
       INPUTS_PATH: String(decided.path),
       INPUTS_ITEM: JSON.stringify(decided.item),
       INPUTS_DECISION: JSON.stringify(decided.decision),
       ...READY_VERDICT,
-      INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json',
-      ARCHON_CALL_LOG: calls,
     });
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(labelWrites(applied, 7)).toEqual({ add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] });
-    // The routed item starts a build-queue pickup, once per run. The fire names no item, so
-    // the binding's own orders_only decides what the pickup may take.
-    const fire = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
-    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-pickup:ghe.example.com/example/repo#7:run-1']);
-    expect(JSON.parse(readFileSync(fire?.[fire.indexOf('--inputs') + 1] ?? '', 'utf8'))).toEqual({});
     const doc = stored(at).value;
     expect(doc).toMatchObject({ stage: 'deliver', trust: 'maintainer', claim: null, requests: [] });
     expect(doc.facts.triage).toMatchObject({
@@ -480,6 +478,23 @@ describe('the intake scripts', () => {
     for (const runOnly of ['closure', 'questions', 'labels', 'summary', 'report']) {
       expect(doc.facts.triage).not.toHaveProperty(runOnly);
     }
+  }, 60_000);
+
+  test('a run ends with the build route only while the issue waits for a round: an edit after its build ends unchanged', () => {
+    const at = install();
+    const first = facts(at, { runId: 'run-1' }).output;
+    expect(JSON.parse(outcome(at, { runId: 'run-1' }, first, READY_VERDICT).stdout)).toMatchObject({ outcome: 'deliver' });
+    // The build queue finished the item; the author then edits the issue.
+    const built = stored(at);
+    const build = { status: 'ready', brief: '', rounds: [], decisions: [], at: new Date().toISOString() };
+    inProcess(at, () =>
+      expect(state.put('work/7', { ...built.value, facts: { ...built.value.facts, build } }, { ifRevision: built.revision }).ok).toBe(true)
+    );
+    const edited = facts(at, { runId: 'run-2', action: 'edited' }).output;
+    expect(edited).toMatchObject({ path: 'quiet' });
+    const applied = JSON.parse(outcome(at, { runId: 'run-2', action: 'edited' }, edited, SKIPPED_TRIAGE).stdout) as unknown;
+    expect(applied).toMatchObject({ path: 'quiet', outcome: 'unchanged' });
+    expect(stored(at).value.stage).toBe('deliver');
   }, 60_000);
 
   test('labels that fail to write leave the stage stored and the claim held, and the next pickup writes them', () => {
@@ -571,21 +586,26 @@ describe('the intake scripts', () => {
     const at = install();
     const event = { runId: 'run-1', others: [ORIGINAL] };
     const decided = facts(at, event).output;
-    const closed = { ...event, state: 'closed' as const, stateReason: 'duplicate' };
+    const closed = { ...event, state: 'closed' as const, stateReason: 'duplicate' as const };
     const repeated = outcome(at, closed, decided, DUPLICATE_VERDICT);
     expect({ code: repeated.code, stderr: repeated.stderr }).toEqual({ code: 0, stderr: '' });
     expect([...repeated.closes, ...repeated.comments]).toEqual([]);
     expect(stored(at).value).toMatchObject({ stage: 'close', claim: null });
   }, 60_000);
 
-  test('an item someone closed for another reason is refused before any comment', () => {
+  test('a closed item whose close the forge refuses writes no comment and fails the run', () => {
     const at = install();
     const event = { runId: 'run-1', others: [ORIGINAL] };
     const decided = facts(at, event).output;
-    const closed = { ...event, state: 'closed' as const, stateReason: 'not_planned' };
+    const closed = {
+      ...event,
+      state: 'closed' as const,
+      stateReason: 'not_planned' as const,
+      fail: { 'workitem.close': forgeRefusal('workitem.close', 'refused', 'closed for another reason') },
+    };
     const applied = outcome(at, closed, decided, DUPLICATE_VERDICT);
     expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain('already closed for another reason');
+    expect(forgeCalls(applied).filter(call => call.op === 'workitem.close')).toHaveLength(1);
     expect([...applied.closes, ...applied.comments]).toEqual([]);
   }, 60_000);
 

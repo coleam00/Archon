@@ -26,6 +26,7 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { IWorkflowStore } from './store';
+import { ConcurrencyConfigError, InstallHeldError, RunLimitError } from './store/errors';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
@@ -431,6 +432,27 @@ describe('checkout-in-use message', () => {
     expect(message).not.toContain('Wait for it to finish');
   });
 
+  it('offers resume, not approve or reject, for an operator-paused run with a stale gate', async () => {
+    const message = await blockedBy(
+      blocker({
+        status: 'paused',
+        metadata: {
+          pause_cause: 'operator',
+          operator_pause: {
+            requested: { by: null, via: 'cli', at: '2026-10-05T12:00:00.000Z' },
+            pausedAt: '2026-10-05T12:01:00.000Z',
+          },
+          approval: { type: 'approval', nodeId: 'review', message: 'Approve?', resolved: true },
+        },
+      })
+    );
+    expect(message).toContain('paused by an operator');
+    expect(message).toContain('/workflow resume abc12345');
+    expect(message).toContain('/workflow abandon abc12345');
+    for (const absent of ['user input', '/workflow approve', '/workflow reject'])
+      expect(message).not.toContain(absent);
+  });
+
   it.each([
     [
       'child_workflow',
@@ -780,4 +802,67 @@ describe('asks without an item', () => {
     expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
   });
+});
+
+describe('run limit config', () => {
+  it('an invalid concurrency number refuses the start with the config problem, not an ownership one', async () => {
+    const invalid = new ConcurrencyConfigError(
+      '/home/config.yaml',
+      'concurrency.runs: Too small: expected number to be >=1',
+      'Run admissions'
+    );
+    const cancelWorkflowRun = mock(async () => ({ cancelled: true }));
+    const result = await startWorkflow({
+      store: makeStore({
+        claimPendingWorkflowRun: mock(async () => {
+          throw invalid;
+        }),
+        cancelWorkflowRun,
+      }),
+    });
+    expect(result).toMatchObject({ success: false, error: invalid.message });
+    expect(cancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe('a start the install holds back', () => {
+  const hold = { setBy: 'operator', setAt: '2026-11-17T10:00:00.000Z' };
+  it.each([
+    ['install hold', 'resource', () => new InstallHeldError(hold)],
+    ['run limit', 'resource', () => new RunLimitError({ limit: 1, live: 1 })],
+    ['run limit', 'claim', () => new RunLimitError({ limit: 1, live: 1 })],
+  ] as const)(
+    'waits for the %s at its %s instead of being refused',
+    async (waitsFor, at, refusal) => {
+      let held = true;
+      const refuseWhileHeld = <T>(then: T) =>
+        mock(async () => {
+          if (held) throw refusal();
+          return then;
+        });
+      const cancelWorkflowRun = mock(async () => ({ cancelled: true }));
+      const platform = makePlatform();
+      const run = makeRun({ codebase_id: 'codebase-1' });
+      const started = startWorkflow({
+        platform,
+        store: makeStore({
+          createWorkflowRun: mock(async () => run),
+          ...(at === 'resource'
+            ? { admitPendingRun: refuseWhileHeld(null) }
+            : { claimPendingWorkflowRun: refuseWhileHeld(run) }),
+          cancelWorkflowRun,
+        }),
+        workflow: makeWorkflow(at === 'resource' ? { resource: { name: 'pool' } } : {}),
+      });
+      for (let tries = 0; !sentMessages(platform).some(m => m.includes(waitsFor)); tries++) {
+        if (tries > 100) throw new Error(`the start did not wait for the ${waitsFor}`);
+        await Bun.sleep(10);
+      }
+      held = false;
+      await started;
+      expect(cancelWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+    }
+  );
 });

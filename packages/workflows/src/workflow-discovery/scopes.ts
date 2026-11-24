@@ -16,6 +16,7 @@ import { PACK_DECLARATION_PATH, qualifyWorkflowResources } from '../packaged-wor
 import { PackSettingsError, parsePackDeclaration, type PackDeclaration } from '../pack-settings';
 import type { DiscoveryContext } from './context';
 import {
+  addPackToScope,
   loadPackagedWorkflowsFromDir,
   loadScopeDirectory,
   loadWorkflowsFromDir,
@@ -26,6 +27,12 @@ import {
   type WorkflowParseContext,
 } from './load-dir';
 import { isYamlFile } from './pack-layout';
+import {
+  AmbiguousSourcePackError,
+  sourcePackFolder,
+  type SourcePackFolder,
+} from '../workflow-source/source-pack';
+import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import { getLog } from './log';
 
 /** Workflows by filename; a higher scope's file replaces a lower scope's of the same name. */
@@ -247,40 +254,29 @@ export async function loadGlobalScope(context: DiscoveryContext, files: ScopeFil
 /**
  * The repo's workflow folder, which overrides bundled and home scope by exact filename.
  * A missing folder is no project workflows; any other access failure rejects discovery.
+ *
+ * A source that is itself a pack folder (`sourcePackFolder`) adds that pack to the project
+ * scope under its manifest name. A capture freezes such a folder whole as its project
+ * root, so live and captured roots read it the same way.
  */
 export async function loadProjectScope(
   context: DiscoveryContext,
   cwd: string,
   files: ScopeFiles
 ): Promise<void> {
+  const projectRoot = context.roots.project ?? cwd;
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
-  const workflowPath = join(context.roots.project ?? cwd, workflowFolder);
+  const workflowPath = join(projectRoot, workflowFolder);
   getLog().debug({ workflowPath }, 'searching_repo_workflows');
 
-  try {
-    await access(workflowPath);
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code !== 'ENOENT') {
-      throw error;
-    }
-    getLog().debug({ workflowPath }, 'workflow_folder_not_found');
-    return;
-  }
-  const repoResult = await loadScopeDirectory(context, workflowPath, workflowPath, 'project');
+  const repoResult = await loadRepoWorkflows(context, workflowPath);
+  await addSourcePack(context, projectRoot, repoResult);
 
-  // Repo workflows override bundled AND home scope by exact filename match.
-  // Preserve 'bundled' source for workflows loaded from the defaults/ subdirectory
-  // that were already registered as bundled in step 1.
+  // Repo workflows override bundled AND home scope by exact filename match. A file read
+  // from here is `project`, even when its name matches a bundled one: `--workflow-source`
+  // admission and dispatch provenance trust this label to say where the bytes came from.
   for (const [filename, parsed] of repoResult.workflows) {
     const existing = files.get(filename);
-    if (existing?.source === 'bundled') {
-      // This file was already loaded as a bundled default — the repo's defaults/
-      // subdirectory is re-discovering it. Keep the bundled source label.
-      getLog().debug({ filename }, 'repo_default_preserves_bundled_source');
-      files.set(filename, { ...parsed, source: 'bundled' });
-      continue;
-    }
     if (existing) {
       getLog().debug(
         { filename, overriddenSource: existing.source },
@@ -293,6 +289,61 @@ export async function loadProjectScope(
   // Surface repo workflow errors to users (these are actionable)
   context.allErrors.push(...repoResult.errors);
   await warnDeprecatedRepoDefaults(join(workflowPath, 'defaults'));
+}
+
+async function loadRepoWorkflows(
+  context: DiscoveryContext,
+  workflowPath: string
+): Promise<DirLoadResult> {
+  try {
+    await access(workflowPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code !== 'ENOENT') {
+      throw error;
+    }
+    getLog().debug({ workflowPath }, 'workflow_folder_not_found');
+    return { workflows: new Map(), errors: [] };
+  }
+  return loadScopeDirectory(context, workflowPath, workflowPath, 'project');
+}
+
+/**
+ * Merge the pack the source folder is into the project scope's files. A pack folder that
+ * cannot be read, or that also holds a nested copy of itself, is a load error, and no
+ * workflow of that pack loads from either copy.
+ */
+async function addSourcePack(
+  context: DiscoveryContext,
+  projectRoot: string,
+  into: DirLoadResult
+): Promise<void> {
+  let pack: SourcePackFolder | null;
+  try {
+    pack = await sourcePackFolder(projectRoot);
+  } catch (error) {
+    into.errors.push({
+      filename: join(projectRoot, PLUGIN_MANIFEST_FILE),
+      error: (error as Error).message,
+      errorType: 'read_error',
+      cause: error,
+    });
+    if (error instanceof AmbiguousSourcePackError) {
+      for (const [filename, parsed] of into.workflows) {
+        if (parsed.workflow.pack?.key === error.packName) into.workflows.delete(filename);
+      }
+    }
+    return;
+  }
+  if (pack === null) return;
+  getLog().debug({ pack: pack.name, packDir: pack.dir }, 'source_pack_folder_found');
+  const packaged: DirLoadResult = { workflows: new Map(), errors: [] };
+  await addPackToScope(context, packaged, new Set(), {
+    name: pack.name,
+    path: pack.dir,
+    source: 'project',
+  });
+  mergeScopeResults(into, packaged);
 }
 
 /** Warn about deprecated non-prefixed defaults in the repo's defaults folder. */

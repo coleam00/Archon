@@ -17,8 +17,11 @@ import {
   EXECUTION_CLAIM_METADATA_KEY,
   FAN_OUT_CANCEL_REASONS,
   WorkflowNotResumableError,
+  WorkflowItemHeldError,
   WorkflowResourceBusyError,
+  RunLimitError,
   pauseCursorMatches,
+  requireOwnerlessLease,
   resumeCursorMatches,
   type PauseCursor,
   type ResumeClaimCursor,
@@ -26,10 +29,12 @@ import {
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import {
   addResourceSlotHolder,
+  heldItemRefusal,
   lockResourceSlot,
   lockResourceSlotForAdmission,
   removeResourceSlotHolder,
   resourceStartOccupancy,
+  runLimitRefusal,
   type TransactionQuery,
 } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
@@ -73,6 +78,7 @@ export async function listResumableRunsByParentConversation(
 
 type PriorRunRow = Pick<WorkflowRunRow, 'status' | 'metadata'> & {
   resource_key?: string | null;
+  item_id?: string | null;
 };
 
 /** Pin the run row (and its admitted resource request, if any) for the resume transaction. */
@@ -84,7 +90,7 @@ async function lockPriorRun(query: TransactionQuery, id: string): Promise<PriorR
     await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
   }
   const priorRows = await query<PriorRunRow>(
-    `SELECT w.status, w.metadata, q.resource_key
+    `SELECT w.status, w.metadata, q.resource_key, w.item_id
        FROM remote_agent_workflow_runs w
        LEFT JOIN remote_agent_resource_start_requests q
          ON q.id = w.id AND q.status = 'admitted'
@@ -237,14 +243,25 @@ export async function resumeWorkflowRun(
   id: string,
   cursor?: ResumeClaimCursor
 ): Promise<WorkflowRun> {
+  requireOwnerlessLease(id, cursor);
   let updateResult:
     | { rowCount: 0 }
-    | { busy: WorkflowResourceBusyError }
+    | { busy: WorkflowResourceBusyError | WorkflowItemHeldError | RunLimitError }
     | { admitted: WorkflowRun };
   try {
     updateResult = await getDatabase().withTransaction(async query => {
       const prior = await lockPriorRun(query, id);
       if (!prior || !priorMatchesCursor(prior, cursor)) return { rowCount: 0 };
+      // A paused or running run still holds its item; a failed one gave it up.
+      const held =
+        prior.status === 'failed' && prior.item_id != null
+          ? await heldItemRefusal(query, id, ['failed'])
+          : undefined;
+      if (held) return { busy: held };
+      // A resume needs room unless its tree still counts (`runLimitRefusal`): a failed tree's
+      // does. Checked before the slot is taken, so a refusal leaves nothing behind.
+      const full = await runLimitRefusal(query, id);
+      if (full) return { busy: full };
       const busy = await claimResourceSlot(query, id, prior, cursor);
       if (busy) return { busy };
       const admitted = await casResumeRun(query, id, prior, cursor);
@@ -300,6 +317,9 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
 
   try {
     return await getDatabase().withTransaction(async query => {
+      // A child recovered after its whole tree ended would revive the tree without room.
+      const full = await runLimitRefusal(query, id);
+      if (full) throw full;
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'running',
@@ -340,6 +360,7 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
     });
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Workflow run ')) throw error;
+    if (error instanceof RunLimitError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_fan_out_recover_failed');
     throw new Error(`Failed to recover cancelled fan-out run: ${err.message}`);

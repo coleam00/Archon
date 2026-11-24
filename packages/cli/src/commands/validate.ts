@@ -27,6 +27,9 @@ import type {
 } from '@archon/workflows/validator';
 import { loadConfig, loadRepoConfig } from '@archon/core';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
+import type { PluginDiscovery } from '@archon/forge/discovery';
+import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
+import { discoverInstalledForgePlugins } from './forge';
 
 /**
  * Build ValidationConfig from the repo's .archon/config.yaml
@@ -88,10 +91,11 @@ function formatWorkflowResult(result: WorkflowValidationResult): string {
 export async function validateWorkflowsCommand(
   cwd: string,
   name?: string,
-  json?: boolean
+  json?: boolean,
+  forgeTrustedEnv: NodeJS.ProcessEnv = process.env
 ): Promise<number> {
   const config = await buildValidationConfig(cwd);
-  const results = await collectWorkflowResults(cwd, config);
+  const results = await collectWorkflowResults(cwd, config, forgeTrustedEnv);
 
   let filteredResults = results;
   if (name) {
@@ -118,7 +122,8 @@ export async function validateWorkflowsCommand(
 
 async function collectWorkflowResults(
   cwd: string,
-  config: ValidationConfig
+  config: ValidationConfig,
+  forgeTrustedEnv: NodeJS.ProcessEnv
 ): Promise<WorkflowValidationResult[]> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
@@ -129,6 +134,8 @@ async function collectWorkflowResults(
   );
 
   const results: WorkflowValidationResult[] = [];
+  // Discovered once, and only when some pack declares forge needs: it starts each plugin.
+  let forgePlugins: Promise<PluginDiscovery | Error> | undefined;
 
   for (const loadError of loadErrors) {
     results.push(
@@ -158,6 +165,13 @@ async function collectWorkflowResults(
       }
     }
 
+    if (workflow.pack?.forge !== undefined) {
+      forgePlugins ??= discoverInstalledForgePlugins(forgeTrustedEnv).catch((error: unknown) =>
+        error instanceof Error ? error : new Error(String(error))
+      );
+      issues.push(...packForgeIssues(workflow.pack, await forgePlugins));
+    }
+
     if (parseWarnings && parseWarnings.length > 0) {
       for (const warning of parseWarnings) {
         issues.push({ level: 'warning', field: 'parse_warning', message: warning });
@@ -168,6 +182,46 @@ async function collectWorkflowResults(
   }
 
   return results;
+}
+
+/**
+ * A declared forge capability no installed plugin advertises. A warning, not an error:
+ * which plugins an install has is a fact about the install, not a defect in the pack.
+ */
+function packForgeIssues(
+  pack: WorkflowPack,
+  discovery: PluginDiscovery | Error
+): ValidationIssue[] {
+  if (discovery instanceof Error) {
+    return [
+      {
+        level: 'warning',
+        field: 'pack_forge',
+        message: `could not discover forge plugins to check pack '${pack.key}': ${discovery.message}`,
+      },
+    ];
+  }
+  const installed = discovery.plugins.map(p => `${p.metadata.name} ${p.metadata.version}`);
+  const unknown = (pack.forge?.operations ?? []).filter(
+    operation => !discovery.plugins.some(p => p.metadata.capabilities.includes(operation))
+  );
+  return [
+    ...unknown.map(
+      (operation): ValidationIssue => ({
+        level: 'warning',
+        field: 'pack_forge',
+        message: `pack '${pack.key}' needs forge operation '${operation}', which no installed forge plugin advertises (installed: ${installed.length > 0 ? installed.join(', ') : 'none'})`,
+        hint: 'A run of this pack is refused at start until a plugin serves it: `archon plugin add` or `archon plugin update`.',
+      })
+    ),
+    ...discovery.unavailable.map(
+      (error): ValidationIssue => ({
+        level: 'warning',
+        field: 'pack_forge',
+        message: `forge plugin unavailable: ${error.message}`,
+      })
+    ),
+  ];
 }
 
 async function reportMissingWorkflow(

@@ -12,7 +12,7 @@ import { createLogger } from '@archon/paths';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { spellWorkflowCommand, type IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { ResumeClaimCursor } from '@archon/workflows/store';
+import type { ResumeRequestCursor } from '@archon/workflows/store';
 
 const log = createLogger('workflow-resume-service');
 const CONTINUATION_SCAN_INTERVAL_MS = 5_000;
@@ -101,11 +101,12 @@ export async function workflowResumeTargetForRun(
 /**
  * The run's resource is busy: `waiting_for_capacity` keeps the paused run's place as a
  * capacity waiter, `resource_busy` leaves it failed or not-ready paused with no place.
+ * `run_limit_full`: the install's run limit is full and the run keeps its state.
  * `message` says what blocks it and who continues it.
  */
 export type ServerResumeOutcome =
   | { kind: 'resumed' }
-  | { kind: 'waiting_for_capacity' | 'resource_busy'; message: string }
+  | { kind: 'waiting_for_capacity' | 'resource_busy' | 'run_limit_full'; message: string }
   | { kind: 'not_resumed' };
 
 export async function resumeWorkflowRunFromServer(
@@ -113,7 +114,7 @@ export async function resumeWorkflowRunFromServer(
   run: WorkflowRun,
   actorUserId?: string,
   target: WorkflowResumeTarget = { kind: 'headless' },
-  cursor?: ResumeClaimCursor
+  cursor?: ResumeRequestCursor
 ): Promise<ServerResumeOutcome> {
   try {
     const admission = await admitFromServer(host, run, async () => target, cursor, actorUserId);
@@ -124,7 +125,11 @@ export async function resumeWorkflowRunFromServer(
       );
     }
     if (admission.kind === 'accepted') return { kind: 'resumed' };
-    if (admission.kind === 'waiting_for_capacity' || admission.kind === 'resource_busy')
+    if (
+      admission.kind === 'waiting_for_capacity' ||
+      admission.kind === 'resource_busy' ||
+      admission.kind === 'run_limit_full'
+    )
       return { kind: admission.kind, message: admission.message };
     return { kind: 'not_resumed' };
   } catch (error) {
@@ -137,7 +142,7 @@ async function admitFromServer(
   host: WorkflowHost,
   run: WorkflowRun,
   resolveTarget: WorkflowResumeDestinationResolver,
-  cursor?: ResumeClaimCursor,
+  cursor?: ResumeRequestCursor,
   actorUserId?: string
 ): Promise<ContinuationAdmission> {
   let destination: WorkflowResumeDestination | undefined;

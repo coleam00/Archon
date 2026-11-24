@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * A resumed run keeps writing to its own conversation (#3328).
  *

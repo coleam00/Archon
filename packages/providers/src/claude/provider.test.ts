@@ -32,6 +32,10 @@ const sdkToolHandlers = new Map<
   string,
   (args: Record<string, unknown>) => Promise<{ content: { type: 'text'; text: string }[] }>
 >();
+// Exports these tests never reach fail when called instead of running the real SDK.
+const unmocked = (name: string) => () => {
+  throw new Error(`${name} is not mocked`);
+};
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   createSdkMcpServer: ({ name }: { name: string }) => ({
     type: 'sdk',
@@ -49,9 +53,16 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
     },
   }),
   query: mockQuery,
+  archiveSession: unmocked('archiveSession'),
+  unarchiveSession: unmocked('unarchiveSession'),
+  matchDeniedModels: unmocked('matchDeniedModels'),
 }));
 
-import { TOOL_OUTPUT_MAX_CHARS, type ProviderStopReason } from '@archon/provider-contract';
+import {
+  TOOL_OUTPUT_MAX_CHARS,
+  createTurnMessageQueue,
+  type ProviderStopReason,
+} from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
@@ -427,6 +438,24 @@ describe('message stream', () => {
       { type: 'mcp_server_status', server: 'github', status: 'connected' },
       { type: 'mcp_server_status', server: 'linear', status: 'needs_auth' },
       { type: 'mcp_server_status', server: 'broken', status: 'failed', error: 'spawn ENOENT' },
+    ]);
+  });
+
+  test('names the session from the first init, once per query, before its MCP status', async () => {
+    const chunks = await streamOf(
+      {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sid',
+        mcp_servers: [{ name: 'github', status: 'connected' }],
+      },
+      // A wake turn of the same query sends init again.
+      { type: 'system', subtype: 'init', session_id: 'sid', mcp_servers: [] }
+    );
+
+    expect(chunks).toEqual([
+      { type: 'session', sessionId: 'sid' },
+      { type: 'mcp_server_status', server: 'github', status: 'connected' },
     ]);
   });
 
@@ -900,6 +929,49 @@ describe('subtasks and settling', () => {
     ]);
   });
 
+  test('an engine turn message reaches the live session at its next step, and the turn settles', async () => {
+    const turnMessages = createTurnMessageQueue();
+    const received: unknown[] = [];
+    mockQuery.mockImplementation(async function* ({ prompt }) {
+      if (typeof prompt === 'string') throw new Error('Expected streaming input');
+      const input = prompt[Symbol.asyncIterator]();
+      received.push((await input.next()).value);
+      yield {
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [{ task_id: 'server', task_type: 'local_bash', description: 'dev server' }],
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's', result: 'waiting' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+      turnMessages.push('engine check-in');
+      received.push((await input.next()).value);
+      yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+      yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+      yield {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'server',
+        status: 'completed',
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's', result: 'done' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+    });
+    const chunks = await chunksOf('test', '/workspace', undefined, { turnMessages });
+    expect(received).toEqual([
+      expect.objectContaining({ message: { role: 'user', content: 'test' } }),
+      {
+        type: 'user',
+        message: { role: 'user', content: 'engine check-in' },
+        parent_tool_use_id: null,
+        session_id: '',
+        priority: 'next',
+        client_composed: true,
+      },
+    ]);
+    expect(chunks.filter(chunk => chunk.type === 'result').at(-1)?.text).toBe('done');
+    expect(chunks.at(-1)).toEqual({ type: 'settled' });
+  });
+
   test('cancelling quiet background work closes streaming input without settling or inventing a stop', async () => {
     const abort = new AbortController();
     let inputClosed = false;
@@ -929,6 +1001,62 @@ describe('subtasks and settling', () => {
     expect(inputClosed).toBe(true);
     expect(stream.chunks.some(chunk => chunk.type === 'settled')).toBe(false);
     expect(stream.chunks.filter(chunk => chunk.type === 'subtask')).toHaveLength(1);
+  });
+
+  test('holds the main agent turn end until its subtasks close, and never refuses its structured result (#5923)', async () => {
+    const decisions: unknown[] = [];
+    let structuredOutputHooks: unknown[] = [];
+    mockQuery.mockImplementation(async function* ({ options }) {
+      structuredOutputHooks = (options?.hooks?.PreToolUse ?? []).filter(
+        m => m.matcher === 'StructuredOutput'
+      );
+      const hold = options?.hooks?.Stop?.[0]?.hooks[0];
+      if (!hold) throw new Error('no Stop hook');
+      const stop = (input: Record<string, unknown> = {}, signal = new AbortController().signal) =>
+        hold({ hook_event_name: 'Stop', ...input } as never, undefined, { signal }).then(d => {
+          decisions.push(d);
+        });
+      yield { type: 'system', subtype: 'task_started', task_id: 'helper' };
+      await stop({ agent_id: 'helper' });
+      const held = stop();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(decisions).toHaveLength(1);
+      yield { type: 'system', subtype: 'task_notification', task_id: 'helper', status: 'failed' };
+      await held;
+      await stop();
+    });
+
+    await chunksOf('test', '/workspace', undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+
+    expect(structuredOutputHooks).toEqual([]);
+    expect(decisions).toEqual([
+      { continue: true },
+      { decision: 'block', reason: expect.any(String) },
+      { continue: true },
+    ]);
+  });
+
+  test('an aborted hold releases the turn end without sending the agent back', async () => {
+    let decision: unknown;
+    mockQuery.mockImplementation(async function* ({ options }) {
+      const hold = options?.hooks?.Stop?.[0]?.hooks[0];
+      if (!hold) throw new Error('no Stop hook');
+      yield { type: 'system', subtype: 'task_started', task_id: 'helper' };
+      const aborted = new AbortController();
+      const held = hold({ hook_event_name: 'Stop' } as never, undefined, {
+        signal: aborted.signal,
+      });
+      aborted.abort();
+      decision = await held;
+    });
+
+    await chunksOf('test', '/workspace', undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+
+    expect(decision).toEqual({ continue: true });
   });
 });
 
@@ -2474,6 +2602,15 @@ describe('workflow node capabilities', () => {
     expect(options.allowedTools).toContain('mcp__declared__*');
   });
 
+  test('a workflow node never gets ScheduleWakeup, and keeps its own denied tools', async () => {
+    const node = await workflowOptions({ nodeConfig: { nodeId: 'n', denied_tools: ['WebFetch'] } });
+    expect(node.disallowedTools).toEqual(['ScheduleWakeup', 'WebFetch']);
+
+    mockQuery.mockClear();
+    const chat = await workflowOptions({ nodeConfig: { denied_tools: ['WebFetch'] } });
+    expect(chat.disallowedTools).toEqual(['WebFetch']);
+  });
+
   test('keeps partial non-workflow nodeConfig on ambient defaults', async () => {
     const options = await workflowOptions({ nodeConfig: { allowed_tools: [] } });
 
@@ -2763,6 +2900,22 @@ describe('typed failures (#1797, #3524)', () => {
     expect(result.cost).toBeCloseTo(0.51);
   });
 
+  test('a structured-output-retries result reports schema_unmet and keeps its subtype', async () => {
+    const result = await resultOf({
+      type: 'result',
+      subtype: 'error_max_structured_output_retries',
+      is_error: true,
+      errors: ['Failed to provide valid structured output after 5 attempts'],
+      session_id: 'sid-schema',
+    });
+    expect(result.failure).toEqual({
+      class: 'schema_unmet',
+      evidence:
+        'error_max_structured_output_retries: Failed to provide valid structured output after 5 attempts',
+    });
+    expect(result.errorSubtype).toBe('error_max_structured_output_retries');
+  });
+
   test('an error_during_execution result keeps its subtype and reports unknown', async () => {
     sdkYields({
       type: 'result',
@@ -2794,6 +2947,11 @@ describe('typed failures (#1797, #3524)', () => {
     ['temp_dir_unusable', 'misconfigured'],
     ['cwd_unavailable', 'misconfigured'],
     ['shell_tool_missing', 'misconfigured'],
+    ['sandbox_required_unavailable', 'misconfigured'],
+    ['config_file_invalid', 'misconfigured'],
+    ['initialize_not_first', 'misconfigured'],
+    ['managed_settings_not_delivered', 'misconfigured'],
+    ['initialize_fields_not_delivered', 'misconfigured'],
     ['remote_settings_required_unavailable', 'unknown'],
     ['org_verify_failed', 'unknown'],
   ])('a startup failure for %s reports %s, classified by its reason', async (reason, expected) => {
@@ -3225,6 +3383,7 @@ describe('provider contract', () => {
         {
           name: 'plain turn',
           run: turn([
+            { type: 'system', subtype: 'init', session_id: 's', mcp_servers: [] },
             { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
             { type: 'system', subtype: 'session_state_changed', state: 'idle' },
           ]),
@@ -3360,7 +3519,10 @@ describe('provider contract', () => {
         name: 'forked session',
         source: 's',
         run: () => {
-          sdkYields({ type: 'result', subtype: 'success', is_error: false, session_id: 's-fork' });
+          sdkYields(
+            { type: 'system', subtype: 'init', session_id: 's-fork', mcp_servers: [] },
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's-fork' }
+          );
           return client.sendQuery('test', '/workspace', 's', { forkSession: true });
         },
       },

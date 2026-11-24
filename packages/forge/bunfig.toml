@@ -1,4 +1,5 @@
 # Package-local Bun config (Bun reads bunfig.toml from the cwd only, so the
-# repo root preload does not apply here). Tests get a scratch ARCHON_HOME and no telemetry.
+# repo root preload does not apply here). Tests get a scratch ARCHON_HOME and no telemetry,
+# and src/test-warmup.ts takes the first child-process spawn that Bun can lose under load.
 [test]
-preload = ["../../scripts/test-preload.ts"]
+preload = ["../../scripts/test-preload.ts", "./src/test-warmup.ts"]

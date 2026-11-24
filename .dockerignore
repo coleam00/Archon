@@ -14,6 +14,7 @@ workspace
 # Build artifacts
 dist
 packages/web/dist
+**/.tsbuild
 
 # Development files
 .env
@@ -34,8 +35,10 @@ Dockerfile.user
 # Documentation site (not needed in production)
 docs/
 
-# Claude Code skills, rules, and commands (not needed in production)
+# Claude Code skills, rules, and commands (not needed in production), except the
+# archon-cli skill, which packages/cli/src/bundled-skill.ts imports at runtime
 .claude/
+!.claude/skills/archon-cli/
 
 # Analysis and POC directories
 .codebase-analysis/

@@ -34,7 +34,6 @@ const CLAUDE_KNOWN_TOOL_NAMES: typeof BUILTIN_TOOL_NAMES = [
   'PowerShell',
   'Projects',
   'propose_skills',
-  'ProposeGoal',
   'PushNotification',
   'Read',
   'ReadMcpResourceDirTool',
@@ -47,6 +46,7 @@ const CLAUDE_KNOWN_TOOL_NAMES: typeof BUILTIN_TOOL_NAMES = [
   'SendMessage',
   'SendUserFile',
   'SendUserMessage',
+  'SetGoal',
   'ShareOnboardingGuide',
   'ShowOnboardingRolePicker',
   'Skill',
@@ -76,6 +76,7 @@ const CLAUDE_RENAMED_TOOLS: Readonly<Record<string, string>> = {
   KillShell: 'TaskStop',
   KillBash: 'TaskStop',
   ListPeers: 'ListAgents',
+  ProposeGoal: 'SetGoal',
   Brief: 'SendUserMessage',
   ListMcpResources: 'ListMcpResourcesTool',
   ReadMcpResource: 'ReadMcpResourceTool',
@@ -86,6 +87,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   backgroundWork: 'reported',
   sessionResume: true,
   sessionFork: true,
+  turnMessages: true, // streamed input messages at priority 'next'
   mcp: true,
   hooks: true,
   skills: true,
@@ -95,6 +97,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   knownToolNames: CLAUDE_KNOWN_TOOL_NAMES,
   renamedTools: CLAUDE_RENAMED_TOOLS,
   structuredOutput: 'enforced', // SDK output_config.format grammar-constrains decoding
+  // No structuredOutputCorrection: the SDK retries an invalid answer itself, so Archon does not.
   requiresAllPropertiesRequired: false, // Claude accepts optional-by-omission (no strict-mode required-coverage rule)
   envInjection: true,
   costControl: true,

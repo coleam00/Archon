@@ -1,0 +1,38 @@
+# Dry-run fixture, the run a `return` answer starts: no judge runs, and the run ends
+# `returned`, the outcome `build-after-merge-return` starts the next build round on.
+facts:
+  path: settle
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+  url: ""
+  facts: null
+  base: null
+  record: null
+  validation: null
+  protected: []
+  lane: auto
+  ci: forge
+  answer:
+    effect: return
+    text: "Split the migration into its own pull request."
+    at: "2026-11-19T10:00:00.000Z"
+    head: "1111111111111111111111111111111111111111"
+    brief: "stub-brief: rework pull request 1"
+  settled: { status: returned, reason: "a maintainer answered return" }
+settle:
+  outcome: returned
+  summary: "stub: PR 1: answered: return; a maintainer answered return"
+  number: 7
+  head: "1111111111111111111111111111111111111111"
+  brief: "stub-brief: rework pull request 1, under the ruling in the issue body"
+  asks: []
+  waits: []
+fixture:
+  inputs:
+    repo_host: github.com
+    repo_path: example/repo
+    decisions: '[{"closedAs":"answered","answer":{"decision":"return","text":"Split the migration into its own pull request."},"option":{"id":"return","does":"stub"},"at":"2026-11-19T10:00:00.000Z"}]'
+    asked: '{"number":7,"head":"1111111111111111111111111111111111111111","brief":"stub-brief: rework pull request 1"}'
+  expect: completed
+  authored: returned
+  reached: [facts, settle]

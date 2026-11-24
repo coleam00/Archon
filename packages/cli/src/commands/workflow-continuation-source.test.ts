@@ -20,9 +20,8 @@ mock.module('@archon/paths', () => ({
 }));
 const stdout = mock(async (_text: string) => undefined);
 mock.module('../utils/stdout', () => ({ writeStdout: stdout }));
-const { workflowContinuationCommand, workflowWakeScheduleConfig } = await import(
-  './workflow-continuations'
-);
+const { workflowContinuationCommand } = await import('./workflow-continuations');
+const { workflowWakeScheduleConfig } = await import('./wake-schedule');
 const trackTempRoot = trackTempRoots();
 
 async function wakeScheduled(host: WorkflowHost) {

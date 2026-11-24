@@ -241,6 +241,7 @@ describe('PiProvider lifecycle', () => {
       model: 'google/gemini-2.5-pro',
       abortSignal: watchdog.signal,
     });
+    expect((await gen.next()).value).toMatchObject({ type: 'session' });
     const abandoned = gen.next();
     abandoned.catch(() => undefined);
     while (mockPrompt.mock.calls.length < 1) await new Promise(resolve => setTimeout(resolve, 1));

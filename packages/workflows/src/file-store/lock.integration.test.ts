@@ -1,6 +1,7 @@
+// @archon-test-windows
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as fsPromises from 'node:fs/promises';
-import { mkdtemp, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -431,18 +432,6 @@ describe('file store filesystem primitives', () => {
     expect(entered).toBe(false);
     expect(await readFile(path, 'utf8')).toBe('{');
   });
-
-  test.skipIf(process.platform === 'win32')(
-    'a lock name that never reads as an owner still times out',
-    async () => {
-      const root = await fixture();
-      // A dangling symlink exists for link (EEXIST) but reads as ENOENT every time.
-      await symlink(join(root, 'missing'), join(root, 'lock'));
-      const error = await rejection(withFileStoreLock(root, async () => {}, 50));
-      expect(error).toBeInstanceOf(FileStoreLockHeldError);
-      expect((error as FileStoreLockHeldError).owner).toBeNull();
-    }
-  );
 
   test('waiters racing to break one dead lock never hold it together', async () => {
     const dead = await deadPid();

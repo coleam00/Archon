@@ -217,9 +217,27 @@ export const providerEventSchema = z.discriminatedUnion('type', [
 ]);
 export type ProviderEvent = z.infer<typeof providerEventSchema>;
 
-/** Everything a provider's stream may yield: its events, then `result`, then `settled`. */
+/**
+ * Archon addition (ACP has no such update): the native session this query runs in, sent as
+ * soon as the provider's SDK confirms it, so a turn stopped before its first `result` can
+ * still be resumed. Optional: a provider that learns its session only at the result sends
+ * none. At most once per query, before the first `result`, and only the session the SDK
+ * confirmed, never the requested resume id echoed back. When a `result` also carries a
+ * `sessionId`, the result's is authoritative.
+ *
+ * It is turn metadata, not an event: it stays out of `providerEventSchema`, which workflow
+ * nodes record.
+ */
+export const providerSessionSchema = z.object({
+  type: z.literal('session'),
+  sessionId: z.string().min(1),
+});
+export type ProviderSession = z.infer<typeof providerSessionSchema>;
+
+/** Everything a provider's stream may yield: its events and `session`, then `result`, then `settled`. */
 export const providerChunkSchema = z.discriminatedUnion('type', [
   providerEventSchema,
+  providerSessionSchema,
   providerResultSchema.extend({ type: z.literal('result') }),
   providerSettledSchema,
 ]);

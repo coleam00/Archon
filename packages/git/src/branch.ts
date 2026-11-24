@@ -13,8 +13,12 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /** Resolve the advertised remote default; never guess or use a stale cached HEAD. */
-export async function getDefaultBranch(repoPath: RepoPath, remote = 'origin'): Promise<BranchName> {
-  const result = await inspectRemoteBranches({ kind: 'local', repoPath, remote });
+export async function getDefaultBranch(
+  repoPath: RepoPath,
+  remote = 'origin',
+  env?: NodeJS.ProcessEnv
+): Promise<BranchName> {
+  const result = await inspectRemoteBranches({ kind: 'local', repoPath, remote, env });
   if (result.status === 'available' && result.defaultBranch) return result.defaultBranch;
   const reason = result.status === 'unavailable' ? result.evidence : `${remote}/HEAD is not known`;
   throw new GitFailure(

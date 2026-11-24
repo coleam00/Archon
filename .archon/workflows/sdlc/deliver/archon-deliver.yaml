@@ -55,12 +55,6 @@ inputs:
       The part of an approved multi-part plan this delivery is, forwarded
       unchanged to every review in the rounds. archon-review's `part` input
       owns its shape. Empty delivers the whole contract.
-  ci:
-    default: "forge"
-    description: >-
-      The pack's `ci` setting; an includer passes its own. `none` has the CI agent run the
-      project's full validation itself and record it for the merge gate; `forge` leaves
-      validation to the forge's checks.
   # Error review can be forced on or off; `auto` leaves it to review's route agent.
   errors:
     default: "auto"
@@ -74,12 +68,6 @@ inputs:
 returns: { node: report, outcome: ready }
 
 nodes:
-  # Refuses the run before any agent spends when the forge plugin cannot
-  # act: no plugin for the host, or no usable credential.
-  - id: forge
-    script: forge-check
-    runtime: bun
-
   # One round: implement → draft PR → review ∥ simplify → settle-threads → CI →
   # threads. Open review findings, simplify's smaller shapes, an unresolved review
   # thread, or a check the change turned red start another round. Each round's
@@ -89,7 +77,6 @@ nodes:
   # step runs every round, so every round's commits are pushed before the review
   # reads the pull request's remote head.
   - id: rounds
-    depends_on: [forge]
     loop_group:
       until_bash: |
         done=$round.output.done
@@ -384,6 +371,7 @@ nodes:
     depends_on: [outcome]
     trigger_rule: all_done
     with:
+      flag: ready
       outcome: { from: "$outcome.output", if_skipped: null }
       pull_requests: { outputs: pull-request, if_unreadable: null }
     output_format:

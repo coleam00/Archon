@@ -25,9 +25,11 @@ import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { registerFolder, registerRepository } from '@archon/core';
 import { updateCodebase, findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
 import { getStartReceipt, hasStartReceiptForDelivery } from '@archon/core/db/resource-starts';
+import { getItem, getItemRuns } from '@archon/core/db/items';
 import { claimPendingWorkflowRun } from '@archon/core/db/workflows';
 import {
   drainResourceStartHost,
+  ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import { captureLogLines, removeTempTree } from '@archon/paths/test-utils';
@@ -36,7 +38,7 @@ import { RESOURCE_START_METADATA_KEY } from '@archon/workflows/schemas/resource-
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { registerWebhookSourceRoutes } from '../routes/webhooks';
 import { createServerResourceStartHost } from './resource-start-hosting';
-import { loadWebhookSourcePlugins } from './webhook-source-plugins';
+import { loadWebhookSourcePlugins } from '@archon/core/workflows/source-plugins';
 import {
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
@@ -100,7 +102,12 @@ interface Fixture {
   app: OpenAPIHono;
   engine: ReturnType<typeof recordingEngine>;
   host: ReturnType<typeof createServerResourceStartHost>;
-  deliver: (delivery: string, overlap: 'skip' | 'queue') => Promise<Response>;
+  /** `binding` stands for what a real plugin evaluates onto the binding it starts. */
+  deliver: (
+    delivery: string,
+    overlap: 'skip' | 'queue',
+    binding?: Record<string, unknown>
+  ) => Promise<Response>;
 }
 
 async function fixture(
@@ -173,7 +180,7 @@ async function fixture(
               sourceActor: null,
             },
             outcome: 'matched',
-            bindings: [{ ...config.binding, overlap: body.overlap }],
+            bindings: [{ ...config.binding, overlap: body.overlap, ...body.binding }],
           },
         };
       },
@@ -220,6 +227,7 @@ async function fixture(
       acceptReceipt: input => workflowHost.deps.store.acceptStartReceipt(input),
       isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
       hasDeliveryReceipt: hasStartReceiptForDelivery,
+      getReceipt: getStartReceipt,
     }),
     autoDrain ? (): void => void host.requestDrain() : undefined
   );
@@ -227,10 +235,10 @@ async function fixture(
     app,
     engine,
     host,
-    deliver: async (delivery, overlap) =>
+    deliver: async (delivery, overlap, binding) =>
       await app.request('/webhooks/sources/events', {
         method: 'POST',
-        body: JSON.stringify({ delivery, overlap }),
+        body: JSON.stringify({ delivery, overlap, binding }),
       }),
   };
 }
@@ -378,6 +386,18 @@ describe('server resource-start host', () => {
     await until(() => (engine.claimed.includes(runId ?? '') ? true : undefined));
   });
 
+  test('a delivery whose binding names an item starts a run listed on that item', async () => {
+    const { deliver, engine } = await fixture();
+    expect((await deliver('opened', 'queue', { itemKey: 'issue-7' })).status).toBe(200);
+    const run = (await until(() => engine.submitted[0])).options?.preCreatedRun;
+    if (!run) throw new Error('Expected a pre-created run');
+    const item = await getItem(run.item_id ?? '');
+    expect(item?.key).toBe('issue-7');
+    const listed = await getItemRuns(item?.projectKey ?? '', 'issue-7');
+    expect(listed?.runs.map(row => ('id' in row ? row.id : row))).toEqual([run.id]);
+    await until(() => engine.claimed[0]);
+  });
+
   test.each(['folder', 'repo'] as const)(
     'a nested repository belongs to itself under a registered parent %s',
     async parentKind => {
@@ -467,6 +487,7 @@ describe('server resource-start host', () => {
         hostId: HOST_ID,
         startAdmitted: async id => {
           admitted.push(id);
+          return null;
         },
       });
       const runId = admitted[0];
@@ -720,6 +741,45 @@ describe('server resource-start host', () => {
     expect(engine.submitted).toHaveLength(1);
   });
 
+  test('a binding whose workflow source lacks the workflow starts nothing, though a global one has the name', async () => {
+    const { deliver, engine } = await fixture(false);
+    const project = join(root, 'project');
+    const source = join(root, 'source');
+    await mkdir(join(source, '.archon', 'workflows'), { recursive: true });
+    await mkdir(join(root, 'home', 'workflows'));
+    await writeFile(
+      join(root, 'home', 'workflows', 'hosted.yaml'),
+      'name: hosted\ndescription: Global copy.\nnodes:\n  - id: one\n    bash: echo global\n'
+    );
+    const launch = {
+      cwd: project,
+      discoveryCwd: source,
+      workflowName: 'hosted',
+      inputs: {},
+      isolation: { kind: 'in-place' },
+    };
+    expect((await deliver('sourced', 'queue', { launch })).status).toBe(200);
+
+    const drained = drainResourceStartHost({
+      ...createSqlWorkflowHost(),
+      hostId: HOST_ID,
+      startAdmitted: async () => {
+        throw new Error('a refused binding is never admitted');
+      },
+    });
+    await expect(drained).rejects.toThrow(ResourceStartDrainError);
+    const failure = await drained.catch((error: ResourceStartDrainError) => error.failures[0]);
+    expect(String(failure?.error)).toContain(join(source, '.archon', 'workflows'));
+    expect((await bindingOf('sourced')).status).toBe('rejected');
+    const counts = await getDatabase().query<{ runs: number; requests: number; holders: number }>(
+      `SELECT (SELECT COUNT(*) FROM remote_agent_workflow_runs) AS runs,
+              (SELECT COUNT(*) FROM remote_agent_resource_start_requests) AS requests,
+              (SELECT COUNT(*) FROM remote_agent_resource_slot_holders) AS holders`
+    );
+    expect(counts.rows[0]).toEqual({ runs: 0, requests: 0, holders: 0 });
+    expect(engine.submitted).toHaveLength(0);
+  });
+
   test('a dead connected credential fails before worktree creation and releases the resource slot on the next drain', async () => {
     const { deliver, engine } = await fixture(false, { kind: 'worktree' });
     const project = join(root, 'project');
@@ -747,6 +807,7 @@ describe('server resource-start host', () => {
       hostId: HOST_ID,
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
     const result = await startAdmittedResourceStart({
@@ -772,6 +833,7 @@ describe('server resource-start host', () => {
       hostId: HOST_ID,
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
     expect(admitted).toHaveLength(2);
@@ -787,6 +849,7 @@ describe('server resource-start host', () => {
       hostId: HOST_ID,
       startAdmitted: async requestId => {
         admitted.push(requestId);
+        return null;
       },
     });
     const [requestId] = admitted;
@@ -837,7 +900,7 @@ describe('server resource-start host', () => {
     expect(released).toBe(true);
   });
 
-  test.each(['missing-branch', 'missing-remote'] as const)(
+  test.each(['missing-branch', 'ambiguous-remote'] as const)(
     'isolation failure %s fails the run and frees the next drain',
     async failure => {
       const { deliver, engine } = await fixture(false, {
@@ -857,8 +920,12 @@ describe('server resource-start host', () => {
         },
       });
       expect((await bindingOf('second')).disposition?.status).toBe('queued');
-      if (failure === 'missing-remote')
-        await execFileAsync('git', ['remote', 'remove', 'origin'], { cwd: join(root, 'project') });
+      if (failure === 'ambiguous-remote')
+        for (const argv of [
+          ['remote', 'rename', 'origin', 'jan'],
+          ['remote', 'add', 'feb', join(root, 'origin.git')],
+        ])
+          await execFileAsync('git', argv, { cwd: join(root, 'project') });
       const host = { ...createSqlWorkflowHost(), engine };
       let diagnostic = '';
       try {
@@ -1086,6 +1153,7 @@ async function admitWithoutStarting(): Promise<string> {
     hostId: HOST_ID,
     startAdmitted: async requestId => {
       admitted.push(requestId);
+      return null;
     },
   });
   const [requestId] = admitted;

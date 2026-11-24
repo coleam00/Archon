@@ -151,8 +151,9 @@ export function fakeGitHub(
     }
     if (url.includes('/pulls?')) return json([state]);
     if (url.includes('/pulls/7')) {
+      // The REST update carries either a new body or a new state.
       if (method === 'PATCH' && !options.lose) {
-        state.body = JSON.parse(String(init?.body)).body as string;
+        Object.assign(state, JSON.parse(String(init?.body)) as Partial<PullState>);
       }
       return json(state);
     }

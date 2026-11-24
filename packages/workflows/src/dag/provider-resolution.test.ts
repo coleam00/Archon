@@ -100,8 +100,8 @@ describe('executor capability ownership', () => {
       expect(factory).not.toHaveBeenCalled();
     });
 
-    for (const structuredOutput of ['best-effort', 'enforced'] as const) {
-      it(`uses the descriptor's ${structuredOutput} reask policy in a ${kind} node`, async () => {
+    for (const correction of ['fresh-session', undefined] as const) {
+      it(`uses the descriptor's ${correction ?? 'no'} correction policy in a ${kind} node`, async () => {
         let calls = 0;
         const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
           async function* () {
@@ -117,7 +117,7 @@ describe('executor capability ownership', () => {
         const store = createMockStore();
         const providers = withProviderCapabilities(mockProviderRegistry, 'claude', {
           ...mockClaudeCapabilities(),
-          structuredOutput,
+          structuredOutputCorrection: correction,
         });
         const deps = createMockDeps(store, providers);
         const factory = mock<WorkflowDeps['getAgentProvider']>(() => ({
@@ -165,12 +165,10 @@ describe('executor capability ownership', () => {
           })
         );
         expect(factory).toHaveBeenCalledTimes(1);
-        expect(sendQuery).toHaveBeenCalledTimes(structuredOutput === 'best-effort' ? 2 : 1);
+        expect(sendQuery).toHaveBeenCalledTimes(correction ? 2 : 1);
         expect(
           persistedEvents(store).some(
-            event =>
-              event.event_type ===
-              (structuredOutput === 'best-effort' ? 'node_completed' : 'node_failed')
+            event => event.event_type === (correction ? 'node_completed' : 'node_failed')
           )
         ).toBe(true);
       });
@@ -464,6 +462,134 @@ describe('executeDagWorkflow -- skills options', () => {
     );
 
     expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+  });
+
+  describe('optional skills', () => {
+    let originalHome: string | undefined;
+
+    beforeEach(() => {
+      originalHome = process.env.HOME;
+      process.env.HOME = join(testDir, 'home');
+    });
+
+    afterEach(() => {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    });
+
+    async function stageSkill(root: string, name: string): Promise<void> {
+      const dir = join(testDir, root, name);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'SKILL.md'), `# ${name}\n`);
+    }
+
+    function nodeRows(store: ReturnType<typeof createMockStore>) {
+      return (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+        .map(call => call[0] as { event_type: string; data?: Record<string, unknown> })
+        .filter(event => event.event_type.startsWith('node_'));
+    }
+
+    async function runSkills(
+      skills: DagNode['skills'],
+      provider?: string
+    ): Promise<{
+      store: ReturnType<typeof createMockStore>;
+      platform: ReturnType<typeof createMockPlatform>;
+    }> {
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          workflow: {
+            name: 'optional-skills',
+            nodes: [
+              {
+                id: 'review',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                ...(provider !== undefined ? { provider } : {}),
+                ...(skills !== undefined ? { skills } : {}),
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+      return { store, platform };
+    }
+
+    it('runs without a missing optional skill and records why', async () => {
+      const { store, platform } = await runSkills([{ name: 'playwright-cli', optional: true }]);
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.skills).toEqual([]);
+      const rows = nodeRows(store);
+      expect(rows.map(row => row.event_type)).toEqual(['node_started', 'node_completed']);
+      for (const row of rows) {
+        expect(row.data?.skills_unavailable).toEqual([
+          { name: 'playwright-cli', reason: 'not_installed' },
+        ]);
+      }
+      const sent = platform.sendMessage.mock.calls.map(call => call[1]);
+      expect(sent).toContain(
+        "Node 'review' runs without its optional skills (playwright-cli): no SKILL.md in the skill directories this provider searches."
+      );
+    });
+
+    it('runs an optional-only node on a provider that cannot load skills', async () => {
+      const { store, platform } = await runSkills(
+        [{ name: 'playwright-cli', optional: true }],
+        'codex'
+      );
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.skills).toEqual([]);
+      for (const row of nodeRows(store)) {
+        expect(row.data?.skills_unavailable).toEqual([
+          { name: 'playwright-cli', reason: 'provider_unsupported' },
+        ]);
+      }
+      const sent = platform.sendMessage.mock.calls.map(call => call[1]);
+      expect(sent).toContain(
+        "Node 'review' runs without its optional skills (playwright-cli): provider 'codex' cannot load named skills."
+      );
+    });
+
+    it('passes an installed optional skill and does not add an unnamed one', async () => {
+      await stageSkill('.claude/skills', 'code-review');
+      await stageSkill('.claude/skills', 'other-skill');
+      const { store } = await runSkills([{ name: 'code-review', optional: true }]);
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.skills).toEqual(['code-review']);
+      expect(nodeRows(store).every(row => row.data?.skills_unavailable === undefined)).toBe(true);
+    });
+
+    it('keeps an optional skill installed outside the enabled roots', async () => {
+      await stageSkill('.agents/skills', 'playwright-cli');
+      const { store } = await runSkills([{ name: 'playwright-cli', optional: true }]);
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.skills).toEqual(['playwright-cli']);
+      expect(nodeRows(store).every(row => row.data?.skills_unavailable === undefined)).toBe(true);
+    });
+
+    it('still fails before sendQuery when a required name is on a provider that cannot load skills', async () => {
+      await expect(
+        runSkills(['code-review', { name: 'playwright-cli', optional: true }], 'codex')
+      ).rejects.toThrow("Node 'review' (provider 'codex') names skills");
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+    });
+
+    it('treats an object without optional: true as required', async () => {
+      await expect(runSkills([{ name: 'code-review' }], 'codex')).rejects.toThrow(
+        "Node 'review' (provider 'codex') names skills"
+      );
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+    });
   });
 
   it('passes named plugins to sendQuery nodeConfig', async () => {

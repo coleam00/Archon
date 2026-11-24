@@ -17,6 +17,7 @@ import type { RunActor } from '../run-authorization';
 import { hostname } from 'node:os';
 import { getLog, type OperationContext } from './context';
 import { rootRunIdOf } from './teardown';
+import { removeRunFiles, type RunFilesReport } from '../../services/cleanup/run-files';
 
 export interface WorkflowStatusData {
   runs: DashboardWorkflowRun[];
@@ -25,7 +26,8 @@ export interface WorkflowStatusData {
 /**
  * Why resume left a run unchanged.
  *
- * `not_resumable`: the run is in a status resume cannot continue.
+ * `not_resumable`: the run is in a status resume cannot continue, or it failed before it
+ *   got a checkout to continue in.
  * `awaiting_answer`: the run is paused at an attention wait that needs an answer.
  * `live_owner`: the run is `running` and its owner, or its root run's owner, answers on
  *   this host. A second executor would run the same work. It resumes once that process
@@ -70,16 +72,28 @@ export async function signalWorkflowWait(
   return ctx.store.signalWorkflowWait(runId, wait, payload);
 }
 
+/**
+ * Delete a terminal run's row, then its files. A file that cannot be removed is logged with
+ * its path and returned in the report; the row stays deleted, and
+ * `archon workflow cleanup --orphans` removes the file later.
+ */
 export async function deleteWorkflowRun(
   ctx: OperationContext,
   runId: string,
   actor: RunActor
-): Promise<void> {
+): Promise<RunFilesReport> {
   const run = await ctx.getRunOrThrow(runId, 'operations.workflow_delete_lookup_failed');
   await ctx.assertMayAct(run, actor, 'delete');
   if (!TERMINAL_WORKFLOW_STATUSES.includes(run.status))
     throw new Error(`Cannot delete workflow in '${run.status}' status — cancel it first`);
   await ctx.store.deleteWorkflowRun(runId);
+  const report = await removeRunFiles([run], ctx.store);
+  if (report.failed.length > 0 || report.unlocated.length > 0)
+    getLog().warn(
+      { runId, failed: report.failed, unlocated: report.unlocated },
+      'operations.workflow_run_files_remove_failed'
+    );
+  return report;
 }
 
 /** List running and paused workflow runs, optionally scoped to one codebase. */
@@ -112,6 +126,7 @@ export async function resumeWorkflow(
   await ctx.assertMayAct(run, actor, 'resume');
   if (run.status === 'running') {
     await assertNoLiveOwner(ctx, run);
+    assertHasCheckout(run);
     return run;
   }
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
@@ -131,7 +146,25 @@ export async function resumeWorkflow(
         'Answer it with answer instead of resuming it.'
     );
   }
+  assertHasCheckout(run);
   return run;
+}
+
+/**
+ * Refuse a run that has no checkout to continue in. A start fails this way when its
+ * worktree could not be prepared: the run was recorded first, with no working path, and
+ * failed before it got one. Preparing a checkout now would be a new start, so the refusal
+ * names the command that makes one: `workflow run --supersedes <id>` takes the workflow,
+ * its source, inputs and lane from this run's record. The line holds only the run id, so
+ * it pastes unchanged into any shell.
+ */
+function assertHasCheckout(run: WorkflowRun): void {
+  if (run.working_path) return;
+  throw new ResumeRefusedError(
+    'not_resumable',
+    `Run ${run.id} failed before its checkout was prepared, so there is nothing to resume. ` +
+      `Start it again with: archon workflow run --supersedes ${run.id}`
+  );
 }
 
 /**
@@ -161,15 +194,8 @@ async function assertNoLiveOwner(ctx: OperationContext, run: WorkflowRun): Promi
       `Run ${run.id} is a sub-run of ${rootRunId}, whose owner still answers on this host. ${notChanged}`
     );
   }
-  const thisHost = hostname();
-  const thisUid = process.getuid?.();
-  const otherUser =
-    recorded?.uid !== undefined && thisUid !== undefined && recorded.uid !== thisUid;
-  if (recorded && (recorded.host !== thisHost || otherUser)) {
-    const where =
-      recorded.host !== thisHost
-        ? `on another host (${recorded.host}, pid ${String(recorded.pid)}); this is ${thisHost}`
-        : `as another user (uid ${String(recorded.uid)}, pid ${String(recorded.pid)}); this is uid ${String(thisUid)}`;
+  const where = unreachableOwner(recorded);
+  if (where !== undefined) {
     throw new ResumeRefusedError(
       'owner_unreachable',
       `Run ${run.id} is marked running and its recorded owner ran ${where}. ` +
@@ -177,6 +203,23 @@ async function assertNoLiveOwner(ctx: OperationContext, run: WorkflowRun): Promi
         'Resume it from that host and user, or abandon it if its process is gone.'
     );
   }
+}
+
+/**
+ * Where a recorded owner runs when this process cannot ask it: on another host or as
+ * another user. Undefined when it is local or none is recorded.
+ */
+export function unreachableOwner(
+  recorded: ReturnType<typeof readExecutionOwner>
+): string | undefined {
+  if (!recorded) return undefined;
+  const thisHost = hostname();
+  const thisUid = process.getuid?.();
+  if (recorded.host !== thisHost)
+    return `on another host (${recorded.host}, pid ${String(recorded.pid)}); this is ${thisHost}`;
+  if (recorded.uid !== undefined && thisUid !== undefined && recorded.uid !== thisUid)
+    return `as another user (uid ${String(recorded.uid)}, pid ${String(recorded.pid)}); this is uid ${String(thisUid)}`;
+  return undefined;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test, type Mock } from 'bun:test';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type * as Git from './index';
@@ -48,6 +48,40 @@ test('fetch-only classifies newly fetched remote commits without updating HEAD',
   });
   expect(await run(checkout, 'rev-parse', 'origin/main')).toBe(remoteHead);
   expect(await run(checkout, 'rev-parse', 'HEAD')).toBe(initialHead);
+});
+
+test('a reset waits for another git process to release the index lock and never removes it', async () => {
+  const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-workspace-lock-')));
+  const remote = join(root, 'remote.git');
+  const writer = join(root, 'writer');
+  const checkout = repo(join(root, 'checkout'));
+  const run = async (cwd: string, ...args: string[]): Promise<string> =>
+    (await git.execFileAsync('git', ['-C', cwd, ...args])).stdout.trim();
+  await run(root, 'init', '--bare', '-q', '-b', 'main', remote);
+  await run(root, 'clone', '-q', remote, writer);
+  await run(writer, 'config', 'user.name', 'Archon Test');
+  await run(writer, 'config', 'user.email', 'test@example.com');
+  await run(writer, 'config', 'commit.gpgsign', 'false');
+  await run(writer, 'commit', '--allow-empty', '-qm', 'base');
+  await run(writer, 'push', '-q', 'origin', 'main');
+  await run(root, 'clone', '-q', remote, checkout);
+  await run(writer, 'commit', '--allow-empty', '-qm', 'remote advance');
+  await run(writer, 'push', '-q', 'origin', 'main');
+
+  // Stands in for another run's `git reset` holding the lock.
+  const lock = join(checkout, '.git', 'index.lock');
+  await writeFile(lock, 'held by another process');
+  let settled = false;
+  const sync = git
+    .syncWorkspace(checkout, branch('main'), { mode: 'reset' })
+    .finally(() => (settled = true));
+  await Bun.sleep(600);
+  expect(settled).toBe(false);
+  expect(await readFile(lock, 'utf8')).toBe('held by another process');
+  await rm(lock);
+
+  expect((await sync).state).toBe('in_sync');
+  expect(await run(checkout, 'rev-parse', 'HEAD')).toBe(await run(writer, 'rev-parse', 'HEAD'));
 });
 
 function failingWorkspaceCommand(
@@ -144,7 +178,7 @@ describe('git utilities', () => {
 
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['-C', '/workspace/repo', 'fetch', 'origin', 'main'],
+        ['-C', '/workspace/repo', 'fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main'],
         expect.any(Object)
       );
     });
@@ -394,7 +428,7 @@ describe('git utilities', () => {
 
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['-C', '/workspace/repo', 'fetch', 'mar', 'main'],
+        ['-C', '/workspace/repo', 'fetch', 'mar', '+refs/heads/main:refs/remotes/mar/main'],
         expect.any(Object)
       );
 

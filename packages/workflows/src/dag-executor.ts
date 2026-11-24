@@ -16,7 +16,7 @@ import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { releaseUnreadableRunSource } from './source-release';
-import { sourceReleaseNotice } from './deps';
+import { sourceReleaseNotice, spellWorkflowCommand } from './deps';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { resolveRunExecutionMode, type ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunNodeSession } from './schemas';
@@ -41,9 +41,12 @@ import { RunSourceUnreadableError } from './dag/node-source';
 import { type RunInputs, type RunLayersContext } from './dag/run-context';
 import { assertRunCapabilities } from './dag/capability-preflight';
 import { runLayers } from './dag/run-layers';
+import { OperatorPauseBoundary } from './dag/operator-pause-boundary';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
+import { readCheckoutMark } from './checkout-mark';
+import type { ReturnsCheckout } from './run-result';
 import {
   announceContainerRun,
   suspendContainerForPause,
@@ -335,9 +338,48 @@ export async function executeDagWorkflow(
     throw error;
   };
 
+  /**
+   * Pause the run for the operator's request the walk stopped for. Every node it started
+   * has settled. The transition compares status and execution claim, so a cancel, an
+   * abandon or another executor that moved the row first wins; the outcome reader then
+   * reports whatever the row says. A container is suspended first, as at a gate.
+   */
+  const pauseForOperator = async (): Promise<void> => {
+    const container =
+      execContext.kind === 'container' && containerCtx ? { execContext, containerCtx } : undefined;
+    const suspended = container && (await suspendContainerForPause(container.containerCtx));
+    const { paused } = await deps.store.pauseWorkflowRunForOperator(
+      workflowRun.id,
+      executionClaim(workflowRun.metadata)
+    );
+    if (container && suspended) {
+      await recordContainerSuspendWarning(deps, workflowRun.id, suspended);
+      await reportContainerSuspension(
+        deps,
+        platform,
+        conversationId,
+        container.containerCtx,
+        container.execContext,
+        workflowRun.id,
+        suspended
+      );
+    }
+    if (!paused) {
+      getLog().info({ workflowRunId: workflowRun.id }, 'dag.operator_pause_skipped_status_changed');
+      return;
+    }
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `⏸️ Paused by an operator after its running nodes finished. Resume: \`${spellWorkflowCommand(platform, `resume ${workflowRun.id}`)}\``,
+      { workflowId: workflowRun.id }
+    );
+  };
+
+  const pauseBoundary = new OperatorPauseBoundary(deps.store, workflowRun.id);
   let sourceUnreadable: RunSourceUnreadableError | undefined;
   try {
-    await runLayers(runCtx);
+    await runLayers(runCtx, pauseBoundary);
   } catch (error) {
     const unwound = await unwindRunLayers(error);
     if (unwound === 'budget_failed') return;
@@ -371,6 +413,11 @@ export async function executeDagWorkflow(
     });
   }
 
+  if (pauseBoundary.reached) {
+    await pauseForOperator();
+    return undefined;
+  }
+
   return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
 }
 
@@ -397,6 +444,24 @@ async function preflightRun(
     options.containerCtx,
     priorCompletedNodes !== undefined && priorCompletedNodes.size > 0
   );
+}
+
+/**
+ * The run's `returns:` node to observe. A run that takes no path lock marks its checkout
+ * as its first pass begins, so completion can show nothing moved HEAD while it judged.
+ */
+async function returnsCheckout(
+  {
+    workflow,
+    cwd,
+    priorCompletedNodes,
+  }: Pick<ExecuteDagWorkflowOptions, 'workflow' | 'cwd' | 'priorCompletedNodes'>,
+  execContext: ExecutionContext
+): Promise<ReturnsCheckout | undefined> {
+  if (workflow.returns === undefined) return undefined;
+  if (workflow.mutates_checkout !== false || (priorCompletedNodes?.size ?? 0) > 0)
+    return { nodeId: workflow.returns };
+  return { nodeId: workflow.returns, startMark: await readCheckoutMark(cwd, execContext) };
 }
 
 /**
@@ -519,6 +584,7 @@ async function createRunContext(
     totalTokens: priorUsage?.tokens,
     totalTokensUnknown: priorUsage?.tokensUnknown,
     stepNamePrefix: '',
+    returnsCheckout: await returnsCheckout(options, execContext),
     loopGroupPath: [],
     loopBodyScopes: [],
   };

@@ -99,8 +99,8 @@ describe('GitHub completed-check workflow signal — real SQLite', () => {
     const secret = 'integration-webhook-secret';
     const signature = `sha256=${createHmac('sha256', secret).update(payload).digest('hex')}`;
     const adapter = new GitHubAdapter({ kind: 'pat', token: 'unused-test-token' }, secret, {
-      acquireLock: async (_id: string, handler: () => Promise<void>) => {
-        await handler();
+      acquireLock: async (_id: string, handler: (signal: AbortSignal) => Promise<void>) => {
+        await handler(new AbortController().signal);
         return { status: 'started' as const };
       },
     });

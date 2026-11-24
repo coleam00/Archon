@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { z } from 'zod';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
@@ -595,7 +595,7 @@ describe('durable resource starts', () => {
     ).toHaveLength(2);
   });
 
-  test('a binding with event inputs stays readable by the v0.11.1 intent schema', async () => {
+  test('a binding with event inputs and a checkout hand-off stays readable by the v0.11.1 intent schema', async () => {
     // The keys and strictness of v0.11.1's resourceStartBindingIntentSchema, which parses
     // the `intent` column. A shipped reader, so it is frozen here, not derived from today's.
     const shippedIntentSchema = z
@@ -620,6 +620,7 @@ describe('durable resource starts', () => {
       })
       .strict();
     const receiptId = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+    const handoff = { runId: 'build-run', branch: 'archon/build-1', commit: 'a'.repeat(40) };
     await acceptStartReceipt({
       receipt: {
         id: receiptId,
@@ -644,34 +645,42 @@ describe('durable resource starts', () => {
             cwd: '/tmp/test',
             workflowName: 'test',
             inputs: { mode: 'nightly', count: 0 },
-            isolation: { kind: 'in-place' },
+            isolation: { kind: 'worktree', branch: 'archon/build-1' },
           },
           eventInputs: { count: 42 },
+          checkoutFrom: handoff,
         },
       ],
     });
 
     const raw = new Database(join(root, 'archon.db'), { readonly: true });
-    let stored: { intent: string; event_input_names: string | null } | null;
+    type StoredBinding = {
+      intent: string;
+      event_input_names: string | null;
+      checkout_from: string | null;
+    };
+    let stored: StoredBinding | null;
     try {
       stored = raw
-        .query<{ intent: string; event_input_names: string | null }, SQLQueryBindings[]>(
-          'SELECT intent, event_input_names FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
+        .query<StoredBinding, SQLQueryBindings[]>(
+          'SELECT intent, event_input_names, checkout_from FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
         )
         .get(receiptId);
     } finally {
       raw.close();
     }
-    // An older binary sees the merged inputs it always passed through.
-    expect(shippedIntentSchema.parse(JSON.parse(stored?.intent ?? 'null')).launch.inputs).toEqual({
-      mode: 'nightly',
-      count: 42,
-    });
+    // An older binary sees the merged inputs it always passed through, and the hand-off's
+    // branch but not the hand-off.
+    const shipped = shippedIntentSchema.parse(JSON.parse(stored?.intent ?? 'null'));
+    expect(shipped.launch.inputs).toEqual({ mode: 'nightly', count: 42 });
+    expect(shipped.launch.isolation).toEqual({ kind: 'worktree', branch: 'archon/build-1' });
     expect(stored?.event_input_names).toBe('["count"]');
+    expect(JSON.parse(stored?.checkout_from ?? 'null')).toEqual(handoff);
     // This version reads the event inputs back apart from the literals.
     const restored = (await getStartReceipt(receiptId))?.bindings[0]?.intent;
     expect(restored?.launch.inputs).toEqual({ mode: 'nightly' });
     expect(restored?.eventInputs).toEqual({ count: 42 });
+    expect(restored?.checkoutFrom).toEqual(handoff);
   });
 
   test('preparation completion and admission share one commit', async () => {
@@ -1654,6 +1663,7 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
       hostId: 'host',
       startAdmitted: async id => {
         started.push(id);
+        return null;
       },
     }).catch((error: unknown) => error);
     expect(started).toEqual([queue[0]!, queue[3]!]);
@@ -1760,6 +1770,7 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
       hostId: 'host',
       startAdmitted: async id => {
         started.push(id);
+        return null;
       },
     }).catch((error: unknown) => error);
     expect(started).toEqual([queued[1]!]);
@@ -1770,21 +1781,20 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
   });
 }
 
-test('a run end prepares every start it caused, past one page of receipts and one page of bindings', async () => {
-  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
-  const { startReceiptBindings, ResourceStartDrainError } = await import(
-    '../workflows/resource-start-host'
-  );
-  const host = createSqlWorkflowHost();
-  // 101 receipts, so their ids span two pages; the first has 101 bindings, so the first
-  // page of ids holds more pending bindings than one read returns.
+/**
+ * 201 pending bindings on 'host': 101 receipts, so their ids span two pages, and the first
+ * has 101 bindings, so the first page of ids holds more pending bindings than one read
+ * returns. Their run-as user does not exist: preparation ends at its first step, which
+ * keeps them cheap and still takes each binding out of pending.
+ */
+async function acceptPagesOfPendingBindings(
+  host: ReturnType<typeof import('../workflows/sql-host').createSqlWorkflowHost>
+): Promise<string[]> {
   const receiptIds = Array.from({ length: 101 }, () => crypto.randomUUID());
   const binding = (index: number) => ({
     bindingId: `binding-${String(index)}`,
     bindingRevision: null,
     hostId: 'host',
-    // No such user: preparation ends at its first step, which keeps 201 of them cheap
-    // and still takes each binding out of pending.
     runAsUserId: '99999999-9999-4999-8999-999999999999',
     resource: 'pool',
     overlap: 'skip' as const,
@@ -1812,12 +1822,11 @@ test('a run end prepares every start it caused, past one page of receipts and on
         ...Array.from({ length: index === 0 ? 100 : 0 }, (_, more) => binding(more + 1)),
       ],
     });
+  return receiptIds;
+}
 
-  const error = await startReceiptBindings(
-    { ...host, hostId: 'host', startAdmitted: async () => {} },
-    new Set(receiptIds)
-  ).catch((caught: unknown) => caught);
-
+async function expectAllBindingsPrepared(error: unknown): Promise<void> {
+  const { ResourceStartDrainError } = await import('../workflows/resource-start-host');
   if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
   expect(error.failures).toHaveLength(201);
   expect(
@@ -1827,6 +1836,86 @@ test('a run end prepares every start it caused, past one page of receipts and on
       )
     ).rows
   ).toEqual([{ status: 'rejected', count: 201 }]);
+}
+
+for (const handOff of ['handed_off', 'hand_off_failed', 'uncertain'] as const) {
+  test(`a drain records how it handed an admitted start over on the pending run: ${handOff}`, async () => {
+    const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+    const { drainResourceStartHost } = await import('../workflows/resource-start-host');
+    const { HandOffUncertainError } = await import('../workflows/start-executor');
+    const host = createSqlWorkflowHost();
+    const [holder, next] = [launch(crypto.randomUUID()), launch(crypto.randomUUID())];
+    for (const prepared of [holder, next])
+      await host.deps.store.admitResourceStart({
+        resource: 'resource',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: prepared,
+      });
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [holder.run.id]
+    );
+
+    const drained = await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async () => {
+        if (handOff === 'hand_off_failed') throw new Error('spawn failed');
+        if (handOff === 'uncertain') throw new HandOffUncertainError('relay lost');
+        return { pid: 4242 };
+      },
+    }).catch((error: unknown) => error);
+
+    const run = await getWorkflowRun(next.run.id);
+    expect(run?.status).toBe('pending');
+    if (handOff === 'handed_off') {
+      expect(drained).toBeUndefined();
+      expect(run?.metadata.start_executor).toMatchObject({
+        kind: handOff,
+        host: hostname(),
+        pid: 4242,
+      });
+    } else {
+      // The hand-off's own failure is still reported to the drain's caller.
+      expect(drained).toBeInstanceOf(Error);
+      // A hand-off that may have started its executor proves nothing, so nothing is recorded.
+      expect(run?.metadata.start_executor).toEqual(
+        handOff === 'uncertain' ? undefined : { kind: handOff }
+      );
+    }
+  });
+}
+
+test('a run end prepares every start it caused, past one page of receipts and one page of bindings', async () => {
+  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+  const { startReceiptBindings } = await import('../workflows/resource-start-host');
+  const host = createSqlWorkflowHost();
+  const receiptIds = await acceptPagesOfPendingBindings(host);
+
+  await expectAllBindingsPrepared(
+    await startReceiptBindings(
+      { ...host, hostId: 'host', startAdmitted: async () => null },
+      new Set(receiptIds)
+    ).catch((caught: unknown) => caught)
+  );
+});
+
+// A hold lift drains each host once; a CLI-only host has no later pass to pick up the rest.
+test('a host pass prepares every pending binding of its host, past one page', async () => {
+  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+  const { drainResourceStartHost } = await import('../workflows/resource-start-host');
+  const host = createSqlWorkflowHost();
+  await acceptPagesOfPendingBindings(host);
+
+  await expectAllBindingsPrepared(
+    await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async () => null,
+    }).catch((caught: unknown) => caught)
+  );
 });
 
 for (const phase of ['admission', 'drain'] as const) {

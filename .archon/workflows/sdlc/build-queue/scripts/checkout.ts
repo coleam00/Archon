@@ -1,7 +1,8 @@
 /**
  * Move the run's checkout to the head of the pull request the round continues.
  *
- * The run's checkout is cut from the default branch. A round that continues a pull
+ * The run's checkout is cut from its base (`$BASE_BRANCH`): the item's landing branch when
+ * it has one, else the repository's base. A round that continues a pull
  * request and adds nothing would otherwise publish that base onto the pull request's
  * head, which git refuses as a non-fast-forward. Starting from the pull request's head
  * makes publish a fast-forward, or a no-op when the round adds nothing.
@@ -9,8 +10,8 @@
  * The checkout moves only when it is clean and its commit is already on a remote, so
  * nothing local is lost.
  *
- * A fresh round stays where it is, but only when that is on the repository's current
- * default branch: an adopted checkout left at a superseded pull request's head would
+ * A fresh round stays where it is, but only when that is on the base as the remote holds
+ * it now: an adopted checkout left at a superseded pull request's head would
  * otherwise carry its commits into the replacement pull request. It refuses instead.
  *
  * Bound inputs: INPUTS_ITEM, the item from facts, whose repository names the base;
@@ -42,7 +43,7 @@ import { announce } from '../../.shared/queue.ts';
 import type { ReviewStamp } from '../../.shared/review-comment.ts';
 import { PUBLISHED_REPORT_FILE, REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
 import { viewPr } from '../../.shared/pr.ts';
-import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
+import { fetchBranch, remoteFor, runBase } from '../../.shared/remote.ts';
 import { read, workItemName } from '../../.shared/workitem.ts';
 
 /**
@@ -86,11 +87,11 @@ function priorReport(review: ReviewStamp, head: string): string {
   return '';
 }
 
-/** A fresh round stays on the base and continues no pull request. */
+/** A fresh round stays on the run's base and continues no pull request. */
 function fresh(item: QualifiedPr): void {
-  const base = fetchDefaultBranch(item.repo);
-  if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
-    throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
+  const base = runBase();
+  if (git('merge-base', '--is-ancestor', 'HEAD', fetchBranch(item.repo, base)).code !== 0)
+    throw new Error(`a fresh round must start on ${base}, but the checkout's HEAD is not on it`);
   started(item);
   emit({ head: null, reviewed: null, pull_request: null, prior_report: '' });
 }

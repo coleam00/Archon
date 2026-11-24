@@ -22,7 +22,7 @@ import {
 } from './include-node';
 import { loopAiAuthoringSchema, type LoopNode } from './loop-node';
 import { nodeBindingsSchema } from './node-bindings';
-import type { NodeMcp } from './provider-options';
+import type { NodeMcp, NodeSkill } from './provider-options';
 import { loopRetryConfigSchema } from './retry';
 import { type WaitNode, waitOutputFormat } from './wait-node';
 import { type WorkflowNode, workflowNodeSchema } from './workflow-node';
@@ -103,12 +103,16 @@ function providerFields(data: DagNodeFields) {
     ]),
     // Overwriting a key keeps its position, so these stay in list order.
     ...(data.mcp !== undefined ? { mcp: trimNodeMcp(data.mcp) } : {}),
-    ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
+    ...(data.skills !== undefined ? { skills: data.skills.map(trimNodeSkill) } : {}),
   };
 }
 
 function trimNodeMcp(mcp: NodeMcp): NodeMcp {
   return typeof mcp === 'string' ? mcp.trim() : { ...mcp, path: mcp.path.trim() };
+}
+
+function trimNodeSkill(skill: NodeSkill): NodeSkill {
+  return typeof skill === 'string' ? skill.trim() : { ...skill, name: skill.name.trim() };
 }
 
 const NODE_BUILDERS: Record<NodeMode, NodeBuilder> = {
