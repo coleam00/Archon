@@ -91,17 +91,18 @@ function source(unreadable: string[] = []): ItemWindowSource {
       listItemLinks: async () => [],
       listItemAsks: async () => [],
       listOpenItemWaits: async () => [],
-      listQueuedItemStarts: async () => [],
-      listSkippedItemStarts: async () => [],
+      listQueuedItemStarts: async itemIds => new Map(itemIds.map(id => [id, []])),
+      listSkippedItemStarts: async itemIds => new Map(itemIds.map(id => [id, []])),
       getInstallHold: async () => null,
       getRunLimit: async () => null,
       listHeldItemStarts: async () => [],
       getResourceStartRequest: async () => null,
-      getStartReceipt: async () => null,
+      listStartReceiptSources: async () => new Map(),
     },
   };
 }
 
+const RECEIPT = '00000000-0000-4000-8000-000000000001';
 const NOVEMBER = { since: '2026-11-01T00:00:00Z', until: '2026-12-01T00:00:00Z' };
 
 describe('reading items over a window', () => {
@@ -155,6 +156,77 @@ describe('reading items over a window', () => {
     const a = page.items.find(read => read.item.key === 'a');
     expect(a?.runs.map(row => row.id)).toEqual(['a2']);
     expect(a?.degraded).toEqual([{ type: 'degraded', reason: 'run_unreadable', runId: 'a1' }]);
+  });
+
+  test("a page reads its items' queued and skipped starts once, and asks only for the receipts its runs started from", async () => {
+    const wide = { since: '2026-10-01T00:00:00Z', until: '2027-01-01T00:00:00Z' };
+    const withReceipt = source();
+    const calls: { queued: string[][]; skipped: string[][]; receipts: string[][] } = {
+      queued: [],
+      skipped: [],
+      receipts: [],
+    };
+    const { store } = withReceipt;
+    const getItemRuns = store.getItemRuns;
+    const queued = store.listQueuedItemStarts;
+    const skipped = store.listSkippedItemStarts;
+    store.getItemRuns = async (project, key) => {
+      const found = await getItemRuns(project, key);
+      if (found === null || key !== 'a') return found;
+      // a2 was started by a receipt; a1 was not.
+      return {
+        ...found,
+        runs: found.runs.map(row =>
+          'id' in row && row.id === 'a2'
+            ? { ...row, metadata: { resource_start: { receiptId: RECEIPT, bindingId: 'b' } } }
+            : row
+        ),
+      };
+    };
+    store.listQueuedItemStarts = async ids => {
+      calls.queued.push([...ids]);
+      return queued(ids);
+    };
+    store.listSkippedItemStarts = async ids => {
+      calls.skipped.push([...ids]);
+      return skipped(ids);
+    };
+    store.listStartReceiptSources = async ids => {
+      calls.receipts.push([...ids]);
+      return new Map(
+        ids.map(id => [id, { id, sourceInstanceId: 'schedule', sourceActor: null }] as const)
+      );
+    };
+    const page = await readItemWindow(withReceipt, PROJECT, wide);
+    expect(page.items.map(read => read.item.key)).toEqual(['a', 'b', 'c']);
+    expect(calls.queued).toEqual([['item-a', 'item-b', 'item-c']]);
+    expect(calls.skipped).toEqual([['item-a', 'item-b', 'item-c']]);
+    // Only item a has a run started by a receipt.
+    expect(calls.receipts).toEqual([[RECEIPT]]);
+    expect(page.items[0]?.runs.map(row => row.cause)).toEqual([
+      null,
+      { kind: 'receipt', receiptId: RECEIPT, sourceInstanceId: 'schedule' },
+    ]);
+  });
+
+  test('the event loop turns between item reads, so other requests are not held behind a page', async () => {
+    const wide = { since: '2026-10-01T00:00:00Z', until: '2027-01-01T00:00:00Z' };
+    const watched = source();
+    const getItemRuns = watched.store.getItemRuns;
+    let turned = false;
+    // Whether the callback below had run, each time the last item's runs were read.
+    const turnedBeforeLastItem: boolean[] = [];
+    watched.store.getItemRuns = async (project, key) => {
+      if (key === 'c') turnedBeforeLastItem.push(turned);
+      return getItemRuns(project, key);
+    };
+    // Every store call above resolves at once, as bun:sqlite does: without a yield the whole
+    // page reads before this callback can run.
+    setImmediate(() => {
+      turned = true;
+    });
+    await readItemWindow(watched, PROJECT, wide);
+    expect(turnedBeforeLastItem).toEqual([true]);
   });
 
   test('a cursor for another project, or a window beside a cursor, is refused', async () => {

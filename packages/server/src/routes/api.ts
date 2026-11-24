@@ -5,16 +5,22 @@ import { webPushPayloadSchema } from '@archon/core/schemas/web-push';
 import {
   createSqlWorkflowHost,
   createSqlWorkflowOperations,
+  createWorkflowHostStore,
 } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as codebaseDb from '@archon/core/db/codebases';
+import * as factoryDb from '@archon/core/db/factory-reads';
+import { providerRegistry } from '@archon/providers';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { attentionQueueSource } from '@archon/core/operations/attention-queue';
+import { changeMergeState, forgeHostDiscoveryOnce } from '@archon/adapters/forge-host';
+import { getArchonHome, projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
 } from '@archon/core/services/codebase-checkout-resolver';
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
 import { getTriggersPath, launchProjectKey } from '@archon/core/workflows/run-ended';
-import { providerRegistry } from '@archon/providers';
 import type { WebAdapter } from '../adapters/web';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import { isApiGateEnabled } from '../auth';
@@ -29,6 +35,7 @@ import { registerCodebaseEnvironmentRoute, registerCodebaseRoutes } from './api.
 import { registerConfigRoutes } from './api.config';
 import { registerConversationRoutes } from './api.conversations';
 import { registerConversationProcessingRoute } from './api.conversation-processing';
+import { registerFactoryRoutes } from './api.factory';
 import { registerHealthRoutes } from './api.health';
 import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
@@ -135,6 +142,40 @@ export function registerApiRoutes(
   registerMetricViewsRoute(app, {
     codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
     loadConfig,
+  });
+  // One forge plugin discovery for every merge lookup these routes make (`forgeHostDiscoveryOnce`),
+  // made on the first lookup: registering the routes reads nothing, not even the home.
+  let forgeDiscovery: ReturnType<typeof forgeHostDiscoveryOnce> | undefined;
+  registerFactoryRoutes(app, {
+    codebase: async id => {
+      const codebase = await codebaseDb.getCodebase(id);
+      return codebase === null
+        ? null
+        : {
+            cwd: codebase.default_cwd,
+            projectKey: projectKeyForCodebase(codebase, codebase.default_cwd),
+            remote: codebase.repository_url,
+          };
+    },
+    // Every registration as stored: the read lists one whose checkout path is invalid as
+    // unreadable rather than failing every pack.
+    codebases: async () =>
+      (await codebaseDb.listCodebaseClaims()).map(({ id, name, default_cwd }) => ({
+        id,
+        name,
+        cwd: default_cwd,
+      })),
+    loadConfig,
+    ranWorkflows: async (id, names) => new Set(await factoryDb.listRunWorkflowNames(id, names)),
+    itemsSource: attentionQueueSource(createWorkflowStore(), createWorkflowHostStore().isolation),
+    discoveriesSource: createWorkflowStore(),
+    changeMergeState: (lookup, branches) =>
+      changeMergeState(lookup, branches, {
+        discovery: () =>
+          (forgeDiscovery ??= forgeHostDiscoveryOnce(getArchonHome(), process.env))(),
+        env: process.env,
+      }),
+    discoverWorkflows: cwd => discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry),
   });
   registerPackGraphRoute(app, {
     codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,

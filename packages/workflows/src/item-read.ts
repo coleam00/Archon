@@ -61,6 +61,7 @@ import {
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { awaitingExecutionSchema } from './schemas/start-executor';
 import {
+  type InstallHold,
   installHoldSchema,
   queuedItemStartSchema,
   type QueuedItemStart,
@@ -68,12 +69,13 @@ import {
   startCause,
   startCauseSchema,
 } from './schemas/resource-start';
-import { runLimitSchema } from './schemas/run-limit';
+import { runLimitSchema, type RunLimitState } from './schemas/run-limit';
 import type { IWorkflowStore } from './store';
 import {
   awaitingExecution,
   type StartExecutorObserver,
   type SkippedItemStart,
+  type StartReceiptSource,
   type ResourceStartRequestInspection,
 } from './resource-start-store';
 import { itemHolder, itemHolders } from './item-hold';
@@ -360,8 +362,8 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getItemLanding'
       | 'listItemLinks'
       | 'listItemAsks'
+      | 'listStartReceiptSources'
       | 'listOpenItemWaits'
-      | 'getStartReceipt'
       | 'getResourceStartRequest'
       | 'listQueuedItemStarts'
       | 'listSkippedItemStarts'
@@ -400,16 +402,28 @@ async function completionEvents(
   return source.store.listEventsForRuns(completedIds, ['workflow_completed']);
 }
 
+/**
+ * The receipts the runs started from, by id. The receipt stays the one owner of why a start
+ * happened; this only reads it.
+ */
+async function runReceipts(
+  source: ItemReadSource,
+  runs: readonly WorkflowRun[]
+): Promise<ReadonlyMap<string, StartReceiptSource>> {
+  const ids = runs.flatMap(run => readResourceStartReceiptId(run.metadata) ?? []);
+  return ids.length === 0 ? new Map() : source.store.listStartReceiptSources(ids);
+}
+
 async function itemRun(
   source: ItemReadSource,
   run: WorkflowRun,
+  receipts: ReadonlyMap<string, StartReceiptSource>,
   request: ResourceStartRequestInspection | null,
   heldBehind: ItemHeldBehind | null,
   terminalEvents: ReadonlyMap<string, WorkflowEventRow[]>
 ): Promise<ItemRun> {
-  // The receipt stays the one owner of why a start happened; this only reads it.
   const receiptId = readResourceStartReceiptId(run.metadata);
-  const receipt = receiptId ? await source.store.getStartReceipt(receiptId) : null;
+  const receipt = receiptId ? receipts.get(receiptId) : undefined;
   const usage = parseRunUsage(run.metadata);
   return {
     id: run.id,
@@ -419,7 +433,7 @@ async function itemRun(
     outcome: displayedRunOutcome(run),
     startedAt: run.started_at.toISOString(),
     completedAt: run.completed_at?.toISOString() ?? null,
-    cause: receipt ? startCause(receipt) : null,
+    cause: receipt === undefined ? null : startCause(receipt),
     awaitingExecution: await awaitingExecution(request, run, source.startExecutor),
     spend: {
       usd: usage.costUsd ?? null,
@@ -633,7 +647,8 @@ export async function readItem(
 ): Promise<ItemRead | null> {
   const resolved = await readItemRuns(source.store, projectKey, key);
   if (resolved === null) return null;
-  return assembleItemRead(source, resolved.item, await readItemQueue(source));
+  const [read] = await assembleItemReads(source, [resolved.item], await readItemQueue(source));
+  return read ?? null;
 }
 
 type ItemQueueRead = ReturnType<typeof splitAttentionRead<AttentionQueueItem>>;
@@ -692,20 +707,65 @@ async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
 }
 
 /**
- * Build the read of an item against one read of the attention queue, so a reader of many
- * items reads the queue once. Null when the item has gone from the store.
+ * The install hold and the item's held, queued and skipped starts. The hold, queued and
+ * skipped starts are read for a whole page of items at once.
  */
-export async function assembleItemRead(
+interface ItemStarts {
+  hold: InstallHold | null;
+  held: ItemHeldStart[];
+  runLimit: RunLimitState | null;
+  waiting: readonly QueuedItemStart[];
+  skipped: readonly SkippedItemStart[];
+}
+
+/**
+ * Build the reads of `items`, in their order, against one read of the attention queue, so a
+ * reader of many items reads the queue and the items' starts once. A read is null when its
+ * item has gone from the store.
+ */
+export async function assembleItemReads(
+  source: ItemReadSource,
+  items: readonly WorkflowItem[],
+  queue: ItemQueueRead
+): Promise<(ItemRead | null)[]> {
+  const ids = items.map(item => item.id);
+  // Held starts first, then queued starts, then every item's runs, the order a start moves
+  // through: one that moves on between two reads shows twice, never in neither. An admitted
+  // start shows in both queued and runs (its run id is its request id) and is listed once as
+  // a run. Held starts are read per item: they wait for the install hold's lift or for
+  // their host's next drain, so they are read whether or not a hold is set.
+  const hold = await source.store.getInstallHold();
+  const held = new Map<string, ItemHeldStart[]>();
+  for (const id of ids) held.set(id, await source.store.listHeldItemStarts(id));
+  const waiting = await source.store.listQueuedItemStarts(ids);
+  const runLimit = await source.store.getRunLimit();
+  const skipped = await source.store.listSkippedItemStarts(ids);
+  const reads: (ItemRead | null)[] = [];
+  for (const item of items) {
+    // bun:sqlite answers synchronously, so every store read resolves without leaving the
+    // event loop: without a turn between items, a page of item reads holds the server end
+    // to end and every other request waits behind it (#58).
+    await new Promise<void>(resolve => setImmediate(resolve));
+    reads.push(
+      await assembleItemRead(source, item, queue, {
+        hold,
+        held: held.get(item.id) ?? [],
+        runLimit,
+        waiting: waiting.get(item.id) ?? [],
+        skipped: skipped.get(item.id) ?? [],
+      })
+    );
+  }
+  return reads;
+}
+
+/** The read of one item, against the page's queue and starts. */
+async function assembleItemRead(
   source: ItemReadSource,
   item: WorkflowItem,
-  queue: ItemQueueRead
+  queue: ItemQueueRead,
+  starts: ItemStarts
 ): Promise<ItemRead | null> {
-  // Held starts first, then queued starts, then the runs, the order a start moves through:
-  // one that moves on between two reads shows twice, never in neither. An admitted start
-  // shows in both queued and runs (its run id is its request id) and is listed once as a run.
-  const hold = await source.store.getInstallHold();
-  const held = await source.store.listHeldItemStarts(item.id);
-  const waiting = await source.store.listQueuedItemStarts(item.id);
   const found = await readItemRuns(source.store, item.projectKey, item.key);
   if (found === null) return null;
   const own = { values: found.runs, degraded: found.degraded };
@@ -737,22 +797,22 @@ export async function assembleItemRead(
     // recording order among rulings, and a set's last answer before its settle.
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const holds = await itemHolds(source, found.item.id, own.values);
-  const runLimit = await source.store.getRunLimit();
   const queued: ItemQueuedStart[] = [];
-  for (const start of waiting.filter(start => !tree.has(start.requestId)))
+  for (const start of starts.waiting.filter(start => !tree.has(start.requestId)))
     queued.push({
       ...start,
       heldBehind: (await holds.queuedHeldBehind(start)) ?? null,
-      waitsForRunLimit: runLimit?.waiting.includes(start.requestId) ?? false,
+      waitsForRunLimit: starts.runLimit?.waiting.includes(start.requestId) ?? false,
     });
   const skipped: ItemSkippedStart[] = [];
-  for (const start of await source.store.listSkippedItemStarts(found.item.id))
+  for (const start of starts.skipped)
     skipped.push({
       requestId: start.requestId,
       workflow: start.workflow,
       resource: start.resource,
       heldBehind: (await holds.skippedHeldBehind(start)) ?? null,
     });
+  const receipts = await runReceipts(source, own.values);
   return {
     item: found.item,
     runs: await Promise.all(
@@ -760,6 +820,7 @@ export async function assembleItemRead(
         itemRun(
           source,
           run,
+          receipts,
           holds.request(run.id),
           (await holds.runHeldBehind(run)) ?? null,
           terminalEvents
@@ -768,9 +829,9 @@ export async function assembleItemRead(
     ),
     queued,
     skipped,
-    hold,
-    held,
-    runLimit: runLimit && { limit: runLimit.limit, live: runLimit.live },
+    hold: starts.hold,
+    held: starts.held,
+    runLimit: starts.runLimit && { limit: starts.runLimit.limit, live: starts.runLimit.live },
     waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
       event: wait.event,
       about: wait.about,

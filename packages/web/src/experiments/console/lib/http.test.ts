@@ -70,9 +70,21 @@ describe('requestJson errors', () => {
 });
 
 describe('errorDetail', () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    (globalThis as { window?: unknown }).window = originalWindow;
+  });
+
   test('HttpError → parsed server message', () => {
     const err = new HttpError(403, '/api/workflows/foo', JSON.stringify({ error: 'denied' }));
     expect(errorDetail(err)).toBe('denied');
+  });
+
+  test('a refusal longer than the snippet reads in full', async () => {
+    const refusal = `Nothing you may answer has ref '${'x'.repeat(240)}'`;
+    respond(404, JSON.stringify({ error: refusal }));
+
+    expect(errorDetail(await caught())).toBe(refusal);
   });
 
   test('generic Error → message; non-Error → String()', () => {
@@ -98,6 +110,14 @@ describe('request serialization', () => {
         params: { runId: 'run/1', filename: 'nested/a b%.md' },
       })
     ).toBe('/api/artifacts/run%2F1/nested%2Fa%20b%25.md');
+  });
+
+  test('repeats an array query value once per entry, each encoded', () => {
+    expect(
+      buildApiUrl('/api/factory/progress', 'get', {
+        query: { codebaseId: 'cb', keys: ['1', 'a,b'] },
+      })
+    ).toBe('/api/factory/progress?codebaseId=cb&keys=1&keys=a%2Cb');
   });
 
   test('encodes JSON bodies and preserves headers, credentials and signal', async () => {

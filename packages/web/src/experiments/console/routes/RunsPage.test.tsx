@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
+import { ProjectAttentionLayout } from '../components/ProjectAttention';
 import { RunsPage, filterRuns } from './RunsPage';
 import { invalidate, set, subscribeKey } from '../store/cache';
 import { K } from '../store/keys';
@@ -175,7 +176,13 @@ test.each([false, true])(
     const html = renderToStaticMarkup(
       <MemoryRouter initialEntries={[project ? '/p/alpha' : '/']}>
         <Routes>
-          <Route path={project ? '/p/:projectId' : '/'} element={<RunsPage />} />
+          {project ? (
+            <Route path="/p/:projectId" element={<ProjectAttentionLayout />}>
+              <Route index element={<RunsPage />} />
+            </Route>
+          ) : (
+            <Route path="/" element={<RunsPage />} />
+          )}
         </Routes>
       </MemoryRouter>
     );

@@ -1,0 +1,266 @@
+{
+  "note": "GET /api/factory/item for item 1, copied 2026-11-17 from the live factory via dev:console (a read-only copy of its database); long strings trimmed. Round verdicts 'ended' re-read under #4's declared approval: 'approve' as approved, any other outcome undecided. progress.runs added after capture, from this response's runs[].workflow (none of these runs failed, so failedStep is null). Fields the API gained after the capture are filled as an item without them reads them (run pack, spend, pause and result fields; item skipped, waits, run limit, merged and landing; progress partOf; each run_ended cause the arrow id the same arrow carries in later captures).",
+  "response": {
+    "pack": "Wirasm/archon-software-factory",
+    "item": {
+      "item": {
+        "id": "55efdcaa9230f91ec0e586d8a3e6a86e",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "1"
+      },
+      "runs": [
+        {
+          "id": "88640c6d-975d-4232-8371-c55226236e2a",
+          "workflow": "Wirasm/archon-software-factory:triage",
+          "pack": null,
+          "status": "completed",
+          "outcome": "build",
+          "startedAt": "2026-11-16T23:28:17.000Z",
+          "completedAt": "2026-11-16T23:29:26.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "290212a7-c7cb-44b5-93c1-a801b0eb573a",
+            "sourceInstanceId": "fc-start-triage"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        },
+        {
+          "id": "147ff872-555d-43fe-ae98-3ee9e3b884ab",
+          "workflow": "Wirasm/archon-software-factory:plan",
+          "pack": null,
+          "status": "completed",
+          "outcome": "planned",
+          "startedAt": "2026-11-16T23:29:31.000Z",
+          "completedAt": "2026-11-16T23:31:19.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "88640c6d-975d-4232-8371-c55226236e2a",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        },
+        {
+          "id": "c90ebf41-6ea3-4261-b63b-b460ad78045e",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-16T23:31:23.000Z",
+          "completedAt": "2026-11-17T00:01:56.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "147ff872-555d-43fe-ae98-3ee9e3b884ab",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        }
+      ],
+      "queued": [],
+      "skipped": [],
+      "hold": null,
+      "held": [],
+      "runLimit": null,
+      "waits": [],
+      "questions": [],
+      "answers": [],
+      "links": [],
+      "merged": null,
+      "landing": null,
+      "degraded": [],
+      "progress": {
+        "title": "The live-home guard and dev:console have tests",
+        "running": null,
+        "round": {
+          "runId": "c90ebf41-6ea3-4261-b63b-b460ad78045e",
+          "iteration": 2,
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return"
+            },
+            {
+              "iteration": 2,
+              "verdict": "approved",
+              "outcome": "approve"
+            }
+          ]
+        },
+        "partOf": null,
+        "returned": 2,
+        "change": {
+          "url": "https://github.com/coleam00/archon-factory-console/pull/10",
+          "number": 10,
+          "merged": true,
+          "mergedAt": "2026-11-17T00:03:14Z"
+        },
+        "runs": [
+          {
+            "runId": "88640c6d-975d-4232-8371-c55226236e2a",
+            "workflow": "triage",
+            "failedStep": null
+          },
+          {
+            "runId": "147ff872-555d-43fe-ae98-3ee9e3b884ab",
+            "workflow": "plan",
+            "failedStep": null
+          },
+          {
+            "runId": "c90ebf41-6ea3-4261-b63b-b460ad78045e",
+            "workflow": "deliver",
+            "failedStep": null
+          }
+        ],
+        "shadows": [],
+        "parked": null,
+        "awaits": null
+      }
+    },
+    "runs": [
+      {
+        "runId": "88640c6d-975d-4232-8371-c55226236e2a",
+        "workflow": "triage",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "290212a7-c7cb-44b5-93c1-a801b0eb573a",
+          "sourceInstanceId": "fc-start-triage"
+        },
+        "costUsd": 0.7374944999999999,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      },
+      {
+        "runId": "147ff872-555d-43fe-ae98-3ee9e3b884ab",
+        "workflow": "plan",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "88640c6d-975d-4232-8371-c55226236e2a",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+        },
+        "costUsd": 0.6756357999999999,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      },
+      {
+        "runId": "c90ebf41-6ea3-4261-b63b-b460ad78045e",
+        "workflow": "deliver",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "147ff872-555d-43fe-ae98-3ee9e3b884ab",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+        },
+        "costUsd": 5.58625366,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return",
+              "summary": "Return: one test asserts refusal message wording (test check). Fix it by asserting non-null, then rename the test. Review and product approve, but the test check's finding is about what the test asser…",
+              "steps": [
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "I approve this. The change adds one file, packages/server/src/boot/live-home-guard.test.ts, with 7 tests for liveHomeRefusal. The tests cover every case the item asks for: no ARCHON_FACTORY_LIVE_HOME …"
+                },
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "return",
+                  "summary": "The change adds only packages/server/src/boot/live-home-guard.test.ts: 7 tests, stable over 5 runs, and included in the full server suite as its own group. Every point the item asks for is guarded: ea…"
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. The change adds one test file, packages/server/src/boot/live-home-guard.test.ts, with 7 tests. They cover every case the item lists: no live home, a different home, the same home in different…"
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "return",
+                  "summary": "Return: one test asserts refusal message wording (test check). Fix it by asserting non-null, then rename the test. Review and product approve, but the test check's finding is about what the test asser…"
+                }
+              ]
+            },
+            {
+              "iteration": 2,
+              "verdict": "approved",
+              "outcome": "approve",
+              "summary": "Approve item #1: one new file, packages/server/src/boot/live-home-guard.test.ts, with 7 tests covering every case in Done-when (no live home, different home, case and trailing-separator refusal, LIVE_…",
+              "steps": [
+                {
+                  "node": "rounds.fix",
+                  "outcome": "fixed",
+                  "summary": "I fixed the one finding: a test asserted the refusal message's wording. The test 'a server on the live factory home is refused and pointed at dev:console' is now 'a server on the live factory home is …"
+                },
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "sound",
+                  "summary": "Sound. The one finding returned last time is fixed: the test that checked the refusal message's wording now only checks that the server is refused (`not.toBeNull()`), and it has been renamed. The chan…"
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "I'm approving. The only change is one new file, `packages/server/src/boot/live-home-guard.test.ts`, with 7 tests that cover every case in Done-when: no live home (null), a different home (null), the s…"
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. The one finding returned last round is fixed: the refusal test now asserts only `not.toBeNull()` and is renamed, and none of the seven tests asserts message wording. The change is still one n…"
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "approve",
+                  "summary": "Approve item #1: one new file, packages/server/src/boot/live-home-guard.test.ts, with 7 tests covering every case in Done-when (no live home, different home, case and trailing-separator refusal, LIVE_…"
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      }
+    ]
+  }
+}

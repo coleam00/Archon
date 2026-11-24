@@ -90,9 +90,15 @@ export function serverErrorMessage(err: HttpError): string {
   return message;
 }
 
-/** Best-effort human detail from a thrown error (the server message for an HttpError). */
+/**
+ * Best-effort human detail from a thrown error: for an HttpError the server's own
+ * `error` (and `detail`), read from the whole body, else whatever the capped snippet holds.
+ */
 export function errorDetail(e: unknown): string {
-  if (e instanceof HttpError) return serverErrorMessage(e);
+  if (e instanceof HttpError) {
+    if (e.serverError === undefined) return serverErrorMessage(e);
+    return e.serverDetail ? `${e.serverError}: ${e.serverDetail}` : e.serverError;
+  }
   if (e instanceof Error) return e.message;
   return String(e);
 }
@@ -113,7 +119,9 @@ function serializeUrl(
   }
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(options?.query ?? {})) {
-    if (value !== undefined) query.set(key, String(value));
+    // An array is a repeated parameter (`keys=a&keys=b`), as the server's array schemas read it.
+    if (Array.isArray(value)) for (const entry of value) query.append(key, String(entry));
+    else if (value !== undefined) query.set(key, String(value));
   }
   return query.size > 0 ? `${url}?${query.toString()}` : url;
 }

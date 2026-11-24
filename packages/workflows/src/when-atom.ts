@@ -35,7 +35,7 @@ import { INPUTS_SCOPE } from './reference-scopes';
  * shorter operator would win and leave a stray `=` on the right-hand side).
  * The pattern below is built from this list so the type and the grammar cannot drift.
  */
-const WHEN_OPERATORS = ['==', '!=', '<=', '>=', '<', '>'] as const;
+export const WHEN_OPERATORS = ['==', '!=', '<=', '>=', '<', '>'] as const;
 
 export type WhenOperator = (typeof WHEN_OPERATORS)[number];
 

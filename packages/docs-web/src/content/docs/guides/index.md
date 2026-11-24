@@ -17,6 +17,7 @@ How-to guides for building and running AI coding workflows with Archon.
 - [Workflow language](/reference/workflow-language/) — Every workflow field, node type and engine behavior
 - [Authoring Commands](/guides/authoring-commands/) — Write prompt templates that serve as building blocks for workflow nodes
 - [Metrics](/guides/metrics/) — Return counts and judged scores from nodes and read them across runs with `archon metrics`
+- [The Factory tab](/guides/factory-console/) — What the console's Factory tab shows, and how a pack declares the factory view it draws
 
 ## Node Types
 

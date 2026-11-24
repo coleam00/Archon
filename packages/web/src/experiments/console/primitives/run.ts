@@ -307,7 +307,6 @@ export interface ListRunsOptions {
 }
 
 type AttentionResponse = components['schemas']['RunsNeedingAttentionResponse'];
-type AttentionQueueItem = components['schemas']['AttentionQueueItem'];
 
 /** An ask a completed run left on its item: an attention item no run holds. */
 export type ItemAsk = Extract<AttentionQueueItem, { kind: 'attention' }> & { run?: undefined };
@@ -357,4 +356,12 @@ export function toOwnerLostHolders(items: AttentionQueueItem[]): OwnerLostHolder
         ]
       : []
   );
+}
+
+/** One open item in the attention queue: an ask, a paused run's wait, or a run that cannot be read. */
+export type AttentionQueueItem = AttentionResponse['items'][number];
+
+/** A project's attention queue: its open items, the runs holding them, the runs that could not be read. */
+export interface AttentionQueue extends Pick<RunsAttention, 'runs' | 'degraded'> {
+  items: AttentionQueueItem[];
 }

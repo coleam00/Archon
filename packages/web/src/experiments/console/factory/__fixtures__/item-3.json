@@ -1,0 +1,444 @@
+{
+  "note": "GET /api/factory/item for item 3, copied 2026-11-17 from the live factory via dev:console (a read-only copy of its database); long strings trimmed. Round verdicts 'ended' re-read under #4's declared approval: 'approve' as approved, any other outcome undecided. progress.runs added after capture, from this response's runs[].workflow (none of these runs failed, so failedStep is null). Fields the API gained after the capture are filled as an item without them reads them (run pack, spend, pause and result fields; item skipped, waits, run limit, merged and landing; progress partOf; each run_ended cause the arrow id the same arrow carries in later captures).",
+  "response": {
+    "pack": "Wirasm/archon-software-factory",
+    "item": {
+      "item": {
+        "id": "97ccab518464519b42eef43af5c39c34",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "3"
+      },
+      "runs": [
+        {
+          "id": "d6a33d87-0ac6-431e-a2f8-4fa33e91a1b2",
+          "workflow": "Wirasm/archon-software-factory:triage",
+          "pack": null,
+          "status": "completed",
+          "outcome": "build",
+          "startedAt": "2026-11-17T03:06:46.000Z",
+          "completedAt": "2026-11-17T03:09:04.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "3b184b44-b90a-4d4c-b205-15755501533d",
+            "sourceInstanceId": "fc-start-triage"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        },
+        {
+          "id": "7e1a2eb1-d114-497f-ac42-71b2d598fa2d",
+          "workflow": "Wirasm/archon-software-factory:plan",
+          "pack": null,
+          "status": "completed",
+          "outcome": "planned",
+          "startedAt": "2026-11-17T03:09:16.000Z",
+          "completedAt": "2026-11-17T03:26:51.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "d6a33d87-0ac6-431e-a2f8-4fa33e91a1b2",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        },
+        {
+          "id": "ab288319-6192-4645-8306-65622f0a966b",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-17T03:27:00.000Z",
+          "completedAt": "2026-11-17T04:33:24.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "7e1a2eb1-d114-497f-ac42-71b2d598fa2d",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        },
+        {
+          "id": "80cc1489-d934-4cba-8979-de51c375bcf1",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-17T04:35:36.000Z",
+          "completedAt": "2026-11-17T05:10:28.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "2b8679a4-4197-420f-992b-fc6f5e8e62a2",
+            "sourceInstanceId": "fc-start-deliver"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        }
+      ],
+      "queued": [],
+      "skipped": [],
+      "hold": null,
+      "held": [],
+      "runLimit": null,
+      "waits": [],
+      "questions": [],
+      "answers": [
+        {
+          "kind": "ask",
+          "runId": "ab288319-6192-4645-8306-65622f0a966b",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-17T04:35:28.663Z",
+          "via": "cli",
+          "ref": "ask:e3859d1c14c102d4c7033ce855630f5a",
+          "question": "Merge with the Postgres path of listProjectItemsByActivity unverified, or run factory-reads.postgres.integration.test.ts against a scratch Postgres first?",
+          "answer": {
+            "decision": "run-pg-test",
+            "text": "Run it in CI: a postgres job was added on main (6bba377)."
+          },
+          "chosen": {
+            "id": "run-pg-test",
+            "does": "The operator provides a scratch Postgres and sets ARCHON_TEST_PG_URL, and the Postgres integration test runs before merge."
+          },
+          "withdrawn": false,
+          "by": {
+            "declared": "cole-owner"
+          },
+          "fromRun": null
+        },
+        {
+          "kind": "asks_settled",
+          "runId": "ab288319-6192-4645-8306-65622f0a966b",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-17T04:35:28.663Z",
+          "via": null,
+          "answered": 1,
+          "withdrawn": 0
+        },
+        {
+          "kind": "ask",
+          "runId": "80cc1489-d934-4cba-8979-de51c375bcf1",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-17T05:12:59.018Z",
+          "via": "cli",
+          "ref": "ask:f938cc6ad14499c2eef5c57b54bf9600",
+          "question": "Should the board's approved state come from the round verdict and outcome that the API already returns, or should DESIGN.md and the factory-view declaration gain a declared approving outcome?",
+          "answer": {
+            "decision": "declare-approving-outcome",
+            "text": "Declared, but in the board issue #4 (ruling written there); #3 lands as is."
+          },
+          "chosen": {
+            "id": "declare-approving-outcome",
+            "does": "The factory-view declaration names the approving outcome and DESIGN.md defines approval per declaration."
+          },
+          "withdrawn": false,
+          "by": {
+            "declared": "cole-owner"
+          },
+          "fromRun": null
+        },
+        {
+          "kind": "asks_settled",
+          "runId": "80cc1489-d934-4cba-8979-de51c375bcf1",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-17T05:12:59.018Z",
+          "via": null,
+          "answered": 1,
+          "withdrawn": 0
+        }
+      ],
+      "links": [],
+      "merged": null,
+      "landing": null,
+      "degraded": [],
+      "progress": {
+        "title": "A read-only page of a project's items with each item's live progress (running step, round, returns, change)",
+        "running": null,
+        "round": {
+          "runId": "80cc1489-d934-4cba-8979-de51c375bcf1",
+          "iteration": 2,
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return"
+            },
+            {
+              "iteration": 2,
+              "verdict": "undecided",
+              "outcome": "ask"
+            }
+          ]
+        },
+        "partOf": null,
+        "returned": 2,
+        "change": {
+          "url": "https://github.com/coleam00/archon-factory-console/pull/14",
+          "number": 14,
+          "merged": "unknown",
+          "mergedAt": null
+        },
+        "runs": [
+          {
+            "runId": "d6a33d87-0ac6-431e-a2f8-4fa33e91a1b2",
+            "workflow": "triage",
+            "failedStep": null
+          },
+          {
+            "runId": "7e1a2eb1-d114-497f-ac42-71b2d598fa2d",
+            "workflow": "plan",
+            "failedStep": null
+          },
+          {
+            "runId": "ab288319-6192-4645-8306-65622f0a966b",
+            "workflow": "deliver",
+            "failedStep": null
+          },
+          {
+            "runId": "80cc1489-d934-4cba-8979-de51c375bcf1",
+            "workflow": "deliver",
+            "failedStep": null
+          }
+        ],
+        "shadows": [],
+        "parked": null,
+        "awaits": null
+      }
+    },
+    "runs": [
+      {
+        "runId": "d6a33d87-0ac6-431e-a2f8-4fa33e91a1b2",
+        "workflow": "triage",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "3b184b44-b90a-4d4c-b205-15755501533d",
+          "sourceInstanceId": "fc-start-triage"
+        },
+        "costUsd": 0.4627796,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      },
+      {
+        "runId": "7e1a2eb1-d114-497f-ac42-71b2d598fa2d",
+        "workflow": "plan",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "d6a33d87-0ac6-431e-a2f8-4fa33e91a1b2",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+        },
+        "costUsd": 8.0685754,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      },
+      {
+        "runId": "ab288319-6192-4645-8306-65622f0a966b",
+        "workflow": "deliver",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "7e1a2eb1-d114-497f-ac42-71b2d598fa2d",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+        },
+        "costUsd": 28.277370919999996,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return",
+              "summary": "Outcome is return. The product review found a real defect: a round whose checks answered ask or replan reads as passed, so the board would show it as approved. The test check found five gaps where the…",
+              "steps": [
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "return",
+                  "summary": "The tests this change adds are deterministic (5 runs each, no flakes) and caught 34 of the 44 code breaks I tried. Every test earns its place. Five things the item asks for still break with no test fa…"
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. GET /api/factory/items returns a page shaped { pack, items, next }. Each entry is the engine's ItemRead with `progress` added, and all of `progress` comes from the factory view declaration: r…"
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "return",
+                  "summary": "The route does what the item asks on real data: against a scratch copy of the seeded console home it returned this project's 5 items with the right running steps (rounds.product__product, build__build…"
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "return",
+                  "summary": "Outcome is return. The product review found a real defect: a round whose checks answered ask or replan reads as passed, so the board would show it as approved. The test check found five gaps where the…"
+                }
+              ]
+            },
+            {
+              "iteration": 2,
+              "verdict": "undecided",
+              "outcome": "ask",
+              "summary": "Outcome is ask, not approve. The item names Postgres as a required adapter, and the Postgres path of listProjectItemsByActivity has never run: no reviewer ran it, and the builder refused to run it wit…",
+              "steps": [
+                {
+                  "node": "rounds.fix",
+                  "outcome": "fixed",
+                  "summary": "Fixed the round verdict defect and closed the five test gaps; the two remaining acceptance findings are answered below.\n\nProduct review, a round ending in `ask` or `replan` read as `passed` (a wrong v…"
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "Approve. I ran the new `GET /api/factory/items` route against a server I started on a scratch home. Its database held only the change's own fixtures (copied from the live factory's runs), plus one ite…"
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. Everything the last round sent back is fixed in cf9281316, and I checked each fix by running it, not by reading the builder's account. A round that ended in ask or replan now reads `verdict: …"
+                },
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "sound",
+                  "summary": "Sound. All five test gaps returned last round are fixed: each named mutant now fails a test. I re-ran every one in a scratch copy at cf9281316. The round-verdict defect is fixed too, and a test guards…"
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "ask",
+                  "summary": "Outcome is ask, not approve. The item names Postgres as a required adapter, and the Postgres path of listProjectItemsByActivity has never run: no reviewer ran it, and the builder refused to run it wit…"
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      },
+      {
+        "runId": "80cc1489-d934-4cba-8979-de51c375bcf1",
+        "workflow": "deliver",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "2b8679a4-4197-420f-992b-fc6f5e8e62a2",
+          "sourceInstanceId": "fc-start-deliver"
+        },
+        "costUsd": 16.93593902,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return",
+              "summary": "Outcome is return, because the test check returned the change. The product and review checks both approved the code, and the test check found three things to fix before landing: one unguarded behaviou…",
+              "steps": [
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "return",
+                  "summary": "The Postgres integration test was not run here because no Postgres exists on this machine. It is skipped locally and is picked up by the CI postgres job's glob. All other new and edited tests pass and…"
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "Approve. GET /api/factory/items gives the board, map and item pages what DESIGN.md \"Data\" asks for, and the API reference describes it accurately. I seeded a scratch home and project from the change's…"
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Land it. GET /api/factory/items returns a page of a project's items, each the engine's own ItemRead plus progress (running, round, returned, change, title) derived through the factory view declaration…"
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "return",
+                  "summary": "Outcome is return, because the test check returned the change. The product and review checks both approved the code, and the test check found three things to fix before landing: one unguarded behaviou…"
+                }
+              ]
+            },
+            {
+              "iteration": 2,
+              "verdict": "undecided",
+              "outcome": "ask",
+              "summary": "Outcome is ask, not approve. No report returns or replans. The review, test check and product review all find the code right against the item, and no check found a change that must be made. The report…",
+              "steps": [
+                {
+                  "node": "rounds.fix",
+                  "outcome": "fixed",
+                  "summary": "All three test-check findings are fixed in commit eb1adda6f, which is pushed to PR #14's branch.\n\n- **Round and change were not tested against the latest run** (an unguarded behaviour). The existing t…"
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. All three things the test check returned are fixed in eb1adda6f, and I confirmed it by running them. The two-deliver-run test now fails when the earlier mutation is applied (latest() walking …"
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "GET /api/factory/items gives the board what item #3 asks for. I ran it against a scratch server loaded with the change's own real-run fixtures. It returned the right running step (deliver at rounds.re…"
+                },
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "sound",
+                  "summary": "The tests are sound. All three findings from last round are fixed, and I confirmed each one. Mutating latest() to walk the runs oldest first now fails 'returned counts every run that sent the item bac…"
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "ask",
+                  "summary": "Outcome is ask, not approve. No report returns or replans. The review, test check and product review all find the code right against the item, and no check found a change that must be made. The report…"
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      }
+    ]
+  }
+}

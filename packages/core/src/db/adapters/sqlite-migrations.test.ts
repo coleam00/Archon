@@ -10,7 +10,8 @@ import { LEGACY_VENDOR_ALIASES } from '@archon/providers/credential-catalog';
 import { getSchemaSQL } from '../bundled-schema';
 import { runEventsSql } from '../run-events-sql';
 import { metricRecordsSql } from '../workflow-metrics';
-import { queuedItemStartsSql, receiptBindingsSql, skippedItemStartsSql } from '../resource-starts';
+import { queuedItemStartsSqlFor, skippedItemStartsSqlFor } from '../item-starts';
+import { receiptBindingsSql } from '../resource-starts';
 import { SqliteAdapter, sqliteDialect } from './sqlite';
 import { isSqliteSchemaCurrent } from './sqlite-schema-state';
 import { prepareAll, prepareGet } from './sqlite-statements';
@@ -582,10 +583,10 @@ describe('item start indexes', () => {
       (raw_query(path, `EXPLAIN QUERY PLAN ${sql}`) as { detail: string }[])
         .map(row => row.detail)
         .join('\n');
-    expect(plan(skippedItemStartsSql)).toContain(
+    expect(plan(skippedItemStartsSqlFor(1))).toContain(
       'USING INDEX idx_resource_start_item (item_id=? AND status=?)'
     );
-    expect(plan(queuedItemStartsSql)).toContain(
+    expect(plan(queuedItemStartsSqlFor(1))).toContain(
       'USING INDEX idx_resource_start_item (item_id=? AND status=?)'
     );
     expect(plan(receiptBindingsSql)).toContain(

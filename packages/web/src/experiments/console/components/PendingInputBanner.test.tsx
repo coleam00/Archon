@@ -26,7 +26,7 @@ test('the attention banner shows a run holding its item after its owner is gone,
     </MemoryRouter>
   );
   expect(html).toContain('data-owner-lost-run-id="holder-1"');
-  expect(html).toContain('issue-1');
+  expect(html).toContain('<span class="font-mono">#1</span>');
   expect(html).toContain('>Resume<');
   expect(html).toContain('>Abandon<');
 });
