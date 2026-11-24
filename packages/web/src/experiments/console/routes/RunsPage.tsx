@@ -213,7 +213,6 @@ export function filterRuns(
 
 interface SectionHeaderProps {
   label: string;
-  /** Null while the count is not known yet. */
   count: number | null;
 }
 
@@ -297,7 +296,6 @@ function RunsFeed({
       ) : null}
 
       {notice}
-
       {recent.length > 0 ? (
         <section>
           <SectionHeader label={recentLabel} count={recent.length} />
