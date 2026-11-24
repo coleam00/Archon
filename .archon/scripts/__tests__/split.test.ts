@@ -6,7 +6,7 @@ import { trackTempRoots } from './temp-roots';
 import { filedIssues, splitMarker } from '../../workflows/sdlc/.shared/split';
 import { state } from 'archon:script';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
-import { gitCheckout, hostCli, labelWrites, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
+import { hostCli, labelWrites, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -39,7 +39,7 @@ interface Install {
 }
 
 function install(): Install {
-  const checkout = gitCheckout(track);
+  const checkout = track(mkdtempSync(join(tmpdir(), 'archon-split-cwd-')));
   const home = track(mkdtempSync(join(tmpdir(), 'archon-split-home-')));
   return {
     checkout,
@@ -188,11 +188,25 @@ describe('split publish', () => {
 
   test('an item an earlier split filed issues from cannot be built whole', () => {
     const at = install();
-    seed(at);
-    const first = publish(at, { kind: 'prd' });
-    ok(first);
-    seed(at);
-    const run = publish(at, { kind: 'whole', route: 'plan' }, { issues: [...first.createdIssues], planned: [] });
+    const issueUrl = (number: number): string => `https://${PR.repo.host}/${PR.repo.path}/issues/${String(number)}`;
+    seed(at, doc => ({
+      ...doc,
+      facts: {
+        ...doc.facts,
+        split: {
+          status: 'done',
+          kind: 'prd',
+          issues: [
+            { key: 'measure', number: 100, url: issueUrl(100), title: 'Measure the signal' },
+            { key: 'feature', number: 101, url: issueUrl(101), title: 'Ship the thin slice' },
+          ],
+          adopted: [],
+          at: AT,
+          run_id: 'run-1',
+        },
+      },
+    }));
+    const run = publish(at, { kind: 'whole', route: 'plan' }, { planned: [] });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('the item is already split into #100, #101, so it cannot be built whole');
     expect(run.comments).toEqual([]);
