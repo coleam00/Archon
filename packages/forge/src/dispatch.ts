@@ -588,7 +588,7 @@ function remedy(
   tokenEnvOverride: string | undefined
 ): string {
   if (kind === 'no_plugin_for_host' || metadata === undefined) {
-    return "Install a forge plugin that claims this host with `archon plugin add`, or map the host to an installed plugin under `forge.hosts` in Archon's config.";
+    return "Install a forge plugin that claims this host with `archon plugin add <owner/repo[/path][@tag]>`, or map the host to an installed plugin under `forge.hosts` in Archon's config.";
   }
   // The plugin's own text names the variables it declares, which a configured token_env replaces.
   if (kind === 'no_credential' && tokenEnvOverride) {
@@ -597,7 +597,7 @@ function remedy(
   const own = metadata.remedies?.[kind];
   if (own) return own;
   return kind === 'unsupported_op'
-    ? `Update plugin ${metadata.name} (installed ${metadata.version}) with \`archon plugin update\`; \`archon plugin list\` shows what is installed.`
+    ? `Update plugin ${metadata.name} (installed ${metadata.version}): find its id with \`archon plugin list\`, then run \`archon plugin update <id>\`.`
     : `Supply the credential plugin ${metadata.name} reads${metadata.token_env.length > 0 ? ` (${metadata.token_env.join(', ')})` : ''} in Archon's env file or the run's environment.`;
 }
 

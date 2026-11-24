@@ -149,7 +149,7 @@ Otherwise it exits 1 with the first reason that applies, in this order:
 
 Any other failure of the read keeps its own kind, such as `unavailable` after the read's retries.
 
-A `no_plugin_for_host`, `unsupported_op`, `no_credential`, `authorization` or `not_found` failure carries `remedy`, the operator's next step. For `unsupported_op` and `no_credential` it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step (`archon plugin update`, or the credential variables the plugin reads). The remedy for `authorization` names the credential source, never the token.
+A `no_plugin_for_host`, `unsupported_op`, `no_credential`, `authorization` or `not_found` failure carries `remedy`, the operator's next step. For `unsupported_op` and `no_credential` it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step (find the plugin's id with `archon plugin list`, then run `archon plugin update <id>`; or the credential variables the plugin reads). The remedy for `authorization` names the credential source, never the token.
 
 The credential is resolved the way an operation resolves it, so for GitHub the check may run `gh auth token`. A `host` check, or one whose plugin does not advertise `pr.view`, makes no read: there a credential that resolves can still be expired or lack access to a repository, which the first operation reports.
 

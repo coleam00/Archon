@@ -247,7 +247,7 @@ function packForgeIssues(
         level: 'warning',
         field: 'pack_forge',
         message: `pack '${pack.key}' needs forge operation '${operation}', which no installed forge plugin advertises (installed: ${installed.length > 0 ? installed.join(', ') : 'none'})`,
-        hint: 'A run of this pack is refused at start until a plugin serves it: `archon plugin add` or `archon plugin update`.',
+        hint: 'A run of this pack is refused at start until a plugin serves it: install one with `archon plugin add <owner/repo[/path][@tag]>`, or update an installed one with `archon plugin update <id>` (find its id with `archon plugin list`).',
       })
     ),
     ...discovery.unavailable.map(

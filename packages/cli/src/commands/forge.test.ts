@@ -692,7 +692,20 @@ test('forge check exits 1 with a typed reason for a missing plugin, capability o
     },
     unsupported: ['pr.merge', 'pr.review.submit'],
     // The test plugin states no remedies, so forge names the generic step.
-    remedy: expect.stringContaining('archon plugin update'),
+    remedy: expect.stringContaining('archon plugin update <id>'),
+  });
+
+  // A plugin's own remedy replaces forge's generic step.
+  const ownRemedy = await checkForge(
+    { host: 'forge.example', operations: ['pr.merge'] },
+    env,
+    'remedies'
+  );
+  expect(ownRemedy.code).toBe(1);
+  expect(ownRemedy.response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    remedy: 'Run the fixture upgrade.',
   });
 
   const noCredential = await checkForge(
