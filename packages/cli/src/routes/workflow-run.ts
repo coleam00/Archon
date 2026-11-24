@@ -7,6 +7,7 @@ import { fail } from './context';
 import type { WorkflowRoute } from './workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRunOptions } from '../commands/workflow-shared';
+import type { RunRestart } from '../commands/workflow-run-restart';
 
 /** True when `path` exists and is a directory (used to validate `--workflow-source`). */
 async function isPathDirectory(path: string): Promise<boolean> {
@@ -300,6 +301,30 @@ async function supersededRun(route: WorkflowRoute, codebaseId: string | undefine
   return declaration.superseded;
 }
 
+/** Set the lane the record gives a restart: adopt a continue hand-off, else supersede. */
+async function applyRestartLane(
+  host: WorkflowRoute['host'],
+  options: WorkflowRunOptions,
+  restart: RunRestart,
+  failed: WorkflowRun
+): Promise<void> {
+  const { lane } = restart;
+  if (lane.kind === 'adopt') {
+    options.adoptRunId = lane.runId;
+    options.supersedesRunId = undefined;
+    // An adoption would take the hand-off run's item; the restart stays on the failed run's.
+    if (options.item === undefined && failed.item_id) {
+      options.item = (await host.deps.store.getItem(failed.item_id))?.key;
+    }
+    return;
+  }
+  options.supersedesRunId = lane.runId;
+  options.fromBranch = lane.copyHandoff?.commit;
+  options.checkoutHandoff = lane.copyHandoff;
+  // An explicit --base wins; --no-worktree runs in place, where a base has no effect.
+  if (!options.noWorktree) options.baseBranch ??= restart.baseBranch;
+}
+
 /**
  * `workflow run --supersedes <run-id>` with no workflow name: start the run again as its
  * record describes it, with its workflow, message, inputs, definitions source and lane
@@ -334,21 +359,7 @@ async function runRestart(route: WorkflowRoute): Promise<number> {
   options.inputs = restart.inputs
     ? Object.entries(restart.inputs).map(([name, value]) => `${name}=${value}`)
     : undefined;
-  const { lane } = restart;
-  if (lane.kind === 'adopt') {
-    options.adoptRunId = lane.runId;
-    options.supersedesRunId = undefined;
-    // An adoption would take the hand-off run's item; the restart stays on the failed run's.
-    if (options.item === undefined && failed.item_id) {
-      options.item = (await host.deps.store.getItem(failed.item_id))?.key;
-    }
-  } else {
-    options.supersedesRunId = lane.runId;
-    options.fromBranch = lane.copyHandoff?.commit;
-    options.checkoutHandoff = lane.copyHandoff;
-    // An explicit --base wins; --no-worktree runs in place, where a base has no effect.
-    if (!options.noWorktree) options.baseBranch ??= restart.baseBranch;
-  }
+  await applyRestartLane(host, options, restart, failed);
   await route.commands.workflowRunCommand(
     host,
     codebaseId === undefined ? await restartCwd(route, failed) : route.effectiveCwd,

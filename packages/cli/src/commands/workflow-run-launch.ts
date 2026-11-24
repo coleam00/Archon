@@ -728,6 +728,7 @@ function createSetupRun(
 ): Promise<WorkflowRun> {
   const { request, admission, conversation, preparedAiConfiguration, continuation } = launch;
   const { declaration } = continuation;
+  const handoff = request.options.checkoutHandoff;
   return request.host.deps.store.createWorkflowRun({
     id: runId,
     workflow_name: admission.workflow.name,
@@ -742,13 +743,9 @@ function createSetupRun(
       ...(preparedAiConfiguration.runConfigMetadata
         ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAiConfiguration.runConfigMetadata }
         : {}),
-      ...(admission.resolvedInputs
-        ? { [SUBRUN_METADATA_KEYS.inputs]: admission.resolvedInputs }
-        : {}),
+      ...(admission.resolvedInputs && { [SUBRUN_METADATA_KEYS.inputs]: admission.resolvedInputs }),
       ...(declaration ? { [CONTINUATION_METADATA_KEY]: declaration.stamp } : {}),
-      ...(request.options.checkoutHandoff
-        ? { [CHECKOUT_HANDOFF_METADATA_KEY]: { ...request.options.checkoutHandoff } }
-        : {}),
+      ...(handoff && { [CHECKOUT_HANDOFF_METADATA_KEY]: handoff }),
     },
     ...(declaration ? { adopted_from_run_id: declaration.runId } : {}),
     ...(request.options.item === undefined ? {} : { item_key: request.options.item }),
