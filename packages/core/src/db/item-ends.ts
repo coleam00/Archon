@@ -1,11 +1,13 @@
 /**
  * Ends of an item (`remote_agent_item_ends`) and the runs each saw
- * (`remote_agent_item_end_runs`): append-only facts, never updated or deleted. An end holds
- * until work starts on the item again (`schemas/item-end.ts`): a run on the item the end did
- * not see, a run resumed since (its `active_phase_started_at` changed), a live run, or a
- * queued start. The rule compares run identities and copied values, never clocks, so a run
- * whose transaction overlapped the end's, or a run row id reused after cleanup, still opens
- * the item. Opening writes nothing, and deleting runs the end saw leaves it holding.
+ * (`remote_agent_item_end_runs`, the item's runs and every run below them): append-only
+ * facts, but for `opened_at`, written once. An end holds until work starts on the item again
+ * (`schemas/item-end.ts`): a run in the item's tree the end did not see, a run resumed since
+ * (its `active_phase_started_at` changed), a live run, or a queued start. The rule compares
+ * run identities and copied values, never clocks, so a run whose transaction overlapped the
+ * end's, or a run row id reused after cleanup, still opens the item. Opening writes nothing,
+ * and deleting runs the end saw leaves it holding. Deleting the run that opened it would
+ * not, so a delete marks such an end opened first (`markOpenedItemEnds`).
  */
 import {
   itemEndBlockerSchema,
@@ -17,7 +19,7 @@ import {
 } from '@archon/workflows/schemas/item-end';
 import { askItemRef } from '@archon/workflows/attention-item-refs';
 import type { ItemAct } from '@archon/workflows/schemas/item-act';
-import { getDatabase, getDatabaseType, pool } from './connection';
+import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import { actColumns, actRead, type ActColumns } from './item-act';
 import type { TransactionQuery } from './resource-slots';
 import { getLog } from './workflow-run-shared';
@@ -44,26 +46,59 @@ function endRead(row: EndRow): ItemEnd | ItemEndDegraded {
 
 const LIVE = "('pending', 'running', 'paused')";
 
+/** The runs of item `itemId` (SQL) and every run below them, as a recursive `tree(id)`. */
+function runTree(itemId: string): string {
+  return `WITH RECURSIVE tree(id) AS (
+      SELECT id FROM remote_agent_workflow_runs WHERE item_id = ${itemId}
+      UNION SELECT c.id FROM remote_agent_workflow_runs c JOIN tree t ON c.parent_run_id = t.id
+    )`;
+}
+
 /**
- * SQL true while end `e` holds: every run on its item is one the end saw, not resumed since
- * (resume is the only write of `active_phase_started_at`), no run on it is live, and no start
- * is queued on it.
+ * SQL true while a run in the tree of end `e`'s item is one the end did not see, or was
+ * resumed since (resume is the only write of `active_phase_started_at`). Once true, only
+ * deleting that run could make it false again, which `markOpenedItemEnds` prevents.
+ */
+function opened(): string {
+  const same = getDatabaseType() === 'sqlite' ? 'IS' : 'IS NOT DISTINCT FROM';
+  return `EXISTS (
+      ${runTree('e.item_id')}
+      SELECT 1 FROM remote_agent_workflow_runs n JOIN tree t ON t.id = n.id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM remote_agent_item_end_runs k
+        WHERE k.end_id = e.id AND k.run_id = CAST(n.id AS TEXT)
+          AND k.active_phase_started_at ${same} n.active_phase_started_at
+      )
+    )`;
+}
+
+/**
+ * SQL true while end `e` holds: it was not marked opened, no run in its item's tree opened
+ * it, none is live, and no start is queued on the item.
  */
 function holds(): string {
-  const same = getDatabaseType() === 'sqlite' ? 'IS' : 'IS NOT DISTINCT FROM';
-  return `NOT EXISTS (
-      SELECT 1 FROM remote_agent_workflow_runs n
-      WHERE n.item_id = e.item_id
-        AND (n.status IN ${LIVE} OR NOT EXISTS (
-          SELECT 1 FROM remote_agent_item_end_runs k
-          WHERE k.end_id = e.id AND k.run_id = CAST(n.id AS TEXT)
-            AND k.active_phase_started_at ${same} n.active_phase_started_at
-        ))
+  return `e.opened_at IS NULL AND NOT ${opened()}
+    AND NOT EXISTS (
+      ${runTree('e.item_id')}
+      SELECT 1 FROM remote_agent_workflow_runs n JOIN tree t ON t.id = n.id
+      WHERE n.status IN ${LIVE}
     )
     AND NOT EXISTS (
       SELECT 1 FROM remote_agent_resource_start_requests q
       WHERE q.item_id = e.item_id AND q.status = 'queued'
     )`;
+}
+
+/**
+ * Record, once, that a run opened each end it did, in the transaction that deletes runs and
+ * before it does: deleting the run that opened an item must not bring its end back. Every
+ * path that deletes runs calls this.
+ */
+export async function markOpenedItemEnds(query: TransactionQuery): Promise<void> {
+  await query(
+    `UPDATE remote_agent_item_ends AS e SET opened_at = ${getDialect().now()}
+     WHERE e.opened_at IS NULL AND ${opened()}`
+  );
 }
 
 /**
@@ -129,9 +164,10 @@ export async function recordItemEnd(
     if (row === undefined) throw new Error('The end was not written');
     // Copied in SQL, so each time compares exactly with the column it came from.
     await query(
-      `INSERT INTO remote_agent_item_end_runs (end_id, run_id, active_phase_started_at)
+      `${runTree('$2')}
+       INSERT INTO remote_agent_item_end_runs (end_id, run_id, active_phase_started_at)
        SELECT $1, CAST(r.id AS TEXT), r.active_phase_started_at
-       FROM remote_agent_workflow_runs r WHERE r.item_id = $2`,
+       FROM remote_agent_workflow_runs r JOIN tree t ON t.id = r.id`,
       [row.id, input.itemId]
     );
     const blocker = await blockerOf(query, input.itemId);

@@ -598,7 +598,8 @@ export class SqliteAdapter implements IDatabase {
         from_run_id TEXT,
         from_node_path TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        run_id TEXT
+        run_id TEXT,
+        opened_at TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_item_ends_item_id ON remote_agent_item_ends(item_id);
       -- The runs an end saw on its item; see migrations/000_combined.sql.

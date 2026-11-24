@@ -24,6 +24,7 @@ import {
   type DeletedWorkflowRun,
 } from '@archon/workflows/store';
 import { getDatabase, getDialect, pool } from './connection';
+import { markOpenedItemEnds } from './item-ends';
 import { insertWorkflowEvent } from './workflow-events';
 import { getWorkflowRun } from './workflow-run-reads';
 import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
@@ -335,6 +336,7 @@ export async function deleteOldWorkflowRuns(
         [olderThanDays]
       );
       const runs = [...selected.rows];
+      if (runs.length > 0) await markOpenedItemEnds(query);
       for (let start = 0; start < runs.length; start += DELETE_CHUNK) {
         const ids = runs.slice(start, start + DELETE_CHUNK).map(run => run.id);
         const list = ids.map((_, index) => `$${String(index + 1)}`).join(', ');
@@ -427,6 +429,7 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
           adopters.rows.map(row => ({ id: String(row.id), status: row.status }))
         );
       }
+      await markOpenedItemEnds(query);
       await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
       await query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
     });

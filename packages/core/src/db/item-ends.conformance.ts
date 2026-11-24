@@ -199,6 +199,55 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
     }
   });
 
+  test("resuming a failed run below the item's runs opens the item", async () => {
+    const harness = await makeHarness();
+    try {
+      const parent = await startOnItem(harness);
+      const child = await startOnItem(harness, parent);
+      await harness.store.failWorkflowRun(child, 'child failed');
+      await harness.store.failWorkflowRun(parent, 'parent failed');
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      expect(await holding(harness)).not.toBeNull();
+      await harness.store.resumeWorkflowRun(child);
+      expect(await holding(harness)).toBeNull();
+      await harness.store.failWorkflowRun(child, 'child failed again');
+      expect(await holding(harness)).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('cleaning up the run that opened an item does not bring its end back', async () => {
+    const harness = await makeHarness();
+    try {
+      const { deleteOldWorkflowRuns, deleteWorkflowRun } = await import('./workflow-run-writes');
+      const first = await startOnItem(harness);
+      await harness.store.failWorkflowRun(first, 'boom');
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      const reopening = await startOnItem(harness);
+      await harness.store.failWorkflowRun(reopening, 'boom again');
+      expect(await holding(harness)).toBeNull();
+      await deleteWorkflowRun(reopening);
+      expect(await holding(harness)).toBeNull();
+
+      // The same through age-based cleanup of every run, ended again first.
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      const again = await startOnItem(harness);
+      await harness.store.failWorkflowRun(again, 'boom');
+      const old = new Date(Date.now() - 2 * 86_400_000).toISOString();
+      await harness.db.query(
+        'UPDATE remote_agent_workflow_runs SET started_at = $1 WHERE id = $2 OR id = $3',
+        [old, first, again]
+      );
+      expect((await deleteOldWorkflowRuns(1)).runs.map(run => run.id).sort()).toEqual(
+        [first, again].sort()
+      );
+      expect(await holding(harness)).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('an end is refused, naming it, while a run, a child run or a queued start is live', async () => {
     const harness = await makeHarness();
     try {

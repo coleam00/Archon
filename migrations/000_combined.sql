@@ -807,10 +807,11 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
   CHECK ((withdraws IS NULL) = (text IS NOT NULL))
 );
 
--- Ends of an item: an operator's statement that nothing more will happen on it. Append-only,
--- like rulings: no row is updated or deleted, and nothing writes one by itself. run_id names
--- the item's latest run, if any, when the end was recorded. from_run_id and run_id have no
--- foreign key, so run cleanup keeps the end.
+-- Ends of an item: an operator's statement that nothing more will happen on it. Rows are
+-- never deleted, and nothing writes one by itself. run_id names the item's latest run, if
+-- any, when the end was recorded. opened_at is written once, by the transaction that deletes
+-- runs, for an end a run had opened, so deleting that run does not bring the end back.
+-- from_run_id and run_id have no foreign key, so run cleanup keeps the end.
 CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   -- Recording order; timestamps tie within a millisecond and `id` is random.
@@ -823,14 +824,16 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
   from_run_id TEXT,
   from_node_path TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  run_id TEXT
+  run_id TEXT,
+  opened_at TIMESTAMP WITH TIME ZONE
 );
 
--- The runs an end saw on its item, copied in the transaction that records it, each with its
--- active_phase_started_at, which only a resume writes; same type as the run's column, so the
--- two compare exactly. The end holds while every run on the item is one it saw, unresumed
--- since, and none is live: a run created or resumed later, even by a transaction that
--- overlapped the end's, opens the item for good, and deleting old runs leaves it holding.
+-- The runs an end saw on its item and below its runs, copied in the transaction that records
+-- it, each with its active_phase_started_at, which only a resume writes; same type as the
+-- run's column, so the two compare exactly. The end holds while every run in the item's tree
+-- is one it saw, unresumed since, and none is live: a run created or resumed later, even by a
+-- transaction that overlapped the end's, opens the item for good (opened_at keeps it open
+-- once that run is deleted), and deleting runs the end saw leaves it holding.
 -- run_id has no foreign key, so run cleanup keeps the row.
 CREATE TABLE IF NOT EXISTS remote_agent_item_end_runs (
   end_id TEXT NOT NULL REFERENCES remote_agent_item_ends(id),

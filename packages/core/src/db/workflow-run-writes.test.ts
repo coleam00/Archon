@@ -187,13 +187,14 @@ describe('workflow run writes', () => {
       const result = await deleteOldWorkflowRuns(30);
 
       expect(result.runs).toEqual(selected);
-      expect(mockQuery).toHaveBeenCalledTimes(3);
+      // The select, the mark of ends a deleted run opened, then the deletes.
+      expect(mockQuery).toHaveBeenCalledTimes(4);
       const [selectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(selectSql).toContain("status IN ('completed', 'failed', 'cancelled')");
-      const [eventsSql, eventIds] = mockQuery.mock.calls[1] as [string, unknown[]];
+      const [eventsSql, eventIds] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(eventsSql).toContain('DELETE FROM remote_agent_workflow_events');
       expect(eventIds).toEqual(['run-a', 'run-b']);
-      const [runsSql, runIds] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [runsSql, runIds] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(runsSql).toContain('DELETE FROM remote_agent_workflow_runs WHERE id IN ($1, $2)');
       expect(runIds).toEqual(['run-a', 'run-b']);
     });
@@ -240,12 +241,12 @@ describe('workflow run writes', () => {
 
       await deleteWorkflowRun('run-123');
 
-      expect(mockQuery).toHaveBeenCalledTimes(7);
+      expect(mockQuery).toHaveBeenCalledTimes(8);
       const [selectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(selectSql).toContain('SELECT status');
-      const [eventsSql] = mockQuery.mock.calls[5] as [string, unknown[]];
+      const [eventsSql] = mockQuery.mock.calls[6] as [string, unknown[]];
       expect(eventsSql).toContain('DELETE FROM remote_agent_workflow_events');
-      const [runsSql] = mockQuery.mock.calls[6] as [string, unknown[]];
+      const [runsSql] = mockQuery.mock.calls[7] as [string, unknown[]];
       expect(runsSql).toContain('DELETE FROM remote_agent_workflow_runs');
     });
 
