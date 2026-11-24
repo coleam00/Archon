@@ -13,6 +13,8 @@ import {
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
   pluginReceiptSchema,
+  describeIssues,
+  unknownManifestKeys,
 } from './index';
 
 const manifest = {
@@ -31,18 +33,71 @@ describe('plugin manifest', () => {
     expect(parsed.executable).toBe('archon-forge-github');
   });
 
-  test('rejects kinds without an install path, unknown keys and executable names outside discovery', () => {
+  test('rejects kinds without an install path and executable names outside discovery', () => {
     expect(pluginManifestSchema.safeParse(manifest).success).toBe(true);
     for (const invalid of [
       { ...manifest, kind: 'provider' },
       { ...manifest, kind: 'workflow-pack' },
-      { ...manifest, install: 'curl | sh' },
       { ...manifest, executable: '../archon-forge-example' },
       { ...manifest, executable: 'archon-forge-example.exe' },
-      { ...manifest, compatibility: { archon: '>=1.0.0', node: '>=20' } },
     ]) {
       expect(pluginManifestSchema.safeParse(invalid).success).toBe(false);
     }
+  });
+});
+
+// A newer Archon may add a manifest field; an older binary reading that
+// manifest must still install and load it.
+describe('keys this Archon does not know', () => {
+  const pack = {
+    schemaVersion: 1,
+    kind: 'workflow-pack',
+    name: 'review-kit',
+    description: 'Review workflows',
+    entrypoints: { review: 'review/review.yaml' },
+  };
+
+  test('are ignored on read, top-level and nested', () => {
+    for (const known of [manifest, pack]) {
+      const parsed = pluginManifestSchema.parse({
+        ...known,
+        skills: ['review'],
+        compatibility: { archon: '>=0.1.0', min: '0.1.0' },
+      });
+      expect(parsed).toEqual({ ...known, compatibility: { archon: '>=0.1.0' } } as never);
+    }
+  });
+
+  test('do not loosen known keys or an unknown schemaVersion', () => {
+    const failure = (value: object): string => {
+      const result = pluginManifestSchema.safeParse({ ...value, skills: [] });
+      return result.success ? 'parsed' : describeIssues(result.error);
+    };
+    expect(failure({ ...pack, description: 5 })).toBe(
+      'description: Invalid input: expected string, received number'
+    );
+    expect(failure({ ...pack, compatibility: { archon: 5 } })).toBe(
+      'compatibility.archon: Invalid input: expected string, received number'
+    );
+    expect(failure({ ...pack, entrypoints: { review: '../x/y.yaml' } })).toBe(
+      'entrypoints.review: must be <workflow folder>/<file>.yaml; entrypoints.review: must stay inside its workflow folder'
+    );
+    expect(failure({ ...pack, schemaVersion: 2 })).toBe('schemaVersion: Invalid input: expected 1');
+  });
+
+  test('are listed by unknownManifestKeys as dotted paths', () => {
+    expect(
+      unknownManifestKeys({
+        ...pack,
+        skills: [],
+        compatibility: { archon: '>=0.1.0', min: 1 },
+        entrypoints: { review: 'review/review.yaml', extra: 'extra/extra.yaml' },
+      })
+    ).toEqual(['skills', 'compatibility.min']);
+    expect(unknownManifestKeys(pack)).toEqual([]);
+    expect(unknownManifestKeys({ ...manifest, install: 'x' })).toEqual(['install']);
+    expect(unknownManifestKeys({ ...pack, kind: 'theme', extra: 1 })).toEqual([]);
+    expect(unknownManifestKeys(null)).toEqual([]);
   });
 });
 
@@ -74,9 +129,6 @@ describe('workflow-pack manifest', () => {
     ]) {
       expect(pluginManifestSchema.safeParse({ ...pack, entrypoints }).success).toBe(false);
     }
-    expect(
-      pluginManifestSchema.safeParse({ ...pack, executable: 'archon-forge-example' }).success
-    ).toBe(false);
   });
 });
 

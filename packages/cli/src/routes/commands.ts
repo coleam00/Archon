@@ -439,6 +439,7 @@ export async function runIsolation({
 export async function runValidate({
   subcommand,
   positionals,
+  cwd,
   effectiveCwd,
   json,
   forgeTrustedEnv,
@@ -448,7 +449,13 @@ export async function runValidate({
   );
   switch (subcommand) {
     case 'workflows':
-      return await validateWorkflowsCommand(effectiveCwd, positionals[2], json, forgeTrustedEnv);
+      return await validateWorkflowsCommand(
+        effectiveCwd,
+        positionals[2],
+        json,
+        forgeTrustedEnv,
+        cwd
+      );
 
     case 'commands':
       return await validateCommandsCommand(effectiveCwd, positionals[2], json);
