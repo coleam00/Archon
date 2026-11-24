@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readdir, realpath, stat } from 'fs/promises';
 import type { Stats } from 'fs';
-import { join, sep } from 'path';
+import { basename, join, sep } from 'path';
 import * as archonPaths from '@archon/paths';
 import { isSystemError } from './integrity';
 import { getLog } from './log';
@@ -21,6 +21,20 @@ import { getLog } from './log';
  *    just waste space: stale `.pyc` files next to edited sources can change behavior.
  */
 const SKIP_DIRECTORIES = new Set(['.git', '__pycache__']);
+
+/**
+ * True for a `.env` or `.env.*` file, which no capture holds from any scope. It is
+ * secrets, not source: a script gets its environment from the engine, never from a file
+ * beside it, and a copy here would outlive a rotation in every run's capture. The skip is
+ * logged with the path, never the contents, so a script that did read a sibling `.env`
+ * is not a silent difference.
+ */
+export function skipsEnvFile(relPath: string, absPath: string): boolean {
+  const name = basename(relPath);
+  if (name !== '.env' && !name.startsWith('.env.')) return false;
+  getLog().warn({ path: absPath }, 'workflow.source_capture_env_skipped');
+  return true;
+}
 
 /** Project-relative directories that hold executable source. */
 export function projectSourceDirs(commandFolder: string | undefined): string[] {
@@ -83,7 +97,7 @@ export interface TreeListing {
 }
 
 /**
- * Recursively list `root`, skipping cache directories.
+ * Recursively list `root`, skipping cache directories and `.env` files (`skipsEnvFile`).
  *
  * Directory symlinks are followed rather than preserved, so a link pointing at one of its
  * own ancestors would otherwise re-enter the same tree: the walk only stops when the kernel
@@ -119,6 +133,7 @@ export async function listTree(root: string): Promise<TreeListing> {
       }
 
       if (!info.isFile()) continue; // sockets, fifos, devices — nothing a workflow reads
+      if (skipsEnvFile(relPath, absPath)) continue;
 
       files.push({ relPath, absPath, size: info.size, mtimeMs: info.mtimeMs });
     }

@@ -392,6 +392,44 @@ nodes:
     );
   });
 
+  test('no scope of a capture holds a .env file, and the run still resolves its pack', async () => {
+    await install({
+      ...reviewKit(),
+      files: { ...reviewKit().files, 'review/scripts/.env': 'SECRET=1\n' },
+    });
+    await mkdir(join(project, '.archon', 'scripts'), { recursive: true });
+    await writeFile(join(project, '.archon', 'scripts', 'main.ts'), 'console.log(1);\n');
+    await writeFile(join(project, '.archon', 'scripts', '.env'), 'SECRET=1\n');
+    await writeFile(join(project, '.archon', 'scripts', '.env.local'), 'SECRET=1\n');
+    await mkdir(join(home, 'scripts'), { recursive: true });
+    await writeFile(join(home, 'scripts', 'tool.ts'), 'console.log(1);\n');
+    await writeFile(join(home, 'scripts', '.env'), 'SECRET=1\n');
+
+    const capture = await captureWorkflowSource({
+      sourceRoot: project,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    const root = capture.anchor.root;
+    for (const kept of [
+      'project/.archon/scripts/main.ts',
+      'global/scripts/tool.ts',
+      'installed/acme.review-kit/review/scripts/check.ts',
+    ]) {
+      await access(join(root, kept));
+    }
+    for (const left of [
+      'project/.archon/scripts/.env',
+      'project/.archon/scripts/.env.local',
+      'global/scripts/.env',
+      'installed/acme.review-kit/review/scripts/.env',
+    ]) {
+      await expect(access(join(root, left))).rejects.toThrow();
+    }
+    await uninstall(ID, COMMIT_A);
+    const resumed = await resolveContinuationWorkflow(deps, runWith(capture, REVIEW), project);
+    expect(resumed?.workflow.name).toBe(REVIEW);
+  });
+
   test('a capture with no installed pack stays manifest version 1', async () => {
     const capture = await captureWorkflowSource({
       sourceRoot: project,
