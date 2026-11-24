@@ -88,7 +88,21 @@ import {
 
 const log = createLogger('resource-start-host');
 
-type PreparationStage = 'run_as_user' | 'run_configuration' | 'launch_preparation';
+const PREPARATION_STAGES = ['run_as_user', 'run_configuration', 'launch_preparation'] as const;
+type PreparationStage = (typeof PREPARATION_STAGES)[number];
+
+/** The error a binding stores when its preparation fails at `stage`. */
+function preparationStageFailure(stage: PreparationStage): string {
+  return `${stage}_failed`;
+}
+
+/**
+ * Whether a binding's stored error is the stage its preparation failed at. `trigger fire`
+ * reads it so a binding another process failed to prepare fails the fire as its own would.
+ */
+export function isPreparationStageFailure(error: string | null): boolean {
+  return PREPARATION_STAGES.some(stage => error === preparationStageFailure(stage));
+}
 
 interface BindingIdentity {
   receiptId: string;
@@ -323,7 +337,7 @@ async function prepareClaimedBinding(
       await host.deps.store.failStartBindingPreparation({
         ...identity,
         retryable: false,
-        error: `${stage}_failed`,
+        error: preparationStageFailure(stage),
         ...(error instanceof ForgeRequirementError
           ? { forgeRefusal: { pack: error.packKey, failures: error.failures } }
           : {}),
@@ -331,7 +345,7 @@ async function prepareClaimedBinding(
     } catch (statusError) {
       throw new AggregateError(
         [error, statusError],
-        `Preparation ${stage}_failed; recording the rejection also failed.`
+        `Preparation ${preparationStageFailure(stage)}; recording the rejection also failed.`
       );
     }
     throw error;

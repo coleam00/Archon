@@ -8,6 +8,7 @@ import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
   drainResourceStartHost,
+  isPreparationStageFailure,
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
@@ -287,7 +288,8 @@ async function triggerFire(
   host: WorkflowHost,
   options: TriggerOptions,
   dispatch: TriggerDispatch,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  wait: PreparationWait
 ): Promise<void> {
   if (!options.config) throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
   if (options.deliveryId !== undefined && options.deliveryId.length === 0)
@@ -366,7 +368,55 @@ async function triggerFire(
       throw error;
     });
   await drainReceipt(host, receipt.receiptId, dispatch);
+  await awaitOthersPreparation(host, receipt, wait);
   await writeFiredReceipt(host, receipt.receiptId);
+}
+
+/**
+ * How long `fire` waits for another process preparing its binding. Bounded because a
+ * stopped owner looks the same as a slow one; past it the fire changes nothing and names
+ * the owner.
+ */
+const PREPARATION_WAIT: PreparationWait = { intervalMs: 250, timeoutMs: 60_000 };
+
+type PreparationWait = { intervalMs: number; timeoutMs: number };
+
+/**
+ * Another process's drain can claim the binding this fire just accepted, so the fire's own
+ * drain leaves it alone. Wait for that preparation to end, so the fire reports its outcome
+ * and fails as it would had it prepared the binding itself. A replay reports what is stored.
+ */
+async function awaitOthersPreparation(
+  host: WorkflowHost,
+  receipt: { receiptId: string; replay: boolean },
+  wait: PreparationWait
+): Promise<void> {
+  const { receiptId } = receipt;
+  const deadline = Date.now() + wait.timeoutMs;
+  for (;;) {
+    const retained = await host.deps.store.getStartReceipt(receiptId);
+    const bindings = retained?.bindings ?? [];
+    const preparing = bindings.filter(binding => binding.status === 'preparing');
+    if (preparing.length === 0) {
+      // This fire's own preparation failure already failed its drain.
+      const failed = receipt.replay
+        ? undefined
+        : bindings.find(binding => isPreparationStageFailure(binding.error));
+      if (failed)
+        throw new Error(
+          `Receipt ${receiptId} is retained, but another process's preparation of binding ${failed.bindingId} failed at ${failed.error}. Inspect that receipt before recovery.`
+        );
+      return;
+    }
+    if (Date.now() >= deadline) {
+      for (const binding of preparing)
+        process.stderr.write(
+          `Another process (preparation owner ${binding.ownerId}) is still preparing binding ${binding.bindingId} of receipt ${receiptId}. If that process has stopped, run archon trigger recover-preparation ${receiptId} ${binding.bindingId} --owner ${binding.ownerId} --yes, then drain the host.\n`
+        );
+      return;
+    }
+    await Bun.sleep(wait.intervalMs);
+  }
 }
 
 /** The fired receipt, with the install hold when it keeps one of the receipt's starts. */
@@ -684,6 +734,8 @@ export interface TriggerDependencies {
   env?: NodeJS.ProcessEnv;
   /** Where `check` reads installed timers from; by default this host's scheduler directories. */
   schedules?: NativeScheduleOptions;
+  /** How long `fire` waits for another process preparing its binding; by default a minute. */
+  preparationWait?: PreparationWait;
 }
 
 export async function triggerCommand(
@@ -710,7 +762,13 @@ export async function triggerCommand(
     case 'check':
       return checkTriggers(host, dependencies.schedules ?? {});
     case 'fire':
-      return triggerFire(host, options, dispatch, dependencies.env ?? process.env);
+      return triggerFire(
+        host,
+        options,
+        dispatch,
+        dependencies.env ?? process.env,
+        dependencies.preparationWait ?? PREPARATION_WAIT
+      );
     case 'drain':
       return triggerDrain(host, options, dispatch);
     case 'execute':
