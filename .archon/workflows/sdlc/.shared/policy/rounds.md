@@ -3,8 +3,9 @@
 How many times a change may go back to its builder. The pack's bindings allow three
 starts of the builder per way back (from the review, from the host, from the land
 stage) on one item, and the count starts again when the item is planned again. The
-engine refuses a start past the limit and writes no ask, so the stage that sends the
-change back reads where the limit stands first.
+engine refuses a start past the limit and lists the item as stopped at its limit, with
+no question and no recommendation. So the stage that sends the change back reads where
+the limit stands first, and asks with what is still wrong instead.
 
 Before you end with `return`, read the item's limits:
 

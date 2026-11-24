@@ -50,7 +50,7 @@ Before you hand off, read the pull request's head again; when it is no longer th
 
 - `ready` hands the pull request to the land stage.
 - `pr_caused` returns it to its builder: the outcome is `return`. Before you return it, read `rounds.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`): the binding is `build-after-host`. When its limit is used up, the outcome is `ask` instead: `send-back` then gives the builder one more round with `ci.md`.
-- `other` is an ask: the outcome is `ask`. Write the question as `asks.md` says. The workflow declares the options every ask offers, because the answer's option starts the next stage; you write none. Write what each means for this pull request in `context`, and recommend one, or `null` with why you cannot choose.
+- `other` is an ask: the outcome is `ask`. Write the question as `asks.md` says. The workflow declares the options every ask offers, because the answer's option starts the next stage; you write none. Write what each means for this pull request in `context`, and recommend one, or write `option: null` with why you cannot choose in `why`.
 
 ## Declare
 

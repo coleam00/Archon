@@ -35,7 +35,7 @@ Otherwise, in delivery:
 - **return** also when the verdict is ready but the simplify pass reported a smaller shape: the builder adopts or declines each one, and the next round's review sees the result. Its round limit applies as below.
 - **return** — the action is `correct`: the change goes back to its builder with this report. Before you return it, read `rounds.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`): the binding is `build-after-review`. When its limit is used up, end `ask` instead: `send-back` then gives the builder one more round with this report.
 - **replan** — the action is `replan`: the item goes back to planning with this report.
-- **ask** — the action is `ask`. Leave each decision synthesis named as an ask, written as `asks.md` says. The workflow declares the options every ask offers, because the answer's option starts the next stage; you write none. Write the decision itself, and what each option means for it, in `context`. Recommend the one you would take, or `null` with why you cannot choose.
+- **ask** — the action is `ask`. Leave each decision synthesis named as an ask, written as `asks.md` says. The workflow declares the options every ask offers, because the answer's option starts the next stage; you write none. Write the decision itself, and what each option means for it, in `context`. Recommend the one you would take, or write `option: null` with why you cannot choose in `why`.
 
 ## Publish the report
 

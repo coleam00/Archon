@@ -31,8 +31,8 @@ they are shown: no step rewrites or completes them.
   `recommendation.option` names one of them. Every ask also offers `other`, answered with text, for an answer none of
   yours covers; never declare an option with that id.
 - `recommendation`: the `option` you recommend and `why`, in a sentence. When you have
-  no basis to choose, set it to `null` and say in `context` why you cannot choose and
-  what would let you.
+  no basis to choose, write `{ "option": null, "why": "<why you cannot choose, and what
+  would let you>" }`: the operator reads that reason in place of a recommendation.
 - `artifacts`: the reports the operator should read to decide, or an empty list.
 
 An answer reaches every later stage on the item as `answers`, oldest first; where two
