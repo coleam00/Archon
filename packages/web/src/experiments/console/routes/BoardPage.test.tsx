@@ -122,7 +122,28 @@ const keysIn = (scope: ParentNode): string[] =>
 test('each open item is under the stage it stands at, in the order the pack graph gives', () => {
   set(K.projects, [project('web', ['flow'])]);
   set(K.board('web'), [
-    item('issue-1', 'check', 'running'),
+    // Part of a work order, which is not itself open.
+    {
+      ...item('issue-1', 'check', 'running'),
+      links: [
+        {
+          id: 'link-1',
+          kind: 'part_of',
+          direction: 'outgoing',
+          other: {
+            id: 'id-order-9',
+            projectKey: 'acme/web',
+            key: 'order-9',
+            title: 'Redo checkout',
+          },
+          at: '2026-11-20T09:00:00.000Z',
+          via: 'cli',
+          by: null,
+          fromRun: null,
+          ended: null,
+        },
+      ],
+    },
     { ...item('issue-2', 'plan', 'waiting'), questions: [ask] },
     item('issue-3', 'check', 'failed'),
     // A stage the pack no longer has stays on the board; a run of no pack waits to be asked for.
@@ -165,6 +186,15 @@ test('each open item is under the stage it stands at, in the order the pack grap
   expect(card?.getAttribute('data-state')).toBe('failed');
   expect(card?.querySelector('[data-item-title]')?.textContent).toBe('Title of issue-3');
   expect(card?.querySelector('a')?.getAttribute('href')).toBe('/console/p/web/r/run-issue-3');
+  // An item that waits on the operator says so; a work order lists its open members.
+  expect(page.querySelector('[data-item="issue-2"] [data-chip]')?.getAttribute('data-chip')).toBe(
+    'needs_you'
+  );
+  expect(
+    [...page.querySelectorAll('[data-work-order]')].map(strip =>
+      strip.getAttribute('data-work-order')
+    )
+  ).toEqual(['order-9']);
   // The project's asks are on the page, and the item that has one links to it.
   const asked = page.querySelector('[data-ask-ref="ask:a1"]')?.closest('[id]');
   expect(asked).not.toBeNull();

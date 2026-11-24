@@ -25,20 +25,35 @@ import {
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 
-type State = ItemRead['standing']['state'];
-
-const STATE: Record<State, { label: string; tone: string }> = {
-  running: { label: 'Running', tone: 'text-accent-bright' },
-  waiting: { label: 'Waiting', tone: 'text-warning' },
-  queued: { label: 'Queued', tone: 'text-text-secondary' },
-  failed: { label: 'Failed', tone: 'text-error' },
-  stopped: { label: 'Stopped', tone: 'text-error' },
-  done: { label: 'Done', tone: 'text-success' },
-  resting: { label: 'At rest', tone: 'text-text-tertiary' },
-};
+type Chip = ItemRead['standing']['state'] | 'needs_you';
 
 /** Every state but the two an item ends in. */
 const OPEN = ['running', 'waiting', 'queued', 'failed', 'stopped'] as const;
+
+// The order chips are counted in on a stage heading.
+const CHIP: Record<Chip, { label: string; tone: string }> = {
+  needs_you: { label: 'Needs you', tone: 'border-warning/50 bg-warning/15 text-warning' },
+  running: { label: 'Running', tone: 'border-accent/50 bg-accent/15 text-accent-bright' },
+  waiting: { label: 'Waiting', tone: 'border-border bg-surface-elevated text-text-secondary' },
+  queued: { label: 'Queued', tone: 'border-border bg-surface-elevated text-text-secondary' },
+  failed: { label: 'Failed', tone: 'border-error/50 bg-error/15 text-error' },
+  stopped: { label: 'Stopped', tone: 'border-error/50 bg-error/15 text-error' },
+  done: { label: 'Done', tone: 'border-success/50 bg-success/15 text-success' },
+  resting: { label: 'At rest', tone: 'border-border bg-surface text-text-tertiary' },
+};
+
+/** An item that waits on the operator says so, whatever else is true of it. */
+function chipOf(read: ItemRead): Chip {
+  const asked = read.questions.some(question => question.kind !== 'stopped');
+  return asked && read.standing.state === 'waiting' ? 'needs_you' : read.standing.state;
+}
+
+/** The work order an item is part of: the item its active `part_of` link points at. */
+function orderOf(read: ItemRead): ItemRead['item'] | undefined {
+  return read.links.find(
+    link => link.kind === 'part_of' && link.direction === 'outgoing' && link.ended === null
+  )?.other;
+}
 
 /** The run the engine says the item stands at. */
 function standingRun(read: ItemRead): ItemRead['runs'][number] | undefined {
@@ -68,46 +83,44 @@ const runPath = (projectId: string, runId: string): string =>
 
 function ItemCard({ read, projectId }: { read: ItemRead; projectId: string }): ReactElement {
   const run = standingRun(read);
-  const { state } = read.standing;
+  const chip = chipOf(read);
   const asks = read.questions.filter(isItemAsk).length;
   const [heldByRun] = read.questions.flatMap(question =>
     'run' in question && question.run !== undefined ? [question.run] : []
   );
   const link = 'text-console-11 underline hover:text-text-primary';
   const reason = needsDecision(read) ? decisionReason(read) : undefined;
+  const key = <span className="font-mono text-console-11">{read.item.key}</span>;
   return (
     <li
       data-item={read.item.key}
-      data-state={state}
+      data-state={read.standing.state}
       className="rounded border border-border bg-surface px-3 py-2"
     >
-      <div className="flex items-baseline justify-between gap-2">
-        {run === undefined ? (
-          <span className="truncate font-mono text-sm text-text-primary">{read.item.key}</span>
-        ) : (
-          <Link
-            to={runPath(projectId, run.id)}
-            className="truncate font-mono text-sm text-text-primary underline"
-          >
-            {read.item.key}
-          </Link>
-        )}
-        <span className={`shrink-0 text-console-11 font-semibold ${STATE[state].tone}`}>
-          {STATE[state].label}
+      <div className="flex items-start justify-between gap-2">
+        <p data-item-title className="min-w-0 text-sm font-medium text-text-primary">
+          {read.item.title ?? read.item.key}
+        </p>
+        <span
+          data-chip={chip}
+          className={`shrink-0 rounded-full border px-2 py-0.5 text-console-10 font-semibold ${CHIP[chip].tone}`}
+        >
+          {CHIP[chip].label}
         </span>
       </div>
-      {read.item.title == null ? null : (
-        <p data-item-title className="mt-1 text-console-12 text-text-secondary">
-          {read.item.title}
-        </p>
-      )}
-      {run === undefined ? null : (
-        <p className="mt-1 text-console-11 text-text-tertiary">
-          {run.outcome === null ? run.status : `ended ${run.outcome}`} ·{' '}
-          {relativeTime(run.completedAt ?? run.startedAt)}
-          {read.merged === null ? '' : ' · merged'}
-        </p>
-      )}
+      <p className="mt-1 text-console-11 text-text-tertiary">
+        {run === undefined ? (
+          key
+        ) : (
+          <Link to={runPath(projectId, run.id)} className="underline hover:text-text-primary">
+            {key}
+          </Link>
+        )}
+        {run === undefined
+          ? ''
+          : ` · ${run.outcome === null ? run.status : `ended ${run.outcome}`} · ${relativeTime(run.completedAt ?? run.startedAt)}`}
+        {read.merged === null ? '' : ' · merged'}
+      </p>
       {reason === undefined ? null : (
         <p data-item-reason className="mt-1 text-console-11 text-text-secondary">
           {reason}
@@ -125,6 +138,16 @@ function ItemCard({ read, projectId }: { read: ItemRead; projectId: string }): R
       ) : null}
     </li>
   );
+}
+
+/** What the items of a stage are doing, as counts: `1 needs you · 2 running`. */
+function stageLine(items: ItemRead[]): string {
+  return (Object.keys(CHIP) as Chip[])
+    .flatMap(chip => {
+      const count = items.filter(read => chipOf(read) === chip).length;
+      return count === 0 ? [] : [`${String(count)} ${CHIP[chip].label.toLowerCase()}`];
+    })
+    .join(' · ');
 }
 
 /**
@@ -154,6 +177,11 @@ function Stage({
         <span className="truncate">{name}</span>
         <span className="text-text-tertiary">{items.length}</span>
       </h3>
+      {empty ? null : (
+        <p data-stage-line className="mt-1 text-console-11 text-text-tertiary">
+          {stageLine(items)}
+        </p>
+      )}
       {empty ? null : (
         <ul className="mt-2 flex flex-col gap-2">
           {items.map(read => (
@@ -261,6 +289,22 @@ function RestingItems({ projectId }: { projectId: string }): ReactElement {
   );
 }
 
+/**
+ * The work orders with a member open: each item that open items are `part_of`, with those
+ * members. A member at rest is not in the open list, so only open members are counted.
+ */
+function workOrders(items: ItemRead[]): { item: ItemRead['item']; members: ItemRead[] }[] {
+  const orders = new Map<string, { item: ItemRead['item']; members: ItemRead[] }>();
+  for (const read of items) {
+    const item = orderOf(read);
+    if (item === undefined) continue;
+    const order = orders.get(item.id) ?? { item, members: [] };
+    order.members.push(read);
+    orders.set(item.id, order);
+  }
+  return [...orders.values()];
+}
+
 export function BoardPage(): ReactElement {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
@@ -272,7 +316,18 @@ export function BoardPage(): ReactElement {
   );
   const itemAsks = useItemAsks(attention, projectId);
   const [showOutside, setShowOutside] = useState(false);
-  const items = open.data ?? [];
+  const [filter, setFilter] = useState('');
+  const [order, setOrder] = useState<string | null>(null);
+  const all = open.data ?? [];
+  const orders = workOrders(all);
+  const wanted = filter.trim().toLowerCase();
+  const items = all.filter(
+    read =>
+      (order === null || orderOf(read)?.id === order || read.item.id === order) &&
+      (wanted === '' ||
+        read.item.key.toLowerCase().includes(wanted) ||
+        (read.item.title ?? '').toLowerCase().includes(wanted))
+  );
   const packOf = (read: ItemRead): string | undefined => standingRun(read)?.pack?.key;
   // An item that needs a decision is not on a stage: it sits in its own strip until a newer run.
   const decide = items.filter(needsDecision);
@@ -292,12 +347,46 @@ export function BoardPage(): ReactElement {
               ? open.error.message
               : open.data === undefined
                 ? 'Reading items…'
-                : `${String(items.length)} open`}
+                : `${String(all.length)} open`}
           </p>
         </div>
         <ProjectViewTabs projectId={projectId} active="board" />
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-4 md:px-6">
+        <input
+          type="search"
+          value={filter}
+          onChange={event => {
+            setFilter(event.target.value);
+          }}
+          aria-label="Filter items"
+          placeholder="Filter by key or title"
+          className="mb-4 w-full rounded border border-border bg-surface px-3 py-1.5 text-console-12 text-text-primary md:w-80"
+        />
+        {orders.length > 0 ? (
+          <section data-work-orders className="mb-6 flex flex-col gap-2">
+            {orders.map(({ item, members }) => (
+              <button
+                key={item.id}
+                type="button"
+                data-work-order={item.key}
+                aria-pressed={order === item.id}
+                onClick={() => {
+                  setOrder(current => (current === item.id ? null : item.id));
+                }}
+                className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded border px-3 py-2 text-left ${order === item.id ? 'border-accent bg-surface-elevated' : 'border-border bg-surface hover:bg-surface-hover'}`}
+              >
+                <span className="font-mono text-console-11 text-text-tertiary">{item.key}</span>
+                <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
+                  {item.title ?? 'Work order'}
+                </span>
+                <span className="text-console-11 text-text-secondary">
+                  {members.length} open · {stageLine(members)}
+                </span>
+              </button>
+            ))}
+          </section>
+        ) : null}
         {packs.map(pack => (
           <PackBoard
             key={pack}
