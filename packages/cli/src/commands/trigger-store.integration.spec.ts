@@ -1271,6 +1271,22 @@ test("fire fails when another process's preparation of its binding fails", async
   }
 });
 
+test('a replayed delivery whose preparation failed reports the stored receipt', async () => {
+  const { host, configPath, inputsPath, restore } = await fireFixture();
+  await writeFile(inputsPath, JSON.stringify({ order_id: 'from-the-event' }));
+  const options = { config: configPath, inputs: inputsPath, deliveryId: 'refused-once' };
+  const deps = { dispatch: noDispatch, env: NO_RUN };
+  try {
+    await expect(triggerCommand(host, 'fire', [], options, deps)).rejects.toThrow(
+      'declares no inputs'
+    );
+    const { printed } = await captureFire(() => triggerCommand(host, 'fire', [], options, deps));
+    expect(printed.bindings[0]).toMatchObject({ status: 'rejected', disposition: null });
+  } finally {
+    restore();
+  }
+});
+
 test('fire reports why preparation refused while the receipt keeps only the stage', async () => {
   const { host, configPath, inputsPath, restore } = await fireFixture();
   await writeFile(inputsPath, JSON.stringify({ order_id: 'from-the-event' }));
