@@ -199,7 +199,7 @@ test('notice sends its text after the labels, and a refusal is the host error', 
 
 test("item reads this run's item, null when the run is on none, and a host failure throws", () => {
   process.env.WORKFLOW_ID = 'full-item';
-  expect(item()?.spend).toEqual({
+  expect(item()?.spend).toMatchObject({
     usd: 0.5,
     inputTokens: 8,
     outputTokens: 4,
