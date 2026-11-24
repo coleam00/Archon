@@ -3581,8 +3581,8 @@ declare module 'archon:script' {
    * which case the branch may or may not have been recorded.
    * A container run cannot call it, as it has no host CLI.
    * A `pr.merge` through {@link forge} on a run with an item records the merged pull
-   * request's base branch by itself, with the merge; recording the same branch afterwards
-   * changes nothing.
+   * request's base branch by itself, with the merge, when the forge plugin reports its merge
+   * time; recording the same branch afterwards changes nothing.
    */
   export function recordLanding(branch: string): ItemLanding;
   /**
