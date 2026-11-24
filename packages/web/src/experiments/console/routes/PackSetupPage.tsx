@@ -4,10 +4,11 @@
  * missing or left over, and the bindings work enters by.
  *
  * Every row is the engine's own data and no pack is named. A check with no server read yet
- * (provider login, forge operations, versions, served events, models, capacity) is not drawn.
+ * (forge operations, versions, served events, models, capacity) is not drawn.
  */
 import type { ReactElement } from 'react';
 import { Link, useParams } from 'react-router';
+import * as skill from '../skills';
 import { getPackGraph, type PackGraph } from '../skills/items';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
@@ -64,6 +65,52 @@ function ArrowList({ kind, arrows }: { kind: string; arrows: Arrow[] }): ReactEl
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Whether a run can find a provider: the install's default, and whether it is one of the
+ * providers registered here. Without a default, a stage that names no provider is refused
+ * when it starts.
+ */
+export function providerState(
+  defaultProvider: string | undefined,
+  registered: readonly string[]
+): { ok: boolean; provider: string | null; registered: readonly string[] } {
+  const provider = defaultProvider ?? null;
+  return { ok: provider !== null && registered.includes(provider), provider, registered };
+}
+
+function ProviderCheck(): ReactElement | null {
+  const { data: config } = useEntity(K.config, skill.getConfig);
+  const { data: providers } = useEntity(K.providers, skill.listProviders);
+  if (config === undefined || providers === undefined) return null;
+  const state = providerState(
+    config.config.assistant,
+    providers.map(provider => provider.id)
+  );
+  return (
+    <section data-setup="provider" data-ok={state.ok ? '' : undefined} className="mb-8">
+      <h2 className="text-sm font-medium text-text-primary">A provider is configured</h2>
+      {state.ok ? (
+        <p className="mt-1 text-console-12 text-text-secondary">
+          Default provider: <span className="font-mono">{state.provider}</span>
+        </p>
+      ) : (
+        <p className="mt-1 text-console-12 text-error">
+          {state.provider === null
+            ? 'No default provider is set. A stage that names no provider is refused when it starts.'
+            : `The default provider ${state.provider} is not registered on this install.`}{' '}
+          <Link className="underline" to="/console/settings">
+            Set one in Settings
+          </Link>
+          .
+        </p>
+      )}
+      <p className="mt-1 text-console-11 text-text-tertiary">
+        Registered: {state.registered.length === 0 ? 'none' : state.registered.join(', ')}
+      </p>
+    </section>
   );
 }
 
@@ -156,6 +203,7 @@ export function PackSetupPage(): ReactElement {
         {graph === undefined && error === undefined ? (
           <p className="text-console-12 text-text-tertiary">Reading the pack…</p>
         ) : null}
+        <ProviderCheck />
         {graph === undefined ? null : <PackSetup graph={graph} />}
       </div>
     </section>

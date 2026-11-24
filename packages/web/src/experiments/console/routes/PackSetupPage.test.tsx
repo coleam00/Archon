@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { bindingState } from './PackSetupPage';
+import { bindingState, providerState } from './PackSetupPage';
 import type { PackGraph } from '../skills/items';
 
 type Arrow = PackGraph['arrows'][number];
@@ -34,4 +34,10 @@ test('setup tells registered bindings from missing and left-over ones, and repor
   expect(state.problems.map(({ arrow: at, problem }) => [at.to, problem])).toEqual([
     ['old', "workflow 'old' was not found"],
   ]);
+});
+
+test('a provider is configured only when the default is one of the registered providers', () => {
+  expect(providerState('claude', ['claude', 'codex']).ok).toBe(true);
+  expect(providerState(undefined, ['claude']).ok).toBe(false);
+  expect(providerState('pi', ['claude']).ok).toBe(false);
 });
