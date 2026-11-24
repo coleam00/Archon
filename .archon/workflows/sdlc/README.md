@@ -359,7 +359,7 @@ recommends under `bindings:` in `.pack/pack.yaml`:
   head while its checks run. `merge-after-answer` starts it when its question is
   answered. `merge-queue` starts it for one issue and has no schedule: `merge-pick`
   fires it every 30 minutes for each waiting item no event will start, which is how a
-  resolved review thread, a draft marked ready, a fixed default branch or a lost event
+  resolved review thread, a draft marked ready, a fixed base branch or a lost event
   gets read.
 - What follows a merge run is a binding on how it ended. `build-after-merge-return`
   starts the issue's next build round when the stage returns its pull request.

@@ -38,8 +38,9 @@ inputs:
 returns: publish
 
 nodes:
-  # The agent judges: which repository the work is proposed to, the base, whether
-  # the run continues an existing pull request, and what the title and body say.
+  # The agent judges: which repository the work is proposed to, whether the run
+  # continues an existing pull request, and what the title and body say. The base
+  # is the run's $BASE_BRANCH, the item's landing branch when it has one.
   # It performs no push and no forge write.
   - id: prepare
     command: pr

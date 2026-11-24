@@ -23,6 +23,8 @@ export interface FakePr {
   readonly threads?: number;
   /** The default branch's head as the pull request's merge state reports it. */
   readonly baseRevision?: string;
+  /** The branch the pull request targets; dev when unset. */
+  readonly base?: string;
   /** The merge is accepted and the pull request stays open, as when the forge queues merges. */
   readonly queuesMerge?: boolean;
   /** The merge is applied but names no landed commit, which the contract allows. */
@@ -96,7 +98,7 @@ export function installMergeForge(seed: FakePr, setup: MergeForgeSetup): void {
     'checks.commit': request =>
       seed.baseUnreadable
         ? failure('HTTP 502 reading base')
-        : done({ repo: request.repo, branch: 'dev', revision: setup.base, ...checks(seed.baseChecks ?? 'green') }),
+        : done({ repo: request.repo, branch: null, revision: setup.base, ...checks(seed.baseChecks ?? 'green') }),
     'pr.merge': request => {
       const { ref } = request;
       if (request.conditions.head !== pr.headRefOid) {
@@ -132,7 +134,7 @@ export function installMergeForge(seed: FakePr, setup: MergeForgeSetup): void {
       done({
         ref,
         head_revision: seed.mergeStateHead ?? pr.headRefOid,
-        base_branch: 'dev',
+        base_branch: seed.base ?? 'dev',
         base_revision: seed.baseRevision ?? setup.base,
         behind: seed.behind ?? 0,
         mergeable: seed.conflicts ? 'conflict' : 'clean',
@@ -170,7 +172,7 @@ export function installMergeForge(seed: FakePr, setup: MergeForgeSetup): void {
         number: ref.number,
         url: setup.prUrlPrefix + String(ref.number),
         head: 'feature',
-        base: 'dev',
+        base: seed.base ?? 'dev',
         is_draft: false,
         state: prState(),
         head_repo: ref.repo,
