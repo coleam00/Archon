@@ -1908,55 +1908,77 @@ describe('pre-dispatch gates --json error envelope', () => {
     }
   });
 
-  it('lets by-id run reads past the git gate, and keeps it for wait --item', async () => {
+  it('lets by-id run reads past the git gate, and keeps it for wait --item and run', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'archon-by-id-outside-'));
+    const bare = mkdtempSync(join(tmpdir(), 'archon-by-id-bare-'));
+    const project = mkdtempSync(join(tmpdir(), 'archon-by-id-project-'));
     // A private copy of the seeded registry, so the run below stays out of other cases.
     const home = mkdtempSync(join(tmpdir(), 'archon-by-id-home-'));
     const runId = '6b50458b-0000-4000-8000-000000000000';
     const missing = '7b50458b-0000-4000-8000-000000000000';
     try {
+      spawnSync('git', ['init', '-q', '--bare', '.'], { cwd: bare });
       copyFileSync(join(jsonEnvelopeHome, 'archon.db'), join(home, 'archon.db'));
       const db = new Database(join(home, 'archon.db'));
       try {
+        // The run belongs to a registered project that the caller is not standing in.
+        db.run('INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)', [
+          'codebase',
+          'fixture/by-id',
+          await canonicalizeProjectPath(project),
+        ]);
         db.run(
-          "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('conversation', 'cli', 'by-id-test')"
+          'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
+          ['conversation', 'cli', 'by-id-test', 'codebase']
         );
         db.run(
-          'INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status) VALUES (?, ?, ?, ?, ?)',
-          [runId, 'conversation', 'by-id-test', '', 'completed']
+          'INSERT INTO remote_agent_workflow_runs (id, conversation_id, codebase_id, workflow_name, user_message, status) VALUES (?, ?, ?, ?, ?, ?)',
+          [runId, 'conversation', 'codebase', 'by-id-test', '', 'completed']
         );
       } finally {
         db.close();
       }
-      const read = (args: string[]) =>
-        spawnJsonError(['workflow', ...args, '--json', '--cwd', outside], { ARCHON_HOME: home });
-
-      const found = read(['get', runId]);
-      expect({ status: found.status, envelope: found.envelope() }).toMatchObject({
-        status: 0,
-        envelope: { id: runId },
-      });
-      // Each read answered for the run; the gate would have refused the directory.
-      expect(read(['get', missing])).toMatchObject({ status: 1 });
-      expect(read(['get', missing]).envelope()).toMatchObject({ ok: false, error: 'not_found' });
-      expect(read(['wait', missing]).envelope()).toMatchObject({ ok: false, error: 'not_found' });
-      expect(read(['artifacts', missing]).envelope().error).toContain('Workflow run not found');
-      const logs = spawnSync(
-        process.execPath,
-        [CLI_ENTRY, 'workflow', 'logs', missing, '--cwd', outside],
-        {
+      // The caller's own directory, with no --cwd, as an operator runs it.
+      const spawnIn = (cwd: string, args: string[]) => {
+        const result = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', ...args], {
+          cwd,
           encoding: 'utf8',
           env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: home },
-        }
-      );
+        });
+        return { ...result, envelope: () => JSON.parse(result.stdout) };
+      };
+      const read = (args: string[]) => spawnIn(outside, [...args, '--json']);
+
+      for (const cwd of [outside, bare]) {
+        const found = spawnIn(cwd, ['get', runId, '--json']);
+        expect({ cwd, status: found.status, envelope: found.envelope() }).toMatchObject({
+          cwd,
+          status: 0,
+          envelope: { id: runId, codebase_id: 'codebase' },
+        });
+      }
+      // Each read answered for the run; the gate would have refused the directory.
+      const missingGet = read(['get', missing]);
+      expect({ status: missingGet.status, envelope: missingGet.envelope() }).toMatchObject({
+        status: 1,
+        envelope: { ok: false, error: 'not_found' },
+      });
+      expect(read(['wait', missing]).envelope()).toMatchObject({ ok: false, error: 'not_found' });
+      expect(read(['artifacts', missing]).envelope().error).toContain('Workflow run not found');
+      const logs = spawnIn(outside, ['logs', missing]);
       expect(logs.status).toBe(1);
       expect(logs.stderr).toContain('Workflow run not found');
 
-      // `wait --item` resolves its item in the directory's project, so it still needs one.
-      expect(read(['wait', '--item', 'x']).envelope().error).toContain('Not in a git repository');
+      // `wait --item` resolves its item in the directory's project, and `run` acts on a
+      // checkout, so both still need one.
+      for (const args of [
+        ['wait', '--item', 'x'],
+        ['run', 'any-workflow', 'go'],
+      ]) {
+        expect(read(args).envelope().error).toContain('Not in a git repository');
+      }
     } finally {
-      await removeTempTree(outside);
-      await removeTempTree(home);
+      for (const dir of [outside, bare, project, home]) await removeTempTree(dir);
     }
   });
 

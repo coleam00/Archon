@@ -424,8 +424,9 @@ const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing'];
 
 /**
  * Reads of one run by id. A full run id names one run in the whole store, so these
- * resolve the directory's project when it has one (for short prefixes) and otherwise
- * run from any directory. `wait --item` resolves its item in the project, so it is not one.
+ * resolve no project for it and run from any directory. A short prefix resolves in the
+ * directory's project, and outside one is passed through to the read. `wait --item`
+ * resolves its item in the project, so it is not one.
  */
 const BY_ID_READS = ['get', 'logs', 'artifacts', 'wait'];
 function isByIdRead({ command, subcommand, values }: CliRouteContext): boolean {
@@ -449,6 +450,10 @@ function requiresGitRepo({ command, subcommand, values }: CliRouteContext): bool
 async function resolveEffectiveCwd(ctx: CliRouteContext): Promise<string | number> {
   const { command, subcommand, values, cwd, json } = ctx;
   if (!requiresGitRepo(ctx)) return cwd;
+  if (isByIdRead(ctx)) {
+    const { isFullRunId } = await import('@archon/core/workflows/run-id');
+    if (isFullRunId(ctx.positionals[2] ?? '')) return cwd;
+  }
   if (!existsSync(cwd)) {
     return await fail(json, `Error: Directory does not exist: ${cwd}`);
   }
