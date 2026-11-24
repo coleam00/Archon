@@ -662,6 +662,16 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_asks_open ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
       CREATE INDEX IF NOT EXISTS idx_item_asks_run_id ON remote_agent_item_asks(run_id);
+      -- Start-limit resets; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_start_limit_resets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        workflow_name TEXT NOT NULL,
+        reset_at TEXT NOT NULL,
+        after_position INTEGER NOT NULL,
+        queued_ids TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_start_limit_resets_item ON remote_agent_start_limit_resets(item_id, workflow_name);
       -- Waits a completed run left on its item; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_waits (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -724,6 +734,8 @@ export class SqliteAdapter implements IDatabase {
         event_input_names TEXT,
         item_key TEXT,
         checkout_from TEXT,
+        start_limit TEXT,
+        grants_limit TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
         preparation_error TEXT,
@@ -762,6 +774,8 @@ export class SqliteAdapter implements IDatabase {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         admitted_at TEXT,
         item_id TEXT REFERENCES remote_agent_items(id),
+        start_limit TEXT,
+        grants_limit TEXT,
         FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
       );
 

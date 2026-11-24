@@ -218,7 +218,24 @@ function startSectionLines(read: ItemRead, served: ReadonlySet<string>): string[
     lines.push('', 'Refused starts:');
     for (const start of read.skipped) lines.push(...skippedLines(start));
   }
+  if (read.startLimits.length > 0) {
+    lines.push('', 'Start limits:');
+    for (const limit of read.startLimits) lines.push(startLimitLine(limit));
+  }
   return lines;
+}
+
+/** One binding's start limit on the item; at 0 left its next start is refused. */
+function startLimitLine(limit: ItemRead['startLimits'][number]): string {
+  const allowed = limit.starts + limit.granted;
+  const granted = limit.granted === 0 ? '' : ` (${String(limit.granted)} granted)`;
+  const since =
+    limit.since === null ? '' : `, since ${limit.resetOn ?? 'the reset'} ${minute(limit.since)}`;
+  const left =
+    limit.left === 0
+      ? 'reached: its next start is refused until a grant or a reset'
+      : `${String(limit.left)} left`;
+  return `  ${limit.name}: ${String(limit.used)} of ${String(allowed)} starts${granted}${since}; ${left}`;
 }
 
 /**

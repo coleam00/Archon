@@ -776,6 +776,28 @@ The start is always written with the settlement, whichever surface recorded the 
 - **The server: the Web UI, the API or chat.** The server runs work only for the host its `ARCHON_TRIGGER_HOST` names. A start on that host is prepared on its loop, within about five seconds. A start on any other host, or on any host when the server sets no `ARCHON_TRIGGER_HOST`, waits as a pending binding to be prepared at that host's next drain: a CLI run ending on an install whose trigger files name it, that install's next `archon workflow wake` pass, a `trigger fire`, `archon trigger drain --host <hostId>` or the loop of a server that serves it. The server never prepares a start for a host it does not serve. If you answer through the server, name the server's host in the binding, or run that host's drain.
 - **A process that dies after the commit.** If it died before the start was admitted, the start waits as a pending binding until its host's next drain, such as the next `archon workflow wake` pass, which prepares it exactly once and admits, queues or skips it like any other start. If it died after admission and before spawning the executor, the run exists as `pending` and no drain retries it; run it once with `archon trigger execute <request-id> --host <hostId>`, as [for a run-ended start](#start-a-stage-when-a-run-on-an-item-ends).
 
+## Limit how often a stage starts on an item
+
+A loop that spans runs needs a round limit: a check returns a change to the build, the build's end starts the check again, and nothing ends it. `binding.limit` caps how many times one binding starts its stage on one item:
+
+```json
+"binding": {
+  "bindingId": "check",
+  "limit": { "name": "check", "starts": 3, "resetOn": "plan" },
+  ...
+}
+```
+
+- **What counts.** Admission counts, per item, the starts it admitted under `name` and those still queued, since a queued start is already promised. A start that waited in the queue across a reset counts in the new count once it runs. A start that was skipped, refused or withdrawn does not count. The count lives in the item's start requests, so it survives restarts. Every binding file that names the same `name` counts against one number.
+- **At the limit.** Admission refuses the next start, in the transaction that would admit it, and writes no request and no run. The binding is `rejected` with a reason that names the limit, the item and how many starts were used; `archon trigger list` and `archon trigger inspect <receipt-id>` show it. The engine writes no ask.
+- **Reset.** When a run of `resetOn` completes on the item, the count starts again, and so do the grants: only starts and grants made after that completion count, plus starts still waiting in the queue at that moment, which run after it. The completion is recorded in event order, so a start in the same second as the reset still counts on the side it happened. Without `resetOn` the count never resets by itself. The reset is recorded apart from the run, so cleaning up that run later does not bring earlier rounds back.
+- **One more round.** An asks-settled binding with `"grants": "<name>"` allows one more start on the item each time it starts: the answer that settles the asks is how an operator raises the limit for that item alone. No answer text is read; the option the binding matches on is the decision. Only an asks-settled trigger file may set `grants`.
+- **No item.** The count is per item, so a limited start that names no item is refused, and the file store, which keeps no items, refuses every limited start.
+
+A stage reads where its limit stands from `archon workflow runs --item <key> --json`: its own run's `startLimit` names the limit it started under, and `startLimits` lists each limit on the item with `starts`, `granted`, `used`, `left` and `since` (when the count last reset, or null). `used` counts the starts still queued under the limit as well as those that ran, so `left: 0` means no further start is allowed without a grant or a reset, not that the reading run is the last: starts already queued still run. A stage that reads `left: 0` while none of the item's `queued` starts is of its own workflow is the last allowed round, and can leave an ask instead of returning the change. A binding without `limit` starts as often as it matches.
+
+A pack declares this as [`limit:` and `grants:`](/reference/workflow-language/#pack-bindings), and `archon pack bindings` names the limit after the binding, so all of its outcome or option files share one count. An older binary on the same database neither counts a limited start it prepares nor records a reset when it completes a run.
+
 ## Choose a resource, capacity, and overlap policy
 
 `resource` names the work that must not overlap. Use the same sufficiently qualified resource for every schedule or webhook binding that can mutate that work. A trigger ID or workflow name does not imply a resource.

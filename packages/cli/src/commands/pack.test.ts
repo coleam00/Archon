@@ -579,6 +579,49 @@ describe('archon pack bindings: asks-settled', () => {
   });
 });
 
+describe('archon pack bindings: start limits', () => {
+  // `build` starts three times per item, again after `fixture-plan` completes on it; an
+  // answer that settles `fixture-ask`'s asks allows it one more.
+  const LIMITED = `${RUN_ENDED_DECLARATION.replace(
+    '    overlap: queue\n',
+    '    overlap: queue\n    limit: { starts: 3, reset_on: fixture-plan }\n'
+  )}${ASKS_SETTLED_DECLARATION.replace('bindings:\n', '').replace(
+    '    overlap: queue\n',
+    '    overlap: queue\n    grants: build\n'
+  )}`;
+
+  it('writes one limit that every outcome file of a binding counts under, and the grant that names it', async () => {
+    await writePack(LIMITED);
+    await packCommand('bindings', ['fixture'], options());
+
+    const [planned, blocked, ...more] = await readRunEndedBindings(out);
+    expect(more).toEqual([]);
+    expect(planned?.binding.limit).toEqual({
+      // Named without an outcome, so both files count under one name.
+      name: expect.stringMatching(/^fixture-acme-widgets-build-[0-9a-f]{12}$/),
+      starts: 3,
+      resetOn: 'fixture-plan',
+    });
+    expect(blocked?.binding.limit).toEqual(planned?.binding.limit);
+    const [grant] = await readAsksSettledBindings(out);
+    expect(grant?.binding.grants).toBe(planned?.binding.limit?.name);
+    expect(grant?.binding.limit).toBeUndefined();
+  });
+
+  it.each([
+    ['an unknown binding', 'grants: build', 'grants: missing', "grants unknown binding 'missing'"],
+    [
+      'a binding with no limit',
+      '    limit: { starts: 3, reset_on: fixture-plan }\n',
+      '',
+      "grants binding 'build', which declares no limit",
+    ],
+  ])('refuses a grant that names %s', async (_case, from, to, reason) => {
+    await writePack(LIMITED.replace(from, to));
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(reason);
+  });
+});
+
 describe('archon pack: a pack folder as the workflow source', () => {
   /** The fixture pack as its author keeps it: its own folder, manifest at the root. */
   async function writePackFolder(): Promise<string> {

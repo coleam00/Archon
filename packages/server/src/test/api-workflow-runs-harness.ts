@@ -483,6 +483,7 @@ mock.module('@archon/core/db/resource-starts', () => ({
   ...realResourceStarts,
   listQueuedItemStarts: mockListQueuedItemStarts,
   listSkippedItemStarts: mockListSkippedItemStarts,
+  readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
 }));
 // The item read reads the install hold; no hold is set here.
 const realInstallHold = { ...(await import('@archon/core/db/install-hold')) };

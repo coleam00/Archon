@@ -750,6 +750,15 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS item_ke
 -- preparation_error, which keeps only the failed boundary.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS forge_refusal TEXT;
 
+-- A binding's start limit (JSON) and the name of the limit it grants (#6109), beside the
+-- intent for the same reason as event_input_names. On each start request, the limit it
+-- counted under and the limit it granted, each JSON with the window it was counted in:
+-- the count is derived from these rows, so no counter has to agree with them.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS start_limit TEXT;
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS grants_limit TEXT;
+ALTER TABLE remote_agent_resource_start_requests ADD COLUMN IF NOT EXISTS start_limit TEXT;
+ALTER TABLE remote_agent_resource_start_requests ADD COLUMN IF NOT EXISTS grants_limit TEXT;
+
 -- The durable thing runs are about: a key within a project, and when it was first named.
 -- No status, stage or config; where an item stands is derived from its runs. project_key
 -- is the engine's project identity, the one remote_agent_state_revisions scopes by.
@@ -900,6 +909,21 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
   replaced_by_run_id TEXT
 );
 
+-- Start-limit resets (#6109): a run completed on an item that has a start limit or a grant,
+-- recorded under the admission lock in the write that completes it. A limit whose resetOn
+-- names the workflow counts only the starts after it: requests with a queue_position above
+-- after_position, and those in queued_ids (a JSON array), which were still waiting at the
+-- reset and run after it. Event order, not time, so a reset in the same second as a start is
+-- exact. Kept apart from the run row, which run cleanup deletes. Rows are only inserted.
+CREATE TABLE IF NOT EXISTS remote_agent_start_limit_resets (
+  id BIGSERIAL PRIMARY KEY,
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  workflow_name TEXT NOT NULL,
+  reset_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  after_position BIGINT NOT NULL,
+  queued_ids TEXT NOT NULL
+);
+
 -- Waits: what a completed run said its item now waits for outside Archon (returns.waits).
 -- A row opens in the write that completes the run and closes once: met by an accepted
 -- event (met_by_* name the receipt binding it started, written in the same transaction),
@@ -962,6 +986,10 @@ ALTER TABLE remote_agent_workflow_node_sessions ADD COLUMN IF NOT EXISTS model T
 --
 -- Guarded by packages/core/src/db/migration-statement-order.test.ts and
 -- exercised against real PostgreSQL upgrades by scripts/check-schema-upgrades.ts.
+
+-- Start-limit resets: the latest reset of a workflow on an item
+CREATE INDEX IF NOT EXISTS idx_start_limit_resets_item
+  ON remote_agent_start_limit_resets(item_id, workflow_name);
 
 -- Item rulings
 CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id

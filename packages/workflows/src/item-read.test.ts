@@ -203,6 +203,7 @@ const source: ItemReadSource = {
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
     listSkippedItemStarts: async () => [],
+    readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
     listQueuedItemStarts: async () => [],
     getInstallHold: async () => null,
     getRunLimit: async () => null,
@@ -288,6 +289,37 @@ describe('reading an item', () => {
     expect(read?.degraded).toEqual([unreadable]);
   });
 
+  test('a run started under a start limit names it, and the item lists where that limit stands', async () => {
+    const standing = {
+      name: 'check',
+      starts: 3,
+      resetOn: 'plan',
+      since: null,
+      granted: 0,
+      used: 3,
+      left: 0,
+    };
+    const read = await readItem(
+      {
+        ...source,
+        store: {
+          ...source.store,
+          readItemStartLimits: async () => ({
+            limits: [standing],
+            countedUnder: { second: 'check' },
+          }),
+        },
+      },
+      item.projectKey,
+      item.key
+    );
+    expect(read?.startLimits).toEqual([standing]);
+    expect(read?.runs.map(run => [run.id, run.startLimit])).toEqual([
+      ['first', null],
+      ['second', 'check'],
+    ]);
+  });
+
   test('lists its own runs, and the questions and answers of their whole tree, oldest first', async () => {
     const read = await readItem(source, item.projectKey, item.key);
     expect(read?.item).toEqual(item);
@@ -302,6 +334,7 @@ describe('reading an item', () => {
         completedAt: '2026-11-01T09:30:00.000Z',
         cause: null,
         awaitingExecution: null,
+        startLimit: null,
         spend: { usd: 0.42, inputTokens: 1200, outputTokens: 300 },
         heldBehind: null,
         operatorPause: null,
@@ -318,6 +351,7 @@ describe('reading an item', () => {
         completedAt: null,
         cause: { kind: 'run_ended', runId: 'first', sourceInstanceId: 'review-after-deliver' },
         awaitingExecution: null,
+        startLimit: null,
         spend: { usd: null, inputTokens: null, outputTokens: null },
         heldBehind: null,
         operatorPause: null,
@@ -443,6 +477,7 @@ describe('reading an item', () => {
       skipped: [],
       hold: null,
       runLimit: null,
+      startLimits: [],
       held: [],
       waits: [],
       questions: [],

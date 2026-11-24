@@ -2908,6 +2908,8 @@ bindings:
     workflow: review-fix
     resource: fix
     overlap: queue
+    limit: { starts: 3, reset_on: plan }  # optional, on any binding: starts per item
+    grants: fix-again                 # optional, asks-settled only: one more start of a limited binding
     asks_settled:                     # starts when the asks a run of this pack's workflow left settle
       workflow: review-fix
       settled: answered               # answered | withdrawn | any
@@ -2968,6 +2970,15 @@ refuses the whole set, writing nothing, when the asking workflow does not declar
 or an input read from it, the started workflow does not declare an input mapped to it, or two
 files would both start when one option is chosen. With `checkout` on either form, `isolation`
 must be left out: the engine picks the start's checkout.
+
+`limit: { starts: <n>, reset_on: <workflow> }`, on any binding, caps how many times it starts
+its workflow on one item, as
+[`binding.limit`](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item) does:
+admission refuses the start past the limit with a reason, and a completed run of `reset_on`, a
+workflow of this pack, on the item starts the count again. Every file the binding is written as
+counts under one name. `grants: <binding id>`, on an asks-settled binding only, allows that
+binding one more start on the item each time this one starts; it must name a declared binding
+with a `limit`. A binding without `limit` starts as often as it matches.
 
 An event binding with `wake:` starts its workflow on the item of an open
 [wait](#waits-what-an-item-waits-for-outside-archon): the wait `wake.wait` that a run of

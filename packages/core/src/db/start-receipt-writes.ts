@@ -97,8 +97,8 @@ async function insertReceiptBindings(
   for (const binding of recorded.bindings) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
-       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,checkout_from,item_key,preparation_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')`,
+       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,checkout_from,item_key,start_limit,grants_limit,preparation_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')`,
       [
         recorded.receipt.id,
         binding.bindingId,
@@ -106,6 +106,8 @@ async function insertReceiptBindings(
         binding.hostId,
         ...storableIntent(binding),
         binding.itemKey ?? null,
+        binding.limit ? JSON.stringify(binding.limit) : null,
+        binding.grants ?? null,
       ]
     );
   }
@@ -131,13 +133,23 @@ async function insertReceiptBindings(
  * always did) and their names go to `event_input_names`. A checkout hand-off goes to
  * `checkout_from`; `launch.isolation` already names its branch, so an older binary starts
  * the stage on that branch without the commit pin or a read-only copy. The binding's item
- * key goes to its own `item_key` column. `readStoredIntent` reverses it.
+ * key goes to its own `item_key` column, and a start limit and the limit it grants to
+ * `start_limit` and `grants_limit`; an older binary admits such a start without counting
+ * it. `readStoredIntent` reverses it.
  */
 function storableIntent(
   binding: ResourceStartBindingIntent
 ): [string, string | null, string | null] {
   // A wake is resolved before a binding is written (`resolveWakes`); none is ever stored.
-  const { eventInputs, checkoutFrom, itemKey: _itemKey, wake: _wake, ...intent } = binding;
+  const {
+    eventInputs,
+    checkoutFrom,
+    itemKey: _itemKey,
+    wake: _wake,
+    limit: _limit,
+    grants: _grants,
+    ...intent
+  } = binding;
   const handoff = checkoutFrom ? JSON.stringify(checkoutFrom) : null;
   if (!eventInputs || Object.keys(eventInputs).length === 0)
     return [JSON.stringify(intent), null, handoff];
