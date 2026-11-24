@@ -99,10 +99,7 @@ const answerableRunSchema = z.object({
 });
 
 const itemBase = {
-  /**
-   * The item's identity: the one string a surface hands out with an item and takes back
-   * to read or answer it. Opaque to every caller.
-   */
+  /** The item's identity, handed out with it and taken back to read or answer it; opaque. */
   ref: z.string().min(1),
   /** Null only when the item's run has no trusted storage root, so there is no key to give. */
   project: projectRefSchema.nullable(),
@@ -146,6 +143,8 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** The option with id `other` is the reserved one: an answer choosing it needs text. */
     other: z.literal(true).optional(),
     recommendation: attentionRecommendationSchema.optional(),
+    /** Why an ask has no recommendation, in its stage's words, when the stage gave a reason. */
+    noRecommendation: z.string().min(1).optional(),
     /** An ask's context: what is at stake and why it came up. */
     context: z.string().optional(),
     /** Artifacts an ask points its answerer to. */

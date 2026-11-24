@@ -2366,6 +2366,7 @@ declare module 'archon:script' {
         readonly why: string;
         readonly confidence?: 'low' | 'medium' | 'high';
       };
+      readonly noRecommendation?: string;
       readonly context?: string;
       readonly artifacts?: ReadonlyArray<{
         readonly type: 'archon_artifact';
@@ -2935,6 +2936,7 @@ declare module 'archon:script' {
           readonly why: string;
           readonly confidence?: 'low' | 'medium' | 'high';
         };
+        readonly noRecommendation?: string;
         readonly context?: string;
         readonly artifacts?: ReadonlyArray<{
           readonly type: 'archon_artifact';
