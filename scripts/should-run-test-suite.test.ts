@@ -165,7 +165,7 @@ describe('test-suite change decision', () => {
   });
 
   test.each([
-    ['.archon/workflows/sdlc/build/commands/build.md', 'a packaged command prompt'],
+    ['.archon/workflows/sdlc/builder/commands/build.md', 'a packaged command prompt'],
     ['.archon/workflows/sdlc/.shared/policy/triage.md', 'a pack .shared/ document'],
     ['.claude/skills/archon-cli/SKILL.md', 'the bundled CLI skill'],
     ['packages/docs-web/src/content/docs/reference/provider-capabilities.md', 'a generated doc'],

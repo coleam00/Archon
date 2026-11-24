@@ -297,7 +297,7 @@ Four rules enforced at `loader.ts:370-439`:
 | File | Mode | Key Features |
 |------|------|-------------|
 | `sdlc/review/archon-review.yaml` | `nodes:` | Parallel `command:` fan-out with `context: fresh`, `when:` routing on structured output, `trigger_rule: all_done` joins, `returns: { node, outcome, asks }` |
-| `sdlc/build/archon-build.yaml` | `nodes:` | One node that keeps its session across runs on an item (`context: same`), `result_of` inputs |
+| `sdlc/builder/archon-build.yaml` | `nodes:` | One node that keeps its session across runs on an item (`context: same`), `result_of` inputs |
 | `sdlc/land/archon-land.yaml` | `nodes:` | An agent stage followed by a `script:` node that records a boundary fact |
 | `sdlc/.pack/pack.yaml` | pack | Settings, forge needs, and the bindings that chain stages (`run_ended`, `asks_settled`, label `event`, `limit`) |
 
