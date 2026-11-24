@@ -115,6 +115,28 @@ function RailNavLink({
 }
 
 /**
+ * The Needs you link with how many things wait: the paused runs, lost owners and asks the
+ * Needs you page lists, counted from the same read. It is its own cache entry, outside the
+ * `runs` keys every run event refetches, and only the attention stream refreshes it. So the
+ * count costs one attention list request when the Console opens and one each time something
+ * starts or stops waiting, whatever page is open.
+ */
+function NeedsYouLink(): ReactElement {
+  const { data: count = 0 } = useEntity<number>(K.needsYouCount, async () => {
+    const waiting = await skill.listRunsNeedingAttention();
+    return waiting.runs.length + waiting.ownerLost.length + waiting.asks.length;
+  });
+  return (
+    <RailNavLink
+      to="/console/needs-you"
+      icon={Inbox}
+      label="Needs you"
+      badge={count === 0 ? undefined : String(count)}
+    />
+  );
+}
+
+/**
  * Left rail, design v2: header with count pill, filter input, projects
  * grouped by owner with hairline section labels, and a drag handle on the
  * right edge (232–440px, persisted).
@@ -362,7 +384,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
 
       {/* Console navigation */}
       <div className="flex flex-col gap-0.5 border-t border-border px-2.5 py-2">
-        <RailNavLink to="/console/needs-you" icon={Inbox} label="Needs you" />
+        <NeedsYouLink />
         <RailNavLink to="/console/metrics" icon={ChartLine} label="Metrics" />
         <RailNavLink
           to="/console/builder"

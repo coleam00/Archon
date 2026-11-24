@@ -17,6 +17,8 @@ export const K = {
     `workflow:${encodeURIComponent(cwd)}:${encodeURIComponent(name)}`,
   worktrees: (projectId: string): string => `worktrees:${projectId}`,
   runsAttention: 'runs:attention' as const,
+  /** How many things wait on the operator, for the rail; only the attention stream refetches it. */
+  needsYouCount: 'needs-you:count' as const,
   /** A project's open items, as the board lists them. Run and attention events refetch `board:*`. */
   board: (projectId: string): string => `board:${projectId}`,
   /** The newest few items at rest of one pack; under `board:` so the same events refetch it. */

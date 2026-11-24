@@ -110,6 +110,7 @@ export function useAttentionStreamSSE(): void {
       flushTimer = setTimeout(() => {
         flushTimer = null;
         invalidate(K.runsAttention);
+        invalidate(K.needsYouCount);
         // An ask that opens or closes changes where its item stands, and no run changed.
         invalidate('board');
       }, 100);
