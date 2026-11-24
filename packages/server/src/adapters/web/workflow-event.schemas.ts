@@ -3,7 +3,10 @@ import {
   nodeSkipReasonSchema as engineNodeSkipReasonSchema,
   skipCauseSchema as engineSkipCauseSchema,
 } from '@archon/workflows/schemas/workflow-run';
-import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
+import {
+  composedNodeOriginSchema,
+  nodeExecutionMetadataSchema,
+} from '@archon/workflows/schemas/node-execution';
 
 export const skipCauseSchema = engineSkipCauseSchema.meta({ id: 'SkipCause' });
 export const nodeSkipReasonSchema = engineNodeSkipReasonSchema.meta({ id: 'NodeSkipReason' });
@@ -14,6 +17,8 @@ export const dagNodeSseEventSchema = z
     runId: z.string(),
     nodeId: z.string(),
     name: z.string(),
+    /** Where a node that came in through an include was written; absent otherwise. */
+    composed: composedNodeOriginSchema.optional(),
     status: z.enum(['running', 'completed', 'failed', 'skipped']),
     duration: z.number().optional(),
     error: z.string().optional(),

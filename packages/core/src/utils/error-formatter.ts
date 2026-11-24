@@ -58,6 +58,8 @@ export function formatProviderFailure(failure: ProviderFailure): string {
       return `⚠️ The AI provider is at capacity${detail}. Wait and try again.`;
     case 'transient':
       return `⚠️ The AI provider failed temporarily${detail}. Try again.`;
+    case 'schema_unmet':
+      return `⚠️ The AI could not produce output matching the required format${detail}. Try again.`;
     case 'unknown':
       return `⚠️ AI error${detail}. Try /reset if issue persists.`;
     default: {

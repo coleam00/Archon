@@ -79,6 +79,48 @@ describe('config-loader', () => {
     await expect(loadConfig()).rejects.toThrow('Invalid attentionNotices config');
   });
 
+  const trackerYaml = (keys: string, extraProject = ''): string =>
+    `itemTracker:\n  projects:\n    - project: acme/widgets\n      repo: { host: github.com, path: acme/widgets }\n      keys:${keys}${extraProject}`;
+  const issueKeys = "\n        - { prefix: 'issue-', kind: issue }\n";
+
+  test('the item tracker loads from global config only, with usage off by default', async () => {
+    mockFsReadFile.mockImplementation(async (path: string) =>
+      path.replace(/\\/g, '/').includes('/repo/.archon/')
+        ? trackerYaml("\n        - { prefix: 'repo-', kind: issue }\n")
+        : trackerYaml(issueKeys)
+    );
+    expect((await loadConfig('/repo')).itemTracker).toEqual({
+      includeUsage: false,
+      projects: [
+        {
+          project: 'acme/widgets',
+          repo: { host: 'github.com', path: 'acme/widgets' },
+          keys: [{ prefix: 'issue-', kind: 'issue' }],
+        },
+      ],
+    });
+    expect(toSafeConfig(await loadConfig())).not.toHaveProperty('itemTracker');
+  });
+
+  test.each([
+    [
+      'overlapping prefixes',
+      trackerYaml(
+        "\n        - { prefix: 'issue-', kind: issue }\n        - { prefix: 'iss', kind: pr }\n"
+      ),
+    ],
+    [
+      'a duplicate project',
+      trackerYaml(
+        issueKeys,
+        "    - project: acme/widgets\n      repo: { host: github.com, path: acme/widgets }\n      keys:\n        - { prefix: 'pr-', kind: pr }\n"
+      ),
+    ],
+  ])('an item tracker with %s refuses to load', async (_case, yaml) => {
+    mockFsReadFile.mockResolvedValue(yaml);
+    await expect(loadConfig()).rejects.toThrow('Invalid itemTracker config');
+  });
+
   test.each(['concurrency:', 'concurrency: null', 'concurrency: ~'])(
     '%s preserves unrelated global settings and the default conversation limit',
     async concurrency => {
@@ -155,6 +197,15 @@ concurrency:
       expect(config.defaultAssistant).toBe('codex');
       expect(config.streaming?.telegram).toBe('batch');
       expect(config.concurrency?.maxConversations).toBe(5);
+    });
+
+    test.each([
+      'worktree: [.cache]',
+      'worktree:\n  linkFiles: .cache',
+      'worktree:\n  linkFiles: [" "]',
+    ])('rejects invalid global worktree.linkFiles: %s', async setting => {
+      mockFsReadFile.mockResolvedValue(setting);
+      await expect(loadGlobalConfig()).rejects.toThrow('Invalid worktree config');
     });
 
     test.each([
@@ -317,6 +368,26 @@ workflows:
     ])('rejects invalid provisioning setting: %s', async setting => {
       mockFsReadFile.mockResolvedValue(`worktree:\n  ${setting}`);
       await expect(loadRepoConfig('/repo')).rejects.toThrow('worktree.postCreate');
+    });
+
+    test('loads linked files', async () => {
+      mockFsReadFile.mockResolvedValue(
+        'worktree:\n  copyFiles: [".env", ".serena/cache-index"]\n  linkFiles: [".serena/cache"]'
+      );
+      expect((await loadRepoConfig('/repo')).worktree?.linkFiles).toEqual(['.serena/cache']);
+    });
+
+    test.each([
+      'linkFiles: .serena/cache',
+      'linkFiles: [42]',
+      'linkFiles: [" "]',
+      'copyFiles: [".cache/"]\n  linkFiles: [".cache"]',
+      'copyFiles: [".cache"]\n  linkFiles: ["./.cache"]',
+      'copyFiles: [".cache"]\n  linkFiles: [".cache/shared"]',
+      'copyFiles: [".cache/shared"]\n  linkFiles: [".cache"]',
+    ])('rejects invalid linked files: %s', async setting => {
+      mockFsReadFile.mockResolvedValue(`worktree:\n  ${setting}`);
+      await expect(loadRepoConfig('/repo')).rejects.toThrow('worktree.linkFiles');
     });
 
     test('loads from .archon/config.yaml', async () => {

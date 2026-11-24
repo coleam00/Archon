@@ -74,7 +74,10 @@ function resolveOwnerRepo(
     // break docker-compose short-form volume specs (HOST:CONTAINER:OPT) (#1583).
     const parsed = parseOwnerRepo(codebaseName);
     if (parsed) return parsed;
-    getLog().warn({ codebaseName }, 'worktree.invalid_codebase_name_format');
+    // A bare name is how a repository with no remote is registered, so only a name
+    // that tried to be `owner/repo` (or carries ':' / '@') is worth a warning.
+    if (/[/:@]/.test(codebaseName))
+      getLog().warn({ codebaseName }, 'worktree.invalid_codebase_name_format');
   }
   if (isInsideArchonWorkspaces(repoPath)) {
     const parts = relative(resolve(getArchonWorkspacesPath()), resolve(repoPath)).split(/[/\\]/);
@@ -121,23 +124,6 @@ export function getWorktreeBase(
     base: getProjectWorktreesPath(owner, repo),
     layout: 'workspace-scoped',
   };
-}
-
-/**
- * Check if the worktree base for a given repo path is workspace-scoped.
- *
- * Kept for backward compatibility with callers outside this package; prefer
- * reading `layout` from `getWorktreeBase()` in new code. This helper is unaware
- * of `override.repoLocal`, so it does not reflect per-repo overrides — use
- * `getWorktreeBase(...).layout === 'workspace-scoped'` in override-aware code.
- *
- * @deprecated Use `getWorktreeBase(...).layout === 'workspace-scoped'` instead.
- *   This helper returned `false` for pre-workspace registered repos in the old
- *   two-layout model; in the current model every repo resolves to workspace-scoped
- *   when no override is set, so this always returns `true`.
- */
-export function isProjectScopedWorktreeBase(repoPath: RepoPath, codebaseName?: string): boolean {
-  return getWorktreeBase(repoPath, codebaseName).layout === 'workspace-scoped';
 }
 
 /**

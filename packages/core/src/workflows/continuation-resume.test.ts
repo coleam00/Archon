@@ -15,6 +15,7 @@ const pausedRun: WorkflowRun = {
   codebase_id: null,
   status: 'paused',
   outcome: null,
+  completed_outcome: null,
   user_message: 'deliver',
   metadata: {},
   active_phase_started_at: null,

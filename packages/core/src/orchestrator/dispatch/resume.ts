@@ -2,8 +2,16 @@ import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { inspectResumableRun } from '@archon/workflows/run-resume';
 import { assertRunCredentials } from '@archon/workflows/run-preflight';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  checkedResumeCursor,
+  leasedResumeCursor,
+  RunLimitError,
+  WorkflowItemHeldError,
+  type RunOwnerLease,
+} from '@archon/workflows/store';
 import { spellWorkflowCommand, type WorkflowDeps } from '@archon/workflows/deps';
 import * as workflowDb from '../../db/workflows';
 import { startRunLiveOwner, withRunLiveOwner } from '../../services/run-live-owner';
@@ -47,7 +55,7 @@ export async function continueForegroundResume(
   const resumeOwner = await startRunLiveOwner(resumableRun.id);
   let resumeOwnerClosed = false;
   try {
-    const admission = await admitResume(scope, input, deps, engine);
+    const admission = await admitResume(scope, input, deps, engine, resumeOwner.lease);
     if (admission === undefined) return;
     if (admission.accepted) {
       await admission.settled;
@@ -66,7 +74,8 @@ async function admitResume(
   scope: DispatchScope,
   input: ForegroundResumeInput,
   deps: WorkflowDeps,
-  engine: InProcessWorkflowEngine
+  engine: InProcessWorkflowEngine,
+  lease: RunOwnerLease
 ): Promise<WorkflowResumeAdmission | undefined> {
   const { platform, conversationId, conversation, codebase, userId, options } = scope;
   const { workflow, resumableRun } = input;
@@ -99,6 +108,8 @@ async function admitResume(
         parentConversationId: conversation.id,
       },
       run: resumableRun,
+      // A running run got here only through `resumeWorkflow` (`detectContinuation`).
+      cursor: leasedResumeCursor(checkedResumeCursor(resumableRun), lease),
       options: {
         codebaseId: codebase.id,
         source: scope.source,
@@ -215,6 +226,32 @@ async function reportRefusedResume(
     );
     return;
   }
+  // The failed run stays failed while another run of its workflow works its item.
+  if (err instanceof WorkflowItemHeldError) {
+    getLog().info(
+      { workflowName: workflow.name, runId: resumableRun.id, holderRunId: err.holderRunId },
+      'orchestrator.resume_item_held'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `⏳ **${workflow.name}** cannot resume while another run works its item. ${err.message}` +
+        deferredNote
+    );
+    return;
+  }
+  // The failed run stays failed; the install runs as many runs as it holds.
+  if (err instanceof RunLimitError) {
+    getLog().info(
+      { workflowName: workflow.name, runId: resumableRun.id, ...err.runLimit },
+      'orchestrator.resume_run_limit_full'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `⏳ **${workflow.name}** cannot resume yet. ${err.message} Resume it once a run ends.` +
+        deferredNote
+    );
+    return;
+  }
   throw err;
 }
 
@@ -249,7 +286,14 @@ async function startFreshInResumedWorktree(
   if (!captured) return; // capture failed, message already sent
   const workflow = captured.workflow;
   const freshAiConfiguration = await input.prepareLaunchAiConfiguration(workflow);
-  await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration, { cwd: scope.runCwd });
+  const workflowDeps = createWorkflowDeps();
+  await assertRunCredentials(workflowDeps, freshAiConfiguration, { cwd: scope.runCwd });
+  const inputs = await assertRunForgeAccess(workflowDeps, workflow, freshAiConfiguration, {
+    cwd: codebase.default_cwd,
+    settingsCwd: scope.runCwd,
+    codebaseId: codebase.id,
+    supplied: input.resolvedInputs,
+  });
   await platform.sendMessage(
     conversationId,
     `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
@@ -281,7 +325,7 @@ async function startFreshInResumedWorktree(
         capturedSourceOwner: owner,
         // This branch creates a FRESH run row (the prior run had nothing to resume),
         // so the supplied inputs still need stamping.
-        inputs: input.resolvedInputs,
+        inputs,
         ...(options?.modelOverrides
           ? {
               modelOverrideLayer: {

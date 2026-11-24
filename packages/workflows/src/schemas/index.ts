@@ -86,15 +86,16 @@ export type {
 // DAG node types
 export {
   triggerRuleSchema,
-  TRIGGER_RULES,
   dagNodeBaseSchema,
   nodeContextSchema,
   isNodeContextResume,
-  isTriggerRule,
+  isNodeContextSame,
 } from './dag-node-base';
 export {
   nodeMcpSchema,
   mcpDeclaration,
+  nodeSkillSchema,
+  skillDeclaration,
   loopGroupNodeSchema,
   loopGroupNodeConfigSchema,
   MAX_DURABLE_WAIT_MS,
@@ -136,6 +137,7 @@ export {
   inputEnvKey,
   bindingDirectiveSchema,
   isBindingDirective,
+  isBindingDirectiveShape,
   isTypedOutputsDirective,
 } from './node-bindings';
 export {
@@ -149,6 +151,7 @@ export {
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,
+  startsSequentialSession,
 } from './node-guards';
 export {
   collectLoopBodyNodeIds,
@@ -159,7 +162,6 @@ export {
   ignoredFieldsForNode,
   isOutputFormatEnforced,
   BASH_NODE_AI_FIELDS,
-  SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
   LOOP_GROUP_NODE_AI_FIELDS,
   INCLUDE_NODE_IGNORED_FIELDS,
@@ -177,6 +179,7 @@ export type { TriggerRule, DagNodeBase, NodeContext } from './dag-node-base';
 export type {
   NodeMcp,
   McpDeclaration,
+  NodeSkill,
   LoopGroupNode,
   LoopGroupNodeConfig,
   DagNode,
@@ -220,6 +223,7 @@ export type {
   WorkflowInputSpec,
   WorkflowBase,
   WorkflowDefinition,
+  WorkflowResultContract,
 } from './workflow';
 
 // Workflow run state
@@ -265,6 +269,7 @@ export {
   WORKFLOW_SOURCE_METADATA_KEY,
   workflowSourceConfigSchema,
   workflowSourceMetadataSchema,
+  runDefinitionsSchema,
   readWorkflowSourceState,
   CONTINUATION_METADATA_KEY,
   CONTINUATION_MODES,
@@ -272,6 +277,8 @@ export {
   continuationInheritsEstate,
   EXECUTION_OWNER_METADATA_KEY,
   readExecutionOwner,
+  START_EXECUTOR_METADATA_KEY,
+  readStartExecutor,
   RUN_DISPATCH_METADATA_KEY,
   runDispatchMetadataSchema,
   readRunDispatchMetadata,
@@ -279,6 +286,7 @@ export {
 export type {
   WorkflowRunStatus,
   WorkflowRunOutcome,
+  RunCompletedOutcome,
   WorkflowStepStatus,
   NodeState,
   SkipCause,
@@ -300,11 +308,14 @@ export type {
   GateAddress,
   LoopGateRunMetadata,
   WorkflowSourceMetadata,
+  RunDefinitions,
+  BaseRunDefinitions,
   WorkflowSourceConfig,
   WorkflowSourceState,
   ContinuationMode,
   ContinuationMetadata,
   ExecutionOwnerRecord,
+  StartExecutorRecord,
   RunDispatchMetadata,
 } from './workflow-run';
 
@@ -346,8 +357,18 @@ export {
   pauseCauseOfApproval,
   pauseCauseOfWait,
   readPauseCause,
+  isOperatorPaused,
   type PauseCause,
 } from './pause-cause';
+export {
+  OPERATOR_PAUSE_METADATA_KEY,
+  operatorPause,
+  describeOperatorPause,
+  operatorPauseSchema,
+  readOperatorPauseRecord,
+  type OperatorPause,
+  type OperatorPauseRecord,
+} from './operator-pause';
 export type { WorkflowRunOrigin } from './workflow-run';
 
 export * from './workflow-event';

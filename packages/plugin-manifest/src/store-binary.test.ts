@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import * as paths from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { MAINTAINED_PROVIDER_IDS, providerCapabilitiesSchema } from '@archon/provider-contract';
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { maintainedProviderPluginId } from './index';
 
 mock.module('@archon/paths', () => ({ ...paths, BUNDLED_IS_BINARY: true }));
@@ -54,6 +55,7 @@ test.each([...MAINTAINED_PROVIDER_IDS])(
             ),
             backgroundWork: 'none',
             sessionFork: undefined,
+            structuredOutputCorrection: undefined,
             knownToolNames: undefined,
             renamedTools: undefined,
           },
@@ -66,7 +68,9 @@ test.each([...MAINTAINED_PROVIDER_IDS])(
     expect(scan.broken[0].unavailableReason).toBe('provider-protocol');
     const notice = scan.broken[0].message;
     expect(notice).toContain(`Plugin unavailable: ${id}`);
-    expect(notice).toContain('uses protocol 2, but this Archon requires protocol 3');
+    expect(notice).toContain(
+      `uses protocol 2, but this Archon requires protocol ${String(PROVIDER_PLUGIN_PROTOCOL)}`
+    );
     expect(notice).toContain(`Run: archon provider add ${provider}`);
     expect(notice).not.toContain('archon plugin remove');
     expect(notice).toContain('Validated older receipts allow direct replacement');
@@ -75,7 +79,7 @@ test.each([...MAINTAINED_PROVIDER_IDS])(
 
     const receipt = JSON.parse(await Bun.file(file).text());
     for (const value of [
-      { ...receipt, descriptor: { ...receipt.descriptor, protocol: 4 } },
+      { ...receipt, descriptor: { ...receipt.descriptor, protocol: PROVIDER_PLUGIN_PROTOCOL + 1 } },
       { ...receipt, files: [{ ...receipt.files[0], path: 'another-file' }] },
       { ...receipt, manifest: { ...receipt.manifest, executable: 'archon-provider-other' } },
     ]) {

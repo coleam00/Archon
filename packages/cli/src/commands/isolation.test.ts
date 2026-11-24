@@ -34,7 +34,7 @@ mock.module('../routes/route-loader', () => ({
   loadRoute: async <T>(loader: () => Promise<T>): Promise<T> => loader(),
 }));
 
-function cleanupRoute(merged = false): Promise<number> {
+function cleanupRoute(merged = false, json = false): Promise<number> {
   const context: CliRouteContext = {
     command: 'isolation',
     subcommand: 'cleanup',
@@ -42,7 +42,7 @@ function cleanupRoute(merged = false): Promise<number> {
     values: { merged },
     cwd: '/test/repo',
     effectiveCwd: '/test/repo',
-    json: false,
+    json,
     detachedRunConfig: undefined,
     inheritedEnv: {},
     forgeTrustedEnv: {},
@@ -101,9 +101,7 @@ const mockRemoveEnvironment = mock<typeof RemoveEnvironment.removeEnvironment>((
 const mockCleanupContainerEnvironments = mock<typeof CleanupService.cleanupContainerEnvironments>(
   () => Promise.resolve({ removed: [], skipped: [], errors: [] })
 );
-const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
-  Promise.resolve(null)
-);
+const mockGetUseBlocker = mock<typeof CleanupRunLock.getUseBlocker>(() => Promise.resolve(null));
 const mockListContainerEnvironments = mock<typeof CleanupContainers.listContainerEnvironments>(() =>
   Promise.resolve([])
 );
@@ -135,7 +133,8 @@ mock.module('@archon/core/services/cleanup/remove-environment', () => ({
 }));
 mock.module('@archon/core/services/cleanup/run-lock', () => ({
   getCleanupRunLock: mockGetCleanupRunLock,
-  getLiveRunBlocker: mockGetLiveRunBlocker,
+  getUseBlocker: mockGetUseBlocker,
+  useBlockerLogFields: () => ({}),
   toUnpushedLock: mock(),
   countUnpushedCommits: mock(),
   readLiveRemoteTips: mock(),
@@ -157,15 +156,24 @@ const mockListEnvironments = mock<typeof IsolationOperations.listEnvironments>((
   })
 );
 const mockCleanupMergedEnvironments = mock<typeof IsolationOperations.cleanupMergedEnvironments>(
-  () =>
-    Promise.resolve({
+  () => Promise.resolve(swept())
+);
+
+function swept(
+  result: Partial<IsolationOperations.CleanupOperationResult> = {}
+): IsolationOperations.MergedCleanupOutcome {
+  return {
+    kind: 'swept',
+    result: {
       removed: [],
       skipped: [],
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-    })
-);
+      ...result,
+    },
+  };
+}
 
 mock.module('@archon/core/operations/isolation-operations', () => ({
   listEnvironments: mockListEnvironments,
@@ -210,10 +218,21 @@ const mockDestroyWorktree = mock<ReturnType<typeof Isolation.getIsolationProvide
   })
 );
 
-const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } =
-  await import('@archon/isolation');
-mock.module('@archon/isolation', () => ({
+const {
   generatedTaskBranch,
+  validateWorktreeConfig,
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+} = await import('@archon/isolation');
+mock.module('@archon/isolation', () => ({
+  checkWorktreeStartable: mock(async () => undefined),
+  readWorktreeBaseBranch: () => undefined,
+  generatedTaskBranch,
+  validateWorktreeConfig,
+  resolveWorktreeBase: mock(async () => {
+    throw new Error('resolveWorktreeBase is not mocked here');
+  }),
+  refuseUnappliedStartPoint: mock(async () => undefined),
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
   })),
@@ -354,8 +373,8 @@ describe('isolationCompleteCommand', () => {
     mockWorktreeExists.mockReset().mockResolvedValue(true);
     mockHasUncommittedChanges.mockReset();
     mockHasUncommittedChanges.mockResolvedValue(false);
-    mockGetLiveRunBlocker.mockReset();
-    mockGetLiveRunBlocker.mockResolvedValue(null);
+    mockGetUseBlocker.mockReset();
+    mockGetUseBlocker.mockResolvedValue(null);
     mockExecFileAsync.mockReset();
     // Default: gh returns empty PR array and git reports no unpushed commits.
     mockExecFileAsync.mockImplementation((cmd: string) =>
@@ -428,12 +447,12 @@ describe('isolationCompleteCommand', () => {
   it.each([false, true])('refuses ambiguous branches even with force=%s', async force => {
     mockListActive.mockResolvedValueOnce([
       mockEnv,
-      {
+      makeEnvironment({
         ...mockEnv,
         id: 'other-env',
         codebase_id: 'other-codebase',
         codebase_default_cwd: '/other/repo',
-      },
+      }),
     ]);
 
     await expect(isolationCompleteCommand(['feature-branch'], { force })).rejects.toThrow(
@@ -703,13 +722,13 @@ describe('isolationCompleteCommand', () => {
   // environment is the failed run's resume handle; removeEnvironment is what would
   // delete its worktree and its local and remote branch.
   it('refuses a clean, pushed environment a failed run can still resume', async () => {
-    mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
+    mockGetUseBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
 
     await expect(
       isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
     ).rejects.toThrow('Failed to complete');
 
-    expect(mockGetLiveRunBlocker).toHaveBeenCalledWith('env-123');
+    expect(mockGetUseBlocker).toHaveBeenCalledWith('env-123');
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
     expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ run run-live is failed');
@@ -718,7 +737,7 @@ describe('isolationCompleteCommand', () => {
   });
 
   it('refuses when the owning-run lookup fails', async () => {
-    mockGetLiveRunBlocker.mockRejectedValueOnce(new Error('database is locked'));
+    mockGetUseBlocker.mockRejectedValueOnce(new Error('database is locked'));
 
     await expect(
       isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true })
@@ -1046,7 +1065,7 @@ describe('isolationCompleteCommand', () => {
   it('reports all blockers in safety-check order when multiple checks fail', async () => {
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
     mockGetUniqueCommitCount.mockResolvedValueOnce(2);
-    mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('running'));
+    mockGetUseBlocker.mockResolvedValueOnce(liveRunBlocker('running'));
     mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === 'gh') {
         return Promise.resolve({
@@ -1134,7 +1153,7 @@ describe('isolationCompleteCommand', () => {
     const env = makeEnvironment({ branch_name: 'dirty-branch' });
     mockListActive.mockResolvedValueOnce([env]);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
-    mockGetLiveRunBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
+    mockGetUseBlocker.mockResolvedValueOnce(liveRunBlocker('failed'));
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
       branchDeleted: true,
@@ -1145,7 +1164,7 @@ describe('isolationCompleteCommand', () => {
 
     // All safety checks should NOT be called when force is true
     expect(mockHasUncommittedChanges).not.toHaveBeenCalled();
-    expect(mockGetLiveRunBlocker).not.toHaveBeenCalled();
+    expect(mockGetUseBlocker).not.toHaveBeenCalled();
     expect(mockExecFileAsync).not.toHaveBeenCalled();
     expect(mockRemoveEnvironment).toHaveBeenCalledWith(expect.objectContaining({ id: 'env-123' }), {
       force: true,
@@ -1255,13 +1274,7 @@ describe('isolationCleanupMergedCommand', () => {
     consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
     mockCleanupMergedEnvironments.mockReset();
-    mockCleanupMergedEnvironments.mockResolvedValue({
-      removed: [],
-      skipped: [],
-      errors: [],
-      releasedFailedRuns: [],
-      warnings: [],
-    });
+    mockCleanupMergedEnvironments.mockResolvedValue(swept());
   });
 
   afterEach(() => {
@@ -1272,19 +1285,84 @@ describe('isolationCleanupMergedCommand', () => {
   it.each([false, true])(
     'returns failure for merged removal errors (failure: %s)',
     async failed => {
-      mockCleanupMergedEnvironments.mockResolvedValueOnce({
-        removed: ['done'],
-        warnings: [],
-        releasedFailedRuns: [],
-        skipped: failed ? [] : [{ branchName: 'kept', reason: 'has uncommitted changes' }],
-        errors: failed ? [{ branchName: 'kept', error: 'registration changed' }] : [],
-      });
+      mockCleanupMergedEnvironments.mockResolvedValueOnce(
+        swept({
+          removed: ['done'],
+          skipped: failed ? [] : [{ branchName: 'kept', reason: 'has uncommitted changes' }],
+          errors: failed ? [{ branchName: 'kept', error: 'registration changed' }] : [],
+        })
+      );
       expect(await cleanupRoute(true)).toBe(failed ? 1 : 0);
       expect(consoleLogSpy).toHaveBeenCalledWith('  Cleaned: done');
       if (failed)
         expect(consoleErrorSpy).toHaveBeenCalledWith('  Failed: kept (registration changed)');
     }
   );
+
+  function twoCodebases(): void {
+    mockListEnvironments.mockResolvedValueOnce({
+      codebases: [
+        { codebaseId: 'gone', defaultCwd: '/tmp/gone-repo', repositoryUrl: null, environments: [] },
+        { codebaseId: 'live', defaultCwd: '/test/repo', repositoryUrl: null, environments: [] },
+      ],
+      totalEnvironments: 0,
+      ghostsReconciled: 0,
+    });
+  }
+  const goneOutcome: IsolationOperations.MergedCleanupOutcome = {
+    kind: 'repository-gone',
+    environments: [{ branchName: 'probe/x', workingPath: '/worktrees/probe/x' }],
+  };
+
+  it('reports a gone repository with its release command and still succeeds', async () => {
+    twoCodebases();
+    mockCleanupMergedEnvironments.mockImplementation(async codebaseId =>
+      codebaseId === 'gone' ? goneOutcome : swept({ removed: ['done'] })
+    );
+    expect(await cleanupRoute(true)).toBe(0);
+    const output = consoleLogSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('/tmp/gone-repo');
+    expect(output).toContain('probe/x');
+    expect(output).toContain('/worktrees/probe/x');
+    expect(output).toContain('archon isolation list');
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Cleaned: done');
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it('--json distinguishes a gone repository from a failed merge check', async () => {
+    twoCodebases();
+    mockCleanupMergedEnvironments.mockImplementation(async codebaseId =>
+      codebaseId === 'gone'
+        ? goneOutcome
+        : swept({ errors: [{ branchName: 'broken', error: 'merge check failed: exit 128' }] })
+    );
+    const written: string[] = [];
+    const writeSpy = spyOn(process.stdout, 'write').mockImplementation(((
+      chunk: string,
+      callback?: (error?: Error) => void
+    ) => {
+      written.push(chunk);
+      callback?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      expect(await cleanupRoute(true, true)).toBe(1);
+    } finally {
+      writeSpy.mockRestore();
+    }
+    expect(consoleLogSpy).not.toHaveBeenCalled();
+    expect(JSON.parse(written.join(''))).toEqual({
+      codebases: [
+        { codebaseId: 'gone', repositoryUrl: null, path: '/tmp/gone-repo', ...goneOutcome },
+        {
+          codebaseId: 'live',
+          repositoryUrl: null,
+          path: '/test/repo',
+          ...swept({ errors: [{ branchName: 'broken', error: 'merge check failed: exit 128' }] }),
+        },
+      ],
+    });
+  });
 
   it('continues after a codebase failure and returns failure after the summary', async () => {
     mockListEnvironments.mockResolvedValueOnce({
@@ -1320,13 +1398,12 @@ describe('isolationCleanupMergedCommand', () => {
   });
 
   it('names each failed run whose lock the sweep released', async () => {
-    mockCleanupMergedEnvironments.mockResolvedValueOnce({
-      removed: ['settled'],
-      skipped: [],
-      warnings: [],
-      errors: [],
-      releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'merged' }],
-    });
+    mockCleanupMergedEnvironments.mockResolvedValueOnce(
+      swept({
+        removed: ['settled'],
+        releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'merged' }],
+      })
+    );
 
     await isolationCleanupMergedCommand({ includeClosed: true });
 
@@ -1334,13 +1411,12 @@ describe('isolationCleanupMergedCommand', () => {
   });
 
   it('shows retained remote branch warnings from merged cleanup', async () => {
-    mockCleanupMergedEnvironments.mockResolvedValueOnce({
-      removed: ['settled'],
-      skipped: [],
-      errors: [],
-      releasedFailedRuns: [],
-      warnings: [{ branchName: 'settled', message: "Remote branch retained 'settled'" }],
-    });
+    mockCleanupMergedEnvironments.mockResolvedValueOnce(
+      swept({
+        removed: ['settled'],
+        warnings: [{ branchName: 'settled', message: "Remote branch retained 'settled'" }],
+      })
+    );
     await isolationCleanupMergedCommand();
     expect(consoleLogSpy).toHaveBeenCalledWith(
       "  Warning: settled: Remote branch retained 'settled'"
@@ -1359,8 +1435,8 @@ describe('isolationCleanupCommand', () => {
     mockFindStaleEnvironments.mockResolvedValue([]);
     mockGetCleanupRunLock.mockReset();
     mockGetCleanupRunLock.mockResolvedValue({ kind: 'free' });
-    mockGetLiveRunBlocker.mockReset();
-    mockGetLiveRunBlocker.mockResolvedValue(null);
+    mockGetUseBlocker.mockReset();
+    mockGetUseBlocker.mockResolvedValue(null);
     mockDestroyWorktree.mockReset().mockResolvedValue({
       worktreeRemoved: true,
       directoryClean: true,

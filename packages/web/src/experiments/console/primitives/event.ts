@@ -73,6 +73,11 @@ export interface NodeTransitionEvent extends RunEventBase {
   output: NodeOutput | null;
   /** Only populated for `failed`: the engine's error for the node. */
   error: string | null;
+  /**
+   * Only populated for `failed`: the failure kind the engine recorded (e.g. `schema_unmet`),
+   * the name a `retry.on_error` policy targets. Null on rows written without one.
+   */
+  failureKind: string | null;
 }
 
 /** A node's recorded stdout; `truncated` when the engine stored only the head of it. */
@@ -211,6 +216,7 @@ function toNodeTransition(
     tokens: readTokens(data.tokens),
     output: transition === 'completed' ? readExecOutput(data) : null,
     error: transition === 'failed' ? readStringOrNull(data, 'error') : null,
+    failureKind: transition === 'failed' ? readStringOrNull(data, 'failure_kind') : null,
   };
 }
 
@@ -398,6 +404,7 @@ const EVENT_MAPPERS = new Map<string, EventMapper>([
       readString(data, 'error') ? 'Workflow resumed (prior error cleared)' : 'Workflow resumed'
     ),
   ],
+  ['operator_paused', workflowLifecycle(() => 'Paused by an operator')],
   ['container_created', containerEvent('Container created')],
   ['container_stopped', containerEvent('Container stopped (paused)')],
   ['container_resumed', containerEvent('Container resumed')],
@@ -508,6 +515,8 @@ export interface NodeRun {
   output: NodeOutput | null;
   /** From the `node_failed` behind a `failed` state. */
   error: string | null;
+  /** The failure kind from the same `node_failed`. */
+  failureKind: string | null;
   /** A `workflow:` fan-out node's per-slot record, from the engine's node state. */
   fanOutOutcome: RunNodeState['fan_out_outcome'];
 }
@@ -589,8 +598,12 @@ function scanTransitions(
 function nodeResult(
   completed: NodeTransitionEvent | null,
   ended: NodeTransitionEvent | null
-): Pick<NodeRun, 'output' | 'error'> {
-  return { output: completed?.output ?? null, error: ended?.error ?? null };
+): Pick<NodeRun, 'output' | 'error' | 'failureKind'> {
+  return {
+    output: completed?.output ?? null,
+    error: ended?.error ?? null,
+    failureKind: ended?.failureKind ?? null,
+  };
 }
 
 function toNodeRun(node: RunNodeState, transitions: NodeTransitionEvent[]): NodeRun {

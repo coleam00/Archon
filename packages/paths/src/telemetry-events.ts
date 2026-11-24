@@ -244,7 +244,8 @@ export interface ChatTurnProperties extends TelemetryUsageProperties {
   provider?: string;
   /** Resolved model ref — passed through {@link sanitizeModelForTelemetry}. */
   model?: string;
-  outcome: 'completed' | 'failed';
+  /** `cancelled`: the operator stopped the turn while it was in flight. */
+  outcome: 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
 }
 
@@ -290,6 +291,7 @@ export type WorkflowErrorClass =
   | 'timeout'
   | 'exec_failed'
   | 'output_contract'
+  | 'schema_unmet'
   | 'max_iterations'
   | 'child_failed'
   | 'cancelled'

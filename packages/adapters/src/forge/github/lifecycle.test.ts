@@ -719,6 +719,7 @@ test('reviews paginate submissions and root diff comments, retaining author and 
     submitted_at: '2026-10-06T10:00:00Z',
     created_at: '2026-10-06T10:00:00Z',
   };
+  const comment = { ...item, path: 'a.ts' };
   const calls: string[] = [];
   const response = await handleGithubOperation(
     { operationId: 'reviews', op: 'pr.reviews', ref },
@@ -737,13 +738,13 @@ test('reviews paginate submissions and root diff comments, retaining author and 
                 ]
           );
         return json([
-          { ...item, state: undefined },
-          { ...item, id: 2, in_reply_to_id: 1 },
-          { ...item, id: 3, user: null, commit_id: null, created_at: null },
-          { ...item, id: 4, user: { id: 3, login: 'ci[bot]', type: 'Bot' } },
-          { ...item, id: 5, user: { id: 4, login: 'acme', type: 'Organization' } },
-          { ...item, id: 6, user: { id: 5, login: 'old' } },
-          { ...item, id: 7, user: { id: 6, login: 'ghost', type: 'Mannequin' } },
+          { ...comment, state: undefined },
+          { ...comment, id: 2, in_reply_to_id: 1 },
+          { ...comment, id: 3, user: null, commit_id: null, created_at: null },
+          { ...comment, id: 4, user: { id: 3, login: 'ci[bot]', type: 'Bot' } },
+          { ...comment, id: 5, user: { id: 4, login: 'acme', type: 'Organization' } },
+          { ...comment, id: 6, user: { id: 5, login: 'old' } },
+          { ...comment, id: 7, user: { id: 6, login: 'ghost', type: 'Mannequin' } },
         ]);
       },
     }
@@ -916,4 +917,87 @@ test('a mutation GitHub answers 502 is sent once and keeps its unknown outcome',
     mutation: { outcome: 'outcome_unknown' },
   });
   expect(github.calls.filter(call => call.method === 'PATCH')).toHaveLength(1);
+});
+
+describe('GitHub pull request close', () => {
+  const request = { operationId: 'close', op: 'pr.close', ref } satisfies ForgeMutationRequest;
+
+  test('closes an open pull request with one state update and nothing else', async () => {
+    const github = fakeGitHub();
+    const writes: unknown[] = [];
+    const response = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async (input, init) => {
+        if (init?.method && init.method !== 'GET')
+          writes.push({
+            url: String(input),
+            method: init.method,
+            body: JSON.parse(String(init.body)),
+          });
+        return github.fetch(input, init);
+      },
+    });
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        op: 'pr.close',
+        value: { outcome: 'applied', changed: true, pr: { state: 'closed' } },
+      },
+    });
+    // No merge, no branch deletion, no comment: one PATCH to the pull request.
+    expect(writes).toEqual([
+      { url: expect.stringMatching(/\/pulls\/7$/), method: 'PATCH', body: { state: 'closed' } },
+    ]);
+  });
+
+  test.each([
+    [
+      false,
+      { ok: true, result: { op: 'pr.close', value: { changed: false, pr: { state: 'closed' } } } },
+    ],
+    [
+      true,
+      {
+        ok: false,
+        error: { kind: 'conflict' },
+        mutation: { op: 'pr.close', outcome: 'refused', observed: { state: 'merged' } },
+      },
+    ],
+  ] as const)('a closed pull request (merged=%s) is not written', async (merged, expected) => {
+    const github = fakeGitHub({ pull: pull({ state: 'closed', merged }) });
+    expect(await run(request, github)).toMatchObject(expected);
+    expect(github.calls.every(call => call.method === 'GET')).toBe(true);
+  });
+
+  test('a read-back that is still open is not reported as closed', async () => {
+    expect(await run(request, fakeGitHub({ lose: true }))).toMatchObject({
+      ok: false,
+      mutation: { op: 'pr.close', outcome: 'verification_failed', observed: { state: 'open' } },
+    });
+  });
+
+  test.each([
+    [403, 'authorization'],
+    [503, 'unavailable'],
+  ] as const)('a read-back that fails with HTTP %i keeps its cause', async (status, kind) => {
+    const github = fakeGitHub();
+    let patched = false;
+    const response = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async (input, init) => {
+        if (init?.method === 'PATCH') patched = true;
+        else if (patched) return json({}, status);
+        return github.fetch(input, init);
+      },
+    });
+    expect(response).toMatchObject({
+      ok: false,
+      error: { kind, status },
+      mutation: {
+        op: 'pr.close',
+        outcome: 'verification_failed',
+        leaveBehind: 'the pull request may be closed',
+      },
+    });
+  });
 });

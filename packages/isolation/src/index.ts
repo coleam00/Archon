@@ -12,11 +12,9 @@ export type {
   IsolationRequest,
   AdoptedWorktreeMetadata,
   CreatedWorktreeMetadata,
-  ObservedWorktreeMetadata,
   WorktreeCreationEnvironment,
   WorktreeMetadata,
   WorktreeEnvironment,
-  IsolatedEnvironment,
   DestroyOptions,
   WorktreeDestroyOptions,
   DestroyResult,
@@ -51,6 +49,7 @@ export {
   WORKTREE_REGISTRATION_ID,
   WORKTREE_REMOVAL_OWNER,
   readWorktreeCreationId,
+  readWorktreeBaseBranch,
   readWorktreeBranchCreated,
   WorktreeRegistrationChangedError,
   WorktreeRemovalInProgressError,
@@ -83,7 +82,7 @@ export {
 } from './errors';
 
 // --- Factory ---
-export { getIsolationProvider, configureIsolation, resetIsolationProvider } from './factory';
+export { getIsolationProvider, configureIsolation, checkWorktreeStartable } from './factory';
 
 // --- Resolver ---
 export { IsolationResolver } from './resolver';
@@ -92,6 +91,8 @@ export type { IsolationResolverDeps } from './resolver';
 // --- Provider ---
 export { WorktreeProvider, resolveRepoLocalOverride } from './providers/worktree';
 export { generatedTaskBranch, isGeneratedTaskBranch } from './providers/worktree/branches';
+export { refuseUnappliedStartPoint } from './providers/worktree/adopt';
+export { resolveWorktreeBase } from './providers/worktree/create';
 
 // --- PR state lookup ---
 export { getPrState, getPrsForCommit } from './pr-state';
@@ -106,7 +107,7 @@ export {
 } from './worktree-copy';
 export type { CopyFileEntry } from './worktree-copy';
 
-export { validateWorktreePostCreate } from './post-create-config';
+export { validateWorktreeConfig } from './worktree-config';
 export type { WorktreeSetupExecutor, WorktreeSetupInput } from './types';
 export { WorktreePostCreateError } from './errors';
 

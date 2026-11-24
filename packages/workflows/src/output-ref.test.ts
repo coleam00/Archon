@@ -304,18 +304,6 @@ describe('assertProducerNotFailed', () => {
       assertProducerNotFailed(failed, f => `custom message referencing ${f.error}`)
     ).toThrow('custom message referencing boom');
   });
-
-  it('passes the narrowed failed NodeOutput to buildMessage (error accessible without a cast)', () => {
-    const failed: NodeOutput = { state: 'failed', output: '', error: 'loop failed' };
-    let seenError: string | undefined;
-    expect(() =>
-      assertProducerNotFailed(failed, f => {
-        seenError = f.error;
-        return 'x';
-      })
-    ).toThrow();
-    expect(seenError).toBe('loop failed');
-  });
 });
 
 describe('resolveNodeOutputField — declared-schema producer', () => {

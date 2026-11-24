@@ -9,6 +9,14 @@ import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
+import { describeItemLandingConformance } from './item-landings.conformance-harness';
+import { describeItemLinkConformance } from './item-links.conformance-harness';
+import { describeLinkedStartConformance } from './linked-starts.conformance-harness';
+import { describeSqlItemAskStartConformance } from './item-ask-starts.conformance';
+import { describeSqlItemAskConformance } from './item-asks.conformance';
+import { describeSqlRunDeleteConformance } from './workflow-run-delete.conformance';
+import { describeSqlStartLimitConformance } from './start-limits.conformance';
+import { describeSqlItemWaitConformance } from './item-waits.conformance';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
 const trackTempRoot = trackTempRoots();
@@ -31,6 +39,14 @@ const makeHarness = async () => {
 describeWorkflowStoreConformance('SQLite', makeHarness);
 
 describeSqlStatusReadConformance(makeHarness);
+describeItemLinkConformance(makeHarness);
+describeItemLandingConformance(makeHarness);
+describeLinkedStartConformance(makeHarness);
+describeSqlItemAskConformance(makeHarness);
+describeSqlItemWaitConformance(makeHarness);
+describeSqlItemAskStartConformance(makeHarness);
+describeSqlRunDeleteConformance(makeHarness);
+describeSqlStartLimitConformance(makeHarness);
 
 test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
   const harness = await makeHarness();
@@ -70,6 +86,8 @@ test.each(['nested-workflow', null])(
       expect(
         await store.updateWorkflowRunMetadataIfRunning(child.id, { parent_node_id: 'replacement' })
       ).toBe(true);
+      // A parent is deleted only once its sub-runs have ended.
+      await store.completeWorkflowRun(child.id, { duration_ms: 1 });
       await store.cancelWorkflowRun(parent.id);
       const { deleteWorkflowRun } = await import('./workflows');
       await deleteWorkflowRun(parent.id);

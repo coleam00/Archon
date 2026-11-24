@@ -2,16 +2,23 @@
  * `archon pack bindings` against a minimal fixture pack, discovered from a real project
  * folder: what it writes is read back with the schemas of the loaders that consume it.
  */
+import { closeDatabase } from '@archon/core/db/connection';
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
+import { readAsksSettledBindings, readRunEndedBindings } from '@archon/core/workflows/run-ended';
+import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { packCommand, type PackBindingsOptions } from './pack';
-import { triggerFireConfigSchema } from './trigger';
+import { packCopyLines } from './pack-copies';
+import { loadWorkflows } from './workflow-list';
+import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
+import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 
 const DECLARATION = `bindings:
   sweep:
@@ -38,6 +45,7 @@ const DECLARATION = `bindings:
     workflow: fixture-sweep
     resource: follow-up
     overlap: queue
+    item: { field: number, prefix: issue- }
   opened:
     workflow: fixture-sweep
     resource: opened
@@ -45,6 +53,7 @@ const DECLARATION = `bindings:
     event:
       kind: issue.lifecycle
       actions: [opened]
+    item: { field: subject.number, prefix: issue- }
     inputs:
       number: { event: subject.number }
       mode: slow
@@ -57,21 +66,97 @@ let logSpy: ReturnType<typeof spyOn>;
 const originalArchonHome = process.env.ARCHON_HOME;
 const originalDefaultAssistant = process.env.DEFAULT_AI_ASSISTANT;
 
-async function writePack(declaration: string): Promise<void> {
-  const pack = join(cwd, '.archon', 'workflows', 'fixture');
+// `fixture-plan` ends with an outcome; `build` starts `fixture-build` from it.
+const RUN_ENDED_DECLARATION = `bindings:
+  build:
+    workflow: fixture-build
+    resource: build
+    capacity: 2
+    overlap: queue
+    isolation: { kind: in-place }
+    run_ended: { workflow: fixture-plan, outcome: [planned, blocked] }
+    inputs:
+      plan: { result: /plan }
+      issue: { input: issue }
+      mode: fast
+`;
+
+const PLAN_WORKFLOW = `name: fixture-plan
+description: d
+inputs:
+  issue: { required: true }
+returns: { node: decide, outcome: outcome }
+nodes:
+  - id: decide
+    bash: echo '{"outcome":"planned","plan":"p"}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [planned, blocked] }
+        plan: { type: string }
+      required: [outcome, plan]
+`;
+
+const BUILD_WORKFLOW = `name: fixture-build
+description: d
+inputs:
+  plan: { required: true }
+  issue: { required: true }
+  mode: {}
+nodes:
+  - id: a
+    bash: echo hi
+`;
+
+// `fixture-ask` leaves asks; `build-again` starts `fixture-build` in its checkout once they are answered.
+const ASKS_SETTLED_DECLARATION = `bindings:
+  build-again:
+    workflow: fixture-build
+    resource: build
+    overlap: queue
+    asks_settled: { workflow: fixture-ask, settled: answered, checkout: asking-run }
+    inputs:
+      plan: { answers: true }
+      issue: { input: issue }
+`;
+
+const ASK_WORKFLOW = `name: fixture-ask
+description: d
+inputs:
+  issue: { required: true }
+returns: { node: decide, asks: asks }
+nodes:
+  - id: decide
+    bash: echo '{"asks":[]}'
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+`;
+
+async function writeWorkflow(packDir: string, name: string, body: string): Promise<void> {
+  await mkdir(join(packDir, name), { recursive: true });
+  await writeFile(join(packDir, name, `${name}.yaml`), body);
+}
+
+async function writePack(declaration: string, dir: string = cwd): Promise<void> {
+  const pack = join(dir, '.archon', 'workflows', 'fixture');
   // The fixture pack is the whole subject: keep the bundled packs out of discovery.
-  await mkdir(join(cwd, '.archon'), { recursive: true });
+  await mkdir(join(dir, '.archon'), { recursive: true });
   await writeFile(
-    join(cwd, '.archon', 'config.yaml'),
+    join(dir, '.archon', 'config.yaml'),
     'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
   );
   await mkdir(join(pack, '.pack'), { recursive: true });
-  await mkdir(join(pack, 'fixture-sweep'), { recursive: true });
   await writeFile(join(pack, '.pack', 'pack.yaml'), declaration);
-  await writeFile(
-    join(pack, 'fixture-sweep', 'fixture-sweep.yaml'),
+  await writeWorkflow(
+    pack,
+    'fixture-sweep',
     'name: fixture-sweep\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
   );
+  await writeWorkflow(pack, 'fixture-plan', PLAN_WORKFLOW);
+  await writeWorkflow(pack, 'fixture-build', BUILD_WORKFLOW);
+  await writeWorkflow(pack, 'fixture-ask', ASK_WORKFLOW);
 }
 
 function options(extra: Partial<PackBindingsOptions> = {}): PackBindingsOptions {
@@ -115,6 +200,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   logSpy.mockRestore();
+  // A check reads the scratch home's codebase records; close the database before it goes.
+  await closeDatabase();
   await removeTempTree(root);
   if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalArchonHome;
@@ -131,7 +218,7 @@ describe('archon pack bindings', () => {
     const sweepFile = await fileFor('sweep');
     const sweepName = sweepFile.replace(/\.json$/, '');
     const sweepPath = join(out, sweepFile);
-    expect(triggerFireConfigSchema.parse(await readJson(sweepFile))).toEqual({
+    expect(triggerConfigSchema.parse(await readJson(sweepFile))).toEqual({
       version: 1,
       sourceInstanceId: sweepName,
       binding: {
@@ -156,7 +243,7 @@ describe('archon pack bindings', () => {
       },
       schedule: { intervalSeconds: 600, runAtLoad: false },
     });
-    const after = triggerFireConfigSchema.parse(await readJson(await fileFor('after')));
+    const after = triggerConfigSchema.parse(await readJson(await fileFor('after')));
     expect(after.binding.resource).toBe('fixture:host-1:after');
     expect(after.binding.launch.inputs).toEqual({ sweep_binding: sweepPath });
     const printed = logSpy.mock.calls.flat().join('\n');
@@ -169,8 +256,9 @@ describe('archon pack bindings', () => {
     await packCommand('bindings', ['fixture'], options({ only: 'follow-up' }));
 
     const file = await fileFor('follow-up');
-    const config = triggerFireConfigSchema.parse(await readJson(file));
+    const config = triggerConfigSchema.parse(await readJson(file));
     expect(config.schedule).toBeUndefined();
+    expect(config.item).toEqual({ field: 'number', prefix: 'issue-' });
     expect(config.binding.resource).toBe('fixture:git.example.com/acme/widgets:follow-up');
     const printed = logSpy.mock.calls.flat().join('\n');
     expect(printed).toContain('Fire-only bindings');
@@ -205,6 +293,46 @@ describe('archon pack bindings', () => {
       },
       inputMapping: { number: { source: 'field', field: 'subject.number' } },
     });
+    expect(config.bindings[0]?.item).toEqual({ field: 'subject.number', prefix: 'issue-' });
+  });
+
+  it('writes an event binding that wakes a wait, with the met wait as an input', async () => {
+    const WAKE = `bindings:
+  checks-done:
+    workflow: fixture-build
+    resource: build
+    overlap: queue
+    event:
+      kind: check.changed
+      actions: [changed]
+    wake: { workflow: fixture-plan, wait: checks, about: check.revision }
+    inputs:
+      plan: { wait: true }
+      issue: { event: check.revision }
+`;
+    await writePack(WAKE);
+    await packCommand('bindings', ['fixture'], options({ repo: 'github.com/acme/widgets' }));
+    const [binding] = githubWebhookSourceConfigSchema.parse({
+      version: 1,
+      webhookSecretEnv: 'WEBHOOK_SECRET',
+      host: 'github.com',
+      bindings: [await readJson(await fileFor('checks-done'))],
+    }).bindings;
+    expect(binding?.wake).toEqual({
+      workflow: 'fixture-plan',
+      wait: 'checks',
+      about: { field: 'check.revision' },
+      input: 'plan',
+    });
+    expect(binding?.inputMapping).toEqual({
+      issue: { source: 'field', field: 'check.revision' },
+    });
+
+    // The met wait exists only for a binding that wakes one.
+    await writePack(WAKE.replace(/    wake: .*\n/, ''));
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
+      "input 'plan' reads the met wait, but only an event binding with wake has one"
+    );
   });
 
   it('refuses an event binding for a host the source plugin does not read, writing nothing', async () => {
@@ -223,7 +351,7 @@ describe('archon pack bindings', () => {
     }
     const files = await readdir(out);
     for (const file of files) {
-      const config = triggerFireConfigSchema.parse(await readJson(file));
+      const config = triggerConfigSchema.parse(await readJson(file));
       ids.add(config.binding.bindingId).add(config.sourceInstanceId);
     }
     expect(files.length).toBe(3);
@@ -261,13 +389,14 @@ describe('archon pack bindings', () => {
     expect(await readFile(join(out, sweep), 'utf8')).toBe('mine');
 
     await packCommand('bindings', ['fixture'], options({ only: 'sweep,after', force: true }));
-    expect(triggerFireConfigSchema.safeParse(await readJson(sweep)).success).toBe(true);
+    expect(triggerConfigSchema.safeParse(await readJson(sweep)).success).toBe(true);
   });
 
   it.each([
     [{ only: 'nope' }, "--only names 'nope'"],
     [{ repo: 'acme/widgets' }, '--repo must be <host>/<owner>/<name>'],
     [{ out: undefined }, 'Usage: archon pack bindings'],
+    [{ host: undefined }, 'Usage: archon pack bindings'],
   ])('refuses %p', async (extra, reason) => {
     await writePack(DECLARATION);
     await expect(packCommand('bindings', ['fixture'], options(extra))).rejects.toThrow(reason);
@@ -281,5 +410,366 @@ describe('archon pack bindings', () => {
     await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
       "Pack 'fixture' declares no bindings"
     );
+  });
+});
+
+describe('archon pack bindings: run-ended', () => {
+  it('writes one trigger file per outcome to --out, mapping inputs from the ended run, and activates none', async () => {
+    const source = join(root, 'pack source');
+    const runConfig = join(root, 'run.yaml');
+    await writeFile(runConfig, 'assistants: {}\n');
+    await writePack(RUN_ENDED_DECLARATION, source);
+    await mkdir(cwd, { recursive: true });
+    await packCommand(
+      'bindings',
+      ['fixture'],
+      options({ config: runConfig, workflowSource: source })
+    );
+
+    expect(existsSync(join(root, 'home', 'triggers'))).toBe(false);
+    const bindings = await readRunEndedBindings(out);
+    expect(bindings.map(entry => entry.runEnded.outcome).sort()).toEqual(['blocked', 'planned']);
+    const printed = logSpy.mock.calls.flat().join('\n');
+    for (const entry of bindings) expect(printed).toContain(`archon trigger add '${entry.file}'`);
+    for (const entry of bindings) {
+      const name = basename(entry.file, '.json');
+      expect(entry.sourceInstanceId).toBe(name);
+      expect(entry.binding).toEqual({
+        bindingId: name,
+        bindingRevision: null,
+        hostId: 'host-1',
+        runAsUserId: 'user-1',
+        resource: 'fixture:git.example.com/acme/widgets:build',
+        capacity: 2,
+        overlap: 'queue',
+        launch: {
+          cwd,
+          workflowName: 'fixture-build',
+          inputs: { mode: 'fast' },
+          discoveryCwd: source,
+          configSource: runConfig,
+          isolation: { kind: 'in-place' },
+        },
+      });
+      expect(entry.runEnded).toEqual({
+        workflowName: 'fixture-plan',
+        outcome: entry.runEnded.outcome,
+        inputs: { plan: { result: '/plan' }, issue: { input: 'issue' } },
+      });
+    }
+  });
+
+  it('writes a linked binding into on.runEnded.linked, with the items it names and their entries', async () => {
+    const declaration = RUN_ENDED_DECLARATION.replace(
+      '[planned, blocked] }',
+      'planned, linked: { kind: part_of, holder: from, items: /start } }'
+    ).replace('{ input: issue }', '{ entry: /brief }');
+    await writePack(declaration);
+    await packCommand('bindings', ['fixture'], options());
+
+    const [entry, ...rest] = await readRunEndedBindings(out);
+    expect(rest).toEqual([]);
+    expect(entry?.runEnded).toEqual({
+      workflowName: 'fixture-plan',
+      outcome: 'planned',
+      linked: { kind: 'part_of', holder: 'from', items: '/start' },
+      inputs: { plan: { result: '/plan' }, issue: { entry: '/brief' } },
+    });
+  });
+
+  it.each([
+    [
+      'an ended workflow the pack lacks',
+      RUN_ENDED_DECLARATION.replace('workflow: fixture-plan', 'workflow: absent'),
+      "names workflow 'absent'",
+    ],
+    [
+      'an outcome the ended workflow does not declare',
+      RUN_ENDED_DECLARATION.replace('[planned, blocked]', '[planned, shipped]'),
+      "outcome 'shipped' is not one",
+    ],
+    [
+      'an input the ended workflow does not declare',
+      RUN_ENDED_DECLARATION.replace('{ input: issue }', '{ input: title }'),
+      "reads 'title'",
+    ],
+    [
+      'a binding that starts the workflow whose end fires it',
+      RUN_ENDED_DECLARATION.replace('workflow: fixture-build', 'workflow: fixture-plan'),
+      'the workflow whose end fires it',
+    ],
+  ])('refuses %s, writing nothing', async (_case, declaration, reason) => {
+    await writePack(declaration);
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(reason);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('refuses run-ended bindings on the file store, writing nothing', async () => {
+    await writePack(RUN_ENDED_DECLARATION);
+    await mkdir(join(root, 'home'), { recursive: true });
+    await writeFile(join(root, 'home', 'config.yaml'), 'store: files\n');
+    const databaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = '';
+    try {
+      await expect(packCommand('bindings', ['fixture'], options())).rejects.toBeInstanceOf(
+        FileStoreUnsupportedError
+      );
+    } finally {
+      if (databaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = databaseUrl;
+    }
+    expect(existsSync(out)).toBe(false);
+  });
+});
+
+describe('archon pack bindings: asks-settled', () => {
+  it("writes one trigger file that takes the asking run's checkout and its answers, and activates none", async () => {
+    await writePack(ASKS_SETTLED_DECLARATION);
+    await packCommand('bindings', ['fixture'], options());
+
+    expect(existsSync(join(root, 'home', 'triggers'))).toBe(false);
+    const [binding, ...others] = await readAsksSettledBindings(out);
+    expect(others).toEqual([]);
+    expect(binding?.asksSettled).toEqual({
+      workflowName: 'fixture-ask',
+      settled: 'answered',
+      checkout: 'asking-run',
+      inputs: { plan: { answers: true }, issue: { input: 'issue' } },
+    });
+    expect(binding?.binding.launch.isolation).toEqual({ kind: 'default' });
+    expect(logSpy.mock.calls.flat().join('\n')).toContain(`archon trigger add '${binding?.file}'`);
+  });
+
+  it('writes one trigger file per option a binding lists', async () => {
+    await writePack(
+      ASKS_SETTLED_DECLARATION.replace(
+        'settled: answered,',
+        'settled: answered, option: [keep, drop],'
+      )
+    );
+    await packCommand('bindings', ['fixture'], options());
+
+    const bindings = await readAsksSettledBindings(out);
+    expect(bindings.map(entry => entry.asksSettled.option).sort()).toEqual(['drop', 'keep']);
+    expect(logSpy.mock.calls.flat().join('\n')).toContain("# option 'keep'");
+  });
+
+  it.each([
+    [
+      'two bindings that both start when one option is chosen',
+      `${ASKS_SETTLED_DECLARATION.replace('settled: answered,', 'settled: answered, option: keep,')}  build-on-answers:\n    workflow: fixture-build\n    resource: build\n    overlap: queue\n    asks_settled: { workflow: fixture-ask, settled: answered }\n    inputs:\n      plan: { answers: true }\n      issue: { input: issue }\n`,
+      "starts when option 'keep' is chosen",
+    ],
+    [
+      'an asking workflow that declares no returns.asks',
+      ASKS_SETTLED_DECLARATION.replace('workflow: fixture-ask', 'workflow: fixture-plan'),
+      "'fixture-plan' declares no returns.asks",
+    ],
+    [
+      'an input the started workflow does not declare',
+      ASKS_SETTLED_DECLARATION.replace('plan: { answers: true }', 'decisions: { answers: true }'),
+      "does not declare input 'decisions'",
+    ],
+  ])('refuses %s, writing nothing', async (_case, declaration, reason) => {
+    await writePack(
+      `${declaration}  sweep:\n    workflow: fixture-sweep\n    resource: sweep\n    overlap: skip\n`
+    );
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(reason);
+    expect(existsSync(out)).toBe(false);
+  });
+});
+
+describe('archon pack bindings: start limits', () => {
+  // `build` starts three times per item, again after `fixture-plan` completes on it; an
+  // answer that settles `fixture-ask`'s asks allows it one more.
+  const LIMITED = `${RUN_ENDED_DECLARATION.replace(
+    '    overlap: queue\n',
+    '    overlap: queue\n    limit: { starts: 3, reset_on: fixture-plan }\n'
+  )}${ASKS_SETTLED_DECLARATION.replace('bindings:\n', '').replace(
+    '    overlap: queue\n',
+    '    overlap: queue\n    grants: build\n'
+  )}`;
+
+  it('writes one limit that every outcome file of a binding counts under, and the grant that names it', async () => {
+    await writePack(LIMITED);
+    await packCommand('bindings', ['fixture'], options());
+
+    const [planned, blocked, ...more] = await readRunEndedBindings(out);
+    expect(more).toEqual([]);
+    expect(planned?.binding.limit).toEqual({
+      // Named without an outcome, so both files count under one name.
+      name: expect.stringMatching(/^fixture-acme-widgets-build-[0-9a-f]{12}$/),
+      starts: 3,
+      resetOn: 'fixture-plan',
+    });
+    expect(blocked?.binding.limit).toEqual(planned?.binding.limit);
+    const [grant] = await readAsksSettledBindings(out);
+    expect(grant?.binding.grants).toBe(planned?.binding.limit?.name);
+    expect(grant?.binding.limit).toBeUndefined();
+  });
+
+  it.each([
+    ['an unknown binding', 'grants: build', 'grants: missing', "grants unknown binding 'missing'"],
+    [
+      'a binding with no limit',
+      '    limit: { starts: 3, reset_on: fixture-plan }\n',
+      '',
+      "grants binding 'build', which declares no limit",
+    ],
+  ])('refuses a grant that names %s', async (_case, from, to, reason) => {
+    await writePack(LIMITED.replace(from, to));
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(reason);
+  });
+});
+
+describe('archon pack: a pack folder as the workflow source', () => {
+  /** The fixture pack as its author keeps it: its own folder, manifest at the root. */
+  async function writePackFolder(): Promise<string> {
+    const dir = join(root, 'fixture-pack');
+    await mkdir(join(dir, '.archon'), { recursive: true });
+    await writeFile(
+      join(dir, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
+    );
+    await writeFile(
+      join(dir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'fixture',
+        description: 'd',
+        entrypoints: { 'fixture-sweep': 'fixture-sweep/fixture-sweep.yaml' },
+      })
+    );
+    await mkdir(join(dir, '.pack'), { recursive: true });
+    await writeFile(join(dir, '.pack', 'pack.yaml'), DECLARATION);
+    await writeWorkflow(
+      dir,
+      'fixture-sweep',
+      'name: fixture-sweep\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    return dir;
+  }
+
+  it('graph and bindings read the folder and say which copy they loaded', async () => {
+    const source = await writePackFolder();
+    await mkdir(cwd, { recursive: true });
+
+    await packCommand('graph', ['fixture'], options({ workflowSource: source }));
+    const printed = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(printed).toContain(`Pack 'fixture' loaded from ${source} (project`);
+    expect(printed).toContain('fixture-sweep');
+
+    let json = '';
+    const write = spyOn(process.stdout, 'write').mockImplementation(((
+      chunk: string | Uint8Array,
+      ...rest: unknown[]
+    ) => {
+      json += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+      (rest.find(arg => typeof arg === 'function') as (() => void) | undefined)?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await packCommand(
+        'bindings',
+        ['fixture'],
+        options({ workflowSource: source, only: 'sweep,after', json: true })
+      );
+    } finally {
+      write.mockRestore();
+    }
+    // The test process's logger shares stdout; the command's payload is the last document.
+    expect(JSON.parse(json.slice(json.lastIndexOf('\n{\n') + 1))).toMatchObject({
+      loaded: [{ source: 'project', key: 'fixture', dir: source }],
+      otherCopies: [],
+    });
+  });
+
+  it('with an installed copy too, the hint to use it drops --workflow-source, and following it works', async () => {
+    const source = await writePackFolder();
+    // The same pack installed as acme/fixture, the way `archon plugin add` leaves it.
+    const pluginsDir = join(root, 'home', 'plugins');
+    const id = 'acme/fixture';
+    const commit = 'a'.repeat(40);
+    await cp(source, packTreePath(pluginsDir, id, commit), {
+      recursive: true,
+      filter: path => !path.includes(`${source}/.archon`),
+    });
+    const manifest = JSON.parse(await readFile(join(source, 'archon-plugin.json'), 'utf8'));
+    const receipt = receiptPath(pluginsDir, id);
+    await mkdir(dirname(receipt), { recursive: true });
+    await writeFile(
+      receipt,
+      JSON.stringify({
+        schemaVersion: 1,
+        id,
+        manifest,
+        commit,
+        installedAt: new Date(0).toISOString(),
+      })
+    );
+    await mkdir(join(cwd, '.archon'), { recursive: true });
+    await writeFile(
+      join(cwd, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
+    );
+
+    await packCommand('graph', ['fixture'], options({ workflowSource: source }));
+    const printed = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(printed).toContain("Drop --workflow-source and name 'acme.fixture' to use it.");
+
+    // Following the hint: the installed copy, discovered from the checkout.
+    await packCommand('bindings', ['acme.fixture'], options({ only: 'sweep' }));
+    const written = JSON.stringify(await readJson(await fileFor('sweep')));
+    expect(written).toContain('acme/fixture:fixture-sweep');
+    expect(written).not.toContain(source);
+  });
+});
+
+describe('run-start pack copy lines', () => {
+  /** One installed copy of review-kit, the way `archon plugin add` leaves it. */
+  async function install(owner: string): Promise<void> {
+    const pluginsDir = join(root, 'home', 'plugins');
+    const id = `${owner}/review-kit`;
+    const commit = 'a'.repeat(40);
+    const manifest = {
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: 'review-kit',
+      description: 'd',
+      entrypoints: { review: 'review/review.yaml' },
+    };
+    const tree = packTreePath(pluginsDir, id, commit);
+    await mkdir(join(tree, 'review'), { recursive: true });
+    await writeFile(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+    await writeFile(
+      join(tree, 'review', 'review.yaml'),
+      'name: review\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    const receipt = receiptPath(pluginsDir, id);
+    await mkdir(dirname(receipt), { recursive: true });
+    await writeFile(
+      receipt,
+      JSON.stringify({
+        schemaVersion: 1,
+        id,
+        manifest,
+        commit,
+        installedAt: new Date(0).toISOString(),
+      })
+    );
+  }
+
+  it("names another owner's installed copy by its own qualified workflow name", async () => {
+    await install('acme');
+    await install('beta');
+    await mkdir(cwd, { recursive: true });
+    const { workflows } = await loadWorkflows(cwd);
+    const selected = workflows.find(entry => entry.workflow.name === 'acme/review-kit:review');
+    if (selected === undefined) throw new Error('acme/review-kit:review was not discovered');
+
+    const lines = await packCopyLines(selected.workflow, workflows, cwd, false);
+
+    expect(lines.join('\n')).toContain("To run it, name 'beta/review-kit:review'.");
   });
 });

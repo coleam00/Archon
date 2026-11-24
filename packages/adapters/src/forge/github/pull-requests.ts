@@ -1,11 +1,10 @@
-/** GitHub pull request reads and the create, body edit and draft-state mutations. */
+/** GitHub pull request reads and the create, body edit, draft-state and close mutations. */
 
 import { z } from 'zod';
 import {
   contentDigest,
   forgePrRecordSchema,
   prTimestampsSchema,
-  reviewItemSchema,
   type ForgeMutationRequest,
   type ForgePrRecord,
   type ForgeRequest,
@@ -14,13 +13,13 @@ import {
 import type { PrRef, RepoRef } from '@archon/forge';
 import {
   GitHubError,
-  githubPages,
+  githubErrorDetail,
   githubRequest,
   location,
   repositoryPath,
   type Fetch,
 } from './api';
-import { actor, authorField, userSchema } from './actor';
+import { authorField, userSchema } from './actor';
 import { applied, failure, refused, unknown, unverified, type Submit } from './mutation-outcome';
 
 const repoSchema = z.object({ full_name: z.string().min(1) });
@@ -280,6 +279,54 @@ export async function setDraftState(
     : unverified(request, `${request.op} read-back did not match`, leaveBehind, { pr });
 }
 
+/** Closes without merging: the REST update never touches the head branch. */
+export async function closePullRequest(
+  request: Extract<ForgeMutationRequest, { op: 'pr.close' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: Submit
+): Promise<ForgeResponse> {
+  const before = prRecord(request.ref.repo, await readPull(fetchImpl, token, request.ref));
+  if (before.state === 'merged') {
+    return refused(
+      request,
+      { kind: 'conflict', message: 'A merged pull request cannot be closed' },
+      before
+    );
+  }
+  if (before.state === 'closed') return applied(request, { changed: false, pr: before });
+
+  const { root, path } = location(request.ref.repo);
+  submit('submitted');
+  await githubRequest(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/pulls/${String(request.ref.number)}`,
+    { method: 'PATCH', body: JSON.stringify({ state: 'closed' }) },
+    () => {
+      submit('acknowledged');
+    }
+  );
+  const leaveBehind = 'the pull request may be closed';
+  let after: Pull;
+  try {
+    after = await readPull(fetchImpl, token, request.ref);
+  } catch (cause) {
+    const error = githubErrorDetail(cause);
+    return unverified(
+      request,
+      { ...error, message: `Closed pull request could not be read back: ${error.message}` },
+      leaveBehind
+    );
+  }
+  // prRecord reads a merged pull request as merged, so a merge that raced the
+  // close cannot pass as closed.
+  const pr = prRecord(request.ref.repo, after);
+  return pr.state === 'closed'
+    ? applied(request, { changed: true, pr })
+    : unverified(request, 'Pull request close read-back did not match', leaveBehind, { pr });
+}
+
 export async function handleGithubPrView(
   request: Extract<ForgeRequest, { op: 'pr.view' }>,
   fetchImpl: Fetch,
@@ -348,58 +395,4 @@ export async function handleGithubPrView(
       : undefined,
     selector.repo
   );
-}
-
-export async function handleGithubPrReviews(
-  request: Extract<ForgeRequest, { op: 'pr.reviews' }>,
-  fetchImpl: Fetch,
-  token: string
-): Promise<ForgeResponse> {
-  const { root, path } = location(request.ref.repo);
-  const fields = reviewItemSchema.shape;
-  const itemSchema = z.object({
-    id: z.union([z.number().int(), fields.id]),
-    html_url: fields.url,
-    body: fields.body.nullable(),
-    user: userSchema,
-    commit_id: fields.commit.optional(),
-    state: fields.state.optional(),
-    submitted_at: fields.createdAt.optional(),
-    created_at: fields.createdAt.optional(),
-    in_reply_to_id: z.number().nullable().optional(),
-  });
-  const base = `${root}/repos/${path}/pulls/${String(request.ref.number)}`;
-  const [reviews, comments] = await Promise.all([
-    githubPages(fetchImpl, token, `${base}/reviews`, value => z.array(itemSchema).parse(value)),
-    githubPages(fetchImpl, token, `${base}/comments`, value => z.array(itemSchema).parse(value)),
-  ]);
-  const project = (
-    item: z.infer<typeof itemSchema>,
-    kind: 'review' | 'review_comment'
-  ): z.infer<typeof reviewItemSchema> => ({
-    kind,
-    id: String(item.id),
-    author: actor(request.ref.repo.host, item.user),
-    commit: item.commit_id ?? null,
-    state: kind === 'review' ? (item.state ?? null) : null,
-    createdAt: (kind === 'review' ? item.submitted_at : item.created_at) ?? null,
-    url: item.html_url,
-    body: item.body ?? '',
-  });
-  return {
-    operationId: request.operationId,
-    ok: true,
-    result: {
-      op: request.op,
-      value: {
-        ref: request.ref,
-        items: [
-          ...reviews.filter(item => item.state !== 'PENDING').map(item => project(item, 'review')),
-          ...comments
-            .filter(item => item.in_reply_to_id == null)
-            .map(item => project(item, 'review_comment')),
-        ],
-      },
-    },
-  };
 }

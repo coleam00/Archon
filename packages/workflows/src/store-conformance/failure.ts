@@ -138,4 +138,29 @@ export function describeExecutionFailureConformance(getHarness: () => WorkflowSt
       }
     );
   }
+  test.each(['pending', 'running', 'paused'] as const)(
+    'a pending-only cancel writes only a pending run: %s',
+    async state => {
+      const harness = getHarness();
+      const { store } = harness;
+      const run = await store.createWorkflowRun({ workflow_name: 'refused', user_message: '' });
+      if (state !== 'pending') await store.claimPendingWorkflowRun(run.id);
+      if (state === 'paused') await store.pauseWorkflowRun(run.id, approval);
+      const before = await store.getWorkflowRun(run.id);
+      const events = await store.listWorkflowEvents(run.id);
+      expect(
+        await store.cancelWorkflowRun(
+          run.id,
+          { cancel_reason: 'precondition_failed' },
+          { pendingOnly: true }
+        )
+      ).toEqual({ cancelled: state === 'pending' });
+      if (state === 'pending') {
+        expect((await store.getWorkflowRun(run.id))?.status).toBe('cancelled');
+      } else {
+        expect(await store.getWorkflowRun(run.id)).toEqual(before);
+        expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+      }
+    }
+  );
 }

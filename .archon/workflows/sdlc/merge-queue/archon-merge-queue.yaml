@@ -1,21 +1,22 @@
 name: archon-merge-queue
 description: |
-  The merge queue: merges the pull requests the build queue finished, and stops only
-  for decisions that belong to a person. Each run claims every waiting item with
-  intake's claim, up to limit. One sweep agent decides each pull request, and a script
-  merges what it declared, one at a time, through a gate that refuses unless the
-  trusted review verdict says Ready at the head, what the pack's ci setting trusts
-  passes there (green checks, or a recorded validation), the head contains
-  the default branch or merges into it cleanly, and the default branch's CI is not
-  red, and merges pinned to that head. A sweep that finds the default branch red
-  merges nothing and completes with a failed outcome that names the diagnosis. The queue never pushes and never waits for CI:
-  a conflict, a stale verdict or red the change caused goes back to the build queue,
-  and the default branch's CI after a merge is the next sweep's first fact. A clear
-  case acts on its own; anything unclear pauses as one attention item whose answer is
-  a declared option.
+  The merge stage: one run decides one issue's pull request, the one the build queue
+  finished, and stops only for a decision that belongs to a person. The run is on the
+  issue's item, where the engine admits one merge run at a time. One agent judges the
+  pull request, and a script merges what it declared through a gate that refuses unless
+  the trusted review verdict says Ready at the head, what the pack's ci setting trusts
+  passes there (green checks, or a recorded validation), the pull request targets the
+  base branch (the item's landing branch, else the default branch), the head contains
+  that branch or merges into it cleanly, and that branch's CI is not red, and merges
+  pinned to that head. The stage never pushes and never holds a run open: a conflict, a
+  stale verdict or red the change caused goes back to the build queue; a pull request
+  whose checks still run ends waiting for a check at its head; one a red base branch
+  holds back ends waiting for the backstop (archon-merge-pick); and anything unclear ends as one ask on the item with three
+  fixed options (merge, return, park), whose answer starts the stage again.
 
   Use when: a trigger binding the operator installed starts it (see
-  https://archon.diy/guides/sdlc-operations/#merge-queue).
+  https://archon.diy/guides/sdlc-operations/#merge-queue), or a person starts one issue:
+  `--item issue-<n>`.
   NOT for: delivering or fixing a pull request (archon-build-queue, archon-ship), or
   reviewing one by hand (archon-review).
 
@@ -25,50 +26,39 @@ inputs:
   repo_host:
     default: ""
     description: >-
-      The forge host of the repository whose pull requests the queue merges. Empty, with repo_path empty too, resolves the repository from the checkout's git remotes.
+      The forge host of the repository whose pull request the run merges. Empty, with repo_path empty too, resolves the repository from the checkout's git remotes.
   repo_path:
     default: ""
     description: The owner/name path of that repository.
-  limit:
-    default: "10"
-    description: The most items one run claims.
   merge_method:
     default: "squash"
     description: How the gate merges, squash or merge.
   retriage_merged:
     default: ""
     description: >-
-      "true" sends an issue still open after its pull request merged back to intake:
-      it gets this run's re-triage request and one intake pickup. Anything else
-      re-triages nothing.
-  merge_queue_binding:
+      "true" records intake's re-triage request for an issue still open after its pull
+      request merged, and the run ends `merged_retriage`, which starts intake through
+      the `intake-after-merge` binding. Anything else re-triages nothing.
+  waited:
     default: ""
     description: >-
-      The absolute path of the operator's timer-binding config for this repository's
-      merge queue. A maintainer's merge answer fires it with `archon trigger fire`, so
-      the sweep that merges is admitted under that binding's resource, capacity and
-      overlap policy, at most once per answer. Empty starts no follow-up; the next
-      sweep merges it.
-  build_queue_binding:
+      The wait a completed check met, as a wake binding passes it (`{ wait: true }`).
+      Empty on any other start.
+  decisions:
     default: ""
     description: >-
-      The absolute path of the operator's timer-binding config for this repository's
-      build queue. A sweep's return or a return answer fires it for the item's next round with
-      `archon trigger fire`, so the round is admitted under that binding's resource,
-      capacity and overlap policy, at most once per decision. Empty starts no
-      follow-up; the next queue run picks the item up.
-  discoveries_binding:
+      The settled answers to the ask a run of this workflow left on the item, as an
+      asks-settled binding passes them (`{ answers: true }`). Empty on any other start.
+  asked:
     default: ""
     description: >-
-      The absolute path of the operator's binding config for this repository's
-      discoveries drain. A sweep that merged at least one pull request fires it with
-      `archon trigger fire`, at most once per sweep, so records about the merged code
-      are decided once that code is on the default branch. Empty starts no drain.
+      The result of the run that left that ask (`{ result: "" }`), which holds the head
+      it asked about and the brief a return starts from. Empty on any other start.
 
-returns: record
-# False when the default branch's CI is red, or when a run that claimed nothing found
-# stored items no pickup can act on: the run completes with a failed outcome.
-outcome_field: healthy
+# How the run left the item. `merged_retriage` is a merge that left the issue open with a
+# re-triage request recorded. A run that ends `waiting` may leave waits; one that ends
+# `asked` leaves its ask.
+returns: { node: settle, outcome: outcome, asks: asks, waits: waits }
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:
@@ -82,286 +72,125 @@ nodes:
     output_format:
       type: object
       properties:
-        path: { type: string, enum: [idle, record, sweep] }
-        # The default branch snapshot, or null with its diagnostic in base_error.
+        # What follows: nothing to judge, a wait that goes on, or the judge.
+        path: { type: string, enum: [settle, wait, judge] }
+        # The issue whose item the run is on.
+        item: { type: object }
+        pr: { type: [object, 'null'] }
+        url: { type: string }
+        # The pull request's gate facts, and the base branch's; null when not read.
+        facts: { type: [object, 'null'] }
         base: { type: [object, 'null'] }
-        base_error: { type: string }
-        # The claimed pull requests the sweep decides, each with its facts snapshot.
-        items: { type: array, items: { type: object } }
-        # Claimed items settled without the sweep: merged or closed already, or no pull request.
-        settled: { type: array, items: { type: object } }
-        # The pack's merge_lane setting: under manual, nothing merges without an approval at its head.
+        # The stage's record on the work item, with an approval the answer just gave.
+        record: { type: [object, 'null'] }
+        validation: { type: [object, 'null'] }
+        protected: { type: array, items: { type: string } }
+        # The pack's merge_lane and ci settings.
         lane: { type: string }
-        # The pack's ci setting: what the gate trusts at a head besides the verdict.
         ci: { type: string }
-      required: [path, base, base_error, items, settled, lane, ci]
+        # The maintainer's answer that started the run; null on any other start.
+        answer: { type: [object, 'null'] }
+        # How the item ends on the settle path; null otherwise.
+        settled: { type: [object, 'null'] }
+      required: [path, item, pr, url, facts, base, record, validation, protected, lane, ci, answer, settled]
 
-  - id: sweep
-    command: sweep
+  - id: judge
+    command: judge
     depends_on: [facts]
-    when: "$facts.output.path == 'sweep'"
-    model: ['@sweep', large]
+    when: "$facts.output.path == 'judge'"
+    model: ['@merge', large]
     with:
+      item: { from: "$facts.output.item" }
+      pr: { from: "$facts.output.pr" }
+      url: "$facts.output.url"
+      facts: { from: "$facts.output.facts" }
+      record: { from: "$facts.output.record" }
+      validation: { from: "$facts.output.validation" }
+      protected: { from: "$facts.output.protected" }
       base: { from: "$facts.output.base" }
-      items: { from: "$facts.output.items" }
       lane: "$facts.output.lane"
       ci: "$facts.output.ci"
     output_format:
       type: object
       properties:
-        # One decision per pull request. Each action admits only what it can act on: a
-        # return carries the brief the build queue's next round starts from, and an ask
-        # carries the wait's own fields, with that brief whenever one of its options returns.
-        decisions:
-          type: array
-          items:
-            anyOf:
-              - type: object
-                additionalProperties: false
-                properties:
-                  number: &number { type: integer, minimum: 1 }
-                  action: { type: string, enum: [merge, wait] }
-                  class: &class { type: string, enum: [clear, unclear] }
-                  # The head the decision is about.
-                  head: &head { type: string, pattern: '^[0-9a-f]{7,64}$' }
-                  reran: &reran { type: boolean }
-                  reason: &reason { type: string, pattern: '\S' }
-                  brief: { type: string }
-                  ask: { type: 'null' }
-                required: &decision [number, action, class, head, reran, reason, brief, ask]
-              - type: object
-                additionalProperties: false
-                properties:
-                  number: *number
-                  action: { type: string, enum: [return] }
-                  class: *class
-                  head: *head
-                  reran: *reran
-                  reason: *reason
-                  brief: &brief { type: string, pattern: '\S' }
-                  ask: { type: 'null' }
-                required: *decision
-              - type: object
-                additionalProperties: false
-                properties:
-                  number: *number
-                  action: &ask { type: string, enum: [ask] }
-                  class: *class
-                  head: *head
-                  reran: *reran
-                  reason: *reason
-                  brief: *brief
-                  # The wait's fields as the person reads them. Each option's value is
-                  # what the queue does when it is chosen.
-                  ask:
-                    type: object
-                    additionalProperties: false
-                    properties:
-                      question: &question { type: string, pattern: '\S' }
-                      options:
-                        type: array
-                        minItems: 1
-                        items:
-                          type: object
-                          additionalProperties: false
-                          properties:
-                            id: &option_id { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
-                            label: &option_label { type: string, pattern: '\S' }
-                            does: &option_does { type: string, pattern: '\S' }
-                            value:
-                              type: object
-                              additionalProperties: false
-                              properties:
-                                effect: { type: string, enum: [merge, return, park] }
-                                ruling: &ruling { type: string }
-                              required: &value [effect, ruling]
-                          required: &option [id, label, does, value]
-                      recommendation: &recommendation
-                        type: object
-                        additionalProperties: false
-                        properties:
-                          option: { type: string }
-                          why: { type: string, pattern: '\S' }
-                          confidence: { type: string, enum: [low, medium, high] }
-                        required: [option, why, confidence]
-                    required: &ask_fields [question, options, recommendation]
-                required: *decision
-              # An ask with no brief offers no return.
-              - type: object
-                additionalProperties: false
-                properties:
-                  number: *number
-                  action: *ask
-                  class: *class
-                  head: *head
-                  reran: *reran
-                  reason: *reason
-                  brief: { type: string }
-                  ask:
-                    type: object
-                    additionalProperties: false
-                    properties:
-                      question: *question
-                      options:
-                        type: array
-                        minItems: 1
-                        items:
-                          type: object
-                          additionalProperties: false
-                          properties:
-                            id: *option_id
-                            label: *option_label
-                            does: *option_does
-                            value:
-                              type: object
-                              additionalProperties: false
-                              properties:
-                                effect: { type: string, enum: [merge, park] }
-                                ruling: *ruling
-                              required: *value
-                          required: *option
-                      recommendation: *recommendation
-                    required: *ask_fields
-                required: *decision
-        # The default branch as the sweep found it. When it is red: what each failing
-        # job points at, the pull requests merged since it was green, and the suspect.
-        base:
-          type: object
-          additionalProperties: false
-          properties:
-            summary: { type: string }
-          required: [summary]
-        summary: { type: string }
-      required: [decisions, base, summary]
+        # Each action admits only what it can act on: a return carries the brief the
+        # build queue's next round starts from, and an ask carries the question.
+        decision:
+          anyOf:
+            - type: object
+              additionalProperties: false
+              properties:
+                action: { type: string, enum: [merge, wait] }
+                class: &class { type: string, enum: [clear, unclear] }
+                # The head the decision is about: the full commit id.
+                head: &head { type: string, pattern: '^[0-9a-f]{40,64}$' }
+                reran: &reran { type: boolean }
+                reason: &reason { type: string, pattern: '\S' }
+                brief: { type: string }
+                ask: { type: 'null' }
+              required: &decision [action, class, head, reran, reason, brief, ask]
+            - type: object
+              additionalProperties: false
+              properties:
+                action: { type: string, enum: [return] }
+                class: *class
+                head: *head
+                reran: *reran
+                reason: *reason
+                brief: { type: string, pattern: '\S' }
+                ask: { type: 'null' }
+              required: *decision
+            - type: object
+              additionalProperties: false
+              properties:
+                action: { type: string, enum: [ask] }
+                class: *class
+                head: *head
+                reran: *reran
+                reason: *reason
+                # The brief the build round starts from when the answer is `return`.
+                brief: { type: string, pattern: '\S' }
+                # The question as the person reads it. The options are the stage's own
+                # three (merge, return, park), which the settle node adds.
+                ask:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    question: { type: string, pattern: '\S' }
+                    context: { type: string, pattern: '\S' }
+                    recommendation:
+                      type: object
+                      additionalProperties: false
+                      properties:
+                        # merge, return or park; anything else is recorded as park.
+                        option: { type: string, pattern: '\S' }
+                        why: { type: string, pattern: '\S' }
+                      required: [option, why]
+                  required: [question, context, recommendation]
+              required: *decision
+        # The base branch as the judge found it; when red, the diagnosis.
+        base: { type: string }
+      required: [decision, base]
 
-  # The one place a pull request merges: gates each one the sweep declared `merge`, read
-  # fresh, and merges it pinned to the declared head.
-  - id: merge
-    script: merge
+  # The one place a pull request merges, and the one write of the run's decision.
+  - id: settle
+    script: settle
     runtime: bun
-    depends_on: [facts, sweep]
-    with:
-      items: { from: "$facts.output.items" }
-      sweep: { from: "$sweep.output" }
-    output_format:
-      type: object
-      properties:
-        gated:
-          type: array
-          items:
-            type: object
-            properties:
-              number: { type: integer }
-              head: { type: string }
-              # Why the gate refused or the merge did not land; empty when it merged.
-              refusals: { type: array, items: { type: string } }
-              merge_commit: { type: [string, 'null'] }
-            required: [number, head, refusals, merge_commit]
-      required: [gated]
-
-  # Checks the decisions, reads back every pull request and records one decision per
-  # item; raises at most one attention item. It also runs when no sweep was due.
-  - id: record
-    script: record
-    runtime: bun
-    depends_on: [facts, sweep, merge]
+    depends_on: [facts, judge]
     trigger_rule: none_failed_min_one_success
     with:
-      path: "$facts.output.path"
-      base_error: "$facts.output.base_error"
-      items: { from: "$facts.output.items" }
-      settled: { from: "$facts.output.settled" }
-      base: { from: "$facts.output.base" }
-      ci: "$facts.output.ci"
-      sweep: { from: "$sweep.output", if_skipped: null }
-      gated: { from: "$merge.output.gated", if_skipped: [] }
+      start: { from: "$facts.output" }
+      judged: { from: "$judge.output", if_skipped: null }
     output_format:
       type: object
       properties:
-        merged: { type: array, items: { type: integer } }
+        outcome: { type: string, enum: [merged, merged_retriage, returned, parked, waiting, asked] }
         summary: { type: string }
-        # The raised ask's question, options and recommendation, as the sweep wrote
-        # them: empty, none and null when nothing is asked.
-        question: { type: string }
-        options:
-          type: array
-          items:
-            type: object
-            properties:
-              id: { type: string }
-              label: { type: string }
-              does: { type: string }
-              value: { type: object }
-            required: [id, label, does, value]
-        recommendation: { type: [object, 'null'] }
-        kind: { type: string, enum: ['', approve] }
-        # The ask's subject labels: the issue and pull request numbers, or empty.
-        item: { type: string }
-        pr: { type: string }
-        # What the ruling node needs to act on the answer; null when nothing is asked.
-        asked: { type: [object, 'null'] }
-        healthy: { type: boolean }
-      required: [merged, summary, question, options, recommendation, kind, item, pr, asked, healthy]
-
-  # An issue its merged pull request left open (`Refs #N`) goes back to intake, the
-  # judge of whether the work is delivered. Writes nothing on the work item.
-  - id: retriage
-    script: retriage
-    runtime: bun
-    depends_on: [facts, record]
-    with:
-      items: { from: "$facts.output.items" }
-      settled: { from: "$facts.output.settled" }
-      merged: { from: "$record.output.merged" }
-    output_format:
-      type: object
-      properties:
-        retriaged: { type: array, items: { type: integer } }
-        summary: { type: string }
-      required: [retriaged, summary]
-
-  # Starts a discoveries drain through the operator's binding after a sweep that merged.
-  - id: drain
-    script: drain
-    runtime: bun
-    depends_on: [record]
-    with:
-      merged: { from: "$record.output.merged" }
-    output_format:
-      type: object
-      properties:
-        summary: { type: string }
-      required: [summary]
-
-  # A paused run gives its resource slot back, so the next scheduled sweep can merge
-  # other pull requests while this one waits.
-  - id: ask
-    depends_on: [record]
-    when: "$record.output.question != ''"
-    wait:
-      attention: "$record.output.question"
-      form: select
-      options: "$record.output.options"
-      other: true
-      recommendation: "$record.output.recommendation"
-      labels:
-        stage: merge
-        kind: "$record.output.kind"
-        item: "$record.output.item"
-        pr: "$record.output.pr"
-
-  - id: ruling
-    script: ruling
-    runtime: bun
-    depends_on: [record, ask]
-    with:
-      asked: { from: "$record.output.asked" }
-      decision: "$ask.output.decision"
-      text: "$ask.output.text"
-    output_format:
-      type: object
-      properties:
-        decision: { type: string, enum: [merge, return, park] }
-        section: { type: string }
-        summary: { type: string }
-      required: [decision, section, summary]
+        # The issue, which a binding on the outcome hands the stage it starts.
+        number: { type: integer }
+        # The head the decision is about, which an approval is pinned to; empty when none was read.
+        head: { type: string }
+        # The brief the item's next build round starts from: on a return, and on an ask
+        # for the return its answer may choose.
+        brief: { type: string }
+      required: [outcome, summary, number, head, brief]

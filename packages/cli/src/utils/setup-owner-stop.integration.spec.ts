@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';

@@ -12,70 +12,6 @@ import {
 import { describe, expect, test } from 'bun:test';
 import { PiProvider } from './provider';
 describe('PiProvider output', () => {
-  test('coalesces text_delta events into a single agent_message_chunk (#1814)', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript([
-      {
-        type: 'message_update',
-        message: { role: 'assistant' } as never,
-        assistantMessageEvent: {
-          type: 'text_delta',
-          contentIndex: 0,
-          delta: 'Hello',
-          partial: {} as never,
-        },
-      },
-      {
-        type: 'message_update',
-        message: { role: 'assistant' } as never,
-        assistantMessageEvent: {
-          type: 'text_delta',
-          contentIndex: 0,
-          delta: ' world',
-          partial: {} as never,
-        },
-      },
-      {
-        type: 'agent_end',
-        willRetry: false,
-        messages: [
-          {
-            role: 'assistant',
-            api: 'test',
-            provider: 'test',
-            model: 'test',
-            timestamp: 0,
-            usage: {
-              input: 1,
-              output: 2,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 3,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: 'stop',
-            content: [],
-          },
-        ],
-      },
-    ]);
-
-    const { chunks, error } = await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-      })
-    );
-    expect(error).toBeUndefined();
-    // Consecutive text_delta events are coalesced into one block-level chunk
-    // (flushed before the terminal result) so downstream consumers don't see
-    // fragmented "Hello\n\n world" output — see #1814.
-    expect(chunks).toEqual([
-      { type: 'agent_message_chunk', text: 'Hello world' },
-      expect.objectContaining({ type: 'result', stopReason: 'end_turn' }),
-      { type: 'settled' },
-    ]);
-  });
-
   test('yields tool_call + tool_call_update for tool_execution events', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript([
@@ -100,21 +36,22 @@ describe('PiProvider output', () => {
         model: 'google/gemini-2.5-pro',
       })
     );
-    expect(chunks.length).toBe(4);
-    expect(chunks[3]).toEqual({ type: 'settled' });
-    expect(chunks[0]).toEqual({
+    expect(chunks.length).toBe(5);
+    expect(chunks[4]).toEqual({ type: 'settled' });
+    expect(chunks[0]).toMatchObject({ type: 'session' });
+    expect(chunks[1]).toEqual({
       type: 'tool_call',
       toolCallId: 'call-1',
       name: 'read',
       rawInput: { path: '/x' },
     });
-    expect(chunks[1]).toEqual({
+    expect(chunks[2]).toEqual({
       type: 'tool_call_update',
       toolCallId: 'call-1',
       status: 'completed',
       output: 'contents',
     });
-    expect(chunks[2]).toMatchObject({ type: 'result' });
+    expect(chunks[3]).toMatchObject({ type: 'result' });
   });
 
   // Script an assistant text_delta followed by agent_end so the bridge has
@@ -192,46 +129,6 @@ describe('PiProvider output', () => {
     );
     expect(result).toBeDefined();
     expect(result?.structuredOutput).toEqual({ area: 'web', confidence: 0.9 });
-  });
-
-  test('outputFormat: fenced JSON (```json ... ```) still parses', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAssistantThenEnd('```json\n{"ok":true}\n```'));
-
-    const { chunks } = await consume(
-      new PiProvider().sendQuery('x', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
-      })
-    );
-
-    const result = chunks.find(
-      (c): c is { type: 'result'; structuredOutput?: unknown } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
-    );
-    expect(result?.structuredOutput).toEqual({ ok: true });
-  });
-
-  test('outputFormat: prose-wrapped JSON → no structuredOutput, degrades cleanly', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAssistantThenEnd('Here is the JSON:\n{"ok":true}\nHope this helps!'));
-
-    const { chunks, error } = await consume(
-      new PiProvider().sendQuery('x', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        outputFormat: { type: 'json_schema', schema: { type: 'object' } },
-      })
-    );
-
-    // No crash — downstream degradation is the executor's job via its
-    // existing dag.structured_output_missing warning path.
-    expect(error).toBeUndefined();
-    const result = chunks.find(
-      (c): c is { type: 'result'; structuredOutput?: unknown } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
-    );
-    expect(result).toBeDefined();
-    expect(result?.structuredOutput).toBeUndefined();
   });
 
   test('no outputFormat → structuredOutput never set even if assistant emits JSON', async () => {

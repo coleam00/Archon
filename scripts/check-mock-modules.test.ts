@@ -5,9 +5,11 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   type Baseline,
+  collectInChildren,
   collectSites,
   compareBaseline,
   computeBaseline,
+  mockingFiles,
 } from './check-mock-modules';
 
 const track = trackTempRoots();
@@ -92,5 +94,59 @@ describe('check-mock-modules', () => {
     expect(check(EMPTY)).toEqual([
       "src/a.test.ts:2 mock.module('./gone') does not resolve; a mock of a path nothing imports is dead",
     ]);
+  });
+
+  test('a scoped comparison ignores baseline entries outside its scope', () => {
+    const { root } = project("mock.module('./db', () => ({ getRun() {}, deleteRun() {} }));");
+    const { sites } = collectSites(root, [join(root, 'src/a.test.ts')]);
+    const outside: Baseline = {
+      factories: { 'other/b.test.ts': ['./db'] },
+      exports: { 'src/db.ts': ['deleteRun'] },
+    };
+    expect(compareBaseline(sites, outside, ['src'])).toEqual([]);
+    expect(compareBaseline(sites, outside)).toHaveLength(3);
+  });
+
+  test('a scoped comparison still refuses an in-scope site and a stale in-scope entry', () => {
+    const { root } = project(partial);
+    const { sites } = collectSites(root, [join(root, 'src/a.test.ts')]);
+    expect(compareBaseline(sites, EMPTY, ['src'])[0]).toStartWith(
+      "src/a.test.ts:2 mock.module('./db') omits deleteRun;"
+    );
+    const stale = { factories: { 'src/a.test.ts': ['./db', './gone'] }, exports: {} };
+    expect(compareBaseline(sites, stale, ['src'])).toContain(
+      "scripts/mock-module-baseline.json: src/a.test.ts no longer mocks './gone' incompletely"
+    );
+  });
+
+  test('a scoped run reads only the mocking files under its directories', () => {
+    const { root } = project(partial);
+    mkdirSync(join(root, 'packages/a'), { recursive: true });
+    mkdirSync(join(root, 'packages/b'), { recursive: true });
+    writeFileSync(join(root, 'packages/a/x.test.ts'), partial);
+    writeFileSync(join(root, 'packages/b/y.test.ts'), partial);
+    writeFileSync(join(root, 'packages/b/plain.ts'), 'export {};\n');
+    Bun.spawnSync(['git', 'init', '-q'], { cwd: root });
+    expect(mockingFiles(root, ['packages/a'])).toEqual([join(root, 'packages/a/x.test.ts')]);
+    expect(mockingFiles(root, undefined)).toEqual([
+      join(root, 'packages/a/x.test.ts'),
+      join(root, 'packages/b/y.test.ts'),
+    ]);
+  });
+
+  // `bun run lint` reads each tsconfig's files in a child process; these cover that path.
+  test('a child process reports the same sites as an in-process read', () => {
+    const { root } = project(partial);
+    const files = [join(root, 'src/a.test.ts')];
+    const collected = collectInChildren(root, files);
+    expect(collected.sites.map(site => site.omitted)).toEqual([['deleteRun']]);
+    expect(collected).toEqual(collectSites(root, files));
+  });
+
+  test('a child that fails fails the check instead of reading as no sites', () => {
+    const { root } = project(partial);
+    expect(() => collectInChildren(root, [join(root, 'src/missing.test.ts')])).toThrow(
+      'Reading the mock.module() sites tsconfig.json owns failed (exit 1)'
+    );
   });
 });

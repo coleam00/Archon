@@ -14,7 +14,10 @@ export const betasSchema = z.array(z.string().min(1)).nonempty("'betas' must be 
 
 /**
  * Claude Agent SDK SandboxSettings — OS-level filesystem/network restrictions.
- * Uses passthrough() to match the SDK's loose schema (index signature allows extra fields).
+ * Listed fields are type-checked. Any other key, at the top level or inside
+ * `network`, `filesystem` or `ripgrep`, is passed to the Claude SDK unchanged:
+ * the SDK's sandbox vocabulary grows faster than Archon lists it, and dropping
+ * a key here can silently remove a restriction such as `deniedDomains`.
  */
 export const sandboxSettingsSchema = z
   .object({
@@ -31,6 +34,7 @@ export const sandboxSettingsSchema = z
         httpProxyPort: z.number().optional(),
         socksProxyPort: z.number().optional(),
       })
+      .passthrough()
       .optional(),
     filesystem: z
       .object({
@@ -38,6 +42,7 @@ export const sandboxSettingsSchema = z
         denyWrite: z.array(z.string()).optional(),
         denyRead: z.array(z.string()).optional(),
       })
+      .passthrough()
       .optional(),
     ignoreViolations: z.record(z.string(), z.array(z.string())).optional(),
     enableWeakerNestedSandbox: z.boolean().optional(),
@@ -48,6 +53,7 @@ export const sandboxSettingsSchema = z
         command: z.string(),
         args: z.array(z.string()).optional(),
       })
+      .passthrough()
       .optional(),
   })
   .passthrough();
@@ -107,4 +113,31 @@ export function mcpDeclaration(mcp: NodeMcp | undefined): McpDeclaration | undef
   return typeof mcp === 'string'
     ? { path: mcp, optional: false }
     : { path: mcp.path, optional: mcp.optional === true };
+}
+
+/**
+ * One `skills:` entry: a name the node requires, or `{ name, optional: true }` for a
+ * skill the node runs without when its provider cannot load skills or no SKILL.md
+ * exists in the known skill roots. Strict so a misspelled key fails
+ * the load instead of silently meaning required. Only `optional: true` is optional.
+ */
+export const nodeSkillSchema = z.union([
+  z.string().min(1, 'each skill must be a non-empty string'),
+  z.strictObject({
+    name: z.string().min(1, "'skills.name' must be a non-empty string"),
+    optional: z.boolean().optional(),
+  }),
+]);
+
+export type NodeSkill = z.infer<typeof nodeSkillSchema>;
+
+export interface SkillDeclaration {
+  name: string;
+  optional: boolean;
+}
+
+export function skillDeclaration(skill: NodeSkill): SkillDeclaration {
+  return typeof skill === 'string'
+    ? { name: skill, optional: false }
+    : { name: skill.name, optional: skill.optional === true };
 }

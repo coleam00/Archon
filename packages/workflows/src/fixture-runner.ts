@@ -15,6 +15,8 @@
  *       branch: "task-123"
  *     resolved-text-contains:    # fragments that must appear in a reached node's resolved text
  *       implement: "task-123"
+ *     wait-labels:               # exact resolved labels of an attention wait
+ *       review: { area: delivery }
  *   exec-code: false             # execute script/bash nodes instead of stubbing
  *
  * Every remaining key is a node-id → stub-output entry, exactly what
@@ -46,7 +48,6 @@ import {
   type DryRunStubs,
 } from './dry-run';
 import type { WorkflowWithSource } from './schemas/workflow';
-import { workflowRunOutcomeSchema } from './schemas';
 import type { WorkflowConfig } from './deps';
 import type { ResolvedAiProfile } from './model-validation';
 import { resolveTopLevelInputs } from './utils/workflow-requirements';
@@ -59,9 +60,8 @@ import {
 } from './workflow-source';
 import { FIXTURE_SUFFIX, FIXTURES_DIR } from './fixture-layout';
 import { parseYaml } from './loader';
-
-/** Compares text the checkout may have converted to CRLF against a fixture's LF expectation. */
-const withLfEndings = (text: string): string => text.replaceAll('\r\n', '\n');
+import { attentionLabelsSchema } from './schemas/wait-node';
+import { fixtureResolvedTextFailure, fixtureWaitLabelsFailure } from './fixture-expectations';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -73,7 +73,9 @@ function getLog(): ReturnType<typeof createLogger> {
 export const fixtureDeclarationSchema = z
   .object({
     expect: z.enum(['completed', 'failed', 'paused', 'cancelled']).default('completed'),
-    authored: workflowRunOutcomeSchema.optional(),
+    // The outcome the run completes with: `succeeded`/`failed` for a boolean
+    // `returns.outcome`, the value itself for an enum one.
+    authored: z.string().min(1).optional(),
     // A single node id, or the exact set of failed entries when one failure
     // implies another — a node failing inside a loop_group fails the group
     // too, so that shape is always two entries and was inexpressible before.
@@ -81,6 +83,7 @@ export const fixtureDeclarationSchema = z
     reached: z.array(z.string()).optional(),
     inputs: z.record(z.string(), z.string()).optional(),
     'resolved-text-contains': z.record(z.string(), z.string()).optional(),
+    'wait-labels': z.record(z.string(), attentionLabelsSchema).optional(),
   })
   .strict()
   .refine(decl => decl.expect !== 'failed' || decl['fail-node'] !== undefined, {
@@ -280,7 +283,7 @@ export interface FixtureCheckResult {
   readonly workflow: string;
   readonly expect: DryRunResult['outcome'];
   readonly outcome?: DryRunResult['outcome'];
-  readonly authoredOutcome?: DryRunResult['authoredOutcome'];
+  readonly completedOutcome?: DryRunResult['completedOutcome'];
   readonly pass: boolean;
   readonly failureReason?: string;
   readonly nodeFailures?: readonly Pick<
@@ -476,11 +479,11 @@ async function disposeExecWorkspace(cwd: string, workspace: string): Promise<voi
  */
 export async function runFixtures(options: RunFixturesOptions): Promise<FixtureReport> {
   const roots = options.sourceRoots ?? liveSourceRoots(options.cwd);
-  // Same scope roots discovery reads, project root included as its `.archon/workflows` dir.
+  // Same roots discovery reads; bundled only when enabled, or its fixtures fail unloaded.
   const all = await discoverFixtures([
     ...(roots.project !== null ? [join(roots.project, '.archon', 'workflows')] : []),
     roots.globalWorkflows,
-    roots.bundledWorkflows,
+    ...(options.sourceConfig.load_default_workflows ? [roots.bundledWorkflows] : []),
   ]);
 
   const byName = new Map(options.workflows.map(ws => [ws.workflow.name, ws]));
@@ -632,8 +635,8 @@ function fixtureOutcomeFailure(
       );
     }
   }
-  if (declaration.authored !== undefined && result.authoredOutcome !== declaration.authored) {
-    return `expected authored outcome ${declaration.authored}, dry-run reported ${result.authoredOutcome ?? 'undeclared'}`;
+  if (declaration.authored !== undefined && result.completedOutcome !== declaration.authored) {
+    return `expected authored outcome ${declaration.authored}, dry-run reported ${result.completedOutcome ?? (result.declaresOutcome ? 'none' : 'undeclared')}`;
   }
   return undefined;
 }
@@ -652,39 +655,6 @@ function fixtureReachedFailure(
   );
   if (missingReached.length > 0) {
     return `required nodes did not complete: ${missingReached.join(', ')}`;
-  }
-  return undefined;
-}
-
-function fixtureResolvedTextFailure(
-  result: DryRunResult,
-  declaration: FixtureDeclaration
-): string | undefined {
-  if (declaration['resolved-text-contains'] === undefined) return undefined;
-  for (const [nodeId, expectedText] of Object.entries(declaration['resolved-text-contains'])) {
-    const traceEntries = result.trace.filter(
-      entry =>
-        entry.nodeId === nodeId &&
-        (entry.state === 'completed' || entry.state === 'stubbed' || entry.state === 'paused')
-    );
-    if (traceEntries.length === 0) {
-      return `expected resolved text for node '${nodeId}', but it was not reached`;
-    }
-    // Line endings belong to the checkout, not to the workflow. A command file is read as
-    // raw text, so `* text=auto` gives a Windows clone CRLF inside it, while a fixture
-    // spells its expectation with `\n` escapes that stay LF everywhere. This declaration is
-    // about interpolated content, so it compares on LF alone rather than passing on Linux
-    // and failing on Windows for the same workflow. (Workflow YAML is immune: the parser
-    // normalizes line breaks in its own scalars.)
-    const expected = withLfEndings(expectedText);
-    if (
-      !traceEntries.some(
-        entry =>
-          entry.resolvedText !== undefined && withLfEndings(entry.resolvedText).includes(expected)
-      )
-    ) {
-      return `expected node '${nodeId}' resolved text to contain ${JSON.stringify(expectedText)}`;
-    }
   }
   return undefined;
 }
@@ -724,7 +694,8 @@ async function checkFixture(
     let failureReason =
       fixtureOutcomeFailure(result, parsed.declaration) ??
       fixtureReachedFailure(result, parsed.declaration) ??
-      fixtureResolvedTextFailure(result, parsed.declaration);
+      fixtureResolvedTextFailure(result, parsed.declaration) ??
+      fixtureWaitLabelsFailure(result, parsed.declaration);
     // A `trigger_rule: all_done` join tolerates its own missing stub (#2869) — it never
     // blocked this simulated outcome, so it must not block the fixture either. Only the
     // untolerated remainder still means "this fixture never verified a reached node."
@@ -742,7 +713,7 @@ async function checkFixture(
     return {
       ...base,
       outcome: result.outcome,
-      authoredOutcome: result.authoredOutcome,
+      completedOutcome: result.completedOutcome,
       nodeFailures: result.trace
         .filter(entry => entry.state === 'failed')
         .map(({ nodeId, reason }) => ({ nodeId, reason })),
@@ -778,7 +749,7 @@ export function formatFixtureReport(report: FixtureReport): string {
     lines.push(`${mark} ${r.fixture} → ${r.workflow}`);
     if (r.outcome !== undefined) {
       lines.push(`    Simulation outcome: ${r.outcome}`);
-      lines.push(`    Authored outcome: ${r.authoredOutcome ?? 'undeclared'}`);
+      lines.push(`    Authored outcome: ${r.completedOutcome ?? 'none'}`);
     }
     if (r.failureReason) lines.push(`    ${r.failureReason}`);
     lines.push(...(r.nodeFailures ?? []).map(({ nodeId, reason }) => `    ${nodeId}: ${reason}`));

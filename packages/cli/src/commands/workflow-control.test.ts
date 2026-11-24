@@ -59,6 +59,7 @@ describe('write command --json output', () => {
       codebase_id: null,
       status: 'running',
       outcome: null,
+      completed_outcome: null,
       user_message: '',
       metadata: {},
       active_phase_started_at: null,
@@ -299,7 +300,7 @@ describe('workflowResumeCommand', () => {
     );
   });
 
-  it('should throw when run has no working path', async () => {
+  it('refuses a run with no working path, naming the command that starts it again', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-no-path',
@@ -309,7 +310,7 @@ describe('workflowResumeCommand', () => {
     });
 
     await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-no-path')).rejects.toThrow(
-      'has no working path recorded'
+      'Start it again with: archon workflow run --supersedes run-no-path'
     );
   });
 

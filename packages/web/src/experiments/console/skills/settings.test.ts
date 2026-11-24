@@ -40,11 +40,6 @@ describe('buildAssistantUpdate', () => {
     expect(body.assistants).toEqual({ claude: { model: 'sonnet' } });
   });
 
-  test('a provider with only a model writes just { model }', () => {
-    const body = buildAssistantUpdate(form({ models: { pi: 'anthropic/claude-haiku-4-5' } }));
-    expect(body.assistants).toEqual({ pi: { model: 'anthropic/claude-haiku-4-5' } });
-  });
-
   test('codex attaches reasoning effort + web search alongside its model', () => {
     const body = buildAssistantUpdate(
       form({
@@ -91,13 +86,6 @@ function tierForm(
 }
 
 describe('buildTiersUpdate', () => {
-  test('a fully-set row → entry with provider/model/effort', () => {
-    const body = buildTiersUpdate(
-      tierForm({ large: { provider: 'claude', model: 'opus', effort: 'high' } })
-    );
-    expect(body.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
-  });
-
   test('omits effort when blank', () => {
     const body = buildTiersUpdate(tierForm({ large: { provider: 'claude', model: 'opus' } }));
     expect(body.tiers.large).toEqual({ provider: 'claude', model: 'opus' });

@@ -38,6 +38,7 @@ export const descriptor: ProviderPluginDescriptor = {
 };
 
 export const chunks: ProviderChunk[] = [
+  { type: 'session', sessionId: 'native-session' },
   { type: 'agent_message_chunk', text: 'Whole text block 🦊\nwith newline' },
   { type: 'agent_thought_chunk', text: 'Thinking' },
   { type: 'heartbeat' },

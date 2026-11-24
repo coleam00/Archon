@@ -30,6 +30,7 @@ const OPS = [
   'pr.edit-body',
   'pr.ready',
   'pr.draft',
+  'pr.close',
   'comment.upsert',
   'pr.merge',
   'checks.rerun',
@@ -157,8 +158,10 @@ else {
     read({
       ref: { ...ref, number },
       head_revision: 'headsha',
-      default_branch: 'dev',
-      default_revision: 'devsha',
+      // `old-shape` answers with the fields merge state had before it was base-relative.
+      ...(mode === 'old-shape'
+        ? { default_branch: 'dev', default_revision: 'devsha' }
+        : { base_branch: 'dev', base_revision: 'devsha' }),
       behind: 2,
       mergeable: 'clean',
       merge_commit: null,
@@ -192,6 +195,7 @@ else {
       return answer(repo, { pr: { ...pr, head_revision: 'another-revision' } });
     if (input.op === 'pr.ready' || input.op === 'pr.draft')
       return answer(ref, { pr: { ...pr, is_draft: !pr.is_draft } });
+    if (input.op === 'pr.close') return answer(ref, { pr });
     if (input.op === 'comment.upsert')
       return answer(ref, { comment: { ...comment, bodyDigest: digest('something else') } });
     if (input.op === 'workitem.comment.upsert')
@@ -345,6 +349,7 @@ else {
     'pr.create': () => answer(repo, { pr }),
     'pr.ready': () => answer(ref, { pr }),
     'pr.draft': () => answer(ref, { pr }),
+    'pr.close': () => answer(ref, { pr: { ...pr, state: 'closed' } }),
     'comment.upsert': () => answer(ref, { comment }),
     'workitem.comment.upsert': () => answer(ref, { workitem: subject, comment }),
     'workitem.close': () =>

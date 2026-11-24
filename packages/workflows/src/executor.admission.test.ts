@@ -2,6 +2,7 @@
 import {
   containerBackend,
   makeCliPlatform,
+  makeDeps,
   makePlatform,
   makeRun,
   makeStore,
@@ -25,6 +26,7 @@ import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowRun } from './schemas';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { IWorkflowStore } from './store';
+import { ConcurrencyConfigError, InstallHeldError, RunLimitError } from './store/errors';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
@@ -430,6 +432,27 @@ describe('checkout-in-use message', () => {
     expect(message).not.toContain('Wait for it to finish');
   });
 
+  it('offers resume, not approve or reject, for an operator-paused run with a stale gate', async () => {
+    const message = await blockedBy(
+      blocker({
+        status: 'paused',
+        metadata: {
+          pause_cause: 'operator',
+          operator_pause: {
+            requested: { by: null, via: 'cli', at: '2026-10-05T12:00:00.000Z' },
+            pausedAt: '2026-10-05T12:01:00.000Z',
+          },
+          approval: { type: 'approval', nodeId: 'review', message: 'Approve?', resolved: true },
+        },
+      })
+    );
+    expect(message).toContain('paused by an operator');
+    expect(message).toContain('/workflow resume abc12345');
+    expect(message).toContain('/workflow abandon abc12345');
+    for (const absent of ['user input', '/workflow approve', '/workflow reject'])
+      expect(message).not.toContain(absent);
+  });
+
   it.each([
     [
       'child_workflow',
@@ -545,18 +568,8 @@ describe('run row stamps', () => {
         expect.objectContaining({ metadata: expect.objectContaining(owner) })
       );
     });
-
-    it.each([
-      ['a row a launcher pre-created', { preCreatedRun: makeRun({ status: 'pending' }) }],
-      ['a resumed run', resumeOf(makeRun())],
-    ])('restamps this process on %s', async (_label, options) => {
-      const store = makeStore({ claimPendingWorkflowRun: mock(async () => makeRun()) });
-      await startWorkflow({ store, options });
-      expect(store.updateWorkflowRun).toHaveBeenCalledWith(
-        'run-123',
-        expect.objectContaining({ metadata: expect.objectContaining(owner) })
-      );
-    });
+    // A pre-created row and a resumed one get their owner from the store, in the update
+    // that claims or resumes them (store conformance: `the claim and every resume record`).
   });
 
   // #2872 — `run --detach` writes the row before it forks, so `Started` names a queryable
@@ -697,4 +710,159 @@ describe('run checkout baseline (#3305)', () => {
     );
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
+});
+
+describe('run-ended binding refusal', () => {
+  /** Starts a pre-created row whose run-ended check fails after `beforeThrow` runs. */
+  async function refused(beforeThrow: (store: IWorkflowStore, runId: string) => Promise<void>) {
+    const root = await mkdtemp(join(tmpdir(), 'run-ended-refusal-'));
+    try {
+      const store = await createFileWorkflowStore({ root });
+      const run = await store.createWorkflowRun({
+        workflow_name: 'plan',
+        user_message: '',
+        working_path: '/tmp',
+      });
+      const deps = {
+        ...makeDeps(store),
+        checkRunEndedBindings: async () => {
+          await beforeThrow(store, run.id);
+          throw new Error('Trigger file /home/triggers/build.json: workflow build is missing');
+        },
+      };
+      const result = await startWorkflow({ deps, options: { preCreatedRun: run } });
+      expect(result.success).toBe(false);
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      return (await store.getWorkflowRun(run.id))?.status;
+    } finally {
+      await removeTempTree(root);
+    }
+  }
+
+  it('cancels its own pending row', async () => {
+    expect(await refused(async () => {})).toBe('cancelled');
+  });
+
+  // Before the claim this dispatcher does not own the row; cancelling it would stop a
+  // run another dispatcher claimed meanwhile and is running.
+  it('leaves a row another dispatcher claimed running', async () => {
+    expect(
+      await refused(async (store, runId) => {
+        await store.claimPendingWorkflowRun(runId);
+      })
+    ).toBe('running');
+  });
+});
+
+describe('asks without an item', () => {
+  const declaresAsks = makeWorkflow({
+    name: 'decide',
+    nodes: [
+      {
+        id: 'decide',
+        kind: 'agent',
+        source: { kind: 'inline', prompt: 'Decide' },
+        output_format: { type: 'object', properties: {} },
+      },
+    ],
+    returns: 'decide',
+    result: { asks: 'asks' },
+  });
+
+  it('refuses a top-level run with no item before any node runs, naming why', async () => {
+    const store = makeStore();
+    const platform = makePlatform();
+    const result = await startWorkflow({
+      store,
+      platform,
+      workflow: declaresAsks,
+      options: { preCreatedRun: makeRun({ status: 'pending', item_id: null }) },
+    });
+    if (result.success) throw new Error('Expected the run to be refused');
+    expect(result.error).toContain("declares returns.asks 'asks', so it runs on an item");
+    expect(sentMessages(platform)[0]).toContain('--item <key>');
+    expect(store.cancelWorkflowRun).toHaveBeenCalledWith(
+      'run-123',
+      { cancel_reason: 'precondition_failed' },
+      { pendingOnly: true }
+    );
+    expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('does not refuse a child run of the same workflow, which carries no item', async () => {
+    const store = makeStore();
+    await startWorkflow({
+      store,
+      workflow: declaresAsks,
+      options: {
+        preCreatedRun: makeRun({ status: 'pending', item_id: null, parent_run_id: 'parent' }),
+      },
+    });
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
+  });
+});
+
+describe('run limit config', () => {
+  it('an invalid concurrency number refuses the start with the config problem, not an ownership one', async () => {
+    const invalid = new ConcurrencyConfigError(
+      '/home/config.yaml',
+      'concurrency.runs: Too small: expected number to be >=1',
+      'Run admissions'
+    );
+    const cancelWorkflowRun = mock(async () => ({ cancelled: true }));
+    const result = await startWorkflow({
+      store: makeStore({
+        claimPendingWorkflowRun: mock(async () => {
+          throw invalid;
+        }),
+        cancelWorkflowRun,
+      }),
+    });
+    expect(result).toMatchObject({ success: false, error: invalid.message });
+    expect(cancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe('a start the install holds back', () => {
+  const hold = { setBy: 'operator', setAt: '2026-11-17T10:00:00.000Z' };
+  it.each([
+    ['install hold', 'resource', () => new InstallHeldError(hold)],
+    ['run limit', 'resource', () => new RunLimitError({ limit: 1, live: 1 })],
+    ['run limit', 'claim', () => new RunLimitError({ limit: 1, live: 1 })],
+  ] as const)(
+    'waits for the %s at its %s instead of being refused',
+    async (waitsFor, at, refusal) => {
+      let held = true;
+      const refuseWhileHeld = <T>(then: T) =>
+        mock(async () => {
+          if (held) throw refusal();
+          return then;
+        });
+      const cancelWorkflowRun = mock(async () => ({ cancelled: true }));
+      const platform = makePlatform();
+      const run = makeRun({ codebase_id: 'codebase-1' });
+      const started = startWorkflow({
+        platform,
+        store: makeStore({
+          createWorkflowRun: mock(async () => run),
+          ...(at === 'resource'
+            ? { admitPendingRun: refuseWhileHeld(null) }
+            : { claimPendingWorkflowRun: refuseWhileHeld(run) }),
+          cancelWorkflowRun,
+        }),
+        workflow: makeWorkflow(at === 'resource' ? { resource: { name: 'pool' } } : {}),
+      });
+      for (let tries = 0; !sentMessages(platform).some(m => m.includes(waitsFor)); tries++) {
+        if (tries > 100) throw new Error(`the start did not wait for the ${waitsFor}`);
+        await Bun.sleep(10);
+      }
+      held = false;
+      await started;
+      expect(cancelWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+    }
+  );
 });

@@ -510,7 +510,7 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('Active nodes: parallel-a, parallel-b');
       });
 
-      test('should show authored outcome independently for an active workflow', async () => {
+      test('shows no outcome for an active workflow, even one an older binary wrote early', async () => {
         mockListDashboardRuns.mockResolvedValueOnce({
           runs: [
             makeDashboardRun({
@@ -528,7 +528,7 @@ describe('CommandHandler', () => {
 
         expect(result.message).toContain('review');
         expect(result.message).toContain('(paused)');
-        expect(result.message).toContain('Authored outcome: succeeded');
+        expect(result.message).not.toContain('Authored outcome');
       });
 
       test('should direct an attention wait from before answers to resume', async () => {
@@ -699,6 +699,7 @@ describe('CommandHandler', () => {
           conversation_id: 'conv-1',
           status: 'failed' as const,
           user_message: 'test',
+          working_path: '/workspace/wt',
         });
         mockGetWorkflowRun.mockResolvedValueOnce(run);
         spyDiscoverWorkflows.mockResolvedValueOnce({
@@ -722,6 +723,7 @@ describe('CommandHandler', () => {
           conversation_id: 'conv-1',
           status: 'failed' as const,
           user_message: 'test',
+          working_path: '/workspace/wt',
         });
         mockGetWorkflowRun.mockResolvedValueOnce(run);
         spyDiscoverWorkflows.mockResolvedValueOnce({ workflows: [], errors: [] });
@@ -778,7 +780,7 @@ describe('CommandHandler', () => {
             id: 'run-789',
             workflow_name: 'assist',
             conversation_id: 'conv-1',
-            status: 'running' as const,
+            status: 'completed' as const,
             user_message: 'test',
           })
         );
@@ -808,7 +810,7 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('Usage: /workflow resume <id>');
-        expect(result.message).toContain('failed or paused workflow');
+        expect(result.message).toContain('failed, paused or killed workflow run');
       });
 
       test('should handle DB error on resume gracefully', async () => {

@@ -2,7 +2,9 @@ import { join } from 'node:path';
 
 /**
  * Rewrites `scripts/test-weights.json` from the Windows test jobs (`test-windows`) of one CI
- * run. A pull request run usually skips them, so use a push or dispatch run:
+ * run. Only a push to `main`, a scheduled run on `dev` that ran them, a dispatch with
+ * `windows-full-suite` set, or a pull request whose change runs every job runs them, so use one
+ * of those runs:
  *
  *   bun scripts/update-test-weights.ts <run-id>
  *

@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { RunActionBar } from './RunActionBar';
 import { PendingInputBanner } from './PendingInputBanner';
+import { NO_ITEM_ASKS } from './ItemAsksSection';
 import { toRun } from '../primitives/run';
 
 function buttonClick(node: ReactNode, label: string): (() => void) | undefined {
@@ -45,7 +46,12 @@ test('the attention banner Resume action dispatches one resume request and no ga
   }
   const html = renderToStaticMarkup(
     <MemoryRouter>
-      <PendingInputBanner runs={[run]} showProject={false} onDismiss={() => undefined} />
+      <PendingInputBanner
+        runs={[run]}
+        showProject={false}
+        onDismiss={() => undefined}
+        itemAsks={NO_ITEM_ASKS}
+      />
       <Probe />
     </MemoryRouter>
   );
@@ -85,7 +91,12 @@ test('a provider-limit wait in the banner shows its reset, Resume and Abandon, a
   });
   const html = renderToStaticMarkup(
     <MemoryRouter>
-      <PendingInputBanner runs={[run]} showProject={false} onDismiss={() => undefined} />
+      <PendingInputBanner
+        runs={[run]}
+        showProject={false}
+        onDismiss={() => undefined}
+        itemAsks={NO_ITEM_ASKS}
+      />
     </MemoryRouter>
   );
   expect(html).toContain('implement');

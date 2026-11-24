@@ -22,7 +22,7 @@ import { planGraph } from '../../../graph-plan';
 import type { DagResumeSnapshot, PersistedNodeOutput } from '../../../store';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
-import type { IncludeCommandContent } from '../../../compiled-command';
+import { readComposedMeta, type IncludeCommandContent } from '../../../compiled-command';
 import type { FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { logWorkflowEvent } from '../../../logger';
 import { aggregateProviderFailure, rootFailures } from '../../../executor-shared';
@@ -205,6 +205,7 @@ function instanceRunContext(
     configuredCommandFolder: ctx.configuredCommandFolder,
     issueContext: ctx.issueContext,
     persistScope: ctx.persistScope,
+    itemScope: ctx.itemScope,
     workflowPersistSessions: ctx.workflowPersistSessions,
     scopeArtifactsDir: undefined,
     // Runtime cardinality changes only the deterministic instance prefix; the body
@@ -465,12 +466,16 @@ export async function runComposeInstance(
       boundaryIdComponent(scope.node.id),
       boundaryIdComponent(snapshot.identity),
     ].join('/');
+    // A node that arrived through an include was authored in that block's file; the
+    // run's own nodes were authored in the run's workflow.
+    const composed = readComposedMeta(scope.node);
     expanded = expandComposeInstance(
       scope.node,
       snapshot.identity,
       snapshot.inputs,
       scope.definition,
       scope.commandContents,
+      composed !== undefined ? composed.pack : scope.ctx.workflowPack,
       boundaryScope
     );
   } catch (err) {

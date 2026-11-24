@@ -11,6 +11,7 @@ import {
   mockCaptureWorkflowInvoked,
   mockExecuteDagWorkflow,
   mockGetDefaultBranch,
+  mockGetDefaultRemote,
   repoCodebase,
   recordedEvents,
   resetExecutorMocks,
@@ -65,14 +66,17 @@ describe('refusals before any side effect', () => {
   it('rejects a structurally valid but semantically invalid outcome declaration', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
-    const workflow = parsedWorkflow({
-      name: 'invalid-authored-outcome',
-      description: 'missing selected return node',
-      outcome_field: 'green',
-      nodes: [{ id: 'node1', prompt: 'Do something' }],
+    // `result` is the loader's normalization of `returns:`; built by hand to bypass the loader.
+    const workflow = resolveWorkflow({
+      ...workflowDefinitionSchema.parse({
+        name: 'invalid-authored-outcome',
+        description: 'missing selected return node',
+        nodes: [{ id: 'node1', prompt: 'Do something' }],
+      }),
+      result: { outcome: 'green' },
     });
     await expect(startWorkflow({ deps, workflow, cwd: '/tmp/ops' })).rejects.toThrow(
-      'without returns:'
+      'without a returns node'
     );
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
     expect(deps.loadConfig).not.toHaveBeenCalled();
@@ -478,6 +482,14 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
     expect(logged('workflow.base_branch_auto_detect_failed')).toEqual([]);
   });
 
+  it('leaves the base empty without a warning in a repository with no remote (#5775)', async () => {
+    mockGetDefaultRemote.mockImplementation(async () => null);
+    await startWorkflow({ cwd: '/tmp/local-repo' });
+    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+    expect(dagCall()?.baseBranch).toBe('');
+    expect(logged('workflow.base_branch_auto_detect_failed')).toEqual([]);
+  });
+
   it('records what it resolved on the fresh run row (#2454)', async () => {
     const store = makeStore();
     await startWorkflow({
@@ -527,7 +539,7 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
     expect(dagCall()?.baseBranch).toBe('hotfix/urgent');
   });
 
-  // A CLI `--resume` re-resolves a source and passes it in; adopting it would report a
+  // A CLI continuation re-resolves a source and passes it in; adopting it would report a
   // guess as the run's original attribution.
   it('a continuation whose record holds no source keeps it absent instead of adopting a live one (#2454)', async () => {
     await inWorktree({ ...resumeOf(recorded('release-2026')), source: 'bundled' });

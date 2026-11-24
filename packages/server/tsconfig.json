@@ -1,7 +1,15 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
+    // A route test imports a web module by relative path, and web cannot be a referenced
+    // project, so the server reaches outside its own directory. Nothing imports the server's
+    // declarations, so it is checked without emitting; `incremental` lets `tsc -b` skip it
+    // when nothing it reads changed.
+    "composite": false,
+    "emitDeclarationOnly": false,
     "noEmit": true,
+    "incremental": true,
+    "rootDir": "..",
     "paths": {
       "@archon/adapters": ["../adapters/src"],
       "@archon/adapters/*": ["../adapters/src/*"],
@@ -13,11 +21,17 @@
       "@archon/git": ["../git/src"]
     }
   },
-  "include": [
-    "src/**/*",
-    "../core/src/**/*.ts",
-    "../adapters/src/**/*.ts",
-    "../workflows/src/defaults/text-imports.d.ts"
-  ],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*", "package.json", "../workflows/src/defaults/text-imports.d.ts"],
+  "exclude": ["node_modules", "dist"],
+  "references": [
+    { "path": "../adapters" },
+    { "path": "../chat-contract" },
+    { "path": "../core" },
+    { "path": "../forge" },
+    { "path": "../git" },
+    { "path": "../paths" },
+    { "path": "../provider-contract" },
+    { "path": "../providers" },
+    { "path": "../workflows" }
+  ]
 }

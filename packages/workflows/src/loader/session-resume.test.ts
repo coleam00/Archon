@@ -353,14 +353,6 @@ nodes:
 });
 
 describe('persist_session capability gating', () => {
-  it('parses persist_session: true on a node', () => {
-    const { workflow } = parseWorkflowYaml(
-      `name: t\ndescription: t\nprovider: claude\nnodes:\n  - id: planner\n    prompt: p\n    persist_session: true\n`
-    );
-    const node = workflow.nodes[0];
-    expect('persist_session' in node ? node.persist_session : undefined).toBe(true);
-  });
-
   it('does NOT capability-check non-AI nodes when persist_sessions is workflow-level', () => {
     // Regression for CodeRabbit #7: workflow-level persist_sessions: true with a bash
     // node would falsely trigger the capability check on a provider that can't even
@@ -581,5 +573,78 @@ ${build}
     expect(error).toContain(
       "context.resume source 'build' is not an upstream dependency of the loop_group"
     );
+  });
+});
+
+describe('context: same', () => {
+  const loopWith = (body: string, provider = 'claude'): string =>
+    `name: t\ndescription: t\nprovider: ${provider}\nnodes:\n  - id: group\n    loop_group:\n      until: DONE\n      max_iterations: 2\n      nodes:\n${body}`;
+
+  it('loads on a prompt node inside a loop_group body and at top level', () => {
+    const looped = parseWorkflow(
+      loopWith('        - id: build\n          prompt: p\n          context: same\n'),
+      't.yaml'
+    );
+    expect(looped.error).toBeNull();
+    const top = parseWorkflow(
+      `name: t\ndescription: t\nprovider: claude\nnodes:\n  - id: build\n    prompt: p\n    context: same\n`,
+      't.yaml'
+    );
+    expect(top.error).toBeNull();
+  });
+
+  it('is refused on a node that takes no agent turn', () => {
+    const error = parseError(
+      `name: t\ndescription: t\nnodes:\n  - id: build\n    bash: echo hi\n    context: same\n`
+    );
+    expect(error).toContain("'context: same' is only supported on command and prompt nodes");
+  });
+
+  it('is refused next to persist_session, which keys continuity on another scope', () => {
+    const error = parseError(
+      `name: t\ndescription: t\nprovider: claude\nnodes:\n  - id: build\n    prompt: p\n    context: same\n    persist_session: true\n`
+    );
+    expect(error).toContain("'context: same' and 'persist_session' are mutually exclusive");
+  });
+
+  const root = useTempWorkflowRoot();
+
+  it('does not take a workflow-level persist_sessions default', async () => {
+    const result = await discoverFiles(root(), {
+      'same.yaml': `name: same-collapse\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: build\n    prompt: p\n    context: same\n  - id: other\n    prompt: p\n`,
+    });
+    expect(result.errors).toEqual([]);
+    const byId = new Map((result.workflows[0].workflow.nodes as DagNode[]).map(n => [n.id, n]));
+    expect(byId.get('build')?.persist_session).toBeUndefined();
+    expect(byId.get('other')?.persist_session).toBe(true);
+  });
+
+  it('rejects a known provider without sessionResume, inside a loop_group body too', () => {
+    withRegistry(
+      () => registerNoResumeProvider('no-resume-same'),
+      () => {
+        const error = parseError(
+          loopWith(
+            '        - id: build\n          prompt: p\n          context: same\n',
+            'no-resume-same'
+          )
+        );
+        expect(error).toContain("Node 'build' has context: same");
+        expect(error).toContain('sessionResume');
+      }
+    );
+  });
+
+  it('warns, and still loads, when the provider cannot fork', () => {
+    withRegistry(registerCommunityProviders, () => {
+      const copilot = parseWorkflow(
+        loopWith('        - id: build\n          prompt: p\n          context: same\n', 'copilot'),
+        't.yaml'
+      );
+      expect(copilot.error).toBeNull();
+      expect(copilot.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
+        expect.stringContaining("Node 'build'"),
+      ]);
+    });
   });
 });

@@ -38,6 +38,17 @@ export function isLoopNode(node: DagNode): node is LoopNode {
   return node.kind === 'loop';
 }
 
+/**
+ * The one definition of which node kinds put their session on the sequential session
+ * cursor that the next sequential AI node continues. The executor advances the cursor
+ * only for these kinds, and include expansion uses the same set to find the AI nodes
+ * that start a composed block's thread. A `loop_group` is not one: its iterations keep
+ * their own thread and never move the outer cursor.
+ */
+export function startsSequentialSession(node: DagNode): node is AgentNode | LoopNode {
+  return isAgentNode(node) || isLoopNode(node);
+}
+
 /** Type guard: check if a DAG node is a loop_group (cross-node iterative subgraph) node */
 export function isLoopGroupNode(node: DagNode): node is LoopGroupNode {
   return node.kind === 'loop_group';

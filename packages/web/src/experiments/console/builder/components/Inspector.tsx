@@ -30,12 +30,17 @@ interface InspectorProps {
   onRename: (id: string, nextId: string) => void;
 }
 
-const TRIGGER_RULES = [
-  'all_success',
-  'one_success',
-  'none_failed_min_one_success',
-  'all_done',
-] as const;
+type TriggerRule = NonNullable<BaseFields['trigger_rule']>;
+
+// Keyed by the generated wire type, so a rule added to or removed from the engine's
+// schema fails type-check here. Key order is the select's display order.
+const TRIGGER_RULE_OPTIONS: Record<TriggerRule, true> = {
+  all_success: true,
+  one_success: true,
+  none_failed_min_one_success: true,
+  all_done: true,
+};
+const TRIGGER_RULES = Object.keys(TRIGGER_RULE_OPTIONS) as TriggerRule[];
 
 function VariantFields({
   node,

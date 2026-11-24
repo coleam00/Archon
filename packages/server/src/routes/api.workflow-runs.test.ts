@@ -448,7 +448,11 @@ describe('GET /api/workflows/runs/:runId', () => {
       expect(response.status).toBe(200);
       return (
         (await response.json()) as {
-          run: { nodes: unknown; terminal_record: { nodes: unknown } | null };
+          run: {
+            nodes: unknown;
+            loop_rounds?: unknown;
+            terminal_record: { nodes: unknown } | null;
+          };
         }
       ).run;
     }
@@ -530,6 +534,68 @@ describe('GET /api/workflows/runs/:runId', () => {
       ]);
       expect(run.terminal_record).toBeNull();
       expect(run.nodes).toEqual([{ node_id: 'build', state: 'completed' }]);
+      expect(run).not.toHaveProperty('loop_rounds');
+    });
+
+    test('a looped run serves each round, and nodes keeps the latest round', async () => {
+      const startedAt = NOW_DATE.toISOString();
+      const inRound = (iteration: number, data: Record<string, unknown>) => ({
+        node: { id: 'check', kind: 'exec', runtime: 'sh' },
+        invocation: {
+          id: `check-${iteration}`,
+          startedAt,
+          loopPath: [{ groupId: 'flaky', iteration }],
+        },
+        attempt: { id: `check-${iteration}-attempt`, startedAt },
+        binding: {},
+        timing: { startedAt, durationMs: iteration * 10 },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting: 'node',
+        ...data,
+      });
+      const run = await getNodes({ ...graphRun, status: 'running' }, [
+        event('node_started', 'flaky'),
+        event('node_completed', 'flaky.check', inRound(1, { node_output: 'first' })),
+        event('node_failed', 'flaky.check', inRound(2, { error: 'second' })),
+        // Round 3 is in `check` now.
+        event('node_started', 'flaky.check', inRound(3, { timing: { startedAt } })),
+      ]);
+      expect(run.nodes).toContainEqual({ node_id: 'flaky.check', state: 'running' });
+      expect(run.loop_rounds).toEqual([
+        {
+          loop_group_path: [{ groupId: 'flaky', iteration: 1 }],
+          nodes: [
+            {
+              node_id: 'flaky.check',
+              state: 'completed',
+              started_at: startedAt,
+              duration_ms: 10,
+              output: 'first',
+            },
+          ],
+        },
+        {
+          loop_group_path: [{ groupId: 'flaky', iteration: 2 }],
+          nodes: [
+            {
+              node_id: 'flaky.check',
+              state: 'failed',
+              error: 'second',
+              started_at: startedAt,
+              duration_ms: 20,
+            },
+          ],
+        },
+        {
+          loop_group_path: [{ groupId: 'flaky', iteration: 3 }],
+          nodes: [{ node_id: 'flaky.check', state: 'running', started_at: startedAt }],
+        },
+      ]);
     });
   });
 

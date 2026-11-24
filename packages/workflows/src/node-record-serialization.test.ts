@@ -29,6 +29,7 @@ import {
   type NodeExecutionRecord,
 } from './schemas/node-execution';
 import { NODE_LIFECYCLE_EVENT_TYPES } from './store';
+import { readNodeEmitterEvent } from './node-event-write';
 
 const record = (): NodeExecutionRecord => ({
   runId: 'run-1',
@@ -127,17 +128,6 @@ describe('node record serializers', () => {
     const durable = serializeNodeStateRecord({ ...record(), lifecycle });
     const restored = readNodeRecordEvent({ ...durable, data: JSON.stringify(durable.data) });
     expect(restored?.metadata?.lifecycle).toEqual(lifecycle);
-  });
-
-  it('preserves persisted lifecycle selection order', () => {
-    expect(NODE_LIFECYCLE_EVENT_TYPES).toEqual([
-      'node_started',
-      'node_suspended',
-      'node_completed',
-      'node_failed',
-      'node_skipped',
-      'node_skipped_prior_success',
-    ]);
   });
 
   it('persists and reads every schema-owned metadata field', () => {
@@ -678,5 +668,45 @@ describe('include skip provenance compatibility', () => {
       reason,
       cause: legacyCause,
     });
+  });
+});
+
+describe('an included node carries where it was written next to its name', () => {
+  const composed = { nodeId: 'review', workflow: 'review-block', includes: ['rounds', 'review'] };
+  const included = (): NodeExecutionRecord => ({
+    ...record(),
+    node: {
+      id: 'rounds__review__review',
+      kind: 'agent',
+      source: { kind: 'command', name: 'review-pr' },
+      composed,
+    },
+  });
+
+  it('on the emitter event, the stored row and the event read back from that row', () => {
+    const live = serializeNodeEmitter(included());
+    expect(live).toMatchObject({ nodeId: 'rounds__review__review', composed });
+
+    const durable = serializeNodeStateRecord(included());
+    expect(durable.data.node).toMatchObject({ composed });
+    expect(readNodeEmitterEvent({ ...durable, workflow_run_id: 'run-1' })).toMatchObject({
+      composed,
+    });
+  });
+
+  it('on a prior-success replay, which has no execution metadata', () => {
+    const { output } = included();
+    const replay = serializeNodeEmitter({
+      runId: 'run-1',
+      path: 'rounds__review__review',
+      node: included().node,
+      cache: { action: 'replayed', output: output! },
+    });
+    expect(replay).toMatchObject({ type: 'node_skipped_prior_success', composed });
+  });
+
+  it('nowhere for a node of the run itself', () => {
+    expect('composed' in serializeNodeEmitter(record())!).toBe(false);
+    expect('composed' in (serializeNodeStateRecord(record()).data.node as object)).toBe(false);
   });
 });

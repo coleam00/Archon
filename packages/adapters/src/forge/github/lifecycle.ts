@@ -13,10 +13,17 @@ import type { ForgeMutationRequest, ForgeResponse } from '@archon/forge/operatio
 import { GitHubError, githubErrorDetail, type Fetch, type Sleep } from './api';
 import { handleGithubChecksRerun } from './checks-rerun';
 import { refused, unknown, unverified, type Submit } from './mutation-outcome';
-import { createPullRequest, editPullRequestBody, setDraftState } from './pull-requests';
+import {
+  closePullRequest,
+  createPullRequest,
+  editPullRequestBody,
+  setDraftState,
+} from './pull-requests';
 import { mergePullRequest } from './merge';
 import { upsertComment } from './comments';
 import { replyOnThread, resolveThread } from './review-threads';
+import { submitReview } from './reviews';
+import { putAttachment } from './attachments';
 import {
   addLabel,
   closeWorkItem,
@@ -62,6 +69,8 @@ export async function handleGithubMutation(
       case 'pr.ready':
       case 'pr.draft':
         return await setDraftState(request, fetchImpl, token, submit);
+      case 'pr.close':
+        return await closePullRequest(request, fetchImpl, token, submit);
       case 'comment.upsert':
       case 'workitem.comment.upsert':
         return await upsertComment(request, fetchImpl, token, submit);
@@ -73,6 +82,10 @@ export async function handleGithubMutation(
         return await replyOnThread(request, fetchImpl, token, submit);
       case 'pr.thread.resolve':
         return await resolveThread(request, fetchImpl, token, submit);
+      case 'pr.review.submit':
+        return await submitReview(request, fetchImpl, token, submit);
+      case 'attachment.put':
+        return await putAttachment(request, fetchImpl, token, submit);
     }
   } catch (cause) {
     const error = githubErrorDetail(cause);

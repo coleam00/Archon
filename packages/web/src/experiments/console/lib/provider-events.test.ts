@@ -184,14 +184,6 @@ describe('provider-event store', () => {
     await h.resolveNext([rec('a', 3)]);
     expect(h.records()).toEqual([0, 1, 2, 3].map(seq => ['a', seq]));
   });
-
-  test('a reconnect catches a loaded node up from its last event', async () => {
-    const h = harness();
-    h.store.load('r1', 'build');
-    await h.resolveNext([rec(null, 0), rec('a', 0)]);
-    h.store.catchUp('r1');
-    expect(h.calls[1]).toEqual(['r1', 'build', { attemptId: 'a', seq: 0 }]);
-  });
 });
 
 describe('findProviderEventGap', () => {

@@ -20,12 +20,22 @@ import {
   type TerminalEvents,
 } from './metrics-steps';
 import {
-  metricRecordSchema,
+  MetricsByModelNodeError,
+  MetricsDimensionKeyError,
+  type MetricsQuery,
+  type MetricsSplit,
+  SEEN_LIMIT,
+} from './metrics-query';
+import {
+  storedMetricOutputSchema,
+  type MetricDimensions,
+  type MetricByDimension,
   type MetricByModel,
   type MetricCohort,
   type MetricCompare,
   type MetricCost,
   type MetricDefinition,
+  type MetricDimensionGroup,
   type MetricInstrumentReport,
   type MetricModelGroup,
   type MetricRecord,
@@ -38,117 +48,27 @@ import { parseRunUsage } from './schemas/run-usage';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore, MetricRecordRow } from './store';
 
+export {
+  DEFAULT_METRICS_WINDOW_DAYS,
+  MetricsByModelNodeError,
+  MetricsDimensionKeyError,
+  MetricsQueryError,
+  resolveMetricsSplit,
+  resolveMetricsWindow,
+  type MetricsQuery,
+  type MetricsSplit,
+} from './metrics-query';
+
 export type MetricsStore = Pick<
   IWorkflowStore,
   'listMetricRecords' | 'listEventsForRuns' | 'getWorkflowRunsByIds' | 'listWorkflowRuns'
 >;
 
-/** A query compares cohorts or models, never both. */
-export type MetricsSplit =
-  | { compareAt?: undefined; byModelNode?: undefined }
-  /** Split each group into runs started before and at or after this time. */
-  | { compareAt: Date; byModelNode?: undefined }
-  /** Split each group by the model label that ran this node in its producing runs. */
-  | { byModelNode: string; compareAt?: undefined };
-
-export type MetricsQuery = {
-  /** Inclusive start of the window. */
-  since: Date;
-  /** Exclusive end of the window. */
-  until: Date;
-  name?: string;
-  subject?: string;
-  codebaseId?: string;
-} & MetricsSplit;
-
-/** A malformed window, cut or split. */
-export class MetricsQueryError extends Error {}
-
-/** No producing run ran the `--by-model` node; `seenNodeIds` are the AI nodes they ran. */
-export class MetricsByModelNodeError extends MetricsQueryError {
-  constructor(
-    readonly node: string,
-    readonly seenNodeIds: readonly string[]
-  ) {
-    super(
-      `no producing run ran an AI node "${node}"; AI nodes they ran: ${
-        seenNodeIds.length === 0 ? 'none' : seenNodeIds.join(', ')
-      }`
-    );
-  }
-}
-
-const SEEN_NODE_LIMIT = 50;
-
-const DAY_MS = 86_400_000;
-export const DEFAULT_METRICS_WINDOW_DAYS = 30;
-const DURATION_UNIT_MS = new Map([
-  ['m', 60_000],
-  ['h', 3_600_000],
-  ['d', DAY_MS],
-  ['w', 7 * DAY_MS],
-]);
-const instantSchema = z.union([z.iso.date(), z.iso.datetime({ offset: true })]);
-
-const INSTANT_FORMS =
-  'an ISO date or a time with an offset, such as 2026-10-01 or 2026-10-01T12:00:00Z';
-
-function parseInstant(field: string, value: string, forms = INSTANT_FORMS): Date {
-  if (!instantSchema.safeParse(value).success) {
-    throw new MetricsQueryError(`${field} must be ${forms}; got ${JSON.stringify(value)}`);
-  }
-  return new Date(value);
-}
-
-/**
- * Resolve a window from the CLI's and API's shared syntax. `since` is a duration
- * (`40m`, `24h`, `7d`, `2w`) counted back from `until`, or an ISO date or time; `until`
- * defaults to `now` and `since` to {@link DEFAULT_METRICS_WINDOW_DAYS} days before it.
- * A date without a time is UTC midnight.
- */
-export function resolveMetricsWindow(
-  input: { since?: string; until?: string },
-  now: Date = new Date()
-): { since: Date; until: Date } {
-  const until = input.until === undefined ? now : parseInstant('until', input.until);
-  const since = resolveSince(input.since, until);
-  if (since.getTime() >= until.getTime()) {
-    throw new MetricsQueryError('since must be before until');
-  }
-  return { since, until };
-}
-
-/** Resolve the CLI's and API's split: a `compare` cut (an ISO date or time) or a `byModel` node. */
-export function resolveMetricsSplit(input: { compare?: string; byModel?: string }): MetricsSplit {
-  if (input.compare !== undefined && input.byModel !== undefined) {
-    throw new MetricsQueryError('compare and by-model cannot be combined; run one query for each');
-  }
-  if (input.compare !== undefined) return { compareAt: parseInstant('compare', input.compare) };
-  if (input.byModel === '') throw new MetricsQueryError('by-model needs a node id');
-  return input.byModel === undefined ? {} : { byModelNode: input.byModel };
-}
-
-function resolveSince(since: string | undefined, until: Date): Date {
-  if (since === undefined) return new Date(until.getTime() - DEFAULT_METRICS_WINDOW_DAYS * DAY_MS);
-  const duration = /^(\d+)([a-z])$/.exec(since);
-  const unitMs = duration === null ? undefined : DURATION_UNIT_MS.get(duration[2]);
-  if (duration === null || unitMs === undefined) {
-    return parseInstant(
-      'since',
-      since,
-      `a duration such as 40m, 24h, 7d or 2w, or ${INSTANT_FORMS}`
-    );
-  }
-  const start = new Date(until.getTime() - Number(duration[1]) * unitMs);
-  if (Number.isNaN(start.getTime())) {
-    throw new MetricsQueryError(`since "${since}" reaches before the earliest representable date`);
-  }
-  return start;
-}
-
 /** One parsed record that counts. */
 interface CountedRecord {
   record: MetricRecord;
+  /** The record's entry in its output's `metric_dimensions`; `{}` without one. */
+  dimensions: MetricDimensions;
   /** `at`, else the completion time, in ms. */
   time: number;
   /** The run that returned the record. */
@@ -365,6 +285,28 @@ const byBucket = (a: ModelBucket, b: ModelBucket): number =>
 const distinct = (values: readonly (string | null)[]): string[] =>
   [...new Set(values.filter(value => value !== null))].sort();
 
+/** The figures of one split group, against the values of the other labelled groups. */
+function groupFigures(
+  kind: MetricDefinition['kind'],
+  rate: boolean,
+  records: readonly CountedRecord[],
+  rest: readonly number[],
+  context: ReportContext
+) {
+  const values = records.map(({ record }) => record.value);
+  const value = aggregate(kind, values);
+  const deltaInterval = differenceInterval(kind, rate, values, rest);
+  return {
+    value,
+    n: values.length,
+    interval: valueInterval(kind, rate, values),
+    cost: costReport(records, context),
+    delta_vs_rest: rest.length === 0 ? null : value - aggregate(kind, rest),
+    delta_interval_vs_rest: deltaInterval,
+    separated: separates(deltaInterval),
+  };
+}
+
 function modelGroup(
   kind: MetricDefinition['kind'],
   rate: boolean,
@@ -372,21 +314,12 @@ function modelGroup(
   rest: readonly number[],
   context: ReportContext
 ): MetricModelGroup {
-  const values = bucket.records.map(({ record }) => record.value);
-  const value = aggregate(kind, values);
-  const deltaInterval = differenceInterval(kind, rate, values, rest);
-  const fields = {
-    value,
-    n: values.length,
-    interval: valueInterval(kind, rate, values),
-    cost: costReport(bucket.records, context),
+  return {
+    ...bucket.split,
+    ...groupFigures(kind, rate, bucket.records, rest, context),
     requested_models: distinct(bucket.steps.map(step => step.requestedModel)),
     resolved_models: distinct(bucket.steps.map(step => step.resolvedModel)),
-    delta_vs_rest: rest.length === 0 ? null : value - aggregate(kind, rest),
-    delta_interval_vs_rest: deltaInterval,
-    separated: separates(deltaInterval),
   };
-  return { ...bucket.split, ...fields };
 }
 
 /** Split records by the model label that ran `node`; each group compares with the other models. */
@@ -423,12 +356,56 @@ function byModelReport(
   };
 }
 
+/** An own-property read, so a key such as `constructor` never reads the prototype's. */
+const dimensionOf = (entry: CountedRecord, key: string): string | null =>
+  Object.hasOwn(entry.dimensions, key) ? (entry.dimensions[key] ?? null) : null;
+
+/**
+ * Split records by the value they carry for `key`; each value group compares with the other
+ * values, and carries its own cohorts when the query names a cut.
+ */
+function byDimensionReport(
+  kind: MetricDefinition['kind'],
+  records: readonly CountedRecord[],
+  context: ReportContext,
+  key: string,
+  compareAt: Date | undefined
+): MetricByDimension {
+  const buckets = new Map<string | null, CountedRecord[]>();
+  for (const entry of records) {
+    const label = dimensionOf(entry, key);
+    buckets.set(label, [...(buckets.get(label) ?? []), entry]);
+  }
+  const rate = isRate(records.map(({ record }) => record.value));
+  const labels = [...buckets.keys()]
+    .filter(label => label !== null)
+    .sort((a, b) => a.localeCompare(b));
+  const restOf = (except: string | null): number[] =>
+    labels
+      .filter(label => label !== except)
+      .flatMap(label => (buckets.get(label) ?? []).map(({ record }) => record.value));
+  const group = (label: string | null): MetricDimensionGroup => {
+    const grouped = buckets.get(label) ?? [];
+    return {
+      ...(label === null ? { split: 'none' as const } : { split: 'value' as const, label }),
+      ...groupFigures(kind, rate, grouped, restOf(label), context),
+      ...(compareAt === undefined
+        ? {}
+        : { compare: compareReport(kind, grouped, context.runs, compareAt) }),
+    };
+  };
+  return { key, groups: [...labels, ...(buckets.has(null) ? [null] : [])].map(group) };
+}
+
 function splitReports(
   kind: MetricDefinition['kind'],
   records: readonly CountedRecord[],
   context: ReportContext
-): Pick<MetricInstrumentReport, 'compare' | 'by_model'> {
-  const { compareAt, byModelNode } = context.split;
+): Pick<MetricInstrumentReport, 'compare' | 'by_model' | 'by_dimension'> {
+  const { compareAt, byModelNode, byDimension } = context.split;
+  if (byDimension !== undefined) {
+    return { by_dimension: byDimensionReport(kind, records, context, byDimension, compareAt) };
+  }
   if (compareAt !== undefined) {
     return { compare: compareReport(kind, records, context.runs, compareAt) };
   }
@@ -502,7 +479,9 @@ const byIdentity = (a: Identity, b: Identity): number => {
  * 7. A record's producing runs are its `runs`, else the run that returned it. Cost sums
  *    each distinct producing run once. `compareAt` splits records by when those runs
  *    started, not by `at`; `byModelNode` splits them by the model labels that ran that
- *    node in those runs and the runs below them.
+ *    node in those runs and the runs below them. `byDimension` splits them by the value
+ *    each record carries for that key, and with `compareAt` compares cohorts within each
+ *    value.
  *
  * Refusals are reported for the queried name and window. A stored output the record
  * schema rejects (written before the schema, or unreadable) has no trusted name, so it
@@ -514,6 +493,10 @@ const byIdentity = (a: Identity, b: Identity): number => {
  * needs at least one producing run that still exists: a window with no records reports
  * none, and records whose producing runs were all deleted are reported `unattributed`
  * without checking the node.
+ *
+ * Throws {@link MetricsDimensionKeyError} when the window holds records of the queried
+ * name and subject and none carries `byDimension`, so a mistyped key is not reported as one
+ * `none` group.
  */
 export async function queryMetrics(
   store: MetricsStore,
@@ -598,7 +581,18 @@ async function reportContext(
   const runs = await runsOf(store, records);
   const context = { runs, steps: await readRunSteps(store, [...runs.keys()], known), split };
   if (split.byModelNode !== undefined) assertNodeRan(context, split.byModelNode);
+  if (split.byDimension !== undefined) assertKeyCarried(records, split.byDimension);
   return context;
+}
+
+function assertKeyCarried(records: readonly CountedRecord[], key: string): void {
+  if (records.length === 0) return;
+  const seen = new Set<string>();
+  for (const entry of records) {
+    if (dimensionOf(entry, key) !== null) return;
+    for (const carried of Object.keys(entry.dimensions)) seen.add(carried);
+  }
+  throw new MetricsDimensionKeyError(key, [...seen].sort().slice(0, SEEN_LIMIT));
 }
 
 function assertNodeRan(context: ReportContext, node: string): void {
@@ -609,7 +603,7 @@ function assertNodeRan(context: ReportContext, node: string): void {
     if (steps.some(step => step.nodeId === node)) return;
     for (const step of steps) seen.add(step.nodeId);
   }
-  throw new MetricsByModelNodeError(node, [...seen].sort().slice(0, SEEN_NODE_LIMIT));
+  throw new MetricsByModelNodeError(node, [...seen].sort().slice(0, SEEN_LIMIT));
 }
 
 /** The producing runs of `records`, read once. */
@@ -634,9 +628,7 @@ function invalidRefusal(row: MetricRecordRow, error: z.ZodError): Refused {
     refusal: {
       reason: 'invalid',
       ...source(row),
-      errors: error.issues.map(
-        issue => `/metrics/${issue.path.map(String).join('/')}: ${issue.message}`
-      ),
+      errors: error.issues.map(issue => `/${issue.path.map(String).join('/')}: ${issue.message}`),
     },
   };
 }
@@ -682,15 +674,19 @@ function admitRow(
   definitions: Map<string, MetricDefinition>,
   row: MetricRecordRow
 ): { admitted: AdmittedRecord[]; refused: Refused[] } {
-  const parsed = z.array(metricRecordSchema).safeParse(row.metrics);
+  const parsed = storedMetricOutputSchema.safeParse({
+    metrics: row.metrics,
+    metric_dimensions: row.metricDimensions,
+  });
   if (!parsed.success) return { admitted: [], refused: [invalidRefusal(row, parsed.error)] };
   const admitted: AdmittedRecord[] = [];
   const refused: Refused[] = [];
-  for (const record of parsed.data) {
+  for (const [index, record] of parsed.data.metrics.entries()) {
     const time = Date.parse(record.at ?? row.completedAt);
     const conflict = admitDefinition(definitions, record);
     if (conflict === null) {
-      admitted.push({ record, time, runId: row.runId });
+      const dimensions = parsed.data.metric_dimensions?.[index] ?? {};
+      admitted.push({ record, dimensions, time, runId: row.runId });
     } else {
       refused.push({
         time,

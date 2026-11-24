@@ -1,0 +1,267 @@
+name: archon-build-pick
+description: |
+  Chooses what the build queue builds next and starts it: one archon-build-queue run per
+  waiting issue, each on that issue's item, fired through the operator's build-queue
+  binding in pickup order (most urgent, then most important, then smallest, then
+  oldest). The binding's capacity admits as many as it has slots and skips the rest, and
+  the engine skips an issue a build run already holds, so the pick keeps no count and
+  holds no build slot. It runs on a schedule and when a build run ends.
+
+  A person can also say what to build in the run's message: one agent resolves the
+  message to an issue to start, a choice between issues, a work order for several
+  issues, which this run writes and later picks build, or new work it files and hands
+  to intake through the operator's intake binding.
+
+  Use when: a trigger binding the operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#build-queue), or a person says in words
+  what to build.
+  NOT for: building one issue by number (archon-build-queue), triaging an item
+  (archon-intake), or merging (archon-merge-queue).
+
+requires: [github]
+
+inputs:
+  repo_host:
+    default: ""
+    description: >-
+      The forge host of the repository whose work items the pick starts. Empty, with
+      repo_path empty too, resolves the repository from the checkout's git remotes.
+  repo_path:
+    default: ""
+    description: The owner/name path of that repository.
+  build_queue_binding:
+    description: >-
+      The absolute path of the operator's fire-only binding config for this
+      repository's build queue. Every start goes through it with `archon trigger fire`,
+      so it is admitted under that binding's resource, capacity and overlap policy.
+  intake_binding:
+    default: ""
+    description: >-
+      The absolute path of the operator's fire-only intake binding config. New work the
+      message files, a work order's untriaged members and a blocked item sent back to
+      re-triage start intake through it; a node that would start intake refuses while
+      it is empty.
+  orders_only:
+    default: "false"
+    description: >-
+      "true" starts an item the queue never built only when it is a member of an open
+      work order (a `work-order/<id>` state document; see
+      https://archon.diy/guides/sdlc-operations/#work-orders). It first marks done each
+      open order whose members have all merged. An issue the message names is started
+      either way, and so is the next round of an item the queue already has a record
+      for. Anything else picks from every waiting item.
+  revisit_blocked:
+    default: ""
+    description: >-
+      "true" makes a run with no message also revisit the blocked items: one agent
+      judges which no longer look blocked, and each of those gets this run's re-triage
+      request and one intake pickup. Anything else revisits nothing.
+
+mutates_checkout: false
+
+nodes:
+  - id: start
+    script: start
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        repo:
+          type: object
+          properties:
+            host: { type: string }
+            path: { type: string }
+          required: [host, path]
+        # Whether the run's message names the work.
+        message: { type: boolean }
+      required: [repo, message]
+
+  - id: interpret
+    command: interpret
+    depends_on: [start]
+    when: "$start.output.message == true"
+    model: ['@build-interpret', large]
+    mutates_checkout: false
+    with:
+      repo: "$start.output.repo.host/$start.output.repo.path"
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [build, choose, order, intake, none] }
+        number: { type: [integer, 'null'], minimum: 1 }
+        options:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              id: { type: string, pattern: '^issue-[0-9]+$' }
+              label: { type: string, pattern: '\S' }
+              does: { type: string, pattern: '\S' }
+              value:
+                type: object
+                additionalProperties: false
+                properties:
+                  number: { type: integer, minimum: 1 }
+                required: [number]
+            required: [id, label, does, value]
+        # On choose, the candidate the message most likely means; null otherwise.
+        recommendation:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            option: { type: string, pattern: '^issue-[0-9]+$' }
+            why: { type: string, pattern: '\S' }
+            confidence: { type: string, enum: [low, medium, high] }
+          required: [option, why, confidence]
+        order:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+            members: { type: array, minItems: 2, items: { type: integer, minimum: 1 } }
+            unresolved:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  named: { type: string, pattern: '\S' }
+                  why: { type: string, pattern: '\S' }
+                required: [named, why]
+          required: [id, members, unresolved]
+        issue:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            title: { type: string, pattern: '\S' }
+            body: { type: string, pattern: '\S' }
+          required: [title, body]
+        reason: { type: string, pattern: '\S' }
+      required: [decision, number, options, recommendation, order, issue, reason]
+
+  - id: choose
+    depends_on: [interpret]
+    when: "$interpret.output.decision == 'choose'"
+    wait:
+      attention: "$interpret.output.reason"
+      form: select
+      options: "$interpret.output.options"
+      recommendation: "$interpret.output.recommendation"
+      labels:
+        stage: build
+        kind: pick
+        item: ""
+        pr: ""
+
+  # Files the new work the message described and starts intake on it.
+  - id: handoff
+    script: handoff
+    runtime: bun
+    depends_on: [start, interpret]
+    when: "$interpret.output.decision == 'intake'"
+    with:
+      repo: { from: "$start.output.repo" }
+      issue: { from: "$interpret.output.issue" }
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+      required: [summary]
+
+  # Writes the work order the message named and starts intake on each member it has
+  # not seen. A later pick with orders_only starts the members.
+  - id: order
+    script: order
+    runtime: bun
+    depends_on: [start, interpret]
+    when: "$interpret.output.decision == 'order'"
+    with:
+      repo: { from: "$start.output.repo" }
+      order: { from: "$interpret.output.order" }
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+      required: [summary]
+
+  # Starts the builds: every waiting item with no message, the one issue a message
+  # resolved to, or none when the message was a work order or new work. A message that
+  # resolved to nothing refuses the run with interpret's reason.
+  - id: fire
+    script: fire
+    runtime: bun
+    depends_on: [start, interpret, choose]
+    trigger_rule: none_failed_min_one_success
+    with:
+      repo: { from: "$start.output.repo" }
+      interpreted: { from: "$interpret.output", if_skipped: null }
+      chosen: { from: "$choose.output.value", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        # The issues a start was fired for, in pickup order, whatever its admission.
+        fired: { type: array, items: { type: integer } }
+        summary: { type: string }
+      required: [fired, summary]
+
+  # The revisit is independent of the starts: an item that cannot be started must not
+  # suppress revisits of others.
+  - id: blocked
+    script: blocked
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        blocked:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer, minimum: 1 }
+              summary: { type: string }
+              # When triage gave the blocked verdict, and what it said the item waits on.
+              blocked_at: { type: string }
+              blocked_reason: { type: string }
+              blocked_by: { type: array, items: { type: string } }
+            required: [number, summary, blocked_at, blocked_reason, blocked_by]
+        blocked_count: { type: integer }
+      required: [blocked, blocked_count]
+
+  - id: revisit
+    command: revisit
+    depends_on: [start, blocked]
+    when: "$blocked.output.blocked_count > 0"
+    model: ['@build-revisit', medium]
+    mutates_checkout: false
+    with:
+      blocked: { from: "$blocked.output.blocked" }
+      repo: "$start.output.repo.host/$start.output.repo.path"
+    output_format:
+      type: object
+      properties:
+        retriage:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              number: { type: integer, minimum: 1 }
+              reason: { type: string, pattern: '\S' }
+            required: [number, reason]
+      required: [retriage]
+
+  - id: retriage
+    script: retriage
+    runtime: bun
+    depends_on: [start, blocked, revisit]
+    with:
+      repo: { from: "$start.output.repo" }
+      blocked: { from: "$blocked.output.blocked" }
+      retriage: { from: "$revisit.output.retriage" }
+    output_format:
+      type: object
+      properties:
+        retriaged: { type: array, items: { type: integer } }
+        summary: { type: string }
+      required: [retriaged, summary]

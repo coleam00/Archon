@@ -31,6 +31,7 @@ import type {
   IsolationRequest,
   ResolutionMethod,
 } from './types';
+import { readWorktreeBaseBranch } from './types';
 
 function makeEnvRow(overrides?: Partial<IsolationEnvironmentRow>): IsolationEnvironmentRow {
   return {
@@ -62,6 +63,7 @@ function makeMockStore(overrides?: Partial<IIsolationStore>): IIsolationStore {
         workflow_id: env.workflow_id,
         working_path: env.working_path,
         branch_name: env.branch_name,
+        ...(env.metadata ? { metadata: env.metadata } : {}),
       }),
     updateStatus: async () => undefined,
     withWorktreeRegistration: async (observed, remove) =>
@@ -97,8 +99,6 @@ function makeMockProvider() {
       directoryClean: true,
       warnings: [],
     }),
-    get: async () => null,
-    list: async () => [],
     healthCheck: async () => true,
   };
 }
@@ -189,7 +189,6 @@ describe('IsolationResolver', () => {
     return new IsolationResolver({
       store: makeMockStore(),
       provider: makeMockProvider(),
-      staleThresholdDays: 14,
       ...overrides,
     });
   }
@@ -307,22 +306,6 @@ describe('IsolationResolver', () => {
     expect(result.status).toBe('none');
     if (result.status === 'none') {
       expect(result.cwd).toBe('/workspace');
-    }
-  });
-
-  test('folder project — returns none with the real folder cwd (not /workspace)', async () => {
-    const resolver = createResolver();
-
-    const result = await resolver.resolve({
-      existingEnvId: null,
-      codebase: { id: 'cb-folder', defaultCwd: '/tmp/platform', name: 'platform', kind: 'folder' },
-      platformType: 'web',
-    });
-
-    expect(result.status).toBe('none');
-    if (result.status === 'none') {
-      // Must be the real folder path, NOT the '/workspace' docker sentinel.
-      expect(result.cwd).toBe('/tmp/platform');
     }
   });
 
@@ -465,7 +448,7 @@ describe('IsolationResolver', () => {
     }
   });
 
-  test('create new — returns resolved with created method', async () => {
+  test('create new — returns resolved with created method and records the base it was cut from', async () => {
     // A canonical path distinct from defaultCwd proves the rollback proof
     // carries the canonical repo path, not the codebase's working path.
     const canonicalRepoPath = git.toRepoPath('/repos/canonical-myrepo');
@@ -477,7 +460,7 @@ describe('IsolationResolver', () => {
         ...provider,
         create: async request => {
           capturedRequest = request as { canonicalRepoPath?: unknown };
-          return provider.create(request);
+          return { ...(await provider.create(request)), resolvedBaseBranch: 'trunk' };
         },
       },
     });
@@ -498,6 +481,8 @@ describe('IsolationResolver', () => {
         canonicalRepoPath,
         branchCreated: true,
       });
+      // The record keeps the base, so every later reuse of the worktree can report it.
+      expect(readWorktreeBaseBranch(result.env.metadata)).toBe('trunk');
     }
   });
 
@@ -1398,30 +1383,6 @@ describe('IsolationResolver', () => {
     expect(capturedRequests).toHaveLength(0);
   });
 
-  // --- Constructor validation tests ---
-
-  test('throws on zero staleThresholdDays', () => {
-    expect(
-      () =>
-        new IsolationResolver({
-          store: makeMockStore(),
-          provider: makeMockProvider(),
-          staleThresholdDays: 0,
-        })
-    ).toThrow('staleThresholdDays must be positive, got 0');
-  });
-
-  test('throws on negative staleThresholdDays', () => {
-    expect(
-      () =>
-        new IsolationResolver({
-          store: makeMockStore(),
-          provider: makeMockProvider(),
-          staleThresholdDays: -1,
-        })
-    ).toThrow('staleThresholdDays must be positive, got -1');
-  });
-
   test('existing env — emits warning when base branch mismatches', async () => {
     const env = makeEnvRow();
     isAncestorOfSpy.mockResolvedValue(false);
@@ -1484,29 +1445,6 @@ describe('IsolationResolver', () => {
     if (result.status === 'resolved') {
       expect(result.warnings).toBeDefined();
       expect(result.warnings?.[0]).toContain("not based on 'dev'");
-    }
-  });
-
-  test('workflow reuse — no warning when base branch matches', async () => {
-    const env = makeEnvRow();
-    isAncestorOfSpy.mockResolvedValue(true);
-    const resolver = createResolver({
-      store: makeMockStore({
-        findActiveByWorkflow: async (_cid, wt, wid) =>
-          wt === 'issue' && wid === '42' ? env : null,
-      }),
-    });
-
-    const result = await resolver.resolve({
-      existingEnvId: null,
-      codebase: defaultCodebase,
-      hints: { workflowType: 'issue', workflowId: '42', baseBranch: git.toBranchName('dev') },
-      platformType: 'web',
-    });
-
-    expect(result.status).toBe('resolved');
-    if (result.status === 'resolved') {
-      expect(result.warnings).toBeUndefined();
     }
   });
 

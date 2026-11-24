@@ -32,8 +32,7 @@ inputs:
 
 # ready:false is a valid completion (see the plan node): the run succeeds with
 # an authored outcome of false — lifecycle status and work outcome are separate facts.
-returns: plan
-outcome_field: ready
+returns: { node: plan, outcome: ready }
 
 nodes:
   # Open questions are a valid outcome, not a failure: the calls only a person can

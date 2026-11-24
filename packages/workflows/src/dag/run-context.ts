@@ -7,6 +7,7 @@ import { buildAiNodeEnvironment } from '../exec-environment';
 import type { NodeExecutionResult } from '../node-record-serialization';
 import type { NodeExecutionRecord, NodeInvocation } from '../schemas/node-execution';
 import type { CheckoutObservation } from '../schemas/checkout-observation';
+import type { ReturnsCheckout } from '../run-result';
 import type { createRunToolCallAttention } from '../tool-call-attention';
 import type { WorkflowSourceRoots } from '../workflow-source';
 import type { WorkflowPack } from '../schemas/pack-settings';
@@ -23,7 +24,7 @@ import type {
   WorkflowNodeSession,
   WorkflowRun,
 } from '../schemas';
-import { isNodeContextResume, type NodeContext } from '../schemas';
+import { isNodeContextResume, isNodeContextSame, type NodeContext } from '../schemas';
 import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from '../store';
 import type { RunBudgetLedger } from '../run-budget';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from '../model-validation';
@@ -62,6 +63,8 @@ export interface LayerNodeResult {
   nodeId: string;
   output: NodeExecutionResult;
   sessionProvider?: string;
+  /** The model the node resolved to, when it resolved one; recorded with its session. */
+  sessionModel?: string;
 }
 
 /**
@@ -73,6 +76,11 @@ export interface LayerNodeResult {
  */
 export interface PersistScope {
   key: string;
+  /**
+   * The run's workflow, captured when the scope opens. A loop_group body context names
+   * its group in `workflowName`, so rows are read and written under this name instead.
+   */
+  workflowName: string;
   sessionsAtStart: Promise<readonly WorkflowNodeSession[]>;
 }
 
@@ -143,6 +151,12 @@ export interface RunDerived {
   workflowLevelOptions: WorkflowLevelOptions;
   /** Cross-run session persistence for this run, or undefined to skip. */
   persistScope: PersistScope | undefined;
+  /**
+   * The run's item scope (`item:<item_id>`) that `context: same` nodes continue from and
+   * write to, or undefined when the run has no item or no node could use it. Forwarded
+   * unchanged into loop_group bodies and composed fan-out instances.
+   */
+  itemScope: PersistScope | undefined;
   /** Workflow-level default for per-node `persist_session` (opt-in). */
   workflowPersistSessions: boolean;
   /**
@@ -155,6 +169,13 @@ export interface RunDerived {
    * (which also run with `persistScope: undefined`).
    */
   scopeArtifactsDir: string | undefined;
+  /**
+   * The top-level `returns:` node, and the checkout sampled when it completed in this pass:
+   * what its result was given at (#5769). Undefined when the workflow declares no
+   * `returns:`. Shared by reference, so nested contexts inherit it; only the top-level
+   * DAG (empty `stepNamePrefix`) samples into it.
+   */
+  returnsCheckout?: ReturnsCheckout;
 }
 
 /**
@@ -203,12 +224,6 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   nodeOutputs: Map<string, NodeOutput>;
   /** Prior body outputs available to a loop-group iteration's `when:` conditions. */
   loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
-  /**
-   * Awaited after a complete layer has been aggregated and before lifecycle status is
-   * observed. The top-level DAG uses this to durably capture authored run state at
-   * the first point it exists; loop_group bodies have no run-level hook.
-   */
-  afterLayer?: () => Promise<void>;
   /**
    * Finish an already-claimed deterministic subgraph when a sibling pauses the parent.
    * Composed fan-out bodies set this after their durable start claim: load-time
@@ -348,13 +363,14 @@ export function sessionCheckpoint(
 }
 
 /**
- * A loop_group body node that resumes a source outside its own body owns a private
- * session cursor continued across iterations. A same-body source is forked afresh in
- * every iteration, so its consumer never owns a cursor.
+ * A loop_group body node owns a private session cursor continued across iterations when
+ * it resumes a source outside its own body, or declares `context: same`. A same-body
+ * source is forked afresh in every iteration, so its consumer never owns a cursor.
  */
 export function ownsBodySessionCursor(
   node: { context?: NodeContext },
   bodyNodeIds: ReadonlySet<string>
 ): boolean {
+  if (isNodeContextSame(node.context)) return true;
   return isNodeContextResume(node.context) && !bodyNodeIds.has(node.context.resume);
 }

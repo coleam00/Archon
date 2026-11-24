@@ -140,20 +140,6 @@ async function collect<T>(gen: AsyncGenerator<T>): Promise<T[]> {
   return out;
 }
 
-describe('CopilotProvider.getType / getCapabilities', () => {
-  test('getType returns copilot', () => {
-    expect(new CopilotProvider().getType()).toBe('copilot');
-  });
-
-  test('getCapabilities matches COPILOT_CAPABILITIES', () => {
-    const c = new CopilotProvider().getCapabilities();
-    expect(c.sessionResume).toBe(true);
-    expect(c.effortControl).toBe(true);
-    expect(c.mcp).toBe(true);
-    expect(c.hooks).toBe(false);
-  });
-});
-
 describe('CopilotProvider.sendQuery', () => {
   beforeEach(() => {
     resetCopilotSingleton();
@@ -233,27 +219,24 @@ describe('CopilotProvider.sendQuery', () => {
     expect(opts.reasoningEffort).toBe('high');
   });
 
-  test.each(['max', 'ultra', 'persistent'] as const)(
-    'workflow `effort: %s` maps to SDK `max`',
-    async effort => {
-      const session = makeFakeSession();
-      nextCreateSessionResult = session;
+  test('workflow `effort: ultra` clamps to the SDK `max` rung', async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
 
-      const p = new CopilotProvider();
-      const gen = p.sendQuery('hi', '/w', undefined, {
-        model: 'gpt-5',
-        nodeConfig: { effort },
-      });
-      const first = gen.next();
-      await new Promise(resolve => setTimeout(resolve, 5));
-      session.resolveSend(undefined);
-      await first;
-      await collect(gen);
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, {
+      model: 'gpt-5',
+      nodeConfig: { effort: 'ultra' },
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
 
-      const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
-      expect(opts.reasoningEffort).toBe('max');
-    }
-  );
+    const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
+    expect(opts.reasoningEffort).toBe('max');
+  });
 
   // #2556: `minimal` is a rung on Archon's shared ladder that Copilot's SDK
   // lacks, so it clamps to the SDK's shallowest — the same treatment `ultra`
@@ -370,6 +353,8 @@ describe('CopilotProvider.sendQuery', () => {
       code: 'copilot.resume_failed',
       message: expect.stringContaining('Could not resume'),
     });
+    // The fresh session is the one named, never the requested one.
+    expect(chunks).toContainEqual({ type: 'session', sessionId: 'sess-new' });
   });
 
   test('forkSession=true with resumeSessionId creates fresh session (SDK has no fork)', async () => {
@@ -437,6 +422,8 @@ describe('CopilotProvider.sendQuery', () => {
 
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+    // The session is named before the prompt is sent.
+    expect((await gen.next()).value).toEqual({ type: 'session', sessionId: 'sess-42' });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
     session.fire(evt('assistant.usage', { model: 'gpt-5', inputTokens: 10, outputTokens: 3 }));
@@ -462,27 +449,6 @@ describe('CopilotProvider.sendQuery', () => {
     evt('assistant.message', { messageId: 'm', content: 'done' }),
   ];
 
-  test('a tool the turn never completed closes as cancelled before the result', async () => {
-    const session = makeFakeSession('sess-open-tool');
-    nextCreateSessionResult = session;
-    const gen = new CopilotProvider().sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
-    const first = gen.next();
-    await new Promise(resolve => setTimeout(resolve, 5));
-    for (const event of toolTurnEvents) session.fire(event);
-    session.resolveSend(undefined);
-    const chunks = [(await first).value, ...(await collect(gen))];
-
-    expect(chunks).toEqual([
-      { type: 'tool_call', toolCallId: 'c1', name: 'read', rawInput: { path: 'a' } },
-      { type: 'tool_call', toolCallId: 'c2', name: 'bash', rawInput: { cmd: 'sleep' } },
-      { type: 'tool_call_update', toolCallId: 'c1', status: 'completed', output: 'A' },
-      { type: 'agent_message_chunk', text: 'done' },
-      { type: 'tool_call_update', toolCallId: 'c2', status: 'cancelled' },
-      { type: 'result', sessionId: 'sess-open-tool' },
-      { type: 'settled' },
-    ]);
-  });
-
   test('conforms to the provider contract', async () => {
     /** One Copilot turn driven by a fake session that streams, then resolves or errors. */
     function turn(events: SessionEvent[], rejection?: Error): () => AsyncIterable<unknown> {
@@ -490,6 +456,8 @@ describe('CopilotProvider.sendQuery', () => {
         const session = makeFakeSession('sess-conformance');
         nextCreateSessionResult = session;
         const gen = new CopilotProvider().sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+        const announced = await gen.next();
+        if (!announced.done) yield announced.value;
         const first = gen.next();
         await new Promise(resolve => setTimeout(resolve, 5));
         for (const event of events) session.fire(event);
@@ -549,6 +517,7 @@ describe('CopilotProvider.sendQuery', () => {
       model: 'gpt-5',
       abortSignal: ac.signal,
     });
+    await gen.next();
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
     ac.abort();
@@ -574,27 +543,6 @@ describe('CopilotProvider.sendQuery', () => {
     await collect(gen);
 
     expect(session.disconnected).toBe(true);
-  });
-
-  test('a forkSession flag is logged at debug (not thrown)', async () => {
-    const session = makeFakeSession();
-    nextCreateSessionResult = session;
-
-    const p = new CopilotProvider();
-    const gen = p.sendQuery('hi', '/w', undefined, {
-      model: 'gpt-5',
-      forkSession: true,
-    });
-    const first = gen.next();
-    await new Promise(resolve => setTimeout(resolve, 5));
-    session.resolveSend(undefined);
-    await first;
-    await collect(gen);
-
-    // No throw, and no warn-level log for forkSession — debug is fine.
-    const warnCalls = mockLogger.warn.mock.calls;
-    const sawUnsupported = warnCalls.some(args => args[1] === 'copilot.option_not_supported');
-    expect(sawUnsupported).toBe(false);
   });
 
   test('GH_TOKEN is ignored by default (logged-in user wins)', async () => {

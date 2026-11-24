@@ -1,5 +1,9 @@
 import { findProjectRunsByReference } from '../../workflows/run-id';
-import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  displayedRunOutcome,
+  isContainerRun,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
 import {
   attentionAnswerLines,
   spellWorkflowCommand,
@@ -102,15 +106,22 @@ export async function cancelWorkflowRun(input: WorkflowCommand): Promise<Command
       return { success: true, message: 'No active workflow to cancel.' };
     }
     const result = await operations.cancelWorkflow(runId, actor);
-    if (result.kind === 'cooperative') {
-      return {
-        success: true,
-        message: result.cancelled
-          ? `Cancelled workflow: \`${result.run.workflow_name}\`${cancelCleanupWarnings(result.cleanupWarnings)}`
-          : `Workflow \`${result.run.workflow_name}\` already finished; nothing to cancel.`,
-      };
+    switch (result.kind) {
+      case 'pending':
+        return {
+          success: true,
+          message: `Cancelled workflow \`${result.run.workflow_name}\` while it was pending, before its workflow started.${cancelCleanupWarnings(result.cleanupWarnings)}`,
+        };
+      case 'cooperative':
+        return {
+          success: true,
+          message: result.cancelled
+            ? `Cancelled workflow: \`${result.run.workflow_name}\`${cancelCleanupWarnings(result.cleanupWarnings)}`
+            : `Workflow \`${result.run.workflow_name}\` already finished; nothing to cancel.`,
+        };
+      case 'stopped':
+        return { success: true, message: stoppedRunMessage(input, result) };
     }
-    return { success: true, message: stoppedRunMessage(input, result) };
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, conversationId: conversation.id, runId }, 'cmd.workflow_cancel_failed');
@@ -154,7 +165,8 @@ export async function getWorkflowRun(input: WorkflowCommand): Promise<CommandRes
     if (!run || (conversation.codebase_id && run.codebase_id !== conversation.codebase_id))
       return { success: false, message: `Workflow run not found: ${arg}` };
     let msg = `**\`${run.workflow_name}\`** (${run.status})\n  ID: ${run.id}\n`;
-    if (run.outcome !== null) msg += `  Authored outcome: ${run.outcome}\n`;
+    const outcome = displayedRunOutcome(run);
+    if (outcome !== null) msg += `  Authored outcome: ${outcome}\n`;
     msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
     if (run.completed_at !== null)
       msg += `  Finished: ${new Date(run.completed_at).toISOString()}\n`;
@@ -184,7 +196,6 @@ export async function listActiveWorkflowRuns(input: WorkflowCommand): Promise<Co
     let msg = `**Active Workflows (${String(activeRuns.length)})**\n\n`;
     for (const run of activeRuns) {
       msg += `**\`${run.workflow_name}\`** (${run.status})\n`;
-      if (run.outcome !== null) msg += `  Authored outcome: ${run.outcome}\n`;
       msg += `  ID: ${run.id}\n`;
       msg += `  Path: ${run.working_path ?? '(unknown)'}\n`;
       if (run.active_nodes.length > 0) {
@@ -215,7 +226,7 @@ export async function resumeWorkflowRun(input: WorkflowCommand): Promise<Command
   if (!runId) {
     return {
       success: false,
-      message: `Usage: ${cmd('resume <id>')}\n\nResumes a failed or paused workflow from completed nodes.`,
+      message: `Usage: ${cmd('resume <id>')}\n\nResumes a failed, paused or killed workflow run from completed nodes.`,
     };
   }
   try {

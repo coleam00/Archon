@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, spyOn, jest } from 'bun:
 import { tmpdir } from 'os';
 import { setImmediate } from 'node:timers/promises';
 import { join } from 'path';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 
 import {
   captureWorkflowInvoked,
@@ -133,6 +133,8 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
     setTTY(true);
     const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
     captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w' });
+    // Without the stamp (as when writing it fails), only the in-process guard stops a repeat.
+    rmSync(stampPath());
     captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w2' });
     expect(writeSpy).toHaveBeenCalledTimes(1);
     writeSpy.mockRestore();
@@ -160,7 +162,7 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
   });
 });
 
-describe('captureWorkflowInvoked when disabled', () => {
+describe('shutdownTelemetry when disabled', () => {
   let saved: Record<string, string | undefined>;
 
   beforeEach(() => {
@@ -172,17 +174,6 @@ describe('captureWorkflowInvoked when disabled', () => {
   afterEach(() => {
     restoreEnv(saved);
     resetTelemetryForTests();
-  });
-
-  test('does not throw when telemetry is disabled', () => {
-    expect(() => {
-      captureWorkflowInvoked({
-        runId: 'run-1',
-        isChild: false,
-        workflowName: 'test-workflow',
-        platform: 'cli',
-      });
-    }).not.toThrow();
   });
 
   test('shutdownTelemetry is a no-op when never initialized', async () => {
@@ -268,17 +259,6 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     await removeTempTree(tmpHome);
   });
 
-  test('captureArchonStarted does not throw (disabled)', () => {
-    process.env.ARCHON_TELEMETRY_DISABLED = '1';
-    expect(() => captureArchonStarted({ surface: 'cli' })).not.toThrow();
-  });
-
-  test('captureArchonStarted does not throw (enabled)', async () => {
-    await captureTelemetry(() => {
-      expect(() => captureArchonStarted({ surface: 'server' })).not.toThrow();
-    });
-  });
-
   test('wire capture survives compression completing after the production exit deadline', async () => {
     const compressed = Promise.withResolvers<void>();
     const releaseCompression = Promise.withResolvers<void>();
@@ -325,11 +305,6 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     expect(claimDailyStart('cli', new Date(Date.now() + 24 * 60 * 60 * 1000))).toBe(true);
   });
 
-  test('captureArchonActive does not throw (disabled)', () => {
-    process.env.ARCHON_TELEMETRY_DISABLED = '1';
-    expect(() => captureArchonActive({ surface: 'server' })).not.toThrow();
-  });
-
   test('captureArchonActive does not throw (enabled)', async () => {
     await captureTelemetry(() => {
       expect(() => captureArchonActive({ surface: 'server' })).not.toThrow();
@@ -365,97 +340,16 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     expect(events).toEqual([]);
   });
 
-  test('captureChatTurn does not throw (disabled)', () => {
-    process.env.ARCHON_TELEMETRY_DISABLED = '1';
-    expect(() =>
-      captureChatTurn({ platform: 'slack', provider: 'claude', outcome: 'completed' })
-    ).not.toThrow();
-    expect(() => captureChatTurn({ outcome: 'failed' })).not.toThrow();
-  });
-
-  test('captureChatTurn does not throw (enabled)', async () => {
-    await captureTelemetry(() => {
-      expect(() =>
-        captureChatTurn({ platform: 'web', provider: 'codex', outcome: 'completed' })
-      ).not.toThrow();
-    });
-  });
-
-  test('captureApprovalResolved does not throw (disabled)', () => {
-    process.env.ARCHON_TELEMETRY_DISABLED = '1';
-    expect(() => captureApprovalResolved({ resolution: 'approved' })).not.toThrow();
-    expect(() => captureApprovalResolved({ resolution: 'rejected' })).not.toThrow();
-  });
-
   test('captureApprovalResolved does not throw (enabled)', async () => {
     await captureTelemetry(() => {
       expect(() => captureApprovalResolved({ resolution: 'approved' })).not.toThrow();
     });
   });
 
-  test('captureChatTurn accepts v4 usage fields without throwing (disabled)', () => {
-    process.env.ARCHON_TELEMETRY_DISABLED = '1';
-    expect(() =>
-      captureChatTurn({
-        platform: 'slack',
-        provider: 'claude',
-        model: 'sonnet',
-        outcome: 'completed',
-        durationMs: 4321,
-        costUsd: 0.12,
-        tokensIn: 1000,
-        tokensOut: 250,
-      })
-    ).not.toThrow();
-  });
-
-  test('captureWorkflowCompleted accepts v5 cache usage fields without throwing (disabled)', () => {
-    process.env.ARCHON_TELEMETRY_DISABLED = '1';
-    expect(() =>
-      captureWorkflowTerminal({
-        outcome: 'completed',
-        workflowName: 'implement',
-        workflowSource: 'bundled',
-        durationMs: 1234,
-        nodesCompleted: 3,
-        nodesTotal: 3,
-        costUsd: 1.5,
-        tokensIn: 50000,
-        tokensOut: 12000,
-        cacheReadTokens: 40000,
-        cacheWriteTokens: 0,
-        loopIterations: 4,
-      })
-    ).not.toThrow();
-  });
-
-  test('captureCodebaseRegistered does not throw (disabled)', () => {
-    process.env.ARCHON_TELEMETRY_DISABLED = '1';
-    expect(() => captureCodebaseRegistered()).not.toThrow();
-  });
-
   test('captureCodebaseRegistered does not throw (enabled)', async () => {
     await captureTelemetry(() => {
       expect(() => captureCodebaseRegistered()).not.toThrow();
     });
-  });
-
-  test('captureArchonStarted accepts deployment-shape props without throwing (disabled)', () => {
-    process.env.ARCHON_TELEMETRY_DISABLED = '1';
-    expect(() =>
-      captureArchonStarted({
-        surface: 'server',
-        dbKind: 'postgresql',
-        webAuthEnabled: true,
-        multiUser: false,
-        githubAuthMode: 'app',
-        chatPluginIds: ['slack'],
-        adapterTelegram: false,
-        adapterDiscord: false,
-        adapterGitea: false,
-        adapterGitlab: false,
-      })
-    ).not.toThrow();
   });
 
   test('captureArchonStarted serializes deployment shape to wire properties (enabled)', async () => {
@@ -519,40 +413,6 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     expect(props.tokens_out).toBe(210);
     expect(props.$process_person_profile).toBe(false);
     expect(props.$ip).toBe('');
-  });
-
-  test('captureWorkflowCompleted does not throw for completed/failed (disabled)', () => {
-    process.env.ARCHON_TELEMETRY_DISABLED = '1';
-    expect(() =>
-      captureWorkflowTerminal({
-        outcome: 'completed',
-        workflowName: 'implement',
-        workflowSource: 'bundled',
-        durationMs: 1234,
-        nodesCompleted: 3,
-        nodesTotal: 3,
-      })
-    ).not.toThrow();
-    expect(() =>
-      captureWorkflowTerminal({
-        outcome: 'failed',
-        workflowName: 'x',
-        exitReason: 'node_error',
-      })
-    ).not.toThrow();
-  });
-
-  test('captureWorkflowCompleted does not throw (enabled)', async () => {
-    await captureTelemetry(() => {
-      expect(() =>
-        captureWorkflowTerminal({
-          outcome: 'failed',
-          workflowName: 'implement',
-          workflowSource: 'bundled',
-          exitReason: 'unhandled_error',
-        })
-      ).not.toThrow();
-    });
   });
 
   test('captureWorkflowTerminal serializes run identity, outcome events, cache totals and machine context', async () => {

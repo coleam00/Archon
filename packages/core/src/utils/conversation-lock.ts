@@ -20,9 +20,16 @@ function getLog(): ReturnType<typeof createLogger> {
  * Represents a queued message waiting for processing
  */
 interface QueuedMessage {
-  handler: () => Promise<void>;
+  handler: LockHandler;
   timestamp: number;
 }
+
+/**
+ * Work run while holding a conversation's slot. The signal aborts when the operator
+ * stops this turn through {@link ConversationLockManager.cancel}; a handler that has
+ * nothing to stop may ignore it.
+ */
+export type LockHandler = (signal: AbortSignal) => Promise<void>;
 
 /**
  * Result of acquiring a lock, indicating whether the message was started or queued
@@ -55,6 +62,8 @@ export interface ConversationLockSnapshot {
 interface ActiveConversation {
   promise: Promise<void>;
   acquiredAt: number;
+  /** Aborts the active handler's signal; queued handlers get their own when they start. */
+  controller: AbortController;
 }
 
 /**
@@ -85,10 +94,7 @@ export class ConversationLockManager {
    * @param conversationId - Unique conversation identifier
    * @param handler - Async function to execute
    */
-  async acquireLock(
-    conversationId: string,
-    handler: () => Promise<void>
-  ): Promise<LockAcquisitionResult> {
+  async acquireLock(conversationId: string, handler: LockHandler): Promise<LockAcquisitionResult> {
     // Check if conversation already active - queue if yes
     if (this.activeConversations.has(conversationId)) {
       this.queueMessage(conversationId, handler);
@@ -110,7 +116,8 @@ export class ConversationLockManager {
 
     // Store Promise in Map BEFORE awaiting (prevents race conditions)
     const acquiredAt = this.now();
-    const promise = handler()
+    const controller = new AbortController();
+    const promise = handler(controller.signal)
       .catch(error => {
         getLog().error({ err: error, conversationId }, 'conversation_handler_error');
       })
@@ -133,10 +140,24 @@ export class ConversationLockManager {
         });
       });
 
-    this.activeConversations.set(conversationId, { promise, acquiredAt });
+    this.activeConversations.set(conversationId, { promise, acquiredAt, controller });
 
     // Fire-and-forget: don't await here, return immediately
     return { status: 'started' };
+  }
+
+  /**
+   * Stop the conversation's active handler by aborting its signal. Queued messages for
+   * the conversation still run afterwards. Returns whether a stop was signalled: false
+   * when nothing is active or the active handler was already stopped, so a repeated stop
+   * or one that races with completion does nothing.
+   */
+  cancel(conversationId: string): boolean {
+    const active = this.activeConversations.get(conversationId);
+    if (!active || active.controller.signal.aborted) return false;
+    active.controller.abort();
+    getLog().info({ conversationId }, 'conversation_cancel_requested');
+    return true;
   }
 
   /**
@@ -144,7 +165,7 @@ export class ConversationLockManager {
    * @param conversationId - Unique conversation identifier
    * @param handler - Async function to queue
    */
-  private queueMessage(conversationId: string, handler: () => Promise<void>): void {
+  private queueMessage(conversationId: string, handler: LockHandler): void {
     const queue = this.messageQueues.get(conversationId) ?? [];
     if (!this.messageQueues.has(conversationId)) {
       this.messageQueues.set(conversationId, queue);

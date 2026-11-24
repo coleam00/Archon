@@ -37,7 +37,12 @@ import {
 } from './loop';
 import { validateNodeHooks } from './hooks';
 import type { AgentNode } from './agent-node';
-import { dagNodeBaseSchema, isNodeContextResume, nodeContextResumeSchema } from './dag-node-base';
+import {
+  dagNodeBaseSchema,
+  isNodeContextResume,
+  isNodeContextSame,
+  nodeContextResumeSchema,
+} from './dag-node-base';
 import {
   bashExecAuthoringSchema,
   bashExecFlatSchema,
@@ -315,6 +320,19 @@ function validateDagNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
   if (isNodeContextResume(data.context) && mode !== 'command' && mode !== 'prompt') {
     addIssue(ctx, "'context.resume' is only supported on command and prompt nodes", ['context']);
   }
+  if (isNodeContextSame(data.context)) {
+    if (mode !== 'command' && mode !== 'prompt') {
+      addIssue(ctx, "'context: same' is only supported on command and prompt nodes", ['context']);
+    }
+    // Two cross-run mechanisms with different scopes on one node: say which, never pick one.
+    if (data.persist_session !== undefined) {
+      addIssue(
+        ctx,
+        "'context: same' and 'persist_session' are mutually exclusive: 'same' already continues the node's session across runs on the same item",
+        ['persist_session']
+      );
+    }
+  }
   if (mode === undefined) {
     validateModelessNode(data, ctx);
     return;
@@ -453,7 +471,8 @@ const loopGroupShape = (loopGroupNodeConfigSchema as unknown as z.ZodObject<z.Zo
  * Absent on purpose — these node fields do not silently strip, so there is
  * nothing to warn about:
  *   `output_format` — free-form JSON Schema (`z.record`); every key is accepted
- *   `sandbox`       — `.passthrough()`; unknown keys are preserved, not dropped
+ *   `sandbox`       — `.passthrough()` at every level (top, `network`, `filesystem`,
+ *                     `ripgrep`); unknown keys are preserved, not dropped
  *   `hooks`         — `.strict()`; unknown keys already hard-error at parse time
  * `loop_group.nodes` is deliberately not modelled here: its entries are full DAG
  * nodes, so the loader recurses into them with KNOWN_DAG_NODE_KEYS instead.

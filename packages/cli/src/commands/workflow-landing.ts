@@ -1,0 +1,98 @@
+/**
+ * `archon workflow landing`: record the branch an item's change lands on. Every fresh run
+ * on the item, and on an item `part_of` it that records none, is then cut from that branch
+ * and proposes against it. Recording alone does not check the remote: a work order may
+ * record its branch before it exists, and each run checks it when it starts. With `--from`
+ * the command first creates the branch on the project's remote from that start point,
+ * leaving a branch that already exists where it is; a failed create records nothing.
+ */
+import { validateBranchName } from '@archon/git';
+import {
+  createLandingBranch,
+  type CreatedLandingBranch,
+} from '@archon/core/workflows/item-landing';
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { loadStoreSelection } from '@archon/core/config/store-selection';
+import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
+import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
+import type { ItemLanding } from '@archon/workflows/schemas/item-landing';
+import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
+import { readCallingNode } from '../utils/calling-node';
+import { writeJsonLine } from '../utils/stdout';
+import { type ItemTarget, NoRunItemError, resolveItemTarget } from './item-target';
+
+export const WORKFLOW_LANDING_USAGE =
+  'Usage: archon workflow landing --item <key>|--item-of <run-id> --branch <name> [--from <start-point>] [--json]';
+
+export type WorkflowLandingRequest = ItemTarget & {
+  branch: string;
+  /** Create the branch on the remote from this start point before recording it. */
+  from?: string;
+};
+
+type Recorded = { key: string; landing: ItemLanding; create: CreatedLandingBranch | null };
+
+async function record(
+  host: WorkflowHost,
+  cwd: string,
+  request: WorkflowLandingRequest,
+  env: NodeJS.ProcessEnv
+): Promise<Recorded> {
+  try {
+    await validateBranchName(request.branch);
+  } catch (error) {
+    throw new Error(`--branch '${request.branch}' is not a valid branch name.`, { cause: error });
+  }
+  const { projectKey, key } = await resolveItemTarget(host, cwd, request);
+  // Everything the record would refuse is checked first, so a create never leaves a
+  // pushed branch that the record step then rejects.
+  assertItemKey(key);
+  const fromRun = env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null;
+  const save = () =>
+    host.deps.store.recordItemLanding({ projectKey, key, branch: request.branch, fromRun });
+  if (request.from === undefined) return { key, landing: await save(), create: null };
+  // The file store cannot record a landing, so refuse before the push changes the remote.
+  if ((await loadStoreSelection()) === 'files') throw new FileStoreUnsupportedError('items');
+  // `--item-of` names the item's project by key, so the checkout is found from it.
+  const codebase = (await host.records.codebases.listCodebases()).find(
+    candidate => projectRefForCodebase(candidate).key === projectKey
+  );
+  if (!codebase)
+    throw new Error(`Project '${projectKey}' has no registered checkout to create the branch in.`);
+  const create = await createLandingBranch(codebase, request.branch, request.from);
+  return { key, landing: await save(), create };
+}
+
+function createdText(request: WorkflowLandingRequest, create: CreatedLandingBranch): string {
+  return create.status === 'created'
+    ? `Created ${request.branch} on ${create.remote} from ${request.from} (${create.commit.slice(0, 12)}). `
+    : `${request.branch} already exists on ${create.remote}; left as it is. `;
+}
+
+export async function workflowLandingCommand(
+  host: WorkflowHost,
+  cwd: string,
+  request: WorkflowLandingRequest,
+  json: boolean | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<number> {
+  try {
+    const { key, landing, create } = await record(host, cwd, request, env);
+    // `create` appears only when --from was given, so the record-only shape is unchanged.
+    if (json) await writeJsonLine(create === null ? landing : { ...landing, create });
+    else
+      console.log(
+        `${create === null ? '' : createdText(request, create)}Item ${key} lands on ${landing.branch}.`
+      );
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (json)
+      await writeJsonLine({
+        ok: false,
+        error: error instanceof NoRunItemError ? 'no_item' : message,
+      });
+    else console.error(`Error: ${message}`);
+    return 1;
+  }
+}

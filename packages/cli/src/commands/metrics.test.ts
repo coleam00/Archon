@@ -1,4 +1,14 @@
 import { expect, test } from 'bun:test';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { itemMetricsReportSchema } from '@archon/workflows/schemas/item-metric';
+import type { ItemMerge } from '@archon/workflows/schemas/item-merge';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { DEFAULT_WORKFLOW_SOURCE_CONFIG } from '@archon/workflows/workflow-source';
+import type { LiveWorkflowSourceRoots } from '@archon/workflows/workflow-source/roots';
 import { providerRegistry } from '@archon/providers';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { metricsReportSchema } from '@archon/workflows/schemas/metric';
@@ -9,13 +19,15 @@ import {
 } from '../test-support/workflow-store';
 
 const now = new Date('2026-10-30T12:00:00Z');
+const trackTempRoot = trackTempRoots();
 
 /** One run per entry, each recording a `prs` count for no subject, overridden by the entry. */
 async function fixture(overrides: Record<string, unknown>[]) {
   const records = createInMemoryWorkflowHostStore();
   const store = createInMemoryWorkflowStore(records);
   const runIds: string[] = [];
-  for (const override of overrides) {
+  // A `dimensions` override is the record's entry in its output's `metric_dimensions`.
+  for (const { dimensions, ...override } of overrides) {
     const run = await store.createWorkflowRun({ workflow_name: 'count-prs', user_message: '' });
     runIds.push(run.id);
     await store.persistWorkflowEvent({
@@ -35,6 +47,7 @@ async function fixture(overrides: Record<string, unknown>[]) {
               ...override,
             },
           ],
+          ...(dimensions === undefined ? {} : { metric_dimensions: [dimensions] }),
         },
       },
     });
@@ -227,6 +240,32 @@ test('--by-model prints a line per model label and labels the split observationa
   expect(text).toContain('The split is observational');
 });
 
+test('--by-dimension with --compare prints a line per value with its cohorts', async () => {
+  const { invoke, stdout } = await fixture([
+    { dimensions: { route: 'plan' } },
+    { dimensions: { route: 'deliver' }, value: 3 },
+    {},
+  ]);
+  expect(await invoke({ byDimension: 'route', compare: '2026-01-01' })).toBe(0);
+  const text = stdout.join('');
+  expect(text).toContain('  by route:\n    deliver: value 3 (n 1)  vs rest 1  separated: no;');
+  expect(text).toContain('    plan: value 2 (n 1)  vs rest -1  separated: no;');
+  expect(text).toContain('    (none): value 2 (n 1)  vs rest -3  separated: no;');
+  expect(text).toContain(
+    '      compare at 2026-01-01T00:00:00.000Z: before none (n 0), after 3 (n 1)'
+  );
+  expect(text).toContain('each value covers different work');
+  expect(text).toContain('The comparison is observational');
+});
+
+test('--by-dimension with a key no record carries exits 2 and lists the keys they carry', async () => {
+  const { invoke, stderr } = await fixture([{ dimensions: { route: 'plan' } }]);
+  expect(await invoke({ byDimension: 'size' })).toBe(2);
+  expect(stderr.join('')).toContain(
+    'no record carries a dimension "size"; dimensions they carry: route'
+  );
+});
+
 test('the headline is the newest judge model, and each instrument line names its models', async () => {
   const judge = { kind: 'score', unit: 'ratio', instrument: 'judge-v1', instrument_node: 'judge' };
   const { invoke, stdout, store, runIds } = await fixture([
@@ -283,4 +322,125 @@ test('a headline judge label containing a comma is not two labels', async () => 
   const lines = stdout.join('').split('\n');
   expect(lines[1]).toContain('value 0.8');
   expect(lines[1]).toContain('[judge-v1 on codex/a,codex/b]');
+});
+
+test('with --project, the item metrics a pack declares are reported over the window with no pack script', async () => {
+  const { store } = await fixture([]);
+  const records = createInMemoryWorkflowHostStore();
+  const codebase = await records.codebases.createCodebase({ name: 'web', default_cwd: '/web' });
+  const projectKey = projectRefForCodebase(codebase).key;
+  // Three items: a merged after two review rounds, b merged after one, c not merged.
+  const items = ['a', 'b', 'c'].map(key => ({ id: `item-${key}`, projectKey, key }));
+  const rounds: Record<string, string[]> = {
+    a: ['build', 'archon-review', 'archon-review'],
+    b: ['build', 'archon-review'],
+    c: ['build', 'archon-review'],
+  };
+  const runs = new Map<string, WorkflowRun[]>();
+  for (const item of items)
+    runs.set(
+      item.key,
+      await Promise.all(
+        (rounds[item.key] ?? []).map(workflow =>
+          store.createWorkflowRun({ workflow_name: workflow, user_message: '' })
+        )
+      )
+    );
+  const merged = (key: string): ItemMerge | null =>
+    key === 'c'
+      ? null
+      : {
+          change: `https://forge.example/web/pull/${key}`,
+          commit: null,
+          at: '2026-10-29T00:00:00.000Z',
+          recordedAt: '2026-10-29T00:00:00.000Z',
+          via: 'cli',
+          fromRun: null,
+        };
+  const itemStore = {
+    ...store,
+    listItemsInWindow: async () => items,
+    getItemRuns: async (_project: string, key: string) => {
+      const item = items.find(entry => entry.key === key);
+      return item ? { item, runs: runs.get(key) ?? [], descendantIds: [] } : null;
+    },
+    listItemRulings: async () => [],
+    getItemMerge: async (id: string) => merged(id.slice('item-'.length)),
+    getItemLanding: async () => null,
+    listQueuedItemStarts: async () => [],
+    listSkippedItemStarts: async () => [],
+    getInstallHold: async () => null,
+    listHeldItemStarts: async () => [],
+    listItemLinks: async () => [],
+  };
+  const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-item-metrics-')));
+  await mkdir(join(root, 'factory', '.shared'), { recursive: true });
+  await writeFile(
+    join(root, 'factory', '.shared', 'item-metrics.json'),
+    JSON.stringify({
+      metrics: [
+        { name: 'factory.merge_rate', op: 'share', where: { merged: true } },
+        {
+          name: 'factory.review_rounds_per_merged_item',
+          op: 'count',
+          of: 'runs',
+          runs: { workflow: ['archon-review'] },
+          items: { merged: true },
+        },
+      ],
+    })
+  );
+  const host = {
+    records,
+    deps: {
+      store: itemStore,
+      providers: providerRegistry,
+      loadConfig,
+      getAgentProvider: (): never => {
+        throw new Error('No provider');
+      },
+    },
+  };
+  const stdout: string[] = [];
+  const io = {
+    now,
+    stdout: async (text: unknown) => {
+      stdout.push(String(text));
+    },
+    stderr: async () => {},
+    sourceRoots: {
+      kind: 'live',
+      config: { ...DEFAULT_WORKFLOW_SOURCE_CONFIG, load_default_workflows: false },
+      project: null,
+      globalWorkflows: root,
+      globalCommands: join(root, 'commands'),
+      globalScripts: join(root, 'scripts'),
+      bundledWorkflows: join(root, 'bundled'),
+      installed: { kind: 'receipts', pluginsDir: join(root, 'plugins') },
+    } satisfies LiveWorkflowSourceRoots,
+  };
+  expect(await metricsCommand(host, undefined, { project: 'web', json: true }, io)).toBe(0);
+  const report = JSON.parse(stdout.join('')) as { item_metrics: unknown };
+  const itemMetrics = itemMetricsReportSchema.parse(report.item_metrics);
+  expect(itemMetrics.items).toBe(3);
+  expect(itemMetrics.packs).toEqual([
+    {
+      pack: 'factory',
+      source: 'global',
+      metrics: [
+        {
+          name: 'factory.merge_rate',
+          op: 'share',
+          value: 2 / 3,
+          numerator: 2,
+          denominator: 3,
+        },
+        { name: 'factory.review_rounds_per_merged_item', op: 'count', value: 1.5, total: 3, n: 2 },
+      ],
+    },
+  ]);
+  // Without a project there is no item to read.
+  stdout.length = 0;
+  expect(await metricsCommand(host, undefined, { json: true }, io)).toBe(0);
+  expect(JSON.parse(stdout.join(''))).toMatchObject({ item_metrics: null });
 });

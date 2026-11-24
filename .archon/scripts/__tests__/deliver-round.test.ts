@@ -16,7 +16,6 @@ const OTHER = 'b'.repeat(40);
 function round(ci: 'forge' | 'none', validation: { head: string; passed: boolean } | null) {
   const run = runPackScript('deliver/scripts/round', {
     inputs: {
-      INPUTS_PREVIOUS: '',
       INPUTS_GREEN: 'true',
       INPUTS_PR_URL: 'https://ghe.example.com/example/repo/pull/42',
       INPUTS_REVIEW_READY: 'true',

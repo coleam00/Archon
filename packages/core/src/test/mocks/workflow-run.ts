@@ -9,6 +9,7 @@ export const mockWorkflowRun: WorkflowRun = {
   codebase_id: 'codebase-789',
   status: 'running',
   outcome: null,
+  completed_outcome: null,
   user_message: 'Add dark mode support',
   metadata: {},
   active_phase_started_at: null,

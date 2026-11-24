@@ -84,8 +84,9 @@ mock.module('@archon/workflows/run-source', () => ({
   ),
   resolveContinuationWorkflow: mockResolveContinuationWorkflow,
   // Stub capture so routing tests do not freeze real source trees.
-  prepareWorkflowSource: mock(() =>
+  prepareWorkflowSource: mock((_deps: unknown, opts?: { definitions?: unknown }) =>
     Promise.resolve({
+      ...(opts?.definitions !== undefined ? { definitions: opts.definitions } : {}),
       runId: 'test-run-id',
       origin: '/test/path',
       manifest: {
@@ -133,7 +134,7 @@ mock.module('@archon/workflows/run-paths', () => ({
       artifactsRoot: join(mockArtifactsRoot, 'artifacts'),
       stateDir: join(mockArtifactsRoot, 'state'),
       outputRoot: mockArtifactsRoot,
-      identityResolution: 'resolved' as const,
+      identityFaulted: false,
     })
   ),
 }));

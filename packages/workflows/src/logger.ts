@@ -8,7 +8,9 @@ import { join, dirname } from 'path';
 import type { WorkflowTokenUsage } from './deps';
 import type { MessageChunk } from '@archon/provider-contract';
 import type { SkipCause } from './schemas';
+import type { FanOutOutcome } from './schemas/fan-out-outcome';
 import type { ProviderEventEnvelope } from './schemas/provider-event';
+import type { StallMessageEventData } from './schemas/workflow-event';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -50,8 +52,11 @@ export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
     | 'node_error'
     | 'watchdog_reset'
     | 'exec_output'
-    | 'provider_event';
+    | 'provider_event'
+    | 'stall_message';
   workflow_id: string;
+  /** A `stall_message` row: the engine's message to a stalled session, or why there was none. */
+  stall_message?: StallMessageEventData;
   workflow_name?: string;
   step?: string;
   content?: string;
@@ -84,6 +89,11 @@ export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
    * name for a timeout kill, or `'unknown'`.
    */
   exit_code?: number | string;
+  /**
+   * `node_complete` and `node_error` of a settled `workflow:` fan-out only: the same
+   * per-child record its `node_completed` or `node_failed` event carries.
+   */
+  fan_out_outcome?: FanOutOutcome;
   ts: string;
 }
 

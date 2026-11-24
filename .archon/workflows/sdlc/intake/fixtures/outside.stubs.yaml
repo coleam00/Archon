@@ -17,14 +17,14 @@ facts:
 outcome:
   path: outside
   item: 8
-  stage: needs_maintainer
+  outcome: needs_maintainer
   trust: outside
   promoted: false
   labels: [archon-needs-maintainer]
   summary: "stub: Issue 8: needs_maintainer"
-  healthy: true
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo, number: "8" }
   expect: completed
+  authored: needs_maintainer
   reached: [facts, outcome]
 exec-code: true

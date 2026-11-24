@@ -14,11 +14,6 @@ mock.module('@archon/paths', () => ({
 import { resolveCopilotBinaryPath } from './binary-resolver';
 
 describe('resolveCopilotBinaryPath (dev mode)', () => {
-  test('returns undefined when BUNDLED_IS_BINARY is false', async () => {
-    const result = await resolveCopilotBinaryPath();
-    expect(result).toBeUndefined();
-  });
-
   test('returns undefined even with config path set', async () => {
     const result = await resolveCopilotBinaryPath('/some/custom/path');
     expect(result).toBeUndefined();

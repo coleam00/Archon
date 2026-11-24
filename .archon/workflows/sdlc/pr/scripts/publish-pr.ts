@@ -7,7 +7,9 @@
  * section the run prepared: between its own markers, keeping every other byte of the
  * description, and read back like every other write. The push comes first and refuses
  * on any failure (./.shared/push.ts), so a pull request is never created for a head
- * the remote does not have.
+ * the remote does not have. The description's text is checked only after that push
+ * and the pull request are in place: a prepared section that cannot be written fails
+ * this node with the pull request named, and never leaves the round's commits unpushed.
  *
  * Whether this work already has a pull request is decided here, not in a prompt: an
  * open pull request for the recorded head IS the pull request, and a second one is
@@ -109,8 +111,15 @@ async function withDescriptionSection(live: string, section: string): Promise<st
   return composed;
 }
 
-/** The prepared section's content, or undefined when prepare declared none. */
-async function preparedSection(artifacts: string): Promise<string | undefined> {
+/**
+ * The declared description-section pointer, or undefined when prepare declared none.
+ *
+ * Only the caller's wiring is checked here, before anything is pushed: whether a section
+ * may be published at all, and that the pointer names this run's artifact. The section's
+ * text is read and checked by preparedSection() after the push, so a defect in prose an
+ * agent wrote can cost the description, never the round's commits.
+ */
+function declaredSection(): Record<string, unknown> | undefined {
   const pointer = record(nullableJson(input('description')));
   if (pointer === undefined) return undefined;
   if (input('publish_description').trim() !== 'true') {
@@ -123,12 +132,35 @@ async function preparedSection(artifacts: string): Promise<string | undefined> {
   ) {
     throw new Error('prepare must declare the pr-description.md artifact from this run');
   }
-  const section = readFileSync(join(artifacts, pointer.path), 'utf8');
+  return pointer;
+}
+
+/**
+ * The prepared section's content, with any reserved delivery marker it would render as
+ * structure escaped into visible text.
+ *
+ * An agent describing these mechanics quotes a marker in prose; written raw it would
+ * become a structural delimiter. Escaping its `<` keeps exactly what a reader sees
+ * (`<!-- archon-delivery-description -->` as text) and removes the structure, so the
+ * common case publishes instead of refusing. Markers in Markdown code are already text
+ * and are left as they are.
+ */
+async function preparedSection(artifacts: string): Promise<string> {
+  const section = readFileSync(join(artifacts, 'pr-description.md'), 'utf8');
   if (section.trim() === '') throw new Error('prepare declared an empty pr-description.md');
-  if ((await descriptionMarkers(section)).length > 0) {
+  const markers = await descriptionMarkers(section);
+  if (markers.length === 0) return section;
+  let escaped = section;
+  for (const { at } of [...markers].sort((a, b) => b.at - a.at)) {
+    escaped = `${escaped.slice(0, at)}&lt;${escaped.slice(at + 1)}`;
+  }
+  if ((await descriptionMarkers(escaped)).length > 0) {
     throw new Error('pr-description.md contains reserved description markers; put literal examples in Markdown code');
   }
-  return section;
+  console.error(
+    `publish-pr: escaped ${String(markers.length)} reserved description marker(s) that pr-description.md wrote outside Markdown code.`
+  );
+  return escaped;
 }
 
 async function applyDescription(pr: PrRecord, section: string): Promise<void> {
@@ -254,12 +286,22 @@ function publish(hasDescription: boolean): PrRecord {
   }
 }
 
-// Validate the artifact before pushing; check composition against the live body before editing.
+// Check the caller's wiring before pushing; check the prepared text only once the push and
+// the pull request are in place, so a description the run cannot write costs the
+// description and never the round's commits.
 async function publishWithDescription(): Promise<PrRecord> {
-  const section = await preparedSection(artifactsDir());
-  const pr = publish(section !== undefined);
-  // The edit does not move the head, so the head-verified record stays the output.
-  if (section !== undefined) await applyDescription(pr, section);
+  const declared = declaredSection() !== undefined;
+  const pr = publish(declared);
+  if (!declared) return pr;
+  try {
+    // The edit does not move the head, so the head-verified record stays the output.
+    await applyDescription(pr, await preparedSection(artifactsDir()));
+  } catch (error) {
+    throw new Error(
+      `pushed and published ${pr.url}, but did not write its description section: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
+    );
+  }
   return pr;
 }
 

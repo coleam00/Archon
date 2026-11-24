@@ -17,6 +17,14 @@ import {
 import type { ProjectStorageKey } from './project-paths';
 
 /**
+ * A run id: a UUID, or 32 hex characters on SQLite rows written before ids had dashes.
+ * The one shape a run's on-disk paths are keyed by, so a name that does not match it was
+ * not made for a run.
+ */
+export const RUN_ID_PATTERN =
+  /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+
+/**
  * Get the artifacts directory for a specific workflow run.
  * Returns: ~/.archon/workspaces/owner/repo/artifacts/runs/{id}/
  */
@@ -113,6 +121,8 @@ export const RUN_ARTIFACTS_ENGINE_SUBDIR = '.archon';
  * throwaway checkouts, dependency installs and other reproducible bulk here,
  * and Archon removes it once the run is completed, failed or cancelled and
  * nothing of the run can still write there (`@archon/workflows/run-scratch`).
+ * It also holds each node invocation's own scratch ({@link getNodeScratchDir}),
+ * which is removed earlier, when that invocation ends.
  * Evidence a later node or the operator reads goes anywhere else in
  * `$ARTIFACTS_DIR`, which is kept unless its containing descendant directory carries
  * a regular CACHEDIR.TAG beginning with the standard signature. Tagged caches are
@@ -120,6 +130,22 @@ export const RUN_ARTIFACTS_ENGINE_SUBDIR = '.archon';
  */
 export function getRunScratchDir(artifactsDir: string): string {
   return join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'scratch');
+}
+
+/**
+ * One node invocation's scratch directory, `$NODE_SCRATCH_DIR`:
+ * `<run scratch>/nodes/<invocation-id>`. The engine creates it before the node runs and
+ * removes it, with the git worktrees under it, when the invocation completes, fails or is
+ * skipped. Keeping it under the run's scratch makes run-end release the backstop for an
+ * invocation that never reached its end.
+ */
+export function getNodeScratchDir(artifactsDir: string, invocationId: string): string {
+  return join(getNodeScratchRoot(artifactsDir), invocationId);
+}
+
+/** The directory holding every node invocation's scratch: `<run scratch>/nodes`. */
+export function getNodeScratchRoot(artifactsDir: string): string {
+  return join(getRunScratchDir(artifactsDir), 'nodes');
 }
 
 /**

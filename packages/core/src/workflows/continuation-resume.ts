@@ -2,9 +2,11 @@ import * as runSource from '@archon/workflows/run-source';
 import {
   CONTINUATION_RETRY_MS,
   WorkflowNotResumableError,
+  RunLimitError,
   WorkflowResourceBusyError,
   resumeCursorMatches,
   deadlineWaitCursor,
+  leasedResumeCursor,
   type IWorkflowStore,
   type ResumeRefusal,
 } from '@archon/workflows/store';
@@ -18,7 +20,7 @@ import type {
   WorkflowResumeInput,
 } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
-import type { WorkflowResumeCursor } from '@archon/workflows/store';
+import type { ResumeRequestCursor, WorkflowResumeCursor } from '@archon/workflows/store';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   answeredPauseContinuation,
@@ -56,6 +58,8 @@ export type ContinuationAdmission =
       refusal: Exclude<ResumeRefusal, 'waiting'>;
       message: string;
     }
+  /** The install's run limit is full; the run keeps its state and a later wake retries it. */
+  | { kind: 'run_limit_full'; message: string }
   | { kind: 'unavailable'; reason: string; sourceError?: runSource.WorkflowSourceIntegrityError };
 export type ContinuationContext =
   | { kind: 'ready'; platform: IWorkflowPlatform; conversationId: string }
@@ -80,7 +84,7 @@ export async function resumeRunContinuation(
   host: { deps: WorkflowDeps; engine: IWorkflowEngine },
   runId: string,
   resolveContext: (run: WorkflowRun) => Promise<ContinuationContext>,
-  cursor?: WorkflowResumeCursor,
+  cursor?: ResumeRequestCursor,
   options: { actorUserId?: string; resolveProject?: ResolveProject } & Pick<
     WorkflowResumeOptions,
     'deferScratchCleanup'
@@ -88,7 +92,7 @@ export async function resumeRunContinuation(
 ): Promise<ContinuationAdmission> {
   const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
-  if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) return { kind: 'not-accepted' };
+  if (!continuable(run, cursor)) return { kind: 'not-accepted' };
   try {
     await runSource.resolveRunSourceCapture(run.metadata);
   } catch (error) {
@@ -132,9 +136,22 @@ export async function resumeRunContinuation(
   });
 }
 
+/**
+ * A failed or paused run continues. A `running` run continues only under the `ownerless`
+ * cursor of an operator's resume, which `resumeWorkflow` checked; the store refuses it if
+ * its claim moved since.
+ */
+function continuable(run: WorkflowRun, cursor: ResumeRequestCursor | undefined): boolean {
+  if (run.status === 'running') return cursor?.kind === 'ownerless';
+  return RESUMABLE_WORKFLOW_STATUSES.includes(run.status);
+}
+
+/** The engine's resume input before the live-owner lease is attached to its cursor. */
+type UnleasedResumeInput = Omit<WorkflowResumeInput, 'cursor'> & { cursor?: ResumeRequestCursor };
+
 async function resumeWithLiveOwner(
   engine: IWorkflowEngine,
-  input: WorkflowResumeInput
+  input: UnleasedResumeInput
 ): Promise<ContinuationAdmission> {
   try {
     const owner = await startRunLiveOwner(input.run.id);
@@ -147,7 +164,10 @@ async function resumeWithLiveOwner(
     };
     let accepted = false;
     try {
-      const admission = await engine.resume(input);
+      const admission = await engine.resume({
+        ...input,
+        cursor: leasedResumeCursor(input.cursor, owner.lease),
+      });
       if (!admission.accepted) return { kind: 'not-accepted' };
       accepted = true;
       const settled = admission.settled.finally(close);
@@ -169,6 +189,7 @@ async function resumeWithLiveOwner(
         ? { kind: 'waiting_for_capacity', blocker, message }
         : { kind: 'resource_busy', blocker, refusal, message };
     }
+    if (error instanceof RunLimitError) return { kind: 'run_limit_full', message: error.message };
     throw error;
   }
 }
@@ -246,6 +267,8 @@ export async function wakeDueWorkflowContinuations(
           { runId: run.id, kind: outcome.kind, blocker: outcome.blocker },
           'workflow_continuation_capacity_refused'
         );
+      if (outcome.kind === 'run_limit_full')
+        log.info({ runId: run.id, kind: outcome.kind }, 'workflow_continuation_capacity_refused');
       if (sourceFailureLimitReached(outcome, cursor)) return outcome;
       if (outcome.kind === 'accepted') structuralFailures.delete(run.id);
       if (outcome.kind !== 'accepted') {

@@ -3,6 +3,8 @@ import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { runAliasesConfigSchema, runTiersConfigSchema } from './model-binding';
 
 export const DEFAULT_TOOL_CALL_ATTENTION_MS = 30 * 60 * 1000;
+/** Messages the engine sends one stalled node attempt before it leaves the stall to the operator. */
+export const DEFAULT_STALL_MESSAGE_LIMIT = 2;
 
 const providerDefaultsSchema = z.record(z.string(), z.unknown());
 
@@ -27,6 +29,16 @@ export const workflowRunContinuationConfigSchema = z
     ...deprecatedQuotaPolicySchema.shape,
   })
   .strict();
+
+/**
+ * The `workflows:` block of install and repository config: the run-layer keys plus keys a
+ * run layer cannot set. A run layer is sealed into the run's metadata, and an older binary
+ * reads it with its own strict run-layer schema, which refuses a key it does not know. A
+ * key added only here never enters that payload, so older binaries keep reading it.
+ */
+export const workflowInstallContinuationConfigSchema = workflowRunContinuationConfigSchema.extend({
+  stallMessageLimit: z.number().int().nonnegative().max(10).optional(),
+});
 
 /** Sparse configuration values whose consumers still run after dispatch. */
 export const workflowRunConfigLayerSchema = z
@@ -72,7 +84,7 @@ export const workflowRunConfigMetadataSchema = z
 
 export type WorkflowRunConfigMetadata = z.infer<typeof workflowRunConfigMetadataSchema>;
 
-export type WorkflowContinuationConfig = z.infer<typeof workflowRunContinuationConfigSchema>;
+export type WorkflowContinuationConfig = z.infer<typeof workflowInstallContinuationConfigSchema>;
 
 export type LiveWorkflowPolicy = Omit<WorkflowContinuationConfig, DeprecatedQuotaPolicyKey>;
 export type ResolvedWorkflowPolicy = LiveWorkflowPolicy & { autoResumeOnQuotaReset: boolean };

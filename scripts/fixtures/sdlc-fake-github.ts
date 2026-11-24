@@ -54,6 +54,7 @@ export interface FakeGitHubState {
     id: number;
     head_sha: string;
     check_suite_id: number;
+    workflow_id: number;
     run_attempt: number;
     status: string;
     conclusion: string | null;

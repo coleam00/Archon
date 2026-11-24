@@ -16,7 +16,7 @@ import {
   type AttentionOption,
 } from './wait-node';
 import { recordSurfaceSchema } from './record-surface';
-import { readSourceRelease } from './run-metadata';
+import { pauseContextsAreHistory } from './pause-cause';
 import type { WorkflowRun } from './workflow-run';
 
 // Optional only for waits persisted before occurrence IDs were introduced.
@@ -127,6 +127,9 @@ const workflowWaitNodeOwnerFields = {
 export const sessionCursorSchema = z.object({
   sessionId: z.string().min(1),
   provider: z.string().min(1),
+  // The model the session ran on, when it resolved one. A `context: same` node does not
+  // continue a session from another model. Absent in metadata written by older binaries.
+  model: z.string().min(1).optional(),
 });
 export type SessionCursor = z.infer<typeof sessionCursorSchema>;
 export const bodySessionCursorsSchema = z.record(z.string().min(1), sessionCursorSchema);
@@ -197,7 +200,7 @@ export function workflowWaitStepName(wait: WorkflowWaitContext): string {
 export function pausedAttentionWait(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowAttentionWaitContext | undefined {
-  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
+  if (run.status !== 'paused' || pauseContextsAreHistory(run)) return undefined;
   const wait = readWorkflowWaitContext(run.metadata.wait);
   return wait?.kind === 'attention' ? wait : undefined;
 }
@@ -206,7 +209,7 @@ export function pausedAttentionWait(
 export function pausedUsageLimitWait(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowUsageLimitWaitContext | undefined {
-  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
+  if (run.status !== 'paused' || pauseContextsAreHistory(run)) return undefined;
   const wait = readWorkflowWaitContext(run.metadata.wait);
   return wait?.kind === 'quota' ? wait : undefined;
 }
@@ -258,6 +261,14 @@ function attentionChoiceProblem(
 }
 
 /**
+ * Why an answer to a message wait is refused, or undefined when it is not:
+ * a message wait cannot be answered with blank text.
+ */
+function messageTextProblem(form: AttentionForm, text: string): string | undefined {
+  return form === 'message' && text.trim() === '' ? 'needs text.' : undefined;
+}
+
+/**
  * Why an answer choosing the reserved `other` option is refused, or undefined when it is
  * not: on a wait declared with `other: true`, that choice must carry text.
  */
@@ -279,9 +290,11 @@ export function attentionAnswerProblem(
   wait: AttentionDeclaration & { other?: boolean },
   answer: { choose: readonly string[]; text: string }
 ): string | undefined {
+  const form = attentionForm(wait);
   const declared = attentionOptions(wait).map(option => option.id);
   return (
-    attentionChoiceProblem(attentionForm(wait), declared, answer.choose) ??
+    attentionChoiceProblem(form, declared, answer.choose) ??
+    messageTextProblem(form, answer.text) ??
     otherTextProblem(wait.other, answer.choose, answer.text)
   );
 }
@@ -333,7 +346,7 @@ export type WorkflowDeadlineWaitContext = Extract<WorkflowWaitContext, { resumeA
 export function pendingWorkflowWaitDeadline(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): WorkflowDeadlineWaitContext | undefined {
-  if (run.status !== 'paused' || readSourceRelease(run.metadata)) return undefined;
+  if (run.status !== 'paused' || pauseContextsAreHistory(run)) return undefined;
   const wait = readWorkflowWaitContext(run.metadata.wait);
   if (!wait || wait.kind === 'attention') return undefined;
   return wait;

@@ -323,7 +323,6 @@
     "src/community/opencode/diagnostics.test.ts": 0.1,
     "src/community/opencode/provider.test.ts": 0.4,
     "src/community/opencode/runtime.test.ts": 0.2,
-    "src/community/opencode/session.test.ts": 0.2,
     "src/community/pi/config.test.ts": 0.4,
     "src/community/pi/credential-authority.integration.test.ts": 0.9,
     "src/community/pi/credential-check.test.ts": 40.8,

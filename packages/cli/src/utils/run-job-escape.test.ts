@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -112,6 +112,69 @@ describe('run job escape', () => {
       }
     });
   }
+
+  // On Windows, Bun keeps a process's event loop alive after it spawns a detached child with
+  // file stdio, so a test process that runs the broker in-process never exits and hangs its
+  // test group. The real broker and CLI end through an explicit exit and are not affected.
+  it.skipIf(process.platform === 'win32')(
+    'starts a trigger executor detached with its log and answers once it has started',
+    async () => {
+      // A trigger executor is another run's owner, so the broker must not tie it to the
+      // relay: it answers 0 on spawn, while the stub itself exits 3.
+      const pipe = brokerPipe();
+      const program = stubProgram();
+      const server = await serveRunJobEscape(pipe, program);
+      const log = join(
+        trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-executor-log-'))),
+        'run.log'
+      );
+      try {
+        expect(
+          await relayOutsideRunJob(
+            pipe,
+            {
+              argv: [...program, 'trigger', 'execute', 'request-id', '--host', 'host-id'],
+              cwd: process.cwd(),
+              env: { ...process.env, [RUN_JOB_ESCAPE_ENV]: pipe, ARCHON_RELAY_TEST: 'preserved' },
+              log,
+            },
+            { stdout: async () => {}, stderr: async () => {} }
+          )
+        ).toBe(0);
+        let output = '';
+        for (let tries = 0; !output.includes('relayed') && tries < 200; tries++) {
+          await Bun.sleep(25);
+          output = existsSync(log) ? readFileSync(log, 'utf8') : '';
+        }
+        expect(JSON.parse(output.split('\n')[0] ?? '')).toEqual({
+          marker: null,
+          cwd: process.cwd(),
+          value: 'preserved',
+        });
+        for (const argv of [
+          [...program, 'trigger', 'fire', 'request-id', '--host', 'host-id'],
+          [...program, 'trigger', 'execute', 'request-id'],
+          [...program, 'trigger', 'execute', 'request-id', '--host', 'host-id', '--extra'],
+          [...program, 'workflow', 'run', 'build', '--detach'],
+        ]) {
+          const [command, ...args] = argv;
+          if (command === undefined) throw new Error('Empty test invocation');
+          await expect(
+            relayOutsideRunJob(pipe, { argv: [command, ...args], cwd: process.cwd(), env: {}, log })
+          ).rejects.toThrow('Only this CLI');
+        }
+        await expect(
+          relayOutsideRunJob(pipe, {
+            argv: [...program, 'trigger', 'execute', 'request-id', '--host', 'host-id'],
+            cwd: process.cwd(),
+            env: {},
+          })
+        ).rejects.toThrow('Only this CLI');
+      } finally {
+        await server.close();
+      }
+    }
+  );
 
   for (const channel of ['BUN_OPTIONS', 'bunfig.toml']) {
     it(`blocks ${channel} preloads when starting the real broker`, async () => {
@@ -481,7 +544,6 @@ nodes:
       expect(isDetachedLaunch(['workflow', action, 'run-id'])).toBe(false);
       expect(isDetachedLaunch(['workflow', action, 'run-id', '--', '--detach'])).toBe(false);
     }
-    expect(isDetachedLaunch(['workflow', 'run', 'build', '--resume', '--detach'])).toBe(true);
     for (const decision of ['approve', 'reject', 'custom']) {
       expect(isDetachedLaunch(['workflow', 'respond', 'run-id', decision, '--detach'])).toBe(true);
     }

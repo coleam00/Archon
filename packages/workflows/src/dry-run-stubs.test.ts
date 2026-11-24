@@ -251,41 +251,43 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
     );
   }
 
-  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
-    test.each(['a%b', 'a%2Fb', 'a%20b', 'a~/b%2F', 'plain', 'a/b', 'a~b', 'a b', 'a#b', 'å'])(
-      `preserves literal property names in ${keyword} scaffolds and defaults: %s`,
-      async property => {
-        const workflow = makeTestWorkflow({
-          name: 'literal-property-stubs',
-          nodes: [
-            {
-              id: 'producer',
-              prompt: 'Produce',
-              output_format: {
-                type: 'object',
-                properties: {
-                  [property]: {
-                    type: 'string',
-                    minLength: 8,
-                    [keyword]: [{ minLength: 0 }],
-                  },
+  // Property-name escaping is keyword-independent (the composition keyword only picks
+  // branches), so one keyword carries the name table.
+  test.each(['a%b', 'a%2Fb', 'a%20b', 'a~/b%2F', 'plain', 'a/b', 'a~b', 'a b', 'a#b', 'å'])(
+    'preserves literal property names in allOf scaffolds and defaults: %s',
+    async property => {
+      const workflow = makeTestWorkflow({
+        name: 'literal-property-stubs',
+        nodes: [
+          {
+            id: 'producer',
+            prompt: 'Produce',
+            output_format: {
+              type: 'object',
+              properties: {
+                [property]: {
+                  type: 'string',
+                  minLength: 8,
+                  allOf: [{ minLength: 0 }],
                 },
-                required: [property],
               },
+              required: [property],
             },
-          ],
-        });
-        const expected = { [property]: 'TTTTTTTT' };
-        const scaffold = createDryRunStubScaffold(workflow);
-        expect(scaffold.producer).toEqual(expected);
-        for (const options of [{ stubs: scaffold }, { defaultStubs: true }]) {
-          const result = await dryRunWorkflow({ workflow, ...options });
-          expect(result.outcome).toBe('completed');
-          expect(result.trace[0]?.output).toBe(JSON.stringify(expected));
-        }
+          },
+        ],
+      });
+      const expected = { [property]: 'TTTTTTTT' };
+      const scaffold = createDryRunStubScaffold(workflow);
+      expect(scaffold.producer).toEqual(expected);
+      for (const options of [{ stubs: scaffold }, { defaultStubs: true }]) {
+        const result = await dryRunWorkflow({ workflow, ...options });
+        expect(result.outcome).toBe('completed');
+        expect(result.trace[0]?.output).toBe(JSON.stringify(expected));
       }
-    );
+    }
+  );
 
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
     test(`preserves root reference context for ${keyword} array items`, async () => {
       const workflow = makeTestWorkflow({
         name: 'array-reference-stubs',

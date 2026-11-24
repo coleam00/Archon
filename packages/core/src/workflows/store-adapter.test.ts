@@ -13,7 +13,6 @@ const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockFindChildRuns = mock(() => Promise.resolve([]));
 const mockGetRunAncestry = mock(() => Promise.resolve([]));
 const mockGetActiveWorkflowRunByPath = mock(() => Promise.resolve(null));
-const mockFindResumableRun = mock(() => Promise.resolve(null));
 const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockRecoverCancelledFanOutRun = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
@@ -30,6 +29,8 @@ const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
 
 mock.module('../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   insertWorkflowRun: async (): Promise<never> => {
@@ -51,7 +52,6 @@ mock.module('../db/workflows', () => ({
   findChildRuns: mockFindChildRuns,
   getRunAncestry: mockGetRunAncestry,
   getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,
-  findResumableRun: mockFindResumableRun,
   resumeWorkflowRun: mockResumeWorkflowRun,
   recoverCancelledFanOutRun: mockRecoverCancelledFanOutRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
@@ -137,6 +137,7 @@ mock.module('@archon/providers', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
+  loadRepoConfig: mock(() => Promise.resolve({})),
 }));
 
 // Per-user provider credentials mocks

@@ -1,6 +1,6 @@
 import { type NodeFailureKind } from '../schemas/node-execution';
-import type { MessageChunk } from '@archon/provider-contract';
-import { type ProviderFailure } from '@archon/provider-contract';
+import type { MessageChunk, ProviderCapabilities, ProviderEvent } from '@archon/provider-contract';
+import { providerEventSchema, type ProviderFailure } from '@archon/provider-contract';
 import { nodeFailureKindOf } from '../executor-shared';
 import { getLog } from './log';
 
@@ -12,6 +12,18 @@ export function assertResultBeforeSettlement(
   if (chunk.type === 'settled' && !awaitingSettlement) {
     throw new NodeFailure('unknown', `provider '${provider}' sent settled before result`);
   }
+}
+
+const PROVIDER_EVENT_TYPES: ReadonlySet<MessageChunk['type']> = new Set(
+  providerEventSchema.options.map(schema => schema.shape.type.value)
+);
+
+/**
+ * Whether a chunk is an event the node records. `result`, `settled` and `session` are turn
+ * metadata the stream loop reads itself; a new non-event chunk is skipped by default.
+ */
+export function isProviderEvent(chunk: MessageChunk): chunk is ProviderEvent {
+  return PROVIDER_EVENT_TYPES.has(chunk.type);
 }
 
 export interface WatchdogReset {
@@ -26,29 +38,76 @@ export function formatWatchdogResetDiagnostic(lastReset: WatchdogReset | undefin
 }
 
 /**
- * Max validate-and-reask attempts for a `best-effort` provider whose structured
- * output fails schema validation (separate from the transient-error retries in dag/retry.ts).
- * Enforced providers don't reask — a validation failure there is a genuine edge
- * (refusal / max_tokens truncation) and fails fast.
+ * Max validate-and-reask attempts for a provider that declares `structuredOutputCorrection`,
+ * when its structured output is missing or fails schema validation (separate from the
+ * transient-error retries in dag/retry.ts). A provider that declares none is not asked
+ * again: Claude's SDK retries an invalid answer itself, so a miss that reaches Archon is a
+ * genuine edge (refusal / max_tokens truncation) and fails fast.
  */
 export const STRUCTURED_OUTPUT_MAX_REASKS = 3;
 
+/** How many times a node's structured output may be asked again on this provider. */
+export function structuredOutputMaxReasks(
+  capabilities: ProviderCapabilities,
+  wantsStructured: boolean
+): number {
+  return wantsStructured && capabilities.structuredOutputCorrection !== undefined
+    ? STRUCTURED_OUTPUT_MAX_REASKS
+    : 0;
+}
+
+/** The schema errors a correction feeds back, with nothing else around them. */
+export function structuredOutputCorrectionBlock(errors: readonly string[]): string {
+  return (
+    '--- CORRECTION ---\n' +
+    `Your previous response did not satisfy the required JSON schema: ${errors.join('; ')}. ` +
+    'Respond again with ONLY a JSON object matching the schema — no prose, no code fences.'
+  );
+}
+
+export interface StructuredOutputPass {
+  resumeSessionId: string | undefined;
+  /** Whether the session this pass ends in becomes the node's thread. */
+  threadsSession: boolean;
+  /**
+   * A same-session correction: the pass continues the thread an earlier pass of this
+   * attempt ended in. It never forks and never falls back to a fresh session, and it is
+   * not the node's own resume, so it does not change whether the node counts as resumed.
+   */
+  continuesThread: boolean;
+}
+
 /**
  * The session one structured-output pass resumes, and whether the session it ends in
- * becomes the node's thread. A reask runs in a fresh throwaway session so an invalid
- * turn is never carried forward. That session holds one repaired turn and none of the
- * node's work, so it never becomes the thread: attempt 0's session stays the one the
- * next iteration, the next node, and the node record continue (#2563, #3584). A named
- * `context: resume` is the exception: every pass forks the declared source itself and
- * must prove that fork on its own, so each pass ends in a real fork of the source.
+ * becomes the node's thread.
+ *
+ * A 'fresh-session' correction (`correctionThreadId` undefined) runs in a throwaway
+ * session so an invalid turn is never carried forward. That session holds one repaired
+ * turn and none of the node's work, so it never becomes the thread: attempt 0's session
+ * stays the one the next iteration, the next node, and the node record continue (#2563,
+ * #3584). A named `context: resume` is the exception: every pass forks the declared
+ * source itself and must prove that fork on its own, so each pass ends in a real fork of
+ * the source.
+ *
+ * A 'same-session' correction (`correctionThreadId` set) continues the thread the failed
+ * answer ended in, so the agent's work is kept and the thread stays the node's. It wins
+ * over a named fork: the correction continues the fork, it does not fork the source again.
  */
 export function structuredOutputPass(
   reaskAttempt: number,
   resumeSessionId: string | undefined,
-  forksNamedSource: boolean
-): { resumeSessionId: string | undefined; threadsSession: boolean } {
+  forksNamedSource: boolean,
+  correctionThreadId?: string
+): StructuredOutputPass {
+  if (reaskAttempt > 0 && correctionThreadId !== undefined) {
+    return { resumeSessionId: correctionThreadId, threadsSession: true, continuesThread: true };
+  }
   const threadsSession = forksNamedSource || reaskAttempt === 0;
-  return { resumeSessionId: threadsSession ? resumeSessionId : undefined, threadsSession };
+  return {
+    resumeSessionId: threadsSession ? resumeSessionId : undefined,
+    threadsSession,
+    continuesThread: false,
+  };
 }
 
 export type TurnCutOff =

@@ -13,6 +13,8 @@ interface ChatComposerProps {
   onSend: (message: string, files?: File[]) => void;
   disabled: boolean;
   disabledReason?: string;
+  /** Stops the reply in flight. While set and `disabled`, Stop takes Send's place. */
+  onStop?: () => void;
 }
 
 const MAX_HEIGHT = 200;
@@ -31,6 +33,7 @@ export function ChatComposer({
   onSend,
   disabled,
   disabledReason,
+  onStop,
 }: ChatComposerProps): ReactElement {
   const [value, setValue] = useState('');
   const [files, setFiles] = useState<PickedFile[]>([]);
@@ -203,18 +206,32 @@ export function ChatComposer({
             className="min-h-0 flex-1 resize-none bg-transparent py-1.75 text-console-15 leading-[1.5] text-text-primary placeholder:text-text-tertiary focus:outline-none disabled:opacity-50"
             style={{ maxHeight: `${MAX_HEIGHT.toString()}px` }}
           />
-          <button
-            type="button"
-            onClick={submit}
-            disabled={disabled || value.trim().length === 0}
-            title="Send · Enter"
-            className="brand-bar flex h-9 shrink-0 items-center gap-1.75 rounded-lg px-3.75 text-console-13 font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-[filter,transform] hover:brightness-110 active:translate-y-px disabled:opacity-45 disabled:shadow-none disabled:hover:brightness-100"
-          >
-            Send
-            <span aria-hidden className="font-mono text-console-10 opacity-70">
-              ↵
-            </span>
-          </button>
+          {disabled && onStop !== undefined ? (
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label="Stop response"
+              title="Stop response"
+              className="flex h-9 shrink-0 items-center gap-1.75 rounded-lg border px-3.75 text-console-13 font-bold text-text-primary transition-colors hover:bg-[color:var(--surface-hover)] active:translate-y-px"
+              style={{ borderColor: 'var(--border-bright)' }}
+            >
+              <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-sm bg-current" />
+              Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={submit}
+              disabled={disabled || value.trim().length === 0}
+              title="Send · Enter"
+              className="brand-bar flex h-9 shrink-0 items-center gap-1.75 rounded-lg px-3.75 text-console-13 font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-[filter,transform] hover:brightness-110 active:translate-y-px disabled:opacity-45 disabled:shadow-none disabled:hover:brightness-100"
+            >
+              Send
+              <span aria-hidden className="font-mono text-console-10 opacity-70">
+                ↵
+              </span>
+            </button>
+          )}
         </div>
         <div className="mt-2.25 flex items-center justify-between px-0.5 font-mono text-console-11 text-text-tertiary">
           <span />

@@ -10,6 +10,7 @@ import type { RecordSurface } from '@archon/workflows/schemas/record-surface';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { SignalWorkflowWaitRequest } from '../schemas/workflow-run';
+import type { RunFilesReport } from '../services/cleanup/run-files';
 import type { RunActor, RunAction } from './run-authorization';
 import { createOperationContext, type WorkflowOperationsDeps } from './workflow/context';
 import type { GateAnswerOrigin } from './workflow/answer-admission';
@@ -32,6 +33,7 @@ import {
   type AbandonConversationRunsResult,
 } from './workflow/abandon';
 import { cancelWorkflow, type CancelWorkflowResult } from './workflow/cancel';
+import { pauseWorkflow, type PauseWorkflowResult } from './workflow/pause';
 import type { AbandonOwnerOutcome, AbandonWorkflowResult } from './workflow/teardown';
 import {
   deleteWorkflowRun,
@@ -53,10 +55,12 @@ export {
 } from './workflow/answer-admission';
 export {
   assertAnswerable,
+  AttentionAnswerInvalidError,
   attentionAnswerFor,
   attentionSugarRequest,
   type AttentionAnswerOperationResult,
   type AttentionAnswerRequest,
+  RecommendationRefusedError,
 } from './workflow/answer';
 export {
   assertLabelable,
@@ -83,9 +87,15 @@ export {
 } from './workflow/abandon';
 export {
   CancelRefusedError,
+  isCancellableRun,
   type CancelRefusal,
   type CancelWorkflowResult,
 } from './workflow/cancel';
+export {
+  PauseRefusedError,
+  type PauseRefusal,
+  type PauseWorkflowResult,
+} from './workflow/pause';
 export { ResumeRefusedError, type WorkflowStatusData } from './workflow/run-actions';
 
 export interface WorkflowOperations {
@@ -97,7 +107,8 @@ export interface WorkflowOperations {
     request: SignalWorkflowWaitRequest,
     actor: RunActor
   ) => Promise<{ signaled: boolean }>;
-  deleteWorkflowRun: (runId: string, actor: RunActor) => Promise<void>;
+  /** Deletes the row, then removes the run's files; the report names any it left. */
+  deleteWorkflowRun: (runId: string, actor: RunActor) => Promise<RunFilesReport>;
   getWorkflowStatus: (options?: { codebaseId?: string }) => Promise<WorkflowStatusData>;
   resumeWorkflow: (runId: string, actor: RunActor) => Promise<WorkflowRun>;
   abandonWorkflow: (
@@ -105,6 +116,11 @@ export interface WorkflowOperations {
     actor: RunActor
   ) => Promise<AbandonWorkflowResult & { owner: AbandonOwnerOutcome }>;
   cancelWorkflow: (runId: string, actor: RunActor) => Promise<CancelWorkflowResult>;
+  pauseWorkflow: (
+    runId: string,
+    actor: RunActor,
+    via: RecordSurface
+  ) => Promise<PauseWorkflowResult>;
   abandonResumableRunsForConversation: (
     conversationId: string,
     actor: RunActor
@@ -158,6 +174,7 @@ export function createWorkflowOperations(deps: WorkflowOperationsDeps): Workflow
     resumeWorkflow: (runId, actor) => resumeWorkflow(ctx, runId, actor),
     abandonWorkflow: (runId, actor) => abandonWorkflow(ctx, runId, actor),
     cancelWorkflow: (runId, actor) => cancelWorkflow(ctx, runId, actor),
+    pauseWorkflow: (runId, actor, via) => pauseWorkflow(ctx, runId, actor, via),
     abandonResumableRunsForConversation: (conversationId, actor) =>
       abandonResumableRunsForConversation(ctx, conversationId, actor),
     approveWorkflow: (runId, comment, actor, origin) =>

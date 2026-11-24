@@ -14,7 +14,6 @@
  * Source installs honor explicit env/config pins, then fall back to
  * {@link resolveBundledCodexBinary}.
  */
-import { existsSync as _existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -25,11 +24,6 @@ import {
   type BinaryPathKind,
 } from '../shared/binary-resolution';
 import { ClassifiedProviderError } from '../shared/failure';
-
-/** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
-export function fileExists(path: string): boolean {
-  return _existsSync(path);
-}
 
 export function pathKind(path: string): BinaryPathKind {
   return classifyBinaryPath(path, error => {

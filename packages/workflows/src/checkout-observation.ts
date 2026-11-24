@@ -42,7 +42,7 @@ interface GitResult {
   stdout: Buffer;
 }
 
-const REPOSITORY_SELECTORS = new Set([
+export const REPOSITORY_SELECTORS: ReadonlySet<string> = new Set([
   'GIT_DIR',
   'GIT_WORK_TREE',
   'GIT_INDEX_FILE',
@@ -54,7 +54,7 @@ const REPOSITORY_SELECTORS = new Set([
  * Run git read-only. Repository-selecting variables are dropped so the observation reads
  * the checkout at `cwd`, not whatever repository the engine process happened to inherit.
  */
-function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult> {
+export function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult> {
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !REPOSITORY_SELECTORS.has(key))
@@ -89,12 +89,12 @@ function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult>
   });
 }
 
-function text(buffer: Buffer): string {
+export function text(buffer: Buffer): string {
   return buffer.toString('utf8').trim();
 }
 
 /** The checkout's own marker walk: a directory with no `.git` in any ancestor is not Git. */
-function hasGitMarker(cwd: string): boolean {
+export function hasGitMarker(cwd: string): boolean {
   let dir: string;
   try {
     dir = realpathSync(cwd);
@@ -124,7 +124,7 @@ type ContainerProbe = 'marker' | 'none' | 'failed';
  * calls, so tests can answer for a container that does not exist instead of spawning
  * `docker`.
  */
-async function probeContainerMarker(
+export async function probeContainerMarker(
   cwd: string,
   execContext: Extract<ExecutionContext, { kind: 'container' }>
 ): Promise<ContainerProbe> {

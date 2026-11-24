@@ -20,7 +20,7 @@ import {
   type PushDestinationState,
 } from '../services/attention-router';
 import type { ChatPluginState, ChatSupervisor } from './supervisor';
-import { runTotalCostUsd } from './run-events';
+import { chatRunOutcome, runTotalCostUsd } from './run-events';
 
 function gateNotice(run: WorkflowRun): ChatAttentionNotice {
   const attention = runAttention(run);
@@ -84,7 +84,7 @@ function terminalNotice(run: WorkflowRun): ChatAttentionNotice {
     runId: run.id,
     workflowName: run.workflow_name,
     status: run.status,
-    ...(run.outcome ? { authoredOutcome: run.outcome } : {}),
+    ...chatRunOutcome(run),
     ...(totalCostUsd !== undefined ? { totalCostUsd } : {}),
   };
 }

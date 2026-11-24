@@ -8,10 +8,18 @@ import {
 } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as codebaseDb from '@archon/core/db/codebases';
+import {
+  registeredProjectForPath,
+  registeredProjectKeyForPath,
+} from '@archon/core/services/codebase-checkout-resolver';
+import { readPackGraph } from '@archon/core/workflows/pack-graph';
+import { getTriggersPath, launchProjectKey } from '@archon/core/workflows/run-ended';
+import { providerRegistry } from '@archon/providers';
 import type { WebAdapter } from '../adapters/web';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import { isApiGateEnabled } from '../auth';
 import type { AttentionRouter } from '../services/attention-router';
+import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import type { WebPushDestination } from '../services/web-push';
 import { createOrchestratorDispatch } from './api-message-dispatch';
 import { requireWebUser, resolveAuthContext } from './api-request-auth';
@@ -22,8 +30,10 @@ import { registerConfigRoutes } from './api.config';
 import { registerConversationRoutes } from './api.conversations';
 import { registerConversationProcessingRoute } from './api.conversation-processing';
 import { registerHealthRoutes } from './api.health';
+import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
 import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
+import { registerPackGraphRoute } from './api.packs';
 import { registerProviderKeyRoutes } from './api.provider-keys';
 import { registerProviderRoutes } from './api.providers';
 import { registerAttentionStreamRoute, registerRunAttentionRoutes } from './api.run-attention';
@@ -49,7 +59,11 @@ export function registerApiRoutes(
   webAdapter: WebAdapter,
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[],
-  attention?: { webPush: WebPushDestination; router: AttentionRouter },
+  attention?: {
+    webPush: WebPushDestination;
+    router: AttentionRouter;
+    tracker?: Pick<ItemTracker, 'health'>;
+  },
   registration: Pick<CloneOptions, 'githubAppAuth'> = {},
   commit?: AppCommit
 ): void {
@@ -95,7 +109,7 @@ export function registerApiRoutes(
   registerProviderKeyRoutes(app);
   registerUserAiPrefsRoutes(app);
   registerConversationRoutes(app, { webAdapter, dispatchToOrchestrator });
-  registerMessageRoutes(app, { webAdapter, dispatchToOrchestrator });
+  registerMessageRoutes(app, { webAdapter, dispatchToOrchestrator, lockManager });
   registerCodebaseRoutes(app, registration);
 
   app.doc('/api/openapi.json', {
@@ -106,6 +120,7 @@ export function registerApiRoutes(
   registerWorkflowListRoute(app);
   registerWorkflowRunLaunchRoute(app, { webAdapter, dispatchToOrchestrator });
   registerRunAttentionRoutes(app, operations);
+  registerItemRoutes(app);
   // A host per stream keeps registration free of I/O; the API-types generator registers too.
   registerAttentionStreamRoute(app, (listener, options) =>
     createSqlWorkflowHost().engine.watchAttention(listener, options)
@@ -120,6 +135,22 @@ export function registerApiRoutes(
   registerMetricViewsRoute(app, {
     codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
     loadConfig,
+  });
+  registerPackGraphRoute(app, {
+    codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
+    readPackGraph: (cwd, pack, workflowSource) =>
+      readPackGraph(
+        cwd,
+        pack,
+        {
+          loadConfig,
+          providers: providerRegistry,
+          triggersDirectory: getTriggersPath,
+          projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
+          projectOf: path => registeredProjectForPath(path, codebaseDb),
+        },
+        workflowSource === undefined ? {} : { workflowSource }
+      ),
   });
   registerWorkflowDefinitionRoutes(app);
   registerArtifactRoutes(app);

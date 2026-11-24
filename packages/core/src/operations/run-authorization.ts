@@ -33,6 +33,7 @@ export const RUN_ACTIONS = [
   'reject',
   'respond',
   'cancel',
+  'pause',
   'abandon',
   'resume',
   'signal',

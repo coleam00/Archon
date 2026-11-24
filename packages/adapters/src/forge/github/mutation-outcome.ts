@@ -49,9 +49,13 @@ export function unknown(request: ForgeMutationRequest, error: ForgeError): Forge
     outcome: 'outcome_unknown',
   });
 }
+/**
+ * A read-back that disagreed is an `invalid_response`; one that could not run passes
+ * the forge's own error, so an access failure stays apart from an outage.
+ */
 export function unverified(
   request: ForgeMutationRequest,
-  message: string,
+  cause: string | ForgeError,
   leaveBehind: string,
   observed?: {
     pr?: ForgePrRecord;
@@ -63,7 +67,7 @@ export function unverified(
 ): ForgeResponse {
   return failure(
     request.operationId,
-    { kind: 'invalid_response', message },
+    typeof cause === 'string' ? { kind: 'invalid_response', message: cause } : cause,
     {
       ...evidenceBase(request),
       outcome: 'verification_failed',

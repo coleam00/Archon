@@ -9,6 +9,7 @@ import type { ReasoningSummary } from "../ReasoningSummary";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
 import type { SandboxPolicy } from "./SandboxPolicy";
+import type { TurnEnvironmentParams } from "./TurnEnvironmentParams";
 
 export type ThreadSettingsUpdateParams = { threadId: string,
 /**
@@ -20,6 +21,12 @@ disabledPluginIds?: Array<string> | null,
  * Override the working directory for subsequent turns.
  */
 cwd?: string | null,
+/**
+ * Replace the environments for future turns without changing the running turn.
+ * Omitted/null preserves the selection unless `cwd` is also provided, which selects
+ * the default environments for that directory. [] clears the selection.
+ */
+environments?: Array<TurnEnvironmentParams> | null,
 /**
  * Override the approval policy for subsequent turns.
  */

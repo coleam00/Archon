@@ -91,7 +91,8 @@ waits; a refused early resume records nothing.
 Failed-run resume respects live holders, those waiting runs and queued requests.
 
 The server refuses file storage because its routes read SQL. Provider concurrency caps
-(`concurrency.providers`) require `store: database` and fail at startup.
+(`concurrency.providers`) and the run limit (`concurrency.runs`) require `store: database`
+and fail at startup.
 Per-user GitHub identity (`GITHUB_APP_ID` with `TOKEN_ENCRYPTION_KEY`) fails at startup under
 file storage, because files hold no user tokens and a run would otherwise use the shared
 token. A GitHub App without `TOKEN_ENCRYPTION_KEY` works. Per-user provider credential
@@ -110,6 +111,8 @@ With `store: database` (the default), **leave `DATABASE_URL` unset** in your she
 - Create a SQLite database at `~/.archon/archon.db`
 - Initialize the schema on first run and skip startup writes when its completion proof is current
 - Use this database for operations with `store: database`
+
+A build running from inside an Archon home's `workspaces/` directory, such as a run's worktree or a managed clone, refuses to open any database, SQLite or PostgreSQL, while `ARCHON_HOME` names that home, because opening it would apply that build's migrations to the live database. Set `ARCHON_HOME` to a scratch directory to run such a checkout. The check reads only the home: with a scratch `ARCHON_HOME`, a set `DATABASE_URL` is opened as given, so unset it or point it at a scratch database.
 
 **Pros:**
 - Zero configuration required
@@ -165,7 +168,11 @@ Schema initialization is serialized rather than retried; the former
 Upgrades are verified, not assumed: CI applies the current schema on top of a database built from
 every distinct schema Archon has ever released, re-applies it to confirm idempotence, and compares
 the result against a fresh install — columns, indexes, column comments, constraints and sequences.
-Run the same check yourself against any PostgreSQL with `bun run check:schema-upgrades`.
+Run the same check yourself with `bun run check:schema-upgrades`. It creates and drops databases, so
+it runs only on a server you name, and that server should be a scratch PostgreSQL you started for
+it: set `PGHOST` or `PGHOSTADDR`, or a `DATABASE_URL` that carries a host. With none of them it
+exits before connecting. `PGPORT`, `PGUSER` and a hostless `DATABASE_URL` do not name a
+server on their own, and a `DATABASE_URL` in `.env` is not read.
 
 If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.postgres_schema_init_failed`.
 
@@ -227,6 +234,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Stores workflow state, step progress, and parent conversation linkage
   - Nullable `user_id` records which user triggered the run
   - Nullable `item_id` references the [item](/reference/cli/#items) the run belongs to. Written once at creation; null for a run started with no item
+  - Nullable `completed_outcome` is the outcome the run completed with, from its workflow's [`returns.outcome`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs): an enum value as it is, a boolean as `succeeded` or `failed`. Written only by the write that completes the run, so it is null on any run that has not completed. Nullable `outcome` holds the boolean form only (its constraint admits `succeeded` and `failed`) and is written by that same write; binaries before `completed_outcome` wrote it while the run was still running
   - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.
   - `conversation_id` cascades on conversation delete: a hard `DELETE` of a conversation would erase its run rows and silently drop the live-run cleanup pin for their isolation environments (#2868). Soft delete is the only supported path — a future hard-delete must resolve live runs first.
 
@@ -271,8 +279,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Stores the provider and session ID for same-run session lineage; excluded from run and event APIs
 
 - **`remote_agent_workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs
-  - Opt-in via `persist_session`; keyed by `(workflow_name, node_id, scope_key, provider)`
-  - `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`). A run with neither has no scope, so it reads and writes no rows here
+  - Opt-in via `persist_session` or `context: same`; keyed by `(workflow_name, node_id, scope_key, provider)`
+  - For `persist_session`, `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`). A run with neither has no scope, so it reads and writes no rows here
+  - For `context: same`, `scope_key` is `item:<item_id>` and `node_id` is the node's qualified path (`<group>.<node>` inside a `loop_group`). A run without an item reads and writes no such rows
+  - `model` is the model the session ran on, or NULL when the node resolved none; rows written before the column existed read as NULL. A `context: same` node does not continue a session recorded under another provider or model
   - A run reads its scope's rows once at start, and each node writes its finished session back, so concurrent runs end with the session that finished last
   - No FK on `scope_key`, so a conversation delete does not cascade here. Soft delete plus a never-reused UUID makes the leftovers harmless; a future hard-delete must delete by `scope_key` itself — the mirror of the cascade caveat on `remote_agent_workflow_runs` above.
 
@@ -312,15 +322,50 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_items`** - The durable thing runs are about
   - `id`, `project_key`, `key` and `created_at`; `(project_key, key)` is unique. `project_key` is the engine's project key, the one `remote_agent_state_revisions` scopes by
   - Holds no status, stage or config. Where an item stands is derived from its runs
-  - Written the first time a start or run names the key in a project. The engine gives `key` no meaning and never parses it
+  - Written the first time a start, run, ruling or link names the key in a project. The engine gives `key` no meaning and never parses it
+
+- **`remote_agent_item_rulings`** - Rulings on an item: decisions recorded without a question, and their withdrawals
+  - Append-only: a row is a ruling (`text` set) or the withdrawal of one (`withdraws` names it); no row is updated, and no column records where the item stands
+  - `item_id`, `text`, `by_declared` or `by_user_id` (who, when they said), `via` (the surface), `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
+  - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
+
+- **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
+  - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
+  - `change` (the forge's identity of the merged change, never parsed), `merge_commit` (nullable), `merged_at` (the forge's merge time), `via`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
+- **`remote_agent_item_landings`** - The branch an item's change lands on (`archon workflow landing`)
+  - One row per item: `item_id` is the primary key, and recording again replaces the row
+  - `branch`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `recorded_at`
+- **`remote_agent_item_tracker_destinations`** - One row per item tracker destination (`tracker:<project>`)
+  - The row exists once the destination's activation baseline is committed (`activated_at`), so a later activation by any process does not baseline again
+  - `pass_owner_host`, `pass_owner_pid`, `pass_owner_instance` and `pass_started_at` name the process running the destination's pass, all null when none runs; one pass runs at a time across the server and CLI processes. `pass_requested` is 1 when another process asked the holder for one more pass
+  - What the tracker showed stays in its `attention_notice_sent` ledger rows, not here
+- **`remote_agent_item_links`** - Links between items: accepted, directed relations
+  - One row per link, read from `from_item_id` to `to_item_id`, with `kind` one of `depends_on`, `part_of` or `duplicate_of`. The engine acts only on an active `part_of`, which carries the landing branch of the item it points at (`remote_agent_item_landings`). The kind is checked in code, not by a database constraint, so a later kind needs no schema change; a binary that reads a kind it does not know reports that link as unreadable and reads the rest of the item
+  - `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at` record who recorded the link, as for rulings. They and the link itself are never updated
+  - Ending a link writes the `ended_*` columns once (`ended_at`, `ended_via`, who, and the calling run); the row is kept, never deleted. `ended_at` and `ended_via` are set together
+  - While `ended_at` is null, `(from_item_id, to_item_id, kind)` is unique (a partial unique index), so an active link is stored once. A link joins two different items. The schema allows the two items to be in different projects; the CLI records links within one
+  - `seq` orders links as they were recorded. `id` is text in both dialects
+- **`remote_agent_item_asks`** - Asks a completed run left on its item ([`returns.asks`](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item))
+  - Opened in the write that completes the run; `run_id` is the run that left the ask and names its set, `workflow_name` the run's workflow, `position` its place in the set and `ask` the JSON the run left
+  - Closes once: `closed_as` is `answered`, `withdrawn` or `replaced`, NULL while open. An answer or withdrawal sets `answer` (answers only), `closed_at`, `closed_via`, `closed_by_declared` or `closed_by_user_id`, and `closed_from_run_id` and `closed_from_node_path` (unverified); a replacement sets `closed_at` and `replaced_by_run_id`
+  - `run_id` has no foreign key, so run cleanup keeps the record: the item read takes its asks, their answers and its settled sets from these rows. `ask` and `answer` are read tolerantly, since more than one binary reads them. The `ask_answered`, `ask_withdrawn` and `asks_settled` events on the run that left the set notify readers of the run's event tail, and go with that run
+- **`remote_agent_item_waits`** - What a completed run said its item waits for outside Archon ([`returns.waits`](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon))
+  - Opened in the write that completes the run; `run_id` is the run that left the wait and names its set, `workflow_name` the run's workflow, `position` its place in the set, `event` and `about` what it waits for, and `deadline_at` when it falls due (`created_at` plus its `within_minutes`)
+  - A set closes once, all its rows together: `closed_as` is `met`, `replaced` or `withdrawn`, NULL while open, with `closed_at`. A met set records the receipt and binding the event started in `met_by_receipt_id` and `met_by_binding_id`, written in the transaction that records the event; a replaced one `replaced_by_run_id`
+  - Nothing reads `deadline_at` but the attention queue, which lists an open set past it as overdue. `run_id` has no foreign key, as for asks
 
 - **`remote_agent_start_receipt_bindings`** - Per-binding preparation state for a source receipt
   - Keyed by `(receipt_id, binding_id)`; deleted with the owning receipt
   - Tracks binding revision, host, intent, preparation status, owner, and error
   - `event_input_names` lists which of the intent's inputs came from the source event; preparation passes those only to a workflow that declares them
+  - `start_limit` holds the binding's start limit (JSON) and `grants_limit` the name of the limit it grants; kept beside the intent, which older binaries parse strictly. A start refused at its limit is `rejected` with the reason in `preparation_error`
 
 - **`remote_agent_resource_slots`** - Keyed resource capacity
   - Stores capacity per `resource_key` for workflow and provider-attempt admission
+
+- **`remote_agent_install_hold`** - The install hold (`archon hold set|lift`)
+  - One row (`id = 'install'`) while the hold is set, with `set_by` (the CLI identity that set it) and `set_at`; no row means no hold
+  - Admission reads it under the admission lock and admits no new run while it is present. Binaries older than the table never read it
 
 - **`remote_agent_resource_slot_holders`** - Resource capacity holders
   - Tracks workflow runs and provider attempts occupying a slot
@@ -331,6 +376,12 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Prepared launches are versioned. Version 2 carries the run's `origin`; version 1 launches queued by older binaries are still admitted, with their conversation and user read as the origin. Older binaries cannot read version 2, so before downgrading, drain or withdraw any queued or admitted request whose run has not started
   - `queue_position` orders waiting requests; optional receipt and binding linkage preserves source provenance
   - Nullable `item_id` references the item a start named, resolved when the binding is prepared, so a start that waits for capacity already has its item. The run takes it at admission
+  - Nullable `start_limit` (JSON, read tolerantly since more than one binary reads it) and `grants_limit` (a limit name) record the start limit a binding start counted under and the limit it granted. A binding's start limit on an item is derived from these rows, their `status` and `queue_position`, at admission and in the item read; it is never kept as a counter. Rows are never deleted
+
+- **`remote_agent_start_limit_resets`** - When a start limit on an item last reset
+  - One row per run that completed on an item that has a start limit or a grant, written under the admission lock in the transaction that completes the run: `item_id`, the run's `workflow_name`, its completion as `reset_at` (for display), `after_position`, the highest request `queue_position` at that moment, and `queued_ids`, a JSON array of the item's limit requests still queued then
+  - A limit whose `resetOn` names that workflow counts, from its latest row (highest `id`), only requests above `after_position` or listed in `queued_ids`. Event order, not time, so a start and a reset in the same second still order
+  - Kept apart from the run row so run cleanup does not bring earlier rounds back. Rows are only inserted
 
 - **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
   - **PostgreSQL only.** Always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled (`DATABASE_URL` + `BETTER_AUTH_SECRET`)
@@ -436,3 +487,33 @@ already overwritten by previous resumes cannot be restored exactly by this chang
 Older binaries can still read and write records, but keep their destructive resume behavior
 and do not understand the separate phase clock. Upgrade all executors together before
 relying on creation-time preservation or the new checkout-priority rule.
+
+## A run's files on disk
+
+Besides its row, a run writes three paths under its project's storage root
+(`$ARCHON_HOME/workspaces/<owner>/<repo>`, `_folder/<slug>` or `@cwd/<name>`), each named by
+its run id:
+
+- `artifacts/runs/<run-id>/`: its `$ARTIFACTS_DIR`. Scratch under it is already removed
+  when the run ends.
+- `logs/<run-id>.jsonl`: its log.
+- `workflow-source/runs/<run-id>/`: the workflow source it froze at start.
+
+Deleting a run removes all three, through `archon workflow cleanup <days>` or
+[`DELETE /api/workflows/runs/{runId}`](/reference/api/), which returns any path it left in
+`files.failed`. A run that is not deleted keeps them. A run that a run which has not ended
+continues from (`--adopt` or `--supersedes`) is not deleted: an adopter reads the source's
+artifacts as `$ADOPTED_RUN_DIR`. A path that cannot be removed is reported with its error,
+and the run's row stays deleted. Archon removes a path only where it sits on disk under
+`$ARCHON_HOME/workspaces`: when a run directory such as `logs/` links outside it, the path
+is reported and left in place.
+
+`archon workflow cleanup --orphans` finds what earlier deletions left: run-id paths whose
+run has no row in the selected store. It lists them with their sizes and removes them only
+with `--yes`. A path that changed in the last 6 hours is left and counted, with the time
+after which a rerun lists it; a removal that failed part way has just changed its path. A run directory that links outside the workspace is
+named as skipped and not scanned. Switching stores keeps the other store's history, and
+its runs would look like orphans here. So `--yes` is refused while this `ARCHON_HOME` holds
+that history: `archon.db` when files are selected, `store/` when a database is selected.
+A PostgreSQL database that is not currently selected cannot be detected. Do not run
+`--orphans --yes` on a home whose runs also live in such a database.

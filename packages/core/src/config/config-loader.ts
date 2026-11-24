@@ -10,7 +10,7 @@
  * How the layers merge lives in config-merge.ts, and what each block may hold in
  * config-validation.ts.
  */
-import { validateWorktreePostCreate } from '@archon/isolation';
+import { validateWorktreeConfig } from '@archon/isolation';
 import type { OpencodeProviderDefaults } from '@archon/providers/types';
 import { readFile as fsReadFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
@@ -213,6 +213,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #   maxConversations: 10
 #   providers:        # optional cap on simultaneous attempts per provider; unlisted = unlimited
 #     pi: 1
+#   runs: 6           # optional number of run trees this install executes at once; unset = no limit
 `;
 
 /**
@@ -252,7 +253,7 @@ async function readConfigFileIfPresent(configPath: string): Promise<string | und
  * Read ~/.archon/config.yaml. A missing file loads as empty and, unless
  * `readOnly`, is created from the documented template. Every other failure throws, naming the file:
  * permissions, YAML syntax, a top level that is not a mapping, or a rejected `tiers`/`aliases`, `streaming`,
- * `attentionNotices`, `concurrency` or `workflows` block.
+ * `attentionNotices`, `itemTracker`, `concurrency` or `workflows` block.
  */
 async function readGlobalConfig(configPath: string, readOnly: boolean): Promise<GlobalConfig> {
   const content = await readConfigFileIfPresent(configPath);
@@ -347,13 +348,13 @@ async function readRepoConfig(configPath: string): Promise<RepoConfig> {
  *
  * Every other failure throws, naming the file: an unreadable file, invalid
  * YAML, a top level that is not a mapping, or a refused `workflows`, `tiers`,
- * `aliases`, `assistants.*`, `worktree.postCreate` or `env` value.
+ * `aliases`, `assistants.*`, `worktree` or `env` value.
  */
 export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
   const configPath = join(repoPath, '.archon', 'config.yaml');
   const parsed = await readRepoConfig(configPath);
   try {
-    validateWorktreePostCreate(parsed.worktree);
+    validateWorktreeConfig(parsed.worktree);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new InvalidConfigError('Invalid worktree config', configPath, detail, { cause: error });

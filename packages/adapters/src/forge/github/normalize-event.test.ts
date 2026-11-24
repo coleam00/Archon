@@ -13,7 +13,7 @@ const context = {
 
 describe('GitHub inbound normalization', () => {
   test('declared capabilities pass their conformance fixtures', () => {
-    expect(githubConformanceFixtures.length).toBe(20);
+    expect(githubConformanceFixtures.length).toBe(22);
     expect(verifyGitHubSourceConformance()).toEqual([]);
   });
 
@@ -249,6 +249,61 @@ describe('GitHub inbound normalization', () => {
       envelope: { event: { subject: { kind: 'pr' } } },
     });
     expect(commented({ number: 4 }, 'edited').status).toBe('unsupported');
+  });
+
+  test('a submitted review carries its state, commit and author, never its text', () => {
+    // Trimmed from a real GitHub pull_request_review delivery.
+    const reviewed = (action: string, state: string) =>
+      normalizeGitHubWebhook(
+        {
+          action,
+          repository: { full_name: 'org/repo' },
+          sender: { id: 1, login: 'reviewer', type: 'User' },
+          pull_request: { number: 6, state: 'open' },
+          review: {
+            id: 2_811_100_442,
+            node_id: 'PRR_kwDOAbc',
+            user: { id: 3, login: 'coderabbitai[bot]', type: 'Bot' },
+            body: 'private review text',
+            commit_id: '4c1f0d2e6b',
+            submitted_at: '2026-11-16T09:30:00Z',
+            state,
+            html_url: 'https://github.com/org/repo/pull/6#pullrequestreview-2811100442',
+            author_association: 'NONE',
+          },
+        },
+        { ...context, eventName: 'pull_request_review' }
+      );
+    const submitted = reviewed('submitted', 'changes_requested');
+    expect(submitted).toMatchObject({
+      status: 'normalized',
+      envelope: {
+        occurredAt: '2026-11-16T09:30:00Z',
+        event: {
+          kind: 'review.changed',
+          action: 'submitted',
+          pr: { repo: { path: 'org/repo' }, number: 6 },
+          review: {
+            id: '2811100442',
+            state: 'changes_requested',
+            nativeState: 'changes_requested',
+            commit: '4c1f0d2e6b',
+            author: { id: '3', login: 'coderabbitai[bot]', type: 'bot' },
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(submitted)).not.toContain('private review text');
+    expect(reviewed('submitted', 'APPROVED')).toMatchObject({
+      envelope: { event: { review: { state: 'approved', nativeState: 'APPROVED' } } },
+    });
+    expect(reviewed('submitted', 'pending')).toMatchObject({
+      envelope: { event: { review: { state: 'unknown' } } },
+    });
+    expect(reviewed('dismissed', 'dismissed')).toMatchObject({
+      envelope: { occurredAt: null, event: { action: 'dismissed' } },
+    });
+    expect(reviewed('edited', 'commented').status).toBe('unsupported');
   });
 
   test('keeps opaque object IDs and zero check PR associations', () => {

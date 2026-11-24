@@ -38,18 +38,12 @@ inputs:
 returns: publish
 
 nodes:
-  # Refuses the run before the agent spends when the forge plugin cannot
-  # act: no plugin for the host, or no usable credential.
-  - id: forge
-    script: forge-check
-    runtime: bun
-
-  # The agent judges: which repository the work is proposed to, the base, whether
-  # the run continues an existing pull request, and what the title and body say.
+  # The agent judges: which repository the work is proposed to, whether the run
+  # continues an existing pull request, and what the title and body say. The base
+  # is the run's $BASE_BRANCH, the item's landing branch when it has one.
   # It performs no push and no forge write.
   - id: prepare
     command: pr
-    depends_on: [forge]
     output_type: pull-request-intent
     output_format:
       type: object

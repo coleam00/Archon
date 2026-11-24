@@ -3,17 +3,32 @@ import {
   type NodeConfig,
   type ProviderCapabilities,
   type SendQueryOptions,
+  type SkillDiscovery,
+  declaredSkillRoots,
   mcpServerMap,
   requireProvider,
   isEffortRung,
 } from '@archon/provider-contract';
+import {
+  findInstalledSkillNames,
+  resolveSkillDirectoriesFromRoots,
+  skillSearchRoots,
+} from '@archon/paths/skills';
 import {
   type ModelAliasPreset,
   type PresetEffortRejection,
   type TierName,
   resolvePresetEffort,
 } from '../model-validation';
-import { type DagNode, type EffortLevel, type NodeMcp, mcpDeclaration } from '../schemas';
+import {
+  type DagNode,
+  type EffortLevel,
+  type NodeMcp,
+  type NodeSkill,
+  mcpDeclaration,
+  skillDeclaration,
+} from '../schemas';
+import type { SkillUnavailable } from '../schemas/node-execution';
 import { type McpPathResolution, resolveMcpPath, missingMcpConfigMessage } from '../mcp-path';
 import type { McpUnavailable } from '../schemas/node-execution';
 import { capturedSourceReadGuard } from '../workflow-source';
@@ -132,6 +147,78 @@ export async function resolveNodeMcp(
     return { kind: 'missing', path: fullPath, servers: new Set(), diagnostic };
   }
   return { kind: 'load', path: fullPath, servers: new Set(servers) };
+}
+
+/** Where one provider looks for a node's skills. `sources` undefined keeps every declared root. */
+export interface SkillResolutionScope {
+  cwd: string;
+  discovery: SkillDiscovery | undefined;
+  env: Record<string, string | undefined> | undefined;
+  sources: readonly ('project' | 'user')[] | undefined;
+}
+
+/** Skill directories the provider searches for this node. Same roots validation checks. */
+export function enabledSkillSearchRoots(scope: SkillResolutionScope): string[] {
+  const { cwd, discovery, env, sources } = scope;
+  if (discovery === undefined) return skillSearchRoots(cwd);
+  return declaredSkillRoots(discovery, cwd, {
+    includeProject: sources?.includes('project') ?? true,
+    includeUser: sources?.includes('user') ?? true,
+    env,
+  });
+}
+
+/** Names the provider receives, and the optional skills withheld from it. */
+export interface NodeSkillsResolution {
+  /** Undefined when the node declares no `skills` list. */
+  names: string[] | undefined;
+  unavailable: SkillUnavailable[];
+}
+
+/**
+ * An optional skill is withheld when the provider cannot load skills, or when no
+ * SKILL.md exists in the directories it will search and the skill's directory is
+ * not installed outside those directories. A directory outside the enabled roots
+ * stays in the list so the provider's unreachable-skill error still fires. A
+ * required name is always passed through.
+ */
+export function resolveNodeSkills(
+  skills: readonly NodeSkill[] | undefined,
+  canLoadSkills: boolean,
+  scope: SkillResolutionScope
+): NodeSkillsResolution {
+  if (skills === undefined) return { names: undefined, unavailable: [] };
+  const names: string[] = [];
+  const unavailable: SkillUnavailable[] = [];
+  for (const entry of skills) {
+    const declared = skillDeclaration(entry);
+    if (!declared.optional) {
+      names.push(declared.name);
+      continue;
+    }
+    if (!canLoadSkills) {
+      unavailable.push({ name: declared.name, reason: 'provider_unsupported' });
+      continue;
+    }
+    if (optionalSkillKept(declared.name, scope)) names.push(declared.name);
+    else unavailable.push({ name: declared.name, reason: 'not_installed' });
+  }
+  return { names, unavailable };
+}
+
+function optionalSkillKept(name: string, scope: SkillResolutionScope): boolean {
+  const searchRoots = enabledSkillSearchRoots(scope);
+  if (resolveSkillDirectoriesFromRoots(searchRoots, [name]).missing.length === 0) return true;
+  const enabled = new Set(searchRoots);
+  const outside = [
+    ...new Set([
+      ...skillSearchRoots(scope.cwd),
+      ...(scope.discovery === undefined
+        ? []
+        : declaredSkillRoots(scope.discovery, scope.cwd, { env: scope.env })),
+    ]),
+  ].filter(root => !enabled.has(root));
+  return findInstalledSkillNames(outside, [name]).length > 0;
 }
 
 type ProviderResolutionContext = Pick<
@@ -443,7 +530,11 @@ function buildNodeConfig(
     // `mcp` is set per attempt by `executeAgentNode`, which decides whether an
     // optional declaration reaches the provider.
     hooks: node.hooks,
-    skills: node.skills,
+    // Names only. `executeAgentNode` replaces this with the names still passed
+    // after optional skills are withheld.
+    ...(node.skills !== undefined
+      ? { skills: node.skills.map(skill => skillDeclaration(skill).name) }
+      : {}),
     plugins: node.plugins,
     agents,
     // Portable per-node Pi extension posture (#2133) — Pi provider reads it as
@@ -512,8 +603,8 @@ function reportedEffort(
  * Node fields that name a capability for the node to load. Each is also the key of
  * the provider capability that honours it. Running the node without what it named
  * would produce output from a setup its author did not intend, so a mismatch fails
- * the run instead of warning like the other capability axes. An `mcp:` declared
- * `optional: true` names no requirement; `resolveNodeMcp` records its absence.
+ * the run instead of warning like the other capability axes. An `mcp:` or skill
+ * declared `optional: true` names no requirement; resolution records its absence.
  */
 export const SCOPED_CAPABILITIES = ['mcp', 'skills', 'plugins'] as const;
 
@@ -523,9 +614,12 @@ export function namesScopedCapability(node: DagNode, capability: ScopedCapabilit
   switch (capability) {
     case 'mcp':
       return 'mcp' in node && mcpDeclaration(node.mcp)?.optional === false;
-    // `skills: []` and `plugins: []` name nothing, so they need no capability.
+    // `skills: []`, an all-optional list, and `plugins: []` name nothing.
     case 'skills':
-      return 'skills' in node && (node.skills?.length ?? 0) > 0;
+      return (
+        'skills' in node &&
+        (node.skills?.some(skill => skillDeclaration(skill).optional === false) ?? false)
+      );
     case 'plugins':
       return 'plugins' in node && (node.plugins?.length ?? 0) > 0;
   }

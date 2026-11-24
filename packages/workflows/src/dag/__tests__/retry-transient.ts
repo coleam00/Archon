@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import type { ProviderFailure } from '@archon/provider-contract';
-import type { DagNode, WorkflowRun } from '../../schemas';
+import type { DagNode, StepRetryConfig, WorkflowRun } from '../../schemas';
 import { executeDagWorkflow } from '../../dag-executor';
 import type { IWorkflowStore } from '../../store';
 import { nodeInvocationKey, readNodeRecordEvent } from '../../node-record-reader';
@@ -19,6 +19,7 @@ import {
   mockGetAgentProviderDag,
   mockSendQueryDag,
   runUsageWrites,
+  spyOnNodeExec,
 } from '../test-utils';
 
 export function registerTransientTests() {
@@ -334,7 +335,7 @@ export function registerTransientTests() {
     async function attemptsForTypedFailure(
       failure: ProviderFailure,
       errors: string[] = [failure.evidence],
-      onError?: 'transient' | 'all'
+      onError?: StepRetryConfig['on_error']
     ): Promise<{
       calls: number;
       failedKinds: unknown[];
@@ -518,6 +519,12 @@ export function registerTransientTests() {
       'capacity waits respect run status %s before another provider attempt',
       async stopStatus => {
         const realSetTimeout = globalThis.setTimeout;
+        // Node scratch release asks git for worktrees when the node ends. Its subprocess
+        // timers are not wait slices, so git answers without spawning: no registrations.
+        const execSpy = spyOnNodeExec().mockImplementation(async () => ({
+          stdout: '',
+          stderr: '',
+        }));
         try {
           for (const isLoop of [false, true]) {
             let status: WorkflowRun['status'] | null = 'running';
@@ -588,6 +595,7 @@ export function registerTransientTests() {
           }
         } finally {
           globalThis.setTimeout = realSetTimeout;
+          execSpy.mockRestore();
         }
       }
     );
@@ -696,6 +704,42 @@ export function registerTransientTests() {
         );
       }
     );
+
+    it.each([
+      [undefined, 1],
+      ['transient', 1],
+      ['schema_unmet', 2],
+      ['all', 2],
+    ] as const)(
+      'an output that did not meet its schema retries only when on_error opts in: %s',
+      async (onError, expectedCalls) => {
+        const evidence =
+          'error_max_structured_output_retries: Failed to provide valid structured output';
+        const result = await attemptsForTypedFailure(
+          { class: 'schema_unmet', evidence },
+          [evidence],
+          onError
+        );
+        expect(result.calls).toBe(expectedCalls);
+        expect(result.failedKinds).toEqual(['schema_unmet']);
+      }
+    );
+
+    it('on_error: schema_unmet is a ladder step: transient still retries, unknown does not', async () => {
+      const transient = await attemptsForTypedFailure(
+        { class: 'transient', evidence: 'stream reset' },
+        undefined,
+        'schema_unmet'
+      );
+      expect(transient.calls).toBe(2);
+      const unknown = await attemptsForTypedFailure(
+        { class: 'unknown', evidence: 'the provider reported a problem' },
+        undefined,
+        'schema_unmet'
+      );
+      expect(unknown.calls).toBe(1);
+      expect(unknown.failedKinds).toEqual(['unknown']);
+    });
 
     it(
       'a typed rate limit earns the widened budget without rate-limit wording — #3520',

@@ -17,9 +17,11 @@ import { handleGithubWorkItemComments } from './comments';
 import { handleGithubPrFiles, handleGithubRepoFile } from './files';
 import { handleGithubPrMergeState } from './merge-state';
 import { handleGithubMutation } from './lifecycle';
-import { handleGithubPrReviews, handleGithubPrView } from './pull-requests';
+import { handleGithubPrView } from './pull-requests';
+import { handleGithubPrReviews } from './reviews';
 import {
   handleGithubRepoLabelsList,
+  handleGithubWorkItemLabelAdded,
   handleGithubWorkItemList,
   handleGithubWorkItemView,
 } from './workitems';
@@ -48,6 +50,7 @@ export const githubPluginMetadata = {
     'workitem.close',
     'workitem.edit-body',
     'workitem.list',
+    'workitem.label.added',
     'workitem.search',
     'repo.labels.list',
     'repo.label.ensure',
@@ -57,6 +60,7 @@ export const githubPluginMetadata = {
     'pr.edit-body',
     'pr.ready',
     'pr.draft',
+    'pr.close',
     'comment.upsert',
     'pr.merge',
     'checks.rerun',
@@ -67,9 +71,23 @@ export const githubPluginMetadata = {
     'repo.file',
     'pr.thread.reply',
     'pr.thread.resolve',
+    'pr.review.submit',
+    'attachment.put',
   ],
   mutationConditions: { 'pr.merge': ['head'] },
   token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
+  remedies: {
+    unsupported_op:
+      '`archon plugin update coleam00/Archon/plugins/forge-github` installs the latest ' +
+      'released plugin, which may not support this operation either.',
+    // Per-user GitHub mode scrubs the shared token from a run started by a user who has
+    // not connected their own identity, so a shared `GH_TOKEN` cannot fix that refusal.
+    no_credential:
+      "Set `GH_TOKEN` in Archon's env file (`~/.archon/.env`, `ARCHON_HOME/.env` when " +
+      'configured, or `/.archon/.env` in Docker), set `GITHUB_TOKEN`, use `gh auth login`, ' +
+      'or configure GitHub App mode. When per-user GitHub is enabled, connect your own ' +
+      'GitHub identity instead: `archon auth github` or the Web UI Settings page.',
+  },
 } satisfies PluginMetadata;
 
 export interface GitHubOperationOptions {
@@ -93,6 +111,7 @@ type ReadHandler<Op extends ReadOp> = (
 const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'workitem.view': handleGithubWorkItemView,
   'workitem.list': handleGithubWorkItemList,
+  'workitem.label.added': handleGithubWorkItemLabelAdded,
   'workitem.search': handleGithubWorkItemSearch,
   'workitem.comments': handleGithubWorkItemComments,
   'repo.labels.list': handleGithubRepoLabelsList,

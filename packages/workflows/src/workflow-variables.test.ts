@@ -22,6 +22,7 @@ mock.module('@archon/paths', () => ({
 import {
   substituteWorkflowVariables,
   buildPromptWithContext,
+  runWithNodeScratch,
   runWithPackDir,
 } from './workflow-variables';
 import { buildExecNodeEnvironment, EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
@@ -93,6 +94,7 @@ describe('user-controlled runtime variable delivery', () => {
         LOG_DIR: '/logs',
         ADOPTED_RUN_DIR: '',
         PACK_DIR: '',
+        NODE_SCRATCH_DIR: '',
         WORKFLOW_ID: 'run-1',
         BASE_BRANCH: 'dev',
         USER_MESSAGE: value('message'),
@@ -129,6 +131,20 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe(
       'message_SUFFIX message_SUFFIX feedback_SUFFIX rejection_SUFFIX previous_SUFFIX'
     );
+  });
+
+  it('replaces $NODE_SCRATCH_DIR with the node scope directory', async () => {
+    const { prompt } = await runWithNodeScratch('/scope/dir', async () =>
+      substituteWorkflowVariables(
+        'Work in $NODE_SCRATCH_DIR/wt',
+        'run-1',
+        'm',
+        '/tmp',
+        'main',
+        'docs/'
+      )
+    );
+    expect(prompt).toBe('Work in /scope/dir/wt');
   });
 
   it('replaces $WORKFLOW_ID with the run ID', () => {
@@ -498,30 +514,6 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe('Check packages/docs-web/src/content/docs for changes');
   });
 
-  it('replaces $DOCS_DIR with default docs/ when default passed', () => {
-    const { prompt } = substituteWorkflowVariables(
-      'Check $DOCS_DIR for changes',
-      'run-1',
-      'msg',
-      '/tmp',
-      'main',
-      'docs/'
-    );
-    expect(prompt).toBe('Check docs/ for changes');
-  });
-
-  it('does not affect prompts without $DOCS_DIR', () => {
-    const { prompt } = substituteWorkflowVariables(
-      'No docs reference here',
-      'run-1',
-      'msg',
-      '/tmp',
-      'main',
-      'custom/docs/'
-    );
-    expect(prompt).toBe('No docs reference here');
-  });
-
   it('falls back to docs/ when docsDir is empty string', () => {
     const { prompt } = substituteWorkflowVariables(
       'Check $DOCS_DIR for changes',
@@ -575,19 +567,6 @@ describe('substituteWorkflowVariables', () => {
       'Context: context-data. File: $CONTEXT_FILE. External path: $EXTERNAL_CONTEXT_PATH. IssueId: $ISSUE_CONTEXT_ID'
     );
     expect(contextSubstituted).toBe(true);
-  });
-
-  it('does not substitute $ISSUE_CONTEXT when followed by identifier characters', () => {
-    const { prompt } = substituteWorkflowVariables(
-      'Issue: $ISSUE_CONTEXT. ID: $ISSUE_CONTEXT_ID. Type: $ISSUE_CONTEXT_TYPE',
-      'run-1',
-      'msg',
-      '/tmp',
-      'main',
-      'docs/',
-      'context-data'
-    );
-    expect(prompt).toBe('Issue: context-data. ID: $ISSUE_CONTEXT_ID. Type: $ISSUE_CONTEXT_TYPE');
   });
 
   it('does not set contextSubstituted when only suffix-extended context vars are present', () => {

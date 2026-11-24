@@ -1,8 +1,11 @@
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "noEmit": true
-  },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist"],
+  "references": [
+    { "path": "../git" },
+    { "path": "../paths" },
+    { "path": "../provider-contract" },
+    { "path": "../workflows" }
+  ]
 }

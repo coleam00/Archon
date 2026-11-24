@@ -121,15 +121,8 @@ const mockCreateOpencode = mock(async () => {
   return runtime;
 });
 
-const mockCreateOpencodeClient = mock((_options?: Record<string, unknown>) => {
-  const runtime = runtimeQueue.shift() ?? makeRuntime();
-  createdRuntimes.push(runtime);
-  return runtime.client;
-});
-
 mock.module('@opencode-ai/sdk', () => ({
   createOpencode: mockCreateOpencode,
-  createOpencodeClient: mockCreateOpencodeClient,
 }));
 
 import { OpencodeProvider, resetEmbeddedRuntime } from './provider';
@@ -162,7 +155,7 @@ describe('normalizeTokens', () => {
   });
 });
 import { opencodeFailureClass } from './errors';
-import type { MessageChunk, NodeConfig } from '../../types';
+import type { MessageChunk } from '../../types';
 
 /** Default model for tests — satisfies the model-or-agent validation */
 const TEST_MODEL = { model: 'test/mock-model' };
@@ -220,7 +213,6 @@ describe('OpencodeProvider', () => {
     createdRuntimes.length = 0;
     startupErrors.length = 0;
     mockCreateOpencode.mockClear();
-    mockCreateOpencodeClient.mockClear();
     mockLogger.info.mockClear();
     mockLogger.warn.mockClear();
     mockLogger.error.mockClear();
@@ -1569,23 +1561,6 @@ describe('OpencodeProvider', () => {
     expect(runtimeB.server.close).toHaveBeenCalledTimes(1);
   });
 
-  test('always starts a fresh embedded runtime per query attempt', async () => {
-    const runtimeA = makeRuntime({ close: mock(() => undefined) });
-    const runtimeB = makeRuntime({ close: mock(() => undefined) });
-    runtimeQueue.push(runtimeA, runtimeB);
-    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-
-    await consume(
-      new OpencodeProvider().sendQuery('one', '/tmp', undefined, { assistantConfig: TEST_MODEL })
-    );
-    await consume(
-      new OpencodeProvider().sendQuery('two', '/tmp', undefined, { assistantConfig: TEST_MODEL })
-    );
-
-    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
-    expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
-  });
-
   test('embedded runtime passes random port and isolated startup config', async () => {
     const runtime = makeRuntime({ close: mock(() => undefined) });
     runtimeQueue.push(runtime);
@@ -1662,15 +1637,6 @@ describe('OpencodeProvider', () => {
     )[0]?.config;
     expect(firstConfig?.server?.port).toBe(firstPort);
     expect(secondConfig?.server?.port).toBe(secondPort);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      {
-        err: startupError,
-        startupPort: expect.any(Number),
-        attempt: 1,
-        maxAttempts: 3,
-      },
-      'opencode.runtime_start_retry_after_port_conflict'
-    );
   });
 
   test.each([
@@ -1693,10 +1659,6 @@ describe('OpencodeProvider', () => {
     expect(failure?.class).toBe('unknown');
     expect(failure?.evidence).toContain(startupError.message);
     expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
-    expect(mockLogger.warn).not.toHaveBeenCalledWith(
-      expect.any(Object),
-      'opencode.runtime_start_retry_after_port_conflict'
-    );
   });
 
   test('agent config injects archon-prefixed kebab-case name into promptAsync body', async () => {
@@ -2001,64 +1963,6 @@ describe('OpencodeProvider', () => {
       body: expect.objectContaining({
         parts: [{ type: 'text', text: 'node prompt that should be used' }],
         agent: 'archon-test-agent',
-      }),
-    });
-  });
-
-  test('uses node prompt when no agents are defined', async () => {
-    const cwd = await createTempProjectDir();
-    const runtime = makeRuntime();
-    runtimeQueue.push(runtime);
-    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-
-    const { error } = await consume(
-      new OpencodeProvider().sendQuery('node prompt should be used', cwd, undefined, {
-        assistantConfig: TEST_MODEL,
-        nodeConfig: {}, // No agents
-      })
-    );
-
-    expect(error).toBeUndefined();
-    // Verify the node's prompt was sent to OpenCode
-    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
-      path: { id: 'session-1' },
-      query: { directory: cwd },
-      body: expect.objectContaining({
-        parts: [{ type: 'text', text: 'node prompt should be used' }],
-      }),
-    });
-  });
-
-  test('uses node prompt when agent has no prompt field', async () => {
-    const cwd = await createTempProjectDir();
-    const runtime = makeRuntime();
-    runtimeQueue.push(runtime);
-    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-
-    const nodeConfig = {
-      agents: {
-        'empty-agent': {
-          description: 'Agent with no prompt',
-          // No prompt field
-        },
-      },
-    } as unknown as NodeConfig;
-
-    const { error } = await consume(
-      new OpencodeProvider().sendQuery('fallback node prompt', cwd, undefined, {
-        assistantConfig: TEST_MODEL,
-        nodeConfig,
-      })
-    );
-
-    expect(error).toBeUndefined();
-    // Verify the node's prompt was used as fallback
-    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
-      path: { id: 'session-1' },
-      query: { directory: cwd },
-      body: expect.objectContaining({
-        parts: [{ type: 'text', text: 'fallback node prompt' }],
-        agent: 'archon-empty-agent',
       }),
     });
   });

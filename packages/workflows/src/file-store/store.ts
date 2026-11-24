@@ -20,7 +20,12 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '../store';
-import type { WorkflowRun } from '../schemas/workflow-run';
+import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
+import {
+  WorkflowRunDeleteRefusedError,
+  liveAdoptersRefusal,
+  liveDescendantsRefusal,
+} from '../store/errors';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   workflowNodeSessionSchema,
@@ -240,6 +245,8 @@ export async function createFileWorkflowStore(
     updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
     updateWorkflowRunMetadataIfRunning: (id, metadata) =>
       write([id], view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
+    updateWorkflowRunMetadataIfPending: (id, metadata) =>
+      write([id], view => view.updateWorkflowRunMetadataIfPending(id, metadata)),
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write([id], view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
@@ -272,6 +279,10 @@ export async function createFileWorkflowStore(
       write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
     releaseRunForUnreadableSource: (id, release, beforePublish) =>
       write([id], view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
+    requestOperatorPause: (id, requested) =>
+      write([id], view => view.requestOperatorPause(id, requested)),
+    pauseWorkflowRunForOperator: (id, claimId) =>
+      write([id], view => view.pauseWorkflowRunForOperator(id, claimId)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write([id], view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, events, expected) =>
@@ -282,16 +293,16 @@ export async function createFileWorkflowStore(
         view => view.resolveAndCancelApprovalGate(id, events, cancellation, expected),
         await observedRun(id)
       ),
-    completeWorkflowRun: async (id, completion, metadata) =>
+    completeWorkflowRun: async (id, completion, metadata, result) =>
       write(
         [id],
-        view => view.completeWorkflowRun(id, completion, metadata),
+        view => view.completeWorkflowRun(id, completion, metadata, result),
         await observedRun(id)
       ),
     failWorkflowRun: async (id, error, options) =>
       write([id], view => view.failWorkflowRun(id, error, options), await observedRun(id)),
-    cancelWorkflowRun: async (id, event) =>
-      write([id], view => view.cancelWorkflowRun(id, event), await observedRun(id)),
+    cancelWorkflowRun: async (id, event, options) =>
+      write([id], view => view.cancelWorkflowRun(id, event, options), await observedRun(id)),
     cancelFanOutRun: async (id, reason) =>
       write([id], view => view.cancelFanOutRun(id, reason), await observedRun(id)),
     cancelResumableRunsForConversation: async (id, assertMayCancel) =>
@@ -347,17 +358,63 @@ export async function createFileWorkflowStore(
     getRunAncestry: id => query('all', view => view.getRunAncestry(id)),
     getActiveWorkflowRunByPath: (path, self) =>
       query('all', view => view.getActiveWorkflowRunByPath(path, self)),
-    findResumableRun: (name, path) => query('all', view => view.findResumableRun(name, path)),
     findWorkflowRunsByIdPrefix: (prefix, codebase) =>
       query('all', view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => query('all', view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => query('all', view => view.findOpenWorkRuns(options)),
-    listItemRuns: async () => {
+    getItemRuns: async () => {
       throw new FileStoreUnsupportedError('items');
     },
     getItem: async () => {
       throw new FileStoreUnsupportedError('items');
     },
+    listItemRulings: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemRuling: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    withdrawItemRuling: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    listItemsInWindow: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    getItemMerge: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemMerge: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    getItemLanding: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemLanding: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    listItemLinks: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemLink: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    endItemLink: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    // An ask belongs to an item, and this store holds none, so it holds no asks: the
+    // readers see an empty set rather than a failure that would break every queue read.
+    listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
+    getItemAsk: async () => null,
+    answerItemAsk: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    withdrawItemAsk: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    // A wait belongs to an item too: none are open, and none can be withdrawn.
+    listOpenItemWaits: async () => [],
+    withdrawItemWaits: async () => ({ kind: 'not_found' }),
     listWorkflowRuns: async options => {
       const result = await query('all', view => view.listWorkflowRuns(options));
       result.runs = await Promise.all(
@@ -407,8 +464,29 @@ export async function createFileWorkflowStore(
       commit(root, 'all', async runs => {
         const run = runs.get(id);
         if (!run) return { result: undefined, changes: {} };
-        if (!['completed', 'failed', 'cancelled'].includes(run.status))
-          throw new Error('Only terminal runs can be deleted');
+        if (!isTerminalRunStatus(run.status))
+          throw new WorkflowRunDeleteRefusedError(
+            `Cannot delete workflow run in '${run.status}' status — cancel it first`
+          );
+        // A sub-run that has not ended, at any depth, keeps its ancestors: deleting one would
+        // cut the tree that `concurrency.runs` counts as one.
+        const live: WorkflowRun[] = [];
+        const seen = new Set([id]);
+        const below = [id];
+        for (let parent = below.pop(); parent !== undefined; parent = below.pop()) {
+          for (const child of runs.values()) {
+            if (child.parent_run_id !== parent || seen.has(child.id)) continue;
+            seen.add(child.id);
+            below.push(child.id);
+            if (!isTerminalRunStatus(child.status)) live.push(child);
+          }
+        }
+        if (live.length > 0) throw liveDescendantsRefusal(id, live);
+        // A continuation that has not ended reads this run's artifacts.
+        const adopters = [...runs.values()].filter(
+          row => row.adopted_from_run_id === id && !isTerminalRunStatus(row.status)
+        );
+        if (adopters.length > 0) throw liveAdoptersRefusal(id, adopters);
         const changed = [...runs.values()]
           .filter(row => row.parent_run_id === id || row.adopted_from_run_id === id)
           .map(row => ({

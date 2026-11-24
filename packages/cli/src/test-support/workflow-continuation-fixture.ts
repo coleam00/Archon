@@ -10,6 +10,7 @@ export function makeContinuationRun(overrides: Partial<WorkflowRun> = {}): Workf
     codebase_id: 'codebase-1',
     status: 'completed',
     outcome: null,
+    completed_outcome: null,
     user_message: 'original prompt',
     metadata: {},
     active_phase_started_at: null,

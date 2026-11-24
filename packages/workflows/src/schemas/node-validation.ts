@@ -240,7 +240,7 @@ function validateWaitNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
 }
 
 function validateIncludeNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
-  if (data.with !== undefined) validateWithShape('include', data.with, ctx);
+  if (data.with !== undefined) validateIncludeWith('include', data.with, ctx);
   if (data.fan_out !== undefined) {
     const result = composeFanOutNodeSchema.pick({ fan_out: true }).safeParse(data);
     if (!result.success) addIssues(ctx, result.error.issues);
@@ -249,7 +249,7 @@ function validateIncludeNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
 }
 
 function validateWorkflowNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
-  if (data.with !== undefined) validateWithShape('workflow', data.with, ctx);
+  if (data.with !== undefined) validateIncludeWith('workflow', data.with, ctx);
   // A `workflow:` node has ONE input channel per invocation: either the untyped
   // `input:` string ($ARGUMENTS) or the named `with:` map ($INPUTS.<name>). Accepting
   // both would require a precedence rule between two overlapping channels — the exact
@@ -368,6 +368,33 @@ function validateWithShape(
 }
 
 /**
+ * Include/workflow `with:` values are JSON literals, except a top-level object with
+ * exactly the binding directive's shape (#5760): that is the directive, validated by the
+ * same rules as on command and script nodes. Any other object, such as
+ * `{ from: 'alice', to: 'bob' }`, stays a literal. `{ outputs }` is still refused: only
+ * a script node's own `with:` reads it, and here it would pass as a literal.
+ */
+function validateIncludeWith(
+  kind: 'include' | 'workflow',
+  value: unknown,
+  ctx: z.RefinementCtx
+): void {
+  const map = validateWithShape(kind, value, ctx);
+  if (map === undefined) return;
+  for (const [key, entry] of Object.entries(map)) {
+    if (bindingDirectiveSchema.safeParse(entry).success) {
+      validateBindingDirective(kind, key, entry as object, ctx);
+    } else if (typedOutputsDirectiveSchema.safeParse(entry).success) {
+      addIssue(
+        ctx,
+        `${kind} input '${key}': '{ outputs }' is a typed-outputs directive, which only a script node's own 'with:' reads; on ${kind} nodes an object is passed as a literal. Read the outputs in a script node and pass that node's output.`,
+        ['with', key]
+      );
+    }
+  }
+}
+
+/**
  * Node-local bindings on command/script nodes (#2637): same key/value grammar as
  * include/workflow `with:`, plus the object position is RESERVED for the binding
  * directive — any other object shape is rejected naming both accepted forms.
@@ -441,7 +468,7 @@ function validateBindingEnvKeys(
 }
 
 function validateBindingDirective(
-  kind: 'command' | 'script',
+  kind: 'command' | 'script' | 'include' | 'workflow',
   key: string,
   value: object,
   ctx: z.RefinementCtx

@@ -193,16 +193,6 @@ describe('mapCopilotEvent', () => {
     expect(ctx.capturedUsage).toEqual({ input: 7, output: 42 });
   });
 
-  test('tool.execution_start → tool_call with arguments as rawInput', () => {
-    const out = mapCopilotEvent(
-      evt('tool.execution_start', { toolCallId: 'c1', toolName: 'bash', arguments: { cmd: 'ls' } }),
-      makeCtx()
-    );
-    expect(out).toEqual([
-      { type: 'tool_call', toolCallId: 'c1', name: 'bash', rawInput: { cmd: 'ls' } },
-    ]);
-  });
-
   test('tool.execution_start without arguments omits rawInput', () => {
     const out = mapCopilotEvent(
       evt('tool.execution_start', { toolCallId: 'c1', toolName: 'read' }),

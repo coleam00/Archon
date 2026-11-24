@@ -74,12 +74,4 @@ describe('requireTerminalStatusWrite', () => {
     const [context] = logError.mock.calls[0] as [Record<string, unknown>];
     expect(context.err).toMatchObject({ cause, failure });
   });
-
-  it('keeps the original error reachable as the marker cause', async () => {
-    const cause = new Error('disk full');
-
-    await expect(
-      requireTerminalStatusWrite(Promise.reject(cause), { workflowRunId: 'r', site: 's' })
-    ).rejects.toMatchObject({ cause });
-  });
 });

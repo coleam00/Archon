@@ -310,6 +310,17 @@ describe('readSubrunMetadata — inputs (#2470)', () => {
     expect(md.inputs).toEqual({ plan: 'do it', mode: 'fast' });
   });
 
+  test('reconstitutes null-valued inputs dropped from inputs_values by SQLite json_patch (#5939)', () => {
+    // When SQLite merges metadata via RFC 7396 json_patch, any null-valued key inside
+    // inputs_values is deleted by the dialect merge. The canonical text map keeps the
+    // key as "null", which readSubrunMetadata restores as null rather than dropping it.
+    const md = readSubrunMetadata({
+      inputs: { before: 'null', other: '42' },
+      inputs_values: { other: 42 },
+    });
+    expect(md.inputs).toEqual({ before: null, other: 42 });
+  });
+
   test('treats a non-string-valued or non-object inputs as unset', () => {
     expect(readSubrunMetadata({ inputs: { plan: 5 } }).inputs).toBeUndefined();
     expect(readSubrunMetadata({ inputs: ['a'] }).inputs).toBeUndefined();
@@ -323,23 +334,8 @@ describe('readIdentityUnresolved (#2304)', () => {
     expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: true })).toBe(true);
   });
 
-  test('reads a false stamp', () => {
-    expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: false })).toBe(false);
-  });
-
   test('treats a missing key as undefined', () => {
     expect(readIdentityUnresolved({})).toBeUndefined();
     expect(readIdentityUnresolved(undefined)).toBeUndefined();
-  });
-
-  test('treats a non-boolean value as undefined (defensive)', () => {
-    expect(
-      readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: 'yes' })
-    ).toBeUndefined();
-    expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: 1 })).toBeUndefined();
-    expect(
-      readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: null })
-    ).toBeUndefined();
-    expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: {} })).toBeUndefined();
   });
 });

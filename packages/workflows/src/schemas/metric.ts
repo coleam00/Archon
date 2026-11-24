@@ -3,22 +3,32 @@
  * output key, and the report `queryMetrics` aggregates them into.
  *
  * Records are strict so they cannot carry free text beyond a bounded subject and
- * instrument: no credentials, prompt contents or user messages.
+ * instrument: no credentials, prompt contents or user messages. A record's dimensions sit
+ * beside the records, under `metric_dimensions`, so a binary that reads records strictly
+ * still reads every record a newer one writes.
  */
 import { z } from 'zod';
+import { RUN_ID_PATTERN } from '@archon/paths/archon-paths';
 
 export const metricNameSchema = z
   .string()
   .max(128)
   .regex(/^[a-z0-9_]+(\.[a-z0-9_]+)*$/, 'must be dot-separated lowercase segments of [a-z0-9_]');
 
-/** Run ids are UUIDs, or 32 hex characters on rows written before ids had dashes. */
-const runIdSchema = z
+const runIdSchema = z.string().regex(RUN_ID_PATTERN, 'must be a run id');
+
+const DIMENSION_KEY_RULE =
+  'must be a lowercase letter, then up to 31 lowercase letters, digits or underscores';
+
+export const metricDimensionKeySchema = z
   .string()
-  .regex(
-    /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/,
-    'must be a run id'
-  );
+  .regex(/^[a-z][a-z0-9_]{0,31}$/, DIMENSION_KEY_RULE);
+
+const metricDimensionValueSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_.:@/-]{1,64}$/, 'must be 1-64 characters of [A-Za-z0-9_.:@/-]');
+
+const MAX_DIMENSIONS = 8;
 
 const offsetTimeSchema = z.iso.datetime({ offset: true });
 
@@ -53,25 +63,84 @@ const recordFields = {
   instrument_node: z.string().min(1).max(255).optional(),
 };
 
+const countFields = { ...recordFields, kind: z.literal('count'), value: z.number().nonnegative() };
+const scoreFields = {
+  ...recordFields,
+  kind: z.literal('score'),
+  value: z.number(),
+  /** The metric this score calibrates. */
+  calibrates: metricNameSchema.optional(),
+};
+
+/** What a node may return: strict, so a record carries nothing the fields do not bound. */
 export const metricRecordSchema = z.discriminatedUnion('kind', [
-  z.strictObject({
-    ...recordFields,
-    kind: z.literal('count'),
-    value: z.number().nonnegative(),
-  }),
-  z.strictObject({
-    ...recordFields,
-    kind: z.literal('score'),
-    value: z.number(),
-    /** The metric this score calibrates. */
-    calibrates: metricNameSchema.optional(),
-  }),
+  z.strictObject(countFields),
+  z.strictObject(scoreFields),
 ]);
 export type MetricRecord = z.infer<typeof metricRecordSchema>;
+
+/**
+ * How a stored record is read: the same fields, with keys it does not know stripped. Only a
+ * newer binary's strict write can store such a key, so a later field never makes an older
+ * reader refuse the record.
+ */
+export const storedMetricRecordSchema = z.discriminatedUnion('kind', [
+  z.object(countFields),
+  z.object(scoreFields),
+]);
 export type MetricKind = MetricRecord['kind'];
 
-/** The output shape a metric node returns. Other top-level keys are the author's. */
-export const metricOutputSchema = z.object({ metrics: z.array(metricRecordSchema) });
+/**
+ * Named values a query can split a record's name by, such as `{ route: 'plan' }`. Not part
+ * of the name's definition or of a record's identity.
+ */
+const metricDimensionsSchema = z.preprocess(
+  (input, context) => {
+    // zod drops a `__proto__` key without a word, so it never reaches the key pattern.
+    if (typeof input === 'object' && input !== null && Object.hasOwn(input, '__proto__')) {
+      context.issues.push({
+        code: 'custom',
+        input,
+        path: ['__proto__'],
+        message: DIMENSION_KEY_RULE,
+      });
+    }
+    return input;
+  },
+  z
+    .record(metricDimensionKeySchema, metricDimensionValueSchema)
+    .refine(
+      dimensions => Object.keys(dimensions).length <= MAX_DIMENSIONS,
+      `must hold at most ${String(MAX_DIMENSIONS)} dimensions`
+    )
+    .meta({ maxProperties: MAX_DIMENSIONS })
+);
+export type MetricDimensions = z.infer<typeof metricDimensionsSchema>;
+
+/** `metric_dimensions`, when present, holds one entry per record, `{}` for none. */
+const metricDimensionsListSchema = z.array(metricDimensionsSchema).optional();
+
+const sameLength = (output: { metrics: unknown[]; metric_dimensions?: unknown[] }): boolean =>
+  output.metric_dimensions === undefined ||
+  output.metric_dimensions.length === output.metrics.length;
+
+const DIMENSIONS_LENGTH = 'must hold one entry per record in metrics';
+
+/**
+ * The output shape a metric node returns: its records, and their dimensions by position.
+ * Other top-level keys are the author's.
+ */
+export const metricOutputSchema = z
+  .object({ metrics: z.array(metricRecordSchema), metric_dimensions: metricDimensionsListSchema })
+  .refine(sameLength, { path: ['metric_dimensions'], message: DIMENSIONS_LENGTH });
+
+/** How a stored output is read: the same rule over the stored records. */
+export const storedMetricOutputSchema = z
+  .object({
+    metrics: z.array(storedMetricRecordSchema),
+    metric_dimensions: metricDimensionsListSchema,
+  })
+  .refine(sameLength, { path: ['metric_dimensions'], message: DIMENSIONS_LENGTH });
 
 const metricDefinitionSchema = z.object({
   kind: z.enum(['count', 'score']),
@@ -173,20 +242,28 @@ const metricCompareSchema = z.object({
 });
 export type MetricCompare = z.infer<typeof metricCompareSchema>;
 
-const metricModelGroupFields = {
+/** The figures every group of a split reports. */
+const metricGroupFields = {
   value: z.number(),
   n: z.number().int(),
   interval: metricIntervalSchema,
   cost: metricCostSchema,
-  /** The requested and the provider-reported models of the group's steps at the node. */
-  requested_models: z.array(z.string()),
-  resolved_models: z.array(z.string()),
-  /** `value` minus the value of every other model group combined; `null` without one. */
+  /**
+   * `value` minus the value of every other labelled group combined (`model` or `value`,
+   * never `mixed` or `none`); `null` without one.
+   */
   delta_vs_rest: z.number().nullable(),
   /** Newcombe's interval for a rate, Welch's for other scores. */
   delta_interval_vs_rest: metricIntervalSchema,
   /** `delta_interval_vs_rest` excludes zero. */
   separated: z.boolean(),
+};
+
+const metricModelGroupFields = {
+  ...metricGroupFields,
+  /** The requested and the provider-reported models of the group's steps at the node. */
+  requested_models: z.array(z.string()),
+  resolved_models: z.array(z.string()),
 };
 
 const metricModelGroupSchema = z.discriminatedUnion('split', [
@@ -213,6 +290,31 @@ const metricByModelSchema = z.object({
 });
 export type MetricByModel = z.infer<typeof metricByModelSchema>;
 
+const metricDimensionGroupFields = {
+  ...metricGroupFields,
+  /** Present when the query also names a cut: the group's own cohorts. */
+  compare: metricCompareSchema.optional(),
+};
+
+const metricDimensionGroupSchema = z.discriminatedUnion('split', [
+  /** Records that carry the dimension with this value. */
+  z.object({ split: z.literal('value'), label: z.string(), ...metricDimensionGroupFields }),
+  /** Records that do not carry the dimension. */
+  z.object({ split: z.literal('none'), ...metricDimensionGroupFields }),
+]);
+export type MetricDimensionGroup = z.infer<typeof metricDimensionGroupSchema>;
+
+/**
+ * Records split by the value they carry for one dimension. Observational: each value covers
+ * different work, so a difference mixes the dimension with the work.
+ */
+const metricByDimensionSchema = z.object({
+  key: z.string(),
+  /** Value groups by label, then `none`; empty groups are left out. */
+  groups: z.array(metricDimensionGroupSchema),
+});
+export type MetricByDimension = z.infer<typeof metricByDimensionSchema>;
+
 const metricInstrumentReportSchema = z.object({
   instrument: z.string().nullable(),
   /**
@@ -226,10 +328,12 @@ const metricInstrumentReportSchema = z.object({
   /** Wilson's interval when every value is 0 or 1, otherwise the t interval of the mean. */
   interval: metricIntervalSchema,
   cost: metricCostSchema,
-  /** Present when the query names a cut. */
+  /** Present when the query names a cut and no dimension; a dimension split carries it per group. */
   compare: metricCompareSchema.optional(),
   /** Present when the query names a node to split by model. */
   by_model: metricByModelSchema.optional(),
+  /** Present when the query names a dimension key to split by. */
+  by_dimension: metricByDimensionSchema.optional(),
   latest: z.object({ value: z.number(), at: z.string(), subject: z.string().nullable() }),
   series: z.array(metricSeriesPointSchema),
 });

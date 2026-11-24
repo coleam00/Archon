@@ -103,6 +103,7 @@ describe('resolveProjectPaths', () => {
     expect(result.artifactsDir).toBe(wsPath('acme', 'widget', 'artifacts', 'runs', 'run-xyz'));
     expect(result.stateDir).toBe(wsPath('acme', 'widget', 'state'));
     expect(result.outputRoot).toBe(wsPath('acme', 'widget'));
+    expect(result.identityFaulted).toBe(false);
   });
 
   // The retry addresses the TRANSIENT case only. A sustained fault must still reach the
@@ -192,19 +193,6 @@ describe('resolveProjectPaths', () => {
     expect(result.logDir).toBe(cwdPath('/some/cwd', 'logs'));
     expect(result.artifactsRoot).toBe(cwdPath('/some/cwd', 'artifacts'));
     expect(result.stateDir).toBe(cwdPath('/some/cwd', 'state'));
-  });
-
-  it('still returns all five paths when the codebase lookup throws', async () => {
-    const store = makeStore({
-      getCodebase: mock(() => Promise.reject(new Error('db down'))),
-    });
-    const deps = makeDeps(store);
-
-    const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'cb-boom');
-
-    expect(result.artifactsDir).toBe(cwdPath('/some/cwd', 'artifacts', 'runs', 'run-xyz'));
-    expect(result.stateDir).toBe(cwdPath('/some/cwd', 'state'));
-    expect(result.outputRoot).toBe(cwdPath('/some/cwd'));
   });
 
   it('isolates state for same-named directories and leaves legacy shared state untouched', async () => {
@@ -391,17 +379,13 @@ describe('resolveProjectPaths', () => {
     expect(result.outputRoot).toBe(wsPath('acme', 'widget'));
   });
 
-  // #2304: identityResolution is the row-level flag the persistence block reads to
+  // #2304: identityFaulted is the row-level flag the persistence block reads to
   // decide whether to write `output_root` or stamp `metadata.identity_unresolved`.
-  // The five cases below cover every branch in `resolveProjectPaths`:
-  //   • registered repo / folder / _local  → 'resolved'
-  //   • codebase row exists, no identity   → 'unregistered' (the WARN arm)
-  //   • no codebaseId                      → 'unregistered' (no lookup attempted)
-  //   • codebase lookup returns null       → 'unregistered' (no row)
-  //   • both attempts throw                → 'faulted' (the ERROR arm)
-  //   • persisted-output-root short-circuit → undefined (a resume, no fresh flag)
-  describe('identityResolution (#2304)', () => {
-    it('is "resolved" for a repo codebase', async () => {
+  // Only a lookup that throws on both attempts is faulted; every other branch of
+  // `resolveProjectPaths` (a resolved row, a row without identity, no codebaseId,
+  // no row, the persisted-output-root short-circuit) must leave it false.
+  describe('identityFaulted (#2304)', () => {
+    it('is false for a repo codebase', async () => {
       const store = makeStore({
         getCodebase: mock(async () => ({
           id: 'cb-repo',
@@ -415,10 +399,10 @@ describe('resolveProjectPaths', () => {
 
       const result = await resolveProjectPaths(deps, '/repos/widget', RUN_ID, 'cb-repo');
 
-      expect(result.identityResolution).toBe('resolved');
+      expect(result.identityFaulted).toBe(false);
     });
 
-    it('is "resolved" for a folder codebase', async () => {
+    it('is false for a folder codebase', async () => {
       const store = makeStore({
         getCodebase: mock(async () => ({
           id: 'cb-folder',
@@ -432,10 +416,10 @@ describe('resolveProjectPaths', () => {
 
       const result = await resolveProjectPaths(deps, '/tmp/platform', RUN_ID, 'cb-folder');
 
-      expect(result.identityResolution).toBe('resolved');
+      expect(result.identityFaulted).toBe(false);
     });
 
-    it('is "unregistered" when the lookup returns a codebase row that resolves to a cwd key (WARN arm)', async () => {
+    it('is false when the lookup returns a codebase row that resolves to a cwd key (WARN arm)', async () => {
       const store = makeStore({
         getCodebase: mock(async () => ({
           id: 'cb-noop',
@@ -449,27 +433,27 @@ describe('resolveProjectPaths', () => {
 
       const result = await resolveProjectPaths(deps, '/tmp/.', RUN_ID, 'cb-noop');
 
-      expect(result.identityResolution).toBe('unregistered');
+      expect(result.identityFaulted).toBe(false);
     });
 
-    it('is "unregistered" when no codebaseId is provided (no lookup attempted)', async () => {
+    it('is false when no codebaseId is provided (no lookup attempted)', async () => {
       const deps = makeDeps();
 
       const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID);
 
-      expect(result.identityResolution).toBe('unregistered');
+      expect(result.identityFaulted).toBe(false);
     });
 
-    it('is "unregistered" when the lookup returns null (no codebase row)', async () => {
+    it('is false when the lookup returns null (no codebase row)', async () => {
       const store = makeStore({ getCodebase: mock(async () => null) });
       const deps = makeDeps(store);
 
       const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'missing-id');
 
-      expect(result.identityResolution).toBe('unregistered');
+      expect(result.identityFaulted).toBe(false);
     });
 
-    it('is "faulted" when both getCodebase attempts throw (ERROR arm)', async () => {
+    it('is true when both getCodebase attempts throw (ERROR arm)', async () => {
       const store = makeStore({
         getCodebase: mock(async () => {
           throw new Error('db down');
@@ -479,10 +463,10 @@ describe('resolveProjectPaths', () => {
 
       const result = await resolveProjectPaths(deps, '/some/cwd', RUN_ID, 'cb-boom');
 
-      expect(result.identityResolution).toBe('faulted');
+      expect(result.identityFaulted).toBe(true);
     });
 
-    it('is undefined on the persisted-output-root short-circuit (resume reading an existing row)', async () => {
+    it('is false on the persisted-output-root short-circuit (resume reading an existing row)', async () => {
       // A resume reads its `output_root` from the row and re-derives nothing; the
       // persistence block has nothing to flag on a branch that never resolved.
       const store = makeStore();
@@ -492,7 +476,7 @@ describe('resolveProjectPaths', () => {
         persistedOutputRoot: wsPath('acme', 'original'),
       });
 
-      expect(result.identityResolution).toBeUndefined();
+      expect(result.identityFaulted).toBe(false);
       // The resolved paths still come from the persisted root, not from a fresh lookup.
       expect(result.outputRoot).toBe(wsPath('acme', 'original'));
     });

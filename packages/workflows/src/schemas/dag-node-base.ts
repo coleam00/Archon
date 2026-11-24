@@ -11,6 +11,7 @@ import { modelRefSchema } from './model-binding';
 import {
   betasSchema,
   nodeMcpSchema,
+  nodeSkillSchema,
   piNodeConfigSchema,
   sandboxSettingsSchema,
 } from './provider-options';
@@ -29,19 +30,19 @@ export const triggerRuleSchema = z.enum([
 
 export type TriggerRule = z.infer<typeof triggerRuleSchema>;
 
-/** Canonical list of trigger rules — derived from schema, do not duplicate. */
-export const TRIGGER_RULES: readonly TriggerRule[] = triggerRuleSchema.options;
-
-/** Type guard: validates a value is a known TriggerRule */
-export function isTriggerRule(value: unknown): value is TriggerRule {
-  return typeof value === 'string' && (TRIGGER_RULES as readonly string[]).includes(value);
-}
-
 export const nodeContextResumeSchema = z.object({
   resume: z.string().trim().min(1, "'context.resume' must name a node"),
 });
 
-export const nodeContextSchema = z.union([z.enum(['fresh', 'shared']), nodeContextResumeSchema]);
+/**
+ * `fresh` starts a new session, `shared` continues the previous sequential node's,
+ * `same` continues the session this node itself last had (its previous loop round, else
+ * the run's item), and `{ resume }` forks a named node's session.
+ */
+export const nodeContextSchema = z.union([
+  z.enum(['fresh', 'shared', 'same']),
+  nodeContextResumeSchema,
+]);
 
 export type NodeContext = z.infer<typeof nodeContextSchema>;
 
@@ -49,6 +50,10 @@ export function isNodeContextResume(
   context: NodeContext | undefined
 ): context is { resume: string } {
   return typeof context === 'object' && context !== null && 'resume' in context;
+}
+
+export function isNodeContextSame(context: NodeContext | undefined): context is 'same' {
+  return context === 'same';
 }
 
 // Kebab-case: no leading/trailing/double hyphens (e.g. `brief-gen`, not `-brief`, `brief-`, `brief--gen`).
@@ -77,7 +82,7 @@ export const dagNodeBaseSchema = z.object({
   retry: stepRetryConfigSchema.optional(),
   hooks: workflowNodeHooksSchema.optional(),
   mcp: nodeMcpSchema.optional(),
-  skills: z.array(z.string().min(1, 'each skill must be a non-empty string')).optional(),
+  skills: z.array(nodeSkillSchema).optional(),
   // Exact provider plugin ids (Claude: `name@marketplace`). A workflow node loads
   // only the plugins it names; the provider fails the node when it cannot.
   plugins: z.array(z.string().trim().min(1, 'each plugin must be a non-empty string')).optional(),

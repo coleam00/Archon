@@ -6,11 +6,12 @@ import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import { safeSendMessage } from './platform-messages';
 import { type RunPhase } from './executor-shared';
-import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader/contracts';
+import { validateRunBudgetShape, validateWorkflowResultContract } from './loader/contracts';
 import { hasRunModelOverrides, runOverrideAppliesToRef, selectModelRef } from './model-validation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import { isFolderCodebase } from './run-paths';
 import { prepareRunAiConfiguration, type PreparedRunAiConfiguration } from './run-preflight';
+import { runProjectConfigRoot } from './workflow-source/load';
 import type {
   DagNode,
   IncludeDirective,
@@ -178,7 +179,7 @@ async function resolveRunPacks(
   isContinuation: boolean,
   recordedDispatch: RunDispatchMetadata | undefined
 ): Promise<{
-  metadata: Pick<RunDispatchMetadata, 'pack' | 'inputs_resolved'>;
+  metadata: Pick<RunDispatchMetadata, 'pack' | 'pack_workflow' | 'inputs_resolved'>;
   startInputs: Record<string, JsonValue> | undefined;
 }> {
   if (isContinuation) {
@@ -199,7 +200,9 @@ async function resolveRunPacks(
   const { inputs } = await resolveRunStartInputs(cwd, workflow, supplied);
   return {
     metadata: {
-      ...(workflow.pack !== undefined ? { pack: workflow.pack.key } : {}),
+      ...(workflow.pack !== undefined
+        ? { pack: workflow.pack.key, pack_workflow: workflow.pack.workflow }
+        : {}),
       inputs_resolved: true,
     },
     startInputs: inputs,
@@ -212,7 +215,7 @@ function refuseInvalidDispatch(
   opts: ExecuteWorkflowOptions,
   isContinuation: boolean
 ): void {
-  const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(workflow);
+  const outcomeDeclarationError = validateWorkflowResultContract(workflow);
   if (outcomeDeclarationError !== null) {
     throw new Error(`Invalid workflow '${workflow.name}': ${outcomeDeclarationError}`);
   }
@@ -350,6 +353,7 @@ async function prepareDispatchAiConfiguration(
     return opts.preparedAiConfiguration;
   }
   return await prepareRunAiConfiguration(deps, workflow, cwd, {
+    configRoot: runProjectConfigRoot(preCreatedRun?.metadata, cwd),
     codebaseId: opts.codebaseId,
     userId: executionUserId,
     runConfig: opts.runConfig,
@@ -367,13 +371,13 @@ async function resolveBaseBranch(
   config: WorkflowConfig,
   recordedDispatch: RunDispatchMetadata | undefined
 ): Promise<string> {
-  // The per-dispatch override takes priority, then what this run
+  // The per-dispatch override (`--base`, else the item's landing branch, which callers
+  // resolve before they call) takes priority, then what this run
   // recorded at its start, then an already resolved checkout base, repo config, the codebase default,
   // then git auto-detection.
   // The override must outrank config so `--base` reports the same branch the
-  // worktree was cut from (WorktreeProvider applies the same order); it also outranks the
-  // record, because re-passing `--base` to a resume is a deliberate retarget of THIS
-  // continuation (the CLI warns that only that half of it applies).
+  // worktree was cut from (WorktreeProvider applies the same order). A continuation keeps
+  // its recorded base: the CLI refuses `--base` on every subcommand that continues a run.
   // If detection fails, leave empty — substituteWorkflowVariables throws only if $BASE_BRANCH is referenced.
   const overrideBaseBranch = opts.baseOverride?.trim();
   if (overrideBaseBranch) return overrideBaseBranch;
@@ -388,7 +392,10 @@ async function resolveBaseBranch(
   try {
     const repoPath = toRepoPath(cwd);
     const remote = config.remote?.trim() || (await getDefaultRemote(repoPath));
-    if (!remote) throw new Error('Set worktree.remote to select a git remote.');
+    // No remote to detect from is the normal state of a local repository. A CLI or trigger
+    // worktree run already has its base from creation (`resolvedBaseBranch` above);
+    // otherwise, like a folder project, $BASE_BRANCH stays unresolved.
+    if (!remote) return '';
     return await getDefaultBranch(repoPath, remote);
   } catch (error) {
     // Intentional fallback: auto-detection failure is non-fatal.

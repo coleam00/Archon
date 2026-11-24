@@ -94,7 +94,7 @@ export interface AdmissionTransaction {
   binding(input: BindingIdentity): Promise<Binding | undefined>;
   owned(input: PreparationOwner): Promise<Binding | undefined>;
   canClaim(id: string): Promise<boolean>;
-  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
+  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. A running run keeps its own. */
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
   /** Remove the run holder of an admitted run; whether one was removed. */
   release(id: string): Promise<boolean>;
@@ -275,7 +275,9 @@ export function createAdmissionTransaction(
     const queue: QueuedStart[] = [];
     for (const id of ids) {
       try {
-        queue.push(queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id)));
+        const start = queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id));
+        // The file store carries no items (`FileStoreUnsupportedError('items')`).
+        queue.push({ ...start, itemId: null });
       } catch (error) {
         if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
         const queueError = new Error(`Queued resource request '${id}' is invalid`, {
@@ -338,6 +340,7 @@ export function createAdmissionTransaction(
       heldCheckouts: heldCheckouts(possiblyLocal, reusable),
       foreignHeldCheckouts: heldCheckouts(foreign, reusable),
       unknownForeignCheckoutHolder,
+      heldItems: new Map(),
     };
   }
   async function admitExisting(
@@ -371,7 +374,12 @@ export function createAdmissionTransaction(
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker(await occupancy(intent.resource, launch), launch);
+    const blocker = resourceStartBlocker(
+      await occupancy(intent.resource, launch),
+      launch,
+      intent.hostId,
+      null
+    );
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     const row: Request = {
       id: intent.launch.run.id,
@@ -412,7 +420,9 @@ export function createAdmissionTransaction(
         ...(await occupancy(resourceName, launch)),
         capacity: (await resourceCapacity(resourceName)) ?? declaredCapacity,
       },
-      launch
+      launch,
+      DIRECT_START_HOST_ID,
+      null
     );
     if (blocker) return blocker;
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
@@ -495,6 +505,12 @@ export function createAdmissionTransaction(
     const resource = await slot(row.resource);
     if (await hasSlotMembership(run.id, row.resource, true))
       throw new Error(`Admitted resource request '${run.id}' disagrees with its slot membership`);
+    // A `running` run resumed with an `ownerless` cursor still holds the slot it was
+    // admitted to; it keeps that slot and takes no other. Without it, the run is refused.
+    if (run.status === 'running') {
+      if (resource.holders.some(h => h.kind === 'run' && h.id === run.id)) return null;
+      throw new WorkflowNotResumableError(run.id, run.status);
+    }
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
     if (!resource.admitted.includes(run.id)) resource.admitted.push(run.id);

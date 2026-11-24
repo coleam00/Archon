@@ -1,24 +1,26 @@
 /**
- * Perform the writes the run's decision declared, read each one back, and hand an ask to
- * the wait as the deciding agent wrote it.
+ * Perform the writes the run's decision declared, read each one back, and leave an ask
+ * on the item as the deciding agent wrote it.
  *
  * The decision is the last agent's that ran: answer's over route's. An answer that asks
  * declares its own class (`stop` or `scope`), recorded as declared. A route that launched is answered after its round, so its own decision is
  * recorded only when it asked or found the pull request already Ready; then apply takes it out of draft. A push the answer declared is made whatever the run
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. The push comes first, then the work item, in one conditional
- * write that also releases the claim unless a person is asked; a run that asks keeps
- * its claim until the ruling node records the answer. The round carries the review
- * verdicts its delivery published and the latest validation its CI agent ran. A
- * continue then starts the item's next round at once through the operator's
- * build-queue binding; if it does not start, the item waits for the next queue run.
+ * write. The round carries the review verdicts its delivery published and the latest
+ * validation its CI agent ran. The run's outcome is the decision; the build-pick the
+ * engine starts when the run ends starts a continue's next round.
  *
- * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ORDER and INPUTS_HANDOFF,
- * the order's and the handoff's summaries, empty when skipped; INPUTS_ROUTE,
+ * An ask becomes the run's `asks`, which the engine opens on the item when the run
+ * completes, and `asked`, which the `build-after-answer` binding hands the run the
+ * answer starts: the brief and each option's effect and ruling, which the ask itself
+ * does not carry. On the `answered` path facts already recorded the answer, and this
+ * hands on its outcome without a write.
+ *
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEM, INPUTS_READ_AT and INPUTS_ANSWERED from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-build's report) and INPUTS_ANSWER, each the whole output of its
- * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
- * INPUTS_BUILD_QUEUE_BINDING, the workflow's input; INPUTS_REVIEWS and INPUTS_CI, every
- * `review-report` and `ci-report` output of this run.
+ * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts; INPUTS_REVIEWS and
+ * INPUTS_CI, every `review-report` and `ci-report` output of this run.
  */
 
 import {
@@ -26,7 +28,6 @@ import {
   type BuildAsk,
   type BuildRound,
   type BuildStatus,
-  nextRound,
   roundPrNumber,
   type Validation,
   withBuild,
@@ -40,8 +41,7 @@ import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
 import { announce, type DecisionEntry } from '../../.shared/queue.ts';
-import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
-import { updateClaimed } from '../../.shared/workitem.ts';
+import { updateWorkItem } from '../../.shared/workitem.ts';
 
 type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
 type AnswerOutput = NodeOutput<'archon-build-queue', 'answer'>;
@@ -153,33 +153,6 @@ const STATUS = {
   asked: 'asking',
 } as const satisfies Record<Exclude<Decision['kind'], 'launch'>, BuildStatus>;
 
-function summaryOf(item: QualifiedPr | null, decision: Decision): string {
-  const subject = item === null ? '' : `Issue ${String(item.number)}: `;
-  return `${subject}${decision.kind}. ${decision.reason}`;
-}
-
-/** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
-function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
-  const written = wrote === null ? summary : `${summary} (${wrote})`;
-  return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
-}
-
-/** The summary of a path with no item, so nothing is written or asked; null on an item's path. */
-function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string; healthy: boolean } | null {
-  switch (path) {
-    case 'idle':
-      return {
-        decision: path,
-        ...idleOutcome('No item waits for the build queue.', stuckItems(workflowRunId(), 'build')),
-      };
-    case 'order':
-      return { decision: path, summary: input('order'), healthy: true };
-    case 'handoff':
-      return { decision: path, summary: input('handoff'), healthy: true };
-    default:
-      return null;
-  }
-}
 
 /**
  * The review verdicts this run's delivery published, for the round's record. Unreadable
@@ -224,14 +197,19 @@ function prNumberOf(url: string, repo: QualifiedPr['repo']): Pick<BuildRound, 'p
   }
 }
 
-const NO_ASK = { question: '', options: [], recommendation: null, class: '', asked: null } as const;
-
-/** The wait's fields for the run's ask, as the deciding agent wrote them. */
+/**
+ * The run's ask as the engine takes it, and what the answered run needs that the ask
+ * does not carry. The engine checks the ask when the run completes.
+ */
 function raisedAsk({ ask, brief, by }: Extract<Decision, { kind: 'asked' }>) {
-  return { ...ask, class: by, asked: { ask, brief, by } };
+  const { question, context, options, recommendation } = ask;
+  return {
+    asks: [{ question, context, options: options.map(({ id, does, cost }) => ({ id, does, cost })), recommendation, artifacts: [] }],
+    asked: { brief, by, options: options.map(({ id, effect, ruling }) => ({ id, effect, ruling })) },
+  };
 }
 
-/** The ask's `pr` label: the number of the round's pull request, or of the item's; empty with none. */
+/** The notice's `pr` label: the number of the round's pull request, or of the item's; empty with none. */
 function prLabel(round: BuildRound | null): string {
   const pr = round?.pr_number ?? (nullableJson(input('pull_request')) as PrRecord | null)?.number;
   return pr === undefined ? '' : String(pr);
@@ -247,9 +225,8 @@ function announceDecision(decision: Decision, item: string, pr: string): void {
 
 function main(): void {
   const path = input('path').trim();
-  const noItem = noItemSummary(path);
-  if (noItem !== null) {
-    emit({ ...noItem, ...NO_ASK, item: '', pr: '' });
+  if (path === 'answered') {
+    emit({ ...(nullableJson(input('answered')) as object), asks: [], asked: null });
     return;
   }
   const runId = workflowRunId();
@@ -275,14 +252,6 @@ function main(): void {
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
   const links = round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '');
-  const result = {
-    decision: decision.kind,
-    summary: summaryOf(item, decision),
-    ...(asking === null ? NO_ASK : raisedAsk(asking)),
-    item: String(item.number),
-    pr: prLabel(round),
-    healthy: true,
-  };
 
   if (decision.kind === 'launch') throw new Error('a launch reached apply without its round');
 
@@ -294,19 +263,22 @@ function main(): void {
     reason: wrote === null ? decision.reason : `${decision.reason} (${wrote})`,
     links,
   };
-  updateClaimed(item, runId, doc =>
+  updateWorkItem(item, doc =>
     withBuild(doc, {
-      at,
+      at: input('read_at'),
       run_id: runId,
       round,
       entry,
       status: STATUS[decision.kind],
       brief: decision.kind === 'continue' ? decision.brief : '',
-      release: asking === null,
     })
   );
-  announceDecision(decision, result.item, result.pr);
-  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
+  announceDecision(decision, String(item.number), prLabel(round));
+  emit({
+    decision: decision.kind,
+    summary: `Issue ${String(item.number)}: ${decision.kind}. ${entry.reason}`,
+    ...(asking === null ? { asks: [], asked: null } : raisedAsk(asking)),
+  });
 }
 
 try {

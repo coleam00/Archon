@@ -151,7 +151,7 @@ const UNSUPPORTED_PATH_CONTINUATION_SOURCE = String.raw`(?:\.(?=[\w.*\[])|\[|\?\
 
 /**
  * The canonical text of an output reference, for messages about a reference that was
- * parsed into parts (a `when:` atom, `outcome_field`). Template scanners already hold
+ * parsed into parts (a `when:` atom, `returns.outcome`). Template scanners already hold
  * the matched text and use that instead.
  */
 export function outputRefText(
@@ -201,6 +201,26 @@ const WHOLE_INPUTS_REF_PATTERN = new RegExp(
  */
 export function parseWholeInputsRef(text: string): string | undefined {
   return WHOLE_INPUTS_REF_PATTERN.exec(text.trim())?.[1];
+}
+
+/**
+ * Whether one implicitly forwarded pack setting (see ComposedNodeMeta.forwarded) is
+ * absent from the run, so its receiver leaves it unset instead of failing as an unknown
+ * input. `forwarded` lists only those implicit forwards: an explicit binding of an
+ * absent input is not one of them and still fails.
+ */
+export function isAbsentInputForward(
+  name: string,
+  value: JsonValue,
+  runInputs: Record<string, JsonValue> | undefined,
+  forwarded: readonly string[]
+): boolean {
+  return (
+    forwarded.includes(name) &&
+    typeof value === 'string' &&
+    parseWholeInputsRef(value) === name &&
+    !Object.hasOwn(runInputs ?? {}, name)
+  );
 }
 
 /**

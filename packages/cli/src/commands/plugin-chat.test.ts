@@ -391,6 +391,7 @@ integration('chat receipts do not interfere with provider and pack discovery', a
         ),
         backgroundWork: 'none',
         sessionFork: undefined,
+        structuredOutputCorrection: undefined,
         knownToolNames: undefined,
         renamedTools: undefined,
       },

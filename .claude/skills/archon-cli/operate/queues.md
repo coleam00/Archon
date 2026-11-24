@@ -12,7 +12,7 @@ workflows. Each run does one step and stops only for a decision it cannot make:
 |---|---|
 | `archon-intake` | Records an issue event and triages that issue, or the best waiting one when it does not wait. The verdict becomes the item's stage and a route label. |
 | `archon-build-queue` | Claims the best waiting triaged item, or the one `number` names, and takes it to a pull request whose review says Ready, one round per run. |
-| `archon-merge-queue` | Claims the items the build queue finished and merges what policy allows, one at a time, through a gate. |
+| `archon-merge-queue` | Decides one issue's pull request, the one the build queue finished: merges it through a gate, returns it, asks, or ends waiting for its checks. |
 | `archon-discoveries` | Decides the out-of-scope findings finished runs recorded: file, track, drop or ask. |
 
 https://archon.diy/guides/sdlc-operations/ is the full operator manual. This
@@ -36,11 +36,11 @@ archon state get work/<issue>
 `archon workflow get <run-id>` shows the run's status and artifacts, not the decision.
 
 The stages do not start each other. After intake routes an item, start the build
-queue. After a build ends `ready`, start the merge queue. Bindings do this on a
+queue. After a build ends `ready`, start the merge stage on the same item. Bindings do this on a
 schedule once the operator installs them.
 
 Rough durations, so a slow run is not mistaken for a hang: intake about 2 minutes, a
-build round 15 to 40 minutes, a merge sweep about 2 minutes. These are typical, not
+build round 15 to 40 minutes, a merge run about 2 minutes. These are typical, not
 limits.
 
 ## Setting up the pack
@@ -63,8 +63,10 @@ the commands to set one; walk the user through it only when they ask to change m
 
 ## Before the first run
 
-- `archon workflow run archon-forge-check` must pass in the checkout. It proves the
-  pack can read the repository through the forge plugin
+- `archon forge check --data '{"remote":"<checkout remote URL>","operations":["pr.view","pr.merge"]}'`
+  must pass in the checkout (or let the engine check forge access automatically when the
+  run starts; see `reference/forge.md`, "Check forge access before a run spends"). It
+  proves the pack can reach the repository through the forge plugin
   (`archon plugin add coleam00/Archon/plugins/forge-github`).
 - `.archon/sdlc/policy/maintainers.json` on the default branch lists the forge logins
   whose issues are triaged and whose review comments count. Without the file
@@ -99,7 +101,7 @@ passes both.
 ```bash
 archon workflow run archon-intake --input number=<issue> --detach
 archon workflow run archon-build-queue --detach
-archon workflow run archon-merge-queue --detach
+archon workflow run archon-merge-queue --item issue-<issue> --detach
 archon workflow run archon-discoveries --detach
 ```
 
@@ -120,10 +122,9 @@ Optional inputs, with their defaults in each workflow's YAML:
   blocked items that no longer look blocked back to intake), `round_limit` (default
   `3`), the rounds after which a run that wants another also judges whether the rounds
   converge, and `build_queue_binding` (the binding file follow-up rounds fire).
-- `archon-merge-queue`: `limit` (default `10` items claimed), `merge_method`
-  (`squash` or `merge`), `retriage_merged` (`true`: an issue still open after its
-  pull request merged goes back to intake), and `merge_queue_binding`,
-  `build_queue_binding` and `discoveries_binding` (the binding files follow-ups fire).
+- `archon-merge-queue`: `merge_method` (`squash` or `merge`) and `retriage_merged`
+  (`true`: an issue still open after its pull request merged goes back to intake). It
+  takes no issue number: the run is on the issue's item, `--item issue-<issue>`.
 - `archon-discoveries`: `since` and `until` (ISO-8601) and `limit` (default `20` runs
   per pass).
 
@@ -192,8 +193,9 @@ A round ends one of three ways, recorded on the item:
   refused, the item waits for the next queue run and the run's summary says why.
   That round's first review continues from the review the earlier round published:
   it checks those findings and reads what changed since, not the whole pull request.
-- `ask`: the run pauses as one attention item labelled `stage: build` and `kind: route`,
-  `kind: stop` or `kind: scope`, with the issue number as `item`.
+- `ask`: the run ends `asked` and leaves one ask on the issue's item. Answer it with
+  `archon workflow answer --ref ask:<id>`; the answer starts the issue's next build run
+  through the `build-after-answer` binding.
 
 An item the merge queue returns waits for a new build round, with the merge queue's
 brief. A re-triage after the queue's last decision starts the item over.
@@ -208,38 +210,38 @@ because the item is no longer claimed by it. Launch a fresh run with
 
 ## Merge queue
 
-A sweep claims every waiting item up to `limit` and merges what policy allows, one
-at a time, through a gate that requires a Ready verdict for the head, green CI there
-(or, under `ci: none`, a passing recorded validation)
-and a default branch whose CI is not red. A pull request that merges cleanly into the
-default branch merges, even when it is behind, so one sweep can land many. The queue
-never pushes or waits for CI: a conflict goes back to the build queue, and the default
-branch's CI on a merge is the next sweep's first fact. Claims keep two sweeps off the
-same item.
+A merge run decides one issue's pull request, on the issue's item, and merges it
+through a gate that requires a Ready verdict for the head, green CI there (or, under
+`ci: none`, a passing recorded validation) and a default branch whose CI is not red. A
+pull request that merges cleanly into the default branch merges, even when it is behind.
+The stage never pushes, pauses or waits for CI: a conflict goes back to the build queue,
+and pull requests merge one at a time. The engine admits one merge run per item.
 
 A verdict counts only at the head it reviewed: after a push, the pull request goes
 back to the build queue for a new round.
 
-A pull request whose read fails twice in a row is parked with the read error until
-the build queue readies the item again.
+A run ends with one outcome, which `archon workflow runs --item issue-<issue>` shows:
 
-A sweep merges a clear pull request on its own, unless the project's `merge_lane` setting is `manual` or the pull request changes a path its `protected_paths` setting matches: then it is asked about and merges only once approved at its head. An unclear one, such as a very large
-change, pauses as an attention item labelled `stage: merge` and `kind: approve` with the choices `merge`,
-`return`, `park` and `other`. A red default branch that holds back a pull request asks nobody: the sweep merges nothing and its run completes
-with a failed outcome whose summary (the `record` node's, in `archon workflow get <run-id> --verbose`) names the failing checks, the
-pull requests merged since green and the suspect. It is reported once per change: while the branch's head and check state
-read the same, no agent runs and the run is idle. A run raises at
-most one attention item: the first pull
-request the sweep asked about. The next sweep decides the rest again and raises the
-next. The merge queue's schedule is short (5 minutes by default), and a sweep where
-nothing changed since an item's last wait runs no agent.
+- `merged`, or `merged_retriage` when it also sent a still-open issue back to intake.
+- `returned`: the build queue's next round starts from the run's brief.
+- `waiting`: its checks still run, or the default branch is red. The run holds nothing.
+  A completed check at the commit it waits on starts the stage again, and so does the
+  backstop (`archon-merge-pick`, every 30 minutes by default) for anything no event
+  reports, such as a resolved review thread.
+- `asked`: one ask is open on the item.
+- `parked`: work on the item stopped until the build queue readies it again.
 
-A `merge` answer approves the pull request at the head it asked about, and a sweep
-the answer fires through `merge_queue_binding` merges it once the gate passes. The approval carries to a later head only when the sweep
+A run merges a clear pull request on its own, unless the project's `merge_lane` setting is `manual` or the pull request changes a path its `protected_paths` setting matches: then it is asked about and merges only once approved at its head. An unclear one, such as a very large
+change, is asked about too. The ask is on the item, with no paused run behind it: answer it with
+`archon workflow answer --ref ask:<id> --choose <option> --text "<why>"`, where the option is `merge`,
+`return` or `park`. A merge ask has exactly those three; an answer with text and no option starts nothing. A red default branch asks nobody: nothing merges, and the run's summary names the failing checks, the
+pull requests merged since green and the suspect.
+
+A `merge` answer approves the pull request at the head it asked about, and the run the
+answer starts merges it once the gate passes. The approval carries to a later head only when the agent
 judges that everything since is merges of the default branch and their conflict
 resolutions, and the verdict is Ready at the later head. A `return` hands the item
-back to the build queue, whose next round starts at once through
-`build_queue_binding`. A `park` stops work on the item until the build queue readies it again.
+back to the build queue, whose next round then starts. A `park` stops work on the item until the build queue readies it again.
 
 ## Discoveries drain
 
@@ -272,8 +274,9 @@ next run yourself.
 - When the recommendation fits the user's standing direction, answer it yourself.
 - When it is unclear, risky or not decided by anything the user has said, bring it to
   the user with the item's own summary.
-- `other` exists on every pull-request and build item. Use it when no declared choice
-  fits, and say exactly what to do instead.
+- `other` exists on every build item. Use it when no declared choice fits, and say
+  exactly what to do instead. A merge ask has no `other`: choose the nearest of its
+  three options and say what you want in the text.
 
 ## Merging by hand
 

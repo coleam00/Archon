@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { Link } from 'react-router';
 import { StatusStrip } from './StatusStrip';
 import { OriginBadge } from './OriginBadge';
@@ -6,16 +6,24 @@ import { ApprovalContext } from './ApprovalContext';
 import { RunActionBar } from './RunActionBar';
 import { AttentionAnswerPanel } from './AttentionAnswerPanel';
 import { ApprovalPanel } from './ApprovalPanel';
-import type { Run } from '../primitives/run';
+import { ItemAsksSection, type ItemAsks } from './ItemAsksSection';
+import * as skill from '../skills';
+import { HttpError } from '../lib/http';
+import { invalidate } from '../store/cache';
+import { runDetailPath, type OwnerLostHolder, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
 import { runStatusLabel } from '../lib/run-status';
 
 interface PendingInputBannerProps {
   /** Paused runs awaiting user input, already filtered to non-dismissed. */
   runs: Run[];
+  /** Runs holding their item while their owner is gone; only resume or abandon moves them. */
+  ownerLost?: OwnerLostHolder[];
   /** Show the project name on each card (true on the All-projects view). */
   showProject: boolean;
   onDismiss: (runId: string) => void;
+  /** Asks completed runs left on items; they have no run card of their own. */
+  itemAsks: ItemAsks;
 }
 
 /**
@@ -28,10 +36,18 @@ interface PendingInputBannerProps {
  */
 export function PendingInputBanner({
   runs,
+  ownerLost = [],
   showProject,
   onDismiss,
+  itemAsks,
 }: PendingInputBannerProps): ReactElement | null {
-  if (runs.length === 0) return null;
+  if (
+    runs.length === 0 &&
+    ownerLost.length === 0 &&
+    itemAsks.asks.length === 0 &&
+    itemAsks.answered.length === 0
+  )
+    return null;
 
   return (
     <div className="flex max-h-[45%] shrink-0 flex-col border-b border-warning/25 bg-warning/[0.04] py-3">
@@ -43,10 +59,13 @@ export function PendingInputBanner({
           Needs your input
         </span>
         <span className="font-mono text-console-11 tabular-nums text-warning/70">
-          {runs.length}
+          {runs.length + ownerLost.length + itemAsks.asks.length}
         </span>
       </div>
       <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-6">
+        {ownerLost.map(holder => (
+          <OwnerLostCard key={holder.runId} holder={holder} showProject={showProject} />
+        ))}
         {runs.map(run => (
           <PendingInputCard
             key={run.id}
@@ -55,6 +74,7 @@ export function PendingInputBanner({
             onDismiss={onDismiss}
           />
         ))}
+        <ItemAsksSection {...itemAsks} showProject={showProject} />
       </div>
     </div>
   );
@@ -150,6 +170,104 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
             <ApprovalPanel run={run} />
           </>
         )}
+      </div>
+    </article>
+  );
+}
+
+/**
+ * A run whose owner is gone while it holds its item. The engine never ends it by itself:
+ * the operator resumes it, or abandons it so later starts on the item can run.
+ */
+function OwnerLostCard({
+  holder,
+  showProject,
+}: {
+  holder: OwnerLostHolder;
+  showProject: boolean;
+}): ReactElement {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (action: 'resume' | 'abandon'): Promise<void> => {
+    if (
+      action === 'abandon' &&
+      !globalThis.confirm(
+        `Abandon the ${holder.workflow} run? It is cancelled and cannot be resumed.`
+      )
+    )
+      return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (action === 'resume') await skill.resumeRun(holder.runId);
+      else await skill.abandonRun(holder.runId);
+      invalidate('runs');
+    } catch (e: unknown) {
+      setError(
+        e instanceof HttpError && e.serverError !== undefined
+          ? e.serverError
+          : e instanceof Error
+            ? e.message
+            : 'Action failed.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const item = holder.itemKey ?? '(unread)';
+  return (
+    <article
+      data-owner-lost-run-id={holder.runId}
+      className="relative shrink-0 overflow-hidden rounded border border-error/40 bg-surface"
+    >
+      <StatusStrip status="failed" />
+      <div className="py-3 pl-4 pr-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="shrink-0 text-console-10 font-semibold uppercase tracking-console-label text-error">
+            Owner gone
+          </span>
+          <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
+          <span className="text-sm font-medium text-text-primary">{holder.workflow}</span>
+          <Link
+            className="font-mono text-console-11 text-text-tertiary underline"
+            to={runDetailPath({ id: holder.runId, projectId: holder.projectId })}
+          >
+            {shortRunId(holder.runId)}
+          </Link>
+          {showProject && holder.projectName !== null ? (
+            <span className="truncate text-console-11 text-text-secondary">
+              · {holder.projectName}
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-3 text-sm text-text-primary">
+          {holder.observedStatus} but its owner is gone, holding item{' '}
+          <span className="font-mono">{item}</span>: later starts of {holder.workflow} on it wait
+          behind it.
+        </p>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void act('resume')}
+            className="rounded border border-border px-3 py-1 text-console-12 text-text-primary hover:bg-surface-hover disabled:opacity-50"
+          >
+            Resume
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void act('abandon')}
+            className="rounded border border-error/40 px-3 py-1 text-console-12 text-error hover:bg-error/10 disabled:opacity-50"
+          >
+            Abandon
+          </button>
+          {error !== null ? (
+            <span role="alert" className="ml-2 font-mono text-console-11 text-error">
+              {error}
+            </span>
+          ) : null}
+        </div>
       </div>
     </article>
   );

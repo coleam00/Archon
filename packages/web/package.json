@@ -7,7 +7,6 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "type-check": "tsc --noEmit",
     "test": "bun run ../../scripts/package-tests.ts",
     "generate:types": "bun --cwd=../server run generate:api-types"
   },
@@ -76,6 +75,9 @@
     ],
     [
       "src/experiments/RunDetailNavigation.test.tsx"
+    ],
+    [
+      "src/experiments/ChatPageStop.test.tsx"
     ]
   ]
 }

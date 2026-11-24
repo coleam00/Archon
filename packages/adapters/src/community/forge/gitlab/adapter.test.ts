@@ -333,20 +333,9 @@ describe('GitLabAdapter', () => {
   });
 
   describe('basic interface', () => {
-    test('returns batch streaming mode', () => {
-      const adapter = createAdapter();
-      expect(adapter.getStreamingMode()).toBe('batch');
-    });
-
     test('returns gitlab platform type', () => {
       const adapter = createAdapter();
       expect(adapter.getPlatformType()).toBe('gitlab');
-    });
-
-    test('start and stop without error', async () => {
-      const adapter = createAdapter();
-      await adapter.start();
-      adapter.stop();
     });
 
     test('ensureThread returns original id', async () => {
@@ -381,27 +370,6 @@ describe('GitLabAdapter', () => {
     test('handles malformed JSON gracefully', async () => {
       const adapter = createAdapter();
       await adapter.handleWebhook('not-json', 'test-secret');
-      expect(mockHandleMessage).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('self-filtering', () => {
-    test('ignores comments with bot response marker', async () => {
-      const adapter = createAdapter();
-      const payload = createNotePayload({
-        note: '@archon hello\n\n<!-- archon-bot-response -->',
-      });
-      await adapter.handleWebhook(payload, 'test-secret');
-      expect(mockHandleMessage).not.toHaveBeenCalled();
-    });
-
-    test('ignores comments from bot account', async () => {
-      const adapter = createAdapter({ botMention: 'archon' });
-      const payload = createNotePayload({
-        note: '@archon something',
-        username: 'archon',
-      });
-      await adapter.handleWebhook(payload, 'test-secret');
       expect(mockHandleMessage).not.toHaveBeenCalled();
     });
   });
@@ -446,37 +414,6 @@ describe('GitLabAdapter', () => {
           description: null,
           state: 'closed',
           labels: [],
-        },
-      });
-      await adapter.handleWebhook(payload, 'test-secret');
-      expect(mockOnConversationClosed).toHaveBeenCalled();
-      expect(mockHandleMessage).not.toHaveBeenCalled();
-    });
-
-    test('handles MR merge event', async () => {
-      const adapter = createAdapter();
-      const payload = JSON.stringify({
-        object_kind: 'merge_request',
-        event_type: 'merge_request',
-        user: { username: 'testuser', name: 'Test' },
-        project: {
-          id: 1,
-          path_with_namespace: 'mygroup/myproject',
-          default_branch: 'main',
-          web_url: 'https://gitlab.example.com/mygroup/myproject',
-          http_url_to_repo: 'https://gitlab.example.com/mygroup/myproject.git',
-        },
-        object_attributes: {
-          iid: 10,
-          action: 'merge',
-          title: 'Merged MR',
-          description: null,
-          state: 'merged',
-          source_branch: 'feature',
-          target_branch: 'main',
-          source_project_id: 1,
-          target_project_id: 1,
-          merge_status: 'can_be_merged',
         },
       });
       await adapter.handleWebhook(payload, 'test-secret');
@@ -674,10 +611,27 @@ describe('GitLabAdapter', () => {
           target_project_id: 1,
         },
       });
-      // Will attempt DB operations which throw, but we can verify the event was parsed
+      // Seed the conversation and a saved codebase so the note reaches handleMessage.
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-test-uuid',
+        codebase_id: 'codebase-test-uuid',
+        cwd: '/tmp/project',
+        platform_type: 'gitlab',
+        platform_conversation_id: 'upstream/project!5',
+      });
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'codebase-test-uuid',
+        repository_url: 'https://gitlab.example.com/upstream/project',
+        default_cwd: '/tmp/test-workspaces/upstream/project/source',
+        name: 'project',
+      });
       await adapter.handleWebhook(payload, 'test-secret');
-      // The fork detection happens inside handleWebhook — if it reaches webhook_processing
-      // log, the event was parsed correctly including the MR context
+      expect(mockHandleMessage).toHaveBeenCalledWith(
+        expect.anything(),
+        'upstream/project!5',
+        expect.anything(),
+        expect.objectContaining({ isolationHints: expect.objectContaining({ isForkPR: true }) })
+      );
     });
   });
 

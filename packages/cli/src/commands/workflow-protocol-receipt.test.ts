@@ -16,6 +16,7 @@ import { registerHostProviders } from '@archon/core/providers/register-host-prov
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { setPlatformPolicies, clearPlatformPolicies } from '@archon/core/platforms/registry';
 import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { setLogLevel } from '@archon/paths';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
 import { checkInstalledProviders } from './doctor-providers';
@@ -86,7 +87,9 @@ test.each([false, true])(
             expect(payload.workflows[0].name).toBe('receipt-check');
             const notice = listStderr.mock.calls.flat().join('');
             expect(notice).toContain(`Plugin unavailable: ${id}`);
-            expect(notice).toContain('uses protocol 2, but this Archon requires protocol 3');
+            expect(notice).toContain(
+              `uses protocol 2, but this Archon requires protocol ${String(PROVIDER_PLUGIN_PROTOCOL)}`
+            );
             expect(notice).toContain(
               `archon plugin remove ${maintainedProviderPluginId('claude')}`
             );
@@ -103,7 +106,9 @@ test.each([false, true])(
             const payload = JSON.parse(String(stdout.mock.calls[0]?.[0]));
             expect(payload).toMatchObject({ passed: 1, failed: 0, errors: [] });
             const notice = stderr.mock.calls.flat().join('');
-            expect(notice).toContain('uses protocol 2, but this Archon requires protocol 3');
+            expect(notice).toContain(
+              `uses protocol 2, but this Archon requires protocol ${String(PROVIDER_PLUGIN_PROTOCOL)}`
+            );
             expect(notice).toContain(
               `archon plugin remove ${maintainedProviderPluginId('claude')}`
             );
@@ -123,7 +128,9 @@ test.each([false, true])(
     expect(result.status, result.output).toBe(0);
     if (!json) {
       expect(result.output).toContain(`Plugin unavailable: ${id}`);
-      expect(result.output).toContain('uses protocol 2, but this Archon requires protocol 3');
+      expect(result.output).toContain(
+        `uses protocol 2, but this Archon requires protocol ${String(PROVIDER_PLUGIN_PROTOCOL)}`
+      );
       expect(result.output).toContain(
         `archon plugin remove ${maintainedProviderPluginId('claude')}`
       );
@@ -221,7 +228,7 @@ test('list and doctor distinguish old protocols and retain healthy peer versions
   const home = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-status-')));
   const pluginsDir = join(home, 'plugins');
   const old = await installReceipt(pluginsDir, 'claude', 2);
-  const peer = await installReceipt(pluginsDir, 'peer', 3);
+  const peer = await installReceipt(pluginsDir, 'peer', PROVIDER_PLUGIN_PROTOCOL);
   const result = await captureCommand({ ARCHON_HOME: home }, async () => {
     clearRegistry();
     try {
@@ -388,7 +395,7 @@ test('JSON workflows retain project results when the installed store cannot be s
 test('doctor fails on a malformed receipt beside a healthy provider', async () => {
   const home = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-doctor-')));
   const pluginsDir = join(home, 'plugins');
-  const peer = await installReceipt(pluginsDir, 'peer', 3);
+  const peer = await installReceipt(pluginsDir, 'peer', PROVIDER_PLUGIN_PROTOCOL);
   const file = receiptPath(pluginsDir, 'acme/broken');
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, '{invalid json');

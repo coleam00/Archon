@@ -172,17 +172,6 @@ describe('message splitting', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-  test('should handle message without paragraph breaks', async () => {
-    const mockFetch = makeFetchMock();
-    globalThis.fetch = mockFetch;
-
-    // Message under MAX_LENGTH with no paragraph breaks
-    const message = 'a'.repeat(50000);
-    await send('owner/repo#123', message);
-
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
-
   test('should throw error when chunk posting fails', async () => {
     const mockFetch = makeFetchMock()
       .mockResolvedValueOnce(new Response(null, { status: 200 })) // First chunk succeeds

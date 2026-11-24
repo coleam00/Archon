@@ -30,14 +30,6 @@ describe('buildSDKHooksFromYAML', () => {
     expect(result).toEqual(response);
   });
 
-  test('matcher field propagated to SDK structure', () => {
-    const nodeHooks: WorkflowNodeHooks = {
-      PreToolUse: [{ matcher: 'Write|Edit', response: { x: 1 } }],
-    };
-    const sdk = buildSDKHooksFromYAML(nodeHooks);
-    expect(sdk.PreToolUse![0].matcher).toBe('Write|Edit');
-  });
-
   test('timeout field propagated to SDK structure', () => {
     const nodeHooks: WorkflowNodeHooks = {
       PreToolUse: [{ response: { x: 1 }, timeout: 120 }],

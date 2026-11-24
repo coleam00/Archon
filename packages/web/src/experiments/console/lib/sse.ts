@@ -1,9 +1,10 @@
 /**
  * Console SSE wiring.
  *
- * Two streams are exposed by the server:
+ * Three streams are exposed by the server:
  *   /api/stream/__dashboard__       — multiplexed workflow events for every run
  *   /api/stream/<conversationId>    — per-conversation events (text/tool_call/tool_result + workflow_*)
+ *   /api/runs/attention/stream      — the attention queue's opens and closes, asks on items included
  *
  * The console treats most of them as cache-invalidation triggers: an event lands,
  * the relevant cache key is invalidated, `useEntity` refetches authoritative
@@ -19,7 +20,7 @@ import { useEffect } from 'react';
 import { invalidate } from '../store/cache';
 import { K } from './../store/keys';
 import { SSE_BASE_URL } from './http';
-import { DASHBOARD_SSE_PATH } from './sse-endpoints';
+import { ATTENTION_SSE_PATH, DASHBOARD_SSE_PATH } from './sse-endpoints';
 import { providerEventStore, type ProviderEventRecord } from './provider-events';
 
 interface ParsedEvent {
@@ -85,6 +86,51 @@ export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
       es.close();
     };
   }, [onRunChanged]);
+}
+
+/**
+ * Subscribe to the attention stream and refetch the attention list when an item opens or
+ * closes. An ask a completed run left changes no run, so the dashboard stream never tells
+ * of it. Lines are only a cue: the list stays the one source of what is open.
+ *
+ * On `cursor_invalid` the server ends the stream, and a plain reconnect would resend the
+ * same `Last-Event-ID`, so the stream is opened afresh instead.
+ */
+export function useAttentionStreamSSE(): void {
+  useEffect(() => {
+    let es: EventSource;
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    // The open set arrives as a burst of `attention` lines; one refetch covers it.
+    const scheduleRefetch = (): void => {
+      if (flushTimer !== null) return;
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        invalidate(K.runsAttention);
+      }, 100);
+    };
+    const open = (): void => {
+      es = new EventSource(`${SSE_BASE_URL}${ATTENTION_SSE_PATH}`);
+      es.onmessage = (e: MessageEvent<string>): void => {
+        const line = parse(e.data);
+        if (line?.type === 'attention' || line?.type === 'resolved') scheduleRefetch();
+        else if (line?.type === 'error') {
+          es.close();
+          scheduleRefetch();
+          open();
+        }
+      };
+      es.onerror = (): void => {
+        if (es.readyState === EventSource.CLOSED) {
+          console.warn('[console-sse] attention stream closed');
+        }
+      };
+    };
+    open();
+    return (): void => {
+      if (flushTimer !== null) clearTimeout(flushTimer);
+      es.close();
+    };
+  }, []);
 }
 
 /**
@@ -204,10 +250,12 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
  *
  *   text / tool_call / tool_result → messages changed (debounced refetch)
  *   conversation_lock              → refetch on unlock + onLockChange(locked)
+ *   stream closed for good         → onStreamClosed(): no further lock event will arrive
  */
 export function useConversationSSE(
   conversationPlatformId: string | null,
-  onLockChange?: (locked: boolean) => void
+  onLockChange?: (locked: boolean) => void,
+  onStreamClosed?: () => void
 ): void {
   useEffect(() => {
     if (conversationPlatformId === null) return;
@@ -256,6 +304,7 @@ export function useConversationSSE(
     es.onerror = (): void => {
       if (es.readyState === EventSource.CLOSED) {
         console.warn('[console-sse] conversation stream closed', { conversationPlatformId });
+        onStreamClosed?.();
       }
     };
 
@@ -263,5 +312,5 @@ export function useConversationSSE(
       if (flushTimer !== null) clearTimeout(flushTimer);
       es.close();
     };
-  }, [conversationPlatformId, onLockChange]);
+  }, [conversationPlatformId, onLockChange, onStreamClosed]);
 }

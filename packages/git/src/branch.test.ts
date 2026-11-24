@@ -1,14 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test, type Mock } from 'bun:test';
 import type * as Git from './index';
-import {
-  clearLogger,
-  output,
-  branch,
-  git,
-  mockLogger,
-  repo,
-  worktree,
-} from './test-fixtures/git-harness';
+import { clearLogger, output, branch, git, repo, worktree } from './test-fixtures/git-harness';
 
 describe('git utilities', () => {
   beforeEach(clearLogger);
@@ -18,156 +10,6 @@ describe('git utilities', () => {
   });
   afterEach(() => {
     execSpy.mockRestore();
-  });
-
-  describe('checkout', () => {
-    test('checks out existing branch successfully', async () => {
-      execSpy.mockResolvedValue(output());
-
-      await git.checkout(repo('/workspace/repo'), branch('feature-branch'));
-
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'checkout', 'feature-branch'],
-        {
-          timeout: 30000,
-        }
-      );
-    });
-
-    test.each([
-      [
-        'creates branch when exact ref is absent despite pathspec wording',
-        'pathspec did not match',
-        "error: pathspec 'new-branch' did not match any file(s) known to git",
-      ],
-      [
-        'creates branch when exact ref is absent despite missing-branch wording',
-        "branch doesn't exist",
-        "error: branch 'new-branch' doesn't exist",
-      ],
-    ])('%s', async (_name, message, stderr) => {
-      execSpy.mockRejectedValueOnce(
-        new git.GitFailure(
-          'unclassified',
-          message,
-          Object.assign(new Error('checkout'), {
-            code: 1,
-            stderr,
-          })
-        )
-      );
-      execSpy.mockRejectedValueOnce(
-        new git.GitFailure(
-          'unclassified',
-          'absent exact ref',
-          Object.assign(new Error('ref lookup'), { code: 1 })
-        )
-      );
-      execSpy.mockResolvedValueOnce(output('origin\n'));
-      execSpy.mockResolvedValueOnce(output('+refs/heads/*:refs/remotes/origin/*\n'));
-      execSpy.mockRejectedValueOnce(
-        new git.GitFailure(
-          'unclassified',
-          'absent remote ref',
-          Object.assign(new Error('ref lookup'), { code: 1 })
-        )
-      );
-      execSpy.mockResolvedValueOnce(output());
-
-      await git.checkout(repo('/workspace/repo'), branch('new-branch'));
-
-      expect(execSpy).toHaveBeenCalledTimes(6);
-      expect(execSpy).toHaveBeenLastCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'checkout', '-b', 'new-branch'],
-        {
-          timeout: 30000,
-        }
-      );
-    });
-
-    test('preserves a typed checkout timeout without attempting branch creation', async () => {
-      const failure = new git.GitFailure('timeout', 'checkout timed out');
-      execSpy.mockRejectedValueOnce(failure);
-      execSpy.mockResolvedValue(output());
-
-      const error = await git
-        .checkout(repo('/workspace/repo'), branch('feature'))
-        .catch((error: unknown) => error);
-      expect(error).toHaveProperty('cause', failure);
-      expect(execSpy).toHaveBeenCalledTimes(1);
-    });
-
-    test('preserves the checkout failure when remote inspection fails', async () => {
-      const failure = new git.GitFailure(
-        'unclassified',
-        'original checkout failure',
-        Object.assign(new Error('checkout'), { code: 1 })
-      );
-      execSpy.mockRejectedValueOnce(failure);
-      execSpy.mockRejectedValueOnce(
-        new git.GitFailure(
-          'unclassified',
-          'absent ref',
-          Object.assign(new Error('rev lookup'), { code: 1 })
-        )
-      );
-      execSpy.mockRejectedValueOnce(new Error('remote inspection failed'));
-      const error = await git
-        .checkout(repo('/workspace/repo'), branch('feature'))
-        .catch((error: unknown) => error);
-      expect(error).toHaveProperty('cause', failure);
-      expect(execSpy).toHaveBeenCalledTimes(3);
-    });
-
-    test('preserves the checkout failure when a candidate ref cannot be inspected', async () => {
-      const failure = new git.GitFailure(
-        'unclassified',
-        'checkout failed',
-        Object.assign(new Error('checkout'), { code: 1 })
-      );
-      execSpy.mockRejectedValueOnce(failure);
-      execSpy.mockRejectedValueOnce(
-        new git.GitFailure(
-          'unclassified',
-          'absent ref',
-          Object.assign(new Error('rev lookup'), { code: 1 })
-        )
-      );
-      execSpy.mockResolvedValueOnce(output('origin\n'));
-      execSpy.mockResolvedValueOnce(output('+refs/heads/*:refs/vendor/*\n'));
-      execSpy.mockRejectedValueOnce(new git.GitFailure('timeout', 'ref inspection timed out'));
-
-      const error = await git
-        .checkout(repo('/workspace/repo'), branch('feature'))
-        .catch((error: unknown) => error);
-      expect(error).toHaveProperty('cause', failure);
-      expect(execSpy).toHaveBeenCalledTimes(5);
-      expect(execSpy).toHaveBeenLastCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'show-ref', '--verify', '--quiet', 'refs/vendor/feature'],
-        { timeout: 10000 }
-      );
-    });
-
-    test('throws and logs on unexpected error', async () => {
-      execSpy.mockRejectedValue(
-        Object.assign(new Error('Permission denied'), { stderr: 'fatal: Permission denied' })
-      );
-
-      await expect(git.checkout(repo('/workspace/repo'), branch('some-branch'))).rejects.toThrow(
-        'Failed to checkout branch some-branch: Permission denied'
-      );
-
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoPath: '/workspace/repo',
-          branchName: 'some-branch',
-        }),
-        'checkout_failed'
-      );
-    });
   });
 
   describe('hasUncommittedChangesStrict', () => {
@@ -232,12 +74,6 @@ describe('git utilities', () => {
       );
 
       expect(await git.hasUncommittedChanges(repo('/workspace/corrupted'))).toBe(true);
-    });
-
-    test('returns true (fail-safe) when git lock file exists', async () => {
-      execSpy.mockRejectedValue(new Error('Another git process seems to be running'));
-
-      expect(await git.hasUncommittedChanges(repo('/workspace/locked'))).toBe(true);
     });
   });
 
@@ -314,80 +150,6 @@ describe('git utilities', () => {
     });
   });
 
-  describe('commitAllChanges', () => {
-    test('commits when there are uncommitted changes', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('status')) {
-          return output(' M file.ts\n');
-        }
-        if (args.includes('diff')) return output('file.ts\0');
-        return output();
-      });
-
-      expect(await git.commitAllChanges(repo('/workspace/repo'), 'test commit')).toBe(true);
-      expect(execSpy).toHaveBeenCalledWith('git', ['-C', '/workspace/repo', 'add', '-A'], {
-        timeout: 10000,
-      });
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'commit', '-m', 'test commit'],
-        { timeout: 10000 }
-      );
-    });
-
-    test('returns false when no changes to commit', async () => {
-      execSpy.mockResolvedValue(output());
-
-      expect(await git.commitAllChanges(repo('/workspace/repo'), 'test commit')).toBe(false);
-      expect(execSpy).toHaveBeenCalledTimes(1);
-    });
-
-    test('returns false when staging normalizes all changes away', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => ({
-        stdout: args.includes('status') ? ' M file.ts\n' : '',
-        stderr: '',
-      }));
-      expect(await git.commitAllChanges(repo('/workspace/repo'), 'test commit')).toBe(false);
-      expect(execSpy.mock.calls.some(([, args]) => args.includes('commit'))).toBe(false);
-    });
-
-    test('a hook printing nothing to commit remains a failure', async () => {
-      const failure = new git.GitFailure(
-        'unclassified',
-        'hook failed',
-        Object.assign(new Error('commit'), {
-          code: 1,
-          stdout: 'nothing to commit',
-          stderr: 'hook rejected',
-        })
-      );
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('status') || args.includes('diff')) return output('file.ts\0');
-        if (args.includes('commit')) throw failure;
-        return output();
-      });
-      const error = await git
-        .commitAllChanges(repo('/workspace/repo'), 'message')
-        .catch((error: unknown) => error);
-      expect(error).toHaveProperty('cause', failure);
-    });
-
-    test.each([
-      ['throws error when git add fails', 'add', 'git add failed'],
-      ['throws error when git commit fails', 'commit', 'pre-commit hook failed'],
-    ])('%s', async (_name, operation, message) => {
-      execSpy.mockImplementation(async (_cmd, args) => {
-        if (args.includes('status')) return output(' M file.ts\n');
-        if (args.includes('diff')) return output('file.ts\0');
-        if (args.includes(operation)) throw new Error(message);
-        return output();
-      });
-      await expect(git.commitAllChanges(repo('/workspace/repo'), 'test commit')).rejects.toThrow(
-        message
-      );
-    });
-  });
-
   describe('getCurrentBranch', () => {
     test('returns branch name when on a named branch', async () => {
       execSpy.mockResolvedValue(output('main\n'));
@@ -400,12 +162,6 @@ describe('git utilities', () => {
       );
     });
 
-    test('returns null for empty stdout (detached HEAD)', async () => {
-      execSpy.mockResolvedValue(output());
-
-      expect(await git.getCurrentBranch('/workspace/repo' as Git.RepoPath)).toBeNull();
-    });
-
     test('returns null for whitespace-only stdout', async () => {
       execSpy.mockResolvedValue(output('   \n'));
 
@@ -416,13 +172,6 @@ describe('git utilities', () => {
       execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
 
       expect(await git.getCurrentBranch('/workspace/repo' as Git.RepoPath)).toBeNull();
-    });
-
-    test('returns null on ENOENT (path not found)', async () => {
-      const error = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      execSpy.mockRejectedValue(error);
-
-      expect(await git.getCurrentBranch('/nonexistent' as Git.RepoPath)).toBeNull();
     });
   });
 

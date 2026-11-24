@@ -46,8 +46,14 @@ Each item names the run, its workflow, its project, how long it has waited, the 
 | `awaiting_response` | An approval gate | `approve`, `reject` or `respond` |
 | `usage_limit` | A node hit a provider usage limit, or a rate limit that outlasted its retries | Nothing. It retries at `resetAt`. `resume` tries sooner |
 | `unreadable` | A paused run Archon cannot describe | Inspect it, then resume or abandon it |
+| `owner_lost` | A run whose owner process on this host is gone while it holds its [item](/reference/cli/#items), with a later start of its workflow on that item waiting behind it | `archon workflow resume <run-id>` or `archon workflow abandon <run-id>`. Archon never ends it by itself |
+| `overdue_wait` | An item still [waiting for something outside Archon](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) past its deadline; no run holds it | Look at why the event has not come. It still wakes the item when it does. `archon workflow answer --withdraw <ref>` withdraws the waits |
 
 A `usage_limit` wait retries from the node that hit the limit, at the provider's reset time or a 5 to 15 minute backoff, and pauses again if the limit is still there. With `workflows.autoResumeOnQuotaReset: false`, or for a container run, the run fails instead of waiting.
+
+An `overdue_wait` item carries `waitingIn` (the completed run that left the waits and its workflow), `waits` (each wait's `event` and `about`), `deadline` and, as `pausedAt`, when the waits opened. Its ref is `wait:<run-id>`.
+
+An `owner_lost` item carries `item` and `observedStatus`, the run's stored status (`running`, or `paused` for a parent whose sub-run lost its owner), which is unchanged. The list observes owners on this host only, so a holder owned on another host is not listed; `archon workflow runs --item <key>` shows its owner as `unknown`.
 
 An `unreadable` item carries `reason` and `detail`. A container paused with reason `source_release_not_continued` could not read its frozen source on this host. Resume it by hand on a host that can.
 
@@ -80,17 +86,17 @@ In a terminal, an answer continues the run in place, unless a running continuati
 archon workflow resume <run-id>       # rerun a failed or paused run, skipping completed nodes
 archon workflow resume <run-id> --detach
 archon workflow end-turn <run-id>     # end a running run's stalled turn
-archon workflow cancel <run-id>       # stop a running run
+archon workflow cancel <run-id>       # stop a running run, or a queued one before it starts
 archon workflow abandon <run-id>      # give up on a run for good
 ```
 
 Pick the command by what is wrong:
 
-- **A turn is stuck, but the run should go on.** When `workflow wait` or `status` reports `stalled_tool_calls`, a tool or reported background work has made no progress. `end-turn` records a request to end that turn. Only the run's live owner acts on it: it ends the turn if the same stall is still active, the node fails as `timeout`, and the node's retry policy decides whether to try again. The command itself stops nothing, and it refuses a run that is not `running`.
-- **The run should stop.** Use `cancel`.
+- **A turn is stuck, but the run should go on.** When `workflow wait` or `status` reports `stalled_tool_calls`, a tool or reported background work has made no progress. When the provider can take one and stall messages are on (`workflows.stallMessageLimit` above `0`, the default), the engine sends the agent a message in its session, up to that many times, shown under the run in `status`; an agent that picks up again needs nothing from you. `end-turn` records a request to end that turn. Only the run's live owner acts on it: it ends the turn if the same stall is still active, the node fails as `timeout`, and the node's retry policy decides whether to try again. The command itself stops nothing, and it refuses a run that is not `running`.
+- **The run should stop, or a queued run should never start.** Use `cancel`.
 - **The run failed or paused.** Use `resume` to continue it.
 
-`cancel` works only on a `running` run. It stops the process that owns the run, confirms it stopped, and then records `cancelled`. When no owner answers, it refuses and changes nothing, because a database update cannot prove the work on the host stopped. A foreground `archon workflow run` can't be stopped from another shell: interrupt it in its terminal.
+`cancel` works on a `pending` or `running` run. A `pending` run that no process on this machine is starting is recorded `cancelled`, so it never starts; one a process is starting is refused. Cancel cannot see a starter on another machine that shares the database, so do not cancel a pending run there (see the [cancel reference](/reference/cli/#workflow-cancel)). For a `running` run, cancel stops the process that owns the run, confirms it stopped, and then records `cancelled`. When no owner answers, it refuses and changes nothing, because a database update cannot prove the work on the host stopped. A foreground `archon workflow run` can't be stopped from another shell: interrupt it in its terminal.
 
 `abandon` is for a paused or failed run, or one whose owner is gone. It stops a live owner on this host first, records `cancelled`, and attempts to remove the worktree Archon created for the run. When removal proceeds, it is forced: uncommitted and untracked files in that worktree are deleted. A sub-run whose execution owner cannot be accounted for retains its checkout with a cleanup warning; cancellation still succeeds. See the [abandon reference](/reference/cli/#workflow-abandon) for retention and recovery guidance. A branch with commits of its own stays, so committed work is recoverable. A branch Archon generated for the run that is still at the commit it was cut from is deleted with the worktree. Archon never decides a run is dead from its age.
 
@@ -203,6 +209,10 @@ The write merges: a key it sets replaces that key, a key it unsets is removed, a
 
 Everything above is also JSON, for scripts and agents. The list, the single read, the stream and `workflow wait` share the run projection for readable runs. An unreadable stored descendant is an exception: a batch can omit its blocked parent, while a single read or `workflow wait` can fail.
 
+An ask a completed run left on its item is listed as an `attention` item with no `run`: its `askedIn` names the run that left it, its options carry a `cost`, and it carries a `context` and any `artifacts`. Answer or withdraw it by its `ref`. The web console shows these asks in its "Needs your input" banner, grouped by item, and answers them by `ref`.
+
+Over HTTP the list also returns `answerRefusals`: each listed `ref` the caller may not answer, with the reason, by the rule the answer route enforces. A `ref` absent from it is one the caller may answer.
+
 | Operation | CLI | HTTP |
 |---|---|---|
 | List | `archon workflow attention --json [--project <id\|name\|key> \| --all] [--label k=v]… [--sort age\|label:<key>]` | `GET /api/runs/attention?project=…&label=…&sort=…` |
@@ -212,6 +222,8 @@ Everything above is also JSON, for scripts and agents. The list, the single read
 | Read one | `archon workflow attention <run-id> --json` | `GET /api/runs/<run-id>/attention` |
 | Label | `archon workflow attention label <run-id> --occurrence <id> [--set k=v]… [--unset k]…` | `POST /api/runs/<run-id>/attention/labels` |
 | Answer | `archon workflow answer <run-id> --occurrence <id> …`, or `respond`, `approve`, `reject` | `POST /api/workflows/runs/<run-id>/answer` |
+| Answer by ref | `archon workflow answer --ref <ref> [--choose <id>… \| --recommended] [--text <text>]` | `POST /api/attention/answer` |
+| Withdraw an ask | `archon workflow answer --withdraw <ref>` | `POST /api/attention/withdraw` |
 | Give up on the run | `archon workflow abandon <run-id>` | `POST /api/workflows/runs/<run-id>/abandon` |
 
 An unreadable stored origin cannot become an item. Batch list and count results instead include
@@ -256,7 +268,7 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
 }
 ```
 
-- **`kind`** is one of the four kinds above. A `usage_limit` item carries `resetAt`, and its `run` has a `node` and no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
+- **`kind`** is one of the five kinds above. A `usage_limit` item carries `resetAt`, and its `run` has a `node` and no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
 - **`ref`** is the item's identity: it names this item and no other, and changes when the run moves to another pause. Treat it as opaque.
 - **`run`** is the paused run that holds the item: its `id`, `workflow` and the fields below. Every item a workflow pauses for has one. The field is optional on an `attention` item, so read it as `item.run?.id`: an item that no paused run holds has no `run`, and its `ref` is all that names it.
 - **`item`** is `{ id, projectKey, key }` when the run was started for an item (`--item`), and absent otherwise.
@@ -292,7 +304,7 @@ archon workflow attention --watch --json --label stage=merge # one queue's quest
 | `type` | Written when |
 |---|---|
 | `attention` | An item that takes an answer or a look opened or changed. The line carries the item with its message, options and recommendation. The items open at the start come first, with `snapshot: true` |
-| `resolved` | An item this stream wrote closed: `reason` is `answered`, `withdrawn` when the run resumed, ended, was deleted or moved to a different pause, or `no_longer_listed` when an item that no run holds left the list. Stop working on it |
+| `resolved` | An item this stream wrote closed: `reason` is `answered`, `withdrawn` when the run resumed, ended, was deleted or moved to a different pause, `replaced` (with `replacedByRunId`) when a newer run of the same workflow on the item replaced an ask, or `no_longer_listed` when an item that no run holds left the list and nothing stored says why. Stop working on it |
 | `unmatched` | A label write moved an item this stream wrote outside `--label`. It is no longer yours |
 | `terminal` | A run in scope ended with `status: "failed"`, where `cause` identifies the failed node when available (null for failures outside a node) and a launch failure has the fixed `reason` "launch failed before the first node", or completed with `outcome: "failed"`: it ran to the end and judged the work unsuccessful, and `reason` says why in up to two short lines taken from what its `returns:` node said |
 | `owner_lost` | A running run's owner process on this host is gone |
@@ -382,8 +394,8 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 | `attention` | An item opened or changed | `cursor`, `snapshot`, `project`, `workflow`, `parentRunId`, `item` |
 | `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `ref`, `runId`, `workflow`, `parentRunId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia`, `answeredBy`, `answeredFromRun` and `answeredAt` |
 | `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `ref`, `runId`, `workflow`, `parentRunId`, `occurrence`, `revision` |
-| `terminal` | A run ended | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status`, `outcome`, `cause`, and `reason` on a launch failure or failed outcome |
-| `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused or stale-running run resumed and cleared a stored error | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status: "running"` |
+| `terminal` | A run ended | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status`, `outcome` (the outcome a completed run declared: `succeeded`, `failed` or a named value such as `built`; null otherwise), `cause`, and `reason` on a launch failure or failed outcome |
+| `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused run, or a running run whose owner was gone, resumed and cleared a stored error | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status: "running"` |
 | `owner_lost` | A running run's owner process on this host is gone | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `observedStatus` |
 | `notice` | A node or the engine [recorded a notice for a run](#notices-what-the-work-did) | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `at`, `node`, `text`, `labels` |
 | `ready` | Initial snapshot delivery finished; coverage may be degraded | `cursor` |
@@ -394,7 +406,7 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 - **Every line carries `needs`**, as the [plain watch](#stream-the-queue) describes it. A stream started with `--after` cannot know which items the earlier stream held, so at `level=quiet` it sends every `resolved` and `unmatched` line.
 - **`answeredBy` is who answered an attention wait**, when the answer recorded it: `{ "declared": "<name>" }` for a name given with `--as`, which is a claim Archon does not check, or `{ "userId": "<id>" }` for an answer through a chat platform. It is null for a gate and for an answer that named nobody.
 - **`answeredFromRun` is the run an answer was given from**: `{ "runId", "nodePath" }` when a workflow node answered an attention wait, and null for an answer from outside a run and for a gate. No flag or request field sets it: Archon reads it from the node's environment, which a node process can change. Archon does not verify it, so treat it as attribution and never as proof: an approval or permission rule must not depend on it. An answer can carry both it and `answeredBy`.
-- **Keep an open set keyed by the item's `ref`.** Each `attention` line replaces the item with that `ref`, including when its kind or `resetAt` changes while `revision` stays 1. `resolved` and `unmatched` carry the `ref` of the item they close; remove that one. A `resolved` line's `reason` is `answered`, or `withdrawn` when the run resumed, ended, was deleted or moved to a different pause. For an item that no run holds it is `no_longer_listed`: the stream saw the item leave the list and does not know whether it was answered or withdrawn. When a run moves to a different pause, `resolved` closes the old `ref` before the `attention` line with the new one. `runId` on these two lines is the run that held the item, and is absent when no run held it.
+- **Keep an open set keyed by the item's `ref`.** Each `attention` line replaces the item with that `ref`, including when its kind or `resetAt` changes while `revision` stays 1. `resolved` and `unmatched` carry the `ref` of the item they close; remove that one. A `resolved` line's `reason` is `answered`, or `withdrawn` when the run resumed, ended, was deleted or moved to a different pause. For an [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left, which no run holds, the reason is read from the stored ask: `answered` (with who answered), `withdrawn`, or `replaced` with `replacedByRunId`, the run whose newer set replaced it. Any other item no run holds closes as `no_longer_listed`: the stream saw it leave the list and nothing says why. When a run moves to a different pause, `resolved` closes the old `ref` before the `attention` line with the new one. `runId` on these two lines is the run that held the item, and is absent when no run held it.
 - **Deliveries are at least once.** Replacing by `ref` is idempotent, so apply every `attention` line, whatever its kind: store the item it carries in place of the one you hold for that `ref`. Never skip a line because its `ref` and `revision` match what you hold. `revision` counts label writes on an attention wait and nothing else, so a `usage_limit` item's `resetAt` can move, and a `usage_limit` item can become `unreadable`, while it stays 1. To avoid acting twice on a question or a gate (`attention`, `awaiting_response`), dedupe that work on `(ref, revision)`: the question, its options and its labels do not change otherwise. Dedupe `terminal` and `resumed` on `(runId, cursor)`. `owner_lost` is a live observation and is not replayed. Only a run whose recorded owner is on this host and user can be reported lost.
 - **Reconnect from a cursor before any event you did not finish.** A cursor names a feed event, and one event can emit two lines with the same cursor (`resolved` then `attention`, or `resolved` then `terminal`). `--after <cursor>` skips the whole event, so checkpoint only on a handled `bookmark` or from before the partly handled event. The new stream sends the snapshot and `ready`, then replays readable changes after the cursor. If the cursor is rejected, reconnect without `--after`.
 - **A silent stream is not reading.** A stream that cannot read the store sends no `bookmark`, so no line for well over 30 seconds means it is stuck.

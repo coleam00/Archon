@@ -238,6 +238,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
           ? turn.accountResponse
           : ({
               workspaceRouting: null,
+              userId: null,
               account: turn.account ?? null,
               requiresOpenaiAuth: turn.requiresOpenaiAuth ?? true,
             } satisfies GetAccountResponse);
@@ -274,12 +275,11 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         case 'thread/start':
           send({ id, result: threadStartResponse(THREAD_ID) });
           break;
-        case 'thread/resume':
-          send({
-            id,
-            result: threadResumeResponse((params as { threadId: string }).threadId),
-          });
+        case 'thread/resume': {
+          const { threadId } = params as { threadId: string };
+          send({ id, result: threadResumeResponse(threadId) });
           break;
+        }
         case 'thread/fork': {
           forks += 1;
           const source = (params as { threadId: string }).threadId;
@@ -290,6 +290,9 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
           activeThreadId = (params as { threadId: string }).threadId;
           send({ id, result: { turn: turnOf('inProgress', null) } satisfies TurnStartResponse });
           nextToolCall();
+          break;
+        case 'turn/steer':
+          send({ id, result: { turnId: TURN_ID } });
           break;
         case 'turn/interrupt':
           if (turn.ignoreInterrupt) break;
@@ -397,6 +400,7 @@ function threadOf(id: string): Thread {
     daybreakEnabled: null,
     forkedFromId: null,
     parentThreadId: null,
+    attachedToThreadId: null,
     preview: '',
     ephemeral: false,
     section: null,
@@ -474,6 +478,7 @@ function configReadResponse(servers: string[]): ConfigReadResponse {
       forced_chatgpt_workspace_id: null,
       forced_login_method: null,
       web_search: null,
+      client_search_provider: null,
       tools: null,
       instructions: null,
       developer_instructions: null,
@@ -561,6 +566,7 @@ function mcpStatusResponse(pages: ServerStatus[][], index: number): ListMcpServe
       serverInfo: null,
       serverCapabilities: null,
       tools: {},
+      toolListMeta: null,
       toolsError: server.toolsError ?? null,
       resources: [],
       resourceTemplates: [],
@@ -624,6 +630,7 @@ export function itemCompleted(
 export function agentMessage(text: string, id = 'msg-1'): ServerNotification {
   return itemCompleted({
     type: 'agentMessage',
+    moderation: null,
     id,
     text,
     phase: null,
@@ -671,6 +678,7 @@ export function mcpToolCall(
     type: 'mcpToolCall',
     id,
     server,
+    environmentId: null,
     tool,
     status,
     arguments: args,
@@ -721,12 +729,13 @@ function breakdownOf(usage: Usage): TokenUsageBreakdown {
 export function tokenUsage(
   total: Usage,
   last: Usage = total,
-  turnId = TURN_ID
+  turnId = TURN_ID,
+  threadId = THREAD_ID
 ): ServerNotification {
   return {
     method: 'thread/tokenUsage/updated',
     params: {
-      threadId: THREAD_ID,
+      threadId,
       turnId,
       tokenUsage: { total: breakdownOf(total), last: breakdownOf(last), modelContextWindow: null },
     },

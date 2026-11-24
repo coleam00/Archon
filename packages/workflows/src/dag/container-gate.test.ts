@@ -2,7 +2,7 @@
 import { WorkflowExecutionHandoffError } from '../engine-port';
 import * as nodeEventWrite from '../node-event-write';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { describe, it, expect, afterEach, mock, spyOn } from 'bun:test';
+import { describe, it, expect, afterEach, beforeEach, mock, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { dagNodeSchema, isApprovalContext, isWorkflowWaitContext } from '../schemas';
 import { join } from 'path';
@@ -44,10 +44,14 @@ describe('executeDagWorkflow -- container write-back gate', () => {
   const wbTestDir = join(tmpdir(), `dag-wb-test-${Date.now()}`);
   // The executor creates `logs/` under the run's cwd, so this path becomes a real tree.
   const eventWrites: Promise<unknown>[] = [];
-  let containerProbe: ReturnType<typeof stubMissingContainer> | undefined;
+  let containerProbe: ReturnType<typeof stubMissingContainer>;
+  // Every run here uses the made-up container `cid-1`. Without this stub, the checkout probe at
+  // node start and at run end spawns a real `docker exec`, which can outlast a test's budget on CI.
+  beforeEach(() => {
+    containerProbe = stubMissingContainer();
+  });
   afterEach(async () => {
-    containerProbe?.mockRestore();
-    containerProbe = undefined;
+    containerProbe.mockRestore();
     await Promise.all(eventWrites.splice(0));
     await removeTempTree(wbTestDir);
   });
@@ -214,7 +218,6 @@ describe('executeDagWorkflow -- container write-back gate', () => {
   );
 
   async function realPauseFixture(nodes: Parameters<typeof dagOptions>[0]['workflow']['nodes']) {
-    containerProbe = stubMissingContainer();
     const store = await createFileWorkflowStore({ root: join(wbTestDir, 'store') });
     trackEventWrites(store);
     const created = await store.createWorkflowRun({ workflow_name: 'pause', user_message: '' });
@@ -759,34 +762,29 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     async (overlayMode, lifecycle, expectedData) => {
       const store = createMockStore();
       const platform = createMockPlatform();
-      const execSpy = stubMissingContainer();
-      try {
-        await executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(store),
-            platform,
-            conversationId: 'conv-created',
-            cwd: wbTestDir,
-            workflow: {
-              name: 'created',
-              nodes: [{ id: 'a', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
-            },
-            workflowRun: makeWorkflowRun('created-run'),
-            ...(lifecycle === 'resumed'
-              ? { priorCompletedNodes: new Map([['a', { output: 'out' }]]) }
-              : {}),
-            execContext: CONTAINER_EXEC,
-            containerCtx: {
-              envId: 'env-x',
-              writeBack: 'approve',
-              backend: makeWritebackBackend(),
-              overlayMode,
-            },
-          })
-        );
-      } finally {
-        execSpy.mockRestore();
-      }
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          conversationId: 'conv-created',
+          cwd: wbTestDir,
+          workflow: {
+            name: 'created',
+            nodes: [{ id: 'a', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
+          },
+          workflowRun: makeWorkflowRun('created-run'),
+          ...(lifecycle === 'resumed'
+            ? { priorCompletedNodes: new Map([['a', { output: 'out' }]]) }
+            : {}),
+          execContext: CONTAINER_EXEC,
+          containerCtx: {
+            envId: 'env-x',
+            writeBack: 'approve',
+            backend: makeWritebackBackend(),
+            overlayMode,
+          },
+        })
+      );
 
       const created = persistedEvents(store).filter(
         event => event.event_type === `container_${lifecycle}`

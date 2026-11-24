@@ -8,23 +8,39 @@ Thank you for your interest in contributing to Archon!
 2. Clone your fork
 3. Install dependencies: `bun install`
 4. Copy `.env.example` to `.env` in the Archon checkout and configure it for the source server. This file loads after CWD env stripping, without overriding remaining process values, and before `~/.archon/.env` and `<cwd>/.archon/.env`. See [environment file locations](packages/docs-web/src/content/docs/reference/configuration.md#env-file-locations) for precedence and the distinction from a target repository's `.env`.
-5. Start development: `bun run dev`
+5. Start development: `bun run dev`. It uses `~/.archon` unless `ARCHON_HOME` is set; see [Running a checkout](#running-a-checkout) before you run a branch.
 
 ## Development Workflow
 
+### Running a checkout
+
+Archon applies its schema migrations when it opens a database. Running a checkout's CLI, server or tests against your own `~/.archon` writes that branch's unmerged schema into your live database, and the additive-only rule means it stays there.
+
+Before you run a checkout, give it its own home and remove it afterwards:
+
+```bash
+export ARCHON_HOME="$(mktemp -d)"
+```
+
+If `DATABASE_URL` is set, in your shell or in the checkout's `.env`, unset it or point it at a scratch database you create and drop. A scratch home does not change which database `DATABASE_URL` names. Copy `config.yaml` into the scratch home when the change needs your configuration; do not copy `archon.db` or credentials.
+
+A build running from inside an Archon home's `workspaces/` (a run's worktree or a managed clone) refuses to open any database, SQLite or PostgreSQL, while `ARCHON_HOME` names that home, and prints this instruction. The check reads only the home: once `ARCHON_HOME` is a scratch directory, a `DATABASE_URL` is opened as given, live or not. Set a scratch home rather than routing around the refusal.
+
 ### Code Quality
 
-Packages using the shared test runner without legacy `testGroups` discover tests
-under `src` automatically (`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents).
-Core uses this default. A test that uses `mock.module()`, directly
+Packages using the shared test runner discover tests under `src` automatically
+(`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents). Core uses this default.
+A package's legacy `testGroups` pin the files their selectors name into fixed processes;
+discovery groups every other test, so a new test needs no manifest edit. A test that uses `mock.module()`, directly
 or through a helper, must start with the exact line `// @archon-test-isolated`;
-discovery fails on a direct call without it.
+discovery fails on a direct call without it. The line isolates only a discovered test: a file a
+directory selector such as `src/` covers stays in that selector's group until the selector is
+narrowed to leave it out.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
 retain Bun's substring-filter meaning and run only matching files, preserving the same
 isolation groups. Every requested group runs, and any failed group makes the command
-fail. Discovery errors, including selected files outside explicit `testGroups`, stop
-the request before any group starts. Test flags apply to each selected group; JUnit output
+fail. Discovery errors stop the request before any group starts. Test flags apply to each selected group; JUnit output
 is combined across groups and, from the repository root, across every started owner.
 Name filters (`-t` or `--test-name-pattern`) are supported only when the request selects
 one isolation group, preserving Bun's native exit result. Requests selecting multiple
@@ -39,9 +55,20 @@ zero-file runs. An absent report after exit 0 emits a diagnostic and contributes
 results, preserving Bun's exit code; absence after a nonzero exit remains a runner error.
 The wrapper cannot distinguish successful zero-file execution from report loss after exit 0.
 
-CI is the full validation gate. While working, choose checks for the files and packages
-you changed: package `type-check` and `test` scripts, `bun run lint`,
-or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
+CI is the full validation gate. While working and before you push, run
+`bun run check:changed`. It finds the packages your change touches against the merge base
+with `origin/dev` (`--base <ref>` for another), adds every package that depends on them
+through the manifests, type-checks those packages and the root script and pack projects the
+change reaches in one `tsc -b` build, runs their `test` scripts, then lint and the ratchet.
+Lint runs the `bun run lint` checks scoped to that set: the `mock.module()` check reads only
+the packages in scope (and `scripts/` when root scripts are), the workflow persistence check
+runs only when core, cli or server is in scope, and the other checks run whole. A change to a
+lint script, the `mock.module()` baseline or a tsconfig runs every lint check whole. It prints
+the packages and lint checks it ran and skipped, and `--list` prints only that. A change to
+the root manifest, the lockfile, CI, shared config or a file it cannot place runs the full
+local set and says why. It leaves to CI the generated files, package boundaries, format, the
+installer, Windows and macOS, and couplings the manifests do not declare. For one test file,
+`bun run test <path>` is enough. Keep package tests isolated through their runners.
 The isolation PR lookup conformance test requires `jq` on PATH to execute the production `gh --jq` projection.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
@@ -63,7 +90,7 @@ excluded from formatting while its TypeScript scripts remain linted. Markdown an
 are hand-formatted. After resolving conflicts in an in-flight PR, run `bun run format`.
 
 The ratchet (`bun run check:ratchet`) lets code grow up to a ceiling and holds what is above
-it, compared with the merge base with `origin/dev` (fetch it locally). A touched function is
+it, compared with the merge base with `origin/dev` (fetch it locally; `--base <ref>` names another). A touched function is
 refused when it ends above cognitive complexity 15 and scores higher than at the merge base. A
 touched source file is refused when it ends above 800 lines and has more lines than at the
 merge base. Test files have no line ceiling. It scores the TS/JS files
@@ -85,6 +112,8 @@ not accepted. Removed collisions must lose their ledger entries; stale entries f
 is excluded with the provider package; `generate:codex-protocol` owns it.
 
 ```bash
+bun run check:changed                       # changed packages and their dependents
+bun run check:changed --list                # print that scope without running it
 bun run validate                            # optional local checks
 bun run validate --only generated-files     # generated artifacts
 bun run validate --only format              # formatting, also run by the staged-file hook
@@ -97,12 +126,19 @@ bun run test --plan pack                    # when changing .archon/workflows or
 A ready pull request runs the Linux jobs its change can affect: `static` (type-check, lint,
 format, generated files, the ratchet), the Linux test jobs (`test`, `test-scripts`,
 `test-pack`), `schema-upgrade` and `postgres-parity`. A push to `dev` or `main` runs every
-job on every platform, and that run is the complete verification of a merge. These jobs wait
+job on every platform, and that run is the complete verification of a merge. On Windows a push
+to `dev` runs only the Windows set (`windows-set`, see "How a test joins the Windows set"
+below); a push to `main` also runs the whole suite there. Once a day a scheduled run runs the
+whole suite on Windows for `dev`, and no other job a change selects, when `dev` has a commit no
+completed scheduled run covered; a scheduled run that succeeded or failed counts, a cancelled one
+does not. A failed scheduled run comments on the open issue titled "Scheduled Windows suite fails
+on dev", or opens it, with the failed jobs and the failing tests their logs name. These jobs wait
 for the push:
 
 | Job | Also runs on a pull request that changes |
 | --- | --- |
-| `test-windows`, `test-scripts-windows`, `test-pack-windows`, `file-store-primitives-macos` | nothing narrower than the list below |
+| `windows-set`, `file-store-primitives-macos` | nothing narrower than the list below |
+| `test-windows`, `test-scripts-windows`, `test-pack-windows` (the whole suite on Windows) | nothing narrower than the list below; a push runs them only on `main`, and the daily schedule on `dev` |
 | `docker-build` | `Dockerfile`, `.dockerignore`, `docker-entrypoint.sh`, or a script the image build or its upgrade test runs |
 | `serve-binary` | `scripts/build-binaries.sh` or a smoke test the job runs |
 
@@ -115,10 +151,12 @@ authoritative lists.
 To run every job on a branch before it merges, for example when a change touches path
 handling, process spawning or anything else that differs on Windows or macOS, dispatch the
 workflow on the branch: `gh workflow run test.yml --ref <branch>`. The results appear in the
-pull request's checks. Dispatching needs write access, and the branch must be in this
+pull request's checks. A dispatch runs the Windows set; add `-f windows-full-suite=true` for
+the whole suite on Windows, as a push to `main` runs it. Dispatching needs write access, and the branch must be in this
 repository, so on a pull request from a fork a maintainer decides whether to push the branch
 here and dispatch it. A break that only another platform shows otherwise appears in the push
-run on `dev`.
+run on `dev`, or, when no test in the Windows set reaches it, in the next scheduled run on `dev`,
+which opens or comments on the scheduled failure issue.
 
 A change touching only prose or files no check reads skips the test, service and binary jobs.
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
@@ -137,7 +175,8 @@ a pull request run already passed every job on the same tree, the ones that wait
 included, and otherwise runs them, so a prose change's test-visible effects are checked on `dev`.
 
 The tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-run in the `test-pack` job (and `test-pack-windows` when it runs) when a pull request or an unproven push changes the pack or a
+run in the `test-pack` job (and `test-pack-windows` when it runs, which a push does only on
+`main` and the daily schedule does on `dev`) when a pull request or an unproven push changes the pack or a
 contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
 those paths. Run them locally with `bun run test --plan pack` and
 `bun run validate --only workflow-fixtures`; a single test file runs with
@@ -153,6 +192,38 @@ formatting. Workflow fixtures require explicit selection; formatting runs by def
 Each validate run prints its actual elapsed time per check. A local success does not predict service, build,
 or other-platform CI results.
 
+#### How a test joins the Windows set
+
+On a push to `dev`, Windows runs only the Windows set: the test files whose leading `//`
+lines include `// @archon-test-windows`. Those lines must start the file and follow one
+another: a blank line, a block comment or an import before the marker hides it. When a file
+has both, `// @archon-test-isolated` stays on line 1 and the Windows marker follows it;
+discovery refuses the isolation directive anywhere else in those leading lines. Every other test
+runs on Windows only on a push to `main`, in the daily scheduled run on `dev`, on a pull
+request whose change runs every job (see `EVERY_JOB_INPUTS` above), or on a dispatch with
+`windows-full-suite=true`. Most of those prove nothing Linux does not, but not all: a Windows
+branch in an unmarked file, such as an assertion whose expected value differs on Windows, is
+not checked by a push to `dev`, only by the next scheduled run. When that branch
+is what the test is about, move the case into a marked file.
+
+Mark a file when its subject behaves differently on Windows and the test exercises the real
+platform, not an injected `win32` path API or a mocked `process.platform`, which Linux proves
+equally well:
+
+- path spelling and separators that reach the file system or an operator's screen;
+- starting and stopping process trees;
+- file locks, renames and removal;
+- shell resolution and quoting;
+- or the file has caught a fault that only Windows showed.
+
+A marked file runs every one of its tests on Windows. A case that cannot run there (a chmod
+denial, a symlink Git-Bash cannot make) goes in an unmarked sibling file, not behind a
+`win32` skip. A Windows-only case in a large mixed file goes the other way, into a small
+marked sibling. `skipIf(process.platform !== 'win32')` for a Windows-only case is fine.
+
+Run the set with `bun run test --windows` or `bun run validate --only windows-tests`; the
+runner prints the files it selected. `scripts/package-test-groups.ts` reads the marker.
+
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 
 **macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Do not compile binaries locally on macOS. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`. One exception: the file-store lock tests compile their probe only under GitHub Actions, on every OS, and skip it everywhere else whatever `ARCHON_TEST_COMPILED_BINARIES` says. The `file-store-primitives-macos` job runs POSIX plugin cleanup, provider and chat inspection diagnostics, process-provider and Codex cleanup, the file-store group, and database-free CLI lifecycle on a disposable Mac so these behaviors and the compiled probe are also proved on macOS.
@@ -165,7 +236,7 @@ drop; never run destructive verification against a configured live database.
 
 | CI job | Needs | Run it yourself |
 | --- | --- | --- |
-| `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
+| `schema-upgrade` | a scratch PostgreSQL you start; the SQLite half also reads every release tag | `PGHOST=<scratch host or socket dir> PGUSER=<user> bun run check:schema-upgrades` (or a `DATABASE_URL` with a host); with no server named it refuses. Then `bun run check:sqlite-vintages` |
 | `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts`, `packages/core/src/db/state-documents.postgres.integration.test.ts`, `packages/core/src/db/codebase-rename.postgres.integration.test.ts`, and `packages/core/src/db/schema-convergence.postgres.integration.test.ts`; then `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/users.postgres.integration.test.ts`, `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/codebase-delete.postgres.integration.test.ts`, and `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/user-provider-key-store.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
 | Linux `test` Slack conformance and smoke | compiled Slack plugin with a stubbed client for conformance, and the unmodified release binary for initialization and missing-token smoke | CI only; source conformance runs in `cd packages/chat-slack && bun run test` |
@@ -180,8 +251,11 @@ checks, and the server-free bundle assertion (including a restored-import
 negative proof), run in CI. Local `check:cli-import-boundary` still checks startup
 and policy import boundaries. Do not compile these binaries locally on macOS.
 
-**Schema changes**: run `bun run check:schema-upgrades` and `bun run check:sqlite-vintages`
-yourself if you touched `migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
+**Schema changes**: if you touched `migrations/000_combined.sql`, run
+`PGHOST=<scratch host or socket dir> PGUSER=<user> bun run check:schema-upgrades` and
+`bun run check:sqlite-vintages` yourself. The upgrade check creates and drops databases, so name a
+scratch PostgreSQL you started for it. With no server named it exits before connecting, and it does
+not read `DATABASE_URL` from `.env`. A statement that applies cleanly to a fresh install can
 abort the whole apply on an upgrade, and nothing before that job catches it.
 
 **SDLC workflows**: We do not accept pull requests from outside contributors

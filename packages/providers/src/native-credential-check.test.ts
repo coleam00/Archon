@@ -12,7 +12,16 @@ let account: AccountInfo = {};
 const close = mock(() => {});
 const accountInfo = mock(async () => account);
 const query = mock((_request: { options: Options; prompt: unknown }) => ({ accountInfo, close }));
-mock.module('@anthropic-ai/claude-agent-sdk', () => ({ query }));
+// Exports these tests never reach fail when called instead of running the real SDK.
+const unmocked = (name: string) => () => {
+  throw new Error(`${name} is not mocked`);
+};
+mock.module('@anthropic-ai/claude-agent-sdk', () => ({
+  query,
+  archiveSession: unmocked('archiveSession'),
+  unarchiveSession: unmocked('unarchiveSession'),
+  matchDeniedModels: unmocked('matchDeniedModels'),
+}));
 const startRuntime = mock(() => {
   throw new Error('Native credential check must not start a runtime');
 });

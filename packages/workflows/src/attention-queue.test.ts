@@ -110,6 +110,7 @@ describe('a usage-limit wait', () => {
       codebase_id: null,
       status: 'paused',
       outcome: null,
+      completed_outcome: null,
       user_message: '',
       metadata: {
         wait: {

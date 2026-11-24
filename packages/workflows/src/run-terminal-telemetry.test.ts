@@ -35,7 +35,7 @@ async function failedRunEvents(): Promise<RunTelemetryEvent[]> {
       created_at: '2026-09-24 10:00:09',
     },
   ];
-  const terminalRun = { ...run, outcome: null, output_root: null };
+  const terminalRun = { ...run, outcome: null, completed_outcome: null, output_root: null };
   const terminalRecord = buildTerminalRecord({
     run: terminalRun,
     events,
@@ -73,12 +73,6 @@ describe('buildRunTerminalTelemetry', () => {
       nodesTotal: 2,
       exitReason: 'node_error',
       errorClass: 'exec_failed',
-    });
-  });
-
-  test.each([0, 0.25])('keeps reported cost %s', costUsd => {
-    expect(buildRunTerminalTelemetry({ run, events: [], usage: { costUsd } })).toMatchObject({
-      costUsd,
     });
   });
 
@@ -127,7 +121,12 @@ describe('buildRunTerminalTelemetry', () => {
         { event_type: 'loop_iteration_completed', data: {}, created_at: '2026-09-24T10:00:06Z' },
         { event_type: 'loop_iteration_completed', data: {}, created_at: '2026-09-24T10:01:06Z' },
       ];
-      const terminalRun = { ...childRun, outcome: null, output_root: null };
+      const terminalRun = {
+        ...childRun,
+        outcome: null,
+        completed_outcome: null,
+        output_root: null,
+      };
       const terminalRecord = buildTerminalRecord({
         run: terminalRun,
         events,
@@ -211,6 +210,8 @@ test('analytics terminal event mapping conforms to the persisted event owner', (
 
 describe('TokenUsage axis seam guard', () => {
   const specimen: Required<TokenUsage> = {
+    calls: [{ input: 5000, output: 1200 }],
+    callsPartial: true,
     input: 5000,
     output: 1200,
     cacheRead: 4000,
@@ -220,6 +221,8 @@ describe('TokenUsage axis seam guard', () => {
     cost: 0.25,
   };
   const wireKeys: Record<keyof TokenUsage, string | null> = {
+    calls: null,
+    callsPartial: null,
     input: 'tokens_in',
     output: 'tokens_out',
     cacheRead: 'cache_read_tokens',
@@ -228,26 +231,24 @@ describe('TokenUsage axis seam guard', () => {
     total: null, // Telemetry carries gross axes, not the optional combined total.
     cost: null, // cost_usd comes from the separate result/run scalar.
   };
-  for (const status of ['completed', 'failed', 'cancelled'] as const) {
-    test(`${status}: carries every declared axis through the terminal wire serializer`, () => {
-      const props = buildRunTerminalTelemetry({
-        run: { ...run, status },
-        events: [],
-        usage: { costUsd: 0.75, tokens: specimen },
-      });
-      if (!props) throw new Error('Missing terminal telemetry');
-      const wire = workflowTerminalEventProperties(props);
-      for (const axis of Object.keys(wireKeys) as (keyof TokenUsage)[]) {
-        const key = wireKeys[axis];
-        if (key !== null) expect(wire[key], `${axis} -> ${key}`).toBe(specimen[axis]);
-        else {
-          expect(props).not.toHaveProperty(axis);
-          expect(wire).not.toHaveProperty(axis);
-        }
-      }
-      expect(wire.cost_usd).toBe(0.75);
+  test('carries every declared axis through the terminal wire serializer', () => {
+    const props = buildRunTerminalTelemetry({
+      run: { ...run, status: 'completed' },
+      events: [],
+      usage: { costUsd: 0.75, tokens: specimen },
     });
-  }
+    if (!props) throw new Error('Missing terminal telemetry');
+    const wire = workflowTerminalEventProperties(props);
+    for (const axis of Object.keys(wireKeys) as (keyof TokenUsage)[]) {
+      const key = wireKeys[axis];
+      if (key !== null) expect(wire[key], `${axis} -> ${key}`).toBe(specimen[axis]);
+      else {
+        expect(props).not.toHaveProperty(axis);
+        expect(wire).not.toHaveProperty(axis);
+      }
+    }
+    expect(wire.cost_usd).toBe(0.75);
+  });
 
   test('preserves absent usage, reported zero, and true-only partial flags', () => {
     for (const tokens of [

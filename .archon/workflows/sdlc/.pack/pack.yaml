@@ -33,30 +33,76 @@ inputs:
       that changes a matching path never merges on the auto lane: it merges only once a
       maintainer approved it at its head.
 
+# The forge operations the pack's scripts call. The engine checks them when a run of any
+# pack workflow starts, before a worktree, a slot or a node: the project's forge plugin
+# must advertise every one and have a credential the forge accepts in one read. An
+# operation only an agent calls from a prompt is not listed; the host refuses that call by
+# name on a plugin without it. `repository` names the inputs a run names its repository
+# in: a run that sets them is checked against that repository, any other against the
+# checkout's remotes.
+forge:
+  repository: { host: repo_host, path: repo_path }
+  operations:
+    - pr.view
+    - pr.create
+    - pr.edit-body
+    - pr.ready
+    - pr.draft
+    - pr.files
+    - pr.merge
+    - pr.merge-state
+    - pr.threads
+    - pr.thread.reply
+    - pr.thread.resolve
+    - comment.upsert
+    - checks.state
+    - checks.commit
+    - checks.rerun
+    - repo.file
+    - repo.labels.list
+    - repo.label.ensure
+    - workitem.view
+    - workitem.create
+    - workitem.edit-body
+    - workitem.close
+    - workitem.comments
+    - workitem.comment.upsert
+    - workitem.label.add
+    - workitem.label.remove
+
 # The trigger bindings the pack recommends. Nothing here starts a run: an operator writes
 # them for one repository with `archon pack bindings sdlc` and registers each file.
 # The README's setup guide says how. https://archon.diy/guides/sdlc-operations/ says,
 # queue by queue, why each capacity and overlap is what it is.
+#
+# Capacity is how many runs hold a resource at once. Intake and the build queue work one
+# issue per run, so their number is how many issues move in parallel: 10 is a starting
+# point, and an install sets its own with `concurrency.resources.<resource>` in its
+# config, which wins over the number here. The merge stage merges one pull request at a
+# time, and the other queues run one pass at a time over everything that waits, so they
+# declare none and hold one slot.
 bindings:
   intake-issues:
     workflow: archon-intake
     resource: intake
-    capacity: 2
+    capacity: 10
     overlap: queue
     event:
       kind: issue.lifecycle
       actions: [opened, edited, reopened]
+    # The run is on the issue's item, `itemKey` in .shared/workitem.ts: one history per
+    # issue, and one intake run on an issue at a time.
+    item: { field: subject.number, prefix: issue- }
     inputs:
       repo_host: { event: repository.host }
       repo_path: { event: repository.path }
       number: { event: subject.number }
       kind: { event: subject.kind }
       action: { event: event.action }
-      build_queue_binding: { binding: build-queue }
   intake-labels:
     workflow: archon-intake
     resource: intake
-    capacity: 2
+    capacity: 10
     overlap: queue
     event:
       kind: label.changed
@@ -66,6 +112,7 @@ bindings:
       predicates:
         - field: label.name
           in: [archon-triage]
+    item: { field: subject.number, prefix: issue- }
     inputs:
       repo_host: { event: repository.host }
       repo_path: { event: repository.path }
@@ -74,18 +121,99 @@ bindings:
       action: { event: event.action }
       label: { event: label.name }
       label_actor: { event: label.actor.login }
-      build_queue_binding: { binding: build-queue }
+  # Fire-only: `archon-build-pick` fires it, on the issue's item, for new work it files,
+  # a work order's untriaged members and a blocked item it sends back to re-triage.
+  intake:
+    workflow: archon-intake
+    resource: intake
+    capacity: 10
+    overlap: queue
+    item: { field: number, prefix: issue- }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+  # Nothing schedules a build: `archon-build-pick` fires this binding once per waiting
+  # issue. Each start is on the issue's item, where the engine admits one build run at a
+  # time; a start that finds the issue held or every slot busy is skipped, and the next
+  # pick fires it again.
   build-queue:
     workflow: archon-build-queue
     resource: build
-    capacity: 2
+    capacity: 10
     overlap: skip
     isolation: { kind: worktree }
+    item: { field: number, prefix: issue- }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+  # The engine starts the routed issue's first round when its intake run ends, on the
+  # issue's item, with no node that fires anything. It names the issue, and a named issue
+  # is built whatever `orders_only` says: an install that builds only work orders leaves
+  # this binding unregistered. A start that finds every slot busy is skipped, and the
+  # next pick starts the issue.
+  build-after-intake:
+    workflow: archon-build-queue
+    resource: build
+    capacity: 10
+    overlap: skip
+    isolation: { kind: worktree }
+    run_ended:
+      workflow: archon-intake
+      outcome: [investigate, plan, deliver, continue]
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
+      number: { input: number }
+  # Starts every waiting issue's build, in pickup order, and holds no build slot. One
+  # pick at a time, and a pick that finds one running is skipped.
+  build-pick:
+    workflow: archon-build-pick
+    resource: build-pick
+    overlap: skip
     schedule: { interval_seconds: 1800 }
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }
       build_queue_binding: { binding: build-queue }
+      intake_binding: { binding: intake }
+  # An answer to the build queue's ask starts the issue's next build run with the answer
+  # and what was asked; that run writes the ruling into the issue body, records the
+  # answer, and runs the round on a continue. The options are the deciding agent's, so
+  # the binding names none: every answer starts the run, `other` with text included,
+  # which continues with the text as the ruling. A withdrawn ask starts nothing and
+  # leaves the item asking until a re-triage. Queued, not skipped: the answer is the
+  # only start the item gets.
+  build-after-answer:
+    workflow: archon-build-queue
+    resource: build
+    capacity: 10
+    overlap: queue
+    isolation: { kind: worktree }
+    asks_settled:
+      workflow: archon-build-queue
+      settled: answered
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
+      number: { input: number }
+      decisions: { answers: true }
+      asked: { result: /asked }
+  # A build run that ends has freed a slot, and may have left its issue waiting for
+  # another round, so the engine starts a pick then instead of leaving both to the
+  # schedule. Queued, not skipped: a pick already running may have listed the items
+  # before this run recorded its decision.
+  build-pick-after-build:
+    workflow: archon-build-pick
+    resource: build-pick
+    overlap: queue
+    run_ended:
+      workflow: archon-build-queue
+      outcome: [parked, ready, continue, asked]
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
+      build_queue_binding: { binding: build-queue }
+      intake_binding: { binding: intake }
   split-queue:
     workflow: archon-split
     resource: split
@@ -94,20 +222,123 @@ bindings:
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }
-  # A short interval stands in for an event the forge does not deliver: a pull request
-  # whose checks were pending merges soon after they finish. A sweep where nothing
-  # changed runs no agent.
+  # The merge stage runs once per issue, on the issue's item, and every start of it below
+  # shares one slot: a run judges its base branch and merges against it, so a second
+  # run beside it would merge against a base it has not judged. Queued, not skipped: each
+  # start is an item's hand-off. This binding is fire-only: the backstop fires it.
   merge-queue:
     workflow: archon-merge-queue
     resource: merge
+    overlap: queue
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+  # A build round that ends ready hands its pull request to the merge stage.
+  merge-after-build:
+    workflow: archon-merge-queue
+    resource: merge
+    overlap: queue
+    run_ended:
+      workflow: archon-build-queue
+      outcome: ready
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
+  # A merge run whose pull request's checks still run ends waiting for a check at its
+  # head, and a completed check there starts it again. A check names no pull request,
+  # so the binding maps no item: the wait's commit finds it. A red base branch leaves
+  # no wait: every pull request it holds would wait on one commit, which the engine
+  # cannot route to one item, so merge-pick starts them again.
+  merge-after-checks:
+    workflow: archon-merge-queue
+    resource: merge
+    overlap: queue
+    event:
+      kind: check.changed
+      actions: [changed]
+      predicates:
+        - field: check.phase
+          equals: completed
+    wake: { workflow: archon-merge-queue, wait: checks, about: check.revision }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+      waited: { wait: true }
+  # An answer to the stage's ask starts it again with the answer and what was asked. The
+  # options are the stage's three fixed ids. Each starts the stage, which approves,
+  # returns or parks by the id chosen; a return then starts the build round below,
+  # through the stage's `returned` outcome. An answer that chooses none of them, such as
+  # text alone, starts nothing, and the engine tells the answerer so.
+  merge-after-answer:
+    workflow: archon-merge-queue
+    resource: merge
+    overlap: queue
+    asks_settled:
+      workflow: archon-merge-queue
+      settled: answered
+      option: [merge, return, park]
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
+      decisions: { answers: true }
+      asked: { result: "" }
+  # A pull request the merge stage returns starts its issue's next build round. A start
+  # that finds every slot busy is skipped, and the next pick starts the issue.
+  build-after-merge-return:
+    workflow: archon-build-queue
+    resource: build
+    capacity: 10
     overlap: skip
-    schedule: { interval_seconds: 300 }
+    isolation: { kind: worktree }
+    run_ended:
+      workflow: archon-merge-queue
+      outcome: returned
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
+      number: { result: /number }
+  # A merge that left its issue open, in a run with `retriage_merged` on, recorded a
+  # re-triage request on the issue's work item; this starts the intake run that takes it.
+  intake-after-merge:
+    workflow: archon-intake
+    resource: intake
+    capacity: 10
+    overlap: queue
+    run_ended:
+      workflow: archon-merge-queue
+      outcome: merged_retriage
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
+      number: { result: /number }
+      action: retriage
+  # A discovery about code a pull request adds is at the default branch once it merged.
+  # An install that drains only on the schedule leaves this binding unregistered.
+  discoveries-after-merge:
+    workflow: archon-discoveries
+    resource: discoveries
+    overlap: skip
+    run_ended:
+      workflow: archon-merge-queue
+      outcome: [merged, merged_retriage]
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
+  # The backstop for what no event above reports: a review thread resolved, a draft
+  # marked ready, the forge computing whether a pull request merges, a new review
+  # verdict, a validation recorded under `ci: none`, a default branch fixed by a new
+  # commit, and a start or a check event that was lost. Every 30 minutes it fires
+  # `merge-queue` for each waiting item that no open ask, wait or merge run holds, and whose
+  # newest merge run did not fail.
+  merge-pick:
+    workflow: archon-merge-pick
+    resource: merge-pick
+    overlap: skip
+    schedule: { interval_seconds: 1800 }
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }
       merge_queue_binding: { binding: merge-queue }
-      build_queue_binding: { binding: build-queue }
-      discoveries_binding: { binding: discoveries }
   discoveries:
     workflow: archon-discoveries
     resource: discoveries
@@ -128,12 +359,3 @@ bindings:
     schedule: { interval_seconds: 86400 }
     inputs:
       since: 1d
-  worktree-cleanup:
-    workflow: archon-worktree-cleanup
-    # The sweep covers every project registered on the host, so one resource guards it.
-    resource: worktree-cleanup
-    resource_scope: host
-    overlap: skip
-    schedule: { interval_seconds: 21600 }
-    inputs:
-      include_closed: 'false'

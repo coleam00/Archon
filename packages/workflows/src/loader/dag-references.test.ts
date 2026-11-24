@@ -14,7 +14,10 @@ import { join } from 'path';
 import { validateDagStructure } from './dag-structure';
 
 describe('DAG output ref validation', () => {
-  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+  // One keyword is enough here: output-ref.test.ts proves the contract each composition
+  // keyword declares; these prove the loader checks templates, conditions and
+  // prior-iteration references against it.
+  for (const keyword of ['allOf']) {
     for (const mixed of [false, true]) {
       const schema = {
         ...(mixed ? { properties: { direct: { type: 'number' } } } : {}),

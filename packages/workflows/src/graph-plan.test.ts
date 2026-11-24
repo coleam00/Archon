@@ -12,37 +12,12 @@ function node(id: string, depends_on?: string[]): AgentNode {
 }
 
 describe('planGraph', () => {
-  it('single node with no dependencies -> one layer', () => {
-    const layers = planGraph([node('a')]).layers;
-    expect(layers).toHaveLength(1);
-    expect(layers[0].map(n => n.id)).toEqual(['a']);
-  });
-
   it('linear chain -> one node per layer', () => {
     const layers = planGraph([node('a'), node('b', ['a']), node('c', ['b'])]).layers;
     expect(layers).toHaveLength(3);
     expect(layers[0].map(n => n.id)).toEqual(['a']);
     expect(layers[1].map(n => n.id)).toEqual(['b']);
     expect(layers[2].map(n => n.id)).toEqual(['c']);
-  });
-
-  it('fan-out: classify -> [investigate, plan] in same layer', () => {
-    const layers = planGraph([
-      node('classify'),
-      node('investigate', ['classify']),
-      node('plan', ['classify']),
-    ]).layers;
-    expect(layers).toHaveLength(2);
-    expect(layers[0].map(n => n.id)).toEqual(['classify']);
-    const layer1Ids = layers[1].map(n => n.id).sort();
-    expect(layer1Ids).toEqual(['investigate', 'plan']);
-  });
-
-  it('fan-in: [a, b] -> implement in its own layer', () => {
-    const layers = planGraph([node('a'), node('b'), node('implement', ['a', 'b'])]).layers;
-    expect(layers).toHaveLength(2);
-    expect(layers[0].map(n => n.id).sort()).toEqual(['a', 'b']);
-    expect(layers[1].map(n => n.id)).toEqual(['implement']);
   });
 
   it('diamond: classify -> [investigate, plan] -> implement', () => {

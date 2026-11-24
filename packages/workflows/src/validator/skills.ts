@@ -8,12 +8,15 @@ import {
   skillSearchRoots,
 } from '@archon/paths/skills';
 import { declaredSkillRoots } from '@archon/provider-contract';
+import { skillDeclaration } from '../schemas';
+import { enabledSkillSearchRoots, resolveNodeSkills } from '../dag/provider-resolution';
 import type { NodeValidation, ResourceValidation } from './context';
 
 /** Where one node's provider looks for skills, and which of those roots are the project's. */
 interface SkillScope {
   discovery: NonNullable<NodeValidation['descriptor']>['skillDiscovery'];
   env: Record<string, string> | undefined;
+  sources: readonly ('project' | 'user')[] | undefined;
   searchRoots: string[];
   projectRoots: string[];
 }
@@ -35,18 +38,28 @@ export async function validateSkills(
 ): Promise<void> {
   const { node, provider, capabilities } = scope;
   if (!('skills' in node) || !Array.isArray(node.skills)) return;
+  const declared = node.skills.map(skill => skillDeclaration(skill));
   // Only validate filesystem names when the provider actually consumes the
   // YAML list. In particular, Codex's native roots/metadata rules do not
   // match Archon's shared four-root resolver, so accepting a `.claude`
   // match here would falsely imply that Codex can invoke it.
   if (capabilities?.skills !== false) {
     const skillScope = nodeSkillScope(validation, scope);
-    for (const skillName of node.skills) {
-      await validateSkill(validation, scope, skillScope, skillName);
+    const withheld = new Set(
+      resolveNodeSkills(node.skills, true, {
+        cwd: validation.cwd,
+        discovery: skillScope.discovery,
+        env: skillScope.env,
+        sources: skillScope.sources,
+      }).unavailable.map(entry => entry.name)
+    );
+    for (const skill of declared) {
+      if (skill.optional && withheld.has(skill.name)) continue;
+      await validateSkill(validation, scope, skillScope, skill.name);
     }
   }
 
-  if (capabilities?.skills === false && node.skills.length > 0) {
+  if (capabilities?.skills === false && declared.some(skill => !skill.optional)) {
     validation.issues.push({
       level: 'error',
       nodeId: node.id,
@@ -74,17 +87,11 @@ function nodeSkillScope(
         parseSettingSources(config?.assistants?.[provider]?.settingSources) ??
         DEFAULT_SETTING_SOURCES)
       : undefined;
-  const searchRoots = discovery
-    ? declaredSkillRoots(discovery, cwd, {
-        includeProject: sources?.includes('project') ?? true,
-        includeUser: sources?.includes('user') ?? true,
-        env,
-      })
-    : skillSearchRoots(cwd);
+  const searchRoots = enabledSkillSearchRoots({ cwd, discovery, env, sources });
   const projectRoots = discovery
     ? declaredSkillRoots(discovery, cwd, { includeUser: false, env })
     : projectSkillSearchRoots(cwd);
-  return { discovery, env, searchRoots, projectRoots };
+  return { discovery, env, sources, searchRoots, projectRoots };
 }
 
 async function validateSkill(

@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import { effortLevelSchema, skipCauseSchema, workflowRunOutcomeSchema } from '../schemas';
+import {
+  attentionFormSchema,
+  attentionLabelsSchema,
+  attentionOptionSchema,
+  attentionRecommendationSchema,
+} from '../schemas/wait-node';
 
 const dryRunNodeTypeSchema = z.enum([
   'command',
@@ -54,6 +60,16 @@ const dryRunTraceBaseSchema = z.object({
   iteration: z.number().int().positive().optional(),
   /** Present for nodes that take an AI turn; absent for bash/script/approval/cancel. */
   resolution: dryRunResolutionSchema.optional(),
+  /** The fully resolved operator ask; excluded from narrow fixture summaries. */
+  attentionAsk: z
+    .object({
+      form: attentionFormSchema,
+      options: z.array(attentionOptionSchema.omit({ value: true })).optional(),
+      recommendation: attentionRecommendationSchema.optional(),
+      labels: attentionLabelsSchema.optional(),
+      other: z.literal(true).optional(),
+    })
+    .optional(),
 });
 
 export const dryRunTraceEntrySchema = z.discriminatedUnion('state', [
@@ -85,7 +101,15 @@ export type DryRunTraceEntry = z.infer<typeof dryRunTraceEntrySchema>;
 export const dryRunResultSchema = z.object({
   workflow: z.string(),
   outcome: z.enum(['completed', 'failed', 'paused', 'cancelled']),
+  /** Whether the workflow declares `returns.outcome`. */
+  declaresOutcome: z.boolean(),
+  /** `outcome` as the run row would hold it: the boolean form only. */
   authoredOutcome: workflowRunOutcomeSchema.nullable(),
+  /**
+   * `completed_outcome` as the run row would hold it: set only when the simulation
+   * completed with a stubbed or executed returns value of the declared form.
+   */
+  completedOutcome: z.string().nullable(),
   trace: z.array(dryRunTraceEntrySchema),
   missingStubs: z.array(z.string()),
   /**

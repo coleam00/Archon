@@ -66,7 +66,10 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     // the adopted lane's worktree and resolve the branch's vintage of the workflow.
     discoverMock
       .mockResolvedValueOnce({
-        workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Parent vintage' })],
+        // `project`: a run with an explicit --workflow-source must find the named workflow there.
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist', description: 'Parent vintage' }, 'project'),
+        ],
         errors: [],
       })
       .mockResolvedValueOnce({
@@ -376,12 +379,17 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       // Both capture calls use the detached child's pre-created run ID.
       setupAdoptMocks();
       const workflowDb = await import('@archon/core/db/workflows');
-      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      const handedOverRow = {
         id: 'run-detached-child',
         metadata: { cli_detached_launch_token: 'launch-token' },
         workflow_name: 'assist',
         status: 'pending',
-      });
+      };
+      // Admission reads the row, and the child reads it again under its lease.
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockImplementation(
+        async (id: string) =>
+          id === handedOverRow.id ? handedOverRow : makeContinuationRun({ id })
+      );
       const prepareMock = prepareWorkflowSource as ReturnType<typeof mock>;
 
       const tempRoot = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-recapture-same-root-')));

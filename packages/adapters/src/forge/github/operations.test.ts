@@ -75,6 +75,7 @@ describe('GitHub outbound producer', () => {
         'workitem.close',
         'workitem.edit-body',
         'workitem.list',
+        'workitem.label.added',
         'workitem.search',
         'repo.labels.list',
         'repo.label.ensure',
@@ -84,6 +85,7 @@ describe('GitHub outbound producer', () => {
         'pr.edit-body',
         'pr.ready',
         'pr.draft',
+        'pr.close',
         'comment.upsert',
         'pr.merge',
         'checks.rerun',
@@ -94,9 +96,15 @@ describe('GitHub outbound producer', () => {
         'repo.file',
         'pr.thread.reply',
         'pr.thread.resolve',
+        'pr.review.submit',
+        'attachment.put',
       ],
       mutationConditions: { 'pr.merge': ['head'] },
       token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
+      remedies: {
+        unsupported_op: expect.stringContaining('archon plugin update'),
+        no_credential: expect.stringContaining('archon auth github'),
+      },
     });
   });
 
@@ -458,6 +466,7 @@ test.each([
                 id: 100,
                 head_sha: head,
                 check_suite_id: 10,
+                workflow_id: 1,
                 run_attempt: 1,
                 status: conclusion === null ? 'waiting' : 'completed',
                 conclusion,
@@ -505,6 +514,7 @@ test('check suites resolve opaque rerun groups, preserving distinct same-name ch
               id: 900,
               head_sha: 'head',
               check_suite_id: 10,
+              workflow_id: 1,
               run_attempt: 3,
               status: 'completed',
               conclusion: 'failure',
@@ -534,6 +544,137 @@ test('check suites resolve opaque rerun groups, preserving distinct same-name ch
   ]);
 });
 
+describe('a check is its newest run across suites of one workflow', () => {
+  type Run = { id: number; suite: number; name: string; conclusion: string; slug?: string };
+  async function unitsFor(
+    runs: Run[],
+    workflows: { id: number; suite: number; workflow: number }[]
+  ) {
+    const response = await handleGithubOperation(checksRequest, {
+      token: 'token',
+      fetch: async input => {
+        const url = String(input);
+        if (url.includes('/pulls/')) return json({ head: { sha: 'head' } });
+        if (url.includes('/actions/runs'))
+          return json({
+            total_count: workflows.length,
+            workflow_runs: workflows.map(run => ({
+              id: run.id,
+              head_sha: 'head',
+              check_suite_id: run.suite,
+              workflow_id: run.workflow,
+              run_attempt: 1,
+              status: 'completed',
+              conclusion: 'success',
+            })),
+          });
+        if (url.includes('/check-runs'))
+          return json({
+            check_runs: runs.map(run => ({
+              id: run.id,
+              name: run.name,
+              head_sha: 'head',
+              app: { slug: run.slug ?? 'github-actions' },
+              check_suite: { id: run.suite },
+              status: 'completed',
+              conclusion: run.conclusion,
+            })),
+          });
+        return json([]);
+      },
+    });
+    if (!response.ok || response.result.op !== 'checks.state') throw new Error('expected checks');
+    return response.result.value;
+  }
+
+  test('a cancelled older run is superseded by a green newer run', async () => {
+    const value = await unitsFor(
+      [
+        { id: 1, suite: 10, name: 'test', conclusion: 'cancelled' },
+        { id: 2, suite: 10, name: 'static', conclusion: 'cancelled' },
+        { id: 3, suite: 20, name: 'test', conclusion: 'success' },
+        { id: 4, suite: 20, name: 'static', conclusion: 'success' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 7 },
+      ]
+    );
+    expect(value.summary.state).toBe('green');
+    expect(value.units.map(unit => [unit.unit.id, unit.rerun])).toEqual([
+      ['3', { id: '200', attempt: 1 }],
+      ['4', { id: '200', attempt: 1 }],
+    ]);
+  });
+
+  test('a failed newer run stays red after an older run passed', async () => {
+    const value = await unitsFor(
+      [
+        { id: 1, suite: 10, name: 'test', conclusion: 'success' },
+        { id: 3, suite: 20, name: 'test', conclusion: 'failure' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 7 },
+      ]
+    );
+    expect(value.summary.state).toBe('red');
+    expect(value.units.map(unit => [unit.unit.id, unit.rerun])).toEqual([
+      ['3', { id: '200', attempt: 1 }],
+    ]);
+  });
+
+  test('a failed check present only in the older suite keeps the commit red', async () => {
+    const value = await unitsFor(
+      [
+        { id: 1, suite: 10, name: 'deploy', conclusion: 'failure' },
+        { id: 2, suite: 10, name: 'test', conclusion: 'cancelled' },
+        { id: 3, suite: 20, name: 'test', conclusion: 'success' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 7 },
+      ]
+    );
+    expect(value.summary.state).toBe('red');
+    expect(value.units.map(unit => [unit.unit.id, unit.rerun])).toEqual([
+      ['1', { id: '100', attempt: 1 }],
+      ['3', { id: '200', attempt: 1 }],
+    ]);
+  });
+
+  test('a rerun in the older suite is the newest run of its check', async () => {
+    const value = await unitsFor(
+      [
+        { id: 5, suite: 10, name: 'test', conclusion: 'success' },
+        { id: 3, suite: 20, name: 'test', conclusion: 'failure' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 7 },
+      ]
+    );
+    expect(value.units.map(unit => unit.unit.id)).toEqual(['5']);
+  });
+
+  test('same-name checks of different workflows, apps or unknown workflows each count', async () => {
+    const value = await unitsFor(
+      [
+        { id: 1, suite: 10, name: 'test', conclusion: 'failure' },
+        { id: 2, suite: 20, name: 'test', conclusion: 'success' },
+        { id: 3, suite: 30, name: 'test', conclusion: 'failure' },
+        { id: 4, suite: 40, name: 'test', conclusion: 'success', slug: 'other-app' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 8 },
+      ]
+    );
+    expect(value.summary.state).toBe('red');
+    expect(value.units.map(unit => unit.unit.id)).toEqual(['1', '2', '3', '4']);
+  });
+});
+
 test('workflow-run approval enumeration includes later enterprise pages', async () => {
   const seen: string[] = [];
   const response = await handleGithubOperation(
@@ -553,6 +694,7 @@ test('workflow-run approval enumeration includes later enterprise pages', async 
           id: 100,
           head_sha: 'head',
           check_suite_id: 10,
+          workflow_id: 1,
           run_attempt: 1,
           status: 'completed',
           conclusion: 'success',

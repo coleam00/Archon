@@ -17,7 +17,7 @@ import {
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
   mockFailPreparedRun,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockGetCodebase,
   mockGetCurrentBranchStrict,
   mockGetOrCreateConversation,
@@ -84,14 +84,14 @@ export function setupRoutingTests() {
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'raced-run-1',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
     mockHydrateResumableRun.mockReturnValueOnce(
       Promise.reject(refusal ?? new WorkflowNotResumableError('raced-run-1', 'running'))
@@ -201,6 +201,53 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
       isolation_env_id: 'env-1',
     });
   });
+
+  test.each([
+    [
+      'worktree',
+      {
+        kind: 'reuse-worktree' as const,
+        environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
+      },
+      '/wt/adopted',
+    ],
+    [
+      'branch',
+      {
+        kind: 'checkout-branch' as const,
+        taskBranch: { kind: 'existing' as const, branch: toBranchName('feature/adopted') },
+      },
+      '/adopted/snapshot',
+    ],
+  ])(
+    "foreground adoption checks the forge against the adopted %s's pack settings",
+    async (_estate, lane, settingsCwd) => {
+      const forgeAccess = await import('@archon/workflows/run-forge-access');
+      const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue(undefined);
+      mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
+      mockResolveWorkflowAdoption.mockResolvedValueOnce({
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
+        lane,
+      });
+      try {
+        await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+          actor: operator,
+          workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
+        });
+        expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+          cwd: '/repos/test-repo',
+          settingsCwd,
+        });
+      } finally {
+        assertForge.mockRestore();
+      }
+    }
+  );
 
   test('background adoption leaves recording to dispatch', async () => {
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
@@ -625,8 +672,8 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ args: 'test message' }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun({ status: 'paused' }))
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ status: 'paused' })])
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({

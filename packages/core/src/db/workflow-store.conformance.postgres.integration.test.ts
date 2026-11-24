@@ -15,8 +15,32 @@ import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
+import { describeItemLandingConformance } from './item-landings.conformance-harness';
+import { describeItemLinkConformance } from './item-links.conformance-harness';
+import {
+  describeLinkedStartConformance,
+  link,
+  reviews,
+  WAIT,
+} from './linked-starts.conformance-harness';
+import { describeSqlItemAskStartConformance } from './item-ask-starts.conformance';
+import { describeSqlItemAskConformance } from './item-asks.conformance';
+import { describeSqlRunDeleteConformance } from './workflow-run-delete.conformance';
+import { describeSqlStartLimitConformance } from './start-limits.conformance';
+import {
+  HEAD,
+  accept,
+  checks,
+  completeWithWaits,
+  describeSqlItemWaitConformance,
+  projectKey,
+  readReceipt,
+  wakeReceipt,
+} from './item-waits.conformance';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
+import { endPgPool } from '../test/end-pg-pool';
+import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
 describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
@@ -42,7 +66,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     };
     try {
       const harness = await makeSqlConformanceHarness(db, postgresDialect, 'postgresql', close);
-      return { ...harness, db };
+      return { ...harness, db, url: url.toString() };
     } catch (error) {
       await close();
       throw error;
@@ -315,6 +339,297 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   }
 
   describeSqlStatusReadConformance(makeHarness);
+  describeItemLinkConformance(makeHarness);
+  describeItemLandingConformance(makeHarness);
+  describeLinkedStartConformance(makeHarness);
+  test('a linked start and an unlink of its link are ordered: the unlink waits for the completion', async () => {
+    const harness = await makeHarness();
+    let interception: ReturnType<typeof spyOn> | undefined;
+    let unlink: Promise<unknown> | undefined;
+    const release = Promise.withResolvers<void>();
+    try {
+      const { db, store } = harness;
+      const linkId = await link(harness, 'waiter', 'dependency', 'depends_on');
+      const { start, finish } = reviews(harness);
+      const runId = await start('dependency');
+      // Pause the completion right after it found the waiter, end the link from another
+      // connection, and see whether that end can commit before the completion does.
+      const found = Promise.withResolvers<void>();
+      const transaction = db.withTransaction.bind(db);
+      interception = spyOn(db, 'withTransaction').mockImplementation(callback =>
+        transaction(query =>
+          callback(async <T>(sql: string, params?: unknown[]) => {
+            const result = await query<T>(sql, params);
+            if (sql.includes('JOIN remote_agent_items i ON i.id = l.')) {
+              found.resolve();
+              await release.promise;
+            }
+            return result;
+          })
+        )
+      );
+      const completion = finish(runId, 'dependency', 'approved', WAIT);
+      await found.promise;
+      interception.mockRestore();
+      interception = undefined;
+      let ended = false;
+      unlink = store.endItemLink({ linkId, via: 'cli', by: null, fromRun: null }).then(() => {
+        ended = true;
+      });
+      let waiting = false;
+      for (let attempt = 0; attempt < 200 && !waiting && !ended; attempt++) {
+        const result = await db.query<{ waiting: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS waiting`
+        );
+        waiting = result.rows[0]?.waiting ?? false;
+        if (!waiting) await Bun.sleep(10);
+      }
+      expect(ended).toBe(false);
+      expect(waiting).toBe(true);
+      release.resolve();
+      // The link was active when the run completed, so the start stands; the end follows.
+      expect((await completion).written.map(receipt => receipt.receipt.itemKey)).toEqual([
+        'waiter',
+      ]);
+      await unlink;
+      const after = await db.query<{ ended_at: unknown }>(
+        'SELECT ended_at FROM remote_agent_item_links WHERE id = $1',
+        [linkId]
+      );
+      expect(after.rows[0]?.ended_at).not.toBeNull();
+    } finally {
+      release.resolve();
+      interception?.mockRestore();
+      await unlink?.catch(() => undefined);
+      await harness.close();
+    }
+  });
+  describeSqlItemAskConformance(makeHarness);
+  describeSqlItemWaitConformance(makeHarness);
+  describeSqlItemAskStartConformance(makeHarness);
+  describeSqlRunDeleteConformance(makeHarness);
+  describeSqlStartLimitConformance(makeHarness);
+  test('age cleanup does not delete a run that resumes while cleanup selects it', async () => {
+    const harness = await makeHarness();
+    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    let gateOpen = false;
+    try {
+      const { db, store } = harness;
+      const run = await store.createWorkflowRun({ workflow_name: 'old', user_message: '' });
+      await store.claimPendingWorkflowRun(run.id);
+      await store.failWorkflowRun(run.id, 'failed');
+      const old = new Date(Date.now() - 10 * 86_400_000);
+      await harness.backdate(run.id, { started_at: old, active_phase_started_at: old });
+      const events = await store.listWorkflowEvents(run.id);
+      expect(events.length).toBeGreaterThan(0);
+
+      // A resume that has written its row but not committed, as cleanup starts.
+      await gate.query('BEGIN');
+      gateOpen = true;
+      await gate.query("UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1", [
+        run.id,
+      ]);
+      const cleanup = store.deleteOldWorkflowRuns(7);
+      for (let tries = 0; ; tries++) {
+        const waiting = await db.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock'`
+        );
+        if ((waiting.rows[0]?.n ?? 0) >= 1) break;
+        if (tries > 200) throw new Error('Expected cleanup to wait on the resumed row');
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      await gate.query('COMMIT');
+      gateOpen = false;
+
+      expect(await cleanup).toEqual({ runs: [] });
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+      expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+    } finally {
+      if (gateOpen) await gate.query('ROLLBACK');
+      await endPgPool(gate);
+      await harness.close();
+    }
+  });
+  test('two completions of one workflow on one item that overlap leave one open set: the later one', async () => {
+    const harness = await makeHarness();
+    // Holding the item row FOR UPDATE parks each completion at its ask insert, whose
+    // foreign-key check needs the row. Without serialization both are parked after their
+    // replace has already run, so neither sees the other's set.
+    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    let gateOpen = false;
+    try {
+      const { db, store } = harness;
+      const start = async () => {
+        const run = await store.createWorkflowRun({
+          workflow_name: 'plan',
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+          item_key: 'issue-1',
+        });
+        return run.id;
+      };
+      const first = await start();
+      const second = await start();
+      await store.claimPendingWorkflowRun(first);
+      // The claim refuses a second run of `plan` on the item while the first holds it, so the
+      // overlap is written directly: an older binary, which has no item hold, can leave it.
+      await db.query("UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1", [
+        second,
+      ]);
+      const itemRow = await db.query<{ item_id: string }>(
+        'SELECT item_id FROM remote_agent_workflow_runs WHERE id = $1',
+        [first]
+      );
+      const itemId = itemRow.rows[0]?.item_id;
+      if (itemId === undefined) throw new Error('Missing item fixture');
+      const askOf = (question: string): ItemAsk => ({
+        question,
+        context: 'Two runs end together.',
+        options: [
+          { id: 'keep', does: 'Keep the flag.', cost: 'One more flag.' },
+          { id: 'drop', does: 'Drop the flag.', cost: 'Older configs break.' },
+        ],
+        recommendation: { option: 'keep', why: 'Nothing depends on dropping it.' },
+        artifacts: [],
+      });
+      const waiters = async (count: number) => {
+        for (let tries = 0; tries < 200; tries++) {
+          // Outside the gate: a transaction reads one pg_stat_activity snapshot throughout.
+          const waiting = await db.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'`
+          );
+          if ((waiting.rows[0]?.n ?? 0) >= count) return;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        throw new Error(`Expected ${count} completions waiting on a lock`);
+      };
+
+      await gate.query('BEGIN');
+      gateOpen = true;
+      await gate.query('SELECT id FROM remote_agent_items WHERE id = $1 FOR UPDATE', [itemId]);
+      // The first is parked before the second starts, so the second commits later.
+      const firstDone = store.completeWorkflowRun(first, { duration_ms: 1 }, undefined, {
+        asks: [askOf('First?')],
+      });
+      await waiters(1);
+      const secondDone = store.completeWorkflowRun(second, { duration_ms: 1 }, undefined, {
+        asks: [askOf('Second?')],
+      });
+      await waiters(2);
+      await gate.query('COMMIT');
+      gateOpen = false;
+      await Promise.all([firstDone, secondDone]);
+
+      const rows = await db.query<{
+        run_id: string;
+        closed_as: string | null;
+        replaced_by_run_id: string | null;
+      }>(
+        'SELECT run_id, closed_as, replaced_by_run_id FROM remote_agent_item_asks WHERE item_id = $1',
+        [itemId]
+      );
+      expect(rows.rows.filter(row => row.closed_as === null).map(row => row.run_id)).toEqual([
+        second,
+      ]);
+      expect(rows.rows.filter(row => row.run_id === first)).toEqual([
+        { run_id: first, closed_as: 'replaced', replaced_by_run_id: second },
+      ]);
+    } finally {
+      if (gateOpen) await gate.query('ROLLBACK');
+      await endPgPool(gate);
+      await harness.close();
+    }
+  });
+  test('a redelivery that waits on the first one replays and leaves later waits open', async () => {
+    const harness = await makeHarness();
+    // The gate stands for a first delivery still in flight: its receipt row is written but
+    // not committed. The same delivery arriving now must wait for it and replay; it must
+    // not meet the wait opened since (a stage that waited again) for a receipt that is
+    // never recorded.
+    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    let gateOpen = false;
+    try {
+      await completeWithWaits(harness, [checks(HEAD)]);
+      const project = await projectKey(harness);
+      const redelivery = wakeReceipt(HEAD, { deliveryId: 'delivery-a' });
+      const firstId = randomUUID();
+      await gate.query('BEGIN');
+      gateOpen = true;
+      await gate.query(
+        `INSERT INTO remote_agent_start_receipts
+         (id, source_instance_id, delivery_id, content_digest, received_at, outcome)
+         VALUES ($1, $2, $3, $4, $5, 'unmatched')`,
+        [
+          firstId,
+          redelivery.receipt.sourceInstanceId,
+          redelivery.receipt.deliveryId,
+          redelivery.receipt.contentDigest,
+          redelivery.receipt.receivedAt,
+        ]
+      );
+      const { acceptStartReceipt } = await import('./start-receipt-writes');
+      const accepted = acceptStartReceipt(redelivery, async () => project);
+      for (let tries = 0; tries < 200; tries++) {
+        const waiting = await harness.db.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock'`
+        );
+        if ((waiting.rows[0]?.n ?? 0) >= 1) break;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      await gate.query('COMMIT');
+      gateOpen = false;
+      expect(await accepted).toEqual({ receiptId: firstId, replay: true });
+      expect((await harness.store.listOpenItemWaits()).map(wait => wait.about)).toEqual([HEAD]);
+    } finally {
+      if (gateOpen) await gate.query('ROLLBACK');
+      await endPgPool(gate);
+      await harness.close();
+    }
+  });
+
+  test('two deliveries for one wait that overlap start one stage', async () => {
+    const harness = await makeHarness();
+    // Holding the wait's row FOR UPDATE parks both acceptances on it, so they overlap: the
+    // one that takes the row second must see the set met and start nothing.
+    const gate = new Pool({ connectionString: harness.url, max: 1 });
+    let gateOpen = false;
+    try {
+      await completeWithWaits(harness, [checks(HEAD)]);
+      const project = await projectKey(harness);
+      const waiters = async (count: number) => {
+        for (let tries = 0; tries < 200; tries++) {
+          const waiting = await harness.db.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'`
+          );
+          if ((waiting.rows[0]?.n ?? 0) >= count) return;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        throw new Error(`Expected ${count} acceptances waiting on a lock`);
+      };
+      await gate.query('BEGIN');
+      gateOpen = true;
+      await gate.query('SELECT id FROM remote_agent_item_waits FOR UPDATE');
+      const accepted = ['delivery-a', 'delivery-b'].map(deliveryId =>
+        accept(wakeReceipt(HEAD, { deliveryId }), project)
+      );
+      await waiters(2);
+      await gate.query('COMMIT');
+      gateOpen = false;
+      const ids = await Promise.all(accepted);
+      const outcomes = await Promise.all(
+        ids.map(async id => (await readReceipt(harness, id)).outcome)
+      );
+      expect(outcomes.sort()).toEqual(['matched', 'unmatched']);
+    } finally {
+      if (gateOpen) await gate.query('ROLLBACK');
+      await endPgPool(gate);
+      await harness.close();
+    }
+  });
   test('SQL attention reads report unreadable origins without losing valid rows or writing state', async () => {
     const harness = await makeHarness();
     try {
@@ -590,6 +905,78 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
           ])
         ).rows
       ).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+  test('a claim or hand admission waits for an admission in flight on the same item', async () => {
+    const harness = await makeHarness();
+    const { store, db } = harness;
+    try {
+      const pending = async (item: string): Promise<string> =>
+        (
+          await store.createWorkflowRun({
+            id: randomUUID(),
+            workflow_name: 'build',
+            codebase_id: CONFORMANCE_CODEBASE_ID,
+            user_message: '',
+            item_key: item,
+          })
+        ).id;
+      // Another admission holds the lock and makes `holder` hold the item, then commits
+      // once `attempt` is waiting on that lock. An implementation that skips the lock never
+      // waits on it, and the test fails here instead of racing the commit.
+      const racedBy = async <T>(holder: string, attempt: () => Promise<T>): Promise<T> => {
+        let raced: Promise<T> | undefined;
+        await db.withTransaction(async query => {
+          await query('SELECT pg_advisory_xact_lock(1797)');
+          await query("UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1", [
+            holder,
+          ]);
+          raced = attempt();
+          raced.catch(() => undefined);
+          for (let tries = 0; ; tries++) {
+            const waiting = await query<{ count: string | number }>(
+              `SELECT COUNT(*) AS count FROM pg_locks
+                WHERE locktype = 'advisory' AND classid = 0 AND objid = 1797 AND NOT granted`
+            );
+            if (Number(waiting.rows[0]?.count) > 0) break;
+            if (tries > 200) throw new Error('attempt never waited on the admission lock');
+            await Bun.sleep(10);
+          }
+        });
+        if (!raced) throw new Error('attempt did not start');
+        return raced;
+      };
+      const [holder, claim] = [await pending('issue-1'), await pending('issue-1')];
+      await expect(
+        racedBy(holder, () => store.claimPendingWorkflowRun(claim))
+      ).rejects.toMatchObject({ name: 'WorkflowItemHeldError', holderRunId: holder });
+
+      const [slotHolder, admit] = [await pending('issue-2'), await pending('issue-2')];
+      expect(
+        await racedBy(slotHolder, () =>
+          store.admitPendingRun({
+            resource: 'builds',
+            capacity: 5,
+            launch: {
+              version: 2,
+              run: {
+                id: admit,
+                workflow_name: 'build',
+                codebase_id: CONFORMANCE_CODEBASE_ID,
+                user_message: '',
+                metadata: {},
+              },
+              execution: {
+                cwd: '/conformance',
+                conversationId: 'c',
+                isolation: { kind: 'in-place' },
+              },
+            },
+          })
+        )
+      ).toEqual({ kind: 'run', id: slotHolder });
     } finally {
       await harness.close();
     }

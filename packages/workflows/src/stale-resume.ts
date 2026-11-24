@@ -25,6 +25,7 @@ const PRE_TURN_CHUNKS: ReadonlySet<MessageChunk['type']> = new Set([
   'warning',
   'mcp_server_status',
   'heartbeat',
+  'session',
 ]);
 
 export async function* withStaleResumeRetry(

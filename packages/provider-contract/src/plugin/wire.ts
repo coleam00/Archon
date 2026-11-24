@@ -16,7 +16,7 @@ import { credentialSpecSchema } from '../registration';
 import { providerStopReasonSchema, type ProviderStopReason } from '../result';
 import { skillDiscoverySchema } from '../skills';
 
-export const PROVIDER_PLUGIN_PROTOCOL = 3;
+export const PROVIDER_PLUGIN_PROTOCOL = 4;
 export { PLUGIN_MAX_MESSAGE_BYTES as PROVIDER_PLUGIN_MAX_MESSAGE_BYTES } from './rpc';
 
 export const providerPluginDescriptorSchema = z.object({
@@ -43,6 +43,8 @@ export type ProviderPluginDescriptor = z.infer<typeof providerPluginDescriptorSc
 export const HOST_ONLY_REQUEST_KEYS = [
   'abortSignal',
   'onAdmission',
+  // Crosses the wire as `_archon/turn_message` notifications, one per text.
+  'turnMessages',
 ] as const satisfies readonly (keyof SendQueryOptions)[];
 const configSchema = z.record(z.string(), z.json());
 export const nativeToolSpecSchema = z.object({
@@ -125,6 +127,10 @@ export const promptRequestSchema = z.object({
 });
 export const promptResponseSchema = z.object({ stopReason: providerStopReasonSchema });
 export const cancelNotificationSchema = z.object({ sessionId: z.string().min(1) });
+/** One `turnMessages` text, for the live turn of `sessionId`. */
+export const turnMessageNotificationSchema = cancelNotificationSchema.extend({
+  text: z.string().min(1),
+});
 export const chunkNotificationSchema = cancelNotificationSchema.extend({
   chunk: providerChunkSchema,
 });
@@ -182,6 +188,7 @@ export const providerPluginWireSchemas = {
   ProviderPromptRequest: promptRequestSchema,
   ProviderPromptResponse: promptResponseSchema,
   ProviderCancelNotification: cancelNotificationSchema,
+  ProviderTurnMessageNotification: turnMessageNotificationSchema,
   ProviderChunkNotification: chunkNotificationSchema,
   ProviderToolCallRequest: toolCallRequestSchema,
   ProviderToolCallResponse: toolCallResponseSchema,

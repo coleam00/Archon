@@ -5,13 +5,6 @@ import type { MessageChunk } from '../../types';
 import { createArchonUIBridge, createArchonUIContext } from './ui-context-stub';
 
 describe('createArchonUIBridge', () => {
-  test('drops notifications when no emitter is set', () => {
-    const bridge = createArchonUIBridge();
-    expect(() =>
-      bridge.emit({ type: 'warning', code: 'pi.extension_notify', message: 'x' })
-    ).not.toThrow();
-  });
-
   test('forwards notifications to the configured emitter', () => {
     const bridge = createArchonUIBridge();
     const chunks: MessageChunk[] = [];
@@ -81,22 +74,6 @@ describe('createArchonUIContext', () => {
     expect(res).toBeUndefined();
   });
 
-  test('getEditorText returns empty string', () => {
-    const { ui } = mk();
-    expect(ui.getEditorText()).toBe('');
-  });
-
-  test('getToolsExpanded returns false', () => {
-    const { ui } = mk();
-    expect(ui.getToolsExpanded()).toBe(false);
-  });
-
-  test('getAllThemes returns empty list and getTheme returns undefined', () => {
-    const { ui } = mk();
-    expect(ui.getAllThemes()).toEqual([]);
-    expect(ui.getTheme('anything')).toBeUndefined();
-  });
-
   test('setTheme returns failure result without throwing', () => {
     const { ui } = mk();
     const result = ui.setTheme('dark');
@@ -122,12 +99,6 @@ describe('createArchonUIContext', () => {
     // Border-color decorators are factories returning passthrough functions.
     const thinkingBorder = themeAny.getThinkingBorderColor() as (s: string) => string;
     expect(thinkingBorder('border')).toBe('border');
-  });
-
-  test('onTerminalInput returns a disposer that is safe to call', () => {
-    const { ui } = mk();
-    const dispose = ui.onTerminalInput(() => undefined);
-    expect(() => dispose()).not.toThrow();
   });
 
   test('TUI setters (setStatus/setWidget/setFooter/setHeader/setTitle) are no-ops', () => {
