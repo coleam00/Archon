@@ -453,7 +453,7 @@ nodes:
       }
       expect(warnings.text).not.toContain(secret);
     } finally {
-      await rm(dirname(bundledEnv), { recursive: true, force: true });
+      await removeTempTree(dirname(bundledEnv));
     }
     if (capture === undefined) throw new Error('capture did not complete');
 
