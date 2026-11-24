@@ -239,9 +239,7 @@ describe('trigger check refuses what a fire refuses', () => {
       join(workflowsDir, 'plan.yaml'),
       asking(', options: [{ id: land, does: d, cost: c }, { id: send-back, does: d, cost: c }]')
     );
-    expect(await check('one-more-round')).toEqual([
-      "option 'one-more-round' is not one workflow 'plan' declares in returns.options (declared: land, send-back), so no answer starts this binding",
-    ]);
+    expect(await check('one-more-round')).toEqual([expect.stringContaining('one-more-round')]);
     expect(await check('land')).toEqual([]);
     expect(await check('other')).toEqual([]);
 

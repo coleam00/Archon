@@ -23,8 +23,6 @@ import { attentionAnswerSchema } from './run-wait';
 import { askOptionSchema, type DeclaredAskOption, refineOptionIds } from './ask-option';
 import { attentionRecommendationSchema, OTHER_ATTENTION_OPTION } from './wait-node';
 
-export { declaredAskOptionsSchema, type DeclaredAskOption } from './ask-option';
-
 /** What the asks property is for, read by the model as the property's description. */
 export const ITEM_ASKS_DESCRIPTION = [
   'Decisions you leave for an operator. Leave one when finishing your work needs a decision that is not yours to make:',

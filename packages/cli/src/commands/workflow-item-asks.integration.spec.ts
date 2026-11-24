@@ -368,8 +368,7 @@ test('the asks of a workflow that declares its options carry them; a recommendat
 
   const stray = await run(fixture, 'declared-stray', 'issue-4');
   expect(stray.exitCode).not.toBe(0);
-  expect(`${stray.stdout}${stray.stderr}`).toContain(
-    'must be equal to one of the allowed values (send-back, take-as-is)'
-  );
+  // The refusal names the declared ids; the stray one alone would not tell a retry what to write.
+  expect(`${stray.stdout}${stray.stderr}`).toMatch(/send-back.*take-as-is/);
   expect((await listed(fixture)).map(listedItem => listedItem.item?.key)).toEqual(['issue-3']);
 }, 120_000);

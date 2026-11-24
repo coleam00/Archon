@@ -138,19 +138,21 @@ function validateMetricRecords(value: unknown): StructuredValidationResult {
   };
 }
 
-/**
- * Render ajv errors as `path: message` lines for reask prompts and logs.
- * `instancePath` is empty for a root-level failure (e.g. a missing top-level
- * required field), rendered as `(root)`. An additional-property error carries the
- * object's description when it has one: that is where a schema says what to write
- * instead (an ask of a workflow that declares its options names them there). Returns a single generic line when ajv
- * reports a failure with no error detail (shouldn't happen with `allErrors`).
- */
+/** `: <description>` of a JSON Schema object, or nothing when it has none. */
 function schemaDescription(schema: unknown): string {
   if (schema === null || typeof schema !== 'object' || !('description' in schema)) return '';
   return typeof schema.description === 'string' ? `: ${schema.description}` : '';
 }
 
+/**
+ * Render ajv errors as `path: message` lines for reask prompts and logs.
+ * `instancePath` is empty for a root-level failure (e.g. a missing top-level
+ * required field), rendered as `(root)`. An additional-property error carries the
+ * object's description when it has one: that is where a schema says what to write
+ * instead (an ask of a workflow that declares its options names them there).
+ * Returns a single generic line when ajv reports a failure with no error detail
+ * (shouldn't happen with `allErrors`).
+ */
 function formatSchemaErrors(errors: ErrorObject[] | null | undefined): string[] {
   if (!errors || errors.length === 0) {
     return ['value does not match the declared schema'];
