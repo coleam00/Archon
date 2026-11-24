@@ -3,9 +3,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -514,6 +516,49 @@ describe('packSkillInstallCommand', () => {
     expect(readFileSync(join(handCopy, 'SKILL.md'), 'utf8')).toBe('my own');
     expect(existsSync(join(project, '.claude', 'skills', 'review-kit'))).toBe(false);
   });
+
+  it('refuses while another plugin command holds the mutation lock, writing nothing', async () => {
+    const { pluginsDir, project } = setup();
+    installPack(pluginsDir, ID, { name: 'review-kit', path: 'skill' }, { 'skill/SKILL.md': 'x' });
+    mkdirSync(join(pluginsDir, '.mutation-lock'));
+
+    const result = await run(ID, project, pluginsDir);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('Plugin mutation locked');
+    expect(existsSync(join(project, '.claude'))).toBe(false);
+    expect(existsSync(join(project, '.agents'))).toBe(false);
+  });
+
+  // chmod does not make a file unreadable on Windows.
+  it.skipIf(process.platform === 'win32')(
+    'keeps the installed skill when a replacement fails, and a retry then replaces it',
+    async () => {
+      const { pluginsDir, project } = setup();
+      const tree = installPack(
+        pluginsDir,
+        ID,
+        { name: 'review-kit', path: 'skill' },
+        { 'skill/SKILL.md': 'v1', 'skill/notes.md': 'notes' }
+      );
+      expect((await run(ID, project, pluginsDir)).code).toBe(0);
+      writeFileSync(join(tree, 'skill/SKILL.md'), 'v2');
+      chmodSync(join(tree, 'skill/notes.md'), 0o000);
+
+      const failed = await run(ID, project, pluginsDir);
+      expect(failed.code).toBe(1);
+      for (const root of ['.claude', '.agents']) {
+        expect(readdirSync(join(project, root, 'skills'))).toEqual(['review-kit']);
+        expect(readFileSync(join(project, root, 'skills/review-kit/SKILL.md'), 'utf8')).toBe('v1');
+        expect(readdirSync(join(project, root))).toEqual(['skills']);
+      }
+
+      chmodSync(join(tree, 'skill/notes.md'), 0o644);
+      expect((await run(ID, project, pluginsDir)).code).toBe(0);
+      for (const root of ['.claude', '.agents']) {
+        expect(readFileSync(join(project, root, 'skills/review-kit/SKILL.md'), 'utf8')).toBe('v2');
+      }
+    }
+  );
 
   it('is what archon skill add --pack runs, and never writes archon-cli', async () => {
     const root = tempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-skill-cli-')));

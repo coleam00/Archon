@@ -13,8 +13,8 @@
  * its manifest's `skill` field to the same two roots, under the skill's own name.
  */
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'fs';
-import { cp, readFile, writeFile } from 'fs/promises';
-import { dirname, join, resolve } from 'path';
+import { cp, mkdir, readFile, rename, rm, writeFile } from 'fs/promises';
+import { basename, dirname, join, resolve } from 'path';
 import {
   ARCHON_SKILL_NAME,
   describeIssues,
@@ -26,7 +26,8 @@ import {
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
 import { packTreePath, scanReceipts } from '@archon/plugin-manifest/store';
-import { brokenReceiptNote } from './plugin-common';
+import { brokenReceiptNote, stagingName } from './plugin-common';
+import { withPluginMutationLock } from './plugin-mutation-lock';
 
 /** Write a skill's relative-path→content map under <skillRoot>, creating dirs as needed. */
 function writeSkillFiles(skillRoot: string, files: Record<string, string>): void {
@@ -191,72 +192,111 @@ export async function packSkillInstallCommand(
   }
 
   try {
-    const { receipts, broken } = await scanReceipts(pluginsDir);
-    const brokenSelf = broken.find(entry => entry.id === packId);
-    if (brokenSelf) {
-      console.error(
-        `Error: ${packId} is installed, but its receipt is broken: ${brokenReceiptNote(brokenSelf)}`
-      );
-      return 1;
-    }
-    const receipt = receipts.find(entry => entry.id === packId);
-    if (!receipt) {
-      console.error(`Error: ${packId} is not installed. Install it: archon plugin add ${packId}`);
-      return 1;
-    }
-    if (!isPackReceipt(receipt)) {
-      console.error(
-        `Error: ${packId} is a ${receipt.manifest.kind} plugin; only workflow packs ship a skill`
-      );
-      return 1;
-    }
-    const tree = packTreePath(pluginsDir, receipt.id, receipt.commit);
-    const { skill } = await readTreeManifest(tree);
-    if (!skill) {
-      console.error(
-        `Error: ${packId} ships no skill (its ${PLUGIN_MANIFEST_FILE} declares no "skill")`
-      );
-      return 1;
-    }
-    // Install checks this too; a tree installed before that check existed may lack it.
-    if (!isFile(join(tree, skill.path, 'SKILL.md'))) {
-      console.error(
-        `Error: ${packId}: skill "${skill.name}" names ${skill.path}, which has no SKILL.md`
-      );
-      return 1;
-    }
-    const rival = await packShippingSkill(receipts, pluginsDir, packId, skill.name);
-    if (rival) {
-      console.error(
-        `Error: ${packId} and ${rival} both ship a skill named ${skill.name}; installing it would replace the other pack's skill`
-      );
-      return 1;
-    }
-
-    const destinations = [
-      join(absoluteTarget, '.claude', 'skills', skill.name),
-      join(absoluteTarget, '.agents', 'skills', skill.name),
-    ];
-    // The receipts above know only what is installed now. A folder already in the
-    // project may belong to a pack since removed, or to a skill since renamed, so the
-    // folder's own marker decides; both are checked before either is replaced.
-    for (const destination of destinations) {
-      const refusal = await ownershipRefusal(destination, packId);
-      if (refusal) {
-        console.error(`Error: ${refusal}`);
-        return 1;
-      }
-    }
-    console.log(`Adding ${packId} skill (${skill.name}) into ${destinations.join(' and ')}`);
-    for (const destination of destinations) {
-      rmSync(destination, { recursive: true, force: true });
-      await cp(join(tree, skill.path), destination, { recursive: true });
-      await writeFile(join(destination, PACK_SKILL_OWNER_FILE), `${packId}\n`);
-    }
-    console.log('Done. Restart Claude Code or Codex to load the skills.');
-    return 0;
+    // Held for the whole read and copy, as `archon plugin copy` does: an update or
+    // removal deletes the installed tree this command copies from.
+    return await withPluginMutationLock(pluginsDir, () =>
+      installPackSkill(packId, absoluteTarget, pluginsDir)
+    );
   } catch (error) {
     console.error(`Error: Failed to install skill: ${(error as Error).message}`);
     return 1;
   }
+}
+
+/**
+ * Copies `source` into a staging folder beside each skill root, then swaps each into
+ * place. A failed copy leaves every installed folder as it was, and nothing partial
+ * lands under a skill root, so a retry sees the folder this pack owns or none.
+ */
+async function replaceSkillFolders(
+  source: string,
+  destinations: readonly string[],
+  packId: string
+): Promise<void> {
+  // Staged beside `skills/`, not in it: a leftover must never load as a skill.
+  const staged = destinations.map(destination =>
+    join(dirname(dirname(destination)), stagingName(basename(destination)))
+  );
+  try {
+    for (const folder of staged) {
+      await mkdir(dirname(folder), { recursive: true });
+      await cp(source, folder, { recursive: true });
+      await writeFile(join(folder, PACK_SKILL_OWNER_FILE), `${packId}\n`);
+    }
+    for (const [index, destination] of destinations.entries()) {
+      await mkdir(dirname(destination), { recursive: true });
+      await rm(destination, { recursive: true, force: true });
+      await rename(staged[index], destination);
+    }
+  } finally {
+    for (const folder of staged) await rm(folder, { recursive: true, force: true });
+  }
+}
+
+/** The pack-skill install itself, run under the plugin mutation lock. */
+async function installPackSkill(
+  packId: string,
+  absoluteTarget: string,
+  pluginsDir: string
+): Promise<number> {
+  const { receipts, broken } = await scanReceipts(pluginsDir);
+  const brokenSelf = broken.find(entry => entry.id === packId);
+  if (brokenSelf) {
+    console.error(
+      `Error: ${packId} is installed, but its receipt is broken: ${brokenReceiptNote(brokenSelf)}`
+    );
+    return 1;
+  }
+  const receipt = receipts.find(entry => entry.id === packId);
+  if (!receipt) {
+    console.error(`Error: ${packId} is not installed. Install it: archon plugin add ${packId}`);
+    return 1;
+  }
+  if (!isPackReceipt(receipt)) {
+    console.error(
+      `Error: ${packId} is a ${receipt.manifest.kind} plugin; only workflow packs ship a skill`
+    );
+    return 1;
+  }
+  const tree = packTreePath(pluginsDir, receipt.id, receipt.commit);
+  const { skill } = await readTreeManifest(tree);
+  if (!skill) {
+    console.error(
+      `Error: ${packId} ships no skill (its ${PLUGIN_MANIFEST_FILE} declares no "skill")`
+    );
+    return 1;
+  }
+  // Install checks this too; a tree installed before that check existed may lack it.
+  if (!isFile(join(tree, skill.path, 'SKILL.md'))) {
+    console.error(
+      `Error: ${packId}: skill "${skill.name}" names ${skill.path}, which has no SKILL.md`
+    );
+    return 1;
+  }
+  const rival = await packShippingSkill(receipts, pluginsDir, packId, skill.name);
+  if (rival) {
+    console.error(
+      `Error: ${packId} and ${rival} both ship a skill named ${skill.name}; installing it would replace the other pack's skill`
+    );
+    return 1;
+  }
+
+  const destinations = [
+    join(absoluteTarget, '.claude', 'skills', skill.name),
+    join(absoluteTarget, '.agents', 'skills', skill.name),
+  ];
+  // The receipts above know only what is installed now. A folder already in the
+  // project may belong to a pack since removed, or to a skill since renamed, so the
+  // folder's own marker decides; both are checked before either is replaced.
+  for (const destination of destinations) {
+    const refusal = await ownershipRefusal(destination, packId);
+    if (refusal) {
+      console.error(`Error: ${refusal}`);
+      return 1;
+    }
+  }
+  console.log(`Adding ${packId} skill (${skill.name}) into ${destinations.join(' and ')}`);
+  await replaceSkillFolders(join(tree, skill.path), destinations, packId);
+  console.log('Done. Restart Claude Code or Codex to load the skills.');
+  return 0;
 }

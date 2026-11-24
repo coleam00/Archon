@@ -140,7 +140,11 @@ The command copies the folder the pack's manifest names in `skill.path` to
 `.claude/skills/<name>/` and `.agents/skills/<name>/`, where `<name>` is
 `skill.name`, and writes a `.archon-pack` file naming the pack into each. A rerun, for
 example after `archon plugin update <id>`, replaces both folders whole, so a file the
-pack dropped disappears. It leaves `archon-cli` and every other skill folder alone.
+pack dropped disappears. Each copy is finished beside the skill roots before it replaces
+the installed folder, so a copy that fails leaves the installed skill as it was and the
+command can simply be run again. It leaves `archon-cli` and every other skill folder alone.
+Like `archon plugin copy`, it takes the plugin mutation lock, so it refuses while
+another `archon plugin` command is changing installed plugins.
 
 ```bash
 archon skill add --pack acme/tools/packs/review-kit
