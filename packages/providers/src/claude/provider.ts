@@ -11,9 +11,8 @@
  * - Credentials reach the subprocess via process.env (already cleaned by
  *   stripCwdEnv) PLUS any per-request `requestOptions.env` (per-user delivered
  *   keys/subscriptions), merged LAST so it wins. `buildProviderSubprocessEnv` does NOT
- *   filter tokens — the Claude wrapper logs which posture process.env shows (explicit
- *   token present vs not); the historical env-token allowlist was removed in
- *   #1067, so the log can read "global" while a per-request token authenticates.
+ *   filter tokens. `buildRequestSubprocessEnv` logs which source the final env
+ *   authenticates with: a delivered per-user key, an install token, or native login.
  * - CLAUDE_USE_GLOBAL_AUTH is an Archon-only boot sentinel (set for solo
  *   installs with no creds — see server/src/boot/claude-auth-posture.ts). The
  *   Claude CLI itself ignores it; it neither gates nor filters env here.
@@ -82,14 +81,6 @@ function deliveredClaudeCredential(options: SendQueryOptions | undefined): strin
 export function buildRequestSubprocessEnv(
   requestOptions: SendQueryOptions | undefined
 ): NodeJS.ProcessEnv {
-  if (requestOptions?.execContext?.kind !== 'container') {
-    const authMode =
-      process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_API_KEY ? 'explicit' : 'global';
-    getLog().info(
-      { authMode },
-      authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
-    );
-  }
   const env = buildProviderSubprocessEnv(requestOptions);
   const delivered = deliveredClaudeCredential(requestOptions);
   if (delivered) {
@@ -126,7 +117,22 @@ export function buildRequestSubprocessEnv(
   // With it, every refusal with a known cause also ends in an error result carrying
   // `startup_failure_reason`, which classifyClaudeErrorResult turns into a failure class.
   env.CLAUDE_CODE_STARTUP_FAILURE_RESULTS = '1';
+  if (requestOptions?.execContext?.kind !== 'container') logAuthSource(env, delivered);
   return env;
+}
+
+/** Logs the credential source by key name only, never a value. */
+function logAuthSource(env: NodeJS.ProcessEnv, delivered: string | undefined): void {
+  if (delivered) {
+    getLog().info(
+      { authSource: 'delivered', credentialKey: delivered },
+      'using_delivered_credential'
+    );
+  } else if (env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN) {
+    getLog().info({ authSource: 'explicit' }, 'using_explicit_tokens');
+  } else {
+    getLog().info({ authSource: 'native' }, 'using_global_auth');
+  }
 }
 
 /**

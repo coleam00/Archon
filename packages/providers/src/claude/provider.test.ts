@@ -2248,6 +2248,53 @@ describe('subprocess environment and binary', () => {
     });
   });
 
+  describe('auth source log', () => {
+    const KEYS = [
+      'ANTHROPIC_AUTH_TOKEN',
+      'ANTHROPIC_API_KEY',
+      'CLAUDE_API_KEY',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+    ] as const;
+    let saved: Partial<Record<(typeof KEYS)[number], string>>;
+    beforeEach(() => {
+      saved = {};
+      for (const key of KEYS) {
+        saved[key] = process.env[key];
+        delete process.env[key];
+      }
+    });
+    afterEach(() => {
+      for (const key of KEYS) {
+        const value = saved[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    test.each<[string, Record<string, string>, RequestOptions, Record<string, string>]>([
+      [
+        'a delivered per-user credential with no install token',
+        {},
+        {
+          env: { CLAUDE_CODE_OAUTH_TOKEN: 'user-secret' },
+          userCredentialEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+        },
+        { authSource: 'delivered', credentialKey: 'CLAUDE_CODE_OAUTH_TOKEN' },
+      ],
+      ['an install token', { CLAUDE_API_KEY: 'install-secret' }, {}, { authSource: 'explicit' }],
+      ['neither', {}, {}, { authSource: 'native' }],
+    ])('%s', (_label, hostEnv, requestOptions, expected) => {
+      Object.assign(process.env, hostEnv);
+      mockLogger.info.mockClear();
+      claudeModule.buildRequestSubprocessEnv(requestOptions);
+      const calls = mockLogger.info.mock.calls.filter(
+        ([fields]) => typeof fields === 'object' && fields !== null && 'authSource' in fields
+      );
+      expect(calls.map(([fields]) => fields)).toEqual([expected]);
+      expect(JSON.stringify(calls)).not.toContain('secret');
+    });
+  });
+
   test('passes executableArgs: [--no-env-file] when cliPath ends in a Bun-runnable JS extension', async () => {
     const cliPath = '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js';
     const spy = spyOn(binaryResolver, 'resolveClaudeBinaryPath').mockResolvedValue(cliPath);
