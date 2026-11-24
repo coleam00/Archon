@@ -354,6 +354,40 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     });
   });
 
+  test.each([
+    ['pr.create', create, 'pull request 7 may exist'],
+    [
+      'pr.draft',
+      { operationId: 'draft', op: 'pr.draft', ref } as const,
+      'the pull request draft state may have changed',
+    ],
+    [
+      'comment.upsert',
+      { operationId: 'comment', op: 'comment.upsert', ref, marker, body: report } as const,
+      'comment 900 may have changed',
+    ],
+  ] satisfies [string, ForgeMutationRequest, string][])(
+    'verification failed: a %s read-back that fails keeps its error and leaveBehind',
+    async (_op, request, leaveBehind) => {
+      const github = fakeGitHub({ pull: pull({ draft: false }) });
+      let wrote = false;
+      const response = await run(request, {
+        ...github,
+        fetch: async (input, init) => {
+          const method = init?.method ?? 'GET';
+          if (method !== 'GET') wrote = true;
+          else if (wrote) return json({ message: 'gone' }, 404);
+          return github.fetch(input, init);
+        },
+      });
+      expect(response).toMatchObject({
+        ok: false,
+        error: { kind: 'not_found', status: 404 },
+        mutation: { op: request.op, outcome: 'verification_failed', leaveBehind },
+      });
+    }
+  );
+
   test('outcome unknown: the request was submitted and its answer was lost', async () => {
     const dropped = await run(create, fakeGitHub({ network: (_url, method) => method === 'POST' }));
     expect(dropped).toMatchObject({

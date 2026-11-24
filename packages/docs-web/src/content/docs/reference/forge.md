@@ -170,7 +170,7 @@ A Bun `script:` node calls an operation with `forge(op, request)` from the `arch
 
 A read-back never claims to have *prevented* a wrong write; it only reports what it could and could not confirm. A vendor that accepts a write and silently does not apply it is reported as a verification failure, never as success.
 
-In the GitHub plugin, a read-back that disagreed carries `invalid_response`. A read-back that could not run carries the forge's own error kind and status, such as `rate_limited`, `authorization` or `unavailable`, so a lost permission reads differently from an outage.
+In the GitHub plugin, a read-back that disagreed carries `invalid_response`. A read-back that could not run carries the forge's own error kind and message, such as `rate_limited`, `authorization` or `unavailable`, so a lost permission reads differently from an outage. `status` is present when GitHub answered with an HTTP error; a dropped connection or a GraphQL error has none.
 
 `pr.draft` converts an open pull request to draft and returns its verified PR record. An already-draft PR returns `applied` with `changed: false`; closed or merged PRs are refused with the observed record. A plugin that does not advertise `pr.draft` returns `unsupported_op` before execution. Nothing falls back to `gh`. The GitHub plugin uses [the GraphQL draft mutation](https://docs.github.com/en/graphql/reference/pulls#convertpullrequesttodraft) and reads the PR back before reporting success.
 
