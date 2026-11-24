@@ -1839,6 +1839,8 @@ archon workflow resume <run-id> --json     # validate and acknowledge only
 
 A run that failed before its checkout was prepared, such as a trigger start whose worktree could not be created, has nothing to resume, and resume refuses it. The refusal prints the command that starts it again: `archon workflow run --supersedes <run-id>`. With no workflow name, [`--supersedes`](#workflow-run-name-message) takes the workflow, message, inputs, definitions source, item and checkout hand-off from the run's record, so the line holds nothing a shell would need quoted.
 
+A `cancelled` run, such as one [`workflow abandon`](#workflow-abandon) ended, is refused too: abandon removes its worktree, so there is no checkout left to continue. That refusal prints the same command, which starts the run fresh from its record, without its completed nodes. With `--json`, either refusal's `{ "ok": false }` line carries the command as `restartCommand`. A `workflow:` sub-run gets no command: restarting it alone would run it outside its parent, so resume or abandon the parent instead.
+
 With `--json` the command validates that the run is resumable, reports its state and returns without executing, because execution output would corrupt the JSON. To drive the run to completion, use the blocking form or `--detach`.
 
 `--detach` hands the resume to a background child that runs it without `--json`, so the run does continue, outside your shell. The acknowledgement carries `continues: true` and is sent only after the engine accepts the resume and clears the old pause. An immediate `workflow wait` can therefore report a new pause, even repeated attention at the same node, but never the cleared one. See [Detached control verbs](#detached-control-verbs).
@@ -2032,9 +2034,15 @@ archon workflow abandon --item <key> [--all-runs]
 run that is `pending`, `running` or `paused`. A failed run, or a cancelled run whose
 worktree removal you are retrying, is abandoned by id.
 
+Abandon prints the command that starts the run again from its record, without its
+completed nodes: `archon workflow run --supersedes <run-id>` (see
+[`workflow resume`](#workflow-resume), which refuses a cancelled run). A `workflow:`
+sub-run gets none; its parent is the run to resume or abandon.
+
 `--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
-"recordedUid", "lastActivityAt" }`.
+"recordedUid", "lastActivityAt" }`, and `restartCommand`, the command above, except for
+a sub-run.
 
 Abandon also attempts to remove the worktree Archon created for this run, and for each
 cancelled `workflow:` sub-run. Owner warnings retain affected checkouts for inspection;
