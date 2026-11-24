@@ -353,8 +353,8 @@ archon workflow run issue-to-pr --cwd /path/to/repo \
   --model large=openai/gpt-5.6 "fix #2482"
 
 # Continue the exact estate left by a terminal run
-archon workflow run archon-ship --cwd /path/to/repo \
-  --adopt 6d5066ca-47b4-4ee8-8d1d-2f3db8039190 "finish the delivery"
+archon workflow run archon-build --cwd /path/to/repo --item issue-42 --input issue=42 \
+  --adopt 6d5066ca-47b4-4ee8-8d1d-2f3db8039190
 ```
 
 Except on an execution handoff, foreground completion and failure output prints the run's recorded cost and input and output tokens, even with `--quiet`:
@@ -469,10 +469,10 @@ The layer is sparse: omitted settings keep their normal lower-layer values. In `
 
 ```bash
 # Author in ~/dev/archon (uncommitted), run against a clean checkout elsewhere
-archon workflow run archon-implement \
+archon workflow run archon-build \
   --workflow-source ~/dev/archon \
   --cwd ~/checkouts/archon-target \
-  "implement the plan"
+  --item issue-42 --input issue=42
 ```
 
 `--workflow-source` takes a checkout root, the directory that contains `.archon/`, or [a pack's own folder](#a-pack-folder-as-the-source). The workflow named on the command line must resolve from that directory's `.archon/workflows` (a pack in `.archon/workflows/<pack>/` counts). If it does not, the run is refused before it starts. The error names the directory searched, and the scope the name would otherwise have resolved from when another scope has it. Archon never silently runs a bundled, global, or installed workflow of the same name in its place. Commands, scripts, and `include:` or `workflow:` children the named workflow uses may still resolve from your home-scoped or bundled source as usual, so a source can override some of a pack's files only if it holds the pack's named workflow. A run that resolves from the source records `project` as its `metadata.dispatch.source`.
@@ -530,11 +530,11 @@ archon workflow run archon-triage --cwd /path/to/repo \
 Generate a starting stub file when a composed workflow has many nodes, then keep the values that drive the path you want to test and manually add any required child-workflow stubs:
 
 ```bash
-archon workflow run archon-deliver --cwd /path/to/repo \
+archon workflow run archon-review --cwd /path/to/repo \
   --dry-run --stubs-init stubs.yaml
 
 # After editing the generated YAML and adding required child-workflow stubs:
-archon workflow run archon-deliver --cwd /path/to/repo \
+archon workflow run archon-review --cwd /path/to/repo \
   --dry-run --stubs stubs.yaml --default-stubs
 ```
 
@@ -621,7 +621,7 @@ cut-from, so pairing the two flags splits them:
 
 ```bash
 # Branch off release/2.0, but open the PR against dev
-archon workflow run archon-implement --from origin/release/2.0 --base dev "Backport the fix"
+archon workflow run archon-build --item issue-42 --input issue=42 --from origin/release/2.0 --base dev
 ```
 
 `--from` is handed to `git worktree add` verbatim, so a remote ref such as
@@ -3003,11 +3003,11 @@ See the [metrics guide](/guides/metrics/) for how to emit them.
 archon metrics
 archon metrics factory.prs_merged --since 7d
 archon metrics factory.prs_merged --since 2026-10-01 --until 2026-10-22 --json
-archon metrics sdlc.tests_unprotective --subject https://github.com/acme/widgets/pull/12
+archon metrics acme.tests_unprotective --subject https://github.com/acme/widgets/pull/12
 archon metrics --project acme/widgets
-archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
-archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.review__code
-archon metrics sdlc.issues_merged --since 30d --by-dimension route
+archon metrics acme.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
+archon metrics acme.pr_merge_rate --since 60d --by-model review__code
+archon metrics acme.issues_merged --since 30d --by-dimension route
 ```
 
 The window is `[--since, --until)`. `--until` defaults to now and takes an ISO date or a
@@ -3247,10 +3247,9 @@ A timer binding is written as a complete `trigger fire --config` file. A fire-on
 ```bash
 archon pack bindings sdlc --repo github.com/acme/widgets --host build-host-1 \
   --run-as 2a568f73-e217-40ca-b17d-a784d19fd43a --cwd /srv/archon/widgets --out /srv/archon/bindings
-# the build-queue path the command printed; another repository's file names a different one
-BINDING=/srv/archon/bindings/sdlc-acme-widgets-build-queue-0297fdfa94d5.json
-archon trigger fire --config "$BINDING"
-archon trigger schedule install --config "$BINDING"
+# a run-ended path the command printed; another repository's file names a different one
+archon trigger add /srv/archon/bindings/sdlc-acme-widgets-plan-after-triage-plan-0297fdfa94d5.json
+archon trigger check
 ```
 
 ### `forge`

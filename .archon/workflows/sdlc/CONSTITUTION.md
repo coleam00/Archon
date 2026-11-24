@@ -1,55 +1,39 @@
 # SDLC pack constitution
 
-How the SDLC pack is written. The workflow language is governed by [`workflow-language-constitution.md`](../../workflow-language-constitution.md), project-wide judgment by [`AGENTS.md`](../../../AGENTS.md), and pack conventions such as guards and public writes are in [`README.md`](README.md). Where the pack is still being shaped, a section says how it works today and where it is heading.
+How the SDLC pack is written. The workflow language is governed by [`workflow-language-constitution.md`](../../workflow-language-constitution.md) and project-wide judgment by [`AGENTS.md`](../../../AGENTS.md). The pack is the reference implementation for operators who build their own pack on Archon, so it stays small enough to read in one sitting.
 
-## Agents judge, scripts act at boundaries
+## Agents judge, the engine moves the work
 
-YAML coordinates, code computes, agents judge. A new step starts as an agent node with a small typed output. Before writing a script, try an agent on the job: most of the pack's work is judgment, and a script that judges freezes one guess into code.
+YAML coordinates, code computes, agents judge. A stage is an agent node with a prompt and a small typed output. The engine owns everything between stages: the item, admission of one run per workflow per item, outcomes, asks and answers, the hand-off from one stage to the next, the checkout a stage continues in, round limits, links and the merge record. The pack grows no record, queue, claim, lease, sweep or state document of its own. Where the engine lacks a primitive the pack needs, that is an engine gap to file, not a script to write.
 
-A script is for a fixed rule whose result must be exact: a public write that reads its result back, a claim on a work item, a fact read from git or the forge. It gives agents facts and acts on their decisions; it never re-judges them.
+## A script is the last resort
 
-Don't guard what doesn't need guarding. A guard protects its own node's action or stands in front of an irreversible one ([`README.md`](README.md#guards)). An invariant something else establishes is a sentence in the prompt. Check once, where it would show: the review's check that the pull request's head is the reviewed commit already catches a skipped push.
+Before writing a script, try an agent on the job: most of the pack's work is judgment, and a script that judges freezes one guess into code. A script gives plain facts or acts at a boundary where an agent's word is not enough, such as recording a merge as the forge reports it. Every script says in its first lines why an agent cannot do its job. The pack has one.
 
 ## Nodes talk in typed values
 
-Nodes pass values through `output_format`, never through prose another node parses. Keep outputs to the fields the next node reads. Every run ends with a typed outcome a person can read: done, or not done and why.
+Nodes and stages pass values through `output_format`, outcomes, `result_of` inputs and answers, never through prose another node parses. Keep an output to the fields a later stage reads. A report too large for an output is a file the output names by its path.
 
-## The engine owns lifecycle
+## Every stage ends
 
-Pauses, waits, claims, leases and terminal states are the engine's. Work items live in the engine's state documents and questions go to people as attention items; the pack grows no store, lifecycle or retry loop of its own. Every loop has a round limit.
+A stage never pauses for an operator. It finishes its work and ends with a named outcome; when a decision is not its own, it leaves the decision as an ask on the item and ends. Its answer starts the next run. An outcome that hands nothing on is a deliberate end, such as a closed issue, and the engine's item tracker reports it. Every way back to the builder has a round limit.
+
+## Intake is a label
+
+Work starts only when a maintainer labels an issue `archon-triage`, or when an operator starts a stage by hand. An issue nobody labelled reaches no agent. A stage may label an issue it filed only to continue work a maintainer already started, as the split stage does for its pieces.
 
 ## Every workflow works on any project
 
-Agents discover a project's commands, branches and CI and record them as typed output. Prompts carry practice that transfers between projects. A project's strong opinions live in policy: defaults in [`.shared/policy/`](.shared/policy), which a project's `.archon/sdlc/policy/<topic>.md` adds to and overrides. A node names only the policy its decision needs. Anything that must be exact, such as label names or allow-lists, is never prose an agent interprets. Pack files carry no tracker references or history.
+Agents discover a project's commands, branches and CI. Prompts carry practice that transfers between projects. A project's opinions live in policy: defaults in [`.shared/policy/`](.shared/policy), which a project's `.archon/sdlc/policy/<topic>.md` adds to and overrides. A node names only the policy its decision needs. A value that must be exact is a typed setting in [`.pack/pack.yaml`](.pack/pack.yaml), and there is one, `ci`. Pack files carry no tracker references, history, provider or model names.
 
-- Today: label names are fixed in code, in [`.shared/labels.ts`](.shared/labels.ts), and the maintainer list is the project's `.archon/sdlc/policy/maintainers.json`. The pack's typed settings are in [`.pack/pack.yaml`](.pack/pack.yaml): what the merge gate trusts (`ci`), whether each queue acts by itself (`build_lane`, `merge_lane`), and the paths a person reads first (`protected_paths`).
-- Direction: an exact value a project needs to change is a typed setting.
+## Prompts are the product
 
-## CI is the validation
-
-An implementer checks only what it changed; CI is the full validation. The merge queue judges it at the head before it merges: pending ends the run waiting for a check at that head, red from the change goes back to the build queue, and red outside the change gets one re-run. Nothing merges without what the project's CI setting trusts at its head: green CI, or, in a project that sets `ci: none` because it has no CI, a passing full validation delivery recorded at that same head. Delivery never waits for CI: once review passes, one agent node hands the pull request off ready, and sends a check already red because of the change back to the implementer. Under `ci: none`, that agent runs the full validation once and records it.
-
-## Stages hand off through queues
-
-The implement-review-fix loop is one composed run; queues sit between stages, never inside it. Intake and the split queue claim a work item with a conditional write; a build run and a merge run are on their issue's item, where the engine admits one of each at a time. Labels are declared once, in [`.shared/labels.ts`](.shared/labels.ts).
-
-- Today: issue events start intake, which records triage on the work item and mirrors it as labels. A pick starts one build run per triaged item, and a build run that ends ready starts the item's merge run.
-
-## Stops the pack can't answer pause
-
-An unanswerable stop pauses as an attention item. The deciding agent writes the question, its options and its recommendation, and they reach the person as written. Every item carries four labels: `stage` (the queue that asks), `kind` (the decision, such as `scope` or `approve`), `item` (the issue number) and `pr` (the pull request number, or empty). The build queue and the merge stage hold no run open: their run ends and leaves the question as an ask on the issue's item, which takes no labels, and the answer starts the next run.
-
-- Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by label:kind --since 30d` shows which decisions recur and how often the answer followed the recommendation.
-- Direction: a recurring class gets a small handler workflow that answers its items through the normal answer channel, without changing the main path or the engine.
+The prompts are tuned against real runs, and changes to them are measured on real items before they replace what was there. Their input lines say what the structure passes; their judgment text is what makes the pack good. Keep that text when the structure changes.
 
 ## Smaller is the default
 
-Before adding a node, look for one to delete. Measure a structural change against the current pack (outcome correctness, wall clock, cost) before it replaces it.
+Before adding a node, a binding or a policy line, look for one to delete. Measure a structural change against the current pack (outcome correctness, wall clock, cost) before it replaces it.
 
-## Tests help authoring
+## No pack tests
 
-Don't test the engine in the pack, or the pack in the engine. A pack test checks a script at a tool boundary: it writes an issue once, reads back a pushed head, merges only what was approved.
-
-A fixture stubs the agent nodes so a dry run (`archon workflow test`) checks certain nodes' outputs without spending AI credits. Write one for an outcome a person cares about, not one per route. Agent judgment is checked by its outcome in real runs and evals.
-
-Don't test a prompt's wording, the YAML's shape or a run's route; those pins make the pack harder to change. Most pack files need no test. Delete a test that only checks structure when it breaks.
+The pack has no tests. Agent judgment is checked by its outcome on real items and in evals; the engine tests the workflow language with its own fixtures; `archon validate workflows`, `archon pack bindings` and `archon trigger check` check the wiring. A script that grows a rule worth testing is a script that should be an engine primitive.

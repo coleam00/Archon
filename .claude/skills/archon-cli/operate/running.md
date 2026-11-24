@@ -13,8 +13,8 @@ archon plugin add owner/repo     # install a workflow pack published on GitHub
 ```
 
 The live list is authoritative. Bundled workflows ship under the `archon-` prefix
-(e.g. `archon-ship`, `archon-review`, `archon-deliver`, `archon-investigate`,
-`archon-triage`); user-authored workflows may
+(e.g. `archon-triage`, `archon-plan`, `archon-build`, `archon-review`,
+`archon-investigate`); user-authored workflows may
 claim any name and override a bundled one in that repo.
 
 In JSON output, `descriptionTruncated: true` means `description` is a discovery preview,
@@ -134,11 +134,11 @@ YAML lists each input with its default and meaning. An input without a default i
 required, and an undeclared name is refused.
 
 ```bash
-archon workflow run archon-intake --input number=42 --detach
+archon workflow run archon-triage --item issue-42 --input issue=42 --detach
 ```
 
-Inputs and a message can be combined. The SDLC pack's queues take inputs, and the
-build queue also reads a message that says what to build; `queues.md` lists them.
+Inputs and a message can be combined. Every SDLC stage takes the issue as `issue` and
+runs on its item; `queues.md` lists how to start each one.
 
 ## Monitoring
 
@@ -182,7 +182,8 @@ with `get --json`, find the report under `leave_behind.artifactFiles`, and use a
 separate `get --verbose --json` call for node summaries. Read the report before
 telling the user what the run concluded. For the bundled SDLC workflows the report
 may list discoveries: findings outside the run's scope. The run records them but
-files nothing; `archon-discoveries` decides and files them (see `queues.md`).
+files nothing; `archon-discoveries` decides and files them once the item's change lands
+(see `queues.md`).
 
 ## Continuing finished work
 

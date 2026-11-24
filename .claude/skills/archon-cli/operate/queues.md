@@ -1,287 +1,145 @@
 ---
 name: archon-cli-queues
-description: Drive the SDLC pack's queues by hand: intake, the build queue, the merge queue and the discoveries drain. Their inputs, what each run does, the decisions they raise and how to answer them. Read when launching or tending any of them.
+description: Drive the SDLC pack: label intake, its nine stages, following an issue's item, answering what a stage asks, round limits, starting each stage by hand, and installing the bindings that chain the stages. Read when setting up, running or tending the pack.
 ---
 
-# Driving the SDLC queues
+# Driving the SDLC pack
 
-The bundled SDLC pack turns issues into merged pull requests through four queue
-workflows. Each run does one step and stops only for a decision it cannot make:
+The bundled SDLC pack turns a labelled issue into a merged pull request. Each stage is
+one workflow that works on the issue's item, `issue-<number>`, ends with an outcome, and
+leaves a question on the item (an ask) when a decision belongs to an operator. The
+pack's bindings start the next stage when one ends. The pack keeps no record of its
+own: what happened to an issue is its item's runs, outcomes, asks and answers.
 
-| Workflow | One run |
-|---|---|
-| `archon-intake` | Records an issue event and triages that issue, or the best waiting one when it does not wait. The verdict becomes the item's stage and a route label. |
-| `archon-build-queue` | Claims the best waiting triaged item, or the one `number` names, and takes it to a pull request whose review says Ready, one round per run. |
-| `archon-merge-queue` | Decides one issue's pull request, the one the build queue finished: merges it through a gate, returns it, asks, or ends waiting for its checks. |
-| `archon-discoveries` | Decides the out-of-scope findings finished runs recorded: file, track, drop or ask. |
+| Workflow | One run | Ends with |
+|---|---|---|
+| `archon-triage` | Grounds the issue against the code, judges whether a run can start from it, and routes it. Posts questions for the author, what a blocked issue waits on, or closes a duplicate or delivered issue. | `investigate`, `plan`, `build`, `split`; `questions`, `blocked`, `close`, `not_triaged`; `ask` |
+| `archon-investigate` | Proves the cause of a symptom and decides the fix. | `rooted`; `refuted`, `inconclusive`; `ask` |
+| `archon-split` | Builds a large issue whole, or files its next piece as an issue linked `part_of` the item and puts it in triage. | `split`; `plan`, `build`; `ask` |
+| `archon-plan` | Chooses the approach and the verifiable steps. | `planned`; `ask` |
+| `archon-build` | Builds, commits, pushes and opens a draft pull request; continues it in the same session when it comes back. | `built`; `replan`; `ask` |
+| `archon-review` | Seven lenses, three verifiers on the blocking findings, one verdict posted on the pull request. Also reviews any pull request by hand. | `approve`, `return`, `replan`, `ask`; by hand `ready`, `not_ready` |
+| `archon-host` | Answers settled review threads, updates the description, reads CI once, takes the pull request out of draft. | `ready`, `return`, `ask` |
+| `archon-land` | Judges the pull request against the land policy, merges it pinned to the head whose checks it read, records the merge on the item. | `merged`, `return`, `ask` |
+| `archon-discoveries` | Files, tracks, drops or holds what the item's runs noticed outside their change. | `decided`, `ask` |
 
-https://archon.diy/guides/sdlc-operations/ is the full operator manual. This
-reference covers launching and tending the queues by hand.
+The pack's README, `.archon/workflows/sdlc/README.md` (on GitHub:
+`https://raw.githubusercontent.com/coleam00/Archon/dev/.archon/workflows/sdlc/README.md`),
+says which outcome starts which stage, and holds the setup guide.
 
-## Reading what a stage decided
+## Intake is a label
 
-A stage's decision is on the issue's work item, not on the run:
+Work starts only when a maintainer adds the label `archon-triage` to an issue. Opening or
+editing an issue starts nothing, and an issue nobody labelled reaches no agent. To
+triage an issue again, for example after its author answered triage's questions,
+remove the label and add it again. On an install with no webhooks the GitHub source sees
+labels by observing; a label already on an issue when the binding is first seen starts
+nothing.
+
+## Following an item
 
 ```bash
-archon state get work/<issue>
+archon workflow runs --item issue-<n>          # every run, its outcome, open asks, queued starts
+archon workflow runs --item issue-<n> --json   # the same, with each run's result and startLimits
 ```
 
-- `value.stage`: intake's result. A route (`deliver`, `plan`, `investigate`,
-  `continue`, `split`) or a stage that waits (`needs_maintainer`, `needs_contract`,
-  `blocked`, `close`).
-- `value.facts.build.status`: the build queue's. `next`, `asking`, `ready` or `parked`.
-- `value.facts.merge.status`: the merge queue's. `waiting`, `asking`, `merged`,
-  `returned` or `parked`.
+`archon workflow get <run-id> --json` gives one run's result at
+`terminal_record.returns.value`; each stage's result names its report by path. With the
+item tracker on (`itemTracker` in `~/.archon/config.yaml`), the engine keeps a status
+comment on the issue and posts each ask and the result there.
 
-`archon workflow get <run-id>` shows the run's status and artifacts, not the decision.
+Rough durations, so a slow run is not mistaken for a hang: triage about 2 minutes, a
+plan 5 to 15, a build 15 to 40, a review 10 to 30, host and land a few minutes, longer
+while land waits for CI. These are typical, not limits.
 
-The stages do not start each other. After intake routes an item, start the build
-queue. After a build ends `ready`, start the merge stage on the same item. Bindings do this on a
-schedule once the operator installs them.
+## Answering what a stage asks
 
-Rough durations, so a slow run is not mistaken for a hang: intake about 2 minutes, a
-build round 15 to 40 minutes, a merge run about 2 minutes. These are typical, not
-limits.
+An ask is on the item, with no paused run behind it:
 
-## Setting up the pack
+```bash
+archon workflow attention
+archon workflow answer --ref ask:<id> --choose <option> --text "<why>"
+```
 
-The pack's own README holds the setup guide: eleven steps, each with a check and a fix,
-written for an agent doing the setup for a user. Read it before anything else and follow
-it in order. It marks every decision that is the user's with **Ask the user**, and says
-which commands write to the tracker, start a run or enable a schedule: ask before those.
+The answer starts the next stage, so you don't relaunch. Which one depends on the
+option:
 
-- In an Archon source checkout: `.archon/workflows/sdlc/README.md`, section "Set up the
-  pack". This skill lives in that checkout when it is a source install; follow the
-  skill's own path up to the repository root.
-- Otherwise, on GitHub:
-  `https://raw.githubusercontent.com/coleam00/Archon/dev/.archon/workflows/sdlc/README.md`
-  for a source install, or the same path on `main` for a released binary.
+- An ask from triage, investigate, split, plan, build or discoveries starts that same
+  stage again with the answers as decisions made. Its options are the stage's own.
+- An ask from review or host offers `send-back` (the builder continues with your
+  answer), `take-as-is` (the next stage takes the change as it is), `replan` (back to
+  planning) and `stop` (nothing more runs; you land or close the change by hand). At
+  the round limit it offers `one-more-round` in place of `send-back`.
+- An ask from land offers `land` (approves the pull request at the head the ask names;
+  land runs again and merges it), `send-back` and `stop`.
 
-Run the setup from a clone of the repository the pack will work on, not from the Archon
-checkout. The README's "Choose the models" section lists every step's model alias with
-the commands to set one; walk the user through it only when they ask to change models.
+An answer that chose no bound option, such as text alone, starts nothing, and the
+answer command says so. Every later stage reads every answer on the item, oldest first.
 
-## Before the first run
+Answer as `managing-runs.md` ("Answering a decision well") describes. When the
+recommendation fits the user's standing direction, answer it yourself; when it is
+unclear, risky or not decided by anything the user has said, bring it to the user with
+the ask's own summary.
 
-- `archon forge check --data '{"remote":"<checkout remote URL>","operations":["pr.view","pr.merge"]}'`
-  must pass in the checkout (or let the engine check forge access automatically when the
-  run starts; see `reference/forge.md`, "Check forge access before a run spends"). It
-  proves the pack can reach the repository through the forge plugin
-  (`archon plugin add coleam00/Archon/plugins/forge-github`).
-- `.archon/sdlc/policy/maintainers.json` on the default branch lists the forge logins
-  whose issues are triaged and whose review comments count. Without the file
-  every author is an outsider: intake labels their issues `archon-needs-maintainer`
-  and runs no agent.
-- The forge account the pack's review runs post as must also be on
-  `maintainers.json`. The merge queue counts only a review comment a listed
-  maintainer wrote; with no trusted review, no verdict is Ready and nothing merges.
-- The merge gate requires green CI at the pull request's head. A repository with no
-  CI checks reads as `none`, not green, so nothing merges there until the project sets
-  `ci: none` in `.archon/packs/sdlc.yaml` (the pack README's setup guide, "Choose the pack settings"): delivery
-  then runs the full validation itself, and the gate requires it to have passed at the
-  head instead.
-- Policy documents at `.archon/sdlc/policy/<topic>.md` add to the pack's defaults
-  rather than replacing them. Where a line in the project's file conflicts with the
-  default, the project's line wins.
-- An answered run continues only when something picks it up: a running `archon serve`,
-  or the wake timer (`archon workflow wake schedule install` on macOS). Without either,
-  an answered run waits forever and holds its place in its queue.
-- The pack installs no trigger bindings. Nothing runs on its own until the operator
-  adds one. `archon pack bindings sdlc` writes the recommended binding per queue; until
-  then, launch by hand.
+## Round limits
 
-## Inputs
+A change goes back to its builder at most three times per way back (from review, host
+and land) until the item is planned again. The stage that would send it back past the
+limit asks instead, with `one-more-round`; choosing it allows one more start. The
+item's limits are under `startLimits` in `archon workflow runs --item issue-<n> --json`.
 
-Launch from the repository's checkout, detached. Every queue works on the repository
-the forge plugin resolves the checkout's remote to: its only remote, or `origin`. In a
-checkout whose `origin` is a fork, or that has several remotes and no `origin`, pass
-`--input repo_host=github.com --input repo_path=<owner>/<repo>`. A binding always
+## Starting a stage by hand
+
+Every stage runs by hand on an item, with the issue number as `issue`. Launch from a
+clone of the repository the pack works on, detached:
+
+```bash
+archon workflow run archon-triage --item issue-<n> --input issue=<n> --detach
+archon workflow run archon-plan --item issue-<n> --input issue=<n> --detach
+```
+
+A stage that continues the change (review, host, land, and build after the first round)
+runs on its branch: add `--branch <head-branch>`, or `--adopt <run-id>` to continue the
+run that holds its checkout. A review of any pull request by hand runs on that pull
+request's item and starts nothing after it:
+
+```bash
+archon workflow run archon-review --item pr-<n> --input pr=<n> --branch <head-branch> --detach
+```
+
+In a checkout whose `origin` is a fork, or that has several remotes and no `origin`,
+add `--input repo_host=github.com --input repo_path=<owner>/<repo>`. A binding always
 passes both.
 
-```bash
-archon workflow run archon-intake --input number=<issue> --detach
-archon workflow run archon-build-queue --detach
-archon workflow run archon-merge-queue --item issue-<issue> --detach
-archon workflow run archon-discoveries --detach
-```
+## Setting up and installing the bindings
 
-The build queue also takes a message saying what to build, when `number` is empty:
-`archon workflow run archon-build-queue "build the retry fix from #123" --detach`. An
-agent resolves it to one issue to claim, a choice between issues (an attention
-item labelled `kind: pick`), new work it files and hands to intake (the run builds nothing), or a
-refusal with its reason.
-
-Optional inputs, with their defaults in each workflow's YAML:
-
-- `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
-  for a label), `label` and `label_actor` for a label event, and `build_queue_binding`
-  (the binding file a routed item's build-queue run is fired through).
-- `archon-build-queue`: `number` (the issue to build; empty claims the item the
-  message names, or the first in order), `orders_only` (`true` claims only members of
-  an open work order), `revisit_blocked` (`true`: a run that names no item also sends
-  blocked items that no longer look blocked back to intake), `round_limit` (default
-  `3`), the rounds after which a run that wants another also judges whether the rounds
-  converge, and `build_queue_binding` (the binding file follow-up rounds fire).
-- `archon-merge-queue`: `merge_method` (`squash` or `merge`) and `retriage_merged`
-  (`true`: an issue still open after its pull request merged goes back to intake). It
-  takes no issue number: the run is on the issue's item, `--item issue-<issue>`.
-- `archon-discoveries`: `since` and `until` (ISO-8601) and `limit` (default `20` runs
-  per pass).
-
-Intake, the merge queue and the discoveries drain never change their checkout. They
-create no worktree and run in the launch checkout as it stands, so launch them from a
-checkout that tracks the default branch. The build queue changes its checkout, so each
-run gets its own worktree on a run-named branch. A completed round removes that
-worktree when it is clean and every commit is on a remote, and keeps the branch;
-otherwise the run names the path and what removing it would lose.
-
-## Intake
-
-Run intake once per issue event. For a new issue, `--input number=<issue>` is enough.
-
-An edit or a plain rerun does not re-triage a maintainer's issue that was already
-triaged. To re-triage one, add the `archon-triage` label on the forge and launch the
-label event, naming who added it:
+Follow the pack README's "Set it up" section in order. It checks the forge plugin
+(`archon plugin add coleam00/Archon/plugins/forge-github`) and its operations, the one
+setting (`ci` in `.archon/packs/sdlc.yaml`), the policy documents, and the models. Ask
+the user before anything that writes to the tracker or the repository, starts a run,
+or registers a binding.
 
 ```bash
-archon workflow run archon-intake $R --input number=<issue> \
-  --input action=added --input label=archon-triage --input label_actor=<maintainer-login> --detach
+archon trigger whoami
+archon pack bindings sdlc --repo github.com/<owner>/<name> --host <host-id> \
+  --run-as <user-id> --out ./sdlc-bindings
+archon trigger add ./sdlc-bindings/<file>.json    # each run-ended and asks-settled file
+archon trigger check
 ```
 
-`label_actor` must be on `maintainers.json`. The same event with a listed maintainer
-promotes an outside author's issue. `archon-triage` is the only label that requests a
-triage: route labels such as `archon-ready` are written by the pack, and adding one by
-hand starts nothing.
+The label binding is an event binding: its object goes into the `bindings` of the
+GitHub source plugin's config in the file `ARCHON_WEBHOOK_SOURCES` names, with
+`"observe": { "everySeconds": 60 }` on an install with no webhooks. Keep
+`archon workflow wake --watch` running (`archon workflow wake schedule install`), so
+labels are observed and queued starts are admitted.
 
-Read the result from the issue's labels:
-
-- `archon-ready`, `archon-plan` or `archon-investigate`: routed to the build queue.
-- `archon-needs-contract`: no route can start from the body. Triage's questions are in
-  a comment on the issue; answer them in the body, then re-triage.
-- `archon-blocked`: a prerequisite or a decision must land first. Re-triage once it
-  has.
-- `archon-close`: a duplicate or already delivered. Intake closes it when the triage
-  policy allows.
-- `archon-needs-maintainer`: an outside author's issue, waiting for promotion.
-
-## Build queue
-
-A run claims the waiting item that sorts first and works it for one round. To build
-a chosen issue, name it:
-
-```bash
-archon workflow run archon-build-queue $R --input number=<issue> --detach
-```
-
-A named issue that cannot be claimed refuses the run before any agent, with the
-reason: it has no work item, another run holds it, or it does not wait for the build
-queue. Launch one run per item you want worked at the same time; the launch's
-`--config` decides which provider builds it.
-
-A round ends one of three ways, recorded on the item:
-
-- `done`: the pull request's latest review says Ready at its head. The merge queue
-  takes it from there. When only a check no round can run is left, the run asks once
-  for it instead. A pull request already reviewed Ready at its head is marked
-  ready without another round.
-- `continue`: the issue already answers what stopped the round, and the correction
-  stays inside the issue's shape (one that adds machinery the issue does not name asks
-  instead). A pull request that changed nothing material since its last
-  review never continues; the round ends as done or ask. The run starts the
-  item's next round at once by firing the binding file `build_queue_binding` names,
-  with the item's `number`. With no binding set, or when the fire is skipped or
-  refused, the item waits for the next queue run and the run's summary says why.
-  That round's first review continues from the review the earlier round published:
-  it checks those findings and reads what changed since, not the whole pull request.
-- `ask`: the run ends `asked` and leaves one ask on the issue's item. Answer it with
-  `archon workflow answer --ref ask:<id>`; the answer starts the issue's next build run
-  through the `build-after-answer` binding.
-
-An item the merge queue returns waits for a new build round, with the merge queue's
-brief. A re-triage after the queue's last decision starts the item over.
-
-Do not resume a failed build-queue run once a later build-queue run has released its
-claim. A run that names no item releases every finished run's claim, whichever item it
-then picks. A run named for the same `number` releases it too; one named for a
-different `number` leaves it alone. A resume skips the completed `facts` node that
-claimed the item, so the resumed run works the whole round, then its `apply` refuses
-because the item is no longer claimed by it. Launch a fresh run with
-`--input number=<issue>` instead.
-
-## Merge queue
-
-A merge run decides one issue's pull request, on the issue's item, and merges it
-through a gate that requires a Ready verdict for the head, green CI there (or, under
-`ci: none`, a passing recorded validation) and a default branch whose CI is not red. A
-pull request that merges cleanly into the default branch merges, even when it is behind.
-The stage never pushes, pauses or waits for CI: a conflict goes back to the build queue,
-and pull requests merge one at a time. The engine admits one merge run per item.
-
-A verdict counts only at the head it reviewed: after a push, the pull request goes
-back to the build queue for a new round.
-
-A run ends with one outcome, which `archon workflow runs --item issue-<issue>` shows:
-
-- `merged`, or `merged_retriage` when it also sent a still-open issue back to intake.
-- `returned`: the build queue's next round starts from the run's brief.
-- `waiting`: its checks still run, or the default branch is red. The run holds nothing.
-  A completed check at the commit it waits on starts the stage again, and so does the
-  backstop (`archon-merge-pick`, every 30 minutes by default) for anything no event
-  reports, such as a resolved review thread.
-- `asked`: one ask is open on the item.
-- `parked`: work on the item stopped until the build queue readies it again.
-
-A run merges a clear pull request on its own, unless the project's `merge_lane` setting is `manual` or the pull request changes a path its `protected_paths` setting matches: then it is asked about and merges only once approved at its head. An unclear one, such as a very large
-change, is asked about too. The ask is on the item, with no paused run behind it: answer it with
-`archon workflow answer --ref ask:<id> --choose <option> --text "<why>"`, where the option is `merge`,
-`return` or `park`. A merge ask has exactly those three; an answer with text and no option starts nothing. A red default branch asks nobody: nothing merges, and the run's summary names the failing checks, the
-pull requests merged since green and the suspect.
-
-A `merge` answer approves the pull request at the head it asked about, and the run the
-answer starts merges it once the gate passes. The approval carries to a later head only when the agent
-judges that everything since is merges of the default branch and their conflict
-resolutions, and the verdict is Ready at the later head. A `return` hands the item
-back to the build queue, whose next round then starts. A `park` stops work on the item until the build queue readies it again.
-
-## Discoveries drain
-
-Each pass decides the records of up to `limit` finished runs, oldest first. Repeat
-passes until one finds nothing queued: its `decide` node is skipped
-(`archon workflow get <run-id> --verbose --json`). Stop early when a pass pauses with a
-`stage: discoveries` item, and answer it first.
-
-Issues a pass files carry no labels. Run intake on each one to triage it.
-
-## Answering queue decisions
-
-Queue items follow one shape: what is being decided, why it matters, the
-recommendation with its evidence and what would change it, the choices and what each
-does, and what happens if nobody answers. Answer them as `managing-runs.md`
-("Answering a decision well") describes:
-
-```bash
-archon workflow respond <run-id> <choice> "<reason>" --detach
-```
-
-The build queue and merge items owned by a build write the ruling into the issue
-body as a dated "Current scope" section, and later rounds work from it. Write the reason as a ruling a later round can act on: what is in scope,
-what is not, and why. An answer that
-continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
-run at once through the binding file the answered run was given, so you don't relaunch.
-A run launched by hand without those binding inputs starts no follow-up: launch the
-next run yourself.
-
-- When the recommendation fits the user's standing direction, answer it yourself.
-- When it is unclear, risky or not decided by anything the user has said, bring it to
-  the user with the item's own summary.
-- `other` exists on every build item. Use it when no declared choice fits, and say
-  exactly what to do instead. A merge ask has no `other`: choose the nearest of its
-  three options and say what you want in the text.
+Policy documents at `.archon/sdlc/policy/<topic>.md` add to the pack's defaults rather
+than replacing them; where a project line conflicts with the default, the project's
+wins. A project that wants every merge asked says so in its `land.md`.
 
 ## Merging by hand
 
-A pull request the queues did not deliver has no work item, so the merge queue does
-not take it. To merge one yourself:
+To merge a pull request the pack did not land:
 
 1. Read the review verdict and the open review threads, including automated
    reviewers' inline comments.

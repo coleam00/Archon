@@ -120,7 +120,7 @@ export default defineConfig({
         starlightLlmsTxt({
           description:
             'Archon is a factory builder: YAML workflows run by AI agents, scripts and your decisions.',
-          details: `Archon runs multi-step workflows written in YAML. Agents judge, code computes, and a run pauses as an attention item when it needs your decision. The bundled sdlc pack takes an issue to a merged pull request through intake, a build queue and a merge queue. Repository runs work in their own git worktree. Runs start from the CLI, the Web UI or a chat platform.`,
+          details: `Archon runs multi-step workflows written in YAML. Agents judge, code computes, and a run pauses as an attention item when it needs your decision. The bundled sdlc pack takes a labelled issue to a merged pull request through triage, plan, build, review, host and land stages that the engine chains on the issue's item. Repository runs work in their own git worktree. Runs start from the CLI, the Web UI or a chat platform.`,
 
           // No exclusions - include all Starlight docs for maximum sitemap coverage
           exclude: [],

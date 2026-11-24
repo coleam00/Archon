@@ -21,7 +21,7 @@ tier keywords or aliases at launch — the persistent config stays untouched:
 
 ```bash
 # Rebind one or more tiers / @aliases for this run only; repeat per binding
-archon workflow run archon-ship --branch fix/x "..." \
+archon workflow run archon-build --item issue-42 --input issue=42 \
   --model large=pi/minimax/minimax-m3 \
   --model small=openai/gpt-5-mini
 ```
@@ -86,9 +86,8 @@ unclear, risky, or outside what they have told you.
 2. Choose one of the declared choices. When none fits and the item offers `other`,
    choose it and say what to do instead.
 3. Give a reason in the text. Workflows record the answer's text with the decision,
-   and some write it down as a ruling: the SDLC build queue and merge items owned by
-   a build add it to the issue body as a dated "Current scope" section that later
-   rounds work from. A bare choice teaches the next round nothing.
+   and the SDLC pack hands every answer on an item to every later stage on it, oldest
+   first, as a decision already made. A bare choice teaches the next run nothing.
 4. Answer detached, so the continuation does not run in your shell:
 
    ```bash
@@ -318,8 +317,8 @@ Report outcomes with their evidence: "completed, review verdict ready:false —
 
 ## Discoveries: the SDLC pack's out-of-scope findings
 
-A convention of the bundled SDLC workflows (`archon-ship`, `archon-deliver`,
-`archon-review`), not of workflows in general. Their review lenses
+A convention of the bundled SDLC workflows (`archon-investigate`, `archon-plan`,
+`archon-build`, `archon-review`), not of workflows in general. They and the review lenses
 record proven findings that fall outside the run's accepted scope as discovery records
 instead of blocking findings: raw per-producer files at
 `<artifacts>/discoveries/*.json` (records of `title`, `claim`, `evidence`, `relation:
@@ -327,10 +326,10 @@ unrelated | scope_conflict | note`, `source_node`), consolidated by the review i
 the verdict's `discoveries` records and a readable `discoveries.md`.
 
 The run that found them files nothing. Its terminal report counts them and names their files, and
-`archon-discoveries` later decides every recorded discovery across finished runs:
-file an issue with a full brief, track it on the open issue that already covers it,
-drop it with a reason, or ask a maintainer. Run that drain rather than filing
-discoveries by hand (see `queues.md`, "Discoveries drain").
+once the item's change lands, `archon-discoveries` decides every discovery the item's
+runs recorded: file an issue with a full brief, track it on the open issue that already
+covers it, drop it with a reason, or ask an operator. Let that stage decide them rather
+than filing discoveries by hand (see `queues.md`).
 
 When the user asks about one run's discoveries before a drain has run:
 

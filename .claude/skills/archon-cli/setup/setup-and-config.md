@@ -27,8 +27,9 @@ a forge operation.
 
 The first run in a checkout Archon has not seen registers the project before it
 starts. On an install with many projects that takes a few seconds.
-To set up the SDLC pack on a project, read `../operate/queues.md` ("Setting up the
-pack"): it points at the pack README's setup guide, which is the source of truth.
+To set up the SDLC pack on a project, read `../operate/queues.md` ("Setting up and
+installing the bindings"): it points at the pack README's setup guide, which is the
+source of truth.
 
 ## Install
 
@@ -223,7 +224,7 @@ model is Pi's inner `<vendor>/<model>` reference, such as
 binding such as `--model large=pi/minimax/MiniMax-M3`.
 
 ```bash
-archon workflow run archon-ship --branch fix/x "..." --config .config.free.yaml
+archon workflow run archon-build --item issue-42 --input issue=42 --config .config.free.yaml
 ```
 
 Notes:

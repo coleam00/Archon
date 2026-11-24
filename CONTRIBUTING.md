@@ -174,16 +174,13 @@ said so. A push to `dev` or `main` skips its jobs only when
 a pull request run already passed every job on the same tree, the ones that wait for the push
 included, and otherwise runs them, so a prose change's test-visible effects are checked on `dev`.
 
-The tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-run in the `test-pack` job (and `test-pack-windows` when it runs, which a push does only on
+The workflow fixtures run in the `test-pack` job (and `test-pack-windows` when it runs, which a push does only on
 `main` and the daily schedule does on `dev`) when a pull request or an unproven push changes the pack or a
 contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
-those paths. Run them locally with `bun run test --plan pack` and
-`bun run validate --only workflow-fixtures`; a single test file runs with
-`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI on a branch
-without a pull request, dispatch the Test Suite workflow with `pack-tests` or
-`pack-fixtures` set:
-`gh workflow run test.yml --ref <branch> -f pack-tests=true -f pack-fixtures=true`.
+those paths. Run them locally with `bun run validate --only workflow-fixtures`. The SDLC
+pack has no tests of its own. To run the fixtures in CI on a branch without a pull
+request, dispatch the Test Suite workflow with `pack-fixtures` set:
+`gh workflow run test.yml --ref <branch> -f pack-fixtures=true`.
 
 Local validation has no fixed duration: tests and typed analysis dominate, and machine
 load matters. The audit for [#3985](https://github.com/coleam00/Archon/issues/3985)

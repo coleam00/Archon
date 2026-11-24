@@ -87,7 +87,7 @@ Run workflows directly from your terminal without needing the server:
 │ $ bun run cli workflow list                                     │
 │                                                                 │
 │ Available workflows in .archon/workflows/:                     │
-│   - archon-ship                  Issue to reviewed PR           │
+│   - archon-triage                Route an issue to its stage    │
 │   - archon-investigate           Prove a root cause             │
 │   - archon-review                Parallel PR review             │
 │                                                                 │
@@ -249,7 +249,7 @@ When you send a message, an AI "router" decides what to do:
 │                                                                         │
 │   USER MESSAGE                           ROUTER DECISION                │
 │                                                                         │
-│   "fix this issue"          ───────▶     archon-ship                   │
+│   "triage this issue"       ───────▶     archon-triage                 │
 │   "review this PR"          ───────▶     archon-review                 │
 │   "what does X do?"         ───────▶     answered directly, no workflow│
 │                                                                         │
@@ -264,7 +264,7 @@ When you send a message, an AI "router" decides what to do:
 │                                       │                                 │
 │                                       ▼                                 │
 │                    ┌─────────────────────────────────────┐             │
-│                    │ invoke_workflow: archon-ship        │             │
+│                    │ invoke_workflow: archon-triage      │             │
 │                    └─────────────────────────────────────┘             │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -282,8 +282,8 @@ The table below lists the key workflows in the bundled `sdlc` pack. All bundled 
 │   WORKFLOW                              TRIGGER PHRASES    WHAT IT DOES │
 │                                                                         │
 │   ┌─────────────────────────────────────────────────────────────────┐  │
-│   │ archon-ship               "fix this issue"        Triage +       │  │
-│   │                           "implement #42"         deliver a PR   │  │
+│   │ archon-triage             "triage this issue"     Judge and      │  │
+│   │                           "what does #42 need"    route an issue │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 │   ┌─────────────────────────────────────────────────────────────────┐  │
@@ -292,8 +292,8 @@ The table below lists the key workflows in the bundled `sdlc` pack. All bundled 
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 │   ┌─────────────────────────────────────────────────────────────────┐  │
-│   │ archon-deliver            "deliver this plan"     Implement +    │  │
-│   │                           "take this to a PR"     PR + review    │  │
+│   │ archon-build              "build this issue"      Implement +    │  │
+│   │                           "take this to a PR"     draft PR       │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -348,7 +348,7 @@ A quick route agent picks which specialist lenses the change earns, and `archon-
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-Review never edits code. Fixing findings belongs to `archon-implement`, or to `archon-deliver`, which runs review and corrections in a loop.
+Review never edits code. Fixing findings belongs to `archon-build`, which continues the change in its own session when a review returns it.
 
 ---
 

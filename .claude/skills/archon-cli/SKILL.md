@@ -2,12 +2,12 @@
 name: archon-cli
 description: |
   Drive Archon through its CLI: run AI workflows on a repo, watch and answer the runs
-  that need a decision, drive the SDLC pack's queues (intake, build queue, merge queue,
-  discoveries), set up Archon or change its config, and author and validate workflows.
+  that need a decision, drive the SDLC pack (label intake, its stages from triage to
+  land, the asks they leave, its bindings), set up Archon or change its config, and author and validate workflows.
   Use when the user says "use archon", "run archon", "archon workflow", "fix issue #N
   with archon", "have archon review this PR", "what's running / check run <id>",
-  "approve/reject/answer/cancel/resume that run", "run the build queue", "drain
-  discoveries", "set up archon", "configure archon", "change my archon config",
+  "approve/reject/answer/cancel/resume that run", "triage this issue with the SDLC
+  pack", "install the SDLC bindings", "set up archon", "configure archon", "change my archon config",
   "create a workflow", "author a workflow", or asks how to write a better Archon prompt.
   NOT for: doing the coding work yourself. Archon delegates it to isolated runs.
 argument-hint: "[workflow | run-id | intent]"
@@ -26,15 +26,15 @@ Route by intent:
 |---|---|
 | Run a workflow on real work | `operate/running.md` |
 | Inspect, answer, cancel or resume runs | `operate/managing-runs.md` |
-| Set up the SDLC pack on a project | the pack README's setup guide (see `operate/queues.md`, "Setting up the pack"), then `operate/queues.md` |
-| Drive the SDLC pack's queues | `operate/queues.md` |
+| Set up the SDLC pack on a project | the pack README's setup guide (see `operate/queues.md`, "Setting up and installing the bindings"), then `operate/queues.md` |
+| Drive the SDLC pack, or answer its asks | `operate/queues.md` |
 | Find out why a run failed or hangs | `operate/troubleshooting.md` |
 | Set up Archon or change config | `setup/setup-and-config.md` |
 | Author or change a workflow | `authoring/authoring-workflows.md` (then `node-reference.md` and `variables.md` in the same folder) |
 | Improve a node prompt or a run message | `authoring/prompting-mistakes.md` |
 
-- When the intent is clear ("build me a workflow for X", "run archon-ship on issue
-  #42"), go straight to the reference. Do not ask.
+- When the intent is clear ("build me a workflow for X", "triage issue #42 with the
+  SDLC pack"), go straight to the reference. Do not ask.
 - When it is ambiguous, ask which of these the user wants.
 - On a machine where `archon doctor` fails, start with `setup/setup-and-config.md`.
 

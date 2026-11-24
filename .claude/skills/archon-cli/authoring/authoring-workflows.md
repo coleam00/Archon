@@ -33,7 +33,7 @@ Work through these questions in order, with the user where marked:
    into a user workflow by default. Their prompts and gates are deliberately
    general so they fit any project; a user workflow composed out of them inherits
    that generality and loses the specificity that made it valuable. If the user
-   asks for "something like archon-ship but for my repo", write a new workflow in
+   asks for "something like the SDLC pack but for my repo", write a new workflow in
    their project's terms, using the pack only as the craft reference.
 4. **Primitives.** Thinking in primitives is right: name the small jobs that
    compose into the outcome — investigate, decide, implement, verify, publish;
@@ -182,8 +182,9 @@ acts on it.
   runtime: bun
 ```
 
-Test at the same seams. A script gets a test at its tool boundary: it writes an issue
-once, reads back a pushed head, merges only what was approved. Agent judgment is
+Test at the same seams. A script that keeps a rule worth testing gets a test at its
+tool boundary: it writes an issue once, reads back a pushed head, merges only what was
+approved. The bundled SDLC pack has one script and no tests. Agent judgment is
 checked by outcome, through dry-run fixtures (`archon workflow test`) and real runs,
 never by a test that pins a prompt's wording, the YAML's shape or the route a run
 takes. Do not retest what the engine owns (`when:`, includes, loops, output

@@ -41,7 +41,7 @@ Support varies by provider. See the [provider capability matrix](/reference/prov
 
 Archon ships the `sdlc` workflow pack, a software factory from an incoming issue to a merged pull request. [The SDLC factory](/getting-started/sdlc-factory/) introduces it and points at its setup guide, and [SDLC pack workflows](/reference/sdlc-workflows/) describes each workflow.
 
-To customize the pack, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it -- same-named workflows override the bundled ones. Copy the pack rather than one workflow folder: its workflows include each other and share scripts in `sdlc/.shared/`.
+To customize the pack, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it -- same-named workflows override the bundled ones. Copy the pack rather than one workflow folder: its stages hand work to each other through the bindings in `sdlc/.pack/pack.yaml` and share policy documents in `sdlc/.shared/policy/`. The pack's README has a short section on building a pack of your own the same way.
 
 ## Advanced
 

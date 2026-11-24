@@ -17,7 +17,7 @@ Workflows are YAML files discovered from `.archon/workflows/` (recursively) plus
 ### `name` (required)
 - **Type**: non-empty string
 - **Used by**: Router for exact-match lookup; displayed in workflow list
-- **Example**: `name: archon-ship`
+- **Example**: `name: archon-build`
 
 ### `description` (required)
 - **Type**: non-empty string (multiline supported)
@@ -65,7 +65,7 @@ name: my-workflow
 description: Sequential execution example
 steps:
   - command: archon-plan
-  - command: archon-implement
+  - command: my-implement
     clearContext: true
   - parallel:
       - command: archon-review-code
@@ -138,7 +138,7 @@ nodes:
       required: [type]
     allowed_tools: []
   - id: implement
-    command: archon-implement
+    command: my-implement
     depends_on: [classify]
     when: "$classify.output.type == 'BUG'"
   - id: lint
@@ -296,9 +296,10 @@ Four rules enforced at `loader.ts:370-439`:
 
 | File | Mode | Key Features |
 |------|------|-------------|
-| `sdlc/ship/archon-ship.yaml` | `nodes:` | `include:` composition, `when:` routing on structured output, `trigger_rule: none_failed_min_one_success` |
-| `sdlc/review/archon-review.yaml` | `nodes:` | Parallel `command:` fan-out with `context: fresh`, conditional lenses, `script:` publish |
-| `sdlc/deliver/archon-deliver.yaml` | `nodes:` | Composed delivery tail, bounded correction loop, `script:` gates |
+| `sdlc/review/archon-review.yaml` | `nodes:` | Parallel `command:` fan-out with `context: fresh`, `when:` routing on structured output, `trigger_rule: all_done` joins, `returns: { node, outcome, asks }` |
+| `sdlc/build/archon-build.yaml` | `nodes:` | One node that keeps its session across runs on an item (`context: same`), `result_of` inputs |
+| `sdlc/land/archon-land.yaml` | `nodes:` | An agent stage followed by a `script:` node that records a boundary fact |
+| `sdlc/.pack/pack.yaml` | pack | Settings, forge needs, and the bindings that chain stages (`run_ended`, `asks_settled`, label `event`, `limit`) |
 
 ---
 
