@@ -73,6 +73,7 @@ describe('workflow types', () => {
 
       const written = run('alpha');
       expect(written.status).toBe(0);
+      expect(existsSync(join(root, 'home', 'config.yaml'))).toBe(true);
       expect(written.stdout).toContain(`Wrote ${generated} (1 node output(s) in 1 workflow(s))`);
       expect(readFileSync(generated, 'utf8')).toContain("readonly level: 'low' | 'high';");
       expect(run('.archon/workflows/alpha', '--check').status).toBe(0);
