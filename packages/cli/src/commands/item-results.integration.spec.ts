@@ -347,6 +347,28 @@ test('a reader with no item is refused before it starts, unless the value is sup
   });
 }, 120_000);
 
+test('a detached reader with no item starts when its project pack settings supply the value', async () => {
+  const fixture = await makeFixture('pack-setting', {});
+  const pack = join(fixture.projectRoot, '.archon', 'workflows', 'kit');
+  mkdirSync(join(pack, 'kit-reader'), { recursive: true });
+  writeFileSync(join(pack, 'kit-reader', 'kit-reader.yaml'), reader('kit-reader', 'stage-a'));
+  mkdirSync(join(pack, '.pack'), { recursive: true });
+  writeFileSync(join(pack, '.pack', 'pack.yaml'), 'inputs:\n  prior: { type: string }\n');
+  mkdirSync(join(fixture.projectRoot, '.archon', 'packs'), { recursive: true });
+  writeFileSync(
+    join(fixture.projectRoot, '.archon', 'packs', 'kit.yaml'),
+    `settings:\n  prior: '"from-project"'\n`
+  );
+  const ack = JSON.parse(
+    await fixture.cli(['workflow', 'run', 'kit-reader', '--no-worktree', '--detach', '--json'])
+  ) as { ok: boolean; runId: string };
+  expect(ack.ok).toBe(true);
+  await fixture.attempt(['workflow', 'wait', ack.runId]);
+  expect((await detail(fixture, ack.runId)).terminal_record.returns.value).toEqual({
+    read: 'from-project',
+  });
+}, 120_000);
+
 // A review that returns its verdict. With \`after=commit\`, a later node commits. With
 // \`beside=commit\`, a parallel node commits while the judge waits for it.
 const REVIEW = `name: review
