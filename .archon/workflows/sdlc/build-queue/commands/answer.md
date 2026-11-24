@@ -41,7 +41,7 @@ On continue, `brief` is what the next round starts from cold. It names the issue
 
 ## The question
 
-`ask` is set only on ask; null otherwise. Write it as `attention.md` says. Say in the `question` that an `other` answer's text is written into the issue body as the ruling, and the next round works from it. An option's `effect` is `continue` (launches the next round from the brief), `ready` (hands the pull request to the merge queue as it stands, such as one the maintainer finishes by hand) or `park` (stops the queue working the item until a re-triage).
+`ask` is set only on ask; null otherwise. Write it as `attention.md` says. It is left on the issue's item and this run ends; the answer starts the next run. Say in the `context` that an `other` answer's text is written into the issue body as the ruling, and the next round works from it. An option's `effect` is `continue` (launches the next round from the brief), `ready` (hands the pull request to the merge queue as it stands, such as one the maintainer finishes by hand) or `park` (stops the queue working the item until a re-triage).
 
 On ask, declare `ask_class`. Use `scope` when the question is about the contract's shape, such as the check before you continue or the rounds' trend at the cap. Use `stop` for any other question, including asking for a check no round can run. On done and continue the queue ignores it; declare `stop`.
 

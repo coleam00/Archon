@@ -193,8 +193,9 @@ A round ends one of three ways, recorded on the item:
   refused, the item waits for the next queue run and the run's summary says why.
   That round's first review continues from the review the earlier round published:
   it checks those findings and reads what changed since, not the whole pull request.
-- `ask`: the run pauses as one attention item labelled `stage: build` and `kind: route`,
-  `kind: stop` or `kind: scope`, with the issue number as `item`.
+- `ask`: the run ends `asked` and leaves one ask on the issue's item. Answer it with
+  `archon workflow answer --ref ask:<id>`; the answer starts the issue's next build run
+  through the `build-after-answer` binding.
 
 An item the merge queue returns waits for a new build round, with the merge queue's
 brief. A re-triage after the queue's last decision starts the item over.

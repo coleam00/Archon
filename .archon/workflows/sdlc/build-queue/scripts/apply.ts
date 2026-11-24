@@ -1,6 +1,6 @@
 /**
- * Perform the writes the run's decision declared, read each one back, and hand an ask to
- * the wait as the deciding agent wrote it.
+ * Perform the writes the run's decision declared, read each one back, and leave an ask
+ * on the item as the deciding agent wrote it.
  *
  * The decision is the last agent's that ran: answer's over route's. An answer that asks
  * declares its own class (`stop` or `scope`), recorded as declared. A route that launched is answered after its round, so its own decision is
@@ -11,7 +11,13 @@
  * validation its CI agent ran. The run's outcome is the decision; the build-pick the
  * engine starts when the run ends starts a continue's next round.
  *
- * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_READ_AT from facts; INPUTS_ROUTE,
+ * An ask becomes the run's `asks`, which the engine opens on the item when the run
+ * completes, and `asked`, which the `build-after-answer` binding hands the run the
+ * answer starts: the brief and each option's effect and ruling, which the ask itself
+ * does not carry. On the `answered` path facts already recorded the answer, and this
+ * hands on its outcome without a write.
+ *
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEM, INPUTS_READ_AT and INPUTS_ANSWERED from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-build's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts; INPUTS_REVIEWS and
  * INPUTS_CI, every `review-report` and `ci-report` output of this run.
@@ -191,14 +197,19 @@ function prNumberOf(url: string, repo: QualifiedPr['repo']): Pick<BuildRound, 'p
   }
 }
 
-const NO_ASK = { question: '', options: [], recommendation: null, class: '', asked: null } as const;
-
-/** The wait's fields for the run's ask, as the deciding agent wrote them. */
+/**
+ * The run's ask as the engine takes it, and what the answered run needs that the ask
+ * does not carry. The engine checks the ask when the run completes.
+ */
 function raisedAsk({ ask, brief, by }: Extract<Decision, { kind: 'asked' }>) {
-  return { ...ask, class: by, asked: { ask, brief, by } };
+  const { question, context, options, recommendation } = ask;
+  return {
+    asks: [{ question, context, options: options.map(({ id, does, cost }) => ({ id, does, cost })), recommendation, artifacts: [] }],
+    asked: { brief, by, options: options.map(({ id, effect, ruling }) => ({ id, effect, ruling })) },
+  };
 }
 
-/** The ask's `pr` label: the number of the round's pull request, or of the item's; empty with none. */
+/** The notice's `pr` label: the number of the round's pull request, or of the item's; empty with none. */
 function prLabel(round: BuildRound | null): string {
   const pr = round?.pr_number ?? (nullableJson(input('pull_request')) as PrRecord | null)?.number;
   return pr === undefined ? '' : String(pr);
@@ -214,6 +225,10 @@ function announceDecision(decision: Decision, item: string, pr: string): void {
 
 function main(): void {
   const path = input('path').trim();
+  if (path === 'answered') {
+    emit({ ...(nullableJson(input('answered')) as object), asks: [], asked: null });
+    return;
+  }
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const ending = nullableJson(input('ending')) as ShipReport | null;
@@ -237,12 +252,6 @@ function main(): void {
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
   const links = round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '');
-  const result = {
-    decision: decision.kind,
-    ...(asking === null ? NO_ASK : raisedAsk(asking)),
-    item: String(item.number),
-    pr: prLabel(round),
-  };
 
   if (decision.kind === 'launch') throw new Error('a launch reached apply without its round');
 
@@ -264,8 +273,12 @@ function main(): void {
       brief: decision.kind === 'continue' ? decision.brief : '',
     })
   );
-  announceDecision(decision, result.item, result.pr);
-  emit({ ...result, summary: `Issue ${result.item}: ${decision.kind}. ${entry.reason}` });
+  announceDecision(decision, String(item.number), prLabel(round));
+  emit({
+    decision: decision.kind,
+    summary: `Issue ${String(item.number)}: ${decision.kind}. ${entry.reason}`,
+    ...(asking === null ? { asks: [], asked: null } : raisedAsk(asking)),
+  });
 }
 
 try {

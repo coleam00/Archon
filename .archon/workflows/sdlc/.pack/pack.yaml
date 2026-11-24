@@ -176,6 +176,28 @@ bindings:
       repo_path: { repo: path }
       build_queue_binding: { binding: build-queue }
       intake_binding: { binding: intake }
+  # An answer to the build queue's ask starts the issue's next build run with the answer
+  # and what was asked; that run writes the ruling into the issue body, records the
+  # answer, and runs the round on a continue. The options are the deciding agent's, so
+  # the binding names none: every answer starts the run, `other` with text included,
+  # which continues with the text as the ruling. A withdrawn ask starts nothing and
+  # leaves the item asking until a re-triage. Queued, not skipped: the answer is the
+  # only start the item gets.
+  build-after-answer:
+    workflow: archon-build-queue
+    resource: build
+    capacity: 10
+    overlap: queue
+    isolation: { kind: worktree }
+    asks_settled:
+      workflow: archon-build-queue
+      settled: answered
+    inputs:
+      repo_host: { input: repo_host }
+      repo_path: { input: repo_path }
+      number: { input: number }
+      decisions: { answers: true }
+      asked: { result: /asked }
   # A build run that ends has freed a slot, and may have left its issue waiting for
   # another round, so the engine starts a pick then instead of leaving both to the
   # schedule. Queued, not skipped: a pick already running may have listed the items
@@ -186,7 +208,7 @@ bindings:
     overlap: queue
     run_ended:
       workflow: archon-build-queue
-      outcome: [parked, ready, continue]
+      outcome: [parked, ready, continue, asked]
     inputs:
       repo_host: { input: repo_host }
       repo_path: { input: repo_path }
