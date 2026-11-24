@@ -610,7 +610,11 @@ async function readLanding(source: ItemReadSource, item: WorkflowItem) {
 }
 
 /** The facts recorded on the item itself: its rulings, its links, its merge and its landing. */
-async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
+async function readItemFacts(
+  source: ItemReadSource,
+  item: WorkflowItem,
+  merge: Awaited<ReturnType<ItemReadSource['store']['getItemMerge']>>
+) {
   const itemId = item.id;
   const rulings: ItemRuling[] = [];
   const unreadableRulings: ItemRulingDegraded[] = [];
@@ -622,7 +626,6 @@ async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
   for (const read of await source.store.listItemLinks(itemId))
     if ('type' in read) unreadableLinks.push(read);
     else links.push(readLink(itemId, read));
-  const merge = await source.store.getItemMerge(itemId);
   const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
   const landing = await readLanding(source, item);
   return {
@@ -682,13 +685,22 @@ export async function placeItem(
     deadline: wait.deadlineAt,
     overdue: Date.parse(wait.deadlineAt) <= Date.now(),
   }));
-  const standing = itemStanding({ runs: own.values, queued: queuedStarts, held, waits, questions });
+  const merge = await source.store.getItemMerge(found.item.id);
+  const standing = itemStanding({
+    runs: own.values,
+    queued: queuedStarts,
+    held,
+    waits,
+    questions,
+    // A merge row that does not read still says the change merged.
+    merged: merge !== null,
+  });
   const read = async (): Promise<ItemRead> => {
     const events =
       tree.size === 0
         ? new Map<string, WorkflowEventRow[]>()
         : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
-    const facts = await readItemFacts(source, found.item);
+    const facts = await readItemFacts(source, found.item, merge);
     const terminalEvents = await completionEvents(source, own.values);
     const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
     const answers = [

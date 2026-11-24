@@ -70,11 +70,12 @@ const graph: PackGraph = {
   loaded: [],
   otherCopies: [],
   // The order the engine gives, which is not alphabetical.
-  stages: ['plan', 'build', 'check'].map(workflow => ({
+  stages: ['plan', 'lint', 'build', 'check'].map(workflow => ({
     name: `acme/flow:${workflow}`,
     workflow,
     entry: workflow === 'plan',
-    inFlow: true,
+    // `lint` is a workflow of the pack that only other workflows call.
+    inFlow: workflow !== 'lint',
     returns: null,
     outcome: null,
     asks: false,
@@ -124,7 +125,7 @@ test('each open item is under the stage it stands at, in the order the pack grap
     item('issue-1', 'check', 'running'),
     { ...item('issue-2', 'plan', 'waiting'), questions: [ask] },
     item('issue-3', 'check', 'failed'),
-    // A stage the pack no longer has, and a run of no pack: both stay on the board.
+    // A stage the pack no longer has stays on the board; a run of no pack waits to be asked for.
     item('issue-4', 'retired', 'queued'),
     item('issue-5', null, 'running'),
   ]);
@@ -147,12 +148,17 @@ test('each open item is under the stage it stands at, in the order the pack grap
       keysIn(stage),
     ])
   ).toEqual([
+    // `lint`, which only other workflows call, is no stage. The failed item is on none.
     ['plan', ['issue-2']],
     ['build', []],
-    ['check', ['issue-1', 'issue-3']],
+    ['check', ['issue-1']],
     ['Not on a stage', ['issue-4']],
   ]);
-  expect(keysIn(page)).toContain('issue-5');
+  const decide = page.querySelector('[data-needs-decision]');
+  expect(decide === null ? [] : keysIn(decide)).toEqual(['issue-3']);
+  expect(decide?.querySelector('[data-item-reason]')?.textContent).toContain('check');
+  expect(page.querySelector('[data-outside-pack]')).not.toBeNull();
+  expect(keysIn(page)).not.toContain('issue-5');
 
   // An item shows its title, links to its run, and says how it stands.
   const card = page.querySelector('[data-item="issue-3"]');

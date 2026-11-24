@@ -59,7 +59,8 @@ const runsByItem = new Map<string, WorkflowRun[]>([
 function source(
   unreadable: string[] = [],
   statuses: Record<string, WorkflowRun['status']> = {},
-  queuedOn: string[] = []
+  queuedOn: string[] = [],
+  mergedIds: string[] = []
 ): ItemWindowSource {
   return {
     branchOf: async () => null,
@@ -92,7 +93,10 @@ function source(
       getCodebase: async () => null,
       getItem: async () => null,
       listItemRulings: async () => [],
-      getItemMerge: async () => null,
+      getItemMerge: async itemId =>
+        mergedIds.includes(itemId)
+          ? { type: 'degraded', reason: 'merge_unreadable', itemId }
+          : null,
       getItemLanding: async () => null,
       listItemLinks: async () => [],
       listItemAsks: async () => [],
@@ -186,6 +190,18 @@ describe('reading items over a window', () => {
       ['a', { runId: 'a2', state: 'resting' }],
       ['b', { runId: 'b1', state: 'failed' }],
       ['c', { runId: 'c2', state: 'resting' }],
+    ]);
+
+    // A recorded merge rests the item, whatever its last run did.
+    const merged = await readItemWindow(
+      source([], { b1: 'failed' }, [], ['item-b']),
+      PROJECT,
+      wide
+    );
+    expect(merged.items.map(read => read.standing.state)).toEqual([
+      'resting',
+      'resting',
+      'resting',
     ]);
 
     // The filter holds across pages: a page fills with matching items only.

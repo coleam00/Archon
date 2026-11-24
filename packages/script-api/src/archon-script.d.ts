@@ -2192,7 +2192,7 @@ declare module 'archon:script' {
     };
     readonly standing: {
       readonly runId: string | null;
-      readonly state: 'running' | 'waiting' | 'queued' | 'failed' | 'resting';
+      readonly state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'resting';
     };
     readonly runs: ReadonlyArray<{
       readonly id: string;
@@ -2775,7 +2775,7 @@ declare module 'archon:script' {
       };
       readonly standing: {
         readonly runId: string | null;
-        readonly state: 'running' | 'waiting' | 'queued' | 'failed' | 'resting';
+        readonly state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'resting';
       };
       readonly runs: ReadonlyArray<{
         readonly id: string;

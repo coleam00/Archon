@@ -32,12 +32,30 @@ const STATE: Record<State, { label: string; tone: string }> = {
   waiting: { label: 'Waiting', tone: 'text-warning' },
   queued: { label: 'Queued', tone: 'text-text-secondary' },
   failed: { label: 'Failed', tone: 'text-error' },
+  stopped: { label: 'Stopped', tone: 'text-error' },
   resting: { label: 'At rest', tone: 'text-text-tertiary' },
 };
 
 /** The run the engine says the item stands at. */
 function standingRun(read: ItemRead): ItemRead['runs'][number] | undefined {
   return read.runs.find(run => run.id === read.standing.runId);
+}
+
+/** Nothing moves a failed or stopped item but a newer run, so an operator has to decide. */
+const needsDecision = (read: ItemRead): boolean =>
+  read.standing.state === 'failed' || read.standing.state === 'stopped';
+
+/** Why the item needs a decision, in the engine's own facts: what failed, or how its run ended. */
+function decisionReason(read: ItemRead): string {
+  const run = standingRun(read);
+  const stage = run?.pack?.workflow ?? run?.workflow ?? 'A run';
+  if (read.standing.state === 'failed') return `${stage} failed`;
+  const [stop] = read.questions.flatMap(question =>
+    question.kind === 'stopped' ? [question] : []
+  );
+  if (stop === undefined) return `${stage} stopped`;
+  const ended = `${stage} ended ${stop.stoppedIn.outcome} and nothing follows`;
+  return stop.summary === null ? ended : `${ended}: ${stop.summary}`;
 }
 
 const runPath = (projectId: string, runId: string): string =>
@@ -51,6 +69,7 @@ function ItemCard({ read, projectId }: { read: ItemRead; projectId: string }): R
     'run' in question && question.run !== undefined ? [question.run] : []
   );
   const link = 'text-console-11 underline hover:text-text-primary';
+  const reason = needsDecision(read) ? decisionReason(read) : undefined;
   return (
     <li
       data-item={read.item.key}
@@ -84,6 +103,11 @@ function ItemCard({ read, projectId }: { read: ItemRead; projectId: string }): R
           {read.merged === null ? '' : ' · merged'}
         </p>
       )}
+      {reason === undefined ? null : (
+        <p data-item-reason className="mt-1 text-console-11 text-text-secondary">
+          {reason}
+        </p>
+      )}
       {asks > 0 ? (
         <a href={`#${itemAsksAnchor(read.item.id)}`} className={`${link} text-warning`}>
           {asks === 1 ? '1 ask waits on you' : `${String(asks)} asks wait on you`}
@@ -98,7 +122,10 @@ function ItemCard({ read, projectId }: { read: ItemRead; projectId: string }): R
   );
 }
 
-/** One stage with its items. An empty stage keeps its heading, so the pack's order shows. */
+/**
+ * One stage with its items. An empty stage collapses to a narrow heading, so the pack's
+ * order still shows and the occupied stages stay on screen.
+ */
 function Stage({
   name,
   items,
@@ -108,19 +135,27 @@ function Stage({
   items: ItemRead[];
   projectId: string;
 }): ReactElement {
+  const empty = items.length === 0;
   return (
-    <div data-stage={name} className="md:w-60 md:shrink-0">
-      <h3 className="flex items-baseline justify-between gap-2 border-b border-border pb-1 text-console-12 font-semibold text-text-secondary">
+    <div
+      data-stage={name}
+      data-empty={empty ? '' : undefined}
+      className={empty ? 'md:w-24 md:shrink-0' : 'md:w-64 md:shrink-0'}
+    >
+      <h3
+        title={name}
+        className={`flex items-baseline justify-between gap-2 border-b border-border pb-1 text-console-12 font-semibold ${empty ? 'text-text-tertiary' : 'text-text-secondary'}`}
+      >
         <span className="truncate">{name}</span>
         <span className="text-text-tertiary">{items.length}</span>
       </h3>
-      {items.length > 0 ? (
+      {empty ? null : (
         <ul className="mt-2 flex flex-col gap-2">
           {items.map(read => (
             <ItemCard key={read.item.id} read={read} projectId={projectId} />
           ))}
         </ul>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -139,7 +174,8 @@ function PackBoard({
     getPackGraph(projectId, pack)
   );
   const stageOf = (read: ItemRead): string | undefined => standingRun(read)?.pack?.workflow;
-  const stages = graph?.stages ?? [];
+  // A workflow of the pack that only other workflows call is not a stage an item stands at.
+  const stages = (graph?.stages ?? []).filter(stage => stage.inFlow);
   // An item whose stage the pack no longer has, or whose pack could not be read, stays visible.
   const offStage = items.filter(read => !stages.some(stage => stage.workflow === stageOf(read)));
   return (
@@ -228,10 +264,14 @@ export function BoardPage(): ReactElement {
     skill.listRunsNeedingAttention
   );
   const itemAsks = useItemAsks(attention, projectId);
+  const [showOutside, setShowOutside] = useState(false);
   const items = open.data ?? [];
   const packOf = (read: ItemRead): string | undefined => standingRun(read)?.pack?.key;
-  const packs = [...new Set(items.flatMap(read => packOf(read) ?? []))].sort();
-  const outside = items.filter(read => packOf(read) === undefined);
+  // An item that needs a decision is not on a stage: it sits in its own strip until a newer run.
+  const decide = items.filter(needsDecision);
+  const moving = items.filter(read => !needsDecision(read));
+  const packs = [...new Set(moving.flatMap(read => packOf(read) ?? []))].sort();
+  const outside = moving.filter(read => packOf(read) === undefined);
 
   return (
     <section className="flex h-full min-h-0 flex-col">
@@ -256,12 +296,43 @@ export function BoardPage(): ReactElement {
             key={pack}
             projectId={projectId}
             pack={pack}
-            items={items.filter(read => packOf(read) === pack)}
+            items={moving.filter(read => packOf(read) === pack)}
           />
         ))}
+        {decide.length > 0 ? (
+          <section data-needs-decision className="mb-6">
+            <h2 className="text-sm font-medium text-text-primary">
+              Failed or stopped: needs a decision
+            </h2>
+            <p className="mt-1 text-console-12 text-text-tertiary">
+              Nothing moves these until a new run starts on them.
+            </p>
+            <ul className="mt-3 grid gap-2 md:grid-cols-3">
+              {decide.map(read => (
+                <ItemCard key={read.item.id} read={read} projectId={projectId} />
+              ))}
+            </ul>
+          </section>
+        ) : null}
         {outside.length > 0 ? (
-          <section className="mb-6">
-            <Stage name="Outside a pack" items={outside} projectId={projectId} />
+          <section data-outside-pack className="mb-6">
+            <button
+              type="button"
+              aria-expanded={showOutside}
+              onClick={() => {
+                setShowOutside(shown => !shown);
+              }}
+              className="rounded border border-border px-3 py-1.5 text-console-12 text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+            >
+              {showOutside ? 'Hide' : 'Show'} {outside.length} open on no pack stage
+            </button>
+            {showOutside ? (
+              <ul className="mt-3 grid gap-2 md:grid-cols-3">
+                {outside.map(read => (
+                  <ItemCard key={read.item.id} read={read} projectId={projectId} />
+                ))}
+              </ul>
+            ) : null}
           </section>
         ) : null}
         {itemAsks.asks.length + itemAsks.answered.length > 0 ? (

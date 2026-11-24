@@ -8305,7 +8305,7 @@ export interface components {
       standing: {
         runId: string | null;
         /** @enum {string} */
-        state: 'running' | 'waiting' | 'queued' | 'failed' | 'resting';
+        state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'resting';
       };
       runs: {
         id: string;
@@ -9034,7 +9034,7 @@ export interface components {
         standing: {
           runId: string | null;
           /** @enum {string} */
-          state: 'running' | 'waiting' | 'queued' | 'failed' | 'resting';
+          state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'resting';
         };
         runs: {
           id: string;
