@@ -6,7 +6,12 @@
  */
 import { expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import type { ResourceStartBindingIntent } from '@archon/workflows/schemas/resource-start';
+import {
+  RUN_ENDED_SOURCE_ACTOR,
+  type ResourceStartBindingIntent,
+  type SourceReceiptInput,
+} from '@archon/workflows/schemas/resource-start';
+import { readItemStopped } from '@archon/workflows/schemas/run-metadata';
 import {
   CONFORMANCE_CODEBASE_ID,
   CONFORMANCE_CONVERSATION_ID,
@@ -27,7 +32,11 @@ type LimitFields = Pick<ResourceStartBindingIntent, 'limit' | 'grants'>;
 function starts(harness: Harness) {
   const { store } = harness;
   const { launch } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
-  const start = async (itemKey: string | undefined, fields: LimitFields) => {
+  const start = async (
+    itemKey: string | undefined,
+    fields: LimitFields,
+    sourceActor: SourceReceiptInput['sourceActor'] = null
+  ) => {
     const identity = { receiptId: randomUUID(), bindingId: 'binding', ownerId: 'owner' };
     await store.acceptStartReceipt({
       receipt: {
@@ -37,7 +46,7 @@ function starts(harness: Harness) {
         contentDigest: identity.receiptId,
         receivedAt: new Date().toISOString(),
         occurredAt: null,
-        sourceActor: null,
+        sourceActor,
         ...(itemKey === undefined ? {} : { itemKey }),
       },
       outcome: 'matched',
@@ -145,6 +154,25 @@ export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harn
       expect((await start(undefined, { limit: LIMIT })).result).toEqual({
         status: 'refused',
         reason: expect.stringContaining('names no item'),
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a start refused at its limit records the stop on the run whose end caused it', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const { start, admitted } = starts(harness);
+      const limit = { name: 'check', starts: 1 };
+      const ended = await admitted('s', { limit });
+      const refused = await start('s', { limit }, { source: RUN_ENDED_SOURCE_ACTOR, id: ended });
+      expect(refused.result?.status).toBe('refused');
+      const run = await store.getWorkflowRun(ended);
+      expect(readItemStopped(run?.metadata ?? {})).toEqual({
+        summary: null,
+        limit: { ...limit, granted: 0, used: 1, bindingId: 'binding', workflow: 'w' },
       });
     } finally {
       await harness.close();

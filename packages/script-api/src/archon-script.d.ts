@@ -2307,6 +2307,14 @@ declare module 'archon:script' {
       readonly granted: number;
       readonly used: number;
       readonly left: number;
+      readonly bindings: ReadonlyArray<{
+        readonly bindingId: string;
+        readonly workflow: string;
+        readonly runEnded: {
+          readonly workflowName: string;
+          readonly outcome: string;
+        } | null;
+      }> | null;
     }>;
     readonly waits: ReadonlyArray<{
       readonly event: string;
@@ -2560,6 +2568,14 @@ declare module 'archon:script' {
         readonly outcome: string;
       };
       readonly summary: string | null;
+      readonly limit?: {
+        readonly name: string;
+        readonly starts: number;
+        readonly granted: number;
+        readonly used: number;
+        readonly bindingId: string;
+        readonly workflow: string;
+      };
       readonly checkout: string | null;
     }>;
     readonly answers: ReadonlyArray<{
@@ -2877,6 +2893,14 @@ declare module 'archon:script' {
         readonly granted: number;
         readonly used: number;
         readonly left: number;
+        readonly bindings: ReadonlyArray<{
+          readonly bindingId: string;
+          readonly workflow: string;
+          readonly runEnded: {
+            readonly workflowName: string;
+            readonly outcome: string;
+          } | null;
+        }> | null;
       }>;
       readonly waits: ReadonlyArray<{
         readonly event: string;
@@ -3130,6 +3154,14 @@ declare module 'archon:script' {
           readonly outcome: string;
         };
         readonly summary: string | null;
+        readonly limit?: {
+          readonly name: string;
+          readonly starts: number;
+          readonly granted: number;
+          readonly used: number;
+          readonly bindingId: string;
+          readonly workflow: string;
+        };
         readonly checkout: string | null;
       }>;
       readonly answers: ReadonlyArray<{

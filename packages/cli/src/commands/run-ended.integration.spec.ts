@@ -60,7 +60,9 @@ interface Fixture {
   bind: (
     name: string,
     file: Record<string, unknown>,
-    launch?: { workflowName?: string; cwd?: string }
+    launch?: { workflowName?: string; cwd?: string },
+    /** More binding fields, such as `limit` or `grants`. */
+    binding?: Record<string, unknown>
   ) => void;
 }
 
@@ -274,7 +276,7 @@ async function makeFixture(label: string): Promise<Fixture> {
       );
       return path;
     },
-    bind: (name, on, launch = {}) => {
+    bind: (name, on, launch = {}, extra = {}) => {
       mkdirSync(join(archonHome, 'triggers'), { recursive: true });
       const base = binding(name, 'stage-b', 'stage-b');
       writeFileSync(
@@ -282,7 +284,7 @@ async function makeFixture(label: string): Promise<Fixture> {
         JSON.stringify({
           version: 1,
           sourceInstanceId: name,
-          binding: { ...base, launch: { ...base.launch, ...launch } },
+          binding: { ...base, ...extra, launch: { ...base.launch, ...launch } },
           on,
         })
       );
@@ -1370,5 +1372,85 @@ describe('a run end on a trigger host', () => {
     // here names other-host, so its start stays queued for that host's own drain.
     await fixture.cli(['workflow', 'wake'], { ARCHON_TRIGGER_HOST: 'other-host' });
     expect(queued()).toEqual([{ status: 'queued' }]);
+  }, 90_000);
+});
+
+// Sends its item back to itself each time, so only a start limit ends the loop.
+const CHECK = `name: check
+description: Check the item and send it round again.
+mutates_checkout: false
+returns: { node: check, outcome: outcome }
+nodes:
+  - id: check
+    bash: |
+      echo '{"outcome": "again"}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [again, done] }
+      required: [outcome]
+`;
+
+describe('a start limit', () => {
+  test('a start refused at its limit lists the item in attention, and the item read names the limit by binding', async () => {
+    const fixture = await makeFixture('limit');
+    writeFileSync(join(fixture.projectRoot, '.archon', 'workflows', 'check.yaml'), CHECK);
+    fixture.bind(
+      'check-again',
+      { runEnded: { workflowName: 'check', outcome: 'again' } },
+      { workflowName: 'check' },
+      { limit: { name: 'check-again-limit', starts: 2 } }
+    );
+    const refusals = () =>
+      fixture.rows<{ status: string }>(
+        "SELECT preparation_status AS status FROM remote_agent_start_receipt_bindings WHERE preparation_status = 'rejected'"
+      );
+    const stopped = async () =>
+      (
+        JSON.parse(await fixture.cli(['workflow', 'attention', '--all', '--json'])) as {
+          items: { kind: string; stoppedIn?: { runId: string }; limit?: unknown }[];
+        }
+      ).items.filter(item => item.kind === 'stopped');
+
+    await fixture.cli(['workflow', 'run', 'check', '--no-worktree', '--item', 'issue-1']);
+    // The hand start and the two starts the limit allows; the third end's start is refused.
+    const runs = await waitFor(() => completedRuns(fixture, 3), 'the hand start and two more');
+    await waitFor(() => (refusals().length === 1 ? true : undefined), 'the refused start');
+    expect(await stopped()).toEqual([
+      expect.objectContaining({
+        stoppedIn: expect.objectContaining({ runId: runs[2]?.id }),
+        limit: {
+          name: 'check-again-limit',
+          starts: 2,
+          granted: 0,
+          used: 2,
+          bindingId: 'check-again',
+          workflow: 'check',
+        },
+      }),
+    ]);
+
+    // A stage finds the limit of the binding its outcome would start by that binding.
+    const read = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+    );
+    const limit = read.startLimits.find(entry =>
+      entry.bindings?.some(binding => binding.bindingId === 'check-again')
+    );
+    expect(limit).toMatchObject({ name: 'check-again-limit', left: 0 });
+    expect(limit?.bindings).toEqual([
+      {
+        bindingId: 'check-again',
+        workflow: 'check',
+        runEnded: { workflowName: 'check', outcome: 'again' },
+      },
+    ]);
+
+    // A start by hand moves the item on; its own end is refused again and stops it there.
+    await fixture.cli(['workflow', 'run', 'check', '--no-worktree', '--item', 'issue-1']);
+    await waitFor(() => (refusals().length === 2 ? true : undefined), 'the second refusal');
+    const next = await stopped();
+    expect(next).toHaveLength(1);
+    expect(next[0]?.stoppedIn?.runId).not.toBe(runs[2]?.id);
   }, 90_000);
 });
