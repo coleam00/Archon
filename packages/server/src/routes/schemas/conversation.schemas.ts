@@ -49,6 +49,8 @@ export const createConversationResponseSchema = z
     conversationId: z.string(),
     id: z.string(),
     dispatched: z.boolean().optional(),
+    /** The dispatched reply, when a message was given: what a stop names. */
+    turnId: z.string().optional(),
   })
   .openapi('CreateConversationResponse');
 
@@ -98,8 +100,18 @@ export const dispatchResponseSchema = z
   .object({
     accepted: z.boolean(),
     status: z.string(),
+    /** Names the reply this dispatch started or queued; `POST .../cancel` stops it by this id. */
+    turnId: z.string(),
   })
   .openapi('DispatchResponse');
+
+/** POST /api/conversations/:id/cancel request body. */
+export const cancelConversationBodySchema = z
+  .object({
+    /** The `turnId` the dispatch of the reply to stop returned. */
+    turnId: z.string().min(1),
+  })
+  .openapi('CancelConversationBody');
 
 /** POST /api/conversations/:id/cancel response. */
 export const cancelConversationResponseSchema = z

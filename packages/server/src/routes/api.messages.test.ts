@@ -246,13 +246,17 @@ describe('POST /api/conversations/:id/cancel', () => {
     mockHandleMessage.mockReset();
   });
 
-  async function cancel(app: OpenAPIHono, id = 'web-test-abc'): Promise<Response> {
-    return app.request(`/api/conversations/${id}/cancel`, { method: 'POST' });
+  async function cancel(app: OpenAPIHono, turnId: string, id = 'web-test-abc'): Promise<Response> {
+    return app.request(`/api/conversations/${id}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ turnId }),
+    });
   }
 
   test('does nothing when no reply is in flight', async () => {
     const { app } = makeApp(undefined, new RealLockManager());
-    const response = await cancel(app);
+    const response = await cancel(app, 'no-such-turn');
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ cancelled: false });
   });
@@ -278,23 +282,28 @@ describe('POST /api/conversations/:id/cancel', () => {
       }
     );
 
-    await app.request('/api/conversations/web-test-abc/message', {
+    const sent = await app.request('/api/conversations/web-test-abc/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: 'write a long essay' }),
     });
+    const { turnId } = (await sent.json()) as { turnId: string };
     expect(turnSignal?.aborted).toBe(false);
 
-    expect(await (await cancel(app)).json()).toEqual({ cancelled: true });
+    expect(await (await cancel(app, turnId)).json()).toEqual({ cancelled: true });
     expect(turnSignal?.aborted).toBe(true);
     // The turn ends and releases the conversation; a stop arriving after that is a no-op.
     await ended;
-    expect(await (await cancel(app)).json()).toEqual({ cancelled: false });
+    expect(await (await cancel(app, turnId)).json()).toEqual({ cancelled: false });
   });
 
-  test('refuses an id that is not a web conversation id', async () => {
+  test('refuses an id that is not a web conversation id, and a stop that names no reply', async () => {
     const { app } = makeApp(undefined, new RealLockManager());
-    expect((await cancel(app, 'bad.id')).status).toBe(400);
+    expect((await cancel(app, 'turn', 'bad.id')).status).toBe(400);
+    const unnamed = await app.request('/api/conversations/web-test-abc/cancel', {
+      method: 'POST',
+    });
+    expect(unnamed.status).toBe(400);
   });
 });
 

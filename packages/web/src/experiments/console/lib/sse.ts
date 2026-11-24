@@ -27,6 +27,8 @@ interface ParsedEvent {
   type?: string;
   runId?: string;
   locked?: boolean;
+  /** On a `conversation_lock` that a starting reply emits: the turn a Stop names. */
+  turnId?: string;
   nodeId?: string;
   status?: string;
 }
@@ -249,12 +251,12 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
  * conversation lock so the composer can disable while the agent is responding.
  *
  *   text / tool_call / tool_result → messages changed (debounced refetch)
- *   conversation_lock              → refetch on unlock + onLockChange(locked)
+ *   conversation_lock              → refetch on unlock + onLockChange(locked, turnId)
  *   stream closed for good         → onStreamClosed(): no further lock event will arrive
  */
 export function useConversationSSE(
   conversationPlatformId: string | null,
-  onLockChange?: (locked: boolean) => void,
+  onLockChange?: (locked: boolean, turnId: string | undefined) => void,
   onStreamClosed?: () => void
 ): void {
   useEffect(() => {
@@ -293,7 +295,7 @@ export function useConversationSSE(
           // The server awaits its unlock flush; earlier text/tool events can
           // trigger refetches before the buffered reply is persisted.
           if (ev.locked === false) invalidate(K.messages(conversationPlatformId));
-          if (typeof ev.locked === 'boolean') onLockChange?.(ev.locked);
+          if (typeof ev.locked === 'boolean') onLockChange?.(ev.locked, ev.turnId);
           break;
         // No run-detail cache here; ignore workflow_* and everything else.
         default:

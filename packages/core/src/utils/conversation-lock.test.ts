@@ -318,10 +318,10 @@ describe('ConversationLockManager', () => {
 describe('ConversationLockManager.cancel', () => {
   test('does nothing when no handler is active', () => {
     const manager = new ConversationLockManager(5);
-    expect(manager.cancel('conv-a')).toBe(false);
+    expect(manager.cancel('conv-a', 'no-such-turn')).toBe(false);
   });
 
-  test("aborts only the active handler's signal; the queued one runs with its own", async () => {
+  test('stops only the turn it names; a stop that arrives after the hand-off leaves the next turn running', async () => {
     const manager = new ConversationLockManager(5);
     const log: string[] = [];
     const signals: AbortSignal[] = [];
@@ -334,23 +334,28 @@ describe('ConversationLockManager.cancel', () => {
         return h.handler();
       };
 
-    await manager.acquireLock('conv-a', recording(first));
-    await manager.acquireLock('conv-a', recording(second));
+    const firstTurn = (await manager.acquireLock('conv-a', recording(first))).turnId;
+    const secondTurn = (await manager.acquireLock('conv-a', recording(second))).turnId;
     await drainUntilStarted(log, 1);
 
-    expect(manager.cancel('conv-a')).toBe(true);
+    // A queued turn is not stopped before it starts.
+    expect(manager.cancel('conv-a', secondTurn)).toBe(false);
+    expect(manager.cancel('conv-a', firstTurn)).toBe(true);
     expect(signals[0]?.aborted).toBe(true);
-    // A repeated stop is a no-op.
-    expect(manager.cancel('conv-a')).toBe(false);
+    // A second press before the stopped turn ends is a no-op.
+    expect(manager.cancel('conv-a', firstTurn)).toBe(false);
 
     first.release();
     await drainUntilStarted(log, 2);
     expect(log).toEqual(['first', 'second']);
+    // A press for the first turn that lands after the hand-off stops nothing.
+    expect(manager.cancel('conv-a', firstTurn)).toBe(false);
     expect(signals[1]?.aborted).toBe(false);
+    expect(manager.cancel('conv-a', secondTurn)).toBe(true);
+    expect(signals[1]?.aborted).toBe(true);
 
     second.release();
     await drainUntilIdle(manager);
-    // A stop after completion is a no-op.
-    expect(manager.cancel('conv-a')).toBe(false);
+    expect(manager.cancel('conv-a', secondTurn)).toBe(false);
   });
 });

@@ -172,7 +172,7 @@ import * as readiness from './repository-readiness';
 // Create a mock lock manager that immediately executes handlers
 const mockAcquireLock = mock(async (_id: string, handler: () => Promise<void>) => {
   await handler();
-  return { status: 'started' as const };
+  return { status: 'started' as const, turnId: 'turn-1' };
 });
 const mockLockManager = {
   acquireLock: mockAcquireLock,
