@@ -230,7 +230,7 @@ function createTestAdapter(): GitHubAdapter {
   const adapter = new GitHubAdapter({ kind: 'pat', token: 'fake-token' }, WEBHOOK_SECRET, {
     acquireLock: mock(async (_id: string, handler: () => Promise<void>) => {
       await handler();
-      return { status: 'started' as const };
+      return { status: 'started' as const, turnId: 'turn-1' };
     }),
   });
 

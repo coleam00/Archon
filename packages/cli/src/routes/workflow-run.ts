@@ -5,6 +5,9 @@ import { DETACHED_RUN_OWNER_ENV, DETACHED_LAUNCH_TOKEN_ENV } from '../utils/deta
 import { matchProjectClaim } from '../utils/project-selector';
 import { fail } from './context';
 import type { WorkflowRoute } from './workflow';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRunOptions } from '../commands/workflow-shared';
+import type { RunRestart } from '../commands/workflow-run-restart';
 
 /** True when `path` exists and is a directory (used to validate `--workflow-source`). */
 async function isPathDirectory(path: string): Promise<boolean> {
@@ -255,11 +258,38 @@ function restartFlagConflict(values: Record<string, unknown>): string | undefine
   return worktreeFlagConflict(values);
 }
 
-/** The run `--supersedes` names, resolved in the launch project as the start resolves it. */
+/**
+ * The directory a restart starts from. Without `--project` it is the failed run's project:
+ * the invoking directory when that resolves to the run's project (a clone keeps its
+ * uncommitted definitions), else the project's registered checkout, as though the line
+ * were pasted there.
+ */
+async function restartCwd(route: WorkflowRoute, failed: WorkflowRun): Promise<string> {
+  const { host, effectiveCwd } = route;
+  if (!failed.codebase_id) return effectiveCwd;
+  const { findLaunchCodebase } = await import('../commands/workflow-isolation');
+  const here = await findLaunchCodebase(host, effectiveCwd, {});
+  if (here.codebase?.id === failed.codebase_id) return effectiveCwd;
+  const project = await host.records.codebases.getCodebase(failed.codebase_id);
+  if (!project) throw new Error(`Run ${failed.id} ran in a project that no longer exists.`);
+  return project.default_cwd;
+}
+
+/**
+ * The run `--supersedes` names. A full run id is resolved in its own run's project, so it
+ * restarts from any directory; a prefix, in the launch project as the start resolves it.
+ */
 async function supersededRun(route: WorkflowRoute, codebaseId: string | undefined) {
   const { findLaunchCodebase } = await import('../commands/workflow-isolation');
   const { resolveContinuationDeclaration } = await import('../commands/workflow-run-preflight');
-  const { codebase } = await findLaunchCodebase(route.host, route.effectiveCwd, { codebaseId });
+  const { isFullRunId } = await import('@archon/core/workflows/run-id');
+  const reference = route.values.supersedes as string;
+  const recorded = isFullRunId(reference)
+    ? ((await route.host.deps.store.getWorkflowRun(reference))?.codebase_id ?? undefined)
+    : undefined;
+  const { codebase } = await findLaunchCodebase(route.host, route.effectiveCwd, {
+    codebaseId: codebaseId ?? recorded,
+  });
   const declaration = await resolveContinuationDeclaration(
     route.host,
     { supersedesRunId: route.values.supersedes as string },
@@ -269,6 +299,30 @@ async function supersededRun(route: WorkflowRoute, codebaseId: string | undefine
     throw new Error('Expected --supersedes to resolve the run it supersedes.');
   }
   return declaration.superseded;
+}
+
+/** Set the lane the record gives a restart: adopt a continue hand-off, else supersede. */
+async function applyRestartLane(
+  host: WorkflowRoute['host'],
+  options: WorkflowRunOptions,
+  restart: RunRestart,
+  failed: WorkflowRun
+): Promise<void> {
+  const { lane } = restart;
+  if (lane.kind === 'adopt') {
+    options.adoptRunId = lane.runId;
+    options.supersedesRunId = undefined;
+    // An adoption would take the hand-off run's item; the restart stays on the failed run's.
+    if (options.item === undefined && failed.item_id) {
+      options.item = (await host.deps.store.getItem(failed.item_id))?.key;
+    }
+    return;
+  }
+  options.supersedesRunId = lane.runId;
+  options.fromBranch = lane.copyHandoff?.commit;
+  options.checkoutHandoff = lane.copyHandoff;
+  // An explicit --base wins; --no-worktree runs in place, where a base has no effect.
+  if (!options.noWorktree) options.baseBranch ??= restart.baseBranch;
 }
 
 /**
@@ -296,25 +350,19 @@ async function runRestart(route: WorkflowRoute): Promise<number> {
       );
     }
   }
-  const options = buildRunOptions(route, restart.workflowSource, codebaseId, undefined);
+  const options: WorkflowRunOptions = buildRunOptions(
+    route,
+    restart.workflowSource,
+    codebaseId,
+    undefined
+  );
   options.inputs = restart.inputs
     ? Object.entries(restart.inputs).map(([name, value]) => `${name}=${value}`)
     : undefined;
-  const { lane } = restart;
-  if (lane.kind === 'adopt') {
-    options.adoptRunId = lane.runId;
-    options.supersedesRunId = undefined;
-    // An adoption would take the hand-off run's item; the restart stays on the failed run's.
-    if (options.item === undefined && failed.item_id) {
-      options.item = (await host.deps.store.getItem(failed.item_id))?.key;
-    }
-  } else {
-    options.supersedesRunId = lane.runId;
-    options.fromBranch = lane.fromCommit;
-  }
+  await applyRestartLane(host, options, restart, failed);
   await route.commands.workflowRunCommand(
     host,
-    route.effectiveCwd,
+    codebaseId === undefined ? await restartCwd(route, failed) : route.effectiveCwd,
     restart.workflowName,
     restart.userMessage,
     options

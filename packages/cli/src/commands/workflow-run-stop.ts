@@ -9,6 +9,7 @@ import {
   type CancelWorkflowResult,
   describeAbandonOwner,
   describeReleasedWorktrees,
+  restartCommandFor,
 } from '@archon/core/operations/workflow-operations';
 
 export type AbandonResult = Awaited<ReturnType<WorkflowHost['operations']['abandonWorkflow']>>;
@@ -32,6 +33,9 @@ export function printAbandonResult(
   console.log(`Abandoned workflow run: ${runId}`);
   console.log(`Workflow: ${run.workflow_name}`);
   for (const line of describeReleasedWorktrees(releasedWorktrees)) console.log(line);
+  const restart = restartCommandFor(run);
+  if (restart)
+    console.log(`Start it again from its record, without its completed nodes, with: ${restart}`);
   for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
 }
@@ -66,6 +70,7 @@ export function formatAbandonResult(
     owner,
   }: AbandonResult
 ) {
+  const restartCommand = restartCommandFor(run);
   return {
     ok: true,
     runId,
@@ -87,6 +92,7 @@ export function formatAbandonResult(
     ...(cleanupWarnings ? { cleanupWarnings } : {}),
     ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
     ...(blockedParentRunId ? { blockedParentRunId } : {}),
+    ...(restartCommand ? { restartCommand } : {}),
   };
 }
 

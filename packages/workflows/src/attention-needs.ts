@@ -63,6 +63,7 @@ export function attentionWatchReader(
           case 'unreadable':
           case 'owner_lost':
           case 'overdue_wait':
+          case 'stopped':
             shown.add(line.item.ref);
             return { needs: 'look' };
           case 'usage_limit':

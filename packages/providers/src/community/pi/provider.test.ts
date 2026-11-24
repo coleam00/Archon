@@ -188,7 +188,10 @@ describe('PiProvider contract', () => {
 
   test('Pi native tools execute host callbacks and carry identical chunks over streams', async () => {
     process.env.GEMINI_API_KEY = 'fixture-key';
-    const handler = mock(async (input: Record<string, unknown>) => JSON.stringify(input));
+    const handler = mock(
+      async (input: Record<string, unknown>, _call?: { providerCallId: string }) =>
+        JSON.stringify(input)
+    );
     const chunks: unknown[][] = [];
     try {
       for (const provider of [createProvider(), overStreams(createProvider, descriptor)]) {
@@ -223,6 +226,11 @@ describe('PiProvider contract', () => {
       }
       expect(chunks[1]).toEqual(chunks[0]);
       expect(handler).toHaveBeenCalledTimes(2);
+      // The provider's call id reaches the host handler in process and across the plugin wire.
+      expect(handler.mock.calls.map(([, call]) => call)).toEqual([
+        { providerCallId: 'native-call' },
+        { providerCallId: 'native-call' },
+      ]);
     } finally {
       delete process.env.GEMINI_API_KEY;
     }

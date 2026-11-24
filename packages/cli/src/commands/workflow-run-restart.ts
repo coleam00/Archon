@@ -1,4 +1,7 @@
-import { readCheckoutHandoff } from '@archon/workflows/schemas/resource-start';
+import {
+  type CheckoutHandoffRunMetadata,
+  readCheckoutHandoff,
+} from '@archon/workflows/schemas/resource-start';
 import {
   SUBRUN_METADATA_KEYS,
   readWorkflowSourceState,
@@ -12,7 +15,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
  * that may since have moved. Any other run is superseded on a fresh worktree.
  */
 export type RestartLane =
-  | { kind: 'supersede'; runId: string; fromCommit?: string }
+  | { kind: 'supersede'; runId: string; copyHandoff?: CheckoutHandoffRunMetadata }
   | { kind: 'adopt'; runId: string };
 
 /** The start `workflow run --supersedes <id>` with no workflow name makes from a run's record. */
@@ -22,6 +25,8 @@ export interface RunRestart {
   inputs: Record<string, string> | undefined;
   /** The explicit `--workflow-source` the run's definitions were read from, if any. */
   workflowSource: string | undefined;
+  /** The base branch the run's definitions were read from, if they came from a base. */
+  baseBranch: string | undefined;
   lane: RestartLane;
 }
 
@@ -44,10 +49,11 @@ export function restartOfRun(run: WorkflowRun): RunRestart {
     userMessage: run.user_message ?? '',
     inputs: recordedLaunchInputs(run),
     workflowSource: definitions?.from === 'source' ? definitions.root : undefined,
+    baseBranch: definitions?.from === 'base' ? definitions.branch : undefined,
     lane:
       handoff?.lane === 'continue'
         ? { kind: 'adopt', runId: handoff.runId }
-        : { kind: 'supersede', runId: run.id, ...(handoff ? { fromCommit: handoff.commit } : {}) },
+        : { kind: 'supersede', runId: run.id, ...(handoff ? { copyHandoff: handoff } : {}) },
   };
 }
 

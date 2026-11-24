@@ -220,3 +220,24 @@ test('an ask with no recommendation says it has none and offers none to accept',
   expect(block).not.toContain('--recommended');
   expect(block).toContain('archon workflow answer --ref ask:3 --choose <option>');
 });
+
+test('a stopped item names its stage and outcome, and its commands work from any directory', () => {
+  const stopped: Extract<AttentionQueueItem, { kind: 'stopped' }> = {
+    ...base,
+    kind: 'stopped',
+    ref: 'stopped:run-9',
+    item: { id: 'i-1', projectKey: 'acme/web', key: 'release 1' },
+    stoppedIn: { runId: 'run-9', workflow: 'deliver', outcome: 'replan' },
+    summary: 'The plan missed the schema change.',
+    checkout: '/srv/acme web',
+  };
+  const block = attentionItemLines(stopped, 'brief').join('\n');
+  expect(block).toContain("deliver ended as 'replan'");
+  expect(block).toContain('The plan missed the schema change.');
+  // Read through the run, and started in the project's checkout, whatever the reader's directory.
+  expect(block).toContain('archon workflow runs --item-of run-9');
+  // Each value one shell word, whatever it holds.
+  expect(block).toContain(
+    "archon workflow run <workflow> --item 'release 1' --cwd '/srv/acme web'"
+  );
+});

@@ -326,11 +326,7 @@ export async function runSubprocess(
   // Both outcomes redact against the same values, so the credential set is resolved
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.
-  const credentialValues = collectCredentialValues(
-    subprocessEnv,
-    options.protectedEnvKeys,
-    options.protectedCredentialValues
-  );
+  const credentialValues = subprocessCredentialValues(execContext, options);
   const retention = options.retention;
   // Container env is delivered in argv, while either execution mode can echo a
   // credential in output. Sanitize at the shared boundaries below so every downstream
@@ -392,6 +388,22 @@ export async function runSubprocess(
       );
     throw rejection;
   }
+}
+
+/**
+ * The credential values a subprocess started with these options can see, and so the
+ * values {@link runSubprocess} redacts. Exported for a caller that records something
+ * about the call when no subprocess ran: a tool call refused for its input.
+ */
+export function subprocessCredentialValues(
+  execContext: ExecutionContext,
+  options: Pick<SubprocessOptions, 'env' | 'protectedEnvKeys' | 'protectedCredentialValues'>
+): string[] {
+  return collectCredentialValues(
+    execContext.kind === 'container' ? options.env : { ...process.env, ...options.env },
+    options.protectedEnvKeys,
+    options.protectedCredentialValues
+  );
 }
 
 function execHostSubprocess(

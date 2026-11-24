@@ -1,3 +1,4 @@
+import { askIdOfRef } from '@archon/workflows/attention-item-refs';
 import {
   splitAttentionRead,
   scopeAttentionDegraded,
@@ -21,7 +22,6 @@ import {
   type AttentionQueueCounts,
 } from '@archon/workflows/attention-counts';
 import {
-  askIdOfRef,
   listAttentionQueue,
   parseAttentionLabelPairs,
   parseAttentionQueueRequest,

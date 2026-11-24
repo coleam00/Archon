@@ -164,6 +164,7 @@ export {
 } from './config-schema';
 
 export { nativeToolInputParser } from './native-tools';
+export { nativeToolInputSchema } from './agent-provider';
 
 export {
   normalizeJsonSchemaForOpenAiStrict,

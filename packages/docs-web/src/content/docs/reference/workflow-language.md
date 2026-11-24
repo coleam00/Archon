@@ -129,6 +129,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `skills` | (`string` \| `{ name, optional? }`)[] | unset | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. A string is required. On agent nodes, `{ name, optional: true }` skips a filesystem skill and records why if the provider cannot load named skills or Archon finds no such skill in its known roots. A skill installed only outside the provider's enabled roots is still passed. A required name fails preflight on an unsupported provider; an all-optional list does not. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`. See [Optional skills](/guides/skills/#optional-skills) |
 | `plugins` | string[] | unset | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | unset | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
+| `tools` | object | unset | Named scripts the node's agent can call as tools. Claude, Codex and Pi; any other provider fails the run before it starts. See [Script tools](#script-tools) |
 | `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | unset | Reasoning depth. Every provider with a request-level reasoning control: Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
 | `maxBudgetUsd` | number | unset | USD cost cap; node fails if exceeded. Claude only. Per-node only. For a ceiling across the whole run, see [Run budgets](#run-budgets) |
 | `systemPrompt` | string | unset | Set system instructions for this node (Claude/Codex/Pi/Copilot/OpenCode). Replaces the default `claude_code` prompt on Claude. Per-node only |
@@ -760,6 +761,52 @@ Keys:
 - **`.claude/agents/*.md` (on-disk)**: use when the sub-agent is shared across multiple workflows OR the whole project (for example, a `triage-agent` used by several maintenance workflows). On-disk agents live outside workflow YAMLs and are picked up automatically by the Claude Agent SDK.
 
 Both sources coexist: inline agents and on-disk agents are both available to `Task(subagent_type=...)` at runtime.
+
+### Script tools
+
+An agent node can offer its model named scripts as tools. The agent decides when to call one and reads the result in the same turn; Archon validates the call, runs the script and records it.
+
+```yaml
+nodes:
+  - id: inspect
+    prompt: Look up the checks of pull request $ARGUMENTS and say whether they are green.
+    tools:
+      lookup_checks:
+        description: Get the check status of a pull request
+        script: lookup-checks        # .archon/scripts/lookup-checks.ts
+        input_schema:
+          type: object
+          properties: { pr: { type: integer } }
+          required: [pr]
+        output_schema:
+          type: object
+          properties: { green: { type: boolean } }
+          required: [green]
+        timeout: 30000
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `description` | string | What the tool does, as the model reads it. Required |
+| `script` | string | A named script, resolved the way a `script:` node resolves one. In a pack it resolves inside the pack. Inline code is refused. Required |
+| `input_schema` | object | JSON Schema of the call's arguments. Its root must be `type: object`. Required |
+| `output_schema` | object | JSON Schema of the script's stdout. Required |
+| `timeout` | number | Milliseconds one call may run. Without it a call runs until it exits or the run stops |
+| `deps` | string[] | Dependencies, as on a `script:` node |
+
+A tool name starts with a letter and holds up to 64 letters, digits, `_` or `-`. On Claude the model sees it as `mcp__archon__<name>`.
+
+**A call runs the way a `script:` node runs**: the same script discovery, runtime, environment and execution backend. The arguments arrive as one JSON document on stdin, and stdout must be one JSON document that satisfies `output_schema`.
+
+- Arguments that do not satisfy `input_schema` start no script. The agent gets an error and can correct the call.
+- A script that exits non-zero, runs past its `timeout` or prints output that does not satisfy `output_schema` is also an error returned to the agent. It does not fail the node.
+- A tool whose script cannot be found, or whose schemas cannot be compiled, fails before the model is called.
+
+**A tool must be safe to rerun.** A retried attempt starts the node over and the agent makes its calls again; nothing is replayed from the earlier attempt, and a call that was running when the attempt stopped may have finished or not. Use tools to read: look something up, compute, check. Tools that write are not supported yet, because the engine cannot yet stop a run from continuing automatically after a write whose outcome is unknown ([issue 6182](https://github.com/coleam00/Archon/issues/6182)). Nothing stops a script from writing; a write in a tool is yours to make safe to repeat.
+
+Each call writes one `script_tool_call` event on the run, with the tool name, the provider's call id, the status (`completed` or `failed`), the input, and the output or the error. Credential values the script could see are removed from the event. The node's own output is whatever the agent answers; a tool result is not added to it.
+
+On Pi, a tool named like a tool Pi already offers the node (`read`, `bash`, or `structured_output` on a node with `output_format`) is refused before the model is called. Rename the tool.
 
 ## Durable waits
 
@@ -1723,8 +1770,9 @@ nodes:
 parent's item. It returns `null` for a run on no item. A withdrawn ruling stays in the
 list with `withdrawn` set; what a ruling means is for the reading node to judge. `links`
 holds every link from or to the item, each with its `direction` and the `other` item; an
-ended link stays with `ended` set, and the engine acts on no link. Like
-`state`, it runs on the host: a container-isolated node cannot call it.
+ended link stays with `ended` set. An active `part_of` sets where an item lands, and a
+trigger can start a stage on the items linked to one whose run ended; [`workflow
+link`](/reference/cli/#workflow-link) says how. Like `state`, it runs on the host: a container-isolated node cannot call it.
 
 Each run's `workflow` is the name it was started under. For a workflow in a pack in the
 project that is its `name:` (`stage-check`); for the same pack installed with
@@ -2370,7 +2418,7 @@ nodes:
   and still resolve as `$INPUTS.<name>` / `INPUTS_<UPPER_SNAKE>`, they are simply never checked
   against a declaration, because there isn't one.
 - **`returns:`**: the **node id** whose output IS the workflow's result, written
-  `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field> }`. It selects by id, so it works for any node type
+  `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field>, options?: [...], waits?: <field>, final?: [<outcome>], summary?: <field> }`. It selects by id, so it works for any node type
   and even a **non-sink** node (a node other nodes depend on). For an `include:` block,
   `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still waits on every
   terminal node. For a `workflow:` sub-run child, the child's terminal output (threaded back as
@@ -2408,8 +2456,48 @@ nodes:
 - **`returns.asks`**: a property of the `returns:` node's output, defined and required by the engine, that holds the
   decisions the run leaves for an operator: its asks. See [Asks](#asks-decisions-a-run-leaves-on-its-item).
 
+- **`returns.options`**: with `asks`, the one set of options every ask of the workflow offers,
+  each with an `id`, what it `does` and what it `cost`s. See [Declared
+  options](#declared-options-one-set-for-every-ask).
+
 - **`returns.waits`**: a property of the `returns:` node's output, defined and required by the engine, that holds what
   the run's item now waits for outside Archon. See [Waits](#waits-what-an-item-waits-for-outside-archon).
+
+- **`returns.final`**: the outcomes after which the run's item needs nothing more, such as a
+  landed change. Each entry is a value `returns.outcome` can take: one of its `enum` values, or
+  `succeeded` or `failed` for the boolean form. It needs `returns.outcome`, and a value the
+  outcome cannot take or one listed twice fails the workflow at load.
+
+  It decides when an item has stopped. A top-level run on an item stops the item when it
+  completes with an outcome that is not final, its end starts nothing (no
+  [run-ended binding](/guides/workflow-triggers/) starts from that outcome), and it leaves no
+  ask and no wait. Nothing follows such a run, so
+  [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
+  `stopped` until another run starts on the item, whatever its status. A run on no item, a run
+  that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
+  workflow that declares no `final` has none, so every unbound outcome stops its item.
+
+- **`returns.summary`**: a string property of the `returns:` node's output that the attention
+  queue shows, as one line, on a `stopped` item: why the stage stopped. The node's
+  `output_format` must declare it with `type: string`; it need not be required, and a run that
+  leaves it out shows none. It is read only because it is declared here, never because a
+  property is called `summary`, and it changes nothing about the run.
+
+```yaml
+returns: { node: result, outcome: stage, final: [landed], summary: why }
+nodes:
+  - id: result
+    prompt: Say where the change stands.
+    output_format:
+      type: object
+      properties:
+        stage: { type: string, enum: [approve, replan, landed] }
+        why: { type: string }
+      required: [stage]
+```
+
+A run of this workflow that ends `landed` stops nothing. One that ends `replan` with no
+binding for it and no ask lists its item as `stopped` with `why` as the summary.
 
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.
@@ -2471,6 +2559,45 @@ node, when the returns node has no object `output_format` the engine enforces, w
 is a `loop_group` or a fan-out node, when `asks` names the same property as `outcome`, or when
 the node's `output_format` declares that property itself (`the engine defines this property;
 remove it from output_format`).
+
+#### Declared options: one set for every ask
+
+An answer's option id decides what starts next when an [asks-settled
+binding](/guides/workflow-triggers/#start-a-different-stage-for-each-option) names it, so the
+options are routing, not prose. A workflow can own them: `returns.options` declares the one set
+every ask it leaves offers.
+
+```yaml
+returns:
+  node: decide
+  asks: asks
+  options:
+    - { id: send-back, does: The builder continues with the answer., cost: Another round. }
+    - { id: take-as-is, does: The change goes on as it is., cost: Nothing more is built. }
+```
+
+- The set holds at least two options, no id twice, and not the reserved `other`, which every
+  ask offers anyway. `options` without `asks` fails to load.
+- The node writes no options. Its ask schema has no `options` field, and
+  `recommendation.option` is limited to the declared ids (an `enum`), with each option's
+  `does` and `cost` in its description. The recommendation may still be `null`.
+- Output that carries `options`, or recommends an id outside the set, fails the node's output
+  validation like any other schema miss: an agent node is asked again with the errors, and a
+  `bash:` or `script:` node fails. Both errors name the declared ids. A wrong recommendation
+  reads `must be equal to one of the allowed values (send-back, take-as-is)`. An ask that
+  wrote its own options reads `must NOT have additional properties ('options')`, followed by
+  the note that `returns.options` supplies them and the ids every ask offers. (An
+  additional-property error quotes the object's `description`, when it has one, for any
+  output schema.)
+- When the run completes, each ask is stored with the declared options, `does` and `cost` as
+  the YAML wrote them, so `archon workflow attention`, the console and the item's tracker
+  comment show them like any ask's options.
+- `archon trigger check`, `archon pack bindings` and the check a bound start gets report an
+  asks-settled binding whose `option` is not a declared id (or `other`): no answer could start
+  it.
+
+A workflow that declares no options works as before: each ask carries the options its node
+wrote.
 
 What the engine does with them:
 

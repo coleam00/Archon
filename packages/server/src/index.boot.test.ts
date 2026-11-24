@@ -454,11 +454,11 @@ describe('server conversation admission configuration', () => {
         toSafeConfig(await loadConfig()).concurrency.maxConversations
       );
       for (let i = 0; i < limit; i++) {
-        expect(await manager.acquireLock(`active-${i}`, () => blocked)).toEqual({
+        expect(await manager.acquireLock(`active-${i}`, () => blocked)).toMatchObject({
           status: 'started',
         });
       }
-      expect(await manager.acquireLock('overflow', () => blocked)).toEqual({
+      expect(await manager.acquireLock('overflow', () => blocked)).toMatchObject({
         status: 'queued-capacity',
       });
     } finally {

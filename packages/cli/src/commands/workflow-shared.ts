@@ -14,11 +14,13 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   ChildRunRedirectError,
+  ResumeRefusedError,
   workflowOperationErrorMessage,
 } from '@archon/core/operations/workflow-operations';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import type { ResumeRequestCursor } from '@archon/workflows/store';
+import type { CheckoutHandoffRunMetadata } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
   ContinuedItemProjectError,
@@ -179,6 +181,13 @@ export interface WorkflowRunOptions {
    * no-adopter query. Provenance only — NO lane inheritance.
    */
   supersedesRunId?: string;
+  /**
+   * @internal The copy hand-off a nameless `--supersedes` restart keeps from the run it
+   * replaces, recorded on the new run's row as its first start recorded it. A run that
+   * ended on a copy hands on the checkout it was given (`ended-checkout.ts`), so without
+   * it a later hand-off would select the restart's throwaway worktree.
+   */
+  checkoutHandoff?: CheckoutHandoffRunMetadata;
 }
 
 export type RunDestination =
@@ -309,9 +318,20 @@ export function printJsonWriteError(runId: string, action: string, error: unknow
   return writeJsonLine(jsonWriteError(runId, action, error));
 }
 
-/** The `{ ok: false }` value a write command reports for a run it could not act on. */
+/**
+ * The `{ ok: false }` value a write command reports for a run it could not act on. A resume
+ * refusal that names a restart command carries it as `restartCommand`, so an agent need
+ * not read it out of the error text.
+ */
 export function jsonWriteError(runId: string, action: string, error: unknown) {
-  return { ok: false, runId, action, error: cliRefusalText(error) } as const;
+  const restartCommand = error instanceof ResumeRefusedError ? error.restartCommand : undefined;
+  return {
+    ok: false,
+    runId,
+    action,
+    error: cliRefusalText(error),
+    ...(restartCommand ? { restartCommand } : {}),
+  } as const;
 }
 
 export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {
