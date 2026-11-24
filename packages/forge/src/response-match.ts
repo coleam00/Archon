@@ -357,6 +357,15 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     value.items.every(item => item.state === 'open' && sameRepo(item.ref.repo, request.repo)),
   'workitem.label.added': (request, value) =>
     sameSubject(value.subject, request.subject) && value.name === request.name,
+  'workitem.opened': (request, value) =>
+    sameRepo(value.repo, request.repo) &&
+    value.since === request.since &&
+    value.items.every(
+      item =>
+        item.state === 'open' &&
+        sameRepo(item.ref.repo, request.repo) &&
+        Date.parse(item.createdAt) >= Date.parse(request.since)
+    ),
   'workitem.create': (request, value) =>
     sameTarget(value.target, request.repo) &&
     sameRepo(value.workitem.ref.repo, request.repo) &&

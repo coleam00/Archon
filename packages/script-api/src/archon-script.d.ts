@@ -492,6 +492,44 @@ declare module 'archon:script' {
         } | null;
       };
     };
+    'workitem.opened': {
+      readonly request: {
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly since: string;
+      };
+      readonly result: {
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly since: string;
+        readonly items: ReadonlyArray<{
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+          readonly kind: 'issue';
+          readonly url: string;
+          readonly state: 'open' | 'closed';
+          readonly createdAt: string;
+          readonly author?: {
+            readonly host: string;
+            readonly id: string;
+            readonly login: string | null;
+            readonly type?: 'user' | 'bot' | 'organization' | null;
+          } | null;
+        }>;
+      };
+    };
     'workitem.search': {
       readonly request: {
         readonly repo: {

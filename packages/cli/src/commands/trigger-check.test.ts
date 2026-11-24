@@ -292,6 +292,11 @@ test('names the observing sources nothing watches with the fix, and the watcher 
     `export default () => ({
   receive: async () => ({ kind: 'ignored' }),
   observedLabels: { reads: [{ bindingId: 'order', repo: { host: 'github.com', path: 'acme/app' }, label: 'factory' }] },
+  observedOpenedIssues: {
+    reads: [{ bindingId: 'triage', repo: { host: 'github.com', path: 'acme/app' } }],
+    unserved: [{ bindingId: 'closing', reason: 'only an opened issue is observed' }],
+  },
+  unservedBindings: [{ bindingId: 'comments', reason: 'a comment.changed event is not observed' }],
   observe: async () => ({ events: [] }),
 });
 `
@@ -315,6 +320,11 @@ test('names the observing sources nothing watches with the fix, and the watcher 
       everySeconds: 60,
       labels: [
         { bindingId: 'order', repo: { host: 'github.com', path: 'acme/app' }, label: 'factory' },
+      ],
+      openedIssues: [{ bindingId: 'triage', repo: { host: 'github.com', path: 'acme/app' } }],
+      unservedBindings: [
+        { bindingId: 'closing', reason: 'only an opened issue is observed' },
+        { bindingId: 'comments', reason: 'a comment.changed event is not observed' },
       ],
     },
   ];

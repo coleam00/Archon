@@ -424,7 +424,17 @@ async function reportObserved(
   json: boolean
 ): Promise<boolean> {
   const started = await owedStarts(host, report, owed);
-  const { source, waits, labels, reads, conflicts, unserved, unservedBindings, error } = report;
+  const {
+    source,
+    waits,
+    labels,
+    openedIssues,
+    reads,
+    conflicts,
+    unserved,
+    unservedBindings,
+    error,
+  } = report;
   const ok = error === undefined;
   if (json)
     await writeJsonLine({
@@ -433,6 +443,7 @@ async function reportObserved(
       source,
       waits,
       labels,
+      openedIssues,
       reads,
       started,
       conflicts,
@@ -442,7 +453,7 @@ async function reportObserved(
     });
   else {
     console.log(
-      `observe ${source}: ${String(waits)} wait(s), ${String(labels)} label(s), ${String(reads)} read(s), ${String(started)} start(s)${conflicts ? `, ${String(conflicts)} conflicting deliveries` : ''}${ok ? '' : `; ${error}`}`
+      `observe ${source}: ${String(waits)} wait(s), ${String(labels)} label(s), ${openedIssues ? `${String(openedIssues)} opened-issue read(s), ` : ''}${String(reads)} read(s), ${String(started)} start(s)${conflicts ? `, ${String(conflicts)} conflicting deliveries` : ''}${ok ? '' : `; ${error}`}`
     );
     for (const { wait, reason } of unserved)
       console.log(
