@@ -692,6 +692,8 @@ async function installTimer(
  * start the same stage. Every other binding, including installed timers' config files
  * wherever they live, is listed under `bindings` (see `checkFireBindings`). `stops` lists
  * the outcomes after which an item would stop (see `runEndedStops`); it fails nothing.
+ * wherever they live, is listed under `bindings` (`checkFireBindings`); sources that observe,
+ * under `observing` (`observingReport`).
  */
 async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOptions): Promise<void> {
   const bindings = await readOnBindings(getTriggersPath());
@@ -737,6 +739,7 @@ async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOption
     stopsExplained:
       'Outcomes of the workflows the bindings above name, started by any of them or ended or asking in an on binding, that are not final (returns.final), that no run-ended file binds, and whose workflow can leave no ask or wait. A run on an item that ends in one stops the item, and `archon workflow attention` lists it as stopped.',
     stops: await runEndedStops([...bindings, ...fire.readable], deps),
+    observing: await (await import('./wake-observation')).observingReport(host, schedules),
   });
   const broken = [...checked.runEnded, ...checked.asksSettled, ...checked.bindings].filter(
     entry => entry.problems.length > 0

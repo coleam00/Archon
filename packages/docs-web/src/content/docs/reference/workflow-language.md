@@ -949,7 +949,7 @@ Claude's typed `overloaded` code and Codex's `serverOverloaded` map to `overload
 Every built-in provider reports a typed class:
 
 - **Claude** reports every class, from its SDK's error codes, result subtypes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared MCP server that cannot connect, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`. Claude reports `schema_unmet` when its SDK gives up on structured output (result subtype `error_max_structured_output_retries`).
-- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a declared MCP server cannot connect, when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
+- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), when Codex reports the node's model as not found for the account (`modelNotFound`; choose another model), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a declared MCP server cannot connect, when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
 - **Pi** reports `misconfigured` when a node has no model, the model ref is malformed, or the model is not in Pi's catalog, and `auth` when it has no credentials for the model's provider. A failed Pi turn reaches Archon only as a stop reason and message text, so those failures are `unknown`. That includes a used-up usage limit: a Pi run that hits one fails instead of waiting for the reset.
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
 - **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
@@ -2944,6 +2944,8 @@ bindings:
     workflow: review-fix
     resource: fix
     overlap: queue
+    limit: { starts: 3, reset_on: plan }  # optional, on any binding: starts per item
+    grants: fix-again                 # optional, asks-settled only: one more start of a limited binding
     asks_settled:                     # starts when the asks a run of this pack's workflow left settle
       workflow: review-fix
       settled: answered               # answered | withdrawn | any
@@ -3004,6 +3006,15 @@ refuses the whole set, writing nothing, when the asking workflow does not declar
 or an input read from it, the started workflow does not declare an input mapped to it, or two
 files would both start when one option is chosen. With `checkout` on either form, `isolation`
 must be left out: the engine picks the start's checkout.
+
+`limit: { starts: <n>, reset_on: <workflow> }`, on any binding, caps how many times it starts
+its workflow on one item, as
+[`binding.limit`](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item) does:
+admission refuses the start past the limit with a reason, and a completed run of `reset_on`, a
+workflow of this pack, on the item starts the count again. Every file the binding is written as
+counts under one name. `grants: <binding id>`, on an asks-settled binding only, allows that
+binding one more start on the item each time this one starts; it must name a declared binding
+with a `limit`. A binding without `limit` starts as often as it matches.
 
 An event binding with `wake:` starts its workflow on the item of an open
 [wait](#waits-what-an-item-waits-for-outside-archon): the wait `wake.wait` that a run of

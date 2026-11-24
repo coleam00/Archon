@@ -11,6 +11,7 @@ import type {
   SDKBackgroundTasksChangedMessage,
   SDKRateLimitInfo,
   SDKResultMessage,
+  SDKSystemMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { sessionPreview, toolCallSchema, truncateToolOutput } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
@@ -63,6 +64,8 @@ interface ToolResultBlock {
 
 interface SystemMessage {
   subtype?: string;
+  // Every SDK message names its session; `init` is the first that does.
+  session_id?: SDKSystemMessage['session_id'];
   mcp_servers?: Pick<McpServerStatus, 'name' | 'status' | 'error'>[];
   // Subagent task lifecycle (Claude SDK v0.2.89+)
   task_id?: string;
@@ -110,6 +113,9 @@ interface StreamState extends ResultSpendState {
   // A wake turn must report its own result before idle can settle it.
   resultSeen: boolean;
   resultReported: boolean;
+  // The CLI sends `init` at the start of every turn of a long-lived query (wake turns,
+  // queued turn messages); the contract's `session` chunk goes out once per query.
+  sessionAnnounced: boolean;
   backgroundObserved: boolean;
   idleReached: boolean;
   // Progress frames carry no visibility marker, so retain the start decision
@@ -144,6 +150,7 @@ export async function* streamClaudeMessages(
     pendingSdkError: undefined,
     lastRateLimit: undefined,
     resultSeen: false,
+    sessionAnnounced: false,
     queryTokensUnknown: false,
     resultReported: false,
     backgroundObserved: false,
@@ -303,6 +310,10 @@ function* streamSystemSubtype(
       yield* streamBackgroundTasks(state, msg as unknown as SDKBackgroundTasksChangedMessage);
       return 'next';
     case 'init':
+      if (msg.session_id && !state.sessionAnnounced) {
+        state.sessionAnnounced = true;
+        yield { type: 'session', sessionId: msg.session_id };
+      }
       return yield* streamMcpServerStatus(msg);
     case 'status':
       if (msg.status !== 'compacting') return 'unhandled';

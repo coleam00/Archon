@@ -156,6 +156,7 @@ export function createFileAdmissionStore(
       }),
     // No start names an item here (`FileStoreUnsupportedError('items')`).
     listSkippedItemStarts: async () => [],
+    readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
     listWaitedItemHolders: async () => [],
     getResourceStartRequest: id =>
       query(async tx => {

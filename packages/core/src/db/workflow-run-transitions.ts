@@ -62,6 +62,7 @@ import {
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertStartReceipt } from './start-receipt-writes';
+import { recordStartLimitReset } from './start-limits';
 import { insertLinkedStarts } from './linked-starts';
 import { openItemAsksForCompletedRun } from './item-asks';
 import { openItemWaitsForCompletedRun } from './item-waits';
@@ -425,6 +426,8 @@ export async function completeWorkflowRun(
           },
           artifacts
         );
+        // A limit that resets on this workflow starts its count again from this end.
+        await recordStartLimitReset(query, id);
         // The starts this end causes commit with it, and only when this write won.
         for (const receipt of result?.startReceipts ?? [])
           if (!(await insertStartReceipt(query, receipt)).replay) started.push(receipt);

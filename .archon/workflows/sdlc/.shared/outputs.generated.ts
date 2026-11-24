@@ -617,17 +617,6 @@ export interface WorkflowOutputs {
       readonly contract_left: ReadonlyArray<string>;
     };
   };
-  'archon-review-eval-judge': {
-    judge: {
-      readonly defects: ReadonlyArray<{
-        readonly id: string;
-        readonly caught_by: ReadonlyArray<string>;
-        readonly finding: string | null;
-        readonly evidence: string;
-      }>;
-      readonly shape_unmatched: number;
-    };
-  };
   'archon-simplify': {
     simplify: {
       readonly findings: boolean;

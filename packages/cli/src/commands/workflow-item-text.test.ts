@@ -18,6 +18,7 @@ const read: ItemRead = {
       completedAt: '2026-11-01T09:30:00.000Z',
       cause: null,
       awaitingExecution: null,
+      startLimit: null,
       spend: { usd: 0.5, inputTokens: 100, outputTokens: 20 },
       heldBehind: null,
       operatorPause: null,
@@ -41,6 +42,7 @@ const read: ItemRead = {
   hold: null,
   held: [],
   runLimit: null,
+  startLimits: [],
   waits: [],
   questions: [
     {

@@ -52,6 +52,7 @@ test('a published close verdict labels the item and closes nothing; intake owns 
 });
 
 test('forge publication fails without label facts rather than assuming no labels', () => {
+  // `labels` is optional in the forge contract: a plugin may not report them.
   const run = runPackScript('triage/scripts/labels', {
     inputs,
     forge: {
@@ -59,6 +60,10 @@ test('forge publication fails without label facts rather than assuming no labels
       response: forgeOperation('workitem.view', {
         ref: { repo: PR.repo, number: 7 },
         kind: 'issue',
+        url: 'https://ghe.example.com/example/repo/issues/7',
+        state: 'open',
+        title: 't',
+        body: 'b',
       }),
     },
   });
@@ -87,8 +92,9 @@ test('a pack label is never accepted as an area label', () => {
 });
 
 test('forge triage adds the labels it lacks and removes only the stale one it owns', () => {
-  const item = { ref: { repo: PR.repo, number: 7 }, kind: 'issue', url: 'https://ghe.example.com/example/repo/issues/7', state: 'open' };
-  const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
+  const item = { ref: { repo: PR.repo, number: 7 }, kind: 'issue', url: 'https://ghe.example.com/example/repo/issues/7', state: 'open' } as const;
+  const applied = (op: 'workitem.label.add' | 'workitem.label.remove') =>
+    forgeOperation(op, { target: item.ref, outcome: 'applied', changed: true, workitem: item, labels: [] });
   const run = runPackScript('triage/scripts/labels', {
     inputs,
     forge: {

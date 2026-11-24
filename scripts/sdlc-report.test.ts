@@ -51,8 +51,9 @@ describe.each([
     result: 'delivered',
     passed: { delivered: true, reason: 'delivered', pr_url: 'https://pr/1', summary: 'Ready.' },
   },
-])('$tail report node', ({ tail, result, passed }) => {
-  const script = join(import.meta.dir, '..', '.archon/workflows/sdlc', tail, 'scripts/report.ts');
+])('$tail report node', ({ result, passed }) => {
+  // Both tails run the pack's one shared report script, with their own done flag.
+  const script = join(import.meta.dir, '..', '.archon/workflows/sdlc/.shared/scripts/report.ts');
 
   async function run(outcome: string): Promise<Record<string, unknown>> {
     const dir = artifactsDir();
@@ -60,6 +61,7 @@ describe.each([
       env: {
         ...process.env,
         ARTIFACTS_DIR: dir,
+        INPUTS_FLAG: result,
         INPUTS_PULL_REQUESTS: '[]',
         INPUTS_OUTCOME: outcome,
       },

@@ -121,6 +121,17 @@ bindings:
       action: { event: event.action }
       label: { event: label.name }
       label_actor: { event: label.actor.login }
+  # Fire-only: `archon-build-pick` fires it, on the issue's item, for new work it files,
+  # a work order's untriaged members and a blocked item it sends back to re-triage.
+  intake:
+    workflow: archon-intake
+    resource: intake
+    capacity: 10
+    overlap: queue
+    item: { field: number, prefix: issue- }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
   # Nothing schedules a build: `archon-build-pick` fires this binding once per waiting
   # issue. Each start is on the issue's item, where the engine admits one build run at a
   # time; a start that finds the issue held or every slot busy is skipped, and the next
@@ -164,6 +175,7 @@ bindings:
       repo_host: { repo: host }
       repo_path: { repo: path }
       build_queue_binding: { binding: build-queue }
+      intake_binding: { binding: intake }
   # A build run that ends has freed a slot, and may have left its issue waiting for
   # another round, so the engine starts a pick then instead of leaving both to the
   # schedule. Queued, not skipped: a pick already running may have listed the items
@@ -179,6 +191,7 @@ bindings:
       repo_host: { input: repo_host }
       repo_path: { input: repo_path }
       build_queue_binding: { binding: build-queue }
+      intake_binding: { binding: intake }
   split-queue:
     workflow: archon-split
     resource: split
@@ -209,32 +222,26 @@ bindings:
     inputs:
       repo_host: { input: repo_host }
       repo_path: { input: repo_path }
-  # A merge run that cannot merge yet ends waiting for a check at one exact commit, and
-  # a completed check there starts it again: `checks` at the pull request's head while
-  # its checks run, `base-checks` at the default branch's head while that branch is red.
-  # A check names no pull request, so neither maps an item: the wait's commit finds it.
+  # A merge run whose pull request's checks still run ends waiting for a check at its
+  # head, and a completed check there starts it again. A check names no pull request,
+  # so the binding maps no item: the wait's commit finds it. A red default branch leaves
+  # no wait: every pull request it holds would wait on one commit, which the engine
+  # cannot route to one item, so merge-pick starts them again.
   merge-after-checks:
     workflow: archon-merge-queue
     resource: merge
     overlap: queue
-    event: &check-completed
+    event:
       kind: check.changed
       actions: [changed]
       predicates:
         - field: check.phase
           equals: completed
     wake: { workflow: archon-merge-queue, wait: checks, about: check.revision }
-    inputs: &woken
+    inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }
       waited: { wait: true }
-  merge-after-base-checks:
-    workflow: archon-merge-queue
-    resource: merge
-    overlap: queue
-    event: *check-completed
-    wake: { workflow: archon-merge-queue, wait: base-checks, about: check.revision }
-    inputs: *woken
   # An answer to the stage's ask starts it again with the answer and what was asked. The
   # options are the stage's three fixed ids. Each starts the stage, which approves,
   # returns or parks by the id chosen; a return then starts the build round below,

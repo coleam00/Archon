@@ -806,7 +806,7 @@ describe('GitHub source plugin observing label bindings', () => {
       }),
     });
   }
-  /** Issue 8 labelled by event 555, pull request 9 in the same list, and issue 10 with no add. */
+  /** Issue 8 labelled by event 555, pull request 9 by event 556, and issue 10 with no add. */
   function labelReader() {
     const reads: string[] = [];
     return {
@@ -828,15 +828,20 @@ describe('GitHub source plugin observing label bindings', () => {
           });
           return { ...input, items: [item(8, 'issue'), item(9, 'pr'), item(10, 'issue')] };
         },
-        async labelAdded(input: { repo: typeof repo; number: number; label: string }) {
-          reads.push(`added ${String(input.number)}`);
+        async labelAdded(input: {
+          repo: typeof repo;
+          kind: 'issue' | 'pr';
+          number: number;
+          label: string;
+        }) {
+          reads.push(`added ${input.kind} ${String(input.number)}`);
           return {
-            subject: { kind: 'issue' as const, ref: { repo, number: input.number } },
+            subject: { kind: input.kind, ref: { repo, number: input.number } },
             name: input.label,
             added:
-              input.number === 8
+              input.number === 8 || input.number === 9
                 ? {
-                    id: '555',
+                    id: String(547 + input.number),
                     at: '2026-11-23T10:00:00Z',
                     actor: {
                       host: 'github.com',
@@ -912,9 +917,9 @@ describe('GitHub source plugin observing label bindings', () => {
       reads: [
         { bindingId: 'factory-intake', repo, label: 'factory' },
         { bindingId: 'factory-intake', repo, label: 'urgent' },
+        { bindingId: 'pr-labels', repo, label: 'factory' },
       ],
       unserved: [
-        { bindingId: 'pr-labels', reason: 'pull-request labels are not observed; only issues are' },
         { bindingId: 'anywhere', reason: 'the selector names no repository to list' },
         { bindingId: 'any-label', reason: 'the selector names no label' },
         { bindingId: 'removed-only', reason: 'only an added label is observed' },
@@ -934,8 +939,23 @@ describe('GitHub source plugin observing label bindings', () => {
     });
   });
 
-  test('a labelled issue is the start its webhook would make; a pull request is skipped', async () => {
-    const plugin = await labelSource([intake()]);
+  const onlyKind = (kind: 'issue' | 'pr', overrides: Record<string, unknown> = {}) =>
+    intake({
+      selector: {
+        kind: 'label.changed',
+        actions: ['added'],
+        repository: repo,
+        predicates: [
+          { field: 'label.name', equals: 'factory' },
+          { field: 'subject.kind', equals: kind },
+        ],
+      },
+      ...overrides,
+    });
+
+  test('a labelled issue is the start its webhook would make; a pull request is not read', async () => {
+    const issues = onlyKind('issue');
+    const plugin = await labelSource([issues]);
     const { forge, reads } = labelReader();
     const read = { bindingId: 'factory-intake', repo, label: 'factory' };
     const observed = await plugin.observe?.({
@@ -943,7 +963,7 @@ describe('GitHub source plugin observing label bindings', () => {
       labels: [{ ...read, seenSince: '2026-11-01T00:00:00Z' }],
       forge,
     });
-    expect(reads).toEqual(['list factory', 'added 8', 'added 10']);
+    expect(reads).toEqual(['list factory', 'added issue 8', 'added issue 10']);
     expect(observed?.labelFailures).toEqual([
       {
         bindingId: 'factory-intake',
@@ -961,7 +981,7 @@ describe('GitHub source plugin observing label bindings', () => {
 
     // The webhook for the same add starts the same binding with the same inputs and item.
     const recorded = recorder();
-    const github = await adapter(config([intake()]), recorded.intake);
+    const github = await adapter(config([issues]), recorded.intake);
     const payload = JSON.stringify({
       action: 'labeled',
       repository: { full_name: 'owner/repo' },
@@ -993,6 +1013,63 @@ describe('GitHub source plugin observing label bindings', () => {
       accepted?.receipt.contentDigest
     );
   });
+
+  test('a labelled pull request is the start its webhook would make; an issue is not read', async () => {
+    const prs = onlyKind('pr', { item: { field: 'subject.number', prefix: 'pr-' } });
+    const plugin = await labelSource([prs]);
+    const { forge, reads } = labelReader();
+    const observed = await plugin.observe?.({
+      waits: [],
+      labels: [
+        { bindingId: 'factory-intake', repo, label: 'factory', seenSince: '2026-11-01T00:00:00Z' },
+      ],
+      forge,
+    });
+    expect(reads).toEqual(['list factory', 'added pr 9']);
+    expect(observed?.labelFailures).toEqual([]);
+    const [accepted] = (observed?.labelAcceptances ?? []).map(entry => entry.acceptance);
+    expect(observed?.labelAcceptances).toHaveLength(1);
+    expect(accepted?.receipt.deliveryId).toBe(
+      'observe:label:github.com/owner/repo#9:556:factory-intake'
+    );
+    expect(accepted?.outcome).toBe('matched');
+    expect(accepted?.bindings.map(start => start.itemKey)).toEqual(['pr-9']);
+
+    const recorded = recorder();
+    const github = await adapter(config([prs]), recorded.intake);
+    const payload = JSON.stringify({
+      action: 'labeled',
+      repository: { full_name: 'owner/repo' },
+      sender: { id: 4242, login: 'maintainer', type: 'User' },
+      pull_request: { number: 9, state: 'open' },
+      label: { id: 1, name: 'factory' },
+    });
+    await github.receiveWebhook(payload, sign(payload), 'delivery-label', 'pull_request');
+    // Same inputs, labeller included, and the same item as the webhook's.
+    expect(accepted?.bindings).toEqual(recorded.calls[0]?.bindings ?? []);
+  });
+
+  test('a selector that names no kind observes issues and pull requests', async () => {
+    const plugin = await labelSource([intake()]);
+    const { forge, reads } = labelReader();
+    const observed = await plugin.observe?.({
+      waits: [],
+      labels: [
+        { bindingId: 'factory-intake', repo, label: 'factory', seenSince: '2026-11-01T00:00:00Z' },
+      ],
+      forge,
+    });
+    expect(reads).toEqual(['list factory', 'added issue 8', 'added pr 9', 'added issue 10']);
+    expect(
+      observed?.labelAcceptances.map(entry => [
+        entry.acceptance.receipt.deliveryId,
+        entry.acceptance.outcome,
+      ])
+    ).toEqual([
+      ['observe:label:github.com/owner/repo#8:555:factory-intake', 'matched'],
+      ['observe:label:github.com/owner/repo#9:556:factory-intake', 'matched'],
+    ]);
+  });
 });
 
 describe('GitHub source plugin label bindings, observed through the engine', () => {
@@ -1016,10 +1093,13 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
     await Promise.all(roots.map(removeTempTree));
   });
 
-  /** One install: its receipts, the open labelled issues with their latest add, and a pass. */
+  /**
+   * One install: its receipts, the open labelled items with their latest add (issues unless
+   * marked `pr`), and a pass.
+   */
   function install() {
     const receipts = new Map<string, SourceReceiptAcceptance>();
-    const issues = new Map<number, { id: string; at: string }>();
+    const issues = new Map<number, { id: string; at: string; kind?: 'pr' }>();
     const reads: string[] = [];
     const known = { users: (_id: string) => true };
     const forge = {
@@ -1033,21 +1113,26 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
         reads.push(`list ${input.label}`);
         return {
           ...input,
-          items: [...issues.keys()].map(number => ({
+          items: [...issues].map(([number, entry]) => ({
             ref: { repo, number },
-            kind: 'issue' as const,
+            kind: entry.kind ?? ('issue' as const),
             url: `https://github.com/owner/repo/issues/${String(number)}`,
             state: 'open' as const,
           })),
         };
       },
-      async labelAdded(input: { repo: typeof repo; number: number; label: string }) {
+      async labelAdded(input: {
+        repo: typeof repo;
+        kind: 'issue' | 'pr';
+        number: number;
+        label: string;
+      }) {
         reads.push(`added ${String(input.number)}`);
         const added = issues.get(input.number);
         return {
-          subject: { kind: 'issue' as const, ref: { repo, number: input.number } },
+          subject: { kind: input.kind, ref: { repo, number: input.number } },
           name: input.label,
-          added: added ? { ...added, actor: null } : null,
+          added: added ? { id: added.id, at: added.at, actor: null } : null,
         };
       },
     };
@@ -1140,22 +1225,40 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
     expect(observed.matched()).toEqual(['observe:label:github.com/owner/repo#8:event-8:fresh']);
   });
 
-  test('a source whose only label binding is on pull requests says so and reads nothing', async () => {
+  test('a label added to a pull request starts its binding once on the pull request', async () => {
     const observed = install();
-    const report = await observed.pass([
-      intake({
-        selector: {
-          kind: 'label.changed',
-          actions: ['added'],
-          repository: repo,
-          subject: { kind: 'pr', number: 3 },
-          predicates: [{ field: 'label.name', equals: 'factory' }],
-        },
-      }),
+    const prs = intake({
+      selector: {
+        kind: 'label.changed',
+        actions: ['added'],
+        repository: repo,
+        predicates: [
+          { field: 'label.name', equals: 'factory' },
+          { field: 'subject.kind', equals: 'pr' },
+        ],
+      },
+      item: { field: 'subject.number', prefix: 'pr-' },
+    });
+    // Pull request 6 has the label when the binding is first seen, so it starts nothing.
+    observed.issues.set(6, { id: 'event-6', at: '2020-01-01T00:00:00Z', kind: 'pr' });
+    await observed.pass([prs]);
+    observed.issues.set(7, { id: 'event-7', at: later(), kind: 'pr' });
+    observed.issues.set(8, { id: 'event-8', at: later() });
+    observed.reads.length = 0;
+    expect((await observed.pass([prs]))?.error).toBeUndefined();
+    // Issue 8 is never read: the binding selects pull requests.
+    expect(observed.reads).toEqual(['list factory', 'added 6', 'added 7']);
+    expect(observed.matched()).toEqual(['observe:label:github.com/owner/repo#7:event-7:intake']);
+    expect(
+      observed.receipts.get('observe:label:github.com/owner/repo#7:event-7:intake')?.bindings
+    ).toMatchObject([{ bindingId: 'intake', itemKey: 'pr-7' }]);
+    // The same add on the next pass is a replay; removed and added again, it starts again.
+    expect((await observed.pass([prs]))?.receipts).toEqual([]);
+    observed.issues.set(7, { id: 'event-9', at: later(), kind: 'pr' });
+    await observed.pass([prs]);
+    expect(observed.matched()).toEqual([
+      'observe:label:github.com/owner/repo#7:event-7:intake',
+      'observe:label:github.com/owner/repo#7:event-9:intake',
     ]);
-    expect(report?.unservedBindings).toEqual([
-      { bindingId: 'intake', reason: 'pull-request labels are not observed; only issues are' },
-    ]);
-    expect(observed.reads).toEqual([]);
   });
 });

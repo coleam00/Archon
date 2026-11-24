@@ -790,13 +790,19 @@ describe('trigger CLI durable execution', () => {
       if (!yaml || !configJson) throw new Error('Polling workflow or config missing');
       writeFileSync(join(workflowsDir, 'process-order.yaml'), yaml);
       const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
-      await runCli(cliPath, projectRoot, archonHome, [
-        'validate',
-        'workflows',
-        'process-order',
-        '--cwd',
-        projectRoot,
-      ]);
+      const validation = JSON.parse(
+        (
+          await runCli(cliPath, projectRoot, archonHome, [
+            'validate',
+            'workflows',
+            'process-order',
+            '--cwd',
+            projectRoot,
+            '--json',
+          ])
+        ).stdout
+      ) as { results: [{ issues: unknown[] }] };
+      expect(validation.results[0].issues).toEqual([]);
       const identity = JSON.parse(
         (await runCli(cliPath, projectRoot, archonHome, ['trigger', 'whoami'])).stdout
       ) as { runAsUserId: string };

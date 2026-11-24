@@ -23,6 +23,7 @@ import {
   resourceStartBindingIntentSchema,
   resourceStartOverlapSchema,
   runEndedTriggerSchema,
+  startLimitSchema,
 } from './resource-start';
 
 /** A binding id and a resource name both end up in a file name and a resource key. */
@@ -64,6 +65,18 @@ const bindingShape = {
     kind: 'default',
   }),
   inputs: z.record(z.string().min(1), packBindingInputSchema).default({}),
+  /**
+   * How many times this binding may start its stage on one item. `reset_on`, a workflow of
+   * this pack, starts the count again when a run of it completes on the item; without it
+   * the count never resets by itself. Every file the binding is written as shares one count.
+   */
+  limit: z
+    .object({
+      starts: startLimitSchema.shape.starts,
+      reset_on: z.string().min(1).optional(),
+    })
+    .strict()
+    .optional(),
 };
 
 export const packTimerBindingSchema = z
@@ -160,10 +173,13 @@ export const packRunEndedBindingSchema = z
  * Starts when the asks a run of `asks_settled.workflow`, a workflow of this pack, left on
  * an item are settled, as `on.asksSettled` does: `settled`, `option` and `checkout` read as
  * there. A trigger file holds one option, so each listed option is written as its own file.
+ * `grants` names a binding of this pack with a `limit`: each start of this binding allows
+ * that binding one more start on the item.
  */
 export const packAsksSettledBindingSchema = z
   .object({
     ...bindingShape,
+    grants: packBindingNameSchema.optional(),
     asks_settled: z
       .object({
         workflow: z.string().min(1),

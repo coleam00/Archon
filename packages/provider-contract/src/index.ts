@@ -44,6 +44,7 @@ export {
   mcpServerStatusSchema,
   providerChunkSchema,
   providerEventSchema,
+  providerSessionSchema,
   providerWarningSchema,
   stateUpdateSchema,
   subtaskSchema,
@@ -57,6 +58,7 @@ export {
   warningSchema,
   type ProviderChunk,
   type ProviderEvent,
+  type ProviderSession,
   type ProviderWarning,
 } from './events';
 export { awaitingTurnSettlement, providerSettledSchema, type ProviderSettled } from './settled';

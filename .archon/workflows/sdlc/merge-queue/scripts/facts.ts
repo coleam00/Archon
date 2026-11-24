@@ -10,8 +10,8 @@
  * `path` says what follows. `settle`: there is nothing to judge, because the pull
  * request is already merged or closed, the item names none, or a maintainer answered the
  * stage's ask with a return or a park. `wait`: a check woke the run and what it waited
- * for is still not there (the head's checks still pending, or the default branch still
- * red, at the commit the wait named), so the item waits again without the agent. `judge`:
+ * for is still not there (the head's checks still pending at the commit the wait
+ * named), so the item waits again without the agent. `judge`:
  * the agent decides, on a snapshot of the pull request's gate facts.
  *
  * A read that fails refuses the run. The backstop leaves an item whose newest run failed
@@ -31,7 +31,6 @@ import { nullableJson } from '../../.shared/inputs.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import {
   ASK_OPTIONS,
-  type BaseFacts,
   type CiMode,
   issueOfItem,
   itemPr,
@@ -73,11 +72,9 @@ function answer(): MergeAnswer | null {
 }
 
 /** Whether what the met wait was about still reads as it did when the item began to wait. */
-function stillWaits(facts: PrFacts, base: BaseFacts, ci: CiMode): boolean {
+function stillWaits(facts: PrFacts, ci: CiMode): boolean {
   const waited = nullableJson(input('waited')) as { readonly event?: string; readonly about?: string } | null;
-  if (waited?.event === 'checks') return ci === 'forge' && waited.about === facts.head_revision && facts.checks.state === 'pending';
-  if (waited?.event === 'base-checks') return waited.about === base.head && base.checks.state === 'red';
-  return false;
+  return waited?.event === 'checks' && ci === 'forge' && waited.about === facts.head_revision && facts.checks.state === 'pending';
 }
 
 /** The work item of the issue whose item the run is on, when it is the merge stage's; a refusal otherwise. */
@@ -123,7 +120,7 @@ function main(): void {
   const base = readBase(repo);
   out({
     ...settle,
-    path: stillWaits(facts, base, ci) ? 'wait' : 'judge',
+    path: stillWaits(facts, ci) ? 'wait' : 'judge',
     url: facts.url,
     facts,
     base,

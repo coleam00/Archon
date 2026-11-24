@@ -30,6 +30,8 @@ export const cliArgOptions: CliArgOptions = {
   throughput: { type: 'boolean' },
   events: { type: 'boolean' },
   watch: { type: 'boolean' },
+  // `workflow wake --sources <file>`: the sources file for this process; the wake job passes it.
+  sources: { type: 'string' },
   event: { type: 'string' },
   'resume-at': { type: 'string' },
   interval: { type: 'string' },

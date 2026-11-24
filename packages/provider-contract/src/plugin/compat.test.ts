@@ -2,14 +2,14 @@ import { expect, test } from 'bun:test';
 import { z } from 'zod';
 import type { ProviderChunk } from '../events';
 import { connectProvider } from './connect';
-import baseline from './fixtures/protocol-3-baseline.schema.json';
+import baseline from './fixtures/protocol-4-baseline.schema.json';
 import { descriptor, fixtureProvider } from './fixtures/provider';
 import { streamPair } from './fixtures/streams';
 import { PluginProtocolMismatchError, PluginRpc } from './rpc';
 import { serveProvider } from './serve';
 import { PROVIDER_PLUGIN_PROTOCOL, type ProviderSessionRequest } from './wire';
 
-// The published schema at the first protocol-3 release. Every protocol-3 peer must keep
+// The published schema at the first protocol-4 release. Every protocol-4 peer must keep
 // speaking with the current code; a protocol bump replaces this snapshot.
 function baselineDef(name: keyof typeof baseline.$defs): z.ZodType {
   // JSON imports widen literal schema keywords such as type to string.
@@ -67,6 +67,8 @@ test.each([
   [1, 'minimal'],
   [2, 'full'],
   [2, 'minimal'],
+  [3, 'full'],
+  [3, 'minimal'],
 ] as const)(
   'a protocol-%s host with a %s envelope gets the current descriptor and cannot start a session',
   async (protocol, envelope) => {

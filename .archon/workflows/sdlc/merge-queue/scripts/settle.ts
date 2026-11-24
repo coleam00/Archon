@@ -262,7 +262,7 @@ function waitsOf(start: MergeStart, settled: Settled, diagnosis: string | null, 
     lines.push([red, diagnosis ?? ''].filter(line => line !== '').join(' '));
     if (diagnosis !== null) announce(`${red} PR ${pr} waits. ${diagnosis}`, { stage: 'merge', kind: 'base-red', item: String(start.item.number), pr });
   }
-  return eventWaits(facts, base, start.ci, settled.reran);
+  return eventWaits(facts, start.ci, settled.reran);
 }
 
 function main(): void {

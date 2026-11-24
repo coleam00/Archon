@@ -157,6 +157,12 @@ const sqliteMigrations: readonly Migration[] = [
   {
     kind: 'tolerated',
     scope: 'schema',
+    failureEvent: 'db.sqlite_migration_start_limit_columns_failed',
+    apply: addStartLimitColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
     failureEvent: 'db.sqlite_migration_completed_outcome_column_failed',
     apply: addCompletedOutcomeColumn,
   },
@@ -475,6 +481,19 @@ function addReceiptBindingColumns(db: Database): void {
   if (!columns.has('forge_refusal')) {
     db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN forge_refusal TEXT');
   }
+}
+
+// A binding's start limit and the limit it grants, beside the intent for the same reason,
+// and what each start request counted under or granted; see migrations/000_combined.sql.
+function addStartLimitColumns(db: Database): void {
+  const bindings = columnNames(db, 'remote_agent_start_receipt_bindings');
+  for (const column of ['start_limit', 'grants_limit'])
+    if (!bindings.has(column))
+      db.run(`ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN ${column} TEXT`);
+  const requests = columnNames(db, 'remote_agent_resource_start_requests');
+  for (const column of ['start_limit', 'grants_limit'])
+    if (!requests.has(column))
+      db.run(`ALTER TABLE remote_agent_resource_start_requests ADD COLUMN ${column} TEXT`);
 }
 
 // A receipt records the key a start named; its start request and the run point at the item.

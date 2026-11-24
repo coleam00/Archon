@@ -343,6 +343,7 @@ export function createInMemoryResourceStartStore(
     listHeldStarts: async () => [],
     listHeldItemStarts: async () => [],
     listSkippedItemStarts: async () => [],
+    readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
     listWaitedItemHolders: async () => [],
     getResourceStartRequest: async (
       id

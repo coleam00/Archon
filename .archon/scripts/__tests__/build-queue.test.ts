@@ -271,6 +271,16 @@ function notices(calls: string): { text: string | undefined; labels: string[] }[
     .map(argv => ({ text: argv.at(-1), labels: argv.filter((_, index) => argv[index - 1] === '--label') }));
 }
 
+/** Each fire of the intake binding a run made: the item it starts on, and its inputs. */
+function intakeFires(calls: string): { item: string | undefined; inputs: unknown }[] {
+  return readFileSync(calls, 'utf8')
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line) as string[])
+    .filter(argv => argv[0] === 'trigger' && argv[argv.indexOf('--config') + 1] === '/bindings/intake.json')
+    .map(argv => ({ item: argv[argv.indexOf('--item') + 1], inputs: JSON.parse(argv[argv.indexOf('--inputs') + 1] ?? '') }));
+}
+
 function callLog(): string {
   return join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
 }
@@ -449,14 +459,18 @@ describe('the build queue scripts', () => {
   test('new work from a message is filed once and handed to intake, never built in the run', () => {
     const at = install();
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    const inputs = { INPUTS_ISSUE: JSON.stringify({ title: 'Retry the fetch', body: 'From a pasted brief.' }), ARCHON_CALL_LOG: calls };
+    const inputs = {
+      INPUTS_ISSUE: JSON.stringify({ title: 'Retry the fetch', body: 'From a pasted brief.' }),
+      INPUTS_INTAKE_BINDING: '/bindings/intake.json',
+      ARCHON_CALL_LOG: calls,
+    };
     const handed = run(at, 'handoff', inputs);
     expect(ok(handed).summary).toContain('https://ghe.example.com/example/repo/issues/100');
     const filed = forgeCalls(handed).filter(call => call.op === 'workitem.create');
     expect(filed).toHaveLength(1);
     expect(filed[0]?.request).toMatchObject({ repo: PR.repo, title: 'Retry the fetch', marker: '<!-- archon-build-queue-request: run-1 -->' });
-    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
-    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=100', '--detach']));
+    expect(intakeFires(calls)).toEqual([{ item: 'issue-100', inputs: { number: '100', repo_host: PR.repo.host, repo_path: PR.repo.path } }]);
+    expect(run(at, 'handoff', { ...inputs, INPUTS_INTAKE_BINDING: '' }).stderr).toContain('intake_binding is empty');
   }, 60_000);
 
   test('a pick fires one build per waiting item, in pickup order, on its item, and none for an item that does not wait', () => {
@@ -473,9 +487,8 @@ describe('the build queue scripts', () => {
     expect(fires.map(fire => fire.slice(0, 6))).toEqual([8, 7].map(number => [
       'trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', `build-pick:ghe.example.com/example/repo#${String(number)}:run-1`,
     ]));
-    expect(fires[0]?.slice(-2)).toEqual(['--item', 'issue-8']);
-    const inputs = fires[0]?.[fires[0].indexOf('--inputs') + 1] ?? '';
-    expect(JSON.parse(readFileSync(inputs, 'utf8'))).toEqual({ number: '8', repo_host: 'ghe.example.com', repo_path: 'example/repo' });
+    expect(fires[0]?.slice(6, 8)).toEqual(['--item', 'issue-8']);
+    expect(JSON.parse(fires[0]?.[fires[0].indexOf('--inputs') + 1] ?? '')).toEqual({ number: '8', repo_host: 'ghe.example.com', repo_path: 'example/repo' });
     expect(run(at, 'fire', { INPUTS_INTERPRETED: 'null', INPUTS_CHOSEN: 'null', INPUTS_BUILD_QUEUE_BINDING: '' }).stderr).toContain('build_queue_binding is empty');
   }, 60_000);
 
@@ -515,6 +528,7 @@ describe('the build queue scripts', () => {
       run(at, 'retriage', {
         INPUTS_BLOCKED: JSON.stringify(blocked),
         INPUTS_RETRIAGE: JSON.stringify(judged),
+        INPUTS_INTAKE_BINDING: '/bindings/intake.json',
         ARCHON_CALL_LOG: calls,
       });
     expect(retriage([{ number: 9, reason: 'r' }]).stderr).toContain('issue 9, which it was not given');
@@ -523,8 +537,9 @@ describe('the build queue scripts', () => {
     expect(ok(sent)).toMatchObject({ retriaged: [7] });
     expect(labelWrites(sent, 7).add).toEqual([]);
     expect(stored(at).value?.requests).toEqual([expect.objectContaining({ action: 'retriage', run_id: 'run-1', actor: null })]);
-    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
-    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=7', 'action=retriage', '--detach']));
+    expect(intakeFires(calls)).toEqual([
+      { item: 'issue-7', inputs: { action: 'retriage', number: '7', repo_host: PR.repo.host, repo_path: PR.repo.path } },
+    ]);
     expect(ok(run(at, 'blocked', { WORKFLOW_ID: 'run-2', INPUTS_REVISIT_BLOCKED: 'true' })).blocked).toEqual([]);
   }, 60_000);
 

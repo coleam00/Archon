@@ -33,6 +33,7 @@ import {
 import type { WorkflowResource } from './schemas/resource-name';
 import type { ResumeClaimCursor, ResumeRefusal } from './store';
 import { itemHolder } from './item-hold';
+import type { StartLimitStanding } from './start-limit';
 import type { AttentionRead } from './schemas/attention-degraded';
 
 export type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
@@ -214,6 +215,26 @@ export type HeldItemStart = Pick<
 export interface HeldPreparation {
   status: 'held';
   hold: InstallHold;
+}
+
+/**
+ * A binding start admission refused at its binding's start limit on the item (`limit`), or
+ * because a limited start names no item to count on. The binding is `rejected` with
+ * `reason`; no request or run is written.
+ */
+export interface RefusedPreparation {
+  status: 'refused';
+  reason: string;
+}
+
+/**
+ * The start limits on one item: each limit a start request on it counted under or raised,
+ * with where it stands (`startLimitStanding`), and for each request that counted under a
+ * limit, that limit's name by request id, which is the run id of its run.
+ */
+export interface ItemStartLimits {
+  limits: StartLimitStanding[];
+  countedUnder: Record<string, string>;
 }
 
 /**
@@ -657,6 +678,8 @@ export interface IResourceStartStore {
    */
   listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
+  /** The start limits on item `itemId`. A store without items reports none. */
+  readItemStartLimits(itemId: string): Promise<ItemStartLimits>;
   /** The starts on item `itemId` whose status is `queued`, in queue order. */
   listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
@@ -668,11 +691,13 @@ export interface IResourceStartStore {
   /**
    * Admit a prepared binding start. `resource` is the bound workflow's declaration; see
    * `preparedBindingStart` for what it changes. Under the install hold nothing is admitted
-   * and the binding is pending again, so the lift prepares it anew.
+   * and the binding is pending again, so the lift prepares it anew. A binding at its start
+   * limit on the item is refused (`RefusedPreparation`) in the same transaction that would
+   * admit it, so two starts cannot both take the last one.
    */
   completeStartBindingPreparation(
     input: PreparedBindingInput & { ownerId: string }
-  ): Promise<ResourceStartDisposition | HeldPreparation | null>;
+  ): Promise<ResourceStartDisposition | HeldPreparation | RefusedPreparation | null>;
   failStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;

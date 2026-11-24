@@ -1,6 +1,6 @@
 import { type NodeFailureKind } from '../schemas/node-execution';
-import type { MessageChunk, ProviderCapabilities } from '@archon/provider-contract';
-import { type ProviderFailure } from '@archon/provider-contract';
+import type { MessageChunk, ProviderCapabilities, ProviderEvent } from '@archon/provider-contract';
+import { providerEventSchema, type ProviderFailure } from '@archon/provider-contract';
 import { nodeFailureKindOf } from '../executor-shared';
 import { getLog } from './log';
 
@@ -12,6 +12,18 @@ export function assertResultBeforeSettlement(
   if (chunk.type === 'settled' && !awaitingSettlement) {
     throw new NodeFailure('unknown', `provider '${provider}' sent settled before result`);
   }
+}
+
+const PROVIDER_EVENT_TYPES: ReadonlySet<MessageChunk['type']> = new Set(
+  providerEventSchema.options.map(schema => schema.shape.type.value)
+);
+
+/**
+ * Whether a chunk is an event the node records. `result`, `settled` and `session` are turn
+ * metadata the stream loop reads itself; a new non-event chunk is skipped by default.
+ */
+export function isProviderEvent(chunk: MessageChunk): chunk is ProviderEvent {
+  return PROVIDER_EVENT_TYPES.has(chunk.type);
 }
 
 export interface WatchdogReset {
