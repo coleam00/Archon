@@ -1,9 +1,9 @@
 /**
  * An end: an operator's statement that nothing more will happen on an item. It is a fact
  * about the item, like a ruling, and nothing records one by itself. It holds until work
- * starts on the item again: a run on it starts or resumes at or after the end, or a start
- * waits on it. Opening the item writes nothing, and deleting old runs does not undo an end.
- * While it holds, the item is at rest and its stop is not in the attention queue.
+ * starts on the item again: a new run or a queued start on the item, or a resume of one of
+ * its runs. Opening the item writes nothing; the rule reads the runs that exist now. While it
+ * holds, the item is at rest and its stop is not in the attention queue.
  */
 import { z } from 'zod';
 import { itemActFields } from './item-act';
@@ -14,8 +14,6 @@ export const itemEndSchema = z.object({
   id: z.string().min(1),
   reason: z.string().min(1),
   ...itemActFields,
-  /** The item's latest run when it was ended; null for an item that had no run. */
-  runId: z.string().nullable(),
 });
 export type ItemEnd = z.infer<typeof itemEndSchema>;
 

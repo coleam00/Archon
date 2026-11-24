@@ -163,7 +163,6 @@ const read: ItemRead = {
     via: 'cli',
     by: { declared: 'alice' },
     fromRun: null,
-    runId: 'run-done-1',
   },
   merged: {
     change: 'https://github.com/acme/web/pull/12',

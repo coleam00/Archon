@@ -2,7 +2,7 @@
  * GET /api/items: read one item, its runs, open questions, and answers with rulings
  * (`readItem`). GET /api/items/window: a page of the project's items with a run started in
  * a window (`readItemWindow`). POST /api/items/rulings records a ruling on an item; POST
- * /api/items/rulings/{rulingId}/withdraw withdraws one. POST /api/items/end ends an item.
+ * /api/items/rulings/{rulingId}/withdraw withdraws one. POST /api/items/ends ends an item.
  */
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -132,7 +132,7 @@ const withdrawRulingRoute = createRoute({
 
 const recordEndRoute = createRoute({
   method: 'post',
-  path: '/api/items/end',
+  path: '/api/items/ends',
   tags: ['Workflows'],
   summary: 'End an item: nothing more will happen on it, so it rests until a new run or start',
   request: {

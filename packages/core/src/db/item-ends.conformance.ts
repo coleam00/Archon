@@ -91,7 +91,6 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
         reason: end.reason,
         by: { declared: 'maintainer' },
         via: 'cli',
-        runId: latest,
       });
       expect(Date.parse(recorded.at)).toBeGreaterThanOrEqual(before);
       expect(Date.parse(recorded.at)).toBeLessThanOrEqual(Date.now());
@@ -155,7 +154,7 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       const failed = await startOnItem(harness);
       await harness.store.failWorkflowRun(failed, 'boom');
       await recordItemEnd(harness.store, end, operator, 'cli');
-      expect(await holding(harness)).toMatchObject({ runId: failed });
+      expect(await holding(harness)).not.toBeNull();
       expect(await harness.store.getWorkflowRunStatus(failed)).toBe('failed');
       await harness.store.resumeWorkflowRun(failed);
       expect(await holding(harness)).toBeNull();
@@ -217,32 +216,20 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
     }
   });
 
-  test('cleaning up the run that opened an item does not bring its end back', async () => {
+  test('deleting the run that opened an item lets its end hold again', async () => {
     const harness = await makeHarness();
     try {
-      const { deleteOldWorkflowRuns, deleteWorkflowRun } = await import('./workflow-run-writes');
+      // The rule reads the runs that exist: with the opening run gone, the item is as the
+      // operator left it.
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
       const first = await startOnItem(harness);
       await harness.store.failWorkflowRun(first, 'boom');
-      await recordItemEnd(harness.store, end, operator, 'cli');
+      const recorded = await recordItemEnd(harness.store, end, operator, 'cli');
       const reopening = await startOnItem(harness);
       await harness.store.failWorkflowRun(reopening, 'boom again');
       expect(await holding(harness)).toBeNull();
       await deleteWorkflowRun(reopening);
-      expect(await holding(harness)).toBeNull();
-
-      // The same through age-based cleanup of every run, ended again first.
-      await recordItemEnd(harness.store, end, operator, 'cli');
-      const again = await startOnItem(harness);
-      await harness.store.failWorkflowRun(again, 'boom');
-      const old = new Date(Date.now() - 2 * 86_400_000).toISOString();
-      await harness.db.query(
-        'UPDATE remote_agent_workflow_runs SET started_at = $1 WHERE id = $2 OR id = $3',
-        [old, first, again]
-      );
-      expect((await deleteOldWorkflowRuns(1)).runs.map(run => run.id).sort()).toEqual(
-        [first, again].sort()
-      );
-      expect(await holding(harness)).toBeNull();
+      expect(await holding(harness)).toEqual(recorded);
     } finally {
       await harness.close();
     }

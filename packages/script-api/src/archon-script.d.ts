@@ -2738,7 +2738,6 @@ declare module 'archon:script' {
         readonly runId: string;
         readonly nodePath: string;
       } | null;
-      readonly runId: string | null;
     } | null;
     readonly degraded: ReadonlyArray<{
       readonly type: 'degraded';
@@ -3328,7 +3327,6 @@ declare module 'archon:script' {
           readonly runId: string;
           readonly nodePath: string;
         } | null;
-        readonly runId: string | null;
       } | null;
       readonly degraded: ReadonlyArray<{
         readonly type: 'degraded';

@@ -2498,7 +2498,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  '/api/items/end': {
+  '/api/items/ends': {
     parameters: {
       query?: never;
       header?: never;
@@ -9050,7 +9050,6 @@ export interface components {
           runId: string;
           nodePath: string;
         } | null;
-        runId: string | null;
       } | null;
       degraded: (
         | {
@@ -9799,7 +9798,6 @@ export interface components {
             runId: string;
             nodePath: string;
           } | null;
-          runId: string | null;
         } | null;
         degraded: (
           | {
@@ -9912,7 +9910,6 @@ export interface components {
         runId: string;
         nodePath: string;
       } | null;
-      runId: string | null;
     };
     ItemEndRefused: {
       error: string;

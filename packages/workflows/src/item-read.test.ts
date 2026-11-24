@@ -451,7 +451,6 @@ describe('reading an item', () => {
       via: 'cli',
       by: { declared: 'alice' },
       fromRun: null,
-      runId: second.id,
     };
     const ended: ItemReadSource = {
       ...source,

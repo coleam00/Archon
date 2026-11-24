@@ -1,13 +1,13 @@
 /**
  * Ends of an item (`remote_agent_item_ends`) and the runs each saw
  * (`remote_agent_item_end_runs`, the item's runs and every run below them): append-only
- * facts, but for `opened_at`, written once. An end holds until work starts on the item again
+ * facts, never updated or deleted. An end holds until work starts on the item again
  * (`schemas/item-end.ts`): a run in the item's tree the end did not see, a run resumed since
- * (its `active_phase_started_at` changed), a live run, or a queued start. The rule compares
- * run identities and copied values, never clocks, so a run whose transaction overlapped the
- * end's, or a run row id reused after cleanup, still opens the item. Opening writes nothing,
- * and deleting runs the end saw leaves it holding. Deleting the run that opened it would
- * not, so a delete marks such an end opened first (`markOpenedItemEnds`).
+ * (its `active_phase_started_at` changed), a live run, or a queued start. The rule reads the
+ * runs that exist now and compares run identities and copied values, never clocks, so a run
+ * whose transaction overlapped the end's, or a run row id reused after cleanup, still opens
+ * the item. Deleting runs leaves no trace: deleting runs the end saw keeps it holding, and
+ * deleting the run that opened the item makes the end hold again, as the operator left it.
  */
 import {
   itemEndBlockerSchema,
@@ -19,7 +19,7 @@ import {
 } from '@archon/workflows/schemas/item-end';
 import { askItemRef } from '@archon/workflows/attention-item-refs';
 import type { ItemAct } from '@archon/workflows/schemas/item-act';
-import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
+import { getDatabase, getDatabaseType, pool } from './connection';
 import { actColumns, actRead, type ActColumns } from './item-act';
 import type { TransactionQuery } from './resource-slots';
 import { getLog } from './workflow-run-shared';
@@ -27,7 +27,6 @@ import { getLog } from './workflow-run-shared';
 interface EndRow extends ActColumns {
   id: string;
   reason: string;
-  run_id: string | null;
 }
 
 function endRead(row: EndRow): ItemEnd | ItemEndDegraded {
@@ -36,7 +35,6 @@ function endRead(row: EndRow): ItemEnd | ItemEndDegraded {
     id: row.id,
     reason: row.reason,
     ...actRead(row),
-    runId: row.run_id,
   });
   if (parsed.success) return parsed.data;
   // The parse error can quote the stored reason.
@@ -56,8 +54,7 @@ function runTree(itemId: string): string {
 
 /**
  * SQL true while a run in the tree of end `e`'s item is one the end did not see, or was
- * resumed since (resume is the only write of `active_phase_started_at`). Once true, only
- * deleting that run could make it false again, which `markOpenedItemEnds` prevents.
+ * resumed since (resume is the only write of `active_phase_started_at`).
  */
 function opened(): string {
   const same = getDatabaseType() === 'sqlite' ? 'IS' : 'IS NOT DISTINCT FROM';
@@ -73,11 +70,11 @@ function opened(): string {
 }
 
 /**
- * SQL true while end `e` holds: it was not marked opened, no run in its item's tree opened
- * it, none is live, and no start is queued on the item.
+ * SQL true while end `e` holds: no run in its item's tree opened it, none is live, and no
+ * start is queued on the item.
  */
 function holds(): string {
-  return `e.opened_at IS NULL AND NOT ${opened()}
+  return `NOT ${opened()}
     AND NOT EXISTS (
       ${runTree('e.item_id')}
       SELECT 1 FROM remote_agent_workflow_runs n JOIN tree t ON t.id = n.id
@@ -87,18 +84,6 @@ function holds(): string {
       SELECT 1 FROM remote_agent_resource_start_requests q
       WHERE q.item_id = e.item_id AND q.status = 'queued'
     )`;
-}
-
-/**
- * Record, once, that a run opened each end it did, in the transaction that deletes runs and
- * before it does: deleting the run that opened an item must not bring its end back. Every
- * path that deletes runs calls this.
- */
-export async function markOpenedItemEnds(query: TransactionQuery): Promise<void> {
-  await query(
-    `UPDATE remote_agent_item_ends AS e SET opened_at = ${getDialect().now()}
-     WHERE e.opened_at IS NULL AND ${opened()}`
-  );
 }
 
 /**
@@ -137,8 +122,8 @@ async function blockerOf(query: TransactionQuery, itemId: string): Promise<ItemE
 }
 
 /**
- * Record an end on item `itemId`, naming its latest run, and copy the runs it sees on the
- * item. The item is checked after the write, in the same transaction: on SQLite the write
+ * Record an end on item `itemId` and copy the runs it sees on the item and below its runs.
+ * The item is checked after the write, in the same transaction: on SQLite the write
  * holds the database, so no run or start slips in between; on PostgreSQL a run committed
  * before the check is seen, and one committed after it is not among the runs the end saw,
  * so it opens the item. While anything on the item is active or waiting, throws
@@ -148,15 +133,11 @@ export async function recordItemEnd(
   input: { itemId: string; key: string; reason: string } & ItemAct
 ): Promise<ItemEnd> {
   if (input.reason.trim() === '') throw new Error('An end needs a reason.');
-  const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
   return getDatabase().withTransaction(async query => {
     const result = await query<EndRow>(
       `INSERT INTO remote_agent_item_ends
-         (item_id, reason, by_declared, by_user_id, via, from_run_id, from_node_path, created_at,
-          run_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-         (SELECT CAST(r.id AS TEXT) FROM remote_agent_workflow_runs r WHERE r.item_id = $1
-          ORDER BY r.started_at DESC, r.${tie} DESC LIMIT 1))
+         (item_id, reason, by_declared, by_user_id, via, from_run_id, from_node_path, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [input.itemId, input.reason, ...actColumns(input)]
     );

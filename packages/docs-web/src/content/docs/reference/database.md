@@ -331,13 +331,12 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
 
 - **`remote_agent_item_ends`** - Ends of an item: an operator's statement that nothing more will happen on it (`archon workflow end`)
-  - No row is deleted, and nothing writes one by itself. `seq` is the recording order and `id` is text in both dialects
+  - Append-only: no row is updated or deleted, and nothing writes one by itself. `seq` is the recording order and `id` is text in both dialects
   - `item_id`, `reason`, `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at`, as for rulings
-  - `run_id` names the item's last run, if it had one, when the end was recorded. A binary that predates the table never reads it and shows the item as before
-  - `opened_at` is written once, by the transaction that deletes runs, for an end a run had opened, so deleting that run does not bring the end back
+  - A binary that predates the table never reads it and shows the item as before
 - **`remote_agent_item_end_runs`** - The runs an end saw on its item and below its runs, copied in the transaction that records the end
   - One row per run: `end_id`, `run_id` (no foreign key) and the run's `active_phase_started_at`, which only a resume writes, in the same type as the run's column
-  - An end holds while it is not marked opened, every run on its item or below its runs is one it saw and not resumed since, none of them is live, and no start is queued on the item. A new run or a resume, even from a transaction that overlapped the end's, opens the item; opening writes nothing, and deleting runs the end saw leaves it holding
+  - An end holds while every run on its item or below its runs is one it saw and not resumed since, none of them is live, and no start is queued on the item. A new run or a resume, even from a transaction that overlapped the end's, opens the item while that run exists. The rule reads only the runs that exist, so deleting runs the end saw leaves it holding, and deleting the run that opened the item makes it hold again
 - **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
   - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
   - `change` (the forge's identity of the merged change, never parsed), `merge_commit` (nullable), `merged_at` (the forge's merge time), `via`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`

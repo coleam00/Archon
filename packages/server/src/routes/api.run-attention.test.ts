@@ -529,7 +529,7 @@ describe('rulings on an item over HTTP', () => {
 describe('ending an item over HTTP', () => {
   const item = { id: 'item-row', projectKey: '_cwd/scratch', key: 'issues/9' };
   const post = (body: unknown) =>
-    makeApp().app.request('/api/items/end', {
+    makeApp().app.request('/api/items/ends', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -555,7 +555,6 @@ describe('ending an item over HTTP', () => {
         via: input.via,
         by: input.by,
         fromRun: null,
-        runId: failed.id,
       }));
       const recorded = await post({ ...body, as: 'triage-agent' });
       expect(recorded.status).toBe(201);

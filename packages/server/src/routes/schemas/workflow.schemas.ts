@@ -514,7 +514,7 @@ export const withdrawItemRulingBodySchema = z
 /** A ruling as recorded on its item, withdrawn or not. */
 export const itemRulingResponseSchema = itemRulingSchema.meta({ id: 'ItemRuling' });
 
-/** POST /api/items/end body: the item, by project and key, and why nothing more will happen on it. */
+/** POST /api/items/ends body: the item, by project and key, and why nothing more will happen on it. */
 export const recordItemEndBodySchema = z
   .object({
     project: z.string().min(1),
@@ -528,7 +528,7 @@ export const recordItemEndBodySchema = z
 /** An end as recorded on its item. */
 export const itemEndResponseSchema = itemEndSchema.meta({ id: 'ItemEnd' });
 
-/** POST /api/items/end 409: what on the item is still active or waiting. */
+/** POST /api/items/ends 409: what on the item is still active or waiting. */
 export const itemEndRefusedResponseSchema = z
   .object({ error: z.string(), blocker: itemEndBlockerSchema })
   .openapi('ItemEndRefused');

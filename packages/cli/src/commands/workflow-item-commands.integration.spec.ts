@@ -377,14 +377,12 @@ test.serial(
       reason: 'A duplicate of item-2.',
       by: { declared: 'triage-agent' },
       via: 'cli',
-      runId: stopped,
     });
 
     // A failed item is ended by its key alone, and without --as the CLI identity says who.
-    const failed = await seedEnded('item-fail', 'failed');
+    await seedEnded('item-fail', 'failed');
     succeeded(await end('item-fail', undefined, { ...callerEnv, ARCHON_USER_ID: 'ops' }));
     expect((await readItemJson('item-fail')).ended).toMatchObject({
-      runId: failed,
       by: { declared: 'ops' },
     });
 
