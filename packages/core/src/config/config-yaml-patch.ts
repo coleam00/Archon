@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'util';
-import { isMap, parseDocument, type Document } from 'yaml';
+import { isMap, isScalar, parseDocument, YAMLMap, type Document } from 'yaml';
 import { isConfigRecord } from './config-validation';
 
 type YamlMap = Record<string, unknown>;
@@ -17,6 +17,15 @@ export function patchYamlText(text: string, current: object, next: object): stri
   // uniqueKeys: false accepts a map with more than one `<<` merge key, which Bun reads.
   const document = parseDocument(text, { uniqueKeys: false });
   if (document.errors.length > 0) throw document.errors[0];
+  // The loader reads a `~` or `null` file as no settings; give it a map to write into,
+  // keeping the comments that sat on the null.
+  const root = document.contents;
+  if (isScalar(root) && root.value === null) {
+    const map = new YAMLMap(document.schema);
+    map.commentBefore = root.commentBefore;
+    map.comment = root.comment;
+    document.contents = map;
+  }
   patchMap(document, [], current as YamlMap, next as YamlMap);
   // lineWidth 0 keeps a long string on one line instead of folding it.
   const patched = document.toString({ lineWidth: 0 });

@@ -623,6 +623,18 @@ assistants:
         );
       });
 
+      test('a file that is only `~` or `null` takes the save', async () => {
+        mockFsReadFile.mockResolvedValueOnce('# empty for now\n~\n');
+        await updateGlobalConfig({ defaultAssistant: 'claude' });
+        mockFsReadFile.mockResolvedValueOnce('null\n');
+        await updateGlobalConfig({ defaultAssistant: 'claude' });
+
+        expect(mockFsWriteFile.mock.calls.map(call => call[1])).toEqual([
+          '# empty for now\ndefaultAssistant: claude\n',
+          'defaultAssistant: claude\n',
+        ]);
+      });
+
       test('CRLF line endings are kept', async () => {
         mockFsReadFile.mockResolvedValue('# note\r\nbotName: Archon\r\n');
 
