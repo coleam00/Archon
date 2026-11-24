@@ -1,7 +1,7 @@
 import type { StartRunArgs } from '../primitives/launch';
 export type { StartRunArgs } from '../primitives/launch';
 import type { paths } from '../../../lib/api.generated';
-import { requestJson } from '../lib/http';
+import { HttpError, requestJson } from '../lib/http';
 
 type WorkflowRunLaunchJson =
   paths['/api/workflows/{name}/run']['post']['requestBody']['content']['application/json'];
@@ -23,6 +23,11 @@ type WorkflowRunBody = Pick<
  *      asynchronously after the HTTP response returns, so we deliberately do
  *      not wait for it here — callers should invalidate the runs cache and
  *      let the list polling surface the new run as it appears.
+ *
+ *      A 4xx answer means the route refused the start before dispatching, so
+ *      no run owns the conversation from step 1: startRun soft-deletes it and
+ *      rethrows the refusal. A 5xx or a transport failure keeps it, because a
+ *      proxy error can hide a start the server accepted.
  *
  *      With files attached the dispatch route accepts multipart/form-data,
  *      mirroring /api/conversations/:id/message. Without files we use JSON.
@@ -50,10 +55,26 @@ export async function startRun({
     ...(hasAliases ? { aliases } : {}),
   } satisfies WorkflowRunBody;
 
-  await requestJson('/api/workflows/{name}/run', 'post', {
-    params: { name: workflow },
-    body: files !== undefined && files.length > 0 ? buildRunForm(body, files) : body,
-  });
+  try {
+    await requestJson('/api/workflows/{name}/run', 'post', {
+      params: { name: workflow },
+      body: files !== undefined && files.length > 0 ? buildRunForm(body, files) : body,
+    });
+  } catch (err) {
+    if (err instanceof HttpError && err.status >= 400 && err.status < 500) {
+      await discardConversation(conv.conversationId);
+    }
+    throw err;
+  }
+}
+
+/** The refusal is what the operator needs to see, so a failed cleanup is only logged. */
+async function discardConversation(conversationId: string): Promise<void> {
+  try {
+    await requestJson('/api/conversations/{id}', 'delete', { params: { id: conversationId } });
+  } catch (err) {
+    console.warn('[console] start-run cleanup failed', { conversationId, err });
+  }
 }
 
 function buildRunForm(body: WorkflowRunBody, files: File[]): FormData {
