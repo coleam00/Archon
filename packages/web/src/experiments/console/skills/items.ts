@@ -54,3 +54,10 @@ export async function getPackGraph(projectId: string, pack: string): Promise<Pac
     query: { codebaseId: projectId },
   });
 }
+
+export type Observing = components['schemas']['Observing'];
+
+/** What the install reads for event bindings without webhooks, and the watcher's last pass. */
+export async function getObserving(): Promise<Observing> {
+  return requestJson('/api/observing', 'get');
+}

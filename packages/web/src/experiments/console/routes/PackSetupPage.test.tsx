@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { bindingState, providerState } from './PackSetupPage';
+import { bindingState, providerState, watcherLine } from './PackSetupPage';
 import type { PackGraph } from '../skills/items';
 
 type Arrow = PackGraph['arrows'][number];
@@ -40,4 +40,22 @@ test('a provider is configured only when the default is one of the registered pr
   expect(providerState('claude', ['claude', 'codex']).ok).toBe(true);
   expect(providerState(undefined, ['claude']).ok).toBe(false);
   expect(providerState('pi', ['claude']).ok).toBe(false);
+});
+
+test('the watcher line says never, a clean pass, a failed pass and an earlier failure apart', () => {
+  const now = Date.parse('2026-11-24T12:00:40Z');
+  const at = '2026-11-24T12:00:00Z';
+  const pass = { at, pid: 1, ok: true, parts: {} };
+  const lines = [
+    watcherLine(null, now),
+    watcherLine(pass, now),
+    watcherLine(
+      { ...pass, ok: false, parts: { observe: { at, ok: false, errors: ['rate limited'] } } },
+      now
+    ),
+    watcherLine({ ...pass, lastFailure: { at, errors: ['unknown user'] } }, now),
+  ];
+  expect(new Set(lines).size).toBe(4);
+  expect(lines[2]).toContain('rate limited');
+  expect(lines[3]).toContain('unknown user');
 });

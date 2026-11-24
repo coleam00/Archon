@@ -45,6 +45,7 @@ export const K = {
   // instead of issuing duplicate /api/health fetches.
   health: 'health' as const,
   providers: 'providers' as const,
+  observing: 'observing' as const,
   updateCheck: 'update-check' as const,
   githubConnection: 'github-connection' as const,
   providerConnections: 'provider-connections' as const,

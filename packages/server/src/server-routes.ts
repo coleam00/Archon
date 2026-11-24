@@ -58,7 +58,8 @@ export function registerServerRoutes(app: OpenAPIHono, deps: ServerRouteDeps): v
     deps.activePlatforms,
     deps.attention,
     { githubAppAuth: adapters.githubAppAuthProvider ?? undefined },
-    deps.commit
+    deps.commit,
+    deps.webhookSources?.observing
   );
 
   // GitHub webhook endpoint

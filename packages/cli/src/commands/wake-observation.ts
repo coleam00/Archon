@@ -13,11 +13,10 @@ import {
   NativeScheduleUnsupportedError,
   type NativeScheduleOptions,
 } from '../triggers/native-schedule';
+import { readWakeLastPass, wakeLastPassPath } from '@archon/core/workflows/wake-last-pass';
 import {
   describeWakeLastPass,
-  readWakeLastPass,
   WAKE_SCHEDULE_INSTALL_COMMAND,
-  wakeLastPassPath,
   workflowWakeScheduleTarget,
 } from './wake-schedule';
 import type { WakeObservation } from './workflow-continuations';

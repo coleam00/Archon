@@ -33,6 +33,7 @@ import { registerConversationProcessingRoute } from './api.conversation-processi
 import { registerHealthRoutes } from './api.health';
 import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
+import { registerObservingRoute } from './api.observing';
 import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
 import { registerPackGraphRoute } from './api.packs';
 import { registerProviderKeyRoutes } from './api.provider-keys';
@@ -46,6 +47,8 @@ import { registerWorkflowRunLaunchRoute } from './api.workflow-run-launch';
 import { registerDashboardRunsRoute, registerWorkflowRunReadRoutes } from './api.workflow-runs';
 import { registerWorkflowDefinitionRoutes, registerWorkflowListRoute } from './api.workflows';
 import type { AppCommit } from './schemas/system.schemas';
+import type { ObservingSource } from '@archon/core/workflows/source-plugins';
+import { readWakeLastPass } from '@archon/core/workflows/wake-last-pass';
 import { RUN_ATTENTION_SCHEMA_NAME, runAttentionSchema } from './schemas/workflow.schemas';
 
 /**
@@ -66,7 +69,8 @@ export function registerApiRoutes(
     tracker?: Pick<ItemTracker, 'health'>;
   },
   registration: Pick<CloneOptions, 'githubAppAuth'> = {},
-  commit?: AppCommit
+  commit?: AppCommit,
+  observing: readonly ObservingSource[] = []
 ): void {
   const operations = createSqlWorkflowOperations();
   const dispatchToOrchestrator = createOrchestratorDispatch(webAdapter, lockManager);
@@ -137,6 +141,7 @@ export function registerApiRoutes(
     codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
     loadConfig,
   });
+  registerObservingRoute(app, { observing, lastPass: () => readWakeLastPass() });
   registerPackGraphRoute(app, {
     codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
     readPackGraph: (cwd, pack, workflowSource) =>

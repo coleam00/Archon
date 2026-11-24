@@ -4,12 +4,13 @@
  * missing or left over, and the bindings work enters by.
  *
  * Every row is the engine's own data and no pack is named. A check with no server read yet
- * (forge operations, versions, served events, models, capacity) is not drawn.
+ * (forge operations, versions) is not drawn.
  */
 import type { ReactElement } from 'react';
 import { Link, useParams } from 'react-router';
 import * as skill from '../skills';
-import { getPackGraph, type PackGraph } from '../skills/items';
+import { relativeTime } from '../lib/format';
+import { getObserving, getPackGraph, type Observing, type PackGraph } from '../skills/items';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 
@@ -114,6 +115,75 @@ function ProviderCheck(): ReactElement | null {
   );
 }
 
+/** When the wake watcher last read, and what it reported failing, in the record's own facts. */
+export function watcherLine(lastPass: Observing['lastPass'], now = Date.now()): string {
+  if (lastPass === null) return 'The wake watcher has never recorded a pass on this install.';
+  const read = `The wake watcher last read ${relativeTime(lastPass.at, now)}`;
+  const failed = Object.values(lastPass.parts).flatMap(part =>
+    part === undefined || part.ok ? [] : part.errors
+  );
+  if (!lastPass.ok) return `${read}, and that pass failed: ${failed.join('; ')}`;
+  if (lastPass.lastFailure === undefined) return `${read}.`;
+  return `${read}. It failed a pass ${relativeTime(lastPass.lastFailure.at, now)}: ${lastPass.lastFailure.errors.join('; ')}`;
+}
+
+/**
+ * What reads event bindings on an install that receives no webhooks. It is the whole
+ * install's: the engine cannot tell which project or pack a source's binding belongs to.
+ */
+function ObservingCheck(): ReactElement | null {
+  const { data } = useEntity<Observing>(K.observing, getObserving);
+  if (data === undefined) return null;
+  const failing = data.lastPass !== null && !data.lastPass.ok;
+  return (
+    <div data-observing className="mt-4 text-console-12 text-text-secondary">
+      <h3 className="font-semibold">Event bindings read without webhooks, on this install</h3>
+      {data.sources.length === 0 ? (
+        <p className="mt-1 text-text-tertiary">
+          This server was started with no sources file that observes, so it reads none.
+          {data.lastPass?.sources === undefined
+            ? ''
+            : ` The wake watcher last loaded ${data.lastPass.sources}.`}
+        </p>
+      ) : (
+        <ul className="mt-1 flex flex-col gap-1">
+          {data.sources.map(source => (
+            <li key={source.source} data-source={source.source}>
+              <span className="font-mono text-text-primary">{source.source}</span>: read every{' '}
+              {source.everySeconds} s while this server runs
+              <ul className="ml-4">
+                {source.labels.map(read => (
+                  <li key={`${read.bindingId}|${read.repo.path}|${read.label}`} data-read>
+                    <span className="font-mono">{read.bindingId}</span>: label{' '}
+                    <span className="font-mono">{read.label}</span> on {read.repo.host}/
+                    {read.repo.path}
+                  </li>
+                ))}
+                {source.unserved.map(binding => (
+                  <li key={binding.bindingId} data-unserved className="text-warning">
+                    <span className="font-mono">{binding.bindingId}</span> is not read:{' '}
+                    {binding.reason}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p data-watcher className={`mt-2 ${failing ? 'text-error' : ''}`}>
+        {watcherLine(data.lastPass)}
+      </p>
+      <p className="mt-1 text-console-11 text-text-tertiary">
+        Whether a job runs the watcher on this host:{' '}
+        <span className="font-mono">archon workflow wake schedule status</span>. A fire binding
+        starts with <span className="font-mono">archon trigger fire --config &lt;file&gt;</span>,
+        where the file is the one <span className="font-mono">archon pack bindings</span> wrote to
+        its <span className="font-mono">--out</span> directory.
+      </p>
+    </div>
+  );
+}
+
 export function PackSetup({ graph }: { graph: PackGraph }): ReactElement {
   const state = bindingState(graph);
   const heading = 'text-sm font-medium text-text-primary';
@@ -166,6 +236,7 @@ export function PackSetup({ graph }: { graph: PackGraph }): ReactElement {
             ))}
           </ul>
         )}
+        <ObservingCheck />
       </section>
       {graph.stages.some(stage => stage.inFlow && stage.roles.length > 0) ? (
         <section data-setup="roles" className="mb-8">

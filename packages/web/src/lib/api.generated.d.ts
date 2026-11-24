@@ -3943,6 +3943,51 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/observing': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The sources this install observes and the last pass its wake watcher recorded */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Observing'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/packs/{pack}/graph': {
     parameters: {
       query?: never;
@@ -11540,6 +11585,46 @@ export interface components {
         source: 'project' | 'bundled' | 'global' | 'installed';
         error: string;
       }[];
+    };
+    Observing: {
+      sources: {
+        source: string;
+        everySeconds: number;
+        labels: {
+          bindingId: string;
+          repo: {
+            host: string;
+            path: string;
+          };
+          label: string;
+        }[];
+        unserved: {
+          bindingId: string;
+          reason: string;
+        }[];
+      }[];
+      lastPass: {
+        at: string;
+        pid: number;
+        ok: boolean;
+        parts: {
+          wake?: {
+            at: string;
+            ok: boolean;
+            errors: string[];
+          };
+          observe?: {
+            at: string;
+            ok: boolean;
+            errors: string[];
+          };
+        };
+        lastFailure?: {
+          at: string;
+          errors: string[];
+        };
+        sources?: string;
+      } | null;
     };
     PackGraph: {
       pack: string;
