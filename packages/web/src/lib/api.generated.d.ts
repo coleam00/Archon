@@ -6308,7 +6308,13 @@ export interface components {
             path: string;
             optional?: boolean;
           };
-      skills?: string[];
+      skills?: (
+        | string
+        | {
+            name: string;
+            optional?: boolean;
+          }
+      )[];
       plugins?: string[];
       agents?: {
         [key: string]: {

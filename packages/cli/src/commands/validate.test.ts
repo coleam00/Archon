@@ -226,6 +226,43 @@ describe('validateWorkflowsCommand', () => {
     expect(await validateWorkflowsCommand(validationCwd, 'packed')).toBe(0);
   });
 
+  test('accepts an optional skill that is not installed', async () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = validationCwd;
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        makeTestWorkflowWithSource(
+          {
+            name: 'optional-skill',
+            provider: 'claude',
+            nodes: [
+              {
+                id: 'step1',
+                prompt: 'hello',
+                skills: [{ name: 'playwright-cli', optional: true }],
+              },
+            ],
+          },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+
+    try {
+      const exitCode = await validateWorkflowsCommand(validationCwd);
+
+      expect(exitCode).toBe(0);
+      const logged = JSON.stringify(mockConsoleLog.mock.calls);
+      expect(logged).toContain('1 valid, 0 with errors');
+      expect(logged).not.toContain('with warnings');
+      expect(logged).not.toContain('playwright-cli');
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
   test('passes effective Claude config dir and user setting source into resource validation', async () => {
     const configDir = join(validationCwd, 'custom-claude');
     const skillDir = join(configDir, 'skills', 'custom-skill');

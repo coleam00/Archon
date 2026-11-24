@@ -22,11 +22,12 @@ Each column is a registered provider id (the value you set as `provider:` in a
 workflow or `.archon/config.yaml`). A ✅ means Archon translates the corresponding
 capability for that provider; a ❌ means the capability is unsupported. Unsupported
 behavior is feature-specific: some optional fields are ignored with a warning, while
-strict contracts fail closed. In particular, a node naming `mcp:`, `skills:` or
-`plugins:` on a provider without that capability fails the run before any node
-starts, and `context.resume` rejects an explicitly unsupported provider at load
-time and an implicitly resolved one at runtime. An `mcp:` declared `optional: true`
-instead runs the node without its servers and records why.
+strict contracts fail closed. In particular, a node naming `mcp:`, a required
+`skills:` entry, or `plugins:` on a provider without that capability fails the run
+before any node starts, and `context.resume` rejects an explicitly unsupported
+provider at load time and an implicitly resolved one at runtime. An `mcp:` declared
+`optional: true` instead runs the node without its servers and records why. A skill
+declared `{ name, optional: true }` runs the node without that skill and records why.
 
 The columns are the providers built from this repository. Release binaries install
 Claude, Codex and Pi as provider plugins, with the same capabilities. A third-party
