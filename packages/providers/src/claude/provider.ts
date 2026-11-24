@@ -33,6 +33,7 @@ import { buildProviderSubprocessEnv } from '@archon/provider-contract';
 import type {
   CredentialStatus,
   ProviderCredentialInput,
+  ProviderCredentialKey,
   ProviderDiagnostics,
 } from '@archon/provider-contract';
 import {
@@ -84,6 +85,17 @@ function deliveredClaudeCredential(options: SendQueryOptions | undefined): strin
   );
 }
 
+/** Env inputs that can authenticate Claude Code; a delivered credential replaces them all. */
+const COMPETING_AUTH_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_CUSTOM_HEADERS',
+  'CLAUDE_CODE_API_KEY_HELPER_FD',
+  'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+] as const satisfies readonly ProviderCredentialKey[];
+/** Env selectors that route Claude Code to a cloud backend; a delivered credential sets them to '0'. */
 const CLOUD_SELECTOR_KEYS = [
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_VERTEX',
@@ -91,14 +103,7 @@ const CLOUD_SELECTOR_KEYS = [
   'CLAUDE_CODE_USE_MANTLE',
   'CLAUDE_CODE_USE_ANTHROPIC_AWS',
   'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD',
-] as const;
-const FORWARDED_AUTH_KEYS = [
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_API_KEY',
-  'CLAUDE_API_KEY',
-  'CLAUDE_CODE_OAUTH_TOKEN',
-  ...CLOUD_SELECTOR_KEYS,
-] as const;
+] as const satisfies readonly ProviderCredentialKey[];
 
 /**
  * Logs the credential input in the final subprocess env: key names only, never values.
@@ -107,7 +112,9 @@ const FORWARDED_AUTH_KEYS = [
  */
 function logCredentialInput(env: NodeJS.ProcessEnv, delivered: string | undefined): void {
   // Names every forwarded key; which one Claude Code uses is its precedence, not Archon's.
-  const credentialKeys = delivered ? [delivered] : FORWARDED_AUTH_KEYS.filter(key => env[key]);
+  const credentialKeys = delivered
+    ? [delivered]
+    : [...COMPETING_AUTH_KEYS, ...CLOUD_SELECTOR_KEYS].filter(key => env[key]);
   const credentialInput: ProviderCredentialInput = delivered
     ? 'delivered'
     : credentialKeys.length > 0
@@ -122,16 +129,7 @@ export function buildRequestSubprocessEnv(
   const env = buildProviderSubprocessEnv(requestOptions);
   const delivered = deliveredClaudeCredential(requestOptions);
   if (delivered) {
-    for (const key of [
-      'ANTHROPIC_API_KEY',
-      'CLAUDE_API_KEY',
-      'CLAUDE_CODE_OAUTH_TOKEN',
-      'ANTHROPIC_AUTH_TOKEN',
-      'ANTHROPIC_CUSTOM_HEADERS',
-      'CLAUDE_CODE_API_KEY_HELPER_FD',
-      'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
-    ])
-      delete env[key];
+    for (const key of COMPETING_AUTH_KEYS) delete env[key];
     env[delivered === 'CLAUDE_API_KEY' ? 'ANTHROPIC_API_KEY' : delivered] =
       requestOptions?.env?.[delivered];
     for (const key of CLOUD_SELECTOR_KEYS) env[key] = '0';

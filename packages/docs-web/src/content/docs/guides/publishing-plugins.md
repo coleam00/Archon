@@ -105,8 +105,9 @@ classes, `bindings.lifecycle` to one of its lifecycle events
 (`providerLifecycleEventSchema`), or `bindings.credentialInput` to one of its credential
 inputs (`providerCredentialInputSchema`), on any record the operator should see. With a
 lifecycle event, a non-negative integer `bindings.waitedMs` is forwarded too. With a
-credential input, the names in `bindings.credentialKeys` that are keys of the env the host
-gave the plugin or the request carried are forwarded too. The host forwards those values
+credential input, the names in `bindings.credentialKeys` that are in the contract's
+closed list (`providerCredentialKeySchema`) are forwarded too. The host sets the plugin's
+`LOG_LEVEL` to its own level, so a record below that level is not sent at all. The host forwards those values
 and nothing else, and drops a record with no enum value. `msg`, plugin module identity, and all
 other bindings remain withheld. Never put credentials, tokens, or message text in log
 records. Keep stdout exclusively for RPC; configure other logging to stderr before

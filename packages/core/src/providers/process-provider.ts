@@ -6,7 +6,7 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
-import { createLogger } from '@archon/paths';
+import { createLogger, getLogLevel } from '@archon/paths';
 import {
   buildProviderSubprocessEnv,
   providerCredentialInputSchema,
@@ -87,6 +87,9 @@ function startProcess(
   // would outlive any test that replaces createLogger to observe these diagnostics.
   const log = createLogger('core.provider-process');
   const env = buildProviderSubprocessEnv(options.execContext?.kind === 'container' ? {} : options);
+  // The host's level is authoritative: a plugin left on an inherited LOG_LEVEL would drop
+  // records (the credential input among them) that `--verbose` asked the host to show.
+  env.LOG_LEVEL = getLogLevel();
   const secrets = [
     ...collectCredentialValues(env, options.protectedEnvKeys),
     ...collectCredentialValues(
@@ -99,9 +102,6 @@ function startProcess(
   secrets.sort((a, b) => b.length - a.length);
   const redact = (text: string): string => redactCredentialValues(text, secrets);
   const providerLog = createLogger(`provider.${descriptor.id}`);
-  // Env key names the host chose or the request carried; a reported credential key outside
-  // them is plugin text and is dropped.
-  const envKeys = new Set([...Object.keys(env), ...Object.keys(options.env ?? {})]);
   const child = spawn(argv[0], argv.slice(1), {
     detached: process.platform !== 'win32',
     windowsHide: true,
@@ -212,7 +212,7 @@ function startProcess(
             // Plugin text and arbitrary JSON can encode message excerpts or credentials.
             // Only the severity, a failure class, lifecycle event and credential input from
             // the contract's closed enums, a lifecycle event's numeric `waitedMs`, and a
-            // credential input's key names that are keys of this process's env, cross this
+            // credential input's key names from the contract's closed list, cross this
             // boundary. An open plugin-chosen token would let a credential-shaped word
             // through, so no other plugin field is forwarded. A record with no enum value
             // would reach the log as severity alone, which no operator can act on, so it is
@@ -235,9 +235,7 @@ function startProcess(
                 ...(credentialInput.success
                   ? {
                       credentialInput: credentialInput.data,
-                      credentialKeys: credentialKeys.success
-                        ? credentialKeys.data.filter(key => envKeys.has(key))
-                        : [],
+                      credentialKeys: credentialKeys.success ? credentialKeys.data : [],
                     }
                   : {}),
               },

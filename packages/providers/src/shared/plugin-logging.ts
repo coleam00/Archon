@@ -32,8 +32,7 @@ export function installProviderLogSink(log: ProviderLogSink): void {
     if (!level) throw new Error('Unsupported provider log level');
     // SDK errors and payloads may contain credentials or message text. Forward
     // only module identity, counters, flags, and the contract's failure class,
-    // lifecycle event and credential input with its key names. The host checks
-    // those names against the env it gave this process.
+    // lifecycle event and credential input with key names from its closed list.
     const bindings = Object.fromEntries(
       Object.entries(record).filter(
         ([key, value]) =>

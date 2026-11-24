@@ -182,8 +182,9 @@ are `bindings.failureClass`, when it is one of the contract's failure classes,
 (`providerLifecycleEventSchema`), and `bindings.credentialInput`, when it is one of the
 contract's credential inputs (`providerCredentialInputSchema`). A lifecycle event also
 forwards its non-negative integer `bindings.waitedMs`, and a credential input the names in
-`bindings.credentialKeys` that are keys of the env the host gave the plugin or the request
-carried. The host drops a record with no enum value. Plugin `msg`, module identity, and all other
+`bindings.credentialKeys` that are in the contract's closed list
+(`providerCredentialKeySchema`). The host drops a record with no enum value, and sets the
+plugin's `LOG_LEVEL` to its own level. Plugin `msg`, module identity, and all other
 bindings are withheld: any plugin-chosen string, even one that looks like a machine
 token, can carry a credential.
 Container requests carry their optional `env` bag as session data while the plugin

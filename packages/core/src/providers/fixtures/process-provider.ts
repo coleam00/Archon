@@ -157,13 +157,21 @@ async function writeQueryLogs(
       },
     });
   }
-  if (mode === 'logs-credential') {
+  // Gated like a real plugin's logger, which reads LOG_LEVEL when it loads.
+  if (
+    mode === 'logs-credential' &&
+    ['trace', 'debug', 'info'].includes(process.env.LOG_LEVEL ?? 'info')
+  ) {
     await log({
       level: 'info',
       msg: 'claude.credential_input',
       bindings: {
         credentialInput: 'delivered',
-        credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN', options?.env?.CLAUDE_CODE_OAUTH_TOKEN ?? ''],
+        credentialKeys: [
+          'CLAUDE_CODE_OAUTH_TOKEN',
+          'PATH',
+          options?.env?.CLAUDE_CODE_OAUTH_TOKEN ?? '',
+        ],
       },
     });
   }

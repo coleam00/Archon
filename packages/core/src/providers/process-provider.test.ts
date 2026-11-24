@@ -653,8 +653,17 @@ test('provider lifecycle events reach the host log as closed values', async () =
   }
 });
 
-test('a credential input reaches the host log with only env key names', async () => {
-  const info = spyOn(providerLog, 'info').mockImplementation(() => {});
+test('a credential input reaches the host log at the host level, with only contract key names', async () => {
+  const levels = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
+  const spies = [providerLog, processLog].flatMap(logger =>
+    levels.map(level => spyOn(logger, level).mockImplementation(() => {}))
+  );
+  const info = spies[levels.indexOf('info')];
+  const inherited = process.env.LOG_LEVEL;
+  const hostLevel = paths.getLogLevel();
+  // A plugin inheriting a quieter LOG_LEVEL than the host would drop the record.
+  process.env.LOG_LEVEL = 'warn';
+  paths.setLogLevel('info');
   try {
     await collect(
       provider('logs-credential').sendQuery('turn', tmpdir(), undefined, {
@@ -668,8 +677,12 @@ test('a credential input reaches the host log with only env key names', async ()
         'provider.plugin.log',
       ],
     ]);
+    expect(JSON.stringify(spies.map(spy => spy.mock.calls))).not.toContain('delivered-secret');
   } finally {
-    info.mockRestore();
+    for (const spy of spies) spy.mockRestore();
+    if (inherited === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = inherited;
+    paths.setLogLevel(hostLevel);
   }
 });
 
