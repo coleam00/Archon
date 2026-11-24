@@ -5,6 +5,7 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import { trackerExit } from './tracker-exit';
+import { engineChangedSinceLoad, recordLoadedEngine } from './engine-fingerprint';
 
 /** A host that executes workflows: it can start, resume or pause runs. */
 export interface CliWorkflowExecution {
@@ -26,6 +27,7 @@ export async function createCliWorkflowHost(
   executorHost?: string
 ): Promise<WorkflowHost> {
   const executesWorkflow = execution !== undefined;
+  recordLoadedEngine();
   if (execution) await trackerExit.prepare(execution.forgeTrustedEnv);
   // Set once the host exists: what a run's end starts runs through the whole host.
   let host: WorkflowHost | undefined;
@@ -102,13 +104,22 @@ async function afterRunEnded(
         ids.add(receipt.id);
         byHost.set(binding.hostId, ids);
       }
+    if (engineChangedSinceLoad()) {
+      await handOffToInstalledEngine(runId, [...byHost.keys()], executorHost);
+      return;
+    }
     // One host's failure must not keep the others, or the install's drain, from running.
     const failures: unknown[] = [];
     if (byHost.size > 0) {
       const { startReceiptBindings, dispatch } = await starting(host);
       for (const [hostId, receiptIds] of byHost)
         await startReceiptBindings(
-          { ...host, hostId, startAdmitted: requestId => dispatch(requestId, hostId) },
+          {
+            ...host,
+            hostId,
+            startAdmitted: requestId => dispatch(requestId, hostId),
+            engineChanged: engineChangedSinceLoad,
+          },
           receiptIds
         ).catch((error: unknown) => {
           failures.push(error);
@@ -120,4 +131,56 @@ async function afterRunEnded(
     if (failures.length > 0)
       throw new AggregateError(failures, 'A start after the run ended failed');
   };
+}
+
+/**
+ * The hand-off of a run that ended on an engine the install has since replaced: this
+ * process prepares nothing, since its code may not load definitions written for the new
+ * engine. Its starts stay pending, and it starts the installed CLI's `trigger drain` for
+ * each host they or this install name, in the background, so a CLI-only install with no
+ * wake job still hands off. A drain that cannot be started leaves the starts pending for
+ * the next drain of their host (a run end, a wake pass, `trigger drain`), and is logged.
+ */
+async function handOffToInstalledEngine(
+  runId: string,
+  causedHosts: readonly string[],
+  executorHost: string | undefined
+): Promise<void> {
+  const log = createLogger('cli.run-end-drain');
+  const [
+    { installHosts },
+    { startTriggerExecutor },
+    { cliProgramArguments },
+    { DETACHED_RUN_OWNER_ENV },
+    { mkdir },
+  ] = await Promise.all([
+    import('./install-hosts'),
+    import('./run-job-escape'),
+    import('./cli-program-arguments'),
+    import('./detached-run-control'),
+    import('node:fs/promises'),
+  ]);
+  const hostIds = [...new Set([...causedHosts, ...(await installHosts(executorHost)).hostIds])];
+  log.info({ workflowRunId: runId, hostIds }, 'run_end_drain.engine_changed');
+  const logDirectory = join(getArchonHome(), 'logs');
+  await mkdir(logDirectory, { recursive: true });
+  for (const hostId of hostIds) {
+    try {
+      await startTriggerExecutor(
+        {
+          args: ['trigger', 'drain', '--host', hostId],
+          cwd: getArchonHome(),
+          // The drain owns no run; empty, not deleted, so `.env` loading cannot restore it.
+          env: { ...process.env, ARCHON_HOME: getArchonHome(), [DETACHED_RUN_OWNER_ENV]: '' },
+          log: join(logDirectory, `run-end-drain-${runId}.log`),
+        },
+        cliProgramArguments()
+      );
+    } catch (error) {
+      log.error(
+        { err: error as Error, workflowRunId: runId, hostId },
+        'run_end_drain.installed_engine_spawn_failed'
+      );
+    }
+  }
 }

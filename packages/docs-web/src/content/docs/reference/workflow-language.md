@@ -2475,7 +2475,10 @@ nodes:
   [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
   `stopped` until another run starts on the item, whatever its status. A run on no item, a run
   that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
-  workflow that declares no `final` has none, so every unbound outcome stops its item.
+  workflow that declares no `final` has none, so every unbound outcome stops its item. A run
+  whose end does start a binding also stops its item when admission refuses that start at
+  its [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item); the
+  listing then names the limit.
 
 - **`returns.summary`**: a string property of the `returns:` node's output that the attention
   queue shows, as one line, on a `stopped` item: why the stage stopped. The node's
@@ -2538,9 +2541,10 @@ none. An ask holds:
 - `context`: what is at stake and why it came up.
 - `options`: at least two, each with a kebab-case `id`, what it `does` and what it `cost`s.
   The id `other` is reserved: every ask also offers it, answered with text.
-- `recommendation`: `{ option, why }`, where `option` names one of the ask's options, or
-  `null` when the stage has no basis to choose between them. The key is still required, so a
-  `bash:` or `script:` node writes `"recommendation": null` rather than leaving it out.
+- `recommendation`: `{ option, why }`, where `option` names one of the ask's options. When the
+  stage has no basis to choose between them, `option` is `null` and `why` says why it
+  recommends none. A whole `null` recommendation, with no reason, is still accepted. The key is
+  required either way, so a `bash:` or `script:` node writes it rather than leaving it out.
 - `artifacts`: [artifact pointers](#a-small-result-that-points-at-a-large-file) the operator
   should read to decide; empty when there are none.
 
@@ -2580,7 +2584,8 @@ returns:
   ask offers anyway. `options` without `asks` fails to load.
 - The node writes no options. Its ask schema has no `options` field, and
   `recommendation.option` is limited to the declared ids (an `enum`), with each option's
-  `does` and `cost` in its description. The recommendation may still be `null`.
+  `does` and `cost` in its description. The recommendation's `option` may still be `null`,
+  with its `why`, and so may the whole recommendation.
 - Output that carries `options`, or recommends an id outside the set, fails the node's output
   validation like any other schema miss: an agent node is asked again with the errors, and a
   `bash:` or `script:` node fails. Both errors name the declared ids. A wrong recommendation
@@ -2617,8 +2622,12 @@ What the engine does with them:
   them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
   --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
   tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
-- **An ask may carry no recommendation.** One whose `recommendation` is `null` shows as having
-  none in `archon workflow attention`, in the console and in the item's tracker comment.
+- **An ask may carry no recommendation.** One whose `recommendation` is `null`, or names no
+  option, shows as having none in `archon workflow attention`, in the console and in the
+  item's tracker comment. The stage's reason for recommending none (the `why` of a
+  recommendation whose `option` is `null`) shows in the recommendation's place: the stored ask
+  keeps it as `no_recommendation`, with `recommendation` stored as `null`, and the attention
+  item carries it as `noRecommendation`. The engine never writes a reason of its own.
   `workflow answer --ref <ref> --recommended` on it is refused, and the ask stays open: choose
   one of its options. An Archon binary from before this field could be `null` reports such an
   ask as unreadable and leaves it out of its queue; answer it with a binary that knows it.
@@ -2860,7 +2869,7 @@ same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
 `INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
 
 The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
-shape as a workflow's, plus a `type`. The file holds only `inputs:`,
+shape as a workflow's, plus a `type` and the optional `section` and `file` keys. The file holds only `inputs:`,
 [`bindings:`](#pack-bindings) and [`forge:`](#pack-forge-needs):
 
 ```yaml
@@ -2876,11 +2885,31 @@ inputs:
   reviewers:
     type: list            # comma-separated text, no empty items
     description: who to request reviews from
+  review_policy:
+    description: the project's review policy
+    section: Policies     # optional grouping name
+    file: true            # string only: the value is a path to a file
+    default: docs/review-policy.md
 ```
 
 The declaration sits in a dot folder so neither workflow loader reads it as a workflow. Values
 stay text, as every `--input` is. An invalid declaration fails every workflow of the pack at
 load, naming the file and the key.
+
+Two optional keys are for a reader that lists a pack's settings, such as a settings page:
+
+- `section:` names the group a setting belongs to. Settings with the same section belong
+  together, in the order the pack lists them; a setting without one belongs to a default group.
+  How groups are shown is the reader's choice. The engine does not interpret the name.
+- `file: true` says the value is a path to a file, relative to the project or absolute. It is
+  allowed only on a `string` setting. [`archon validate workflows`](/reference/cli/#validate-workflows-name)
+  reports a file setting whose value, or default when the project sets none, names a path that
+  does not exist or is not a file. An empty value is not an error. A run does not check the
+  file at start; the node that reads it does.
+
+An unknown key on a setting is ignored, so a pack can use a key a newer Archon adds, and
+`archon validate workflows` lists each one as a `parse_warning`. Releases before this one
+refuse an unknown key on a setting, so they fail to load a pack that sets `section:` or `file:`.
 
 A project sets the values in `.archon/packs/<pack>.yaml`, under `settings:` only:
 
@@ -2902,8 +2931,8 @@ that is after its worktree was created. A `required` setting must be set there, 
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
 Run [`archon validate workflows`](/reference/cli/#validate-workflows-name) to check project
-pack settings before starting a run. It reports invalid values and undeclared names against
-each discovered workflow's pack declaration. Required values that an invocation can supply
+pack settings before starting a run. It reports invalid values, undeclared names and missing
+files named by `file` settings against each discovered workflow's pack declaration. Required values that an invocation can supply
 are checked only at run start.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each

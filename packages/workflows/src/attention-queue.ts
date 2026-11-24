@@ -44,6 +44,7 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { workflowRunStatusSchema } from './schemas/run-status';
+import { stoppedLimitSchema } from './schemas/run-metadata';
 import type { RunOwnerObservation } from './schemas/workflow-run-listing';
 import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
@@ -99,10 +100,7 @@ const answerableRunSchema = z.object({
 });
 
 const itemBase = {
-  /**
-   * The item's identity: the one string a surface hands out with an item and takes back
-   * to read or answer it. Opaque to every caller.
-   */
+  /** The item's identity, handed out with it and taken back to read or answer it; opaque. */
   ref: z.string().min(1),
   /** Null only when the item's run has no trusted storage root, so there is no key to give. */
   project: projectRefSchema.nullable(),
@@ -146,6 +144,8 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** The option with id `other` is the reserved one: an answer choosing it needs text. */
     other: z.literal(true).optional(),
     recommendation: attentionRecommendationSchema.optional(),
+    /** Why an ask has no recommendation, in its stage's words, when the stage gave a reason. */
+    noRecommendation: z.string().min(1).optional(),
     /** An ask's context: what is at stake and why it came up. */
     context: z.string().optional(),
     /** Artifacts an ask points its answerer to. */
@@ -192,17 +192,13 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('stopped'),
     ...itemBase,
-    /**
-     * The completed run that stopped the item, which holds nothing, and the outcome it
-     * completed with. `pausedAt` is when it ended.
-     */
+    /** The completed run that stopped the item and its outcome; `pausedAt` is when it ended. */
     stoppedIn: z.object({ runId: z.string(), workflow: z.string(), outcome: z.string() }),
     /** The run's declared `returns.summary`, or null when it declares or gave none. */
     summary: z.string().nullable(),
-    /**
-     * The project's checkout, the directory a start on the item runs from (`--cwd`); null
-     * when the run has no registered project.
-     */
+    /** Set when a start refused at its limit stopped the item; see `stoppedLimitSchema`. */
+    limit: stoppedLimitSchema.optional(),
+    /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),
 ]);

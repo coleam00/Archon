@@ -6,7 +6,7 @@ import { isAgentNode, isExecNode, workflowDefinitionSchema, type DagNode } from 
 import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from '../loader';
 import { resolveWorkflow } from '../graph-plan';
 import { findPreparedStrictSchemaIssues } from '@archon/provider-contract';
-import { itemAsksJsonSchema, parseItemAsks } from '../schemas/item-ask';
+import { itemAsksJsonSchema, parseItemAsks, storedItemAskSchema } from '../schemas/item-ask';
 import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { validateWorkflowResultContract } from './contracts';
 import { validateStructuredOutput } from '../structured-output';
@@ -500,6 +500,24 @@ nodes:${node}
       problem: "[0].recommendation.option names 'keep', which is not one of the ask's options",
     });
     expect(findPreparedStrictSchemaIssues(itemAsksJsonSchema())).toEqual([]);
+  });
+
+  it('opens an ask that recommends no option with no recommendation and the reason beside it', () => {
+    const ask = {
+      question: 'Which way?',
+      context: 'Nothing settles it.',
+      options: [
+        { id: 'drop', does: 'Drops it.', cost: 'The work is lost.' },
+        { id: 'reshape', does: 'Plans it again.', cost: 'A round.' },
+      ],
+      recommendation: { option: null, why: 'Only you can weigh the deadline.' },
+      artifacts: [],
+    };
+    // Stored with `recommendation: null`, so a binary that reads a recommendation as always
+    // naming an option still reads the ask, and the reason in its own key.
+    const opened = { ...ask, recommendation: null, no_recommendation: ask.recommendation.why };
+    expect(parseItemAsks([ask])).toEqual({ asks: [opened] });
+    expect(storedItemAskSchema.safeParse(opened).success).toBe(true);
   });
 
   it('refuses a property the author declared under the asks name', () => {
