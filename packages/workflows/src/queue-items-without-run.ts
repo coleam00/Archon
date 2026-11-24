@@ -193,6 +193,7 @@ export async function stoppedQueueItem(
     pausedAt: run.completed_at?.toISOString() ?? null,
     stoppedIn: { runId: run.id, workflow: run.workflow_name, outcome: run.completed_outcome },
     summary: stopped.summary,
+    ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
     checkout: codebase?.default_cwd ?? null,
   };
 }

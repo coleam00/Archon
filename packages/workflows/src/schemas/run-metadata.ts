@@ -204,26 +204,59 @@ export function readAsksResult(metadata: Record<string, unknown>): JsonValue | u
  * nothing, and it left no ask or wait. The attention queue lists the item as `stopped`
  * while this run is the newest on it. `summary` is the declared `returns.summary` value,
  * or null. Older binaries read metadata as an open record and ignore the key.
+ *
+ * Admission also sets it, with `limit`, on the completed run whose end or settled asks
+ * caused a start it refused at the start's limit (see `stoppedLimitSchema`): that start
+ * was the item's next step, so nothing follows the run either. An older binary reads that
+ * stop without its limit.
  */
 export const ITEM_STOPPED_METADATA_KEY = 'item_stopped';
 
 /** The longest summary kept, so one line in attention stays one line. */
 const ITEM_STOPPED_SUMMARY_MAX = 500;
 
+/**
+ * The start limit that stopped an item: where it stood when admission refused the start
+ * (`left` was 0), and the binding and workflow the refused start was for, so a reader can
+ * name what raises it.
+ */
+export const stoppedLimitSchema = z.object({
+  name: z.string(),
+  starts: z.number().int().positive(),
+  granted: z.number().int().nonnegative(),
+  used: z.number().int().nonnegative(),
+  bindingId: z.string(),
+  workflow: z.string(),
+});
+export type StoppedLimit = z.infer<typeof stoppedLimitSchema>;
+
 /** The metadata that marks a completed run as having stopped its item. */
-export function itemStoppedMetadata(summary: string | null): Record<string, unknown> {
+export function itemStoppedMetadata(
+  summary: string | null,
+  limit?: StoppedLimit
+): Record<string, unknown> {
   const line = summary?.trim().slice(0, ITEM_STOPPED_SUMMARY_MAX) ?? '';
-  return { [ITEM_STOPPED_METADATA_KEY]: { summary: line === '' ? null : line } };
+  return {
+    [ITEM_STOPPED_METADATA_KEY]: {
+      summary: line === '' ? null : line,
+      ...(limit === undefined ? {} : { limit }),
+    },
+  };
 }
 
 /** The stop a completed run recorded, or undefined when it stopped nothing. */
 export function readItemStopped(
   metadata: Record<string, unknown>
-): { summary: string | null } | undefined {
+): { summary: string | null; limit?: StoppedLimit } | undefined {
   const value = metadata[ITEM_STOPPED_METADATA_KEY];
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const summary = (value as Record<string, unknown>).summary;
-  return { summary: typeof summary === 'string' ? summary : null };
+  const { summary, limit } = value as Record<string, unknown>;
+  // A newer binary may add keys to the limit; they are stripped, not refused.
+  const read = stoppedLimitSchema.safeParse(limit);
+  return {
+    summary: typeof summary === 'string' ? summary : null,
+    ...(read.success ? { limit: read.data } : {}),
+  };
 }
 
 export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';

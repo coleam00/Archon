@@ -7898,6 +7898,14 @@ export interface components {
             outcome: string;
           };
           summary: string | null;
+          limit?: {
+            name: string;
+            starts: number;
+            granted: number;
+            used: number;
+            bindingId: string;
+            workflow: string;
+          };
           checkout: string | null;
         };
     AttentionQueueCountsResponse: {
@@ -8257,6 +8265,14 @@ export interface components {
               outcome: string;
             };
             summary: string | null;
+            limit?: {
+              name: string;
+              starts: number;
+              granted: number;
+              used: number;
+              bindingId: string;
+              workflow: string;
+            };
             checkout: string | null;
           }
         | unknown;
@@ -8427,6 +8443,16 @@ export interface components {
         granted: number;
         used: number;
         left: number;
+        bindings:
+          | {
+              bindingId: string;
+              workflow: string;
+              runEnded: {
+                workflowName: string;
+                outcome: string;
+              } | null;
+            }[]
+          | null;
       }[];
       waits: {
         event: string;
@@ -8731,6 +8757,14 @@ export interface components {
               outcome: string;
             };
             summary: string | null;
+            limit?: {
+              name: string;
+              starts: number;
+              granted: number;
+              used: number;
+              bindingId: string;
+              workflow: string;
+            };
             checkout: string | null;
           }
       )[];
@@ -9141,6 +9175,16 @@ export interface components {
           granted: number;
           used: number;
           left: number;
+          bindings:
+            | {
+                bindingId: string;
+                workflow: string;
+                runEnded: {
+                  workflowName: string;
+                  outcome: string;
+                } | null;
+              }[]
+            | null;
         }[];
         waits: {
           event: string;
@@ -9451,6 +9495,14 @@ export interface components {
                 outcome: string;
               };
               summary: string | null;
+              limit?: {
+                name: string;
+                starts: number;
+                granted: number;
+                used: number;
+                bindingId: string;
+                workflow: string;
+              };
               checkout: string | null;
             }
         )[];
@@ -10064,6 +10116,14 @@ export interface components {
                   outcome: string;
                 };
                 summary: string | null;
+                limit?: {
+                  name: string;
+                  starts: number;
+                  granted: number;
+                  used: number;
+                  bindingId: string;
+                  workflow: string;
+                };
                 checkout: string | null;
               };
         }

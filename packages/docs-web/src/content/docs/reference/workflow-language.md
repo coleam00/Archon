@@ -2475,7 +2475,10 @@ nodes:
   [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
   `stopped` until another run starts on the item, whatever its status. A run on no item, a run
   that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
-  workflow that declares no `final` has none, so every unbound outcome stops its item.
+  workflow that declares no `final` has none, so every unbound outcome stops its item. A run
+  whose end does start a binding also stops its item when admission refuses that start at
+  its [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item); the
+  listing then names the limit.
 
 - **`returns.summary`**: a string property of the `returns:` node's output that the attention
   queue shows, as one line, on a `stopped` item: why the stage stopped. The node's

@@ -240,4 +240,23 @@ test('a stopped item names its stage and outcome, and its commands work from any
   expect(block).toContain(
     "archon workflow run <workflow> --item 'release 1' --cwd '/srv/acme web'"
   );
+
+  // Stopped by a start refused at its limit: it names the limit and starts that workflow.
+  const limited = attentionItemLines(
+    {
+      ...stopped,
+      limit: {
+        name: 'build-rounds',
+        starts: 2,
+        granted: 1,
+        used: 3,
+        bindingId: 'b',
+        workflow: 'build',
+      },
+    },
+    'brief'
+  ).join('\n');
+  expect(limited).toContain("'build-rounds'");
+  expect(limited).toContain('3 of 3');
+  expect(limited).toContain("archon workflow run build --item 'release 1' --cwd '/srv/acme web'");
 });

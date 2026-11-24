@@ -91,6 +91,53 @@ export function startLimitStanding(
   };
 }
 
+/**
+ * A trigger file on this install whose binding counts its starts under a start limit: its
+ * `bindingId`, the `workflow` it starts and, for a run-ended binding, the run end that
+ * starts it (`runEnded`, null for any other form).
+ */
+export const startLimitBindingSchema = z.object({
+  bindingId: z.string(),
+  workflow: z.string(),
+  runEnded: z.object({ workflowName: z.string(), outcome: z.string() }).nullable(),
+});
+export type StartLimitBinding = z.infer<typeof startLimitBindingSchema>;
+
+/**
+ * A start limit on the item, as `startLimitStanding` counts it, with the trigger files
+ * that count under it. `bindings` is null when the host reads no trigger files or they
+ * did not read; an empty list means no file on this install names the limit any more.
+ */
+export const itemStartLimitSchema = startLimitStandingSchema.extend({
+  bindings: z.array(startLimitBindingSchema).nullable(),
+});
+
+/**
+ * What an item read's host gives to name each limit's `bindings`: this install's trigger
+ * files that declare a start limit, each with the limit's name, or null when they did not
+ * read. A host without one names none.
+ */
+export type LimitBindingsReader = () => Promise<
+  readonly (StartLimitBinding & { limit: string })[] | null
+>;
+
+/** Each limit with the trigger files that count under it; read only when there is a limit. */
+export async function withLimitBindings(
+  limits: readonly StartLimitStanding[],
+  read: LimitBindingsReader | undefined
+): Promise<z.infer<typeof itemStartLimitSchema>[]> {
+  const files = limits.length === 0 ? null : ((await read?.()) ?? null);
+  return limits.map(limit => ({
+    ...limit,
+    bindings:
+      files === null
+        ? null
+        : files
+            .filter(file => file.limit === limit.name)
+            .map(({ bindingId, workflow, runEnded }) => ({ bindingId, workflow, runEnded })),
+  }));
+}
+
 /** Why admission refused a start at its limit, written where `trigger inspect` shows it. */
 export function startLimitRefusal(standing: StartLimitStanding, itemKey: string): string {
   const allowed = standing.starts + standing.granted;
