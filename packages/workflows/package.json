@@ -7,6 +7,7 @@
     "./run-ai-configuration": "./src/run-ai-configuration.ts",
     "./run-preflight": "./src/run-preflight.ts",
     "./start-refusal": "./src/start-refusal.ts",
+    "./pack-settings": "./src/pack-settings.ts",
     "./run-credential-env": "./src/run-credential-env.ts",
     "./run-forge-access": "./src/run-forge-access.ts",
     "./run-paths": "./src/run-paths.ts",

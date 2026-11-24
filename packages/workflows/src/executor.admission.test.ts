@@ -840,6 +840,26 @@ describe('result_of inputs without an item', () => {
     expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
   });
+
+  it('starts a pre-created row whose value its pack settings supply, as a foreground start does', async () => {
+    const store = makeStore();
+    await startWorkflow({
+      store,
+      workflow: makeWorkflow({
+        name: 'reads',
+        inputs: { prior: { result_of: 'build' } },
+        pack: {
+          key: 'stages',
+          workflow: 'reads',
+          source: 'project',
+          settings: { prior: { type: 'string', default: 'from-pack' } },
+        },
+      }),
+      options: { preCreatedRun: makeRun({ status: 'pending', item_id: null }) },
+    });
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(store.claimPendingWorkflowRun).toHaveBeenCalled();
+  });
 });
 
 describe('run limit config', () => {
