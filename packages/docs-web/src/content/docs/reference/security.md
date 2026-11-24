@@ -77,12 +77,13 @@ nodes:
 
   - id: implement
     prompt: "Fix the issues found"
-    denied_tools: [WebSearch, WebFetch]  # No internet access
+    denied_tools: [WebSearch, WebFetch]  # Blocks these two tools only
 ```
 
 **How it works:**
 - `allowed_tools` is an allow list for the provider's tool filter. An empty list (`[]`) selects no built-in tools governed by that filter. A Claude node that declares `skills` keeps the `Skill` tool even then. On Copilot the filter covers MCP tools too, so `[]` also removes them.
 - `denied_tools` blocks listed tools within the provider's restriction boundary.
+- Denying tools does not cut network access. In the example above, `implement` keeps `Bash`, so shell commands such as `curl` still reach the internet, as can any other network-capable tool the node keeps, such as an MCP server. Only the execution environment a run uses can enforce a network boundary.
 - If both are set on Claude, Pi or Copilot, `denied_tools` wins: a tool named in both lists is removed.
 - Support and tool names depend on the provider. See [Provider capabilities](/reference/provider-capabilities/#capabilities) for tool restriction support.
 
