@@ -18,7 +18,7 @@ import {
 import { parsePackagedResourceReference } from '../packaged-workflow';
 import type { DigestEntry } from './manifest';
 import { BUNDLED_SCOPE_DIR } from './roots';
-import { isEnvFile, logSkippedEnvFile, type TreeFile, type TreeListing } from './tree';
+import { isEnvFile, type TreeFile, type TreeListing } from './tree';
 
 /**
  * One bundled file, held ready to be written into a capture.
@@ -51,7 +51,7 @@ export interface BundledScope {
   readonly byteCount: number;
   /**
    * Bundled `.env` files left out (`isEnvFile`), as the source path or, for a binary's
-   * constants, the bundled path. Logged by each capture that would have written them.
+   * constants, the bundled path. Each capture logs them with its other skipped files.
    */
   readonly skippedEnvFiles: readonly string[];
 }
@@ -219,7 +219,6 @@ export async function resolveBundledScope(): Promise<BundledScope | undefined> {
 
 /** Write this build's bundled bytes into a staged capture. */
 export async function writeBundledScope(scope: BundledScope, staging: string): Promise<void> {
-  for (const path of scope.skippedEnvFiles) logSkippedEnvFile(path);
   for (const dir of scope.dirs) await mkdir(join(staging, dir), { recursive: true });
   for (const file of scope.files) await writeFile(join(staging, file.relPath), file.content);
 }

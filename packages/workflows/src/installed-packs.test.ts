@@ -927,21 +927,28 @@ describe('a pack folder given as the source', () => {
     );
   });
 
-  test('a non-git pack folder reports each .env once, by the job that would copy it', async () => {
+  test('a non-git pack folder reports each .env it leaves out once, even where two jobs list it', async () => {
     const folder = await packFolder('local');
     const rootEnv = join(folder, '.env');
     const scriptsEnv = join(folder, '.archon', 'scripts', '.env');
     const fixturesEnv = join(folder, '.archon', 'fixtures', '.env');
-    for (const path of [rootEnv, scriptsEnv, fixturesEnv]) {
+    // A command folder at the pack root is copied by its own job and by the root listing.
+    const commandsEnv = join(folder, 'commands', '.env');
+    for (const path of [rootEnv, scriptsEnv, fixturesEnv, commandsEnv]) {
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, 'SECRET=1\n');
     }
 
     const warnings = await captureWarnings(() =>
-      captureWorkflowSource({ sourceRoot: folder, captureRoot: join(home, 'runs', 'run-1') })
+      captureWorkflowSource({
+        sourceRoot: folder,
+        captureRoot: join(home, 'runs', 'run-1'),
+        commandFolder: 'commands',
+      })
     );
     expect(warnings.reported(rootEnv)).toBe(1);
     expect(warnings.reported(scriptsEnv)).toBe(1);
+    expect(warnings.reported(commandsEnv)).toBe(1);
     // No capture job copies `.archon/fixtures/`, so nothing was left out of one.
     expect(warnings.reported(fixturesEnv)).toBe(0);
   });

@@ -213,11 +213,16 @@ async function stageCapture(
   let fileCount = 0;
   let byteCount = 0;
   const scopesCaptured = new Set<CapturedScope>(jobs.map(j => j.scope));
+  // `.env` files left out, reported once each: a pack folder's root listing and a project
+  // directory job (a command folder at the root, say) can both list the same file.
+  const skippedEnvFiles = new Set<string>();
   await mkdir(staging, { recursive: true });
   for (const job of jobs) {
     const target = join(staging, job.dest);
     await mkdir(dirname(target), { recursive: true });
-    const copied = await copyListing(job.listing ?? (await listTree(job.from)), target);
+    const listing = job.listing ?? (await listTree(job.from));
+    for (const file of listing.skippedEnvFiles) skippedEnvFiles.add(file.absPath);
+    const copied = await copyListing(listing, target);
     fileCount += copied.files;
     byteCount += copied.bytes;
   }
@@ -236,9 +241,14 @@ async function stageCapture(
   const bundled = await resolveBundledScope();
   if (bundled) {
     await writeBundledScope(bundled, staging);
+    for (const path of bundled.skippedEnvFiles) skippedEnvFiles.add(path);
     fileCount += bundled.files.length;
     byteCount += bundled.byteCount;
     scopesCaptured.add('bundled');
+  }
+
+  for (const path of skippedEnvFiles) {
+    getLog().warn({ path }, 'workflow.source_capture_env_skipped');
   }
 
   // The bundled files were written from bytes whose hashes are already known, so reading

@@ -26,17 +26,12 @@ const SKIP_DIRECTORIES = new Set(['.git', '__pycache__']);
  * True for a `.env` or `.env.*` file, which no capture holds from any scope. It is
  * secrets, not source: a script gets its environment from the engine, never from a file
  * beside it, and a copy here would outlive a rotation in every run's capture. A walk
- * records each one it leaves out (`TreeListing.skippedEnvFiles`) and the copy logs it, so
- * a script that did read a sibling `.env` is not a silent difference.
+ * records each one it leaves out (`TreeListing.skippedEnvFiles`) and the capture logs it,
+ * so a script that did read a sibling `.env` is not a silent difference.
  */
 export function isEnvFile(relPath: string): boolean {
   const name = basename(relPath);
   return name === '.env' || name.startsWith('.env.');
-}
-
-/** Log one `.env` file a capture left out: the path, never the contents. */
-export function logSkippedEnvFile(path: string): void {
-  getLog().warn({ path }, 'workflow.source_capture_env_skipped');
 }
 
 /** Project-relative directories that hold executable source. */
@@ -98,8 +93,8 @@ export interface TreeListing {
   readonly dirs: readonly string[];
   readonly files: readonly TreeFile[];
   /**
-   * `.env` files the walk left out (`isEnvFile`). The copy logs them, so a file is
-   * reported once by the job that would have copied it, not by every walk that saw it.
+   * `.env` files the walk left out (`isEnvFile`). The capture logs them once each, after
+   * every job, because two jobs can list the same file.
    */
   readonly skippedEnvFiles: readonly TreeFile[];
 }
@@ -186,15 +181,11 @@ async function enterableDirectory(
   return canonical;
 }
 
-/**
- * Copy a listed tree into `to`. Empty directories are recreated too. Each `.env` file the
- * listing left out is logged here, by the one job that would have copied it.
- */
+/** Copy a listed tree into `to`. Empty directories are recreated too. */
 export async function copyListing(
   listing: TreeListing,
   to: string
 ): Promise<{ files: number; bytes: number }> {
-  for (const file of listing.skippedEnvFiles) logSkippedEnvFile(file.absPath);
   for (const dir of listing.dirs) await mkdir(join(to, dir), { recursive: true });
   let bytes = 0;
   for (const file of listing.files) {
