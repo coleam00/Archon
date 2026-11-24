@@ -98,18 +98,35 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       });
     });
 
-    test('a top-level null in a metadata write removes the key and keeps nulls inside a value', async () => {
+    test.each([
+      'update',
+      'pending-update',
+      'running-update',
+      'complete',
+      'pause',
+      'resolve',
+    ] as const)('%s removes a key patched to null and keeps nulls inside a value', async writer => {
+      const metadata = { cleared: 'set', kept: true };
+      const run =
+        writer === 'pending-update'
+          ? await create(store, { metadata })
+          : await running(store, { metadata });
       const patch = { cleared: null, nested: { a: null } };
-      const expected = { kept: true, nested: { a: null } };
-      const run = await create(store, { metadata: { cleared: 'set', kept: true } });
-      await store.updateWorkflowRun(run.id, { metadata: patch });
-      expect((await store.getWorkflowRun(run.id))?.metadata).toEqual(expected);
-      const live = await running(store, { metadata: { cleared: 'set', kept: true } });
-      expect(await store.updateWorkflowRunMetadataIfRunning(live.id, patch)).toBe(true);
-      expect((await store.getWorkflowRun(live.id))?.metadata).toEqual(
-        expect.objectContaining(expected)
-      );
-      expect((await store.getWorkflowRun(live.id))?.metadata).not.toHaveProperty('cleared');
+      if (writer === 'update') await store.updateWorkflowRun(run.id, { metadata: patch });
+      else if (writer === 'pending-update')
+        expect(await store.updateWorkflowRunMetadataIfPending(run.id, patch)).toBe(true);
+      else if (writer === 'running-update')
+        expect(await store.updateWorkflowRunMetadataIfRunning(run.id, patch)).toBe(true);
+      else if (writer === 'complete')
+        await store.completeWorkflowRun(run.id, { duration_ms: 1 }, patch);
+      else if (writer === 'pause') await store.pauseWorkflowRun(run.id, approval, patch);
+      else {
+        await store.pauseWorkflowRun(run.id, approval);
+        expect(await store.resolveApprovalGate(run.id, patch, [])).toEqual({ resolved: true });
+      }
+      const stored = (await store.getWorkflowRun(run.id))?.metadata;
+      expect(stored).toMatchObject({ kept: true, nested: { a: null } });
+      expect(stored).not.toHaveProperty('cleared');
     });
 
     test.each(['spawn', null, 42, undefined])(
