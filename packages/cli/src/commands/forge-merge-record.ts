@@ -2,9 +2,10 @@
  * A `pr.merge` from a run records itself on the run's item when the forge applied it, or
  * refused it because the pull request was already merged: the merge, as `workflow merged`
  * records it, and the landing branch, as `workflow landing` does. The facts come from the
- * forge, never from the request: from the merge result, or for an already-merged refusal
- * from `pr.view` and `pr.merge-state`. A pack that still calls `recordMerge` afterwards
- * keeps this record: the store keeps the first merge.
+ * forge's answer, never from the request: the merge result, or the refusal's evidence of
+ * the earlier merge. The store keeps the first merge, and the landing is written only with
+ * it, so a repeat, a pack that still calls `recordMerge` afterwards, or a merge of another
+ * pull request leaves both records as they were.
  */
 import { closeDatabase } from '@archon/core/db/connection';
 import { readCallingNode } from '../utils/calling-node';
@@ -23,14 +24,15 @@ export interface RunMergeFacts {
 
 /**
  * `no_merge_time`: the run is on an item, but the plugin reported no merge time, so
- * nothing is recorded rather than a time the forge did not give. A file-store run is
- * never on an item, so it resolves to `no_item`.
+ * nothing is recorded rather than a time the forge did not give. `already_recorded`: the
+ * item already has a merge, so neither record is written. A file-store run is never on an
+ * item, so it resolves to `no_item`.
  */
 export async function recordRunMerge(
   runId: string,
   facts: RunMergeFacts,
   env: NodeJS.ProcessEnv
-): Promise<'recorded' | 'no_item' | 'no_merge_time'> {
+): Promise<'recorded' | 'already_recorded' | 'no_item' | 'no_merge_time'> {
   try {
     const host = await createCliWorkflowHost();
     let target: { projectKey: string; key: string };
@@ -53,6 +55,7 @@ export async function recordRunMerge(
       fromRun,
     });
     if (recorded === null) throw new Error(`No item '${target.key}' in this project.`);
+    if (!recorded.recorded) return 'already_recorded';
     await store.recordItemLanding({ ...target, branch, fromRun });
     return 'recorded';
   } finally {

@@ -178,9 +178,11 @@ export function mergeGitHub(
     supplementalMissing?: boolean;
     mergedFalse?: boolean;
     readFailed?: boolean;
+    /** Merged before the request, by hand. */
+    alreadyMerged?: boolean;
   } = {}
 ) {
-  let wrote = false;
+  let wrote = options.alreadyMerged ?? false;
   const writes: unknown[] = [];
   const mergePull = (init: RequestInit) => {
     writes.push(JSON.parse(String(init.body)));

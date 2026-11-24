@@ -124,3 +124,29 @@ test('failure evidence cannot belong to another operation or call observed rerun
     }).success
   ).toBe(false);
 });
+
+test('a merge time on failure evidence needs a refusal that observed the pull request merged', async () => {
+  const { mutationFailureSchema } = await import('./operations');
+  const target = { repo: { host: 'forge', path: 'repo' }, number: 1 };
+  const observed = {
+    ...target,
+    schemaVersion: 1,
+    url: 'https://forge/repo/pull/1',
+    head: 'feat',
+    base: 'dev',
+    is_draft: false,
+    head_repo: target.repo,
+    head_revision: 'head',
+    base_revision: 'base',
+    maintainer_can_modify: null,
+  };
+  const refusal = (state: 'merged' | 'closed') => ({
+    op: 'pr.merge',
+    target,
+    outcome: 'refused',
+    merge: { method: 'merge', conditions: { head: 'head' }, merged_at: '2026-11-20T09:30:00Z' },
+    observed: { ...observed, state },
+  });
+  expect(mutationFailureSchema.safeParse(refusal('merged')).success).toBe(true);
+  expect(mutationFailureSchema.safeParse(refusal('closed')).success).toBe(false);
+});

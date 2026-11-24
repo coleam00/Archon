@@ -32,13 +32,17 @@ function evidenceBase(
 ): Pick<ForgeMutationFailure, 'op' | 'target' | 'merge' | 'rerun'> {
   return { op: request.op, target: mutationTarget(request), ...mutationAttempt(request) };
 }
+/** `merge` adds to a refused merge's evidence what the forge reports of an earlier merge. */
 export function refused(
   request: ForgeMutationRequest,
   error: ForgeError,
-  observed?: ForgePrRecord
+  observed?: ForgePrRecord,
+  merge?: Pick<NonNullable<ForgeMutationFailure['merge']>, 'landed' | 'merged_at'>
 ): ForgeResponse {
+  const base = evidenceBase(request);
   return failure(request.operationId, error, {
-    ...evidenceBase(request),
+    ...base,
+    ...(base.merge && merge ? { merge: { ...base.merge, ...merge } } : {}),
     outcome: 'refused',
     ...(observed ? { observed } : {}),
   });

@@ -891,6 +891,32 @@ test.serial(
     expect(after.landing?.branch).toBe('dev');
     expect(merges()).toEqual([{ n: 1 }]);
 
+    // A repeat, or the merge of another pull request, keeps both records as they are,
+    // including a landing the operator corrected since.
+    succeeded(
+      await invoke(host =>
+        workflowLandingCommand(
+          host,
+          projectRoot,
+          { itemOf: onItem.id, branch: 'release/next' },
+          true,
+          env
+        )
+      )
+    );
+    let repeat: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
+    await invoke(async () => {
+      repeat = await recordRunMerge(
+        onItem.id,
+        { ...facts, change: 'https://github.com/acme/web/pull/5', branch: 'main' },
+        env
+      );
+    });
+    expect(repeat).toBe('already_recorded');
+    const repeated = await readItemJson('item-1');
+    expect(repeated.merged).toEqual(item.merged);
+    expect(repeated.landing?.branch).toBe('release/next');
+
     // A run on no item writes nothing.
     expect(await record(bare.id, facts.at)).toBe('no_item');
     expect(merges()).toEqual([{ n: 1 }]);

@@ -546,6 +546,23 @@ test('merge refuses stale and unsupported conditions before writing', async () =
   }
 });
 
+test('merge refuses a pull request merged earlier and reports the facts of that merge', async () => {
+  const github = mergeGitHub({ alreadyMerged: true });
+  const response = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: github.fetch,
+  });
+  expect(forgeResponseSchema.parse(response)).toMatchObject({
+    ok: false,
+    mutation: {
+      outcome: 'refused',
+      observed: { state: 'merged' },
+      merge: { landed: { commit: 'landed' }, merged_at: MERGED_AT },
+    },
+  });
+  expect(github.writes).toEqual([]);
+});
+
 test.each([
   [{ status: 409 }, 'refused'],
   [{ lost: true }, 'outcome_unknown'],

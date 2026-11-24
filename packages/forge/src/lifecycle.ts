@@ -467,6 +467,12 @@ export const mergeEvidenceSchema = z.object({
   method: prMergeRequestSchema.shape.method,
   conditions: mergeConditionsSchema,
   landed: landedSchema.optional(),
+  /**
+   * When the forge says the pull request merged, only on a refusal that observed it
+   * already merged. With `landed`, a run on an item records that merge. Absent from a plugin
+   * released before the field.
+   */
+  merged_at: z.iso.datetime({ offset: true }).optional(),
 });
 
 export const lifecycleReadRequestSchemas = [
@@ -634,6 +640,15 @@ export const mutationFailureSchema = z
       (value.outcome === 'refused' && value.rerun && value.rerun.observed.length > 0)
     )
       ctx.addIssue({ code: 'custom', message: 'Mutation evidence belongs to its operation' });
+    if (
+      value.merge?.merged_at !== undefined &&
+      (value.outcome !== 'refused' || value.observed?.state !== 'merged')
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A merge time belongs to a pull request observed merged',
+        path: ['merge', 'merged_at'],
+      });
   });
 export type ForgeMutationFailure = z.infer<typeof mutationFailureSchema>;
 

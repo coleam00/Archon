@@ -44,14 +44,15 @@ const credential = { credentialSource: z.string().min(1).optional() };
 
 /**
  * What the host recorded on the run's item for a `pr.merge` from a run on an item: on the
- * success response for an applied merge, and on the refusal for a pull request the forge
- * reports already merged. `no_merge_time`: the forge reported no merge time, so nothing was
- * recorded; the merge itself still happened. Absent for every other operation and outcome,
- * and for a run on no item.
+ * success response for an applied merge, and on the refusal of a pull request the forge
+ * reports already merged. `no_merge_time`: the forge reported no merge time, so nothing
+ * was recorded. `already_recorded`: the item already had a merge, so neither record was
+ * written. Either way the merge itself happened. Absent for every other operation and
+ * outcome, and for a run on no item.
  */
 export const cliForgeItemRecordSchema = z.discriminatedUnion('recorded', [
   z.object({ recorded: z.literal(true) }),
-  z.object({ recorded: z.literal(false), reason: z.literal('no_merge_time') }),
+  z.object({ recorded: z.literal(false), reason: z.enum(['no_merge_time', 'already_recorded']) }),
 ]);
 export type CliForgeItemRecord = z.infer<typeof cliForgeItemRecordSchema>;
 

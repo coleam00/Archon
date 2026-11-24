@@ -33,7 +33,15 @@ export async function mergePullRequest(
     return refused(
       request,
       { kind: 'conflict', message: 'Pull request is not open and ready at the requested head' },
-      prRecord(request.ref.repo, before)
+      prRecord(request.ref.repo, before),
+      // Merged earlier, by hand or by another run: the facts of that merge, so a run on an
+      // item can record it.
+      before.merged && before.merged_at
+        ? {
+            landed: { commit: before.merge_commit_sha ?? null, tree: null, parents: null },
+            merged_at: before.merged_at,
+          }
+        : undefined
     );
   const { root, path } = location(request.ref.repo);
   submit('submitted');
