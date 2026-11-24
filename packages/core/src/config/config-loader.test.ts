@@ -850,6 +850,10 @@ concurrency:
       await expect(updateGlobalConfig({ botName: 'X' })).rejects.toThrow(
         /Invalid concurrency config.*concurrency\.providers\.claude/
       );
+      // Setting another provider's cap is checked against the merged map, not only the patch.
+      await expect(
+        updateGlobalConfig({ concurrency: { providers: { codex: 2 } } })
+      ).rejects.toThrow(/concurrency\.providers\.claude/);
       expect(mockFsWriteFile).not.toHaveBeenCalled();
       // Loading stays permissive: only admission and writes refuse a bad cap.
       await expect(loadGlobalConfig()).resolves.toMatchObject({ botName: 'MyBot' });

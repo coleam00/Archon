@@ -587,8 +587,11 @@ export async function writeHomePiModelConfig(model: string): Promise<void> {
     manualNote();
     return;
   }
-  validateProviderConcurrencyConfig(doc.toJS(), configPath);
-  writeFileSync(configPath, doc.toString());
+  const next = doc.toString();
+  // Check the text admission will read, parsed the way admission parses it: the `yaml`
+  // library resolves merge keys (`<<`) differently from Bun's parser.
+  validateProviderConcurrencyConfig(Bun.YAML.parse(next) ?? {}, configPath);
+  writeFileSync(configPath, next);
   log.info(`Pi model written to ${configPath}`);
 }
 
