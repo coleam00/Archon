@@ -14,8 +14,9 @@ import {
 import type { RunLimitState } from '@archon/workflows/schemas/run-limit';
 import { getDatabase } from './connection';
 import { INSTALL_HOLD_ID, lockAdmission, readInstallHold } from './resource-slots';
+import { storedWorkflowName } from './item-starts';
 import { readRunLimitWaiting } from './run-room';
-import { parseStoredJson, storedWorkflowName } from './resource-starts';
+import { parseStoredJson } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
 import { loadRunLimit } from '../config/concurrency-config';
 

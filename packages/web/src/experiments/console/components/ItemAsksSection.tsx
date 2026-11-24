@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import { displayItemKey } from '../factory/lib/item-key';
 import { Link } from 'react-router';
 import { AttentionAnswerForm } from './AttentionAnswerPanel';
 import * as skill from '../skills';
@@ -97,7 +98,7 @@ export function ItemAsksSection({
                 Item
               </span>
               <span className="font-mono text-sm text-text-primary">
-                {item?.key ?? 'Item not found'}
+                {item === undefined ? 'Item not found' : displayItemKey(item.key, null)}
               </span>
               {showProject && project !== null ? (
                 <span className="truncate text-console-11 text-text-secondary">
@@ -159,7 +160,7 @@ function OpenAsk({
   onAnswered: (record: AnsweredAsk) => void;
 }): ReactElement {
   const submit = async (choose: string[], text: string | undefined): Promise<void> => {
-    await skill.answerAttentionItem(ask.ref, choose, text);
+    await skill.answerAttentionItem(ask.ref, { choose, ...(text === undefined ? {} : { text }) });
     onAnswered({ ask, choose, text });
     invalidate(K.runsAttention);
   };
@@ -177,7 +178,11 @@ function OpenAsk({
           No recommendation. Choose an option.
         </p>
       ) : null}
-      <AttentionAnswerForm fields={ask} submit={submit} refusal={refusal} />
+      <AttentionAnswerForm
+        wait={ask}
+        submit={submit}
+        {...(refusal === undefined ? {} : { refusal })}
+      />
     </div>
   );
 }

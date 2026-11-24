@@ -1,0 +1,304 @@
+{
+  "note": "GET /api/factory/item for item 2, copied 2026-11-17 from the live factory via dev:console (a read-only copy of its database); long strings trimmed. Round verdicts 'ended' re-read under #4's declared approval: 'approve' as approved, any other outcome undecided. progress.runs added after capture, from this response's runs[].workflow (none of these runs failed, so failedStep is null). Fields the API gained after the capture are filled as an item without them reads them (run pack, spend, pause and result fields; item skipped, waits, run limit, merged and landing; progress partOf; each run_ended cause the arrow id the same arrow carries in later captures).",
+  "response": {
+    "pack": "Wirasm/archon-software-factory",
+    "item": {
+      "item": {
+        "id": "843ffe6473952a19d7a52834f2881c9e",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "2"
+      },
+      "runs": [
+        {
+          "id": "59c892d1-90c3-4f70-9a68-ce4ea1425d9d",
+          "workflow": "Wirasm/archon-software-factory:triage",
+          "pack": null,
+          "status": "completed",
+          "outcome": "build",
+          "startedAt": "2026-11-16T23:30:52.000Z",
+          "completedAt": "2026-11-16T23:31:49.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "cb2c2c9b-b80b-411a-9d8d-b7f95bbc1837",
+            "sourceInstanceId": "fc-start-triage"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        },
+        {
+          "id": "d4e76223-9187-490b-ba5f-ce8aff023767",
+          "workflow": "Wirasm/archon-software-factory:plan",
+          "pack": null,
+          "status": "completed",
+          "outcome": "planned",
+          "startedAt": "2026-11-16T23:31:55.000Z",
+          "completedAt": "2026-11-16T23:39:32.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "59c892d1-90c3-4f70-9a68-ce4ea1425d9d",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        },
+        {
+          "id": "934682d0-bf74-494c-9949-7b0f7697d9d9",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-16T23:39:38.000Z",
+          "completedAt": "2026-11-17T03:01:06.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "d4e76223-9187-490b-ba5f-ce8aff023767",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        }
+      ],
+      "queued": [],
+      "skipped": [],
+      "hold": null,
+      "held": [],
+      "runLimit": null,
+      "waits": [],
+      "questions": [],
+      "answers": [],
+      "links": [],
+      "merged": null,
+      "landing": null,
+      "degraded": [],
+      "progress": {
+        "title": "The Factory tab: a pack's factory view declaration, discovered per project, opens a Software Factory section",
+        "running": null,
+        "round": {
+          "runId": "934682d0-bf74-494c-9949-7b0f7697d9d9",
+          "iteration": 3,
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return"
+            },
+            {
+              "iteration": 2,
+              "verdict": "returned",
+              "outcome": "return"
+            },
+            {
+              "iteration": 3,
+              "verdict": "approved",
+              "outcome": "approve"
+            }
+          ]
+        },
+        "partOf": null,
+        "returned": 2,
+        "change": {
+          "url": "https://github.com/coleam00/archon-factory-console/pull/11",
+          "number": 11,
+          "merged": true,
+          "mergedAt": "2026-11-17T03:05:25Z"
+        },
+        "runs": [
+          {
+            "runId": "59c892d1-90c3-4f70-9a68-ce4ea1425d9d",
+            "workflow": "triage",
+            "failedStep": null
+          },
+          {
+            "runId": "d4e76223-9187-490b-ba5f-ce8aff023767",
+            "workflow": "plan",
+            "failedStep": null
+          },
+          {
+            "runId": "934682d0-bf74-494c-9949-7b0f7697d9d9",
+            "workflow": "deliver",
+            "failedStep": null
+          }
+        ],
+        "shadows": [],
+        "parked": null,
+        "awaits": null
+      }
+    },
+    "runs": [
+      {
+        "runId": "59c892d1-90c3-4f70-9a68-ce4ea1425d9d",
+        "workflow": "triage",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "cb2c2c9b-b80b-411a-9d8d-b7f95bbc1837",
+          "sourceInstanceId": "fc-start-triage"
+        },
+        "costUsd": 0.29648339999999995,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      },
+      {
+        "runId": "d4e76223-9187-490b-ba5f-ce8aff023767",
+        "workflow": "plan",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "59c892d1-90c3-4f70-9a68-ce4ea1425d9d",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+        },
+        "costUsd": 3.2227326,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      },
+      {
+        "runId": "934682d0-bf74-494c-9949-7b0f7697d9d9",
+        "workflow": "deliver",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "d4e76223-9187-490b-ba5f-ce8aff023767",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+        },
+        "costUsd": 32.01725652,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return",
+              "summary": "Return. One finding: the `current()` helper in packages/web/src/experiments/console/factory/FactoryPage.test.tsx compares whole Tailwind class strings, so a styling-only change to the sub-navigation l…",
+              "steps": [
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "return",
+                  "summary": "Nearly every test this change adds catches a realistic break in something the item asks for: schema rejection, discovery precedence, malformed files reported with their path, the applies-to-project ru…"
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "Users get what the item was for. I ran the change on a scratch home with two scratch projects and drove it in a browser at 1440x900 and 390x844:\n- The project that ships `.archon/packs/Wirasm.archon-s…"
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve: I would land this change. It does what item #2 asks: a strict zod schema for the declaration, discovery shared with metric views (project file first), a read-only GET /api/factory/views route…"
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "return",
+                  "summary": "Return. One finding: the `current()` helper in packages/web/src/experiments/console/factory/FactoryPage.test.tsx compares whole Tailwind class strings, so a styling-only change to the sub-navigation l…"
+                }
+              ]
+            },
+            {
+              "iteration": 2,
+              "verdict": "returned",
+              "outcome": "return",
+              "summary": "Return, for test-assertion repairs only. The feature meets item #2: the review and product checks both approve it, and the builder's returned fix (the class-string test) is confirmed fixed. The test c…",
+              "steps": [
+                {
+                  "node": "rounds.fix",
+                  "outcome": "fixed",
+                  "summary": "I fixed the one returned finding, the `current()` helper in `FactoryPage.test.tsx`. It was a test pinned to styling rather than behaviour: it compared the whole Tailwind class string of the current li…"
+                },
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "return",
+                  "summary": "Return, for a different fault than last time. The finding returned last time is fixed: currentLinks() in FactoryPage.test.tsx now checks only aria-current, href and label. I confirmed it in a scratch …"
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "Approve. I ran the change against a scratch home with a fresh database and two scratch projects: a copy of this checkout at the commit, and an empty git repo. The project that ships `.archon/packs/Wir…"
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. The one returned finding is fixed. The new `currentLinks()` helper in FactoryPage.test.tsx asserts which links carry aria-current=\"page\", by href and label. I ran three changes to SectionLink…"
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "return",
+                  "summary": "Return, for test-assertion repairs only. The feature meets item #2: the review and product checks both approve it, and the builder's returned fix (the class-string test) is confirmed fixed. The test c…"
+                }
+              ]
+            },
+            {
+              "iteration": 3,
+              "verdict": "approved",
+              "outcome": "approve",
+              "summary": "Approve: the review, product review and test check all approve or call the tests sound, and the builder fixed both returned findings in commit 6d5ec050f. No report returns the change, replans, or leav…",
+              "steps": [
+                {
+                  "node": "rounds.fix",
+                  "outcome": "fixed",
+                  "summary": "Both findings are fixed. They were the same fault: tests compared whole error sentences, so rewording a message failed them though nothing behaved differently. Commit 6d5ec050f is pushed to the PR bra…"
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "I'm approving this. Users get what the item asked for, and I saw it in a browser at 1440x900 and at phone width. I used a scratch server, a scratch home and two scratch projects, not the live database…"
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. Both returned findings are fixed. The schema and discovery tests now check issue paths, file paths and pack identity instead of whole sentences. I proved this in a scratch copy: rewording the…"
+                },
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "sound",
+                  "summary": "Sound. Both returned findings are fixed, and every test this change leaves behind fails for a plausible break that matters.\n\n- **Wording no longer breaks tests.** In a scratch copy I prefixed every sc…"
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "approve",
+                  "summary": "Approve: the review, product review and test check all approve or call the tests sound, and the builder fixed both returned findings in commit 6d5ec050f. No report returns the change, replans, or leav…"
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": []
+      }
+    ]
+  }
+}

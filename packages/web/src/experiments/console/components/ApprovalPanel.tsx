@@ -4,8 +4,7 @@ import {
   type MouseEvent,
   type ReactElement,
 } from 'react';
-import * as skill from '../skills';
-import { invalidate } from '../store/cache';
+import { gateChoices, respondToGate } from '../lib/gate-response';
 import type { Run } from '../primitives/run';
 
 interface ApprovalPanelProps {
@@ -14,11 +13,6 @@ interface ApprovalPanelProps {
 
 /** `null` (nothing being answered) or the id of the non-default decision being answered. */
 type Mode = string | null;
-
-function decisionLabel(id: string, label: string | undefined): string {
-  if (label !== undefined && label.length > 0) return label;
-  return id.charAt(0).toUpperCase() + id.slice(1);
-}
 
 /**
  * Inline approval surface for a paused run.
@@ -64,47 +58,28 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
   const [mode, setMode] = useState<Mode>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const isDemo = run.id.startsWith('demo-');
   // Signal-bearing interactive-loop gate (#2074): a bare approve finalizes the
   // node from the already-computed output (no re-run); a comment runs another
   // iteration. Same respond call either way — the backend derives
   // finalize-vs-iterate from comment presence.
   const signalBearing = run.approval?.completionSignaled === true;
 
-  const authored = run.approval?.decisionsAuthored === true;
-  const decisions = run.approval?.decisions ?? [];
-  const approveDecision = decisions.find(d => d.id === 'approve');
-  const canApprove = !authored || approveDecision !== undefined;
-  const approveLabel = authored
-    ? decisionLabel('approve', approveDecision?.label)
-    : signalBearing && comment.trim().length === 0
-      ? 'Accept & complete'
-      : 'Continue';
-  const secondaryDecisions = decisions.filter(d => d.id !== 'approve');
+  const choices = gateChoices(run, comment);
+  const approve = choices.find(choice => choice.id === 'approve');
+  const canApprove = approve !== undefined;
+  const approveLabel = approve?.label ?? '';
+  const secondaryDecisions = choices.filter(choice => choice.id !== 'approve');
+  const modeLabel = secondaryDecisions.find(choice => choice.id === mode)?.label ?? '';
 
   const stopPropagation = (e: MouseEvent | ReactKeyboardEvent): void => {
     e.stopPropagation();
   };
 
   const respond = async (decisionId: string, rawText: string): Promise<void> => {
-    const trimmed = rawText.trim();
     setBusy(true);
     setError(null);
     try {
-      if (isDemo) {
-        await new Promise<void>(r => setTimeout(r, 300));
-      } else {
-        await skill.respondRun(
-          run.id,
-          decisionId,
-          trimmed.length > 0 ? trimmed : undefined,
-          run.approval?.pauseId === undefined
-            ? undefined
-            : { nodeId: run.approval.nodeId, pauseId: run.approval.pauseId }
-        );
-      }
-      invalidate('runs');
-      invalidate(`run:${run.id}`);
+      await respondToGate(run, decisionId, rawText);
       setComment('');
       setText('');
       setMode(null);
@@ -197,17 +172,16 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
               }}
               disabled={busy}
               className="shrink-0 rounded border border-error/30 px-3 text-console-12 text-error transition-colors hover:bg-error/10 disabled:opacity-40"
-              title={`${decisionLabel(d.id, d.label)} this run`}
+              title={`${d.label} this run`}
             >
-              {decisionLabel(d.id, d.label)}
+              {d.label}
             </button>
           ))}
         </div>
       ) : (
         <div className="flex flex-col gap-2">
           <label className="font-mono text-console-10 uppercase tracking-console-label text-error">
-            {decisionLabel(mode, secondaryDecisions.find(d => d.id === mode)?.label)} — text
-            required
+            {modeLabel} — text required
           </label>
           <textarea
             value={text}
@@ -247,9 +221,7 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
                 disabled={busy || text.trim().length === 0}
                 className="flex items-center gap-1 rounded border border-error/40 bg-error/15 px-3 py-1 text-console-12 font-medium text-error transition-colors hover:bg-error/25 disabled:opacity-40"
               >
-                {busy
-                  ? 'Sending…'
-                  : `${decisionLabel(mode, secondaryDecisions.find(d => d.id === mode)?.label)} run`}
+                {busy ? 'Sending…' : `${modeLabel} run`}
                 <span aria-hidden className="font-mono text-console-10 opacity-70">
                   ⌘↵
                 </span>

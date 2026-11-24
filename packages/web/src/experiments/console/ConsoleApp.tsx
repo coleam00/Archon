@@ -9,9 +9,10 @@ import { BuilderConnected } from './builder/BuilderConnected';
 import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
 import { MetricsPage } from './routes/metrics/MetricsPage';
-import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
 import { SettingsPage } from './routes/SettingsPage';
+import { projectRoutes } from './routes/project-routes';
+import { factoryPackRoutes } from './factory/packs/routes';
 import { invalidate } from './store/cache';
 import { K } from './store/keys';
 import { useKeymap, type Binding } from './lib/keymap';
@@ -119,11 +120,8 @@ export function ConsoleApp(): ReactElement {
             <Route path="_preview" element={<PreviewPage />} />
             <Route path="r/:runId" element={<RunDetailPage />} />
             <Route path="*" element={<Navigate to="/console" replace />} />
-            <Route path="p/:projectId" element={<RunsPage />} />
-            <Route path="p/:projectId/chat" element={<ChatPage />} />
-            <Route path="p/:projectId/metrics" element={<MetricsPage />} />
-            <Route path="p/:projectId/metrics/details" element={<MetricsPage view="details" />} />
-            <Route path="p/:projectId/r/:runId" element={<RunDetailPage />} />
+            {projectRoutes('')}
+            {factoryPackRoutes('')}
           </Routes>
         </main>
       </div>

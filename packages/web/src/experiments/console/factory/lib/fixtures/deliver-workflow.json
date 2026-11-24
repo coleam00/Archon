@@ -1,0 +1,349 @@
+{
+  "name": "deliver",
+  "runName": "Wirasm/archon-software-factory:deliver",
+  "steps": [
+    {
+      "key": "build__build",
+      "label": "build",
+      "group": "build",
+      "dependsOn": [],
+      "kind": "agent",
+      "includedFrom": "build",
+      "model": ["@builder", "large"],
+      "when": null,
+      "whenClauses": null,
+      "prompt": "# Build one item",
+      "promptError": null,
+      "references": [],
+      "script": null,
+      "scriptError": null,
+      "command": "build",
+      "yaml": "id: build",
+      "yamlError": null
+    },
+    {
+      "key": "rounds.fix",
+      "label": "fix",
+      "group": "rounds",
+      "dependsOn": [],
+      "kind": "agent",
+      "includedFrom": null,
+      "model": ["@builder", "large"],
+      "when": "$LOOP_PREV.verdict__verdict.output.outcome == 'return'",
+      "whenClauses": [
+        [
+          {
+            "reads": {
+              "kind": "step",
+              "key": "rounds.verdict__verdict"
+            },
+            "operator": "==",
+            "value": "return"
+          }
+        ]
+      ],
+      "prompt": "# Fix what the checks returned",
+      "promptError": null,
+      "references": [],
+      "script": null,
+      "scriptError": null,
+      "command": "fix",
+      "yaml": "id: fix",
+      "yamlError": null
+    },
+    {
+      "key": "rounds.base",
+      "label": "base",
+      "group": "rounds",
+      "dependsOn": ["rounds.fix"],
+      "kind": "bash",
+      "includedFrom": null,
+      "model": null,
+      "when": null,
+      "whenClauses": null,
+      "prompt": null,
+      "promptError": null,
+      "references": [],
+      "script": {
+        "runtime": "sh",
+        "name": null,
+        "body": "git fetch origin main\ngit diff --stat origin/main"
+      },
+      "scriptError": null,
+      "command": null,
+      "yaml": "id: base",
+      "yamlError": null
+    },
+    {
+      "key": "rounds.review__review",
+      "label": "review",
+      "group": "rounds.review",
+      "dependsOn": ["rounds.base"],
+      "kind": "agent",
+      "includedFrom": "review",
+      "model": ["@reviewer", "large"],
+      "when": null,
+      "whenClauses": null,
+      "prompt": "# Review one change",
+      "promptError": null,
+      "references": [],
+      "script": null,
+      "scriptError": null,
+      "command": "review",
+      "yaml": "id: review",
+      "yamlError": null
+    },
+    {
+      "key": "rounds.tests__tests",
+      "label": "tests",
+      "group": "rounds.tests",
+      "dependsOn": ["rounds.base"],
+      "kind": "agent",
+      "includedFrom": "tests",
+      "model": ["@test-checker", "large"],
+      "when": null,
+      "whenClauses": null,
+      "prompt": "# Check the tests of one change",
+      "promptError": null,
+      "references": [],
+      "script": null,
+      "scriptError": null,
+      "command": "tests",
+      "yaml": "id: tests",
+      "yamlError": null
+    },
+    {
+      "key": "rounds.product__product",
+      "label": "product",
+      "group": "rounds.product",
+      "dependsOn": ["rounds.base"],
+      "kind": "agent",
+      "includedFrom": "product",
+      "model": ["@product-reviewer", "large"],
+      "when": null,
+      "whenClauses": null,
+      "prompt": "# Review the change for the product's users",
+      "promptError": null,
+      "references": [],
+      "script": null,
+      "scriptError": null,
+      "command": "product",
+      "yaml": "id: product",
+      "yamlError": null
+    },
+    {
+      "key": "rounds.verdict__verdict",
+      "label": "verdict",
+      "group": "rounds.verdict",
+      "dependsOn": ["rounds.review__review", "rounds.tests__tests", "rounds.product__product"],
+      "kind": "agent",
+      "includedFrom": "verdict",
+      "model": ["@verdict", "small"],
+      "when": null,
+      "whenClauses": null,
+      "prompt": "# Put the reports on one change together",
+      "promptError": null,
+      "references": [],
+      "script": null,
+      "scriptError": null,
+      "command": "verdict",
+      "yaml": "id: verdict",
+      "yamlError": null
+    },
+    {
+      "key": "exhausted",
+      "label": "exhausted",
+      "group": null,
+      "dependsOn": ["rounds"],
+      "kind": "agent",
+      "includedFrom": null,
+      "model": ["@judge", "medium"],
+      "when": "$rounds.output.outcome == 'return'",
+      "whenClauses": [
+        [
+          {
+            "reads": {
+              "kind": "step",
+              "key": "rounds"
+            },
+            "operator": "==",
+            "value": "return"
+          }
+        ]
+      ],
+      "prompt": "# The rounds ran out: what should happen to this change?",
+      "promptError": null,
+      "references": [],
+      "script": null,
+      "scriptError": null,
+      "command": "exhausted",
+      "yaml": "id: exhausted",
+      "yamlError": null
+    },
+    {
+      "key": "hostrounds.hostfix",
+      "label": "hostfix",
+      "group": "hostrounds",
+      "dependsOn": [],
+      "kind": "agent",
+      "includedFrom": null,
+      "model": ["@builder", "large"],
+      "when": "$LOOP_PREV.host__host.output.outcome == 'return'",
+      "whenClauses": [
+        [
+          {
+            "reads": {
+              "kind": "step",
+              "key": "hostrounds.host__host"
+            },
+            "operator": "==",
+            "value": "return"
+          }
+        ]
+      ],
+      "prompt": "# Fix what the host returned",
+      "promptError": null,
+      "references": [],
+      "script": null,
+      "scriptError": null,
+      "command": "fix-host",
+      "yaml": "id: hostfix",
+      "yamlError": null
+    },
+    {
+      "key": "hostrounds.host__host",
+      "label": "host",
+      "group": "hostrounds.host",
+      "dependsOn": ["hostrounds.hostfix"],
+      "kind": "agent",
+      "includedFrom": "host",
+      "model": ["@host", "medium"],
+      "when": null,
+      "whenClauses": null,
+      "prompt": "# Read what the host says about one change",
+      "promptError": null,
+      "references": [],
+      "script": null,
+      "scriptError": null,
+      "command": "host",
+      "yaml": "id: host",
+      "yamlError": null
+    },
+    {
+      "key": "result",
+      "label": "result",
+      "group": null,
+      "dependsOn": ["rounds", "hostrounds", "exhausted"],
+      "kind": "script",
+      "includedFrom": null,
+      "model": null,
+      "when": null,
+      "whenClauses": null,
+      "prompt": null,
+      "promptError": null,
+      "references": [],
+      "script": {
+        "runtime": "bun",
+        "name": "result",
+        "body": "import { result } from 'archon:script';\nresult({});"
+      },
+      "scriptError": null,
+      "command": null,
+      "yaml": "id: result",
+      "yamlError": null
+    }
+  ],
+  "groups": [
+    {
+      "id": "build",
+      "kind": "include",
+      "parent": null,
+      "label": "build",
+      "maxRounds": null,
+      "when": null,
+      "whenClauses": null,
+      "dependsOn": []
+    },
+    {
+      "id": "rounds",
+      "kind": "loop",
+      "parent": null,
+      "label": "rounds",
+      "maxRounds": 3,
+      "when": null,
+      "whenClauses": null,
+      "dependsOn": ["build__build"]
+    },
+    {
+      "id": "rounds.review",
+      "kind": "include",
+      "parent": "rounds",
+      "label": "review",
+      "maxRounds": null,
+      "when": null,
+      "whenClauses": null,
+      "dependsOn": []
+    },
+    {
+      "id": "rounds.tests",
+      "kind": "include",
+      "parent": "rounds",
+      "label": "tests",
+      "maxRounds": null,
+      "when": null,
+      "whenClauses": null,
+      "dependsOn": []
+    },
+    {
+      "id": "rounds.product",
+      "kind": "include",
+      "parent": "rounds",
+      "label": "product",
+      "maxRounds": null,
+      "when": null,
+      "whenClauses": null,
+      "dependsOn": []
+    },
+    {
+      "id": "rounds.verdict",
+      "kind": "include",
+      "parent": "rounds",
+      "label": "verdict",
+      "maxRounds": null,
+      "when": null,
+      "whenClauses": null,
+      "dependsOn": []
+    },
+    {
+      "id": "hostrounds",
+      "kind": "loop",
+      "parent": null,
+      "label": "hostrounds",
+      "maxRounds": 3,
+      "when": "$rounds.output.outcome == 'approve'",
+      "whenClauses": [
+        [
+          {
+            "reads": {
+              "kind": "step",
+              "key": "rounds"
+            },
+            "operator": "==",
+            "value": "approve"
+          }
+        ]
+      ],
+      "dependsOn": ["rounds"]
+    },
+    {
+      "id": "hostrounds.host",
+      "kind": "include",
+      "parent": "hostrounds",
+      "label": "host",
+      "maxRounds": null,
+      "when": null,
+      "whenClauses": null,
+      "dependsOn": []
+    }
+  ]
+}

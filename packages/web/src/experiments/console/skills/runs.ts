@@ -1,6 +1,11 @@
 import type { paths } from '@/lib/api.generated';
-import type { ListRunsOptions, RunsAttention } from '../primitives/run';
-export type { ListRunsOptions, RunsAttention } from '../primitives/run';
+import type { AttentionQueue, ListRunsOptions, RunsAttention } from '../primitives/run';
+export type {
+  AttentionQueue,
+  AttentionQueueItem,
+  ListRunsOptions,
+  RunsAttention,
+} from '../primitives/run';
 import { requestJson, buildApiUrl } from '../lib/http';
 import { isItemAsk, toOwnerLostHolders, toRun, type Run } from '../primitives/run';
 import { toRunEvent, type RunEvent, type RunNodeState } from '../primitives/event';
@@ -52,6 +57,37 @@ export async function listRunsNeedingAttention(): Promise<RunsAttention> {
   };
 }
 
+/** The open attention items of one project (a codebase id), with the runs holding them. */
+export async function listAttentionQueue(
+  project: string,
+  init: { signal?: AbortSignal } = {}
+): Promise<AttentionQueue> {
+  const res = await requestJson('/api/runs/attention', 'get', {
+    query: { project },
+    signal: init.signal,
+  });
+  if (!('items' in res)) throw new Error('Attention endpoint returned counts instead of items');
+  return {
+    items: res.items,
+    runs: res.runs.map(toRun),
+    degraded: res.degraded ?? [],
+  };
+}
+
+type AnswerAttentionItemBody = components['schemas']['AnswerAttentionItemBody'];
+
+/**
+ * Answer an attention queue item by its ref: an ask no run holds, or a paused run's wait.
+ * The server decides who may answer and refuses a ref that is closed, moved or unknown.
+ */
+export async function answerAttentionItem(
+  ref: string,
+  answer: { choose: string[]; text?: string }
+): Promise<void> {
+  const body: AnswerAttentionItemBody = { ref, choose: answer.choose, text: answer.text };
+  await requestJson('/api/attention/answer', 'post', { body });
+}
+
 export async function listGlobalCounts(): Promise<RunCounts> {
   // Counts without any codebase filter — used by top chrome pill.
   const res = await requestJson('/api/dashboard/runs', 'get', { query: { limit: '1' } });
@@ -99,18 +135,6 @@ export async function answerRun(
 ): Promise<void> {
   const body: AnswerWorkflowRunBody = { occurrence, choose, text };
   await requestJson('/api/workflows/runs/{runId}/answer', 'post', { params: { runId: id }, body });
-}
-
-/**
- * Answer an attention item by its ref, through the answer operation the CLI's
- * `workflow answer --ref` uses. An ask a completed run left is answered only this way.
- */
-export async function answerAttentionItem(
-  ref: string,
-  choose: string[],
-  text?: string
-): Promise<void> {
-  await requestJson('/api/attention/answer', 'post', { body: { ref, choose, text } });
 }
 
 /** Asks the server to resume a run; resolves to the server's account of what it started. */

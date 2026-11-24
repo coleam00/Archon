@@ -1,0 +1,703 @@
+{
+  "note": "GET /api/factory/item for item 111, copied 2026-11-22 from dev:console on a fresh read-only copy of the live factory database, after #122 added each run's change, said, models and steps. Run pack and the item run limit, which the API gained after the capture, filled as null.",
+  "response": {
+    "pack": "Wirasm/archon-software-factory",
+    "item": {
+      "item": {
+        "id": "fb43bb97f586bd497f3707e14a6dbd31",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "111"
+      },
+      "runs": [
+        {
+          "id": "d36fa8fc-8de4-4709-8328-f6383c353799",
+          "workflow": "Wirasm/archon-software-factory:order",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-20T20:23:24.000Z",
+          "completedAt": "2026-11-20T20:23:38.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "89129813-7853-4e43-8469-683dc2122dfc",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9e7a832ba0209a628294a6fdb0a1289c7e7b54d8"
+        },
+        {
+          "id": "19c31920-9b8a-47bc-908b-420b1ba68c89",
+          "workflow": "Wirasm/archon-software-factory:triage",
+          "pack": null,
+          "status": "completed",
+          "outcome": "build",
+          "startedAt": "2026-11-20T20:23:41.000Z",
+          "completedAt": "2026-11-20T20:24:57.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "d36fa8fc-8de4-4709-8328-f6383c353799",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.7206477,
+            "inputTokens": 303951,
+            "outputTokens": 4788
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9e7a832ba0209a628294a6fdb0a1289c7e7b54d8"
+        },
+        {
+          "id": "85be42d5-9cf8-4cd8-8ba0-5fc12879b24d",
+          "workflow": "Wirasm/archon-software-factory:plan",
+          "pack": null,
+          "status": "completed",
+          "outcome": "planned",
+          "startedAt": "2026-11-20T20:25:05.000Z",
+          "completedAt": "2026-11-20T20:30:07.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "19c31920-9b8a-47bc-908b-420b1ba68c89",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 2.1710994,
+            "inputTokens": 1314708,
+            "outputTokens": 22838
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9e7a832ba0209a628294a6fdb0a1289c7e7b54d8"
+        },
+        {
+          "id": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-20T20:30:10.000Z",
+          "completedAt": "2026-11-20T21:26:18.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "85be42d5-9cf8-4cd8-8ba0-5fc12879b24d",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 18.135819989999998,
+            "inputTokens": 25719539,
+            "outputTokens": 190354
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "01acbb2e884ae73668f1ea5463907d38f94ddb84"
+        },
+        {
+          "id": "ecb37c45-8126-42e1-8f1a-836c4fe36d14",
+          "workflow": "Wirasm/archon-software-factory:discoveries",
+          "pack": null,
+          "status": "completed",
+          "outcome": null,
+          "startedAt": "2026-11-20T21:26:22.000Z",
+          "completedAt": "2026-11-20T21:37:17.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-discoveries-after-deliver-ready-e89b89823cf2"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.6565239999999999,
+            "inputTokens": 628896,
+            "outputTokens": 6543
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9e7a832ba0209a628294a6fdb0a1289c7e7b54d8"
+        },
+        {
+          "id": "7465840d-7466-42b8-aa70-9f3e987ceb9f",
+          "workflow": "Wirasm/archon-software-factory:landgate",
+          "pack": null,
+          "status": "completed",
+          "outcome": null,
+          "startedAt": "2026-11-20T21:26:25.000Z",
+          "completedAt": "2026-11-20T21:27:39.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landgate-after-deliver-ready-1c0ffe07697c"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.2565552,
+            "inputTokens": 359110,
+            "outputTokens": 2759
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9e7a832ba0209a628294a6fdb0a1289c7e7b54d8"
+        }
+      ],
+      "queued": [],
+      "skipped": [],
+      "hold": null,
+      "held": [],
+      "runLimit": null,
+      "waits": [],
+      "questions": [],
+      "answers": [],
+      "links": [],
+      "merged": null,
+      "landing": null,
+      "degraded": [],
+      "progress": {
+        "title": "A delivery ask shows what the stage offered, above the four answers",
+        "running": null,
+        "round": {
+          "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+          "iteration": 2,
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return"
+            },
+            {
+              "iteration": 2,
+              "verdict": "approved",
+              "outcome": "approve"
+            }
+          ]
+        },
+        "partOf": null,
+        "returned": 1,
+        "change": {
+          "url": "https://github.com/coleam00/archon-factory-console/pull/112",
+          "merged": true,
+          "mergedAt": "2026-11-20T21:29:51Z",
+          "number": 112
+        },
+        "runs": [
+          {
+            "runId": "d36fa8fc-8de4-4709-8328-f6383c353799",
+            "workflow": "order",
+            "failedStep": null
+          },
+          {
+            "runId": "19c31920-9b8a-47bc-908b-420b1ba68c89",
+            "workflow": "triage",
+            "failedStep": null
+          },
+          {
+            "runId": "85be42d5-9cf8-4cd8-8ba0-5fc12879b24d",
+            "workflow": "plan",
+            "failedStep": null
+          },
+          {
+            "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+            "workflow": "deliver",
+            "failedStep": null
+          },
+          {
+            "runId": "7465840d-7466-42b8-aa70-9f3e987ceb9f",
+            "workflow": "landgate",
+            "failedStep": null
+          }
+        ],
+        "shadows": [
+          {
+            "workflow": "triage",
+            "node": "admit",
+            "round": null,
+            "runId": "19c31920-9b8a-47bc-908b-420b1ba68c89",
+            "decidedAt": "2026-11-20T20:24:57.000Z",
+            "read": {
+              "reads": "verdict",
+              "value": "ask",
+              "why": "The item does not say who opened it, and the policy only admits owner (coleam00) issues or work orders. Triage's files are in `console/components/ask-card/`, which is outside the policy's `console/factory` path, so I cannot tell whether the change stays inside the allowed scope."
+            }
+          },
+          {
+            "workflow": "deliver",
+            "node": "rounds.checks",
+            "round": 2,
+            "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+            "decidedAt": "2026-11-20T21:26:18.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": true,
+                  "seconds": 147,
+                  "tail": null
+                },
+                {
+                  "name": "lint",
+                  "passed": true,
+                  "seconds": 71,
+                  "tail": null
+                },
+                {
+                  "name": "format",
+                  "passed": true,
+                  "seconds": 3,
+                  "tail": null
+                },
+                {
+                  "name": "web tests",
+                  "passed": true,
+                  "seconds": 31,
+                  "tail": null
+                }
+              ]
+            }
+          },
+          {
+            "workflow": "discoveries",
+            "node": "result",
+            "round": null,
+            "runId": "ecb37c45-8126-42e1-8f1a-836c4fe36d14",
+            "decidedAt": "2026-11-20T21:37:17.000Z",
+            "read": {
+              "reads": "lists",
+              "counts": [0, 0, 1, 2],
+              "why": "Three discoveries, nothing filed. (1) The raw recommendation id in the ask card's why line is real: I read it in pack deliver.yaml:461. The fault is in the factory pack's prose, and the project policy sends pack faults to the pack's maintainers, not to this tracker. The console cannot fix it without parsing free text, which AGENTS.md forbids. Dropped here and passed on to the pack in for_next. (2) The build:web failure under Node does not reproduce in CI: today's CI run on a fresh `bun install --frozen-lockfile` ran vite v6.4.1 and built 2798 modules. So it is specific to the reviewer's local copy, not a CI gap. Dropped. (3) dev:console --reopen-asks mostly picking merged items is a dev-tool inconvenience, not a defect a person meets. Held. The tracker has no open items; searches for each entry turned up only closed ones (#65, #67, #72, #90)."
+            }
+          }
+        ],
+        "parked": null,
+        "awaits": null
+      }
+    },
+    "runs": [
+      {
+        "runId": "d36fa8fc-8de4-4709-8328-f6383c353799",
+        "workflow": "order",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "89129813-7853-4e43-8469-683dc2122dfc",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+        },
+        "costUsd": null,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": [
+          {
+            "node": "order",
+            "startedAt": "2026-11-20T20:23:33.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "19c31920-9b8a-47bc-908b-420b1ba68c89",
+        "workflow": "triage",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "d36fa8fc-8de4-4709-8328-f6383c353799",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+        },
+        "costUsd": 0.7206477,
+        "step": null,
+        "rounds": null,
+        "shadows": [
+          {
+            "workflow": "triage",
+            "node": "admit",
+            "round": null,
+            "runId": "19c31920-9b8a-47bc-908b-420b1ba68c89",
+            "decidedAt": "2026-11-20T20:24:57.000Z",
+            "read": {
+              "reads": "verdict",
+              "value": "ask",
+              "why": "The item does not say who opened it, and the policy only admits owner (coleam00) issues or work orders. Triage's files are in `console/components/ask-card/`, which is outside the policy's `console/factory` path, so I cannot tell whether the change stays inside the allowed scope."
+            }
+          }
+        ],
+        "change": null,
+        "said": "Issue 111 asks the console ask card to show what a delivery stage offered, as its own unclamped block above the four fixed answer tiles. Since pack 1e571ea, a delivery ask always has the same four options (send-back, replan, take-as-is, hold). The stage's own offered options now sit in the ask's `context`, which `ClampedSummary` clamps to 3 lines, so the real decision hides behind \"Show more\". The fix is to parse the marker line \"The stage offered these, in its own words; say which in your answer:\" and the `- id: does (cost: ...)` lines under it, in a pure tested function. The card renders them as a labelled block with the recommended one marked (named in the recommendation's `why` as `The stage recommends \"<id>\".`). It also changes the answer placeholder for send-back and replan to ask which offered option is meant. Without the marker, the card renders exactly as today. The compact forms are untouched. This follows DESIGN rule 1 (no pack outcomes named). I did not open the DESIGN rules or the tests, so the fit with them is unchecked.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "judge__judge",
+            "startedAt": "2026-11-20T20:24:01.000Z"
+          },
+          {
+            "node": "link__link",
+            "startedAt": "2026-11-20T20:24:34.000Z"
+          },
+          {
+            "node": "admit",
+            "startedAt": "2026-11-20T20:24:35.000Z"
+          },
+          {
+            "node": "split",
+            "startedAt": "2026-11-20T20:24:35.000Z"
+          },
+          {
+            "node": "admitted",
+            "startedAt": "2026-11-20T20:24:55.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "85be42d5-9cf8-4cd8-8ba0-5fc12879b24d",
+        "workflow": "plan",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "19c31920-9b8a-47bc-908b-420b1ba68c89",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+        },
+        "costUsd": 2.1710994,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "It is the whole outcome the item asks for at size s. Every piece lands in the one shared ask card, and the fallback contains the coupling to pack prose.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "plan",
+            "startedAt": "2026-11-20T20:25:30.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+        "workflow": "deliver",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "85be42d5-9cf8-4cd8-8ba0-5fc12879b24d",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+        },
+        "costUsd": 18.135819989999998,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return",
+              "summary": "Return. The approach and the main behaviour hold: the offered block renders unclamped between the question and the tiles, the Recommended mark works, and the compact forms are untouched. Three reports agree the parser must fall back to null when the offered list only partly parses, which is the item's \"falls back to today's rendering\" rule; that is the main fix. The rest is one false comment and three test-quality fixes, all small and test-only apart from the comment.\nBrowser evidence on a live-DB copy (the item's Done-when) is not yet done. The product review used a scratch fixture, so the builder must do the live-DB pass after the parser fix and describe it in the PR.\nBuild the fix, then re-run the two test files and the browser pass.",
+              "steps": [
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "return",
+                  "summary": "For the ask the item describes, the change works: in a browser, the stage's own options show whole between the context and the four routes. The recommended one carries the green mark, the rest of the context keeps its 3-line clamp, and the layout holds at 760 px, at the 480 px popover width, and at 390x844. One defect: when an offered option's text holds a line break, the card shows only part of the list. Nothing in the pack stops that, since the option's `does` is a plain `{ type: string }` and the pack's script writes it raw. The block is still headed \"What the stage offered\", so it reads as complete. The rest of the options go behind \"More\" with a stray \"(cost: One roun…\" fragment, and the answer prompt lists only the options it parsed. The item promises the opposite: if the card can't read the list, it falls back to today's rendering. The fix is small. The pack always puts the list at the end of the context, so the parse can return null when anything other than option lines follows the marker. A unit test for that case should come with it. Everything else is ready to land."
+                },
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "return",
+                  "summary": "The new tests mostly earn their place. Each thing the item asks for has a test that fails when I break it: the offered block sitting between the question and the tiles, its rows never clamped, the rest of the context keeping its clamp, plain-word ids, the green Recommended mark (both the badge and the fill), the placeholder that asks which option is meant, no block when the marker is missing, a marker with nothing under it, an option with no cost, and the dry-run shape. All 29 tests in the two files passed three runs in a row.\n\nI am returning the change for two small things:\n- The CRLF unit test passes when the break it guards is made: splitting on '\\n' alone still passes it.\n- One placeholder unit assertion repeats what the component test already checks.\n\nNeither touches the feature's behaviour."
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "return",
+                  "summary": "Return: the approach is right, but the parser does not fall back when the offered list only partly matches. It shows the options before the first line that does not match, under the heading \"What the stage offered\", and moves the rest, which can include the option the stage recommended, back into the clamped context. The installed pack writes a stage's `does`/`cost` without removing newlines, so a multi-line `does` triggers this today, and so would any rewording of the option lines. The fix makes the parse smaller: the producer always writes the list last, so require every line after the marker to be an option line and return null otherwise. Also correct the regex comment about which cost is taken. Everything else holds: 29 tests pass, tsc and biome are clean, the compact forms are untouched, and the board popover, item page and Needs you all reach it through AskGroup -> AskCard."
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "return",
+                  "summary": "Return. The approach and the main behaviour hold: the offered block renders unclamped between the question and the tiles, the Recommended mark works, and the compact forms are untouched. Three reports agree the parser must fall back to null when the offered list only partly parses, which is the item's \"falls back to today's rendering\" rule; that is the main fix. The rest is one false comment and three test-quality fixes, all small and test-only apart from the comment.\nBrowser evidence on a live-DB copy (the item's Done-when) is not yet done. The product review used a scratch fixture, so the builder must do the live-DB pass after the parser fix and describe it in the PR.\nBuild the fix, then re-run the two test files and the browser pass."
+                },
+                {
+                  "node": "rounds.shown",
+                  "outcome": "return",
+                  "summary": "Return. The approach and the main behaviour hold: the offered block renders unclamped between the question and the tiles, the Recommended mark works, and the compact forms are untouched. Three reports agree the parser must fall back to null when the offered list only partly parses, which is the item's \"falls back to today's rendering\" rule; that is the main fix. The rest is one false comment and three test-quality fixes, all small and test-only apart from the comment.\nBrowser evidence on a live-DB copy (the item's Done-when) is not yet done. The product review used a scratch fixture, so the builder must do the live-DB pass after the parser fix and describe it in the PR.\nBuild the fix, then re-run the two test files and the browser pass."
+                }
+              ]
+            },
+            {
+              "iteration": 2,
+              "verdict": "approved",
+              "outcome": "approve",
+              "summary": "Approve PR #112 (item 111), with no findings. The reports agree that a delivery ask's offered list now shows as its own unclamped block above the four tiles, that the recommended offered option is marked, and that asks without the marker render as before. All four parse cases and the component case are covered, and the test check confirmed the new fallback tests fail for the break they guard.\nNotes for the maintainer: the placeholder appears on every tile pick (Hold and Take as is too), not only send-back and replan, which is the recorded rule 1 resolution. The offered rows look like answer tiles, and the PR's \"AttentionAnswerPanel unchanged\" wording is loose.\nTwo reports disagree on environment facts, not on the item: whether build:web passes (product fails in a fresh install copy, builder exit 0), and the test count (29 vs 31). Both are kept under disagreements and noticed.",
+              "steps": [
+                {
+                  "node": "rounds.fix",
+                  "outcome": "fixed",
+                  "summary": "I fixed all five findings in commit 01acbb2e8, pushed to the branch of draft PR #112.\n\n1. **A partial list showed as the whole list** (a parser that kept a partial match). `parseOffered` now returns null if any non-blank line after the marker is not an option line, so the card shows today's rendering instead. The rest of the context is now just the lines before the marker, and the old rejoin and blank-line squash are gone. The old \"stays in the rest\" test now expects null. A new test covers a `does` and a `cost` broken over two lines, as the pack writes them, and expects null. The same fault could also have been in `offeredPlaceholder` (it names only the parsed options) and in the green mark (the recommended option could be lost); both read the parse result, so this one fix covers them. DESIGN.md rule 9 now says that a line under the marker that is not an option line also falls back.\n\n2. **The cost comment was wrong.** It now says the cost starts at the first ` (cost: ` from which the line still ends in `)`, which is what the regex does. I left the regex unchanged.\n\n3. **I deleted the CRLF test**, which could not fail. The `/\\r?\\n/` split stays, with no test.\n\n4. **I dropped the duplicate \"Build it or Leave it\" assertion** from the placeholder unit test. The one-option and three-option cases remain.\n\n5. **The Something else test now uses a real reserved option.** `dryRunAsk` no longer sets `other: true`. The Something else test gives its ask the four routes plus `{ id: 'other', label: 'Other' }`, with `other: true`, and checks that the tile reads \"Write your own answer\" before clicking it. On the live-DB copy, the engine-served ask also shows a real \"Something else\" tile after the four routes, so this shape is realistic.\n\nThe browser pass (a note, not a finding) is redone on the live-DB copy after the fix and described in the PR."
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. All five findings from the last round are fixed in 01acbb2e8. parseOffered now returns null when anything after the marker is not an option line, so the card never shows part of the list as the whole. The cost comment now matches the regex. The CRLF test that could not fail and the duplicate placeholder assertion are gone. The Something else test now clicks a real reserved option. The fix touches only the parser and its tests, plus one DESIGN.md sentence that describes the new fallback. Both test files pass (29/29). The PR describes a live-DB browser pass after the fix, at both sizes, on Needs you and the board popover, including the two-line fallback case."
+                },
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "sound",
+                  "summary": "Sound. All four test findings from the last round are fixed, and the tests the fix added or changed each fail for the break they claim to guard. In a scratch copy, putting back the old partial-list `break` failed both new fall-back-to-null tests. Letting the offered placeholder win over Something else failed the reworked Something else test, which now clicks a real reserved option. Widening or untrimming the rest of the context failed the dry-run parse test and the component test. Both test files passed 29/29 on three runs in a row, with no flakes. The comment now matches the regex (first ` (cost: `). The CRLF test and the duplicate placeholder assertion are gone. The item's parse cases (dry run, no cost, no marker, marker with nothing under it) and the component case (unclamped block above the tiles, recommended option marked) are each guarded. I have not checked the browser pass the builder describes in the PR; it is not a test."
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "Approve. On all three full-card surfaces (the Needs you tab, the item page Asks, the board popover), a delivery ask of the issue's shape now shows \"What the stage offered\" whole, between the context and the four tiles. \"Build it\" and \"Leave it\" appear in plain words with their does and cost, and the stage's pick wears the tiles' green Recommended mark. The rest of the context keeps its 3-line clamp, and an ask without the marker renders as before. Picking Send back or Replan sets the note's placeholder to \"Say which the stage offered you mean: Build it or Leave it\". The parser matches the installed pack's exact output (deliver.yaml:458,461). The compact board face is unchanged (\"Recommended: Send back\"), and nothing overflows at 1440x900 or 390x844. The 31 targeted tests pass in a scratch copy. Two judgment calls are below in notes, neither grounded in a project passage strong enough to return on: the offered rows look like the answer tiles, and the placeholder also appears on Hold and Take as is."
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "approve",
+                  "summary": "Approve PR #112 (item 111), with no findings. The reports agree that a delivery ask's offered list now shows as its own unclamped block above the four tiles, that the recommended offered option is marked, and that asks without the marker render as before. All four parse cases and the component case are covered, and the test check confirmed the new fallback tests fail for the break they guard.\nNotes for the maintainer: the placeholder appears on every tile pick (Hold and Take as is too), not only send-back and replan, which is the recorded rule 1 resolution. The offered rows look like answer tiles, and the PR's \"AttentionAnswerPanel unchanged\" wording is loose.\nTwo reports disagree on environment facts, not on the item: whether build:web passes (product fails in a fresh install copy, builder exit 0), and the test count (29 vs 31). Both are kept under disagreements and noticed."
+                },
+                {
+                  "node": "rounds.shown",
+                  "outcome": "approve",
+                  "summary": "Approve PR #112 (item 111), with no findings. The reports agree that a delivery ask's offered list now shows as its own unclamped block above the four tiles, that the recommended offered option is marked, and that asks without the marker render as before. All four parse cases and the component case are covered, and the test check confirmed the new fallback tests fail for the break they guard.\nNotes for the maintainer: the placeholder appears on every tile pick (Hold and Take as is too), not only send-back and replan, which is the recorded rule 1 resolution. The offered rows look like answer tiles, and the PR's \"AttentionAnswerPanel unchanged\" wording is loose.\nTwo reports disagree on environment facts, not on the item: whether build:web passes (product fails in a fresh install copy, builder exit 0), and the test count (29 vs 31). Both are kept under disagreements and noticed."
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [
+          {
+            "workflow": "deliver",
+            "node": "rounds.checks",
+            "round": 1,
+            "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+            "decidedAt": "2026-11-20T21:26:18.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": true,
+                  "seconds": 142,
+                  "tail": null
+                },
+                {
+                  "name": "lint",
+                  "passed": true,
+                  "seconds": 57,
+                  "tail": null
+                },
+                {
+                  "name": "format",
+                  "passed": true,
+                  "seconds": 1,
+                  "tail": null
+                },
+                {
+                  "name": "web tests",
+                  "passed": true,
+                  "seconds": 33,
+                  "tail": null
+                }
+              ]
+            }
+          },
+          {
+            "workflow": "deliver",
+            "node": "rounds.checks",
+            "round": 2,
+            "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+            "decidedAt": "2026-11-20T21:26:18.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": true,
+                  "seconds": 147,
+                  "tail": null
+                },
+                {
+                  "name": "lint",
+                  "passed": true,
+                  "seconds": 71,
+                  "tail": null
+                },
+                {
+                  "name": "format",
+                  "passed": true,
+                  "seconds": 3,
+                  "tail": null
+                },
+                {
+                  "name": "web tests",
+                  "passed": true,
+                  "seconds": 31,
+                  "tail": null
+                }
+              ]
+            }
+          }
+        ],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/112",
+        "said": "PR #112 is clear. All 10 checks are green at head 01acbb2e8, and the two review findings are fixed in the code. The PR merges cleanly with main (0 behind). It was a draft, so I took it out of draft.",
+        "models": ["claude-opus-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-20T20:30:57.000Z"
+          },
+          {
+            "node": "rounds",
+            "startedAt": "2026-11-20T20:50:17.000Z"
+          },
+          {
+            "node": "rounds.base",
+            "startedAt": "2026-11-20T20:50:17.000Z"
+          },
+          {
+            "node": "rounds.checks",
+            "startedAt": "2026-11-20T20:50:18.000Z"
+          },
+          {
+            "node": "rounds.product__product",
+            "startedAt": "2026-11-20T20:50:18.000Z"
+          },
+          {
+            "node": "rounds.tests__tests",
+            "startedAt": "2026-11-20T20:50:18.000Z"
+          },
+          {
+            "node": "rounds.review__review",
+            "startedAt": "2026-11-20T20:50:18.000Z"
+          },
+          {
+            "node": "rounds.verdict__verdict",
+            "startedAt": "2026-11-20T20:59:35.000Z"
+          },
+          {
+            "node": "rounds.shown",
+            "startedAt": "2026-11-20T21:00:21.000Z"
+          },
+          {
+            "node": "rounds.fix",
+            "startedAt": "2026-11-20T21:00:32.000Z"
+          },
+          {
+            "node": "rounds.base",
+            "startedAt": "2026-11-20T21:14:30.000Z"
+          },
+          {
+            "node": "rounds.checks",
+            "startedAt": "2026-11-20T21:14:31.000Z"
+          },
+          {
+            "node": "rounds.review__review",
+            "startedAt": "2026-11-20T21:14:31.000Z"
+          },
+          {
+            "node": "rounds.tests__tests",
+            "startedAt": "2026-11-20T21:14:31.000Z"
+          },
+          {
+            "node": "rounds.product__product",
+            "startedAt": "2026-11-20T21:14:31.000Z"
+          },
+          {
+            "node": "rounds.verdict__verdict",
+            "startedAt": "2026-11-20T21:24:16.000Z"
+          },
+          {
+            "node": "rounds.shown",
+            "startedAt": "2026-11-20T21:25:13.000Z"
+          },
+          {
+            "node": "hostrounds",
+            "startedAt": "2026-11-20T21:25:19.000Z"
+          },
+          {
+            "node": "hostrounds.host__host",
+            "startedAt": "2026-11-20T21:25:20.000Z"
+          },
+          {
+            "node": "result",
+            "startedAt": "2026-11-20T21:26:12.000Z"
+          },
+          {
+            "node": "reported",
+            "startedAt": "2026-11-20T21:26:13.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "ecb37c45-8126-42e1-8f1a-836c4fe36d14",
+        "workflow": "discoveries",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-discoveries-after-deliver-ready-e89b89823cf2"
+        },
+        "costUsd": 0.6565239999999999,
+        "step": null,
+        "rounds": null,
+        "shadows": [
+          {
+            "workflow": "discoveries",
+            "node": "result",
+            "round": null,
+            "runId": "ecb37c45-8126-42e1-8f1a-836c4fe36d14",
+            "decidedAt": "2026-11-20T21:37:17.000Z",
+            "read": {
+              "reads": "lists",
+              "counts": [0, 0, 1, 2],
+              "why": "Three discoveries, nothing filed. (1) The raw recommendation id in the ask card's why line is real: I read it in pack deliver.yaml:461. The fault is in the factory pack's prose, and the project policy sends pack faults to the pack's maintainers, not to this tracker. The console cannot fix it without parsing free text, which AGENTS.md forbids. Dropped here and passed on to the pack in for_next. (2) The build:web failure under Node does not reproduce in CI: today's CI run on a fresh `bun install --frozen-lockfile` ran vite v6.4.1 and built 2798 modules. So it is specific to the reviewer's local copy, not a CI gap. Dropped. (3) dev:console --reopen-asks mostly picking merged items is a dev-tool inconvenience, not a defect a person meets. Held. The tracker has no open items; searches for each entry turned up only closed ones (#65, #67, #72, #90)."
+            }
+          }
+        ],
+        "change": null,
+        "said": null,
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "intake",
+            "startedAt": "2026-11-20T21:26:41.000Z"
+          },
+          {
+            "node": "drain",
+            "startedAt": "2026-11-20T21:26:42.000Z"
+          },
+          {
+            "node": "result",
+            "startedAt": "2026-11-20T21:37:14.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "7465840d-7466-42b8-aa70-9f3e987ceb9f",
+        "workflow": "landgate",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landgate-after-deliver-ready-1c0ffe07697c"
+        },
+        "costUsd": 0.2565552,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "CI is green and the PR merges cleanly, but the change alters what the Needs you tab, item page and board popover show. Only the builder and a product review checked it in a browser, not the operator, and the policy says the owner presents from this screen.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "gate",
+            "startedAt": "2026-11-20T21:26:42.000Z"
+          }
+        ]
+      }
+    ]
+  }
+}

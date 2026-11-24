@@ -1,0 +1,737 @@
+{
+  "note": "GET /api/factory/item for item 115, copied 2026-11-22 from dev:console on a fresh read-only copy of the live factory database, after #122 added each run's change, said, models and steps. Run pack and the item run limit, which the API gained after the capture, filled as null. The live home path is replaced by <live-home>.",
+  "response": {
+    "pack": "Wirasm/archon-software-factory",
+    "item": {
+      "item": {
+        "id": "0e4cc710976dfd65ea978f8219571d5a",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "115"
+      },
+      "runs": [
+        {
+          "id": "7e68bd0d-23ad-4a3b-89c8-d951647965a9",
+          "workflow": "Wirasm/archon-software-factory:order",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-20T21:32:52.000Z",
+          "completedAt": "2026-11-20T21:33:26.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "a8310192-4d01-48e1-93f7-b1cb9674fca0",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "f66647d6-2398-4485-b5ed-5a558c00d636",
+          "workflow": "Wirasm/archon-software-factory:triage",
+          "pack": null,
+          "status": "completed",
+          "outcome": "build",
+          "startedAt": "2026-11-20T21:33:33.000Z",
+          "completedAt": "2026-11-20T21:35:11.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "7e68bd0d-23ad-4a3b-89c8-d951647965a9",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.32483019999999996,
+            "inputTokens": 296378,
+            "outputTokens": 4173
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "36544d49-4c5c-496b-82b3-c0027fec164c",
+          "workflow": "Wirasm/archon-software-factory:plan",
+          "pack": null,
+          "status": "completed",
+          "outcome": "planned",
+          "startedAt": "2026-11-20T21:35:22.000Z",
+          "completedAt": "2026-11-20T21:37:41.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "f66647d6-2398-4485-b5ed-5a558c00d636",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.24453960000000002,
+            "inputTokens": 137183,
+            "outputTokens": 3023
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "55b3158c-6c5a-4d3b-8f57-75db63171537",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-20T21:37:48.000Z",
+          "completedAt": "2026-11-20T21:39:20.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "36544d49-4c5c-496b-82b3-c0027fec164c",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.20140000000000002,
+            "inputTokens": 92174,
+            "outputTokens": 1736
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "a30fb778-2327-4c54-805c-2f82197ffce0",
+          "workflow": "Wirasm/archon-software-factory:plan",
+          "pack": null,
+          "status": "completed",
+          "outcome": "planned",
+          "startedAt": "2026-11-20T21:40:00.000Z",
+          "completedAt": "2026-11-20T21:41:03.000Z",
+          "cause": {
+            "kind": "asks_settled",
+            "runId": "55b3158c-6c5a-4d3b-8f57-75db63171537"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.27193910000000004,
+            "inputTokens": 182245,
+            "outputTokens": 3778
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "73058f19-56e3-4c6e-9084-146952b4c211",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-20T21:41:06.000Z",
+          "completedAt": "2026-11-20T21:51:40.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "a30fb778-2327-4c54-805c-2f82197ffce0",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 2.2866681,
+            "inputTokens": 3698697,
+            "outputTokens": 30271
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9bbf14f575416144efc6f940c693cfd068248b11"
+        },
+        {
+          "id": "0a615d6a-524e-4bcd-ad0d-7c46745308f9",
+          "workflow": "Wirasm/archon-software-factory:discoveries",
+          "pack": null,
+          "status": "completed",
+          "outcome": null,
+          "startedAt": "2026-11-20T21:51:46.000Z",
+          "completedAt": "2026-11-20T21:56:18.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "73058f19-56e3-4c6e-9084-146952b4c211",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-discoveries-after-deliver-ready-e89b89823cf2"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.49839400000000006,
+            "inputTokens": 744441,
+            "outputTokens": 5658
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "1edbb2bd-84c7-437c-8ee7-f2cdf9222ffb",
+          "workflow": "Wirasm/archon-software-factory:landgate",
+          "pack": null,
+          "status": "completed",
+          "outcome": null,
+          "startedAt": "2026-11-20T21:51:52.000Z",
+          "completedAt": "2026-11-20T21:54:14.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "73058f19-56e3-4c6e-9084-146952b4c211",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landgate-after-deliver-ready-1c0ffe07697c"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.1439587,
+            "inputTokens": 345734,
+            "outputTokens": 2669
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        }
+      ],
+      "queued": [],
+      "skipped": [],
+      "hold": null,
+      "held": [],
+      "runLimit": null,
+      "waits": [],
+      "questions": [],
+      "answers": [
+        {
+          "kind": "ask",
+          "runId": "55b3158c-6c5a-4d3b-8f57-75db63171537",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-20T21:39:57.088Z",
+          "via": "cli",
+          "ref": "ask:f1b5df3151bdf7b7d4a0a1d41636b200",
+          "question": "Which title should docs/factory-console/answers/replan.md have?",
+          "answer": {
+            "decision": "replan",
+            "text": "Replan with short-imperative: the title is 'Start over from the plan'."
+          },
+          "chosen": {
+            "id": "replan",
+            "does": "The item goes back to planning with what you say in your answer."
+          },
+          "withdrawn": false,
+          "by": {
+            "declared": "cole-owner"
+          },
+          "fromRun": null
+        },
+        {
+          "kind": "asks_settled",
+          "runId": "55b3158c-6c5a-4d3b-8f57-75db63171537",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-20T21:39:57.088Z",
+          "via": null,
+          "answered": 1,
+          "withdrawn": 0
+        }
+      ],
+      "links": [],
+      "merged": null,
+      "landing": null,
+      "degraded": [],
+      "progress": {
+        "title": "Docs: what the replan answer on a delivery ask does (ask-routing test)",
+        "running": null,
+        "round": {
+          "runId": "73058f19-56e3-4c6e-9084-146952b4c211",
+          "iteration": 1,
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "approved",
+              "outcome": "approve"
+            }
+          ]
+        },
+        "partOf": null,
+        "returned": 0,
+        "change": {
+          "url": "https://github.com/coleam00/archon-factory-console/pull/117",
+          "merged": true,
+          "mergedAt": "2026-11-20T21:52:41Z",
+          "number": 117
+        },
+        "runs": [
+          {
+            "runId": "7e68bd0d-23ad-4a3b-89c8-d951647965a9",
+            "workflow": "order",
+            "failedStep": null
+          },
+          {
+            "runId": "f66647d6-2398-4485-b5ed-5a558c00d636",
+            "workflow": "triage",
+            "failedStep": null
+          },
+          {
+            "runId": "36544d49-4c5c-496b-82b3-c0027fec164c",
+            "workflow": "plan",
+            "failedStep": null
+          },
+          {
+            "runId": "55b3158c-6c5a-4d3b-8f57-75db63171537",
+            "workflow": "deliver",
+            "failedStep": null
+          },
+          {
+            "runId": "a30fb778-2327-4c54-805c-2f82197ffce0",
+            "workflow": "plan",
+            "failedStep": null
+          },
+          {
+            "runId": "73058f19-56e3-4c6e-9084-146952b4c211",
+            "workflow": "deliver",
+            "failedStep": null
+          },
+          {
+            "runId": "1edbb2bd-84c7-437c-8ee7-f2cdf9222ffb",
+            "workflow": "landgate",
+            "failedStep": null
+          }
+        ],
+        "shadows": [
+          {
+            "workflow": "triage",
+            "node": "admit",
+            "round": null,
+            "runId": "f66647d6-2398-4485-b5ed-5a558c00d636",
+            "decidedAt": "2026-11-20T21:35:11.000Z",
+            "read": {
+              "reads": "verdict",
+              "value": "ask",
+              "why": "The scope lines hold: one new docs file under docs/factory-console, with no schema, engine or DESIGN.md change. But the item names no opener and no work order, and the policy says an unclear line is an ask."
+            }
+          },
+          {
+            "workflow": "deliver",
+            "node": "rounds.checks",
+            "round": 1,
+            "runId": "73058f19-56e3-4c6e-9084-146952b4c211",
+            "decidedAt": "2026-11-20T21:51:40.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": false,
+                  "seconds": 12,
+                  "tail": "pe-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/adapters type-check: Exited with code 1\n@archon/server type-check: error TS2688: Cannot find type definition file for 'bun-types'.\n@archon/server type-check:   The file is in the program because:\n@archon/server type-check:     Entry point of type library 'bun-types' specified in compilerOptions\n@archon/server type-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/cli type-check: error TS2688: Cannot find type definition file for 'bun-types'.\n@archon/cli type-check:   The file is in the program because:\n@archon/cli type-check:     Entry point of type library 'bun-types' specified in compilerOptions\n@archon/cli type-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/server type-check: Exited with code 1\n@archon/cli type-check: Exited with code 1\n\n$ bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json && bun x tsc --noEmit -p .archon/workflows/tsconfig.json\nerror: script \"type-check\" exited with code 1"
+                },
+                {
+                  "name": "lint",
+                  "passed": false,
+                  "seconds": 0,
+                  "tail": "$ bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-mock-modules.ts && bun run scripts/check-pack-portability.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && bun run scripts/check-web-api-types.ts && bun run scripts/check-console-tokens.ts && biome lint --error-on-warnings .\nerror: Cannot find package 'typescript' from '<live-home>\\workspaces\\coleam00\\archon-factory-console\\worktrees\\archon\\task-wirasm-archon-software-factory-deliver-73058f19\\scripts\\check-test-cleanup-drift.ts'\n\nBun v1.4.2 (Windows x64)\nerror: script \"lint\" exited with code 1"
+                },
+                {
+                  "name": "format",
+                  "passed": false,
+                  "seconds": 0,
+                  "tail": "$ biome format .\nbun: command not found: biome\nerror: script \"format:check\" exited with code 1"
+                },
+                {
+                  "name": "web tests",
+                  "passed": false,
+                  "seconds": 0,
+                  "tail": "$ bun run ../../scripts/package-tests.ts\nerror: Cannot find module '@archon/paths/test-utils' from '<live-home>\\workspaces\\coleam00\\archon-factory-console\\worktrees\\archon\\task-wirasm-archon-software-factory-deliver-73058f19\\scripts\\bun-test-command.ts'\n\nBun v1.4.2 (Windows x64)\nerror: script \"test\" exited with code 1"
+                }
+              ]
+            }
+          },
+          {
+            "workflow": "discoveries",
+            "node": "result",
+            "round": null,
+            "runId": "0a615d6a-524e-4bcd-ad0d-7c46745308f9",
+            "decidedAt": "2026-11-20T21:56:18.000Z",
+            "read": {
+              "reads": "lists",
+              "counts": [0, 0, 0, 3],
+              "why": "Three discoveries, all from the #115 ask-routing test, where the owner answered a delivery ask with `replan` and a title. Nothing is filed in this repository. Entries 1 and 2 are about how the factory pack routes and records answers. The project's discoveries policy (docs/factory-console/policy/discoveries.md) sends pack faults to the pack's maintainers through the run's notes, not to this tracker. I checked entry 1 against the installed pack and it holds, so it goes to the operator below. Entry 2 has no effect in this repository: the console never shows the raw option id to a person. Entry 3 (nothing links to docs/factory-console/answers/) changes nothing a person sees in the console, and the policy excludes that kind of item, so I dropped it."
+            }
+          }
+        ],
+        "parked": null,
+        "awaits": null
+      }
+    },
+    "runs": [
+      {
+        "runId": "7e68bd0d-23ad-4a3b-89c8-d951647965a9",
+        "workflow": "order",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "a8310192-4d01-48e1-93f7-b1cb9674fca0",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+        },
+        "costUsd": null,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": [
+          {
+            "node": "order",
+            "startedAt": "2026-11-20T21:33:10.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "f66647d6-2398-4485-b5ed-5a558c00d636",
+        "workflow": "triage",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "7e68bd0d-23ad-4a3b-89c8-d951647965a9",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+        },
+        "costUsd": 0.32483019999999996,
+        "step": null,
+        "rounds": null,
+        "shadows": [
+          {
+            "workflow": "triage",
+            "node": "admit",
+            "round": null,
+            "runId": "f66647d6-2398-4485-b5ed-5a558c00d636",
+            "decidedAt": "2026-11-20T21:35:11.000Z",
+            "read": {
+              "reads": "verdict",
+              "value": "ask",
+              "why": "The scope lines hold: one new docs file under docs/factory-console, with no schema, engine or DESIGN.md change. But the item names no opener and no work order, and the policy says an unclear line is an ask."
+            }
+          }
+        ],
+        "change": null,
+        "said": "Issue 115 asks for one new docs file, docs/factory-console/answers/replan.md, 5-10 lines. It explains what the `replan` answer on a delivery ask does, written from the pack's own text. The file does not exist yet (nothing under docs/factory-console/answers/). The pack names no project triage policy; its default says to judge against the repo's AGENTS.md and the documents it points to. Nothing in that guidance conflicts with a small docs file. The pack's own text, checked in the installed pack, gives the content:\n- deliver.yaml line 445 gives the option text. `does` is \"The item goes back to planning with what you say in your answer.\" `cost` is \"The work so far may be discarded.\"\n- deliver.yaml lines 432 and 471 show when the ask arises. A check says the change needs a different approach, or the builder stopped because the plan could not be built as written.\n- .pack/pack.yaml lines 189-199 bind it (`plan-after-deliver-replan`, `option: replan`). `send-back` continues delivery in the checkout it left, and `replan` starts planning again.\n- deliver/commands/exhausted.md line 19 gives the \"when to pick it\" guidance. The approach cannot meet the item, so more rounds will not help. It is right when the same kind of finding keeps coming back.\n- The \"what starts next\" line is the pack.yaml binding that starts planning again. The builder should read pack.yaml lines 185-205 to word it exactly.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "judge__judge",
+            "startedAt": "2026-11-20T21:34:12.000Z"
+          },
+          {
+            "node": "link__link",
+            "startedAt": "2026-11-20T21:34:42.000Z"
+          },
+          {
+            "node": "admit",
+            "startedAt": "2026-11-20T21:34:42.000Z"
+          },
+          {
+            "node": "split",
+            "startedAt": "2026-11-20T21:34:42.000Z"
+          },
+          {
+            "node": "admitted",
+            "startedAt": "2026-11-20T21:35:05.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "36544d49-4c5c-496b-82b3-c0027fec164c",
+        "workflow": "plan",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "f66647d6-2398-4485-b5ed-5a558c00d636",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+        },
+        "costUsd": 0.24453960000000002,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "The item asks for exactly one 5-10 line file and keeps the title for the owner. Anything larger goes past what the owner settled.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "plan",
+            "startedAt": "2026-11-20T21:36:36.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "55b3158c-6c5a-4d3b-8f57-75db63171537",
+        "workflow": "deliver",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "36544d49-4c5c-496b-82b3-c0027fec164c",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+        },
+        "costUsd": 0.20140000000000002,
+        "step": null,
+        "rounds": {
+          "max": null,
+          "rounds": []
+        },
+        "shadows": [],
+        "change": null,
+        "said": "Item 115 asks for one 5-10 line doc, docs/factory-console/answers/replan.md, explaining what the `replan` answer on a delivery ask does. The owner reserved the file's first line, its title, for themselves. No answer and nothing in the plan has chosen it yet, so this build writes nothing and ends with the single title ask the item specifies. That is the intended result of the first build.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-20T21:38:54.000Z"
+          },
+          {
+            "node": "result",
+            "startedAt": "2026-11-20T21:39:18.000Z"
+          },
+          {
+            "node": "reported",
+            "startedAt": "2026-11-20T21:39:18.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "a30fb778-2327-4c54-805c-2f82197ffce0",
+        "workflow": "plan",
+        "cause": {
+          "kind": "asks_settled",
+          "runId": "55b3158c-6c5a-4d3b-8f57-75db63171537"
+        },
+        "costUsd": 0.27193910000000004,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "The item asks for exactly one file with no other change, and the owner already chose the title, so nothing is left to decide.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "plan",
+            "startedAt": "2026-11-20T21:40:17.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "73058f19-56e3-4c6e-9084-146952b4c211",
+        "workflow": "deliver",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "a30fb778-2327-4c54-805c-2f82197ffce0",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+        },
+        "costUsd": 2.2866681,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "approved",
+              "outcome": "approve",
+              "summary": "Approve PR #117 (Refs/Closes #115): one new 7-line file, docs/factory-console/answers/replan.md, with no other file changed. The title \"Start over from the plan\" was chosen by the owner, not the builder: plan run a30fb778 records the owner's CLI answer (2026-11-20T21:39:57Z) and the item's rule says to write the file once a plan has chosen the title. Every body claim matches deliver.yaml's routes and pack.yaml's bindings. No findings; the notes and noticed items below do not return the change.",
+              "steps": [
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "sound",
+                  "summary": "This change adds no tests and edits none, so no test in it can fail to earn its place. It adds one file, docs/factory-console/answers/replan.md (7 lines). The item says a docs-only file needs no test. Under the pack's test policy, anything only a wording test could guard is a note and never a finding or an ask. Separately from the tests, the builder chose the title \"Start over from the plan\" on its own. The item reserved that choice for the owner, and the review stage should weigh it."
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "Approve. The change adds one file, docs/factory-console/answers/replan.md, with 7 lines and nothing else. The title \"Start over from the plan\" is the owner's choice. The first deliver run (55b3158c) ended in the title ask, as the item required. The owner answered from the CLI at 2026-11-20T21:39:57Z: option `replan`, with the text \"the title is Start over from the plan\". That started plan run a30fb778, which recorded the title as settled, and this build used that title. Every line of the body matches the installed pack: the replan and send-back entries (does/cost) in the deliver.yaml routes, the replan reasons, and the plan-after-deliver-replan and deliver-after-plan bindings in pack.yaml. The doc tells an operator what starts next, what it costs, when to pick replan, and when to pick send-back instead. It has no em dashes and uses the pack's cost wording, \"may be discarded\", without making it stronger."
+                },
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. The change adds only docs/factory-console/answers/replan.md: 7 lines, under the title \"Start over from the plan\". The owner did choose that title. The item said the builder must not pick one itself, and the plan run (a30fb778) records the owner's CLI answer from 2026-11-20T21:39:57Z naming that title. I compared each line of the body with the installed pack's deliver.yaml `routes` and `said` map and with the pack.yaml bindings `plan-after-deliver-replan` and `deliver-after-plan`, and every claim is there."
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "approve",
+                  "summary": "Approve PR #117 (Refs/Closes #115): one new 7-line file, docs/factory-console/answers/replan.md, with no other file changed. The title \"Start over from the plan\" was chosen by the owner, not the builder: plan run a30fb778 records the owner's CLI answer (2026-11-20T21:39:57Z) and the item's rule says to write the file once a plan has chosen the title. Every body claim matches deliver.yaml's routes and pack.yaml's bindings. No findings; the notes and noticed items below do not return the change."
+                },
+                {
+                  "node": "rounds.shown",
+                  "outcome": "approve",
+                  "summary": "Approve PR #117 (Refs/Closes #115): one new 7-line file, docs/factory-console/answers/replan.md, with no other file changed. The title \"Start over from the plan\" was chosen by the owner, not the builder: plan run a30fb778 records the owner's CLI answer (2026-11-20T21:39:57Z) and the item's rule says to write the file once a plan has chosen the title. Every body claim matches deliver.yaml's routes and pack.yaml's bindings. No findings; the notes and noticed items below do not return the change."
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [
+          {
+            "workflow": "deliver",
+            "node": "rounds.checks",
+            "round": 1,
+            "runId": "73058f19-56e3-4c6e-9084-146952b4c211",
+            "decidedAt": "2026-11-20T21:51:40.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": false,
+                  "seconds": 12,
+                  "tail": "pe-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/adapters type-check: Exited with code 1\n@archon/server type-check: error TS2688: Cannot find type definition file for 'bun-types'.\n@archon/server type-check:   The file is in the program because:\n@archon/server type-check:     Entry point of type library 'bun-types' specified in compilerOptions\n@archon/server type-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/cli type-check: error TS2688: Cannot find type definition file for 'bun-types'.\n@archon/cli type-check:   The file is in the program because:\n@archon/cli type-check:     Entry point of type library 'bun-types' specified in compilerOptions\n@archon/cli type-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/server type-check: Exited with code 1\n@archon/cli type-check: Exited with code 1\n\n$ bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json && bun x tsc --noEmit -p .archon/workflows/tsconfig.json\nerror: script \"type-check\" exited with code 1"
+                },
+                {
+                  "name": "lint",
+                  "passed": false,
+                  "seconds": 0,
+                  "tail": "$ bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-mock-modules.ts && bun run scripts/check-pack-portability.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && bun run scripts/check-web-api-types.ts && bun run scripts/check-console-tokens.ts && biome lint --error-on-warnings .\nerror: Cannot find package 'typescript' from '<live-home>\\workspaces\\coleam00\\archon-factory-console\\worktrees\\archon\\task-wirasm-archon-software-factory-deliver-73058f19\\scripts\\check-test-cleanup-drift.ts'\n\nBun v1.4.2 (Windows x64)\nerror: script \"lint\" exited with code 1"
+                },
+                {
+                  "name": "format",
+                  "passed": false,
+                  "seconds": 0,
+                  "tail": "$ biome format .\nbun: command not found: biome\nerror: script \"format:check\" exited with code 1"
+                },
+                {
+                  "name": "web tests",
+                  "passed": false,
+                  "seconds": 0,
+                  "tail": "$ bun run ../../scripts/package-tests.ts\nerror: Cannot find module '@archon/paths/test-utils' from '<live-home>\\workspaces\\coleam00\\archon-factory-console\\worktrees\\archon\\task-wirasm-archon-software-factory-deliver-73058f19\\scripts\\bun-test-command.ts'\n\nBun v1.4.2 (Windows x64)\nerror: script \"test\" exited with code 1"
+                }
+              ]
+            }
+          }
+        ],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/117",
+        "said": "PR #117 adds one 7-line doc, docs/factory-console/answers/replan.md, titled \"Start over from the plan\". All 10 checks are green, no review comment holds, and the PR merges cleanly with main (0 behind). I took it out of draft.",
+        "models": ["claude-opus-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-20T21:42:54.000Z"
+          },
+          {
+            "node": "rounds",
+            "startedAt": "2026-11-20T21:43:54.000Z"
+          },
+          {
+            "node": "rounds.base",
+            "startedAt": "2026-11-20T21:43:54.000Z"
+          },
+          {
+            "node": "rounds.checks",
+            "startedAt": "2026-11-20T21:43:55.000Z"
+          },
+          {
+            "node": "rounds.tests__tests",
+            "startedAt": "2026-11-20T21:43:55.000Z"
+          },
+          {
+            "node": "rounds.product__product",
+            "startedAt": "2026-11-20T21:43:55.000Z"
+          },
+          {
+            "node": "rounds.review__review",
+            "startedAt": "2026-11-20T21:43:55.000Z"
+          },
+          {
+            "node": "rounds.verdict__verdict",
+            "startedAt": "2026-11-20T21:49:02.000Z"
+          },
+          {
+            "node": "rounds.shown",
+            "startedAt": "2026-11-20T21:49:28.000Z"
+          },
+          {
+            "node": "hostrounds",
+            "startedAt": "2026-11-20T21:49:42.000Z"
+          },
+          {
+            "node": "hostrounds.host__host",
+            "startedAt": "2026-11-20T21:49:42.000Z"
+          },
+          {
+            "node": "result",
+            "startedAt": "2026-11-20T21:51:32.000Z"
+          },
+          {
+            "node": "reported",
+            "startedAt": "2026-11-20T21:51:34.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "0a615d6a-524e-4bcd-ad0d-7c46745308f9",
+        "workflow": "discoveries",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "73058f19-56e3-4c6e-9084-146952b4c211",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-discoveries-after-deliver-ready-e89b89823cf2"
+        },
+        "costUsd": 0.49839400000000006,
+        "step": null,
+        "rounds": null,
+        "shadows": [
+          {
+            "workflow": "discoveries",
+            "node": "result",
+            "round": null,
+            "runId": "0a615d6a-524e-4bcd-ad0d-7c46745308f9",
+            "decidedAt": "2026-11-20T21:56:18.000Z",
+            "read": {
+              "reads": "lists",
+              "counts": [0, 0, 0, 3],
+              "why": "Three discoveries, all from the #115 ask-routing test, where the owner answered a delivery ask with `replan` and a title. Nothing is filed in this repository. Entries 1 and 2 are about how the factory pack routes and records answers. The project's discoveries policy (docs/factory-console/policy/discoveries.md) sends pack faults to the pack's maintainers through the run's notes, not to this tracker. I checked entry 1 against the installed pack and it holds, so it goes to the operator below. Entry 2 has no effect in this repository: the console never shows the raw option id to a person. Entry 3 (nothing links to docs/factory-console/answers/) changes nothing a person sees in the console, and the policy excludes that kind of item, so I dropped it."
+            }
+          }
+        ],
+        "change": null,
+        "said": null,
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "intake",
+            "startedAt": "2026-11-20T21:52:21.000Z"
+          },
+          {
+            "node": "drain",
+            "startedAt": "2026-11-20T21:52:23.000Z"
+          },
+          {
+            "node": "result",
+            "startedAt": "2026-11-20T21:56:16.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "1edbb2bd-84c7-437c-8ee7-f2cdf9222ffb",
+        "workflow": "landgate",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "73058f19-56e3-4c6e-9084-146952b4c211",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landgate-after-deliver-ready-1c0ffe07697c"
+        },
+        "costUsd": 0.1439587,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "The PR is 2 commits behind main and the forge reports mergeability as unknown. The checks that passed ran on the older base, so they do not cover the merge result.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "gate",
+            "startedAt": "2026-11-20T21:52:29.000Z"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -163,7 +163,9 @@ const unexpected = (name: string) => () => {
 export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return workflowStoreDouble<IWorkflowStore>(
     {
-      listSkippedItemStarts: mock(async () => []),
+      listSkippedItemStarts: mock(
+        async (itemIds: readonly string[]) => new Map(itemIds.map(id => [id, []]))
+      ),
       listWaitedItemHolders: mock(async () => []),
       releasePausedRunSlot: mock(async () => ({ released: false })),
       findWorkflowRunsByIdPrefix: mock(async () => []),

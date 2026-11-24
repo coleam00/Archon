@@ -3,7 +3,7 @@ import { Window } from 'happy-dom';
 import { act, useState, type ReactElement } from 'react';
 import { invalidate, useEntity } from '../store/cache';
 import { K } from '../store/keys';
-import { useAttentionStreamSSE, useConversationSSE } from './sse';
+import { useAttentionStreamSSE, useConversationSSE, useDashboardSSE } from './sse';
 
 class TestEventSource {
   static instances: TestEventSource[] = [];
@@ -80,12 +80,56 @@ test('unlock refetches the persisted reply and updates the subscribed chat view'
     expect(loadMessages).toHaveBeenCalledTimes(2);
     expect(container.textContent).toBe('User question\nPersisted assistant reply');
     expect(container.firstElementChild?.getAttribute('data-locked')).toBe('false');
+
+    await act(async () => dom.dispatchEvent(new dom.Event('pagehide')));
+    expect(stream.close).toHaveBeenCalledTimes(1);
   } finally {
     await act(async () => root.unmount());
     container.remove();
     invalidate(key);
   }
   expect(TestEventSource.instances.at(-1)?.close).toHaveBeenCalledTimes(1);
+});
+
+test('a run or node change on the dashboard stream refetches the factory item pages and item reads', async () => {
+  const pageKey = K.factoryItems('project-1');
+  const itemKey = K.factoryItem('project-1', '6');
+  const loadItems = mock(async () => ['page']);
+  const loadItem = mock(async () => ['item']);
+  const onRunChanged = (): void => {};
+
+  function Board(): ReactElement {
+    useDashboardSSE(onRunChanged);
+    const page = useEntity(pageKey, loadItems);
+    const item = useEntity(itemKey, loadItem);
+    return <div>{[...(page.data ?? []), ...(item.data ?? [])].join('')}</div>;
+  }
+
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<Board />));
+    expect([loadItems, loadItem].map(load => load.mock.calls.length)).toEqual([1, 1]);
+    const stream = TestEventSource.instances.at(-1);
+    if (!stream) throw new Error('Dashboard stream was not opened');
+    const send = (event: object): void => stream.onmessage?.({ data: JSON.stringify(event) });
+
+    await act(async () => send({ type: 'heartbeat' }));
+    expect([loadItems, loadItem].map(load => load.mock.calls.length)).toEqual([1, 1]);
+    await act(async () => send({ type: 'workflow_status', runId: 'run-1' }));
+    expect([loadItems, loadItem].map(load => load.mock.calls.length)).toEqual([2, 2]);
+    await act(async () => send({ type: 'dag_node', runId: 'run-1' }));
+    expect([loadItems, loadItem].map(load => load.mock.calls.length)).toEqual([3, 3]);
+
+    // A full page load unloads the document without unmounting React: the stream must close
+    // on pagehide, or the old page keeps its socket (#39).
+    await act(async () => dom.dispatchEvent(new dom.Event('pagehide')));
+    expect(stream.close).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
 });
 
 test('the attention stream refetches the attention list, and reopens on a bad cursor', async () => {

@@ -1,13 +1,13 @@
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, afterEach, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
-import { act, Children, isValidElement, type ReactElement, type ReactNode } from 'react';
+import { act, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
-import { AttentionAnswerPanel } from './AttentionAnswerPanel';
+import { AttentionAnswerForm, AttentionAnswerPanel } from './AttentionAnswerPanel';
 import { RunActionBar } from './RunActionBar';
 import { toRun, type Run } from '../primitives/run';
 
-// A DOM for the one test that types into the panel; restored after this file.
+// Choosing a tile re-renders the form, which static markup cannot reach.
 const dom = new Window({ url: 'http://localhost' });
 const globals = { window: dom, document: dom.document, IS_REACT_ACT_ENVIRONMENT: true };
 const descriptors = new Map(
@@ -17,12 +17,11 @@ for (const [key, value] of Object.entries(globals)) {
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
 }
 const { createRoot } = await import('react-dom/client');
-// React tracks a text box's value through the prototype setter, so typing goes through it.
-const setTextAreaValue = Object.getOwnPropertyDescriptor(
-  dom.HTMLTextAreaElement.prototype,
-  'value'
-)?.set;
+const originalFetch = globalThis.fetch;
 
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 afterAll(async () => {
   await dom.happyDOM.close();
   for (const [key, descriptor] of descriptors) {
@@ -30,19 +29,6 @@ afterAll(async () => {
     else Reflect.deleteProperty(globalThis, key);
   }
 });
-
-/** The click handler of the button labelled `label`, rendering function components on the way. */
-function buttonClick(node: ReactNode, label: string): (() => void) | undefined {
-  let click: (() => void) | undefined;
-  Children.forEach(node, child => {
-    if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(child)) return;
-    if (child.type === 'button' && child.props.children === label) click = child.props.onClick;
-    else if (typeof child.type === 'function')
-      click ??= buttonClick((child.type as (props: unknown) => ReactNode)(child.props), label);
-    else click ??= buttonClick(child.props.children, label);
-  });
-  return click;
-}
 
 const attention = {
   kind: 'attention',
@@ -62,38 +48,61 @@ const run = toRun({
   attention,
 });
 
-test('a select wait is answered with the chosen option at its occurrence, never resumed', async () => {
-  let click: (() => void) | undefined;
-  let resume: (() => void) | undefined;
-  function Probe(): ReactElement | null {
-    const panel = AttentionAnswerPanel({ run, attention });
-    click = buttonClick(panel, 'Use main');
-    resume = buttonClick(RunActionBar({ run }), 'Resume');
-    return panel;
-  }
-  const html = renderToStaticMarkup(
-    <MemoryRouter>
-      <Probe />
-    </MemoryRouter>
-  );
-  expect(html).toContain('use-dev');
-  expect(resume).toBeUndefined();
-  const originalFetch = globalThis.fetch;
+async function mount(element: ReactElement) {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<MemoryRouter>{element}</MemoryRouter>));
+  const button = (label: string): HTMLButtonElement => {
+    const found = [...container.querySelectorAll('button')].find(candidate =>
+      candidate.textContent?.startsWith(label)
+    );
+    if (found === undefined) throw new Error(`No button "${label}"`);
+    return found;
+  };
+  const click = async (label: string): Promise<void> => {
+    await act(async () => {
+      button(label).click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+  };
+  return {
+    container,
+    button,
+    click,
+    unmount: async () => {
+      await act(async () => root.unmount());
+      container.remove();
+    },
+  };
+}
+
+test('a select wait: a tile chooses, Confirm answers at the occurrence, never resumed', async () => {
   const requests: { path: string; body: unknown }[] = [];
   globalThis.fetch = Object.assign(
     async (input: RequestInfo | URL, init?: RequestInit) => {
-      requests.push({
-        path:
-          typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url,
-        body: JSON.parse(String(init?.body)),
-      });
+      requests.push({ path: String(input), body: JSON.parse(String(init?.body)) });
       return Response.json({ success: true });
     },
     { preconnect: originalFetch.preconnect }
   );
+  // The run's own controls offer no resume for an answerable wait.
+  expect(
+    renderToStaticMarkup(
+      <MemoryRouter>
+        <RunActionBar run={run} />
+      </MemoryRouter>
+    )
+  ).not.toContain('Resume');
+  const form = await mount(<AttentionAnswerPanel run={run} attention={attention} />);
   try {
-    click?.();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    // An option with no label reads as its id humanised, never raw.
+    expect(form.container.textContent).toContain('Use dev');
+    expect(form.container.textContent).not.toContain('use-dev');
+    await form.click('Use main');
+    expect(requests).toEqual([]);
+    expect(form.container.textContent).toContain('Answer: Use main');
+    await form.click('Confirm');
     expect(requests).toEqual([
       {
         path: '/api/workflows/runs/ask-run/answer',
@@ -101,70 +110,115 @@ test('a select wait is answered with the chosen option at its occurrence, never 
       },
     ]);
   } finally {
-    globalThis.fetch = originalFetch;
+    await form.unmount();
   }
 });
 
-test("the reserved 'other' option cannot be chosen without text", () => {
-  const html = renderToStaticMarkup(
-    <AttentionAnswerPanel
-      run={run}
-      attention={{
-        ...attention,
-        other: true,
-        options: [...attention.options, { id: 'other', label: 'Other' }],
-      }}
-    />
-  );
-  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Other<\/button>/);
-  expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Use main<\/button>/);
+test("the reserved 'other' option reads Something else and cannot be confirmed without text", async () => {
+  const withOther = {
+    ...attention,
+    other: true,
+    options: [...attention.options, { id: 'other', label: 'Other' }],
+  } as const satisfies NonNullable<Run['attention']>;
+  const form = await mount(<AttentionAnswerForm wait={withOther} submit={async () => {}} />);
+  try {
+    expect(form.container.textContent).toContain('Something elseWrite your own answer');
+    await form.click('Something else');
+    expect(form.button('Confirm').disabled).toBe(true);
+    const box = form.container.querySelector('textarea');
+    if (box === null) throw new Error('No textarea opened');
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        Object.getPrototypeOf(box) as object,
+        'value'
+      )?.set;
+      setter?.call(box, 'Rebase on release instead.');
+      box.dispatchEvent(new dom.Event('input', { bubbles: true }) as unknown as Event);
+    });
+    expect(form.button('Confirm').disabled).toBe(false);
+    // Choosing an ordinary option instead needs no text.
+    await form.click('Cancel');
+    await form.click('Use main');
+    expect(form.button('Confirm').disabled).toBe(false);
+  } finally {
+    await form.unmount();
+  }
 });
 
-test('a message wait can be answered only while its text has a non-blank character', async () => {
-  const container = document.createElement('div');
-  document.body.append(container);
-  const root = createRoot(container);
-  const message = { ...attention, form: 'message' as const, options: [] };
-  const answerButton = (): HTMLButtonElement | undefined =>
-    [...container.querySelectorAll('button')].find(button => button.textContent === 'Answer');
+test('the recommended tile comes first, marked, with what each does and costs, and why under the tiles', () => {
+  const html = renderToStaticMarkup(
+    <AttentionAnswerForm
+      wait={{
+        form: 'select',
+        options: [
+          {
+            id: 'use-main',
+            label: 'Use main',
+            does: 'Rebases onto main.',
+            cost: 'Drops dev fixes.',
+          },
+          { id: 'use-dev', label: 'Use dev', does: 'Rebases onto dev.', cost: 'One more rebase.' },
+        ],
+        recommendation: {
+          option: 'use-dev',
+          why: 'Dev is the working base.',
+          confidence: 'medium',
+        },
+      }}
+      submit={async () => {}}
+    />
+  );
+  // A text node, not the tile's hover title that repeats its words.
+  const at = (text: string): number => {
+    const index = html.indexOf(`>${text}<`);
+    expect(index).toBeGreaterThanOrEqual(0);
+    return index;
+  };
+  expect(at('Use dev')).toBeLessThan(at('Recommended'));
+  expect(at('Recommended')).toBeLessThan(at('Rebases onto dev.'));
+  expect(at('Cost: One more rebase.')).toBeLessThan(at('Use main'));
+  expect(at('Use main')).toBeLessThan(at('Rebases onto main.'));
+  expect(at('Rebases onto main.')).toBeLessThan(at('Cost: Drops dev fixes.'));
+  expect(at('Cost: Drops dev fixes.')).toBeLessThan(
+    at('Medium confidence. Dev is the working base.')
+  );
+  // Nothing is chosen until a tile is: no confirm row yet.
+  expect(html).not.toContain('Confirm');
+});
+
+test('a message wait has no tiles and opens with the textarea', () => {
+  const html = renderToStaticMarkup(
+    <AttentionAnswerForm wait={{ form: 'message', options: [] }} submit={async () => {}} />
+  );
+  expect(html).not.toContain('aria-pressed');
+  expect(html).toContain('<textarea');
+  expect(html).toContain('Answer in words');
+});
+
+test('a message wait can be confirmed only while its text has a non-blank character', async () => {
+  const form = await mount(
+    <AttentionAnswerForm wait={{ form: 'message', options: [] }} submit={async () => {}} />
+  );
   const type = async (value: string): Promise<void> => {
-    const box = container.querySelector('textarea');
-    if (!box) throw new Error('Answer text box was not rendered');
+    const box = form.container.querySelector('textarea');
+    if (box === null) throw new Error('No textarea opened');
     await act(async () => {
-      setTextAreaValue?.call(box, value);
-      box.dispatchEvent(new window.Event('input', { bubbles: true }));
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(box) as object, 'value')?.set?.call(
+        box,
+        value
+      );
+      box.dispatchEvent(new dom.Event('input', { bubbles: true }) as unknown as Event);
     });
   };
   try {
-    await act(async () => root.render(<AttentionAnswerPanel run={run} attention={message} />));
-    expect(answerButton()?.disabled).toBe(true);
+    expect(form.button('Confirm').disabled).toBe(true);
     await type('   ');
-    expect(answerButton()?.disabled).toBe(true);
+    expect(form.button('Confirm').disabled).toBe(true);
     await type('1, 3');
-    expect(answerButton()?.disabled).toBe(false);
+    expect(form.button('Confirm').disabled).toBe(false);
     await type('');
-    expect(answerButton()?.disabled).toBe(true);
+    expect(form.button('Confirm').disabled).toBe(true);
   } finally {
-    await act(async () => root.unmount());
-    container.remove();
+    await form.unmount();
   }
-});
-
-test('the recommendation and what each option does are shown before the choices', () => {
-  const recommended = {
-    ...attention,
-    options: [
-      { id: 'use-main', label: 'Use main', does: 'Rebases the branch onto main.' },
-      { id: 'use-dev' },
-    ],
-    recommendation: { option: 'use-main', why: 'Main has the fix.', confidence: 'medium' },
-  } as const satisfies NonNullable<Run['attention']>;
-  const html = renderToStaticMarkup(
-    <AttentionAnswerPanel run={{ ...run, attention: recommended }} attention={recommended} />
-  );
-  expect(html).toContain('Recommended: Use main');
-  expect(html).toContain('(medium confidence)');
-  expect(html).toContain('Main has the fix.');
-  expect(html).toContain('Rebases the branch onto main.');
-  expect(html).toContain('Use main (recommended)');
 });

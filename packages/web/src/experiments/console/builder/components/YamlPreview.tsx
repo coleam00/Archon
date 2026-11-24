@@ -65,13 +65,13 @@ export function YamlPreview({ yamlText }: YamlPreviewProps): ReactElement {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center justify-between border-b border-border px-3 py-1.5">
-        <span className="font-mono text-console-10 font-bold uppercase tracking-console-label text-text-tertiary">
+        <span className="font-mono text-console-12 font-medium uppercase tracking-console-label text-text-tertiary">
           YAML · read-only
         </span>
         <button
           type="button"
           onClick={copy}
-          className="rounded border border-border bg-surface px-2 py-0.5 text-console-11 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          className="rounded border border-border bg-surface px-2 py-0.5 text-console-12 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
         >
           {copied === 'idle' ? 'Copy' : copied === 'copied' ? 'Copied ✓' : 'Copy failed'}
         </button>

@@ -1,0 +1,1289 @@
+{
+  "version": 1,
+  "pack": "Wirasm/archon-software-factory",
+  "title": "Software factory",
+  "summary": "Work comes in as a work order, or as an issue someone adds the factory label to. Order turns each one into an item the factory can read. Triage decides whether the item is worth building. Plan writes down the approach. Build writes the change and opens a draft pull request. Three checks then read it (a review, a test check and a product check) and send what they find back to the builder, for up to three rounds. Once they approve, the factory reads CI and the reviews on the pull request and fixes what they raise. A ready change goes to a merge gate that lets it through or asks you; told \"land\", the factory merges it itself. A person steps in only to answer the questions an item asks, and to shape an item triage or your answer sent back to shaping.",
+  "stages": [
+    {
+      "id": "order",
+      "label": "Order",
+      "blurb": "Takes a work order, or an issue someone added the factory label to, and makes it one item the factory can read.",
+      "short": "Orders, labelled issues",
+      "group": "intake",
+      "workflows": [
+        "order"
+      ],
+      "drilldown": {
+        "phases": [
+          {
+            "label": "Take the order",
+            "cards": [
+              {
+                "title": "Take the order",
+                "text": "Turns a work order, or an issue given the factory label, into one item the factory can read",
+                "icon": "inbox",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "order",
+                    "steps": [
+                      "order"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "triage",
+      "label": "Triage",
+      "blurb": "Reads a new item and decides whether it is worth building.",
+      "short": "Is it worth building?",
+      "group": "intake",
+      "workflows": [
+        "triage",
+        "split"
+      ],
+      "drilldown": {
+        "phases": [
+          {
+            "label": "Decide",
+            "cards": [
+              {
+                "title": "Decide",
+                "text": "Decides whether the item is worth building, and how",
+                "icon": "scale",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "triage",
+                    "steps": [
+                      "judge__judge"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Follow up",
+            "cards": [
+              {
+                "title": "Link",
+                "text": "Links the item to related items",
+                "icon": "link",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "triage",
+                    "steps": [
+                      "link__link"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Would it start on its own",
+                "text": "Decides whether it would start without you; nothing acts on it",
+                "icon": "ruler",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "triage",
+                    "steps": [
+                      "admit"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Record",
+                "text": "Records the measurement",
+                "icon": "database",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "triage",
+                    "steps": [
+                      "admitted"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Split",
+            "cards": [
+              {
+                "title": "Cut it into pieces",
+                "text": "Decides how an item that is not one change is split",
+                "icon": "scissors",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "split",
+                    "steps": [
+                      "cut"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Start the pieces",
+                "text": "Orders each piece that can start now as an item of its own",
+                "icon": "inbox",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "split",
+                    "steps": [
+                      "members"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "plan",
+      "label": "Plan",
+      "blurb": "Works out how to build the item and writes the plan down.",
+      "short": "Plans how to build it",
+      "group": "intake",
+      "workflows": [
+        "plan"
+      ],
+      "drilldown": {
+        "phases": [
+          {
+            "label": "Plan",
+            "cards": [
+              {
+                "title": "Plan",
+                "text": "Works out how to build the item and writes the plan down",
+                "icon": "clipboard-list",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "plan",
+                    "steps": [
+                      "plan"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "build",
+      "label": "Build",
+      "blurb": "Writes the change and opens a draft pull request, then fixes what comes back.",
+      "short": "Writes the change and PR",
+      "group": "build",
+      "workflows": [
+        "deliver",
+        "stage-build"
+      ],
+      "nodes": [
+        "build__build",
+        "rounds.fix",
+        "hostrounds.hostfix"
+      ],
+      "drilldown": {
+        "phases": [
+          {
+            "label": "Write",
+            "cards": [
+              {
+                "title": "Write or fix the change",
+                "text": "Writes or fixes the change, in the session it had",
+                "icon": "pencil",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "stage-build",
+                    "steps": [
+                      "build__build"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Hand off",
+            "cards": [
+              {
+                "title": "Hand off",
+                "text": "Says whether the change goes to the checks or back to CI",
+                "icon": "send",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "stage-build",
+                    "steps": [
+                      "end"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "checks",
+      "label": "Checks",
+      "blurb": "A review, a test check and a product check read the change and approve it or send it back.",
+      "short": "Review, tests, product",
+      "group": "check",
+      "workflows": [
+        "deliver",
+        "stage-check"
+      ],
+      "nodes": [
+        "rounds.base",
+        "rounds.review__review",
+        "rounds.tests__tests",
+        "rounds.product__product",
+        "rounds.checks",
+        "rounds.verdict__verdict",
+        "rounds.shown",
+        "exhausted"
+      ],
+      "drilldown": {
+        "phases": [
+          {
+            "label": "Prepare",
+            "cards": [
+              {
+                "title": "Read the base",
+                "text": "Reads the commit the change is checked against",
+                "icon": "git-branch",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "stage-check",
+                    "steps": [
+                      "base"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Check",
+            "cards": [
+              {
+                "title": "Code review",
+                "text": "Reviews the change",
+                "icon": "search-code",
+                "kind": "check",
+                "covers": [
+                  {
+                    "workflow": "stage-check",
+                    "steps": [
+                      "review__review"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Test check",
+                "text": "Checks the tests prove the change",
+                "icon": "flask-conical",
+                "kind": "check",
+                "covers": [
+                  {
+                    "workflow": "stage-check",
+                    "steps": [
+                      "tests__tests"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Product check",
+                "text": "Looks at the change in a browser",
+                "icon": "monitor-check",
+                "kind": "check",
+                "covers": [
+                  {
+                    "workflow": "stage-check",
+                    "steps": [
+                      "product__product"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Verdict",
+            "cards": [
+              {
+                "title": "Verdict",
+                "text": "Approves the change or sends it back",
+                "icon": "gavel",
+                "kind": "check",
+                "covers": [
+                  {
+                    "workflow": "stage-check",
+                    "steps": [
+                      "verdict__verdict"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Round ends",
+            "cards": [
+              {
+                "title": "Count the round",
+                "text": "Records the round and the rounds allowed",
+                "icon": "ruler",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "stage-check",
+                    "steps": [
+                      "allowance"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Rounds ran out",
+                "text": "Asks you when the allowed rounds are used up",
+                "icon": "circle-alert",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "stage-check",
+                    "steps": [
+                      "exhausted"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Hand on",
+                "text": "Hands the change on to CI, back to the builder or to Plan, or to you",
+                "icon": "send",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "stage-check",
+                    "steps": [
+                      "end"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Report",
+                "text": "Writes the factory's report on the pull request",
+                "icon": "message-square",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "stage-check",
+                    "steps": [
+                      "report__report"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "host",
+      "label": "CI and review",
+      "blurb": "Reads CI and the reviews on the pull request and sends back what they raise.",
+      "short": "Reads CI and PR reviews",
+      "group": "check",
+      "workflows": [
+        "deliver",
+        "stage-host"
+      ],
+      "nodes": [
+        "hostrounds.host__host",
+        "result",
+        "reported"
+      ],
+      "drilldown": {
+        "phases": [
+          {
+            "label": "CI and reviews",
+            "cards": [
+              {
+                "title": "Read CI and reviews",
+                "text": "Reads CI and the pull request's reviews",
+                "icon": "git-pull-request",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "stage-host",
+                    "steps": [
+                      "rounds__host"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Round ends",
+            "cards": [
+              {
+                "title": "Count the round",
+                "text": "Records the round and the rounds allowed",
+                "icon": "ruler",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "stage-host",
+                    "steps": [
+                      "allowance"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Rounds ran out",
+                "text": "Asks you when the allowed rounds are used up",
+                "icon": "circle-alert",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "stage-host",
+                    "steps": [
+                      "exhausted"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Hand on",
+                "text": "Hands the change on to the merge gate, back to the builder or to you",
+                "icon": "send",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "stage-host",
+                    "steps": [
+                      "end"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Report",
+                "text": "Writes the factory's report on the pull request",
+                "icon": "message-square",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "stage-host",
+                    "steps": [
+                      "report__report"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ready",
+      "label": "Ready to merge",
+      "blurb": "A gate reads the approved change and either lets it through or asks you; told \"land\", the factory merges it. Told to drop or reshape it, the factory closes the change or turns it back into a draft.",
+      "short": "Gated, merged on land",
+      "group": "land",
+      "workflows": [
+        "landgate",
+        "land",
+        "close"
+      ],
+      "drilldown": {
+        "phases": [
+          {
+            "label": "Gate",
+            "cards": [
+              {
+                "title": "Merge gate",
+                "text": "Decides, by the land policy, whether the change may merge without asking you",
+                "icon": "shield-check",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "landgate",
+                    "steps": [
+                      "gate"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Gate's answer",
+                "text": "Lands it when the policy allows, otherwise asks you",
+                "icon": "send",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "landgate",
+                    "steps": [
+                      "end"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Merge",
+            "cards": [
+              {
+                "title": "Merge",
+                "text": "Told \"land\" by the gate or by you, the factory merges the change",
+                "icon": "git-merge",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "land",
+                    "steps": [
+                      "land"
+                    ]
+                  }
+                ]
+              },
+              {
+                "title": "Merge's answer",
+                "text": "Says merged, sent back, or asks you",
+                "icon": "send",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "land",
+                    "steps": [
+                      "end"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Drop or reshape",
+            "cards": [
+              {
+                "title": "Drop or reshape",
+                "text": "Closes or drafts the change you dropped or reshaped, and says why on it",
+                "icon": "git-pull-request",
+                "kind": "script",
+                "covers": [
+                  {
+                    "workflow": "close",
+                    "steps": [
+                      "close"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "landed",
+      "label": "Merged",
+      "blurb": "The change is merged.",
+      "short": "The change is merged",
+      "group": "land",
+      "workflows": [
+        "landed"
+      ],
+      "drilldown": {
+        "phases": [
+          {
+            "label": "After the merge",
+            "cards": [
+              {
+                "title": "Is the branch still sound",
+                "text": "Reads the branch after the merge, and orders a fix when it broke",
+                "icon": "shield-check",
+                "kind": "agent",
+                "covers": [
+                  {
+                    "workflow": "landed",
+                    "steps": [
+                      "landed"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "columns": [
+    {
+      "id": "intake",
+      "label": "Intake",
+      "blurb": "Order, triage",
+      "stages": [
+        "order",
+        "triage"
+      ]
+    },
+    {
+      "id": "plan-build",
+      "label": "Plan & build",
+      "blurb": "Plan, build",
+      "stages": [
+        "plan",
+        "build"
+      ]
+    },
+    {
+      "id": "checks-review",
+      "label": "Checks & review",
+      "blurb": "Checks, CI and PR reviews",
+      "stages": [
+        "checks",
+        "host"
+      ]
+    },
+    {
+      "id": "ready",
+      "label": "Ready to merge",
+      "blurb": "Gate, then merged on land",
+      "stages": [
+        "ready"
+      ]
+    },
+    {
+      "id": "merged",
+      "label": "Merged",
+      "blurb": "Merged changes",
+      "stages": [
+        "landed"
+      ]
+    }
+  ],
+  "retired": [
+    "deliver"
+  ],
+  "placement": {
+    "order:ready": "triage",
+    "triage:build": "plan",
+    "triage:narrow": "plan",
+    "triage:park": "triage",
+    "plan:planned": "build",
+    "plan:ask": "plan",
+    "deliver:ready": "ready",
+    "deliver:waiting": "host",
+    "deliver:returned": "build",
+    "deliver:replan": "plan",
+    "deliver:ask": "build",
+    "landgate:*": "ready",
+    "land:landed": "landed",
+    "land:returned": "build",
+    "land:ask": "ready",
+    "triage:split": "triage",
+    "split:whole": "plan",
+    "split:waiting": "triage",
+    "stage-build:built": "checks",
+    "stage-build:built_for_host": "host",
+    "stage-build:replan": "plan",
+    "stage-build:ask": "build",
+    "stage-check:approve": "host",
+    "stage-check:return": "build",
+    "stage-check:replan": "plan",
+    "stage-check:ask": "checks",
+    "stage-host:ready": "ready",
+    "stage-host:return": "build",
+    "stage-host:waiting": "host",
+    "stage-host:ask": "host",
+    "landed:*": "landed",
+    "triage:shape": "triage",
+    "close:reshape": "triage",
+    "close:not_closed": "ready",
+    "close:none": "ready"
+  },
+  "endings": {
+    "order:refused": "Refused at intake",
+    "triage:close": "Closed by triage",
+    "triage:decline": "Closed by triage",
+    "triage:deprecate": "Closed by triage",
+    "triage:fold": "Folded into another item",
+    "triage:recipe": "Handled another way",
+    "triage:native": "Handled another way",
+    "plan:stop": "Stopped at planning",
+    "land:stop": "Stopped before merging",
+    "split:split": "Split into pieces",
+    "close:dropped": "Dropped by you"
+  },
+  "landed": {
+    "stage": "landed"
+  },
+  "rounds": [
+    {
+      "workflow": "deliver",
+      "loop": "rounds"
+    },
+    {
+      "workflow": "stage-check",
+      "round": "/round",
+      "allowance": "/allowance"
+    }
+  ],
+  "returns": [
+    {
+      "workflow": "deliver",
+      "node": "rounds.verdict__verdict",
+      "outcome": "return"
+    },
+    {
+      "workflow": "deliver",
+      "node": "hostrounds.host__host",
+      "outcome": "return"
+    },
+    {
+      "workflow": "stage-check",
+      "node": "verdict__verdict",
+      "outcome": "return"
+    },
+    {
+      "workflow": "stage-host",
+      "node": "rounds__host",
+      "outcome": "return"
+    }
+  ],
+  "approves": [
+    {
+      "workflow": "deliver",
+      "node": "rounds.verdict__verdict",
+      "outcome": "approve"
+    },
+    {
+      "workflow": "stage-check",
+      "node": "verdict__verdict",
+      "outcome": "approve"
+    }
+  ],
+  "verdicts": {
+    "deliver": {
+      "rounds.review__review": {
+        "approve": "approved",
+        "return": "returned",
+        "ask": "asked"
+      },
+      "rounds.tests__tests": {
+        "sound": "approved",
+        "return": "returned",
+        "ask": "asked"
+      },
+      "rounds.product__product": {
+        "approve": "approved",
+        "return": "returned",
+        "ask": "asked"
+      },
+      "rounds.verdict__verdict": {
+        "ask": "asked"
+      }
+    },
+    "stage-check": {
+      "review__review": {
+        "approve": "approved",
+        "return": "returned",
+        "ask": "asked"
+      },
+      "tests__tests": {
+        "sound": "approved",
+        "return": "returned",
+        "ask": "asked"
+      },
+      "product__product": {
+        "approve": "approved",
+        "return": "returned",
+        "ask": "asked"
+      },
+      "verdict__verdict": {
+        "ask": "asked"
+      }
+    }
+  },
+  "asked": [
+    "plan:ask",
+    "deliver:ask",
+    "land:ask",
+    "stage-build:ask",
+    "stage-check:ask",
+    "stage-host:ask",
+    "landgate:ask",
+    "split:waiting"
+  ],
+  "parked": {
+    "triage:park": {
+      "label": "Parked by triage",
+      "why": "/why"
+    },
+    "close:not_closed": {
+      "label": "The forge would not close the PR: close or draft it by hand",
+      "why": "/why"
+    }
+  },
+  "awaits": {
+    "triage:shape": {
+      "label": "Needs shaping",
+      "why": "/why",
+      "questions": "/open_questions",
+      "next": "Settle these questions with a maintainer, then order it again: a work order, or remove and add the factory label. A comment on the issue does not reach it."
+    },
+    "close:reshape": {
+      "label": "Needs shaping",
+      "why": "/why",
+      "next": "Shape the item with a maintainer, then order it again: a work order, or remove and add the factory label. A comment on the issue does not reach it."
+    }
+  },
+  "change": [
+    {
+      "workflow": "deliver",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "stage-build",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "stage-check",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "stage-host",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "landgate",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "land",
+      "pointer": "/change"
+    }
+  ],
+  "partOf": {
+    "workflow": "order",
+    "pointer": "/part_of",
+    "outcome": "ready"
+  },
+  "discoveries": {
+    "workflow": "discoveries",
+    "shadow": true,
+    "filed": "/filed",
+    "held": "/held",
+    "dropped": "/dropped",
+    "entry": {
+      "title": "/title",
+      "kind": "/kind",
+      "verified": "/verified"
+    }
+  },
+  "shadows": [
+    {
+      "workflow": "triage",
+      "node": "admit",
+      "label": "Would it start on its own",
+      "reads": "verdict",
+      "pointer": "/admit",
+      "why": "/why",
+      "words": {
+        "auto": "would start on its own",
+        "ask": "would ask you first"
+      }
+    },
+    {
+      "workflow": "deliver",
+      "node": "rounds.checks",
+      "label": "Project checks",
+      "reads": "checks",
+      "results": "/results",
+      "entry": {
+        "name": "/name",
+        "passed": "/passed",
+        "seconds": "/seconds",
+        "tail": "/tail"
+      }
+    },
+    {
+      "workflow": "discoveries",
+      "node": "result",
+      "label": "What it would file",
+      "reads": "lists",
+      "lists": [
+        {
+          "pointer": "/filed",
+          "words": "would file"
+        },
+        {
+          "pointer": "/folded",
+          "words": "would fold into open items"
+        },
+        {
+          "pointer": "/held",
+          "words": "would hold"
+        },
+        {
+          "pointer": "/dropped",
+          "words": "would drop"
+        }
+      ],
+      "why": "/summary"
+    }
+  ],
+  "itemTitle": {
+    "input": "item"
+  },
+  "steps": {
+    "triage": {
+      "judge__judge": "Decides whether to build",
+      "link__link": "Links related items",
+      "admit": "Would it start on its own",
+      "admitted": "Records the admit measurement"
+    },
+    "plan": {
+      "plan": "Writes the plan"
+    },
+    "deliver": {
+      "build__build": "Writes the change",
+      "rounds": "Check rounds",
+      "rounds.fix": "Fixes what came back",
+      "rounds.base": "Reads the base commit",
+      "rounds.review__review": "Code review",
+      "rounds.tests__tests": "Test check",
+      "rounds.product__product": "Product check",
+      "rounds.checks": "Project checks",
+      "rounds.verdict__verdict": "Verdict",
+      "rounds.shown": "Posts the review",
+      "exhausted": "Rounds ran out",
+      "hostrounds": "CI and review rounds",
+      "hostrounds.hostfix": "Fixes what CI and reviews raised",
+      "hostrounds.host__host": "Reads CI and PR reviews",
+      "result": "Decides how delivery ends",
+      "reported": "Reports the ending"
+    },
+    "split": {
+      "cut": "Decides how to split it",
+      "members": "Starts the pieces"
+    },
+    "stage-build": {
+      "build__build": "Writes or fixes the change",
+      "end": "Hands the change on"
+    },
+    "stage-check": {
+      "base": "Reads the base commit",
+      "review__review": "Code review",
+      "tests__tests": "Test check",
+      "product__product": "Product check",
+      "verdict__verdict": "Verdict",
+      "allowance": "Reads the rounds allowed",
+      "exhausted": "Rounds ran out",
+      "end": "Hands the change on",
+      "report__report": "Writes the report"
+    },
+    "stage-host": {
+      "rounds__host": "Reads CI and PR reviews",
+      "allowance": "Reads the rounds allowed",
+      "exhausted": "Rounds ran out",
+      "end": "Hands the change on",
+      "report__report": "Writes the report"
+    },
+    "landed": {
+      "landed": "Checks the branch after the merge"
+    },
+    "landgate": {
+      "end": "Hands on the gate's answer"
+    },
+    "land": {
+      "end": "Hands on the merge's answer"
+    },
+    "close": {
+      "close": "Carries out drop or reshape"
+    }
+  },
+  "story": {
+    "outcomes": {
+      "order:ready": "Order took the work order and made it an item",
+      "order:refused": "Order refused the work order",
+      "triage:build": "Triage judged it worth building",
+      "triage:narrow": "Triage judged it worth building, in a narrower form",
+      "triage:split": "Triage judged it is more than one change",
+      "triage:recipe": "Triage judged it is handled another way",
+      "triage:native": "Triage judged it is handled another way",
+      "triage:fold": "Triage folded it into another item",
+      "triage:park": "Triage parked it for later",
+      "triage:deprecate": "Triage closed it",
+      "triage:decline": "Triage closed it",
+      "triage:close": "Triage closed it",
+      "split:whole": "Split kept it as one change",
+      "split:split": "Split cut it into pieces",
+      "split:waiting": "Split is waiting before it can cut it",
+      "plan:planned": "Plan wrote the approach",
+      "plan:ask": "Plan asked you before writing the approach",
+      "plan:stop": "Plan stopped it",
+      "deliver:ready": "The checks and CI passed; it is ready to merge",
+      "deliver:returned": "Delivery sent it back to the builder",
+      "deliver:waiting": "Delivery is waiting on CI",
+      "deliver:replan": "Delivery sent it back to planning",
+      "deliver:ask": "Delivery asked you",
+      "stage-build:built": "Build wrote the change",
+      "stage-build:built_for_host": "Build fixed what CI and the reviews raised",
+      "stage-build:replan": "Build sent it back to planning",
+      "stage-build:ask": "Build asked you",
+      "stage-check:approve": "The checks approved it",
+      "stage-check:return": "The checks sent it back",
+      "stage-check:replan": "The checks sent it back to planning",
+      "stage-check:ask": "The checks asked you",
+      "stage-host:ready": "CI and the reviews passed",
+      "stage-host:return": "CI or a review sent it back",
+      "stage-host:waiting": "Waiting on CI",
+      "stage-host:ask": "CI and review asked you",
+      "landgate:land": "The merge gate said land",
+      "landgate:ask": "The merge gate asked you",
+      "landgate:*": "The merge gate read the change",
+      "land:landed": "The factory merged it",
+      "land:returned": "Merging sent it back to the builder",
+      "land:stop": "Merging stopped it",
+      "land:ask": "Merging asked you",
+      "landed:*": "The factory checked the branch after the merge",
+      "discoveries:*": "The factory looked for other work it noticed",
+      "triage:shape": "Triage judged it worth doing, once a maintainer settles its open questions",
+      "close:dropped": {
+        "withChange": "You dropped it; the factory closed the PR without merging",
+        "withoutChange": "You dropped it before a change was proposed"
+      },
+      "close:reshape": {
+        "withChange": "You sent it back to shaping; the PR stays open as a draft",
+        "withoutChange": "You sent it back to shaping before a change was proposed"
+      },
+      "close:not_closed": "The factory could not carry out your drop or reshape on the change; do it by hand",
+      "close:none": "Drop or reshape found no drop or reshape answer and did nothing"
+    },
+    "steps": {
+      "deliver": {
+        "build__build": "Build wrote the change",
+        "hostrounds.host__host": "CI and the reviews were read"
+      }
+    },
+    "said": [
+      "/summary",
+      "/why"
+    ]
+  },
+  "answers": {
+    "stage-build:drop": {
+      "starts": "Closes the PR without merging"
+    },
+    "stage-build:reshape": {
+      "starts": "Leaves the PR as a draft until the item is shaped"
+    },
+    "stage-check:drop": {
+      "starts": "Closes the PR without merging"
+    },
+    "stage-check:reshape": {
+      "starts": "Leaves the PR as a draft until the item is shaped"
+    },
+    "stage-host:drop": {
+      "starts": "Closes the PR without merging"
+    },
+    "stage-host:reshape": {
+      "starts": "Leaves the PR as a draft until the item is shaped"
+    },
+    "landgate:drop": {
+      "starts": "Closes the PR without merging"
+    },
+    "landgate:reshape": {
+      "starts": "Leaves the PR as a draft until the item is shaped"
+    },
+    "land:drop": {
+      "starts": "Closes the PR without merging"
+    },
+    "land:reshape": {
+      "starts": "Leaves the PR as a draft until the item is shaped"
+    }
+  },
+  "map": {
+    "cards": [
+      {
+        "stage": "order"
+      },
+      {
+        "stage": "triage"
+      },
+      {
+        "stage": "plan"
+      },
+      {
+        "stage": "build"
+      },
+      {
+        "stage": "checks"
+      },
+      {
+        "stage": "host"
+      },
+      {
+        "stage": "ready"
+      },
+      {
+        "stage": "landed"
+      }
+    ],
+    "arrows": [
+      {
+        "from": "order",
+        "to": "triage",
+        "label": "ready"
+      },
+      {
+        "from": "triage",
+        "to": "plan",
+        "label": "build, narrow"
+      },
+      {
+        "from": "plan",
+        "to": "build",
+        "label": "planned"
+      },
+      {
+        "from": "build",
+        "to": "checks",
+        "label": "built"
+      },
+      {
+        "from": "checks",
+        "to": "host",
+        "label": "approved"
+      },
+      {
+        "from": "host",
+        "to": "ready",
+        "label": "ready, drop or reshape"
+      },
+      {
+        "from": "ready",
+        "to": "landed",
+        "label": "merged"
+      },
+      {
+        "from": "checks",
+        "to": "build",
+        "label": "returned"
+      },
+      {
+        "from": "host",
+        "to": "build",
+        "label": "returned"
+      },
+      {
+        "from": "host",
+        "to": "plan",
+        "label": "replan",
+        "person": true
+      },
+      {
+        "from": "plan",
+        "to": "plan",
+        "label": "answers"
+      },
+      {
+        "from": "ready",
+        "to": "ready",
+        "label": "land, drop or reshape",
+        "person": true
+      },
+      {
+        "from": "triage",
+        "to": "triage",
+        "label": "split"
+      },
+      {
+        "from": "triage",
+        "to": "order",
+        "label": "pieces"
+      },
+      {
+        "from": "landed",
+        "to": "order",
+        "label": "broke the branch"
+      },
+      {
+        "from": "build",
+        "to": "host",
+        "label": "fixed for CI"
+      },
+      {
+        "from": "ready",
+        "to": "build",
+        "label": "sent back"
+      },
+      {
+        "from": "build",
+        "to": "build",
+        "label": "answers",
+        "person": true
+      },
+      {
+        "from": "build",
+        "to": "plan",
+        "label": "replan",
+        "person": true
+      },
+      {
+        "from": "checks",
+        "to": "plan",
+        "label": "replan",
+        "person": true
+      },
+      {
+        "from": "build",
+        "to": "ready",
+        "label": "drop or reshape"
+      },
+      {
+        "from": "checks",
+        "to": "ready",
+        "label": "drop or reshape"
+      }
+    ],
+    "notes": [
+      {
+        "text": "You answer asks here",
+        "near": "needs-you"
+      }
+    ]
+  }
+}

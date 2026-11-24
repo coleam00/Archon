@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import type { components } from '@/lib/api.generated';
 import { detailFixture, terminalRecord } from '../primitives/run.test-fixtures';
 import { toRun } from '../primitives/run';
-import { getRun, listRuns, respondRun, fetchArtifact, listRunsNeedingAttention } from './runs';
+import {
+  getRun,
+  listRuns,
+  respondRun,
+  fetchArtifact,
+  listAttentionQueue,
+  listRunsNeedingAttention,
+} from './runs';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -187,6 +194,26 @@ test('attention list keeps asks no run holds apart from run items, with refusals
     itemIds: new Set(['item-1', 'item-2']),
     degraded: [],
   });
+});
+
+test("a project's attention queue is read for that project and refuses a count response", async () => {
+  const paths: string[] = [];
+  globalThis.fetch = Object.assign(
+    (input: RequestInfo | URL) => {
+      paths.push(String(input));
+      return Promise.resolve(Response.json({ runs: [detailFixture.run], items: [] }));
+    },
+    { preconnect: originalFetch.preconnect }
+  );
+  expect(await listAttentionQueue('cb 1')).toEqual({
+    items: [],
+    runs: [toRun(detailFixture.run)],
+    degraded: [],
+  });
+  expect(paths).toEqual(['/api/runs/attention?project=cb+1']);
+
+  respond({ counts: { by: 'project', counts: [] } });
+  await expect(listAttentionQueue('cb-1')).rejects.toThrow('counts instead of items');
 });
 
 test('attention list keeps a lost-owner item holder, which has no paused run row', async () => {
