@@ -194,6 +194,15 @@ describe('writeHomePiModelConfig', () => {
     expect(readFileSync(configPath(), 'utf-8')).toBe(broken);
   });
 
+  it('refuses to save over a provider cap that admission would refuse, leaving the file as it was', async () => {
+    const badCap = 'concurrency:\n  providers:\n    claude: 0\n';
+    writeFileSync(configPath(), badCap);
+    await expect(writeHomePiModelConfig('xai/grok-4.7')).rejects.toThrow(
+      /concurrency\.providers\.claude/
+    );
+    expect(readFileSync(configPath(), 'utf-8')).toBe(badCap);
+  });
+
   it('keeps a model name with double quotes intact', async () => {
     await writeHomePiModelConfig('vendor/"weird-model"');
     expect(piModel()).toBe('vendor/"weird-model"');

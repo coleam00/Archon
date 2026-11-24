@@ -227,12 +227,12 @@ export function validateProviderConcurrencyConfig(parsed: unknown, configPath: s
       .join('; ');
     throw new InvalidConfigError('Invalid concurrency config', configPath, issues);
   }
-  const { unknown } = providerCapsOf(result.data);
-  if (unknown.length > 0) {
+  const { unknownKeys } = providerCapsOf(result.data);
+  if (unknownKeys.length > 0) {
     throw new InvalidConfigError(
       'Invalid concurrency config',
       configPath,
-      `concurrency.providers: ${unknownProvidersDetail(unknown)}`
+      unknownProvidersDetail(unknownKeys)
     );
   }
 }

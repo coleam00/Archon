@@ -144,6 +144,24 @@ describe('config-loader', () => {
     }
   );
 
+  test('a null provider cap block allows unrelated global settings updates', async () => {
+    mockFsReadFile.mockResolvedValue('botName: MyBot\nconcurrency:\n  providers: null\n');
+    await updateGlobalConfig({ botName: 'UpdatedBot' });
+    expect(Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string)).toEqual({
+      botName: 'UpdatedBot',
+      concurrency: { providers: null },
+    });
+  });
+
+  test('a conversation limit update keeps existing provider caps', async () => {
+    mockFsReadFile.mockResolvedValue('botName: MyBot\nconcurrency:\n  providers:\n    claude: 2\n');
+    await updateGlobalConfig({ concurrency: { maxConversations: 3 } });
+    expect(Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string)).toEqual({
+      botName: 'MyBot',
+      concurrency: { maxConversations: 3, providers: { claude: 2 } },
+    });
+  });
+
   test('invalid conversation limits refuse to load and cannot be persisted', async () => {
     mockFsReadFile.mockResolvedValue('concurrency:\n  maxConversations: -1\n');
     await expect(loadConfig()).rejects.toThrow(/Invalid concurrency config.*maxConversations/);
@@ -822,6 +840,8 @@ concurrency:
   maxConversations: 5
   providers:
     claude: 0
+    nope: 1
+    codex: 3
 `;
 
     test('refuses an unrelated edit that leaves an invalid provider cap in place', async () => {
@@ -835,18 +855,23 @@ concurrency:
       await expect(loadGlobalConfig()).resolves.toMatchObject({ botName: 'MyBot' });
     });
 
-    test('a patch that repairs the provider cap keeps every unrelated key and admission reads it', async () => {
+    test('a patch that repairs the provider caps keeps the valid cap and every unrelated key, and admission reads it', async () => {
       mockFsReadFile.mockResolvedValue(fileWithBadCap);
 
-      await updateGlobalConfig({ concurrency: { providers: { claude: 2 } } });
+      await updateGlobalConfig({ concurrency: { providers: { claude: 2, nope: null } } });
 
       const yaml = mockFsWriteFile.mock.calls[0]?.[1] as string;
       expect(Bun.YAML.parse(yaml)).toEqual({
         botName: 'MyBot',
-        concurrency: { maxConversations: 5, providers: { claude: 2 } },
+        concurrency: { maxConversations: 5, providers: { claude: 2, codex: 3 } },
       });
       mockFsReadFile.mockResolvedValue(yaml);
-      expect(await loadProviderConcurrencyCaps()).toEqual(new Map([['claude', 2]]));
+      expect(await loadProviderConcurrencyCaps()).toEqual(
+        new Map([
+          ['claude', 2],
+          ['codex', 3],
+        ])
+      );
     });
 
     test('an edit to one provider does not overwrite a malformed entry for another', async () => {

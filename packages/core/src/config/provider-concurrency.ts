@@ -27,31 +27,38 @@ export const providerConcurrencySchema = z.looseObject({
 
 /**
  * Caps keyed by provider registration ID, with Pi's `maxConcurrent` folded in as the lower
- * of the two, and the IDs no registered provider owns.
+ * of the two, and the config keys whose provider ID no registered provider owns.
  */
 export function providerCapsOf(config: z.output<typeof providerConcurrencySchema>): {
   caps: Map<string, number>;
-  unknown: string[];
+  unknownKeys: string[];
 } {
-  const caps = new Map(Object.entries(config.concurrency?.providers ?? {}));
+  const providers = config.concurrency?.providers ?? {};
+  const caps = new Map(Object.entries(providers));
   const piCap = config.assistants?.pi?.maxConcurrent;
   if (piCap !== undefined) caps.set('pi', Math.min(caps.get('pi') ?? piCap, piCap));
-  return { caps, unknown: [...caps.keys()].filter(id => !isRegisteredProvider(id)) };
+  const unknownKeys = [...caps.keys()]
+    .filter(id => !isRegisteredProvider(id))
+    .flatMap(id => [
+      ...(Object.hasOwn(providers, id) ? [`concurrency.providers.${id}`] : []),
+      ...(id === 'pi' && piCap !== undefined ? ['assistants.pi.maxConcurrent'] : []),
+    ]);
+  return { caps, unknownKeys };
 }
 
-export function unknownProvidersDetail(unknown: readonly string[]): string {
-  return `unknown provider registration ID(s) ${unknown.map(id => `'${id}'`).join(', ')}`;
+export function unknownProvidersDetail(unknownKeys: readonly string[]): string {
+  return `${unknownKeys.join(', ')}: names no registered provider`;
 }
 
 /** Caps keyed by provider registration ID. An absent provider is unlimited. */
 export async function loadProviderConcurrencyCaps(): Promise<ReadonlyMap<string, number>> {
-  const { caps, unknown } = providerCapsOf(
+  const { caps, unknownKeys } = providerCapsOf(
     await readConcurrencyConfig(providerConcurrencySchema, REFUSED)
   );
-  if (unknown.length > 0) {
+  if (unknownKeys.length > 0) {
     throw new ConcurrencyConfigError(
       getArchonConfigPath(),
-      unknownProvidersDetail(unknown),
+      unknownProvidersDetail(unknownKeys),
       REFUSED
     );
   }
