@@ -358,7 +358,7 @@ function waitStore(waits: Partial<StoredItemWait>[], itemKey = 'pr-7'): ItemWait
         event: 'checks',
         about: REVISION,
         openedAt: '2026-01-01T00:00:00.000Z',
-        deadlineAt: '2026-01-01T01:00:00.000Z',
+        deadlineAt: '2026-12-31T23:59:59.000Z',
         closed: null,
         ...wait,
       })),

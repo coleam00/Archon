@@ -498,6 +498,8 @@ export function createItemWaitObserver(input: {
   >();
   // Each unserved wait is logged once per process, not on every pass.
   const warned = new Set<string>();
+  // Track which overdue waits have been reported in unserved, once per observer process
+  const reportedOverdue = new Set<string>();
   let running = false;
 
   const openWaits = async (now: Date): Promise<{ active: ObservedItemWait[]; overdue: Array<{ wait: ObservedItemWait; deadlineAt: string }> }> => {
@@ -717,6 +719,21 @@ export function createItemWaitObserver(input: {
             log.warn({ ...wait, deadlineAt }, 'source_observe_overdue');
           }
         }
+        // Build the unserved entries for overdue waits, once per observer process
+        const overdueUnserved = overdue
+          .map(({ wait, deadlineAt }) => {
+            const key = JSON.stringify([wait, deadlineAt]);
+            return { key, wait, deadlineAt };
+          })
+          .filter(({ key }) => {
+            if (reportedOverdue.has(key)) return false;
+            reportedOverdue.add(key);
+            return true;
+          })
+          .map(({ wait, deadlineAt }) => ({
+            wait,
+            reason: `deadline passed at ${deadlineAt}; polling stopped`,
+          }));
         for (const source of due) {
           // A source with nothing to observe is not called, so it reads nothing; the label
           // bindings it cannot observe are still reported, so the operator learns why.
@@ -724,26 +741,20 @@ export function createItemWaitObserver(input: {
             if (source.unservedBindings.length === 0 && overdue.length === 0) continue;
             lastObserved.set(source.sourceInstanceId, now.getTime());
             const report = unobserved(source);
-            // Add overdue waits to unserved for reporting
-            if (overdue.length > 0) {
-              report.unserved = overdue.map(({ wait, deadlineAt }) => ({
-                wait,
-                reason: `deadline passed at ${deadlineAt}; polling stopped`,
-              }));
+            // Add overdue waits to unserved for reporting (once per observer process)
+            if (overdueUnserved.length > 0) {
+              report.unserved = overdueUnserved;
             }
             reports.push(report);
             continue;
           }
           lastObserved.set(source.sourceInstanceId, now.getTime());
           const report = await observeSource(source, waits);
-          // Add overdue waits to unserved for reporting
-          if (overdue.length > 0) {
+          // Add overdue waits to unserved for reporting (once per observer process)
+          if (overdueUnserved.length > 0) {
             report.unserved = [
               ...report.unserved,
-              ...overdue.map(({ wait, deadlineAt }) => ({
-                wait,
-                reason: `deadline passed at ${deadlineAt}; polling stopped`,
-              })),
+              ...overdueUnserved,
             ];
           }
           reports.push(report);
