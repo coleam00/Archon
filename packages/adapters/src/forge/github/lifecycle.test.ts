@@ -328,7 +328,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     });
   });
 
-  test('verification failed: the read-back after an acknowledged write could not run', async () => {
+  test('verification failed: a read-back that could not run reports its own error', async () => {
     let submitted = false;
     const github = fakeGitHub({
       status: (url, method) => {
@@ -336,7 +336,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
           submitted = true;
           return undefined;
         }
-        return submitted && url.includes('/pulls/7') ? 500 : undefined;
+        return submitted && url.includes('/pulls/7') ? 429 : undefined;
       },
     });
     const response = await run(
@@ -345,7 +345,12 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     );
     expect(response).toMatchObject({
       ok: false,
-      mutation: { op: 'pr.edit-body', outcome: 'verification_failed' },
+      error: { kind: 'rate_limited' },
+      mutation: {
+        op: 'pr.edit-body',
+        outcome: 'verification_failed',
+        leaveBehind: 'the pull request body may have changed',
+      },
     });
   });
 
@@ -565,6 +570,19 @@ test.each([
   });
   expect(JSON.stringify(response)).not.toContain('token must never escape');
   expect(github.writes).toHaveLength(1);
+});
+
+test('a merge whose read-back fails keeps the read-back error on verification_failed', async () => {
+  // pr.merge has no read-back catch of its own, so this goes through lifecycle's.
+  const response = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: mergeGitHub({ readFailed: true }).fetch,
+  });
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'unavailable', status: 500 },
+    mutation: { outcome: 'verification_failed', leaveBehind: 'the acknowledged write may remain' },
+  });
 });
 
 test('unavailable supplemental merge evidence remains explicitly null', async () => {
