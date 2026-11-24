@@ -14,6 +14,7 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   ChildRunRedirectError,
+  ResumeRefusedError,
   workflowOperationErrorMessage,
 } from '@archon/core/operations/workflow-operations';
 import * as archonPaths from '@archon/paths';
@@ -309,9 +310,20 @@ export function printJsonWriteError(runId: string, action: string, error: unknow
   return writeJsonLine(jsonWriteError(runId, action, error));
 }
 
-/** The `{ ok: false }` value a write command reports for a run it could not act on. */
+/**
+ * The `{ ok: false }` value a write command reports for a run it could not act on. A resume
+ * refusal that names a restart command carries it as `restartCommand`, so an agent need
+ * not read it out of the error text.
+ */
 export function jsonWriteError(runId: string, action: string, error: unknown) {
-  return { ok: false, runId, action, error: cliRefusalText(error) } as const;
+  const restartCommand = error instanceof ResumeRefusedError ? error.restartCommand : undefined;
+  return {
+    ok: false,
+    runId,
+    action,
+    error: cliRefusalText(error),
+    ...(restartCommand ? { restartCommand } : {}),
+  } as const;
 }
 
 export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {

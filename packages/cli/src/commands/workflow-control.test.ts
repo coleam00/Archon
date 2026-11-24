@@ -113,6 +113,7 @@ describe('write command --json output', () => {
         recordedUid: null,
         lastActivityAt: '2026-09-20T10:00:00.000Z',
       },
+      restartCommand: 'archon workflow run --supersedes run-ab',
     });
   });
 
@@ -142,6 +143,7 @@ describe('write command --json output', () => {
       status: 'cancelled',
       workflowName: 'implement',
       owner: { outcome: 'stopped', pid: 42 },
+      restartCommand: 'archon workflow run --supersedes run-ab',
     });
   });
 
@@ -312,6 +314,29 @@ describe('workflowResumeCommand', () => {
     await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-no-path')).rejects.toThrow(
       'Start it again with: archon workflow run --supersedes run-no-path'
     );
+  });
+
+  it('refuses a cancelled run, naming the command that starts it again', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const cancelled = { id: 'run-gone', workflow_name: 'implement', status: 'cancelled' };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(cancelled);
+
+    await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-gone')).rejects.toThrow(
+      'with: archon workflow run --supersedes run-gone'
+    );
+
+    const stdoutSpy = spyOnJsonStdout();
+    try {
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(cancelled);
+      expect(await workflowResumeCommand(createTestWorkflowHost(), 'run-gone', true)).toBe(1);
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+        ok: false,
+        action: 'resume',
+        restartCommand: 'archon workflow run --supersedes run-gone',
+      });
+    } finally {
+      stdoutSpy.mockRestore();
+    }
   });
 
   it('forwards the codebase recorded on the run to the resumed run', async () => {
