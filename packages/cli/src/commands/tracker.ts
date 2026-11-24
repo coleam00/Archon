@@ -16,8 +16,9 @@ import { writeStdout } from '../utils/stdout';
 /**
  * The configured tracker, activated; undefined when the config tracks no project.
  *
- * The read leaves a missing config missing: every command that builds a workflow host
- * comes through here, read-only ones such as `trigger check` included.
+ * The read leaves a missing config missing: a workflow host built for executions on a
+ * database store activates the tracker, and every `trigger` subcommand builds one,
+ * read-only `trigger check` included.
  */
 export async function activateConfiguredTracker(
   forgeTrustedEnv: NodeJS.ProcessEnv
