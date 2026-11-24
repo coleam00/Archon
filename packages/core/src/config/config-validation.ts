@@ -18,6 +18,7 @@ import {
   platformStreamingSchema,
   workflowContinuationConfigSchema,
 } from './config-types';
+import { resolveProviderConcurrencyCaps } from './provider-concurrency';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -206,6 +207,17 @@ export function validateConversationConcurrencyConfig(parsed: unknown, configPat
       configPath,
       "'concurrency.maxConversations' must be a finite positive integer."
     );
+  }
+}
+
+/**
+ * Refuses provider caps admission would refuse. Only a settings write runs it: on read,
+ * a bad cap refuses provider attempts at admission rather than every config load.
+ */
+export function validateProviderConcurrencyConfig(parsed: unknown, configPath: string): void {
+  const resolved = resolveProviderConcurrencyCaps(parsed);
+  if (!resolved.ok) {
+    throw new InvalidConfigError('Invalid concurrency config', configPath, resolved.detail);
   }
 }
 

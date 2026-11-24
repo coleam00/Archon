@@ -12,6 +12,7 @@ import {
   updateGlobalConfig,
 } from './config-loader';
 import { InvalidConfigError } from './config-validation';
+import { resolveProviderConcurrencyCaps } from './provider-concurrency';
 import {
   mockLogger,
   archonHome,
@@ -154,6 +155,24 @@ describe('config-loader', () => {
     expect(Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string)).toEqual({
       concurrency: { maxConversations: 3 },
     });
+  });
+
+  test.each([
+    ['zero', 'claude: 0'],
+    ['negative', 'claude: -2'],
+    ['fractional', 'claude: 1.5'],
+    ['unregistered', 'nope: 2'],
+  ])('a %s provider cap cannot be persisted, and a repair can', async (_case, cap) => {
+    mockFsReadFile.mockResolvedValue(`botName: Bot\nconcurrency:\n  providers:\n    ${cap}\n`);
+    await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+      InvalidConfigError
+    );
+    expect(mockFsWriteFile).not.toHaveBeenCalled();
+    await updateGlobalConfig({ concurrency: { providers: { claude: 2 } } });
+    const written = Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string);
+    expect(written).toEqual({ botName: 'Bot', concurrency: { providers: { claude: 2 } } });
+    const resolved = resolveProviderConcurrencyCaps(written);
+    expect(resolved.ok && [...resolved.caps]).toEqual([['claude', 2]]);
   });
 
   test('registered streaming default and validated environment override apply', async () => {

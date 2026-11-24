@@ -41,13 +41,16 @@ export async function readConcurrencyConfig<S extends z.ZodType>(
   }
   const result = schema.safeParse(parsed ?? {});
   if (!result.success) {
-    throw fail(
-      result.error.issues
-        .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
-        .join('; ')
-    );
+    throw fail(describeIssues(result.error));
   }
   return result.data;
+}
+
+/** Each refused key with why, as a `ConcurrencyConfigError` detail. */
+export function describeIssues(error: z.ZodError): string {
+  return error.issues
+    .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+    .join('; ');
 }
 
 // `.nullish()`: YAML reads an empty `concurrency:` or `resources:` key as null, which

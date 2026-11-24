@@ -36,6 +36,7 @@ import {
   isConfigRecord,
   validateAssistantDefaults,
   validateGlobalConfigBlocks,
+  validateProviderConcurrencyConfig,
   validateModelBindingConfig,
   validateWorkflowContinuationConfig,
 } from './config-validation';
@@ -476,6 +477,7 @@ export async function updateGlobalConfig(updates: GlobalConfigUpdates): Promise<
     // bad block already on disk must be repaired, not kept.
     validateGlobalConfigBlocks(merged, configPath);
     validateAssistantDefaults(merged, configPath);
+    validateProviderConcurrencyConfig(merged, configPath);
 
     // Serialize to YAML and write
     const yaml = Bun.YAML.stringify(merged);
