@@ -9,7 +9,6 @@
  */
 import { askItemRef } from './attention-item-refs';
 import { z } from 'zod';
-import { createLogger } from '@archon/paths';
 import {
   attentionQueueItemSchema,
   compareAge,
@@ -78,16 +77,17 @@ import {
 } from './resource-start-store';
 import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
-import { readCompletedRunResult, resultCommitOf } from './run-result';
-import { getTerminalRecord } from './terminal-record';
+import { readItemRunResult, itemCompletionEvents } from './item-run-result';
 import { runPack, runPackSchema } from './run-pack';
 import { startLimitStandingSchema } from './start-limit';
-
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('workflow.item-read');
-  return cachedLog;
-}
+import { recordedSpendSchema, type RunUsageReport } from './schemas/run-usage-report';
+import { hasUnknownTokenTotal } from './schemas/run-usage';
+import { readRunUsageReports } from './run-usage-read';
+import {
+  aggregateUsageReports,
+  itemRunUsageReport,
+  unknownRunUsageReport,
+} from './run-usage-report';
 
 /**
  * The run of the same workflow that holds the item, which a start waits behind or was
@@ -133,11 +133,7 @@ export const itemRunSchema = z.object({
    */
   startLimit: z.string().nullable(),
   /** The totals recorded on the run row; null where the run recorded no figure. */
-  spend: z.object({
-    usd: z.number().nullable(),
-    inputTokens: z.number().nullable(),
-    outputTokens: z.number().nullable(),
-  }),
+  spend: recordedSpendSchema,
   /**
    * Set while the run is a pending start waiting for another run of its workflow on the
    * item, and kept on a start that was refused for it (`--no-wait`), which is cancelled.
@@ -335,6 +331,7 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * refusal is on its receipt (`trigger inspect`).
  */
 export const itemReadSchema = z.object({
+  spend: recordedSpendSchema,
   item: workflowItemSchema,
   runs: z.array(itemRunSchema),
   queued: z.array(itemQueuedStartSchema),
@@ -366,6 +363,7 @@ export interface ItemReadSource extends AttentionQueueSource {
     Pick<
       IWorkflowStore,
       | 'getItemRuns'
+      | 'getWorkflowRunsByIds'
       | 'listEventsForRuns'
       | 'listItemRulings'
       | 'getItemMerge'
@@ -386,40 +384,14 @@ export interface ItemReadSource extends AttentionQueueSource {
   startExecutor?: StartExecutorObserver;
 }
 
-function readResult(
-  run: WorkflowRun,
-  events: readonly WorkflowEventRow[]
-): Pick<ItemRun, 'hasResult' | 'resultCommit'> {
-  try {
-    return {
-      hasResult: readCompletedRunResult(run, events).kind === 'result',
-      resultCommit:
-        run.status === 'completed' ? resultCommitOf(getTerminalRecord(run.status, events)) : null,
-    };
-  } catch (error) {
-    // One unreadable record must not fail the whole item read.
-    getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.terminal_record_unreadable');
-    return { hasResult: false, resultCommit: null };
-  }
-}
-
-/** The `workflow_completed` events of the completed runs, which hold their results. */
-async function completionEvents(
-  source: ItemReadSource,
-  runs: readonly WorkflowRun[]
-): Promise<ReadonlyMap<string, WorkflowEventRow[]>> {
-  const completedIds = runs.filter(run => run.status === 'completed').map(run => run.id);
-  if (completedIds.length === 0) return new Map();
-  return source.store.listEventsForRuns(completedIds, ['workflow_completed']);
-}
-
 async function itemRun(
   source: ItemReadSource,
   run: WorkflowRun,
   request: ResourceStartRequestInspection | null,
   heldBehind: ItemHeldBehind | null,
   terminalEvents: ReadonlyMap<string, WorkflowEventRow[]>,
-  startLimit: string | null
+  startLimit: string | null,
+  report: RunUsageReport
 ): Promise<ItemRun> {
   // The receipt stays the one owner of why a start happened; this only reads it.
   const receiptId = readResourceStartReceiptId(run.metadata);
@@ -440,10 +412,11 @@ async function itemRun(
       usd: usage.costUsd ?? null,
       inputTokens: usage.tokens?.input ?? null,
       outputTokens: usage.tokens?.output ?? null,
+      coverage: report.coverage,
     },
     heldBehind,
     operatorPause: operatorPause(run),
-    ...readResult(run, terminalEvents.get(run.id) ?? []),
+    ...readItemRunResult(run, terminalEvents.get(run.id) ?? []),
   };
 }
 
@@ -741,7 +714,21 @@ export async function assembleItemRead(
       ? new Map<string, WorkflowEventRow[]>()
       : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
   const facts = await readItemFacts(source, found.item);
-  const terminalEvents = await completionEvents(source, own.values);
+  const terminalEvents = await itemCompletionEvents(source, own.values);
+  const reports = await readRunUsageReports(source.store, own.values);
+  const usageReports = own.values.map(run =>
+    itemRunUsageReport(
+      run,
+      reports.get(run.id) ?? unknownRunUsageReport(run, 'history_unavailable')
+    )
+  );
+  const aggregate = aggregateUsageReports(usageReports, {
+    missingRunIds: own.degraded.map(report => report.runId),
+    unknownTokens: own.values.some(
+      run =>
+        hasUnknownTokenTotal(run.metadata) || parseRunUsage(run.metadata).tokensUnknown === true
+    ),
+  });
   const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
   const answers = [
     ...[...events.values()].flat().map(itemAnswer),
@@ -771,6 +758,7 @@ export async function assembleItemRead(
     });
   return {
     item: found.item,
+    spend: { ...aggregate.totals, coverage: aggregate.coverage },
     runs: await Promise.all(
       own.values.map(async run =>
         itemRun(
@@ -779,7 +767,11 @@ export async function assembleItemRead(
           holds.request(run.id),
           (await holds.runHeldBehind(run)) ?? null,
           terminalEvents,
-          startLimits.countedUnder[run.id] ?? null
+          startLimits.countedUnder[run.id] ?? null,
+          itemRunUsageReport(
+            run,
+            reports.get(run.id) ?? unknownRunUsageReport(run, 'history_unavailable')
+          )
         )
       )
     ),

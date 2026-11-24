@@ -12,6 +12,8 @@ import { toError } from '../../utils/error';
 import type { createWorkflowDeps } from '../../workflows/store-adapter';
 import type { createCodebaseChildResolver } from '../../workflows/child-isolation-resolver';
 import type { WorkflowRoutingContext } from './background';
+import { readRunUsageReport } from '@archon/workflows/run-usage-read';
+import { formatUsageReport } from '@archon/workflows/run-usage-report';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -36,6 +38,7 @@ export interface BackgroundRun {
   ctx: WorkflowRoutingContext;
   workflow: ResolvedWorkflow;
   engine: InProcessWorkflowEngine;
+  store: WorkflowDeps['store'];
   workerPlatformId: string;
   workerConv: Conversation;
   preCreatedRun: Awaited<ReturnType<WorkflowDeps['store']['createWorkflowRun']>>;
@@ -133,6 +136,18 @@ async function surfaceResult(run: BackgroundRun, result: SubmitResult): Promise<
     };
   } else {
     return;
+  }
+  try {
+    if (!('handedOff' in result)) {
+      const store = run.store;
+      const persisted = await store.getWorkflowRun(card.runId);
+      if (persisted !== null) {
+        const usage = await readRunUsageReport(store, persisted);
+        card.message += `\n\n${formatUsageReport(usage).join('\n')}`;
+      }
+    }
+  } catch {
+    getLog().warn({ runId: card.runId }, 'workflow_output_usage_unavailable');
   }
   try {
     await ctx.platform.sendMessage(ctx.conversationId, card.message, {

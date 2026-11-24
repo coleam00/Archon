@@ -86,6 +86,8 @@
     "./container-context": "./src/container-context.ts",
     "./structured-output": "./src/structured-output.ts",
     "./throughput": "./src/throughput.ts",
+    "./run-usage-report": "./src/run-usage-report.ts",
+    "./run-usage-read": "./src/run-usage-read.ts",
     "./metrics": "./src/metrics.ts",
     "./metric-views": "./src/metric-views.ts",
     "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",

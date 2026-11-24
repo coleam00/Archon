@@ -18,6 +18,7 @@ import { loopRoundSchema } from '@archon/workflows/schemas/loop-rounds';
 import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { runUsageReportSchema } from '@archon/workflows/schemas/run-usage-report';
 import { itemWindowSchema } from '@archon/workflows/item-window';
 import { packGraphSchema } from '@archon/workflows/pack-graph';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
@@ -245,6 +246,7 @@ export const workflowRunDetailSchema = z
       conversation_platform_id: z.string().nullable(),
       owner_observation: ownerObservationSchema,
       terminal_record: terminalRecordSchema.nullable(),
+      usage: runUsageReportSchema,
       nodes: z.array(runNodeStateSchema).openapi({
         description:
           "The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round.",

@@ -35,6 +35,7 @@ import { writeJsonLine, writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
 import type { LatestWorkflowNotice } from '@archon/workflows/workflow-notice';
 import { formatRunUsage } from './workflow-usage';
+import type { RunUsageReport } from '@archon/workflows/schemas/run-usage-report';
 import { stallMessageLine } from './workflow-run-output';
 import { printRequestedBy, type RequestedBy } from '../utils/requested-by';
 import {
@@ -523,6 +524,7 @@ export function printRunDetail(
     verbose: boolean | undefined;
     requestedBy?: RequestedBy;
     throughput?: RunThroughput;
+    usage?: RunUsageReport;
   }
 ): void {
   const { transcriptPath, terminalRecord, leaveBehind, events, verbose } = detail;
@@ -538,7 +540,7 @@ export function printRunDetail(
   if (outcome !== null) console.log(`  Authored outcome: ${outcome}`);
   printReason(terminalRecord);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
-  for (const line of formatRunUsage(run.metadata)) console.log(line);
+  for (const line of formatRunUsage(run.metadata, detail.usage)) console.log(line);
   printRunThroughput(detail.throughput);
   printRunPauseLines(run);
   // Only a failed run's stop reason describes how it ended. A run can leave 'failed'

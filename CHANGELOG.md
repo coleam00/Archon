@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Run results, settled result cards, `workflow get --json` (`usage`) and run-detail API responses (`run.usage`) report recorded cost and gross-token totals with executed AI-node contributor counts, named measurement gaps and read limitations. Complete coverage replaces the unconditional completeness warning; missing amounts stay missing. Item reads add `spend.coverage` per own run and aggregate `spend` across those runs without adding child totals twice. Coverage is read-only and also applies to historical runs; provider reporting and persisted shapes are unchanged. (Refs #5793)
+
 ### Breaking
 
 - `POST /api/conversations/{id}/cancel` takes `{ "turnId": "..." }` and stops only the reply that turn names. A stop that arrived after the reply ended, or a second press of Stop, used to stop the next message queued in the same conversation. The send and create-with-message responses and the SSE `conversation_lock` event of a starting reply carry its `turnId`; a cancel without one is refused with 400. The console's Stop sends it. (#6171)

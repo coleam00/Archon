@@ -320,13 +320,15 @@ archon workflow run archon-ship --cwd /path/to/repo \
 Except on an execution handoff, foreground completion and failure output prints the run's recorded cost and input and output tokens, even with `--quiet`:
 
 ```text
-  Usage (recorded totals; completeness unknown):
-    Cost: $0.024
-    Input tokens: 8420
-    Output tokens: 2180
+  Usage (recorded totals):
+    Cost: $0.024 (2/2 AI nodes; all executed AI nodes recorded this metric)
+    Input tokens: 8420 (2/2 AI nodes; all executed AI nodes recorded this metric)
+    Output tokens: 2180 (2/2 AI nodes; all executed AI nodes recorded this metric)
 ```
 
-These are stored figures, not a certified bill, so the completeness warning is always printed. Provider usage metadata is optional: a missing or malformed value prints `unknown`, and a recorded zero prints `0` (or `$0`). An unknown or malformed token-uncertainty marker makes both token counts unknown. If the persisted run cannot be read, the output shows `Usage: unavailable (persisted run unavailable)` and the execution result is unchanged. [`workflow get`](#workflow-get) shows the same summary for any run.
+These are stored figures, not an estimate or a certified bill. Each metric names its contributing executed AI nodes and its known population, with `complete`, `partial`, `unknown`, or `not_applicable` coverage. Cost and gross-token coverage are independent. Gaps identify the run, node, invocation/attempt when recorded, and the node's recorded measurement reason; coverage limitations such as unreadable history are labelled separately. Paid failed attempts count, while replayed, skipped and pre-call `not_applicable` work is excluded. A node can contribute on one attempt and have a gap on another.
+
+A missing or malformed value prints `unknown`, and a recorded zero prints `0` (or `$0`). An unknown or malformed token-uncertainty marker makes both token counts unknown. Readable node measurements never replace an unavailable run total. Unknown history or an opaque child/instance scope prints an unknown denominator, not a claim of completeness. Complete coverage means all executed AI nodes recorded that metric, not that invisible provider-internal work or an invoice was verified; see [provider reporting capabilities](/reference/provider-capabilities/). If the persisted run cannot be read, the output shows `Usage: unavailable (persisted run unavailable)` and the execution result is unchanged. [`workflow get`](#workflow-get) and settled result cards show the same report.
 
 If another execution takes ownership before the foreground command returns, it prints:
 
@@ -666,6 +668,8 @@ While the [install hold](#hold) is set, the text view starts with who set it and
 
 List recent runs of every execution status for the current project, resolved from `cwd` like [`workflow status`](#workflow-status). A separate clone does not resolve to that project, even after a launch with `workflow run --project`. `--open` lists the open-work inbox: failed runs that no later run has adopted or superseded.
 
+The item read (`--item` or `--item-of`) includes recorded spend and usage coverage for each own run and summed `spend` for the item. It sums available valid own-run figures once, not child totals again. Missing figures remain null at their source; unreadable own runs make the remaining sum partial. Explicit token uncertainty makes the corresponding aggregate token total null. An item with no runs has null spend and not-applicable coverage. Historical per-run numeric values retain their existing projection; invalid values are excluded from the aggregate and named in coverage.
+
 ```bash
 archon workflow runs
 archon workflow runs --json
@@ -752,9 +756,15 @@ archon workflow get <run-id> --throughput --json
 ```
 
 The text view includes the same [recorded usage summary](#workflow-run-name-message)
-for any run status. It reads stored totals without recalculating them or certifying
-completeness. `--json` retains the raw usage values in `metadata`, including nulls or
-malformed historical values; it adds no formatted usage text.
+for any run status. It reads stored totals without repairing them. `--json` retains raw
+usage values in `metadata`, including nulls and malformed historical values, and adds
+`usage: { totals: { usd, inputTokens, outputTokens }, coverage }` in default, verbose and
+raw-event modes. Each metric's coverage carries `state`, `aiNodes` (null when unknown),
+`observedAiNodes`, `contributedAiNodes`, `contributors`, `recordedNodes`, `gaps`, `partial`
+and `limitations`; `coverage.excluded` lists skipped/replayed/pre-call AI work. Numeric
+node evidence in `recordedNodes` remains distinct from contributors to an available total.
+Run detail HTTP responses expose the same report at `run.usage`. History reads are strict
+and usage-only; malformed history degrades coverage without changing stored figures.
 
 `--throughput` adds **effective output throughput**, not model decode speed, beside the
 usage summary: output tokens divided by execution duration in seconds (`tok/s`). Each
@@ -1457,6 +1467,9 @@ Read the items of the current project that had a run in a window, a page at a ti
 item is read whole, as [`runs --item`](#workflow-runs) reads it: all of its runs in start
 order, not only those in the window, its open questions, its answers and rulings, its
 merge and its `degraded` parts.
+
+Each item carries the same [own-run spend and coverage](#workflow-runs), including runs
+outside the selection window, in both CLI/API reads and `archon:script`'s `items()`.
 
 ```bash
 archon workflow items                       # the last 30 days

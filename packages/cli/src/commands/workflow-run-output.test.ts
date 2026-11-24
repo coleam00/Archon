@@ -40,6 +40,7 @@ import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
 import { presentRunResult } from './workflow-run-output';
+import { usageEvents } from '../test-support/usage-fixtures';
 import { deadlineWaitCursor } from '@archon/workflows/store';
 import { resolveCliExitCode, WorkflowRunFailedError } from '../utils/workflow-exit-code';
 
@@ -436,10 +437,10 @@ describe('workflowRunCommand — progress rendering', () => {
   it('renders aligned completed execution and succeeded authored outcome', async () => {
     await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', 'succeeded');
 
-    expect(consoleSpy).toHaveBeenCalledWith('  Usage (recorded totals; completeness unknown):');
-    expect(consoleSpy).toHaveBeenCalledWith('    Cost: $0.024');
-    expect(consoleSpy).toHaveBeenCalledWith('    Input tokens: 8420');
-    expect(consoleSpy).toHaveBeenCalledWith('    Output tokens: 2180');
+    const text = consoleSpy.mock.calls.flat().join('\n');
+    expect(text).toContain('Cost: $0.024');
+    expect(text).toContain('Input tokens: 8420');
+    expect(text).toContain('Output tokens: 2180');
     expect(consoleSpy).toHaveBeenCalledWith(
       '\nWorkflow finished.\n  Status: completed\n  Authored outcome: succeeded'
     );
@@ -460,7 +461,7 @@ describe('workflowRunCommand — progress rendering', () => {
     );
 
     expect(resolveCliExitCode(thrown)).toBe(1);
-    expect(consoleSpy).toHaveBeenCalledWith('    Cost: $0.024');
+    expect(consoleSpy.mock.calls.flat().join('\n')).toContain('Cost: $0.024');
   });
 
   it('preserves the existing completion text when authored outcome is null', async () => {
@@ -702,7 +703,7 @@ describe('workflowRunCommand — progress rendering', () => {
       kind: 'numbers',
       metadata: { total_cost_usd: 0, total_tokens_in: 12, total_tokens_out: 4 },
       expected: [
-        '  Usage (recorded totals; completeness unknown):',
+        '  Usage (recorded totals):',
         '    Cost: $0',
         '    Input tokens: 12',
         '    Output tokens: 4',
@@ -712,7 +713,7 @@ describe('workflowRunCommand — progress rendering', () => {
       kind: 'empty',
       metadata: {},
       expected: [
-        '  Usage (recorded totals; completeness unknown):',
+        '  Usage (recorded totals):',
         '    Cost: unknown',
         '    Input tokens: unknown',
         '    Output tokens: unknown',
@@ -761,7 +762,8 @@ describe('workflowRunCommand — progress rendering', () => {
       expect(lookup.mock.calls.length - readsBefore).toBe(1);
       expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
       expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
-      for (const line of expected) expect(consoleSpy).toHaveBeenCalledWith(line);
+      const text = consoleSpy.mock.calls.flat().join('\n');
+      for (const line of expected) expect(text).toContain(line);
     }
   );
 
@@ -1043,6 +1045,57 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(progressLines()).toEqual([]);
     expect(consoleSpy).toHaveBeenCalledWith('  Usage: unavailable (persisted run unavailable)');
   });
+
+  it.each([false, true])(
+    'prints measured coverage and preserves completed cards or failure semantics, failure=%s',
+    async failure => {
+      const { createInMemoryWorkflowStore, createInMemoryWorkflowHostStore } = await import(
+        '../test-support/workflow-store'
+      );
+      const store = createInMemoryWorkflowStore(createInMemoryWorkflowHostStore());
+      const run = await store.createWorkflowRun({
+        workflow_name: 'usage',
+        user_message: '',
+        metadata: { total_cost_usd: 0.25, total_tokens_in: 8, total_tokens_out: 4 },
+      });
+      await store.claimPendingWorkflowRun(run.id, '/tmp/usage-fixture');
+      for (const event of usageEvents(run.id, true)) await store.persistWorkflowEvent(event);
+      if (failure) await store.failWorkflowRun(run.id, 'failed');
+      else await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+      const host = createTestWorkflowHost();
+      host.deps.store = store;
+      const { CLIAdapter } = await import('../adapters/cli-adapter');
+      const adapter = new CLIAdapter();
+      const sent = spyOn(adapter, 'sendMessage').mockResolvedValue(undefined);
+      try {
+        const result = failure
+          ? { success: false as const, workflowRunId: run.id, error: 'failed' }
+          : { success: true as const, workflowRunId: run.id, summary: 'Authored summary' };
+        const promise = presentRunResult({
+          host,
+          workflow: resolveWorkflow({ name: 'usage', description: '', nodes: [] }),
+          result,
+          adapter,
+          conversationId: 'conversation',
+          destination: { kind: 'headless', correlationId: 'fixture' },
+          detachedProcessOwner: false,
+        });
+        if (failure) await expect(promise).rejects.toBeInstanceOf(WorkflowRunFailedError);
+        else await promise;
+        const text = consoleSpy.mock.calls.flat().join('\n');
+        expect(text).toContain('Cost: $0.25 (1/2 AI nodes; partial)');
+        expect(text).toContain('Input tokens: 8 (2/2 AI nodes');
+        expect(text).toContain('node unsupported');
+        expect(text).not.toContain('completeness unknown');
+        if (!failure) {
+          expect(sent.mock.calls[0]?.[1]).toContain('Authored summary');
+          expect(sent.mock.calls[0]?.[1]).toContain('1/2 AI nodes');
+        }
+      } finally {
+        sent.mockRestore();
+      }
+    }
+  );
 
   it('renders rows committed before the executor throws', async () => {
     setupWorkflowMocks();
@@ -1514,7 +1567,7 @@ describe('workflowRunCommand — dispatch and result cards', () => {
 
     expect(sendMessage).toHaveBeenCalledWith(
       expect.any(String),
-      'All steps completed. Branch pushed.',
+      expect.stringContaining('All steps completed. Branch pushed.'),
       expect.objectContaining({
         category: 'workflow_result',
         workflowResult: { workflowName: 'assist', runId: 'run-42' },

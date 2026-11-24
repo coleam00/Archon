@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { ItemWindowQueryError, readItemWindow, type ItemWindowSource } from './item-window';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
+import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
+import { serializeNodeStateRecord } from './node-record-serialization';
+import type { WorkflowEventRow } from './schemas/workflow-event';
 
 const PROJECT = 'acme/web';
 const items: WorkflowItem[] = ['a', 'b', 'c'].map(key => ({
@@ -60,6 +63,8 @@ function source(unreadable: string[] = []): ItemWindowSource {
   return {
     branchOf: async () => null,
     store: {
+      getWorkflowRunsByIds: async ids =>
+        [...runsByItem.values()].flat().filter(run => ids.includes(run.id)),
       listItemsInWindow: async query =>
         items
           .filter(item => query.afterItemId === null || item.id > query.afterItemId)
@@ -106,6 +111,67 @@ function source(unreadable: string[] = []): ItemWindowSource {
 const NOVEMBER = { since: '2026-11-01T00:00:00Z', until: '2026-12-01T00:00:00Z' };
 
 describe('reading items over a window', () => {
+  test('sums full item histories outside the window and names only unreadable own runs as coverage gaps', async () => {
+    const scoped = source(['a1']);
+    const rows = (runsByItem.get('item-a') ?? []).map(row => ({
+      ...row,
+      metadata: { total_cost_usd: 0.25, total_tokens_in: 4, total_tokens_out: 2 },
+    }));
+    const events: WorkflowEventRow[] = rows.map(row => {
+      const start = startNodeExecution({
+        runId: row.id,
+        path: 'work',
+        node: { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+        invocation: newNodeInvocation(),
+        provider: 'claude',
+      });
+      return {
+        ...serializeNodeStateRecord(
+          finishNodeExecution(
+            start,
+            { status: 'completed' },
+            { costUsd: 0.25, tokens: { input: 4, output: 2 } }
+          )
+        ),
+        id: row.id,
+        step_index: null,
+        created_at: '2026-11-25T00:00:00Z',
+      };
+    });
+    scoped.store.getItemRuns = async () => ({ item: items[0], runs: rows, descendantIds: [] });
+    scoped.store.listEventsForRuns = async (ids, types) =>
+      new Map(
+        ids.map(id => [
+          id,
+          events.filter(
+            row => row.workflow_run_id === id && types.some(type => type === row.event_type)
+          ),
+        ])
+      );
+    const complete = await readItemWindow(scoped, PROJECT, NOVEMBER);
+    expect(complete.items[0].spend).toMatchObject({ usd: 0.5, inputTokens: 8, outputTokens: 4 });
+    expect(complete.items[0].spend.coverage.usd).toMatchObject({
+      state: 'complete',
+      aiNodes: 2,
+      contributedAiNodes: 2,
+    });
+    scoped.store.getItemRuns = async () => ({
+      item: items[0],
+      runs: [{ type: 'degraded', reason: 'run_unreadable', runId: 'a1' }, rows[1]],
+      descendantIds: [],
+    });
+    const partial = await readItemWindow(scoped, PROJECT, NOVEMBER);
+    expect(partial.items[0].spend.usd).toBe(0.25);
+    expect(partial.items[0].spend.coverage.usd).toMatchObject({
+      state: 'partial',
+      aiNodes: null,
+      contributedAiNodes: 1,
+    });
+    expect(partial.items[0].spend.coverage.usd.limitations).toContainEqual({
+      runId: 'a1',
+      reason: 'history_unavailable',
+    });
+  });
   test('returns exactly the items with a run in the window, each with all its runs in start order', async () => {
     const page = await readItemWindow(source(), PROJECT, NOVEMBER);
     expect(page.window).toEqual({

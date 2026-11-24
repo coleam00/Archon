@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ItemRead, ItemRun } from './item-read';
 import { evaluateItemMetrics } from './item-metrics';
+import { aggregateUsageReports } from './run-usage-report';
 import type { ItemMetricDefinition } from './schemas/item-metric';
 
 function run(workflow: string, startedAt: string, outcome: string | null = null): ItemRun {
@@ -15,7 +16,12 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
     cause: null,
     awaitingExecution: null,
     startLimit: null,
-    spend: { usd: null, inputTokens: null, outputTokens: null },
+    spend: {
+      usd: null,
+      inputTokens: null,
+      outputTokens: null,
+      coverage: aggregateUsageReports([]).coverage,
+    },
     heldBehind: null,
     operatorPause: null,
     hasResult: false,
@@ -26,6 +32,7 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
 function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
   return {
     item: { id: key, projectKey: 'acme/web', key },
+    spend: { ...aggregateUsageReports([]).totals, coverage: aggregateUsageReports([]).coverage },
     runs,
     queued: [],
     skipped: [],

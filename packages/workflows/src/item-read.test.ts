@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { aggregateUsageReports, unknownRunUsageReport } from './run-usage-report';
+import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
+import { serializeNodeStateRecord } from './node-record-serialization';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
 import { heldRunOf } from './attention-queue';
 import type { ResourceStartRequestInspection } from './resource-start-store';
@@ -184,6 +187,7 @@ const links: ItemLink[] = [
 const source: ItemReadSource = {
   branchOf: async () => null,
   store: {
+    getWorkflowRunsByIds: async ids => [...runs.values()].filter(run => ids.includes(run.id)),
     getItemRuns: async (projectKey, key) =>
       projectKey === item.projectKey && key === item.key
         ? { item, runs: [first, second], descendantIds: ['child', 'sibling'] }
@@ -228,6 +232,73 @@ const source: ItemReadSource = {
 };
 
 describe('reading an item', () => {
+  test('sums only own-run amounts and preserves child-qualified coverage without double counting', async () => {
+    const own = run('root', {
+      status: 'completed',
+      metadata: { total_cost_usd: 0.25, total_tokens_in: 4, total_tokens_out: 2 },
+    });
+    const child = run('nested', { parent_run_id: own.id, metadata: own.metadata });
+    const started = startNodeExecution({
+      runId: child.id,
+      path: 'build',
+      node: { id: 'build', kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+      invocation: newNodeInvocation(),
+      provider: 'claude',
+    });
+    const record = serializeNodeStateRecord(
+      finishNodeExecution(
+        started,
+        { status: 'completed' },
+        { costUsd: 0.25, tokens: { input: 4, output: 2 } }
+      )
+    );
+    const rows: WorkflowEventRow[] = [
+      { ...record, id: 'child-event', step_index: null, created_at: '2026-11-25T00:00:00Z' },
+      {
+        id: 'parent-event',
+        workflow_run_id: own.id,
+        event_type: 'node_completed',
+        step_name: 'children',
+        step_index: null,
+        created_at: '2026-11-25T00:00:00Z',
+        data: {
+          type: 'workflow',
+          cost_usd: 0.25,
+          tokens: { input: 4, output: 2 },
+          child_usage: [{ childRunId: child.id, costUsd: 0.25, tokens: { input: 4, output: 2 } }],
+        },
+      },
+    ];
+    const scoped: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [own], descendantIds: [child.id] }),
+        getWorkflowRunsByIds: async () => [child],
+        listEventsForRuns: async (ids, types) =>
+          new Map(
+            ids.map(id => [
+              id,
+              rows.filter(
+                row => row.workflow_run_id === id && types.some(type => type === row.event_type)
+              ),
+            ])
+          ),
+      },
+    };
+    const read = await readItem(scoped, item.projectKey, item.key);
+    expect(read?.runs.map(run => run.id)).toEqual(['root']);
+    expect(read?.spend).toMatchObject({ usd: 0.25, inputTokens: 4, outputTokens: 2 });
+    expect(read?.spend.coverage.usd).toMatchObject({
+      state: 'complete',
+      aiNodes: 1,
+      contributedAiNodes: 1,
+    });
+    expect(read?.spend.coverage.usd.contributors[0]).toMatchObject({
+      runId: 'nested',
+      path: 'build',
+    });
+  });
   test('a set with an unreadable ask row does not read as settled; a readable set does, with its run gone', async () => {
     const act = { via: 'cli', by: null, fromRun: null } as const;
     const stored = (
@@ -335,7 +406,12 @@ describe('reading an item', () => {
         cause: null,
         awaitingExecution: null,
         startLimit: null,
-        spend: { usd: 0.42, inputTokens: 1200, outputTokens: 300 },
+        spend: {
+          usd: 0.42,
+          inputTokens: 1200,
+          outputTokens: 300,
+          coverage: unknownRunUsageReport(first, 'history_absent').coverage,
+        },
         heldBehind: null,
         operatorPause: null,
         hasResult: false,
@@ -352,7 +428,12 @@ describe('reading an item', () => {
         cause: { kind: 'run_ended', runId: 'first', sourceInstanceId: 'review-after-deliver' },
         awaitingExecution: null,
         startLimit: null,
-        spend: { usd: null, inputTokens: null, outputTokens: null },
+        spend: {
+          usd: null,
+          inputTokens: null,
+          outputTokens: null,
+          coverage: unknownRunUsageReport(second, 'history_absent').coverage,
+        },
         heldBehind: null,
         operatorPause: null,
         hasResult: false,
@@ -472,6 +553,7 @@ describe('reading an item', () => {
     };
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
+      spend: { ...aggregateUsageReports([]).totals, coverage: aggregateUsageReports([]).coverage },
       runs: [],
       queued: [],
       skipped: [],

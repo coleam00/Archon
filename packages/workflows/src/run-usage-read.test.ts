@@ -1,0 +1,335 @@
+import { describe, expect, it } from 'bun:test';
+import {
+  readRunUsageReport,
+  readRunUsageReports,
+  USAGE_REPORT_EVENT_TYPES,
+  type RunUsageReadStore,
+} from './run-usage-read';
+import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
+import { serializeNodeStateRecord } from './node-record-serialization';
+import type { WorkflowRun } from './schemas/workflow-run';
+import type { WorkflowEventRow } from './schemas/workflow-event';
+import { USAGE_METRICS } from './schemas/run-usage-report';
+
+function run(
+  id: string,
+  metadata: Record<string, unknown> = {
+    total_cost_usd: 0.25,
+    total_tokens_in: 4,
+    total_tokens_out: 2,
+  }
+): WorkflowRun {
+  return {
+    origin: null,
+    id,
+    workflow_name: 'fixture',
+    conversation_id: null,
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'completed',
+    outcome: null,
+    completed_outcome: null,
+    user_message: 'PRIVATE_MESSAGE',
+    metadata,
+    started_at: new Date(),
+    active_phase_started_at: null,
+    completed_at: new Date(),
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    checkout_baseline: null,
+    item_id: null,
+  };
+}
+
+function agentEvent(runId: string): WorkflowEventRow {
+  const started = startNodeExecution({
+    runId,
+    path: 'build',
+    node: { id: 'build', kind: 'agent', source: { kind: 'inline', prompt: 'PRIVATE_PROMPT' } },
+    invocation: newNodeInvocation(),
+    provider: 'claude',
+    sessionId: 'PRIVATE_SESSION',
+  });
+  const record = serializeNodeStateRecord(
+    finishNodeExecution(
+      started,
+      { status: 'completed' },
+      { costUsd: 0.25, tokens: { input: 4, output: 2 }, output: { text: 'PRIVATE_OUTPUT' } }
+    )
+  );
+  return {
+    id: `${runId}-event`,
+    step_index: null,
+    created_at: new Date().toISOString(),
+    ...record,
+  };
+}
+
+function parentEvent(childIds: string[], costUsd = 0.25): WorkflowEventRow {
+  return {
+    id: 'parent-event',
+    workflow_run_id: 'parent',
+    event_type: 'node_completed',
+    step_name: 'children',
+    step_index: null,
+    created_at: new Date().toISOString(),
+    data: {
+      type: 'workflow',
+      cost_usd: costUsd,
+      tokens: { input: 4, output: 2 },
+      child_usage: childIds.map(childRunId => ({
+        childRunId,
+        costUsd: 0.25,
+        tokens: { input: 4, output: 2 },
+      })),
+    },
+  };
+}
+
+function source(runs: WorkflowRun[], events: WorkflowEventRow[]) {
+  const calls: { ids: readonly string[]; eventTypes: readonly string[]; strict?: boolean }[] = [];
+  const childBatches: string[][] = [];
+  const store: RunUsageReadStore = {
+    listEventsForRuns: async (ids, eventTypes, options) => {
+      calls.push({ ids, eventTypes, strict: options?.strict });
+      return new Map(
+        ids.map(id => [
+          id,
+          events.filter(
+            event =>
+              event.workflow_run_id === id && eventTypes.some(type => type === event.event_type)
+          ),
+        ])
+      );
+    },
+    getWorkflowRunsByIds: async ids => {
+      childBatches.push([...ids]);
+      return runs.filter(row => ids.includes(row.id));
+    },
+  };
+  return { store, calls, childBatches };
+}
+
+describe('strict usage history reads', () => {
+  it('batches roots with strict filtered event reads, excludes provider streams and performs no writes', async () => {
+    const roots = [run('one'), run('two')];
+    const fixture = source(
+      roots,
+      roots.map(root => agentEvent(root.id))
+    );
+    const reports = await readRunUsageReports(fixture.store, roots);
+    expect(fixture.calls).toEqual([
+      { ids: ['one', 'two'], eventTypes: USAGE_REPORT_EVENT_TYPES, strict: true },
+    ]);
+    expect(fixture.calls[0].eventTypes).not.toContain('provider_event');
+    expect(fixture.childBatches).toEqual([]);
+    expect(reports.get('one')?.coverage.usd.state).toBe('complete');
+    expect(reports.get('two')?.coverage.usd.state).toBe('complete');
+    for (const marker of ['PRIVATE_MESSAGE', 'PRIVATE_PROMPT', 'PRIVATE_SESSION', 'PRIVATE_OUTPUT'])
+      expect(JSON.stringify([...reports])).not.toContain(marker);
+  });
+
+  it('preserves totals and records an unavailable batch without refetching individual runs', async () => {
+    const roots = [run('one'), run('two')];
+    const fixture = source(roots, []);
+    let attempts = 0;
+    fixture.store.listEventsForRuns = async () => {
+      attempts++;
+      throw new Error('unavailable');
+    };
+    const reports = await readRunUsageReports(fixture.store, roots);
+    expect(attempts).toBe(1);
+    for (const root of roots) {
+      const report = reports.get(root.id);
+      expect(report?.totals.usd).toBe(0.25);
+      expect(report?.coverage.usd).toMatchObject({
+        state: 'unknown',
+        aiNodes: null,
+        contributedAiNodes: 0,
+      });
+      expect(report?.coverage.usd.limitations).toContainEqual({
+        runId: root.id,
+        reason: 'history_unavailable',
+      });
+    }
+  });
+
+  it('degrades only the run carrying malformed typed metadata', async () => {
+    const roots = [run('bad'), run('good')];
+    const malformed = agentEvent('bad');
+    malformed.data = { ...malformed.data, invocation: { invalid: true } };
+    const fixture = source(roots, [malformed, agentEvent('good')]);
+    const reports = await readRunUsageReports(fixture.store, roots);
+    expect(reports.get('bad')?.coverage.usd.limitations).toContainEqual({
+      runId: 'bad',
+      path: 'build',
+      reason: 'record_unreadable',
+    });
+    expect(reports.get('good')?.coverage.usd.state).toBe('complete');
+  });
+
+  it('strict malformed JSON remains unavailable instead of an empty certified population', async () => {
+    const fixture = source([run('bad')], []);
+    fixture.store.listEventsForRuns = async () => {
+      JSON.parse('{');
+      return new Map();
+    };
+    const report = await readRunUsageReport(fixture.store, run('bad'));
+    expect(report.coverage.usd.state).toBe('unknown');
+    expect(report.coverage.usd.limitations).toContainEqual({
+      runId: 'bad',
+      reason: 'history_unavailable',
+    });
+  });
+
+  it('expands matching child baselines using qualified nodes without adding child totals', async () => {
+    const fixture = source([run('child')], [parentEvent(['child']), agentEvent('child')]);
+    const report = await readRunUsageReport(fixture.store, run('parent'));
+    expect(report.totals).toEqual({ usd: 0.25, inputTokens: 4, outputTokens: 2 });
+    for (const metric of USAGE_METRICS) {
+      expect(report.coverage[metric]).toMatchObject({
+        state: 'complete',
+        aiNodes: 1,
+        contributedAiNodes: 1,
+      });
+      expect(report.coverage[metric].contributors[0]).toMatchObject({
+        runId: 'child',
+        path: 'build',
+      });
+    }
+    expect(fixture.childBatches).toEqual([['child']]);
+  });
+
+  it('reads sibling children once, including repeated references', async () => {
+    const event = parentEvent(['one', 'two'], 0.5);
+    event.data.tokens = { input: 8, output: 4 };
+    const fixture = source([run('one'), run('two')], [event, agentEvent('one'), agentEvent('two')]);
+    const report = await readRunUsageReport(
+      fixture.store,
+      run('parent', { total_cost_usd: 0.5, total_tokens_in: 8, total_tokens_out: 4 })
+    );
+    expect(report.coverage.usd).toMatchObject({
+      state: 'complete',
+      aiNodes: 2,
+      contributedAiNodes: 2,
+    });
+    expect(fixture.childBatches).toEqual([['one', 'two']]);
+  });
+
+  it('refuses child attribution on every mismatched metric, never replaces the parent amount', async () => {
+    const child = run('child', { total_cost_usd: 3, total_tokens_in: 40, total_tokens_out: 20 });
+    const fixture = source([child], [parentEvent(['child']), agentEvent('child')]);
+    const report = await readRunUsageReport(fixture.store, run('parent'));
+    expect(report.totals).toEqual({ usd: 0.25, inputTokens: 4, outputTokens: 2 });
+    for (const metric of USAGE_METRICS) {
+      expect(report.coverage[metric].state).not.toBe('complete');
+      expect(report.coverage[metric].contributedAiNodes).toBe(0);
+      expect(report.coverage[metric].limitations).toContainEqual({
+        runId: 'child',
+        path: 'children',
+        reason: 'child_usage_mismatch',
+      });
+    }
+  });
+
+  it('names deleted children and retains already charged replaced children', async () => {
+    const replaced = parentEvent(['old']);
+    const current = parentEvent(['new']);
+    const fixture = source([run('new')], [replaced, current, agentEvent('new')]);
+    const report = await readRunUsageReport(
+      fixture.store,
+      run('parent', { total_cost_usd: 0.5, total_tokens_in: 8, total_tokens_out: 4 })
+    );
+    expect(fixture.childBatches).toEqual([['old', 'new']]);
+    expect(report.totals.usd).toBe(0.5);
+    expect(report.coverage.usd).toMatchObject({
+      state: 'partial',
+      aiNodes: null,
+      observedAiNodes: 1,
+      contributedAiNodes: 1,
+    });
+    expect(report.coverage.usd.limitations).toContainEqual({
+      runId: 'old',
+      path: 'children',
+      reason: 'child_unavailable',
+    });
+  });
+
+  it('does not invent an allocation for historical multi-child increments', async () => {
+    const event = parentEvent([]);
+    const { child_usage: _childUsage, ...legacy } = event.data;
+    event.data = legacy;
+    event.data.fan_out_outcome = { slots: [] };
+    const fixture = source([], [event]);
+    const report = await readRunUsageReport(fixture.store, run('parent'));
+    expect(report.totals.usd).toBe(0.25);
+    expect(report.coverage.usd.aiNodes).toBeNull();
+    expect(report.coverage.usd.limitations).toContainEqual({
+      runId: 'parent',
+      path: 'children',
+      reason: 'scope_unattributed',
+    });
+  });
+
+  it('terminates corrupt child cycles without another database read', async () => {
+    const event = parentEvent(['parent']);
+    const fixture = source([], [event]);
+    const report = await readRunUsageReport(fixture.store, run('parent'));
+    expect(fixture.childBatches).toEqual([]);
+    expect(report.coverage.usd.limitations).toContainEqual({
+      runId: 'parent',
+      path: 'children',
+      reason: 'child_cycle',
+    });
+  });
+
+  it('preserves readable own usage when a child batch rejects', async () => {
+    const fixture = source([], [parentEvent(['missing'])]);
+    fixture.store.getWorkflowRunsByIds = async () => {
+      throw new Error('unavailable');
+    };
+    const report = await readRunUsageReport(fixture.store, run('parent'));
+    expect(report.totals.usd).toBe(0.25);
+    expect(report.coverage.usd.limitations).toContainEqual({
+      runId: 'missing',
+      path: 'children',
+      reason: 'child_unavailable',
+    });
+  });
+
+  it('does not certify a child inside an opaque authoritative instance', async () => {
+    const leaf = parentEvent(['child']);
+    leaf.step_name = 'fan__item__children';
+    const wrapper: WorkflowEventRow = {
+      id: 'wrapper',
+      workflow_run_id: 'parent',
+      step_name: 'fan__item',
+      step_index: null,
+      event_type: 'node_completed',
+      created_at: '2026-11-25T00:00:00Z',
+      data: {
+        type: 'compose_fan_out_instance',
+        cost_usd: 5,
+        tokens: { input: 40, output: 20 },
+        cost_scope: 'total',
+      },
+    };
+    const fixture = source([run('child')], [leaf, wrapper, agentEvent('child')]);
+    const report = await readRunUsageReport(
+      fixture.store,
+      run('parent', { total_cost_usd: 5, total_tokens_in: 40, total_tokens_out: 20 })
+    );
+    expect(report.totals.usd).toBe(5);
+    expect(report.coverage.usd.contributedAiNodes).toBe(0);
+    expect(report.coverage.usd.observedAiNodes).toBe(1);
+    expect(report.coverage.usd.limitations).toContainEqual({
+      runId: 'parent',
+      path: 'fan__item',
+      reason: 'scope_unattributed',
+    });
+  });
+});

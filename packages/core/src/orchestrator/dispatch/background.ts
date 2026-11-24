@@ -238,6 +238,7 @@ async function dispatchBackgroundWorkflowOwned(
     await announceDispatch(ctx, workflow, workerPlatformId);
 
     const backgroundExecution = runInBackground({
+      store: workflowDeps.store,
       ctx,
       workflow,
       engine,

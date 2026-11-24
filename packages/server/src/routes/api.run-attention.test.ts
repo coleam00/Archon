@@ -29,6 +29,12 @@ import { describe, test, expect } from 'bun:test';
 import { heldRunOf } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
+import {
+  finishNodeExecution,
+  newNodeInvocation,
+  startNodeExecution,
+} from '@archon/workflows/node-execution';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ItemRulingNotFoundError,
@@ -364,11 +370,48 @@ describe('reading an item over HTTP', () => {
   });
 
   test('a window read returns the page of items readItemWindow builds, and refuses a bad cursor', async () => {
+    const run = {
+      ...asking,
+      metadata: {
+        ...asking.metadata,
+        total_cost_usd: 0.25,
+        total_tokens_in: 4,
+        total_tokens_out: 2,
+      },
+    };
+    const start = startNodeExecution({
+      runId: run.id,
+      path: 'build',
+      node: { id: 'build', kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+      invocation: newNodeInvocation(),
+      provider: 'claude',
+    });
+    const measured = {
+      ...serializeNodeStateRecord(
+        finishNodeExecution(
+          start,
+          { status: 'completed' },
+          { costUsd: 0.25, tokens: { input: 4, output: 2 } }
+        )
+      ),
+      id: 'usage',
+      step_index: null,
+      created_at: '2026-11-25T00:00:00Z',
+    };
+    mockListEventsForRuns.mockImplementation(
+      async (ids, types) =>
+        new Map(
+          ids.map(id => [
+            id,
+            id === run.id && types.some(type => type === measured.event_type) ? [measured] : [],
+          ])
+        )
+    );
     mockListItemsInWindow.mockImplementationOnce(async () => [item]);
     mockListAttentionQueueRows.mockImplementationOnce(async () => []);
     mockGetItemRuns.mockImplementationOnce(async () => ({
       item,
-      runs: [asking],
+      runs: [run],
       descendantIds: [],
     }));
     const { app } = makeApp();
@@ -380,6 +423,17 @@ describe('reading an item over HTTP', () => {
       [item.key, ['run-item']],
     ]);
     expect(page.next).toBeNull();
+    expect(page.items[0].spend).toMatchObject({ usd: 0.25, inputTokens: 4, outputTokens: 2 });
+    expect(page.items[0].spend.coverage.usd).toMatchObject({
+      state: 'complete',
+      aiNodes: 1,
+      contributedAiNodes: 1,
+    });
+    expect(page.items[0].runs[0].spend.coverage.usd.contributors[0]).toMatchObject({
+      runId: run.id,
+      path: 'build',
+    });
+    mockListEventsForRuns.mockImplementation(async ids => new Map(ids.map(id => [id, []])));
     expect((await app.request(`/api/items/window?project=${project}&after=nope`)).status).toBe(400);
     expect((await app.request('/api/items/window?project=no-such')).status).toBe(400);
   });

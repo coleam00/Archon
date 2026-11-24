@@ -4,6 +4,7 @@ import {
   mockListDashboardRuns,
   mockGetWorkflowRunByWorkerPlatformId,
   mockListWorkflowEvents,
+  mockListEventsForRuns,
   mockListProviderEvents,
   mockGetConversationById,
   mockObserveRunOwner,
@@ -35,6 +36,7 @@ import {
   startNodeExecution,
 } from '@archon/workflows/node-execution';
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
+import { runUsageReportSchema } from '@archon/workflows/schemas/run-usage-report';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { z } from '@hono/zod-openapi';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
@@ -47,6 +49,62 @@ import {
 import { makeDashboardRunsResult } from '../test/workflow-mock-factories';
 
 describe('workflow run API wait metadata', () => {
+  test.each([false, true])(
+    'run detail reports actual usage coverage beside unchanged metadata, partial=%s',
+    async partial => {
+      const run = {
+        ...MOCK_COMPLETED_RUN,
+        metadata: { total_cost_usd: partial ? 0.25 : 0.5, total_tokens_in: 8, total_tokens_out: 4 },
+      };
+      const events = ['build', 'review'].map((path, index) => {
+        const start = startNodeExecution({
+          runId: run.id,
+          path,
+          node: { id: path, kind: 'agent', source: { kind: 'inline', prompt: 'PRIVATE_PROMPT' } },
+          invocation: newNodeInvocation(),
+          provider: partial && index === 1 ? 'codex' : 'claude',
+        });
+        const end = finishNodeExecution(
+          start,
+          { status: 'completed' },
+          {
+            costUsd: partial && index === 1 ? undefined : 0.25,
+            tokens: { input: 4, output: 2 },
+            output: { text: 'PRIVATE_OUTPUT' },
+          }
+        );
+        if (partial && index === 1)
+          end.spend.costUsd = { source: 'unavailable', reason: 'unsupported' };
+        return {
+          ...serializeNodeStateRecord(end),
+          id: path,
+          created_at: '2026-11-25T00:00:00Z',
+          step_index: index,
+        };
+      });
+      mockGetWorkflowRun.mockImplementationOnce(async () => run);
+      mockListWorkflowEvents.mockImplementationOnce(async () => events);
+      mockListEventsForRuns.mockImplementationOnce(async () => new Map([[run.id, events]]));
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${run.id}`);
+      expect(response.status).toBe(200);
+      const body = workflowRunDetailSchema.parse(await response.json());
+      const usage = runUsageReportSchema.parse(body.run.usage);
+      expect(body.run.metadata).toEqual(run.metadata);
+      expect(usage.totals).toEqual({ usd: partial ? 0.25 : 0.5, inputTokens: 8, outputTokens: 4 });
+      expect(usage.coverage.usd).toMatchObject({
+        state: partial ? 'partial' : 'complete',
+        aiNodes: 2,
+        contributedAiNodes: partial ? 1 : 2,
+      });
+      expect(usage.coverage.inputTokens.state).toBe('complete');
+      if (partial)
+        expect(usage.coverage.usd.gaps).toContainEqual(
+          expect.objectContaining({ path: 'review', source: 'node', reason: 'unsupported' })
+        );
+      expect(JSON.stringify(usage)).not.toContain('PRIVATE_OUTPUT');
+    }
+  );
   const attentionWait = {
     owner: 'loop_group' as const,
     nodeId: 'recover-ci',

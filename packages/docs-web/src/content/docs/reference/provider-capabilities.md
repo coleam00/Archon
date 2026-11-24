@@ -40,6 +40,10 @@ all nested agents. Unsupported fields remain absent; Archon does not estimate co
 count events as turns, or substitute the requested model for an unreported model.
 Cost reporting is independent of spend-limit support. Older providers may omit
 reporting declarations; absence means unknown, not unsupported.
+Run [usage coverage](/reference/cli/#workflow-get) describes actual recorded cost and
+gross-token measurements: contributing executed AI nodes and gaps with their recorded
+reasons. Cost and token coverage are independent. Complete AI-node coverage is not
+proof that a provider reported every internal subagent or its full invoice.
 
 Background work: `reported` waits for runtime-reported task endings; `none` means verified absent;
 `unobserved` means background work may exist without an observable lifecycle. A process

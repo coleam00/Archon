@@ -42,6 +42,7 @@ import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
 import { workflowRunCommand } from './workflow-run-owned';
+import { usageEvents } from '../test-support/usage-fixtures';
 
 mock.module('@archon/core/services/title-generator', () => ({
   generateAndSetTitle: async (): Promise<void> => undefined,
@@ -199,14 +200,18 @@ async function seedRuns(itemKeys: readonly (string | undefined)[]): Promise<void
     const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
     if (!codebase) throw new Error('The seed run did not register the project');
     for (const item_key of itemKeys) {
+      const mixed = item_key === 'item-2';
       const seeded = await host.deps.store.createWorkflowRun({
         workflow_name: 'item-proof',
         user_message: 'go',
         codebase_id: codebase.id,
         working_path: projectRoot,
         item_key,
+        metadata: { total_cost_usd: mixed ? 0.25 : 0.5, total_tokens_in: 8, total_tokens_out: 4 },
       });
       await host.deps.store.claimPendingWorkflowRun(seeded.id, projectRoot);
+      for (const event of usageEvents(seeded.id, mixed))
+        await host.deps.store.persistWorkflowEvent(event);
       await host.deps.store.completeWorkflowRun(seeded.id, { duration_ms: 1 });
     }
   });
@@ -447,6 +452,22 @@ test.serial(
     const one = page.items.find(entry => entry.item.key === 'item-1');
     expect(one).toEqual(await readItemJson('item-1'));
     expect(one?.merged?.change).toBe(change);
+    expect(one?.spend).toMatchObject({ usd: 0.5, inputTokens: 8, outputTokens: 4 });
+    expect(one?.spend.coverage.usd).toMatchObject({
+      state: 'complete',
+      aiNodes: 2,
+      contributedAiNodes: 2,
+    });
+    const mixed = page.items.find(entry => entry.item.key === 'item-2');
+    expect(mixed?.spend).toMatchObject({ usd: 0.25, inputTokens: 8, outputTokens: 4 });
+    expect(mixed?.spend.coverage.usd).toMatchObject({
+      state: 'partial',
+      aiNodes: 2,
+      contributedAiNodes: 1,
+    });
+    expect(mixed?.spend.coverage.usd.gaps).toContainEqual(
+      expect.objectContaining({ path: 'review', reason: 'unsupported', source: 'node' })
+    );
     const first = await items({ limit: 1 });
     const rest = await items({ after: first.next ?? '' });
     expect(first.items).toHaveLength(1);

@@ -4,6 +4,7 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import { observeRunOwner } from '@archon/core/services/run-attention-watch';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
+import { readRunUsageReport } from '@archon/workflows/run-usage-read';
 import { nodeCostScope } from '@archon/workflows/node-record-serialization';
 import {
   buildLoopRounds,
@@ -264,6 +265,7 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
           conversation_platform_id: conversationPlatformId ?? null,
           owner_observation: await observeRunOwner(createWorkflowStore(), run),
           terminal_record: terminalRecord,
+          usage: await readRunUsageReport(createWorkflowStore(), run),
           // The console reads node state from here and keeps no fold of its own.
           nodes: terminalRecord?.nodes ?? buildRunNodeStates(run, events),
           ...(loopRounds.length > 0 ? { loop_rounds: loopRounds } : {}),

@@ -8277,6 +8277,579 @@ export interface components {
       unset?: string[];
     };
     ItemRead: {
+      spend: {
+        usd: number | null;
+        inputTokens: number | null;
+        outputTokens: number | null;
+        coverage: {
+          usd: {
+            /** @enum {string} */
+            state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+            aiNodes: number | null;
+            observedAiNodes: number;
+            contributedAiNodes: number;
+            contributors: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+            }[];
+            recordedNodes: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+            }[];
+            gaps: (
+              | {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                  /** @enum {string} */
+                  source: 'node';
+                  /** @enum {string} */
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
+                }
+              | {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                  /** @enum {string} */
+                  source: 'coverage';
+                  /** @enum {string} */
+                  reason:
+                    | 'history_unavailable'
+                    | 'history_absent'
+                    | 'record_unreadable'
+                    | 'measurement_source_absent'
+                    | 'node_kind_unavailable'
+                    | 'unfinished_execution'
+                    | 'total_unavailable'
+                    | 'total_invalid'
+                    | 'total_mismatch'
+                    | 'scope_unattributed'
+                    | 'child_unavailable'
+                    | 'child_usage_mismatch'
+                    | 'child_cycle';
+                }
+            )[];
+            partial: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+              /** @enum {boolean} */
+              partial: true;
+            }[];
+            limitations: {
+              runId: string;
+              path?: string;
+              /** @enum {string} */
+              reason:
+                | 'history_unavailable'
+                | 'history_absent'
+                | 'record_unreadable'
+                | 'measurement_source_absent'
+                | 'node_kind_unavailable'
+                | 'unfinished_execution'
+                | 'total_unavailable'
+                | 'total_invalid'
+                | 'total_mismatch'
+                | 'scope_unattributed'
+                | 'child_unavailable'
+                | 'child_usage_mismatch'
+                | 'child_cycle';
+            }[];
+          };
+          inputTokens: {
+            /** @enum {string} */
+            state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+            aiNodes: number | null;
+            observedAiNodes: number;
+            contributedAiNodes: number;
+            contributors: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+            }[];
+            recordedNodes: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+            }[];
+            gaps: (
+              | {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                  /** @enum {string} */
+                  source: 'node';
+                  /** @enum {string} */
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
+                }
+              | {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                  /** @enum {string} */
+                  source: 'coverage';
+                  /** @enum {string} */
+                  reason:
+                    | 'history_unavailable'
+                    | 'history_absent'
+                    | 'record_unreadable'
+                    | 'measurement_source_absent'
+                    | 'node_kind_unavailable'
+                    | 'unfinished_execution'
+                    | 'total_unavailable'
+                    | 'total_invalid'
+                    | 'total_mismatch'
+                    | 'scope_unattributed'
+                    | 'child_unavailable'
+                    | 'child_usage_mismatch'
+                    | 'child_cycle';
+                }
+            )[];
+            partial: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+              /** @enum {boolean} */
+              partial: true;
+            }[];
+            limitations: {
+              runId: string;
+              path?: string;
+              /** @enum {string} */
+              reason:
+                | 'history_unavailable'
+                | 'history_absent'
+                | 'record_unreadable'
+                | 'measurement_source_absent'
+                | 'node_kind_unavailable'
+                | 'unfinished_execution'
+                | 'total_unavailable'
+                | 'total_invalid'
+                | 'total_mismatch'
+                | 'scope_unattributed'
+                | 'child_unavailable'
+                | 'child_usage_mismatch'
+                | 'child_cycle';
+            }[];
+          };
+          outputTokens: {
+            /** @enum {string} */
+            state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+            aiNodes: number | null;
+            observedAiNodes: number;
+            contributedAiNodes: number;
+            contributors: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+            }[];
+            recordedNodes: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+            }[];
+            gaps: (
+              | {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                  /** @enum {string} */
+                  source: 'node';
+                  /** @enum {string} */
+                  reason:
+                    | 'unsupported'
+                    | 'not_reported'
+                    | 'unknown'
+                    | 'not_applicable'
+                    | 'invalid'
+                    | 'incomplete';
+                }
+              | {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                  /** @enum {string} */
+                  source: 'coverage';
+                  /** @enum {string} */
+                  reason:
+                    | 'history_unavailable'
+                    | 'history_absent'
+                    | 'record_unreadable'
+                    | 'measurement_source_absent'
+                    | 'node_kind_unavailable'
+                    | 'unfinished_execution'
+                    | 'total_unavailable'
+                    | 'total_invalid'
+                    | 'total_mismatch'
+                    | 'scope_unattributed'
+                    | 'child_unavailable'
+                    | 'child_usage_mismatch'
+                    | 'child_cycle';
+                }
+            )[];
+            partial: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+              /** @enum {boolean} */
+              partial: true;
+            }[];
+            limitations: {
+              runId: string;
+              path?: string;
+              /** @enum {string} */
+              reason:
+                | 'history_unavailable'
+                | 'history_absent'
+                | 'record_unreadable'
+                | 'measurement_source_absent'
+                | 'node_kind_unavailable'
+                | 'unfinished_execution'
+                | 'total_unavailable'
+                | 'total_invalid'
+                | 'total_mismatch'
+                | 'scope_unattributed'
+                | 'child_unavailable'
+                | 'child_usage_mismatch'
+                | 'child_cycle';
+            }[];
+          };
+          excluded: {
+            runId: string;
+            path: string;
+            /** @enum {string} */
+            nodeKind?:
+              | 'agent'
+              | 'exec'
+              | 'loop'
+              | 'loop_group'
+              | 'gate'
+              | 'halt'
+              | 'wait'
+              | 'workflow'
+              | 'compose_fan_out'
+              | 'compose_fan_out_instance';
+            provider?: string;
+            invocationId?: string;
+            loopPath?: {
+              groupId: string;
+              iteration: number;
+            }[];
+            attemptId?: string;
+            /** @enum {string} */
+            reason: 'skipped' | 'replayed' | 'not_applicable';
+            lifecycleReason?:
+              | (
+                  | 'prior_success'
+                  | 'when_condition'
+                  | 'when_condition_parse_error'
+                  | 'trigger_rule'
+                  | 'timeout'
+                )
+              | 'stale_dependency';
+            /** @enum {string} */
+            tokensReason?:
+              | 'unsupported'
+              | 'not_reported'
+              | 'unknown'
+              | 'not_applicable'
+              | 'invalid'
+              | 'incomplete';
+            /** @enum {string} */
+            costReason?:
+              | 'unsupported'
+              | 'not_reported'
+              | 'unknown'
+              | 'not_applicable'
+              | 'invalid'
+              | 'incomplete';
+          }[];
+        };
+      };
       item: {
         id: string;
         projectKey: string;
@@ -8337,6 +8910,574 @@ export interface components {
           usd: number | null;
           inputTokens: number | null;
           outputTokens: number | null;
+          coverage: {
+            usd: {
+              /** @enum {string} */
+              state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              aiNodes: number | null;
+              observedAiNodes: number;
+              contributedAiNodes: number;
+              contributors: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              recordedNodes: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              gaps: (
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'node';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  }
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'coverage';
+                    /** @enum {string} */
+                    reason:
+                      | 'history_unavailable'
+                      | 'history_absent'
+                      | 'record_unreadable'
+                      | 'measurement_source_absent'
+                      | 'node_kind_unavailable'
+                      | 'unfinished_execution'
+                      | 'total_unavailable'
+                      | 'total_invalid'
+                      | 'total_mismatch'
+                      | 'scope_unattributed'
+                      | 'child_unavailable'
+                      | 'child_usage_mismatch'
+                      | 'child_cycle';
+                  }
+              )[];
+              partial: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {boolean} */
+                partial: true;
+              }[];
+              limitations: {
+                runId: string;
+                path?: string;
+                /** @enum {string} */
+                reason:
+                  | 'history_unavailable'
+                  | 'history_absent'
+                  | 'record_unreadable'
+                  | 'measurement_source_absent'
+                  | 'node_kind_unavailable'
+                  | 'unfinished_execution'
+                  | 'total_unavailable'
+                  | 'total_invalid'
+                  | 'total_mismatch'
+                  | 'scope_unattributed'
+                  | 'child_unavailable'
+                  | 'child_usage_mismatch'
+                  | 'child_cycle';
+              }[];
+            };
+            inputTokens: {
+              /** @enum {string} */
+              state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              aiNodes: number | null;
+              observedAiNodes: number;
+              contributedAiNodes: number;
+              contributors: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              recordedNodes: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              gaps: (
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'node';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  }
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'coverage';
+                    /** @enum {string} */
+                    reason:
+                      | 'history_unavailable'
+                      | 'history_absent'
+                      | 'record_unreadable'
+                      | 'measurement_source_absent'
+                      | 'node_kind_unavailable'
+                      | 'unfinished_execution'
+                      | 'total_unavailable'
+                      | 'total_invalid'
+                      | 'total_mismatch'
+                      | 'scope_unattributed'
+                      | 'child_unavailable'
+                      | 'child_usage_mismatch'
+                      | 'child_cycle';
+                  }
+              )[];
+              partial: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {boolean} */
+                partial: true;
+              }[];
+              limitations: {
+                runId: string;
+                path?: string;
+                /** @enum {string} */
+                reason:
+                  | 'history_unavailable'
+                  | 'history_absent'
+                  | 'record_unreadable'
+                  | 'measurement_source_absent'
+                  | 'node_kind_unavailable'
+                  | 'unfinished_execution'
+                  | 'total_unavailable'
+                  | 'total_invalid'
+                  | 'total_mismatch'
+                  | 'scope_unattributed'
+                  | 'child_unavailable'
+                  | 'child_usage_mismatch'
+                  | 'child_cycle';
+              }[];
+            };
+            outputTokens: {
+              /** @enum {string} */
+              state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              aiNodes: number | null;
+              observedAiNodes: number;
+              contributedAiNodes: number;
+              contributors: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              recordedNodes: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              gaps: (
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'node';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  }
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'coverage';
+                    /** @enum {string} */
+                    reason:
+                      | 'history_unavailable'
+                      | 'history_absent'
+                      | 'record_unreadable'
+                      | 'measurement_source_absent'
+                      | 'node_kind_unavailable'
+                      | 'unfinished_execution'
+                      | 'total_unavailable'
+                      | 'total_invalid'
+                      | 'total_mismatch'
+                      | 'scope_unattributed'
+                      | 'child_unavailable'
+                      | 'child_usage_mismatch'
+                      | 'child_cycle';
+                  }
+              )[];
+              partial: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {boolean} */
+                partial: true;
+              }[];
+              limitations: {
+                runId: string;
+                path?: string;
+                /** @enum {string} */
+                reason:
+                  | 'history_unavailable'
+                  | 'history_absent'
+                  | 'record_unreadable'
+                  | 'measurement_source_absent'
+                  | 'node_kind_unavailable'
+                  | 'unfinished_execution'
+                  | 'total_unavailable'
+                  | 'total_invalid'
+                  | 'total_mismatch'
+                  | 'scope_unattributed'
+                  | 'child_unavailable'
+                  | 'child_usage_mismatch'
+                  | 'child_cycle';
+              }[];
+            };
+            excluded: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+              /** @enum {string} */
+              reason: 'skipped' | 'replayed' | 'not_applicable';
+              lifecycleReason?:
+                | (
+                    | 'prior_success'
+                    | 'when_condition'
+                    | 'when_condition_parse_error'
+                    | 'trigger_rule'
+                    | 'timeout'
+                  )
+                | 'stale_dependency';
+              /** @enum {string} */
+              tokensReason?:
+                | 'unsupported'
+                | 'not_reported'
+                | 'unknown'
+                | 'not_applicable'
+                | 'invalid'
+                | 'incomplete';
+              /** @enum {string} */
+              costReason?:
+                | 'unsupported'
+                | 'not_reported'
+                | 'unknown'
+                | 'not_applicable'
+                | 'invalid'
+                | 'incomplete';
+            }[];
+          };
         };
         heldBehind: {
           runId: string;
@@ -8991,6 +10132,579 @@ export interface components {
         until: string;
       };
       items: {
+        spend: {
+          usd: number | null;
+          inputTokens: number | null;
+          outputTokens: number | null;
+          coverage: {
+            usd: {
+              /** @enum {string} */
+              state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              aiNodes: number | null;
+              observedAiNodes: number;
+              contributedAiNodes: number;
+              contributors: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              recordedNodes: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              gaps: (
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'node';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  }
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'coverage';
+                    /** @enum {string} */
+                    reason:
+                      | 'history_unavailable'
+                      | 'history_absent'
+                      | 'record_unreadable'
+                      | 'measurement_source_absent'
+                      | 'node_kind_unavailable'
+                      | 'unfinished_execution'
+                      | 'total_unavailable'
+                      | 'total_invalid'
+                      | 'total_mismatch'
+                      | 'scope_unattributed'
+                      | 'child_unavailable'
+                      | 'child_usage_mismatch'
+                      | 'child_cycle';
+                  }
+              )[];
+              partial: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {boolean} */
+                partial: true;
+              }[];
+              limitations: {
+                runId: string;
+                path?: string;
+                /** @enum {string} */
+                reason:
+                  | 'history_unavailable'
+                  | 'history_absent'
+                  | 'record_unreadable'
+                  | 'measurement_source_absent'
+                  | 'node_kind_unavailable'
+                  | 'unfinished_execution'
+                  | 'total_unavailable'
+                  | 'total_invalid'
+                  | 'total_mismatch'
+                  | 'scope_unattributed'
+                  | 'child_unavailable'
+                  | 'child_usage_mismatch'
+                  | 'child_cycle';
+              }[];
+            };
+            inputTokens: {
+              /** @enum {string} */
+              state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              aiNodes: number | null;
+              observedAiNodes: number;
+              contributedAiNodes: number;
+              contributors: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              recordedNodes: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              gaps: (
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'node';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  }
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'coverage';
+                    /** @enum {string} */
+                    reason:
+                      | 'history_unavailable'
+                      | 'history_absent'
+                      | 'record_unreadable'
+                      | 'measurement_source_absent'
+                      | 'node_kind_unavailable'
+                      | 'unfinished_execution'
+                      | 'total_unavailable'
+                      | 'total_invalid'
+                      | 'total_mismatch'
+                      | 'scope_unattributed'
+                      | 'child_unavailable'
+                      | 'child_usage_mismatch'
+                      | 'child_cycle';
+                  }
+              )[];
+              partial: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {boolean} */
+                partial: true;
+              }[];
+              limitations: {
+                runId: string;
+                path?: string;
+                /** @enum {string} */
+                reason:
+                  | 'history_unavailable'
+                  | 'history_absent'
+                  | 'record_unreadable'
+                  | 'measurement_source_absent'
+                  | 'node_kind_unavailable'
+                  | 'unfinished_execution'
+                  | 'total_unavailable'
+                  | 'total_invalid'
+                  | 'total_mismatch'
+                  | 'scope_unattributed'
+                  | 'child_unavailable'
+                  | 'child_usage_mismatch'
+                  | 'child_cycle';
+              }[];
+            };
+            outputTokens: {
+              /** @enum {string} */
+              state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              aiNodes: number | null;
+              observedAiNodes: number;
+              contributedAiNodes: number;
+              contributors: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              recordedNodes: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              gaps: (
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'node';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  }
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'coverage';
+                    /** @enum {string} */
+                    reason:
+                      | 'history_unavailable'
+                      | 'history_absent'
+                      | 'record_unreadable'
+                      | 'measurement_source_absent'
+                      | 'node_kind_unavailable'
+                      | 'unfinished_execution'
+                      | 'total_unavailable'
+                      | 'total_invalid'
+                      | 'total_mismatch'
+                      | 'scope_unattributed'
+                      | 'child_unavailable'
+                      | 'child_usage_mismatch'
+                      | 'child_cycle';
+                  }
+              )[];
+              partial: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {boolean} */
+                partial: true;
+              }[];
+              limitations: {
+                runId: string;
+                path?: string;
+                /** @enum {string} */
+                reason:
+                  | 'history_unavailable'
+                  | 'history_absent'
+                  | 'record_unreadable'
+                  | 'measurement_source_absent'
+                  | 'node_kind_unavailable'
+                  | 'unfinished_execution'
+                  | 'total_unavailable'
+                  | 'total_invalid'
+                  | 'total_mismatch'
+                  | 'scope_unattributed'
+                  | 'child_unavailable'
+                  | 'child_usage_mismatch'
+                  | 'child_cycle';
+              }[];
+            };
+            excluded: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+              /** @enum {string} */
+              reason: 'skipped' | 'replayed' | 'not_applicable';
+              lifecycleReason?:
+                | (
+                    | 'prior_success'
+                    | 'when_condition'
+                    | 'when_condition_parse_error'
+                    | 'trigger_rule'
+                    | 'timeout'
+                  )
+                | 'stale_dependency';
+              /** @enum {string} */
+              tokensReason?:
+                | 'unsupported'
+                | 'not_reported'
+                | 'unknown'
+                | 'not_applicable'
+                | 'invalid'
+                | 'incomplete';
+              /** @enum {string} */
+              costReason?:
+                | 'unsupported'
+                | 'not_reported'
+                | 'unknown'
+                | 'not_applicable'
+                | 'invalid'
+                | 'incomplete';
+            }[];
+          };
+        };
         item: {
           id: string;
           projectKey: string;
@@ -9051,6 +10765,574 @@ export interface components {
             usd: number | null;
             inputTokens: number | null;
             outputTokens: number | null;
+            coverage: {
+              usd: {
+                /** @enum {string} */
+                state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+                aiNodes: number | null;
+                observedAiNodes: number;
+                contributedAiNodes: number;
+                contributors: {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                }[];
+                recordedNodes: {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                }[];
+                gaps: (
+                  | {
+                      runId: string;
+                      path: string;
+                      /** @enum {string} */
+                      nodeKind?:
+                        | 'agent'
+                        | 'exec'
+                        | 'loop'
+                        | 'loop_group'
+                        | 'gate'
+                        | 'halt'
+                        | 'wait'
+                        | 'workflow'
+                        | 'compose_fan_out'
+                        | 'compose_fan_out_instance';
+                      provider?: string;
+                      invocationId?: string;
+                      loopPath?: {
+                        groupId: string;
+                        iteration: number;
+                      }[];
+                      attemptId?: string;
+                      /** @enum {string} */
+                      source: 'node';
+                      /** @enum {string} */
+                      reason:
+                        | 'unsupported'
+                        | 'not_reported'
+                        | 'unknown'
+                        | 'not_applicable'
+                        | 'invalid'
+                        | 'incomplete';
+                    }
+                  | {
+                      runId: string;
+                      path: string;
+                      /** @enum {string} */
+                      nodeKind?:
+                        | 'agent'
+                        | 'exec'
+                        | 'loop'
+                        | 'loop_group'
+                        | 'gate'
+                        | 'halt'
+                        | 'wait'
+                        | 'workflow'
+                        | 'compose_fan_out'
+                        | 'compose_fan_out_instance';
+                      provider?: string;
+                      invocationId?: string;
+                      loopPath?: {
+                        groupId: string;
+                        iteration: number;
+                      }[];
+                      attemptId?: string;
+                      /** @enum {string} */
+                      source: 'coverage';
+                      /** @enum {string} */
+                      reason:
+                        | 'history_unavailable'
+                        | 'history_absent'
+                        | 'record_unreadable'
+                        | 'measurement_source_absent'
+                        | 'node_kind_unavailable'
+                        | 'unfinished_execution'
+                        | 'total_unavailable'
+                        | 'total_invalid'
+                        | 'total_mismatch'
+                        | 'scope_unattributed'
+                        | 'child_unavailable'
+                        | 'child_usage_mismatch'
+                        | 'child_cycle';
+                    }
+                )[];
+                partial: {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                  /** @enum {boolean} */
+                  partial: true;
+                }[];
+                limitations: {
+                  runId: string;
+                  path?: string;
+                  /** @enum {string} */
+                  reason:
+                    | 'history_unavailable'
+                    | 'history_absent'
+                    | 'record_unreadable'
+                    | 'measurement_source_absent'
+                    | 'node_kind_unavailable'
+                    | 'unfinished_execution'
+                    | 'total_unavailable'
+                    | 'total_invalid'
+                    | 'total_mismatch'
+                    | 'scope_unattributed'
+                    | 'child_unavailable'
+                    | 'child_usage_mismatch'
+                    | 'child_cycle';
+                }[];
+              };
+              inputTokens: {
+                /** @enum {string} */
+                state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+                aiNodes: number | null;
+                observedAiNodes: number;
+                contributedAiNodes: number;
+                contributors: {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                }[];
+                recordedNodes: {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                }[];
+                gaps: (
+                  | {
+                      runId: string;
+                      path: string;
+                      /** @enum {string} */
+                      nodeKind?:
+                        | 'agent'
+                        | 'exec'
+                        | 'loop'
+                        | 'loop_group'
+                        | 'gate'
+                        | 'halt'
+                        | 'wait'
+                        | 'workflow'
+                        | 'compose_fan_out'
+                        | 'compose_fan_out_instance';
+                      provider?: string;
+                      invocationId?: string;
+                      loopPath?: {
+                        groupId: string;
+                        iteration: number;
+                      }[];
+                      attemptId?: string;
+                      /** @enum {string} */
+                      source: 'node';
+                      /** @enum {string} */
+                      reason:
+                        | 'unsupported'
+                        | 'not_reported'
+                        | 'unknown'
+                        | 'not_applicable'
+                        | 'invalid'
+                        | 'incomplete';
+                    }
+                  | {
+                      runId: string;
+                      path: string;
+                      /** @enum {string} */
+                      nodeKind?:
+                        | 'agent'
+                        | 'exec'
+                        | 'loop'
+                        | 'loop_group'
+                        | 'gate'
+                        | 'halt'
+                        | 'wait'
+                        | 'workflow'
+                        | 'compose_fan_out'
+                        | 'compose_fan_out_instance';
+                      provider?: string;
+                      invocationId?: string;
+                      loopPath?: {
+                        groupId: string;
+                        iteration: number;
+                      }[];
+                      attemptId?: string;
+                      /** @enum {string} */
+                      source: 'coverage';
+                      /** @enum {string} */
+                      reason:
+                        | 'history_unavailable'
+                        | 'history_absent'
+                        | 'record_unreadable'
+                        | 'measurement_source_absent'
+                        | 'node_kind_unavailable'
+                        | 'unfinished_execution'
+                        | 'total_unavailable'
+                        | 'total_invalid'
+                        | 'total_mismatch'
+                        | 'scope_unattributed'
+                        | 'child_unavailable'
+                        | 'child_usage_mismatch'
+                        | 'child_cycle';
+                    }
+                )[];
+                partial: {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                  /** @enum {boolean} */
+                  partial: true;
+                }[];
+                limitations: {
+                  runId: string;
+                  path?: string;
+                  /** @enum {string} */
+                  reason:
+                    | 'history_unavailable'
+                    | 'history_absent'
+                    | 'record_unreadable'
+                    | 'measurement_source_absent'
+                    | 'node_kind_unavailable'
+                    | 'unfinished_execution'
+                    | 'total_unavailable'
+                    | 'total_invalid'
+                    | 'total_mismatch'
+                    | 'scope_unattributed'
+                    | 'child_unavailable'
+                    | 'child_usage_mismatch'
+                    | 'child_cycle';
+                }[];
+              };
+              outputTokens: {
+                /** @enum {string} */
+                state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+                aiNodes: number | null;
+                observedAiNodes: number;
+                contributedAiNodes: number;
+                contributors: {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                }[];
+                recordedNodes: {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                }[];
+                gaps: (
+                  | {
+                      runId: string;
+                      path: string;
+                      /** @enum {string} */
+                      nodeKind?:
+                        | 'agent'
+                        | 'exec'
+                        | 'loop'
+                        | 'loop_group'
+                        | 'gate'
+                        | 'halt'
+                        | 'wait'
+                        | 'workflow'
+                        | 'compose_fan_out'
+                        | 'compose_fan_out_instance';
+                      provider?: string;
+                      invocationId?: string;
+                      loopPath?: {
+                        groupId: string;
+                        iteration: number;
+                      }[];
+                      attemptId?: string;
+                      /** @enum {string} */
+                      source: 'node';
+                      /** @enum {string} */
+                      reason:
+                        | 'unsupported'
+                        | 'not_reported'
+                        | 'unknown'
+                        | 'not_applicable'
+                        | 'invalid'
+                        | 'incomplete';
+                    }
+                  | {
+                      runId: string;
+                      path: string;
+                      /** @enum {string} */
+                      nodeKind?:
+                        | 'agent'
+                        | 'exec'
+                        | 'loop'
+                        | 'loop_group'
+                        | 'gate'
+                        | 'halt'
+                        | 'wait'
+                        | 'workflow'
+                        | 'compose_fan_out'
+                        | 'compose_fan_out_instance';
+                      provider?: string;
+                      invocationId?: string;
+                      loopPath?: {
+                        groupId: string;
+                        iteration: number;
+                      }[];
+                      attemptId?: string;
+                      /** @enum {string} */
+                      source: 'coverage';
+                      /** @enum {string} */
+                      reason:
+                        | 'history_unavailable'
+                        | 'history_absent'
+                        | 'record_unreadable'
+                        | 'measurement_source_absent'
+                        | 'node_kind_unavailable'
+                        | 'unfinished_execution'
+                        | 'total_unavailable'
+                        | 'total_invalid'
+                        | 'total_mismatch'
+                        | 'scope_unattributed'
+                        | 'child_unavailable'
+                        | 'child_usage_mismatch'
+                        | 'child_cycle';
+                    }
+                )[];
+                partial: {
+                  runId: string;
+                  path: string;
+                  /** @enum {string} */
+                  nodeKind?:
+                    | 'agent'
+                    | 'exec'
+                    | 'loop'
+                    | 'loop_group'
+                    | 'gate'
+                    | 'halt'
+                    | 'wait'
+                    | 'workflow'
+                    | 'compose_fan_out'
+                    | 'compose_fan_out_instance';
+                  provider?: string;
+                  invocationId?: string;
+                  loopPath?: {
+                    groupId: string;
+                    iteration: number;
+                  }[];
+                  attemptId?: string;
+                  /** @enum {boolean} */
+                  partial: true;
+                }[];
+                limitations: {
+                  runId: string;
+                  path?: string;
+                  /** @enum {string} */
+                  reason:
+                    | 'history_unavailable'
+                    | 'history_absent'
+                    | 'record_unreadable'
+                    | 'measurement_source_absent'
+                    | 'node_kind_unavailable'
+                    | 'unfinished_execution'
+                    | 'total_unavailable'
+                    | 'total_invalid'
+                    | 'total_mismatch'
+                    | 'scope_unattributed'
+                    | 'child_unavailable'
+                    | 'child_usage_mismatch'
+                    | 'child_cycle';
+                }[];
+              };
+              excluded: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {string} */
+                reason: 'skipped' | 'replayed' | 'not_applicable';
+                lifecycleReason?:
+                  | (
+                      | 'prior_success'
+                      | 'when_condition'
+                      | 'when_condition_parse_error'
+                      | 'trigger_rule'
+                      | 'timeout'
+                    )
+                  | 'stale_dependency';
+                /** @enum {string} */
+                tokensReason?:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
+                /** @enum {string} */
+                costReason?:
+                  | 'unsupported'
+                  | 'not_reported'
+                  | 'unknown'
+                  | 'not_applicable'
+                  | 'invalid'
+                  | 'incomplete';
+              }[];
+            };
           };
           heldBehind: {
             runId: string;
@@ -10725,6 +13007,581 @@ export interface components {
                   | 'unobserved';
               };
         } | null;
+        usage: {
+          totals: {
+            usd: number | null;
+            inputTokens: number | null;
+            outputTokens: number | null;
+          };
+          coverage: {
+            usd: {
+              /** @enum {string} */
+              state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              aiNodes: number | null;
+              observedAiNodes: number;
+              contributedAiNodes: number;
+              contributors: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              recordedNodes: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              gaps: (
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'node';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  }
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'coverage';
+                    /** @enum {string} */
+                    reason:
+                      | 'history_unavailable'
+                      | 'history_absent'
+                      | 'record_unreadable'
+                      | 'measurement_source_absent'
+                      | 'node_kind_unavailable'
+                      | 'unfinished_execution'
+                      | 'total_unavailable'
+                      | 'total_invalid'
+                      | 'total_mismatch'
+                      | 'scope_unattributed'
+                      | 'child_unavailable'
+                      | 'child_usage_mismatch'
+                      | 'child_cycle';
+                  }
+              )[];
+              partial: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {boolean} */
+                partial: true;
+              }[];
+              limitations: {
+                runId: string;
+                path?: string;
+                /** @enum {string} */
+                reason:
+                  | 'history_unavailable'
+                  | 'history_absent'
+                  | 'record_unreadable'
+                  | 'measurement_source_absent'
+                  | 'node_kind_unavailable'
+                  | 'unfinished_execution'
+                  | 'total_unavailable'
+                  | 'total_invalid'
+                  | 'total_mismatch'
+                  | 'scope_unattributed'
+                  | 'child_unavailable'
+                  | 'child_usage_mismatch'
+                  | 'child_cycle';
+              }[];
+            };
+            inputTokens: {
+              /** @enum {string} */
+              state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              aiNodes: number | null;
+              observedAiNodes: number;
+              contributedAiNodes: number;
+              contributors: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              recordedNodes: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              gaps: (
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'node';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  }
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'coverage';
+                    /** @enum {string} */
+                    reason:
+                      | 'history_unavailable'
+                      | 'history_absent'
+                      | 'record_unreadable'
+                      | 'measurement_source_absent'
+                      | 'node_kind_unavailable'
+                      | 'unfinished_execution'
+                      | 'total_unavailable'
+                      | 'total_invalid'
+                      | 'total_mismatch'
+                      | 'scope_unattributed'
+                      | 'child_unavailable'
+                      | 'child_usage_mismatch'
+                      | 'child_cycle';
+                  }
+              )[];
+              partial: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {boolean} */
+                partial: true;
+              }[];
+              limitations: {
+                runId: string;
+                path?: string;
+                /** @enum {string} */
+                reason:
+                  | 'history_unavailable'
+                  | 'history_absent'
+                  | 'record_unreadable'
+                  | 'measurement_source_absent'
+                  | 'node_kind_unavailable'
+                  | 'unfinished_execution'
+                  | 'total_unavailable'
+                  | 'total_invalid'
+                  | 'total_mismatch'
+                  | 'scope_unattributed'
+                  | 'child_unavailable'
+                  | 'child_usage_mismatch'
+                  | 'child_cycle';
+              }[];
+            };
+            outputTokens: {
+              /** @enum {string} */
+              state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              aiNodes: number | null;
+              observedAiNodes: number;
+              contributedAiNodes: number;
+              contributors: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              recordedNodes: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+              }[];
+              gaps: (
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'node';
+                    /** @enum {string} */
+                    reason:
+                      | 'unsupported'
+                      | 'not_reported'
+                      | 'unknown'
+                      | 'not_applicable'
+                      | 'invalid'
+                      | 'incomplete';
+                  }
+                | {
+                    runId: string;
+                    path: string;
+                    /** @enum {string} */
+                    nodeKind?:
+                      | 'agent'
+                      | 'exec'
+                      | 'loop'
+                      | 'loop_group'
+                      | 'gate'
+                      | 'halt'
+                      | 'wait'
+                      | 'workflow'
+                      | 'compose_fan_out'
+                      | 'compose_fan_out_instance';
+                    provider?: string;
+                    invocationId?: string;
+                    loopPath?: {
+                      groupId: string;
+                      iteration: number;
+                    }[];
+                    attemptId?: string;
+                    /** @enum {string} */
+                    source: 'coverage';
+                    /** @enum {string} */
+                    reason:
+                      | 'history_unavailable'
+                      | 'history_absent'
+                      | 'record_unreadable'
+                      | 'measurement_source_absent'
+                      | 'node_kind_unavailable'
+                      | 'unfinished_execution'
+                      | 'total_unavailable'
+                      | 'total_invalid'
+                      | 'total_mismatch'
+                      | 'scope_unattributed'
+                      | 'child_unavailable'
+                      | 'child_usage_mismatch'
+                      | 'child_cycle';
+                  }
+              )[];
+              partial: {
+                runId: string;
+                path: string;
+                /** @enum {string} */
+                nodeKind?:
+                  | 'agent'
+                  | 'exec'
+                  | 'loop'
+                  | 'loop_group'
+                  | 'gate'
+                  | 'halt'
+                  | 'wait'
+                  | 'workflow'
+                  | 'compose_fan_out'
+                  | 'compose_fan_out_instance';
+                provider?: string;
+                invocationId?: string;
+                loopPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                attemptId?: string;
+                /** @enum {boolean} */
+                partial: true;
+              }[];
+              limitations: {
+                runId: string;
+                path?: string;
+                /** @enum {string} */
+                reason:
+                  | 'history_unavailable'
+                  | 'history_absent'
+                  | 'record_unreadable'
+                  | 'measurement_source_absent'
+                  | 'node_kind_unavailable'
+                  | 'unfinished_execution'
+                  | 'total_unavailable'
+                  | 'total_invalid'
+                  | 'total_mismatch'
+                  | 'scope_unattributed'
+                  | 'child_unavailable'
+                  | 'child_usage_mismatch'
+                  | 'child_cycle';
+              }[];
+            };
+            excluded: {
+              runId: string;
+              path: string;
+              /** @enum {string} */
+              nodeKind?:
+                | 'agent'
+                | 'exec'
+                | 'loop'
+                | 'loop_group'
+                | 'gate'
+                | 'halt'
+                | 'wait'
+                | 'workflow'
+                | 'compose_fan_out'
+                | 'compose_fan_out_instance';
+              provider?: string;
+              invocationId?: string;
+              loopPath?: {
+                groupId: string;
+                iteration: number;
+              }[];
+              attemptId?: string;
+              /** @enum {string} */
+              reason: 'skipped' | 'replayed' | 'not_applicable';
+              lifecycleReason?:
+                | (
+                    | 'prior_success'
+                    | 'when_condition'
+                    | 'when_condition_parse_error'
+                    | 'trigger_rule'
+                    | 'timeout'
+                  )
+                | 'stale_dependency';
+              /** @enum {string} */
+              tokensReason?:
+                | 'unsupported'
+                | 'not_reported'
+                | 'unknown'
+                | 'not_applicable'
+                | 'invalid'
+                | 'incomplete';
+              /** @enum {string} */
+              costReason?:
+                | 'unsupported'
+                | 'not_reported'
+                | 'unknown'
+                | 'not_applicable'
+                | 'invalid'
+                | 'incomplete';
+            }[];
+          };
+        };
         /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round. */
         nodes: {
           node_id: string;

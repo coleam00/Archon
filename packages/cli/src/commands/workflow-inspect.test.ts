@@ -1,4 +1,6 @@
 import { throughputEvents } from '../test-support/throughput-fixtures';
+import { usageEvents } from '../test-support/usage-fixtures';
+import { runUsageReportSchema } from '@archon/workflows/schemas/run-usage-report';
 import {
   mockCanonicalizeProjectPath,
   mockListDashboardRuns,
@@ -885,6 +887,55 @@ describe('workflowGetCommand', () => {
     stdoutSpy.mockRestore();
   });
 
+  it.each([
+    [false, false, false],
+    [true, false, false],
+    [true, true, false],
+    [false, false, true],
+    [true, false, true],
+    [true, true, true],
+  ])(
+    'adds recorded coverage to JSON, verbose=%s events=%s mixed=%s',
+    async (verbose, rawEvents, mixed) => {
+      const { createInMemoryWorkflowStore, createInMemoryWorkflowHostStore } = await import(
+        '../test-support/workflow-store'
+      );
+      const store = createInMemoryWorkflowStore(createInMemoryWorkflowHostStore());
+      const run = await store.createWorkflowRun({
+        workflow_name: 'usage',
+        user_message: '',
+        metadata: { total_cost_usd: mixed ? 0.25 : 0.5, total_tokens_in: 8, total_tokens_out: 4 },
+      });
+      await store.claimPendingWorkflowRun(run.id, '/tmp/usage-fixture');
+      for (const event of usageEvents(run.id, mixed)) await store.persistWorkflowEvent(event);
+      await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+      const host = createTestWorkflowHost();
+      host.deps.store = store;
+      stdoutSpy.mockClear();
+      expect(await workflowGetCommand(host, run.id, true, verbose, undefined, rawEvents)).toBe(0);
+      const body = JSON.parse(firstJsonPayload(stdoutSpy));
+      const usage = runUsageReportSchema.parse(body.usage);
+      expect(usage.totals).toEqual({ usd: mixed ? 0.25 : 0.5, inputTokens: 8, outputTokens: 4 });
+      expect(usage.coverage.inputTokens).toMatchObject({
+        state: 'complete',
+        aiNodes: 2,
+        contributedAiNodes: 2,
+      });
+      expect(usage.coverage.usd).toMatchObject({
+        state: mixed ? 'partial' : 'complete',
+        aiNodes: 2,
+        contributedAiNodes: mixed ? 1 : 2,
+      });
+      expect(usage.coverage.usd.gaps.map(gap => [gap.path, gap.source, gap.reason])).toEqual(
+        mixed ? [['review', 'node', 'unsupported']] : []
+      );
+      expect(body.metadata.total_cost_usd).toBe(mixed ? 0.25 : 0.5);
+      expect(body.terminal_record).toBeDefined();
+      for (const marker of ['PRIVATE_PROMPT', 'PRIVATE_SESSION', 'PRIVATE_OUTPUT'])
+        expect(JSON.stringify(usage)).not.toContain(marker);
+    }
+  );
+
   it('reports creation age and JSON creation time after an actual store resume', async () => {
     const { createInMemoryWorkflowStore, createInMemoryWorkflowHostStore } = await import(
       '../test-support/workflow-store'
@@ -1230,10 +1281,10 @@ describe('workflowGetCommand', () => {
         metadata,
       });
       expect(await workflowGetCommand(createTestWorkflowHost(), 'run-usage')).toBe(0);
-      expect(consoleSpy).toHaveBeenCalledWith('  Usage (recorded totals; completeness unknown):');
-      expect(consoleSpy).toHaveBeenCalledWith(`    Cost: ${cost}`);
-      expect(consoleSpy).toHaveBeenCalledWith(`    Input tokens: ${input}`);
-      expect(consoleSpy).toHaveBeenCalledWith(`    Output tokens: ${output}`);
+      const text = consoleSpy.mock.calls.flat().join('\n');
+      expect(text).toContain(`Cost: ${cost}`);
+      expect(text).toContain(`Input tokens: ${input}`);
+      expect(text).toContain(`Output tokens: ${output}`);
     }
   );
 
