@@ -61,6 +61,8 @@ function installed(
   return {
     file: `/home/triggers/${id}.json`,
     sourceInstanceId: id,
+    resource: to,
+    capacity: null,
     from: { stage: from, outcome },
     launchWorkflow: to,
     linked: null,
@@ -225,6 +227,8 @@ describe('a pack graph', () => {
         {
           file: '/home/triggers/answered.json',
           sourceInstanceId: 'answered',
+          resource: 'r',
+          capacity: null,
           from: { stage: 'a', settled: 'answered' },
           launchWorkflow: 'a',
           linked: null,
@@ -256,6 +260,8 @@ describe('a pack graph', () => {
         {
           file: '/home/triggers/replan.json',
           sourceInstanceId: 'replan',
+          resource: 'r',
+          capacity: null,
           from: { stage: 'a', settled: 'answered', option: 'replan' },
           launchWorkflow: 'b',
           linked: null,
@@ -276,6 +282,8 @@ describe('a pack graph', () => {
         {
           file: '/home/triggers/asks.json',
           sourceInstanceId: 'asks',
+          resource: 'r',
+          capacity: null,
           from: { stage: 'a', settled: 'answered' },
           launchWorkflow: 'b',
           linked: null,
@@ -614,6 +622,7 @@ describe('a pack graph', () => {
       otherCopies: [],
       document: null,
       groups: [],
+      capacity: [],
       settings: [],
       settingsFile: { path: '.archon/packs/chain.yaml', problems: [] },
       laterField: 1,

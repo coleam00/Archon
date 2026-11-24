@@ -167,6 +167,23 @@ export function PackSetup({ graph }: { graph: PackGraph }): ReactElement {
           </ul>
         )}
       </section>
+      {graph.capacity.length > 0 ? (
+        <section data-setup="capacity" className="mb-8">
+          <h2 className={heading}>How much runs at once</h2>
+          <ul className="mt-2 flex flex-col gap-1 text-console-12 text-text-secondary">
+            {graph.capacity.map(slot => (
+              <li key={slot.resource} data-resource={slot.resource}>
+                <span className="font-mono text-text-primary">{slot.stages.join(' · ')}</span>:{' '}
+                <span data-held>{slot.held}</span> of{' '}
+                <span data-limit>{slot.limit ?? slot.declared ?? 1}</span> running
+                {slot.limit !== null && slot.declared !== null && slot.limit !== slot.declared
+                  ? ` (the binding declares ${String(slot.declared)})`
+                  : ''}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {graph.discoveryErrors.length > 0 ? (
         <section data-setup="errors" className="mb-8">
           <h2 className={heading}>Workflows that did not load</h2>

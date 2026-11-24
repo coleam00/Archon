@@ -471,6 +471,10 @@ bindings:
       runEnded: { workflowName: string; problems: string[] }[];
     };
     expect(listed.runEnded).toMatchObject([{ workflowName: 'chain-build', problems: [] }]);
+    // The registered binding's resource is listed with the stage it starts; nothing runs yet.
+    expect((await graph()).capacity.map(slot => [slot.stages, slot.held, slot.limit])).toEqual([
+      [['chain-build'], 0, null],
+    ]);
     const [arrow] = (await graph()).arrows;
     expect(arrow).toMatchObject({ active: true, declared: { binding: 'build', problems: [] } });
     if (!arrow?.active) throw new Error('the copied file did not activate the arrow');
@@ -505,6 +509,8 @@ bindings:
       runId: runs[0]?.id,
       sourceInstanceId: arrowId,
     });
+    // The build's start recorded its slot's capacity, and the ended run holds it no longer.
+    expect((await graph()).capacity.map(slot => [slot.held, slot.limit])).toEqual([[0, 1]]);
   }, 90_000);
 
   test('a linked binding starts the stage on the order each time a member ends, naming the member', async () => {

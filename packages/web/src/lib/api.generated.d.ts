@@ -11601,6 +11601,13 @@ export interface components {
         name: string;
         stages: string[];
       }[];
+      capacity: {
+        resource: string;
+        stages: string[];
+        declared: number | null;
+        limit: number | null;
+        held: number;
+      }[];
       settings: {
         name: string;
         description: string | null;

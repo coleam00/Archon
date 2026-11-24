@@ -40,7 +40,34 @@ import {
 } from './run-ended';
 
 type GraphDeps = BindingDefinitionsDeps &
-  Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'>;
+  Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'> & {
+    /**
+     * The recorded capacity and the runs holding a slot of each resource named. A reader
+     * without it reports no limit and nothing held.
+     */
+    slotOccupancy?: (
+      resources: readonly string[]
+    ) => Promise<ReadonlyMap<string, { capacity: number; held: number }>>;
+  };
+
+/** Each resource the registered arrows start work on, with its stages, limit and slots held. */
+async function packCapacity(
+  installed: readonly InstalledArrow[],
+  deps: GraphDeps
+): Promise<PackGraph['capacity']> {
+  const resources = [...new Set(installed.map(arrow => arrow.resource))];
+  const slots = (await deps.slotOccupancy?.(resources)) ?? new Map<string, never>();
+  return resources.map(resource => {
+    const arrows = installed.filter(arrow => arrow.resource === resource);
+    return {
+      resource,
+      stages: [...new Set(arrows.map(arrow => arrow.launchWorkflow))],
+      declared: arrows.find(arrow => arrow.capacity !== null)?.capacity ?? null,
+      limit: slots.get(resource)?.capacity ?? null,
+      held: slots.get(resource)?.held ?? 0,
+    };
+  });
+}
 
 /** The link a run-ended file starts its stage over, or null for a same-item start. */
 function installedLink(file: OnBinding): InstalledArrow['linked'] {
@@ -88,6 +115,8 @@ async function installedArrows(
     const entry = {
       file: file.file,
       sourceInstanceId: file.sourceInstanceId,
+      resource: file.binding.resource,
+      capacity: file.binding.capacity ?? null,
       from,
       launchWorkflow,
       linked: installedLink(file),
@@ -156,11 +185,12 @@ export async function readPackGraph(
   );
   const touches = (name: string): boolean => own.has(name);
   const copies = await packCopies(discovered, liveSourceRoots(source), packKey);
+  const installed = await installedArrows(cwd, touches, deps);
   const graph = buildPackGraph({
     packKey,
     stages,
     declared,
-    installed: await installedArrows(cwd, touches, deps),
+    installed,
     workflows: [...discovered.workflows, ...(discovered.support ?? [])].map(e => e.workflow),
     discoveryErrors: discovered.errors,
   });
@@ -183,5 +213,6 @@ export async function readPackGraph(
     document: read === null || read.document === null ? null : { path: read.document, problems },
     groups: read === null || problems.length > 0 ? [] : read.groups,
     ...(await packSettings(cwd, packKey, workflows)),
+    capacity: await packCapacity(installed, deps),
   };
 }

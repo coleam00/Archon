@@ -231,6 +231,22 @@ export const packGraphSchema = z.object({
    * or its declaration has a problem: a group may name only stages that are `inFlow`.
    */
   groups: z.array(packGroupSchema),
+  /**
+   * How much runs at once: each resource the pack's registered arrows start work on, with
+   * the stages they start there. `declared` is the capacity those files name, null when
+   * none does. `limit` is the capacity the slot recorded at its last start, which is what
+   * admission applies, null for a slot nothing has started on. `held` is how many runs that have
+   * not ended hold a slot now.
+   */
+  capacity: z.array(
+    z.object({
+      resource: z.string(),
+      stages: z.array(z.string()),
+      declared: z.number().int().nullable(),
+      limit: z.number().int().nullable(),
+      held: z.number().int(),
+    })
+  ),
   /** The pack's declared settings with this project's values, in declaration order. */
   settings: z.array(packGraphSettingSchema),
   /**
@@ -414,6 +430,9 @@ function declaredFrom(binding: PackBinding): string | undefined {
 export interface InstalledArrow {
   file: string;
   sourceInstanceId: string;
+  /** The resource the file's starts take a slot of, and the capacity it declares for it. */
+  resource: string;
+  capacity: number | null;
   from: PackGraphArrowFrom;
   launchWorkflow: string;
   /**
@@ -690,7 +709,10 @@ function inFlowOrder(input: GraphInput, arrows: readonly PackGraphArrow[]): Stag
  */
 export function buildPackGraph(
   input: GraphInput
-): Omit<PackGraph, 'loaded' | 'otherCopies' | 'document' | 'groups' | 'settings' | 'settingsFile'> {
+): Omit<
+  PackGraph,
+  'loaded' | 'otherCopies' | 'document' | 'groups' | 'settings' | 'settingsFile' | 'capacity'
+> {
   const arrows = graphArrows(input);
   // Only an outcome arrow starts something for an outcome; an asks arrow starts on answers.
   const started = new Set(

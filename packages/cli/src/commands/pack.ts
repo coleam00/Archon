@@ -26,6 +26,7 @@ import { loadConfig } from '@archon/core/config/config-loader';
 import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
 import { loadStoreSelection } from '@archon/core/config/store-selection';
 import * as codebaseDb from '@archon/core/db/codebases';
+import { listSlotOccupancy } from '@archon/core/db/resource-slots';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
@@ -770,6 +771,7 @@ async function packGraph(packKey: string, options: PackBindingsOptions): Promise
       loadConfig,
       providers: providerRegistry,
       triggersDirectory: getTriggersPath,
+      slotOccupancy: listSlotOccupancy,
       projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
       projectOf: cwd => registeredProjectForPath(cwd, codebaseDb),
     },
