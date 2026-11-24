@@ -37,6 +37,7 @@ import {
   validateAssistantDefaults,
   validateGlobalConfigBlocks,
   validateModelBindingConfig,
+  validateProviderConcurrencyConfig,
   validateWorkflowContinuationConfig,
 } from './config-validation';
 import {
@@ -473,9 +474,12 @@ export async function updateGlobalConfig(updates: GlobalConfigUpdates): Promise<
 
     // Refuse to persist what the loaders would then refuse to read: a bad value
     // from the settings UI would otherwise brick every later config load, and a
-    // bad block already on disk must be repaired, not kept.
+    // bad block already on disk must be repaired, not kept. A write also refuses provider
+    // caps that admission would refuse; that check is write-only so a bad cap on disk
+    // refuses provider attempts without breaking config loads.
     validateGlobalConfigBlocks(merged, configPath);
     validateAssistantDefaults(merged, configPath);
+    validateProviderConcurrencyConfig(merged, configPath);
 
     // Serialize to YAML and write
     const yaml = Bun.YAML.stringify(merged);

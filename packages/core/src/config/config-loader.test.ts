@@ -12,6 +12,7 @@ import {
   updateGlobalConfig,
 } from './config-loader';
 import { InvalidConfigError } from './config-validation';
+import { loadProviderConcurrencyCaps } from './provider-concurrency';
 import {
   mockLogger,
   archonHome,
@@ -799,6 +800,53 @@ workflows:
 
       const written = Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string);
       expect(written).toEqual({ botName: 'MyBot', workflows: { quotaMaxAttempts: 3 } });
+    });
+
+    test.each([
+      ['claude', 0],
+      ['claude', -1],
+      ['claude', 1.5],
+      ['nope', 2],
+    ])('refuses to write provider cap %s: %p', async (id, cap) => {
+      mockFsReadFile.mockResolvedValue('botName: MyBot\n');
+
+      await expect(
+        updateGlobalConfig({ concurrency: { providers: { [id]: cap } } })
+      ).rejects.toThrow(new RegExp(`Invalid concurrency config.*concurrency\\.providers.*${id}`));
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    const fileWithBadCap = `
+botName: MyBot
+concurrency:
+  maxConversations: 5
+  providers:
+    claude: 0
+`;
+
+    test('refuses an unrelated edit that leaves an invalid provider cap in place', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadCap);
+
+      await expect(updateGlobalConfig({ botName: 'X' })).rejects.toThrow(
+        /Invalid concurrency config.*concurrency\.providers\.claude/
+      );
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+      // Loading stays permissive: only admission and writes refuse a bad cap.
+      await expect(loadGlobalConfig()).resolves.toMatchObject({ botName: 'MyBot' });
+    });
+
+    test('a patch that repairs the provider cap keeps every unrelated key and admission reads it', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadCap);
+
+      await updateGlobalConfig({ concurrency: { providers: { claude: 2 } } });
+
+      const yaml = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(Bun.YAML.parse(yaml)).toEqual({
+        botName: 'MyBot',
+        concurrency: { maxConversations: 5, providers: { claude: 2 } },
+      });
+      mockFsReadFile.mockResolvedValue(yaml);
+      expect(await loadProviderConcurrencyCaps()).toEqual(new Map([['claude', 2]]));
     });
 
     test('an edit to one provider does not overwrite a malformed entry for another', async () => {
