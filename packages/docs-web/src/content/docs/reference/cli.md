@@ -15,7 +15,7 @@ sidebar:
 
 Install Archon and add a provider; see the [Quickstart](/getting-started/quick-start/). From a source checkout, run `bun run cli` in the repository, or `bun link` inside `packages/cli` to put `archon` on your PATH; see [Installation](/getting-started/installation/#from-source).
 
-The `workflow` subcommands, except `attention`, `notice`, `test`, `wake`, `signal` and the `--item-of` forms of `runs`, `link`, `merged` and `landing`, plus `complete`, `validate` and `setup --scope project`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
+The `workflow` subcommands, except `attention`, `notice`, `test`, `wake`, `signal` and the `--item-of` forms of `runs`, `link`, `merged`, `landing` and `title`, plus `complete`, `validate` and `setup --scope project`, run inside a git repository; a subdirectory resolves to the repository root. A non-git directory also works when it is a registered [folder project](/guides/multi-repo-projects/), or on first use with `--folder`, which registers it and runs in place. Every other command works from any directory. See [Working directory](#working-directory) for how the project is resolved.
 
 ## Setup and maintenance
 
@@ -1517,6 +1517,28 @@ A run that merges through [`archon forge pr.merge`](/reference/forge/#workflow-h
 records the merge on its item by itself (`via: forge`) when the forge plugin reports the
 merge time (`merged_at`), so a later `workflow merged` for that item keeps the forge's
 record. With a plugin that omits it, nothing is recorded and the merge still succeeds.
+
+### `workflow title`
+
+Set what an item is called. Every read of the item returns the title beside the key:
+`workflow runs --item`, `workflow items`, the attention queue and the API. The engine gives
+it no meaning and never derives it from the key; whoever knows the title sets it, such as a
+pack's first stage from the issue it read.
+
+```bash
+archon workflow title --item issue-42 --text "Checkout fails for saved cards"
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--item <key>` | The item, in the project the working directory belongs to. A key nothing has named yet writes the item, so a title can be set before the item has a run |
+| `--item-of <run-id>` | In place of `--item`: the item the run is on (its root run's, for a `workflow:` child), in that item's project whatever the working directory. A run on no item exits 1 with `error: "no_item"` |
+| `--text <title>` | The title: one to 300 characters after trimming |
+| `--json` | Print the item as `{ id, projectKey, key, title }` |
+
+Setting it again replaces it. An item no one titled reads `title: null`. It exits 1 for an
+empty or too long title, a run on no item under `--item-of`, or a directory with no
+registered project. It needs the database store.
 
 ### `workflow landing`
 
@@ -3114,6 +3136,8 @@ Show how a pack's stages connect in this install: each stage with the outcomes i
 archon pack graph <pack> [--cwd <checkout>] [--workflow-source <dir>] [--json]
 ```
 
+- Stages are listed in the order work flows through them, which the pack declares nowhere else: along the outcome arrows from the stages its timer, event and fire bindings start, then from each stage no arrow leads to, then from each one only an answer leads to. Workflows of the pack that only other workflows include or call come last. `--json` gives each stage its `name` and `workflow`, its name within the pack, which a run of the stage records as `pack.workflow`; `entry`, true when a timer, event or fire binding starts it; and `inFlow`, true when it is an entry or an arrow leads to or from it, false for a workflow no item stands at. `entries` lists each timer, event or fire binding the pack declares with the stage it starts.
+- When the pack's manifest names a [document](/guides/publishing-plugins/#the-packs-document), `--json` carries `document` (`{ path, problems }`) and `groups`, how the document's frontmatter groups the stages for display: `[{ name, stages }]`. A group may name only stages that are `inFlow`, each once; a declaration with a problem yields no groups and the problem is listed. Without a document, `document` is null and `groups` is empty.
 - `<pack>` is discovered from `--cwd` as `pack bindings` discovers it, and the arrows are those of that checkout's project. With `--workflow-source`, the pack is discovered from there instead, as a binding's `launch.discoveryCwd` discovers it, including [a pack's own folder](#a-pack-folder-as-the-source); the arrows are still those of `--cwd`'s project.
 - The output starts with the copy of the pack it read and that copy's directory, then every other copy of the same pack in reach under another name, such as the installed `<owner>.<name>` beside a local `<name>`, with the name that reads it. For an installed copy found under `--workflow-source`, the hint says to drop the flag: a binding discovered from that source refuses an installed workflow. `--json` has them as `loaded` and `otherCopies`, each `{ source, key, dir }`.
 - Each active arrow is checked as a run is checked before it starts. A file that check refuses is shown as `[active, refused: <problem>]`: every run of its source stage on an item is refused until the file is fixed. A file whose `launch.cwd` no longer exists is shown refused too, because the end of a run never starts it.

@@ -239,13 +239,14 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--item <key>',
     description:
-      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on",
+      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow title': the item the title is set on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on",
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'workflow', subcommand: 'runs' },
       { command: 'workflow', subcommand: 'rule' },
       { command: 'workflow', subcommand: 'merged' },
       { command: 'workflow', subcommand: 'landing' },
+      { command: 'workflow', subcommand: 'title' },
       { command: 'workflow', subcommand: 'link' },
       { command: 'workflow', subcommand: 'wait' },
       { command: 'workflow', subcommand: 'cancel' },
