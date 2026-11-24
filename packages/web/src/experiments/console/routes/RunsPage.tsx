@@ -7,17 +7,12 @@ import { FilterChips, FILTER_ORDER, type Filter } from '../components/FilterChip
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { DraftRunCard } from '../components/DraftRunCard';
 import { PendingInputBanner } from '../components/PendingInputBanner';
-import {
-  askGroupKey,
-  NO_ITEM_ASKS,
-  type AnsweredAsk,
-  type ItemAsks,
-} from '../components/ItemAsksSection';
+import { useItemAsks, type ItemAsks } from '../components/ItemAsksSection';
 import { useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
-import { runDetailPath, type ItemAsk, type OwnerLostHolder, type Run } from '../primitives/run';
+import { runDetailPath, type OwnerLostHolder, type Run } from '../primitives/run';
 import { ensureUtc } from '../lib/format';
 import type { RunCounts } from '../skills/runs';
 import type { Project } from '../primitives/project';
@@ -478,8 +473,6 @@ function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
   // Pending-input runs the user has dismissed from the banner this session.
   // Not persisted — the run is still paused, so it re-surfaces on reload.
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
-  // Not persisted either: after a reload the list alone says what is still open.
-  const [answered, setAnswered] = useState<AnsweredAsk[]>([]);
   const { data: attentionRuns, error } = useEntity<skill.RunsAttention>(
     K.runsAttention,
     skill.listRunsNeedingAttention
@@ -528,7 +521,7 @@ function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
   const degraded = (attentionRuns?.degraded ?? []).map(report =>
     scope === 'all' ? report : { type: report.type, reason: report.reason }
   );
-  const inScope = (ask: ItemAsk): boolean => scope === 'all' || ask.project?.codebaseId === scope;
+  const itemAsks = useItemAsks(attentionRuns, scope);
   const ownerLost = useMemo(
     () =>
       (attentionRuns?.ownerLost ?? []).filter(
@@ -543,18 +536,7 @@ function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
     degraded,
     error,
     dismiss,
-    itemAsks: {
-      asks: (attentionRuns?.asks ?? []).filter(inScope),
-      answered: answered.filter(record => inScope(record.ask)),
-      answerRefusals: attentionRuns?.answerRefusals ?? NO_ITEM_ASKS.answerRefusals,
-      itemIds: attentionRuns?.itemIds ?? NO_ITEM_ASKS.itemIds,
-      onAnswered: record => {
-        setAnswered(prev => [...prev.filter(r => r.ask.ref !== record.ask.ref), record]);
-      },
-      onDismissItem: groupKey => {
-        setAnswered(prev => prev.filter(record => askGroupKey(record.ask) !== groupKey));
-      },
-    },
+    itemAsks,
   };
 }
 

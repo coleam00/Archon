@@ -27,9 +27,11 @@ interface LinkRow extends ActColumns {
   from_item_id: string;
   from_project_key: string;
   from_key: string;
+  from_title: string | null;
   to_item_id: string;
   to_project_key: string;
   to_key: string;
+  to_title: string | null;
   ended_at: string | Date | null;
   ended_by_declared: string | null;
   ended_by_user_id: string | null;
@@ -42,8 +44,18 @@ function linkRead(row: LinkRow): ItemLinkRead {
   const parsed = itemLinkSchema.safeParse({
     id: row.id,
     kind: row.kind,
-    from: { id: row.from_item_id, projectKey: row.from_project_key, key: row.from_key },
-    to: { id: row.to_item_id, projectKey: row.to_project_key, key: row.to_key },
+    from: {
+      id: row.from_item_id,
+      projectKey: row.from_project_key,
+      key: row.from_key,
+      title: row.from_title,
+    },
+    to: {
+      id: row.to_item_id,
+      projectKey: row.to_project_key,
+      key: row.to_key,
+      title: row.to_title,
+    },
     ...actRead(row),
     ended:
       row.ended_at === null
@@ -65,7 +77,7 @@ function linkRead(row: LinkRow): ItemLinkRead {
 }
 
 const LINKS_SELECT = `SELECT l.*, f.project_key AS from_project_key, f.key AS from_key,
-    t.project_key AS to_project_key, t.key AS to_key
+    f.title AS from_title, t.project_key AS to_project_key, t.key AS to_key, t.title AS to_title
   FROM remote_agent_item_links l
   JOIN remote_agent_items f ON f.id = l.from_item_id
   JOIN remote_agent_items t ON t.id = l.to_item_id`;

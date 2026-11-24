@@ -36,6 +36,7 @@ export { workflowRuleCommand, WORKFLOW_RULE_USAGE } from './workflow-rule';
 export { workflowItemsCommand, WORKFLOW_ITEMS_USAGE } from './workflow-items';
 export { workflowMergedCommand, WORKFLOW_MERGED_USAGE } from './workflow-merged';
 export { workflowLandingCommand, WORKFLOW_LANDING_USAGE } from './workflow-landing';
+export { workflowTitleCommand, WORKFLOW_TITLE_USAGE } from './workflow-title';
 export { workflowLinkCommand, WORKFLOW_LINK_USAGE } from './workflow-link';
 export { workflowAnswerRefCommand, WORKFLOW_ANSWER_REF_USAGE } from './workflow-answer-ref';
 export {

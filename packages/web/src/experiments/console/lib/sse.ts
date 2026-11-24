@@ -63,6 +63,8 @@ export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
       if (ev.type === 'workflow_status' || ev.type === 'dag_node') {
         // Refetch every runs:* key (runs:all, runs:project:<id>).
         invalidate('runs');
+        // A run that starts, pauses or ends may move its item on an open board; a node does not.
+        if (ev.type === 'workflow_status') invalidate('board');
         // Node outputs record metrics, so every metrics:* report may have changed.
         invalidate('metrics');
         // Also refresh any open run-detail cache so the detail page picks
@@ -108,6 +110,8 @@ export function useAttentionStreamSSE(): void {
       flushTimer = setTimeout(() => {
         flushTimer = null;
         invalidate(K.runsAttention);
+        // An ask that opens or closes changes where its item stands, and no run changed.
+        invalidate('board');
       }, 100);
     };
     const open = (): void => {

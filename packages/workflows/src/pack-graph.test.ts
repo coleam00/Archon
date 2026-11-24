@@ -7,7 +7,11 @@ import {
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
-import { packAsksSettledBindingSchema, packRunEndedBindingSchema } from './schemas/pack-bindings';
+import {
+  packAsksSettledBindingSchema,
+  packFireBindingSchema,
+  packRunEndedBindingSchema,
+} from './schemas/pack-bindings';
 
 function decide(values: string[]) {
   return {
@@ -142,6 +146,66 @@ describe('a pack graph', () => {
       ['b', true, false, ['done', 'stuck']],
       ['c', false, true, ['shipped']],
     ]);
+  });
+
+  test('stages come in the order work flows through them, whatever order they were found in', () => {
+    const answered = packAsksSettledBindingSchema.parse({
+      workflow: 'close',
+      resource: 'close',
+      overlap: 'queue',
+      asks_settled: { workflow: 'check', settled: 'answered', option: 'drop' },
+    });
+    // Found alphabetically. Work enters at `intake`, which a later stage also leads back to,
+    // and `close` starts only on an answer.
+    const found = stages(
+      stage('build', ['built']),
+      stage('check', ['pass', 'again'], true),
+      stage('close', ['closed']),
+      stage('intake', ['ready'])
+    );
+    const declared = {
+      'check-after-build': runEnded('check', 'build', 'built'),
+      'intake-again': runEnded('intake', 'check', 'again'),
+      'build-after-intake': runEnded('build', 'intake', 'ready'),
+      dropped: answered,
+    };
+    const order = (bindings: GraphInput['declared']) =>
+      graphOf(found, { declared: bindings, installed: [] }).stages.map(s => s.workflow);
+
+    // Every stage but `close` is on the cycle, so only a binding that starts one says where
+    // work enters.
+    const enter = packFireBindingSchema.parse({
+      workflow: 'intake',
+      resource: 'intake',
+      overlap: 'queue',
+    });
+    expect(order({ ...declared, enter })).toEqual(['intake', 'build', 'check', 'close']);
+    // Work flows through a stage a binding starts or an arrow touches; a workflow of the pack
+    // that only other workflows call is not one.
+    const withHelper = graphOf(
+      stages(
+        stage('build', ['built']),
+        stage('check', ['pass', 'again'], true),
+        stage('close', ['closed']),
+        stage('intake', ['ready']),
+        stage('lint', ['ok'])
+      ),
+      {
+        declared: { ...declared, enter },
+        installed: [],
+      }
+    );
+    expect(withHelper.entries).toEqual([{ binding: 'enter', kind: 'fire', stage: 'intake' }]);
+    expect(withHelper.stages.map(s => [s.workflow, s.entry, s.inFlow])).toEqual([
+      ['intake', true, true],
+      ['build', false, true],
+      ['check', false, true],
+      ['close', false, true],
+      ['lint', false, false],
+    ]);
+    // Without the cycle, the stage no arrow leads to is the entry.
+    const { 'intake-again': _back, ...chain } = declared;
+    expect(order(chain)).toEqual(['intake', 'build', 'check', 'close']);
   });
 
   test('an asks arrow is active with its file and declared, inactive without one', () => {
@@ -548,6 +612,8 @@ describe('a pack graph', () => {
       ...graph,
       loaded: [],
       otherCopies: [],
+      document: null,
+      groups: [],
       laterField: 1,
       stages: graph.stages.map(s => ({ ...s, laterField: true })),
     };

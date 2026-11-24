@@ -18,7 +18,16 @@ export const codebaseSchema = codebaseRowSchema
   .openapi('Codebase');
 
 /** GET /api/codebases response. */
-export const codebaseListResponseSchema = z.array(codebaseSchema).openapi('CodebaseListResponse');
+export const codebaseListResponseSchema = z
+  .array(
+    codebaseSchema.extend({
+      item_packs: z.array(z.string()).openapi({
+        description:
+          'The keys of the workflow packs with a run on an item of this project, as GET /api/packs/{pack}/graph takes them. Empty when the project has no item on a pack stage.',
+      }),
+    })
+  )
+  .openapi('CodebaseListResponse');
 
 /** Path params for routes with :id (codebase ID). */
 export const codebaseIdParamsSchema = z.object({ id: z.string() });

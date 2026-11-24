@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { Link } from 'react-router';
 import { AttentionAnswerForm } from './AttentionAnswerPanel';
 import * as skill from '../skills';
@@ -16,6 +16,11 @@ export interface AnsweredAsk {
 /** The item an ask belongs to; an ask whose item is gone stands on its own. */
 export function askGroupKey(ask: ItemAsk): string {
   return ask.item?.id ?? ask.ref;
+}
+
+/** The element id of an item's asks, for a link to them from elsewhere on the page. */
+export function itemAsksAnchor(groupKey: string): string {
+  return `item-asks-${groupKey}`;
 }
 
 /** What the pending-input banner shows of asks left on items, and how it changes it. */
@@ -40,6 +45,28 @@ export const NO_ITEM_ASKS: ItemAsks = {
   onAnswered: () => undefined,
   onDismissItem: () => undefined,
 };
+
+/**
+ * The asks left on items in `scope` (a project id, or `all`), from the attention list, with
+ * the ones answered in this browser session. Answered asks are not persisted: after a
+ * reload the list alone says what is still open.
+ */
+export function useItemAsks(attention: RunsAttention | undefined, scope: string): ItemAsks {
+  const [answered, setAnswered] = useState<AnsweredAsk[]>([]);
+  const inScope = (ask: ItemAsk): boolean => scope === 'all' || ask.project?.codebaseId === scope;
+  return {
+    asks: (attention?.asks ?? []).filter(inScope),
+    answered: answered.filter(record => inScope(record.ask)),
+    answerRefusals: attention?.answerRefusals ?? NO_ITEM_ASKS.answerRefusals,
+    itemIds: attention?.itemIds ?? NO_ITEM_ASKS.itemIds,
+    onAnswered: record => {
+      setAnswered(prev => [...prev.filter(r => r.ask.ref !== record.ask.ref), record]);
+    },
+    onDismissItem: groupKey => {
+      setAnswered(prev => prev.filter(record => askGroupKey(record.ask) !== groupKey));
+    },
+  };
+}
 
 interface AskGroup {
   key: string;
@@ -89,6 +116,7 @@ export function ItemAsksSection({
         return (
           <article
             key={group.key}
+            id={itemAsksAnchor(group.key)}
             data-item-asks={group.key}
             className="shrink-0 rounded border border-warning/40 bg-surface py-3 pl-4 pr-3"
           >
