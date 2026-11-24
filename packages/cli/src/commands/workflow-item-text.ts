@@ -299,7 +299,8 @@ function itemFactLines(read: ItemRead): string[] {
  * start is told admits it.
  */
 export function itemReadLines(read: ItemRead, served: ReadonlySet<string>): string[] {
-  const lines = [`Item ${read.item.key} (${read.item.projectKey})`, ...itemFactLines(read)];
+  const title = read.item.title == null ? '' : `: ${read.item.title}`;
+  const lines = [`Item ${read.item.key} (${read.item.projectKey})${title}`, ...itemFactLines(read)];
   lines.push('', 'Runs:');
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));

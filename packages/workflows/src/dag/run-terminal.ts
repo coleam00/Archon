@@ -11,7 +11,7 @@ import type {
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
 import { SUBRUN_METADATA_KEYS } from '../schemas';
-import { keptAsksResult, stoppedItem } from './item-completion';
+import { itemEnding, keptAsksResult } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import {
   RESULT_COMMIT_METADATA_KEY,
@@ -143,7 +143,7 @@ export async function finishRun(
     completionResult(returned, starts),
     asksCheckout,
     result,
-    stoppedItem(ctx, returned, starts, result)
+    itemEnding(ctx, returned, starts, result)
   );
   await reportNoOutcome(ctx, outcome);
   // The receipts the write wrote, which include those it resolved for linked starts.

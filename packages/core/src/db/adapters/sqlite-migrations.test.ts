@@ -210,6 +210,32 @@ describe('SqliteAdapter upgrade path', () => {
   });
 });
 
+describe('item titles on an existing database', () => {
+  test('an items table from before titles gains the column, and its items read untitled', async () => {
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
+    try {
+      raw.run('ALTER TABLE remote_agent_items DROP COLUMN title');
+      raw.run("INSERT INTO remote_agent_items (project_key, key) VALUES ('acme/web', 'issue-1')");
+    } finally {
+      raw.close();
+    }
+
+    // Twice: the second open finds the column there.
+    await new SqliteAdapter(path).close();
+    const upgraded = new SqliteAdapter(path);
+    try {
+      const items = await upgraded.query<{ key: string; title: string | null }>(
+        'SELECT key, title FROM remote_agent_items'
+      );
+      expect(items.rows).toEqual([{ key: 'issue-1', title: null }]);
+    } finally {
+      await upgraded.close();
+    }
+  });
+});
+
 describe('migrateColumns on an existing database', () => {
   let db: SqliteAdapter;
   let currentDbPath = '';

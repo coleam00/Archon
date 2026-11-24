@@ -420,7 +420,7 @@ const NO_GIT_COMMANDS = [
 ];
 
 /** Item reads and writes that take their item and project from `--item-of <run-id>`. */
-const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing'];
+const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing', 'title'];
 
 function requiresGitRepo({ command, subcommand, values }: CliRouteContext): boolean {
   // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
@@ -568,6 +568,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowMerged(route);
         case 'landing':
           return await workflowRoutes.runWorkflowLanding(route);
+        case 'title':
+          return await workflowRoutes.runWorkflowTitle(route);
         case 'link':
           return await workflowRoutes.runWorkflowLink(route);
         default:
