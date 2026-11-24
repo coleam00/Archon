@@ -155,6 +155,16 @@ const read: ItemRead = {
     branch: 'feat/order',
     from: { kind: 'part_of', item: { id: 'wo-row', projectKey: 'acme/web', key: 'WO-12' } },
   },
+  ended: {
+    kind: 'ended',
+    id: 'end-1',
+    reason: 'Done by hand elsewhere.',
+    at: '2026-11-01T12:00:00.000Z',
+    via: 'cli',
+    by: { declared: 'alice' },
+    fromRun: null,
+    runId: 'run-done-1',
+  },
   merged: {
     change: 'https://github.com/acme/web/pull/12',
     commit: null,
@@ -176,6 +186,9 @@ test('an item read prints its runs, open questions and answers', () => {
   const text = lines.join('\n');
   expect(text).toContain('Merged 2026-11-01T11:00Z: https://github.com/acme/web/pull/12');
   expect(text).toContain('Lands on: feat/order (part_of WO-12)');
+  expect(text).toContain(
+    'Ended 2026-11-01T12:00Z by alice (self-declared) via cli: Done by hand elsewhere.'
+  );
   expect(text).toContain('result: archon workflow get run-done-1 --json, holds at a1b2c3d4e5f6');
   expect(text).toContain('Ship the fix?');
   expect(text).toContain('archon workflow approve run-ask-1 --occurrence gate-3');

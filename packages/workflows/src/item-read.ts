@@ -44,6 +44,7 @@ import {
   type ItemMergeDegraded,
 } from './schemas/item-merge';
 import { itemLandingUnresolvedSchema, resolvedItemLandingSchema } from './schemas/item-landing';
+import { itemEndDegradedSchema, itemEndSchema } from './schemas/item-end';
 import { ItemLandingUnresolvedError, resolveItemLanding } from './item-landing';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import { parseRunUsage } from './schemas/run-usage';
@@ -326,7 +327,10 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * branch a fresh run on the item is cut from and proposes against, and where it came from:
  * the item's own record, or the nearest item it is `part_of`. Null when neither records
  * one, or when it cannot be resolved. The read does not check that the branch is on the
- * remote; a run does when it starts. `waits` are what the item waits for outside Archon:
+ * remote; a run does when it starts. `ended` is the operator's end of the item while it
+ * holds (`schemas/item-end.ts`): the item is at rest, and a newer run, a resume of its last
+ * run, or a start waiting in `queued` or `held` opens it again. Null when the item was never ended, the end no longer holds, or
+ * its row could not be read (`end_unreadable`, by `endId`). `waits` are what the item waits for outside Archon:
  * the open waits completed runs left on it (`returns.waits`), each with when it opened and
  * fell due, and `overdue` once that time has passed. An overdue set is also among
  * `questions`. `startLimits` are the start limits of the bindings that started work on the
@@ -349,6 +353,7 @@ export const itemReadSchema = z.object({
   links: z.array(itemReadLinkSchema),
   merged: itemMergeSchema.nullable(),
   landing: resolvedItemLandingSchema.nullable(),
+  ended: itemEndSchema.nullable(),
   degraded: z.array(
     z.discriminatedUnion('reason', [
       attentionDegradedSchema,
@@ -356,6 +361,7 @@ export const itemReadSchema = z.object({
       itemMergeDegradedSchema,
       itemLinkDegradedSchema,
       itemLandingUnresolvedSchema,
+      itemEndDegradedSchema,
     ])
   ),
 });
@@ -370,6 +376,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listItemRulings'
       | 'getItemMerge'
       | 'getItemLanding'
+      | 'getHoldingItemEnd'
       | 'listItemLinks'
       | 'listItemAsks'
       | 'listOpenItemWaits'
@@ -681,7 +688,14 @@ async function readLanding(source: ItemReadSource, item: WorkflowItem) {
   }
 }
 
-/** The facts recorded on the item itself: its rulings, its links, its merge and its landing. */
+/** The end that holds on the item; an unreadable one is reported, not thrown. */
+async function readEnd(source: ItemReadSource, itemId: string) {
+  const end = await source.store.getHoldingItemEnd(itemId);
+  if (end !== null && 'type' in end) return { ended: null, degraded: [end] };
+  return { ended: end, degraded: [] };
+}
+
+/** The facts recorded on the item itself: its rulings, its links, its merge, its landing and its end. */
 async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
   const itemId = item.id;
   const rulings: ItemRuling[] = [];
@@ -697,12 +711,20 @@ async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
   const merge = await source.store.getItemMerge(itemId);
   const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
   const landing = await readLanding(source, item);
+  const end = await readEnd(source, itemId);
   return {
     rulings,
     links,
     merged: merge !== null && !('type' in merge) ? merge : null,
     landing: landing.landing,
-    degraded: [...unreadableRulings, ...unreadableMerge, ...unreadableLinks, ...landing.degraded],
+    ended: end.ended,
+    degraded: [
+      ...unreadableRulings,
+      ...unreadableMerge,
+      ...unreadableLinks,
+      ...landing.degraded,
+      ...end.degraded,
+    ],
   };
 }
 
@@ -803,6 +825,8 @@ export async function assembleItemRead(
     links: facts.links,
     merged: facts.merged,
     landing: facts.landing,
+    // A start waiting on the item opens it in the read before its run exists.
+    ended: waiting.length === 0 && held.length === 0 ? facts.ended : null,
     // A paused item run the store could not read is in both reports, and an unreadable
     // open ask in the queue's and the item's; list each run once.
     degraded: [

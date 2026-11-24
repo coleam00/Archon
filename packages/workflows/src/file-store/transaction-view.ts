@@ -86,6 +86,8 @@ export type TransactionView = Omit<
   | 'listItemRulings'
   | 'recordItemRuling'
   | 'withdrawItemRuling'
+  | 'getHoldingItemEnd'
+  | 'recordItemEnd'
   | 'listItemsInWindow'
   | 'getItemMerge'
   | 'recordItemMerge'

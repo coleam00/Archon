@@ -33,6 +33,7 @@ export {
 export { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
 export { workflowNoticeCommand, WORKFLOW_NOTICE_USAGE } from './workflow-notice';
 export { workflowRuleCommand, WORKFLOW_RULE_USAGE } from './workflow-rule';
+export { workflowEndCommand, WORKFLOW_END_USAGE } from './workflow-end';
 export { workflowItemsCommand, WORKFLOW_ITEMS_USAGE } from './workflow-items';
 export { workflowMergedCommand, WORKFLOW_MERGED_USAGE } from './workflow-merged';
 export { workflowLandingCommand, WORKFLOW_LANDING_USAGE } from './workflow-landing';

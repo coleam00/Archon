@@ -377,6 +377,11 @@ export async function createFileWorkflowStore(
     withdrawItemRuling: async () => {
       throw new FileStoreUnsupportedError('items');
     },
+    // An end belongs to an item: none holds here, and none can be recorded.
+    getHoldingItemEnd: async () => null,
+    recordItemEnd: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listItemsInWindow: async () => {
       throw new FileStoreUnsupportedError('items');
     },

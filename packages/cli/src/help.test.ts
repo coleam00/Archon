@@ -190,6 +190,10 @@ Commands:
   workflow rule --item <key> -- <text>
                              Record a ruling on an item of this project: a decision made without a question.
                              Every later read of the item shows it with the answers; prints the ruling's id
+  workflow end --item <key> -- <reason>
+                             End an item of this project: nothing more will happen on it. Its stop leaves attention and
+                             reads show who ended it and why; a newer run or start opens it again. Refused while anything
+                             on the item is active or waiting, naming it
   workflow link --item <key> --kind <kind> --to <key>
                              Record a link from one item of this project to another: depends_on, part_of or
                              duplicate_of, read from --item to --to. Recording it again leaves one link; prints the link's id
@@ -303,15 +307,15 @@ Options:
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
                              and attention label)
-  --as <name>                For 'workflow approve/reject/respond/answer/rule/link/pause': the name the answerer declares for itself,
-                             recorded with an attention wait's answer, a ruling, a link or a pause as a claim (never checked; refused at a gate)
+  --as <name>                For 'workflow approve/reject/respond/answer/rule/end/link/pause': the name the answerer declares for itself,
+                             recorded with an attention wait's answer, a ruling, an end, a link or a pause as a claim (never checked; refused at a gate)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --no-wait                  For 'workflow run': refuse instead of waiting, naming the resource when the workflow's
                              resource is full, or the holding run when another run of the workflow on the same --item
                              is not terminal (with or without a resource:), or who set the install hold while it is set
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
   --no-item                  For 'trigger fire': start the run on no item instead of inheriting the firing run's item
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20); for 'workflow items': items a page (default 20, at most 100)

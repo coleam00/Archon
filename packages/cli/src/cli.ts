@@ -562,6 +562,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowNotice(route);
         case 'rule':
           return await workflowRoutes.runWorkflowRule(route);
+        case 'end':
+          return await workflowRoutes.runWorkflowEnd(route);
         case 'items':
           return await workflowRoutes.runWorkflowItems(route);
         case 'merged':

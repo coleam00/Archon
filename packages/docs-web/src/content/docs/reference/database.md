@@ -330,6 +330,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `item_id`, `text`, `by_declared` or `by_user_id` (who, when they said), `via` (the surface), `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
   - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
 
+- **`remote_agent_item_ends`** - Ends of an item: an operator's statement that nothing more will happen on it (`archon workflow end`)
+  - Append-only: no row is updated or deleted, and nothing writes one by itself. `seq` is the recording order and `id` is text in both dialects
+  - `item_id`, `reason`, `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at`, as for rulings
+  - `run_id` and `run_completed_at` copy the item's last run, if it had one, when the end was recorded, with `run_completed_at` in the type of the run's `completed_at`. An end holds while that run is still the item's last with the same `completed_at`, so a newer run or a resume voids it without a write. A binary that predates the table never reads it and shows the item as before
 - **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
   - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
   - `change` (the forge's identity of the merged change, never parsed), `merge_commit` (nullable), `merged_at` (the forge's merge time), `via`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`

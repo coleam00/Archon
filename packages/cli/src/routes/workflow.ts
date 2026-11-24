@@ -645,6 +645,16 @@ export async function runWorkflowRule(route: WorkflowRoute): Promise<number> {
   return await commands.workflowRuleCommand(route.host, effectiveCwd, request, json);
 }
 
+export async function runWorkflowEnd(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  const item = values.item as string | undefined;
+  const as = values.as as string | undefined;
+  const reason = positionals[2];
+  if (item === undefined || !reason?.trim() || positionals[3] !== undefined)
+    return await fail(json, commands.WORKFLOW_END_USAGE);
+  return await commands.workflowEndCommand(route.host, effectiveCwd, { item, reason, as }, json);
+}
+
 export async function runWorkflowItems(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, commands, effectiveCwd } = route;
   if (positionals[2] !== undefined) return await fail(json, commands.WORKFLOW_ITEMS_USAGE);
@@ -795,6 +805,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, pause, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, link, items, merged, landing, cleanup, reset-sessions, event, notice, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, pause, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, end, link, items, merged, landing, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

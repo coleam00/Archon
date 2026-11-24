@@ -1,7 +1,8 @@
 // @archon-test-isolated
 /**
  * The item commands against a real SQLite store, in-process: `workflow run --item` and
- * `--supersedes`, `workflow runs --item` and `--item-of`, `workflow rule`, `workflow merged`,
+ * `--supersedes`, `workflow runs --item` and `--item-of`, `workflow rule`, `workflow end`,
+ * `workflow merged`,
  * the merge record an applied forge `pr.merge` writes,
  * `workflow items` and `workflow link`. The store's conformance tests prove what is
  * recorded; these prove each command's request, refusal codes and JSON and text output.
@@ -31,6 +32,8 @@ import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
 import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
+import { itemEndSchema } from '@archon/workflows/schemas/item-end';
+import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
 import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
 import { recordRunMerge } from './forge-merge-record';
@@ -41,6 +44,8 @@ import { workflowLandingCommand } from './workflow-landing';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
+import { workflowEndCommand } from './workflow-end';
+import { workflowAttentionCommand } from './workflow-attention';
 import { workflowRunCommand } from './workflow-run-owned';
 
 mock.module('@archon/core/services/title-generator', () => ({
@@ -305,6 +310,91 @@ test.serial(
         .filter(row => row.continues !== null)
         .map(({ continues, item_key }) => ({ continues, item_key }))
     ).toEqual([{ continues: bare.id, item_key: 'item-2' }]);
+  }
+);
+
+/** A run of `item-proof` on `key`: still running, or ended at once, stopping the item or failed. */
+async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Promise<string> {
+  let id = '';
+  const result = await captureWorkflowCommand(archonHome, async host => {
+    const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
+    if (!codebase) throw new Error('The seed run did not register the project');
+    const seeded = await host.deps.store.createWorkflowRun({
+      workflow_name: 'item-proof',
+      user_message: 'go',
+      codebase_id: codebase.id,
+      working_path: projectRoot,
+      item_key: key,
+    });
+    id = seeded.id;
+    await host.deps.store.claimPendingWorkflowRun(seeded.id, projectRoot);
+    if (end === 'failed') await host.deps.store.failWorkflowRun(seeded.id, 'boom');
+    else if (end === 'stopped')
+      await host.deps.store.completeWorkflowRun(
+        seeded.id,
+        { duration_ms: 1 },
+        itemStoppedMetadata('Folded into another item.'),
+        { outcome: { kind: 'enum', value: 'fold' } }
+      );
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return id;
+}
+
+test.serial(
+  'workflow end takes a stopped item out of attention, and the item read says who ended it and why',
+  async () => {
+    const attention = async () =>
+      (
+        await invoke(host =>
+          workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+        )
+      ).stdout;
+    const stopped = await seedEnded('item-stop', 'stopped');
+    expect(await attention()).toContain(`stopped:${stopped}`);
+
+    const end = (key: string, json: boolean) =>
+      invoke(host =>
+        workflowEndCommand(
+          host,
+          projectRoot,
+          { item: key, reason: 'A duplicate of item-2.', as: 'triage-agent' },
+          json,
+          callerEnv
+        )
+      );
+    const ended = itemEndSchema.parse(succeeded(await end('item-stop', true)));
+    expect(ended).toMatchObject({ runId: stopped, by: { declared: 'triage-agent' }, via: 'cli' });
+    expect(await attention()).not.toContain(`stopped:${stopped}`);
+    expect((await readItemJson('item-stop')).ended).toMatchObject({
+      reason: 'A duplicate of item-2.',
+      by: { declared: 'triage-agent' },
+      via: 'cli',
+      at: ended.at,
+    });
+
+    // A failed item is ended by its key alone.
+    const failed = await seedEnded('item-fail', 'failed');
+    const text = await end('item-fail', false);
+    expect(text.exitCode, text.stderr).toBe(0);
+    expect(text.stdout).toContain('Item item-fail ended.');
+    expect((await readItemJson('item-fail')).ended).toMatchObject({ runId: failed });
+
+    // A new run opens the item again; while it runs, ending it is refused and names it.
+    const again = await seedEnded('item-stop', 'stopped');
+    expect((await readItemJson('item-stop')).ended).toBeNull();
+    expect(await attention()).toContain(`stopped:${again}`);
+    const running = await seedEnded('item-stop', 'running');
+    const refused = await end('item-stop', true);
+    expect(refused.exitCode).toBe(1);
+    expect(JSON.parse(refused.stdout)).toMatchObject({
+      ok: false,
+      error: 'run',
+      blocker: { kind: 'run', runId: running, status: 'running' },
+    });
+    const unknown = await end('item-none', true);
+    expect(unknown.exitCode).toBe(1);
+    expect(JSON.parse(unknown.stdout)).toEqual({ ok: false, error: 'not_found' });
   }
 );
 
