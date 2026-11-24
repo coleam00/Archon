@@ -31,6 +31,8 @@ import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
 import { discoverInstalledForgePlugins } from './forge';
 import { PLUGIN_MANIFEST_FILE, unknownManifestKeys } from '@archon/plugin-manifest';
+import { loadPackDocument } from '@archon/workflows/pack-document';
+import { packWorkflowName } from '@archon/workflows/pack-graph';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -116,6 +118,12 @@ export async function validateWorkflowsCommand(
   }
   // The manifest is not a workflow, so the name filter does not apply to it.
   filteredResults.push(...(await unknownManifestKeyResults(pluginRoot)));
+  filteredResults.push(
+    ...(await packDocumentResults(
+      pluginRoot,
+      results.map(result => result.workflowName)
+    ))
+  );
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -192,6 +200,36 @@ async function collectWorkflowResults(
   }
 
   return results;
+}
+
+/**
+ * What is wrong with the document the pack's manifest names: it is missing, its frontmatter
+ * does not read, or a group names something that is not a workflow of the pack. Whether a
+ * named workflow is a stage of the flow depends on the bindings an install has, which
+ * `archon pack graph` checks.
+ */
+async function packDocumentResults(
+  cwd: string,
+  workflowNames: readonly string[]
+): Promise<WorkflowValidationResult[]> {
+  const read = await loadPackDocument(cwd);
+  if (read.document === null) return [];
+  const unknown = read.groups.flatMap(group =>
+    group.stages
+      .filter(stage => packWorkflowName(workflowNames, stage) === undefined)
+      .map(stage => `group '${group.name}' names '${stage}', which is not a workflow of the pack`)
+  );
+  const issues = [...read.problems, ...unknown].map(
+    (message): ValidationIssue => ({
+      level: 'error',
+      field: 'pack_document',
+      message,
+      hint: `Fix ${read.document ?? 'the document'} or the manifest's document path.`,
+    })
+  );
+  return issues.length > 0
+    ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
+    : [];
 }
 
 /**

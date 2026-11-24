@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { Link } from 'react-router';
 import { AttentionAnswerForm } from './AttentionAnswerPanel';
 import * as skill from '../skills';
@@ -16,6 +16,11 @@ export interface AnsweredAsk {
 /** The item an ask belongs to; an ask whose item is gone stands on its own. */
 export function askGroupKey(ask: ItemAsk): string {
   return ask.item?.id ?? ask.ref;
+}
+
+/** The element id of an item's asks, for a link to them from elsewhere on the page. */
+export function itemAsksAnchor(groupKey: string): string {
+  return `item-asks-${groupKey}`;
 }
 
 /** What the pending-input banner shows of asks left on items, and how it changes it. */
@@ -40,6 +45,28 @@ export const NO_ITEM_ASKS: ItemAsks = {
   onAnswered: () => undefined,
   onDismissItem: () => undefined,
 };
+
+/**
+ * The asks left on items in `scope` (a project id, or `all`), from the attention list, with
+ * the ones answered in this browser session. Answered asks are not persisted: after a
+ * reload the list alone says what is still open.
+ */
+export function useItemAsks(attention: RunsAttention | undefined, scope: string): ItemAsks {
+  const [answered, setAnswered] = useState<AnsweredAsk[]>([]);
+  const inScope = (ask: ItemAsk): boolean => scope === 'all' || ask.project?.codebaseId === scope;
+  return {
+    asks: (attention?.asks ?? []).filter(inScope),
+    answered: answered.filter(record => inScope(record.ask)),
+    answerRefusals: attention?.answerRefusals ?? NO_ITEM_ASKS.answerRefusals,
+    itemIds: attention?.itemIds ?? NO_ITEM_ASKS.itemIds,
+    onAnswered: record => {
+      setAnswered(prev => [...prev.filter(r => r.ask.ref !== record.ask.ref), record]);
+    },
+    onDismissItem: groupKey => {
+      setAnswered(prev => prev.filter(record => askGroupKey(record.ask) !== groupKey));
+    },
+  };
+}
 
 interface AskGroup {
   key: string;
@@ -78,9 +105,31 @@ export function ItemAsksSection({
   showProject,
   onAnswered,
   onDismissItem,
-}: ItemAsks & { showProject: boolean }): ReactElement | null {
+  compact,
+}: ItemAsks & {
+  showProject: boolean;
+  /**
+   * One row an ask: its item, the question on a line, the recommended option as a button
+   * and a link to the full ask at `openAt`, a page that draws this section in full.
+   */
+  compact?: { openAt: string };
+}): ReactElement | null {
   const groups = groupAsks(asks, answered);
   if (groups.length === 0) return null;
+  if (compact !== undefined)
+    return (
+      <ul className="flex flex-col gap-2">
+        {asks.map(ask => (
+          <CompactAsk
+            key={ask.ref}
+            ask={ask}
+            refusal={answerRefusals[ask.ref]}
+            onAnswered={onAnswered}
+            openAt={`${compact.openAt}#${itemAsksAnchor(askGroupKey(ask))}`}
+          />
+        ))}
+      </ul>
+    );
   return (
     <>
       {groups.map(group => {
@@ -89,6 +138,8 @@ export function ItemAsksSection({
         return (
           <article
             key={group.key}
+            ref={scrollToWhenLinked}
+            id={itemAsksAnchor(group.key)}
             data-item-asks={group.key}
             className="shrink-0 rounded border border-warning/40 bg-surface py-3 pl-4 pr-3"
           >
@@ -137,6 +188,92 @@ export function ItemAsksSection({
   );
 }
 
+/** A link from another page names an item's asks in the hash; the page scrolls inside itself. */
+function scrollToWhenLinked(element: HTMLElement | null): void {
+  if (element !== null && window.location.hash === `#${element.id}`)
+    element.scrollIntoView({ block: 'start' });
+}
+
+/** Records the answer to an ask and refreshes the attention list. */
+async function answer(
+  ask: ItemAsk,
+  onAnswered: (record: AnsweredAsk) => void,
+  choose: string[],
+  text: string | undefined
+): Promise<void> {
+  await skill.answerAttentionItem(ask.ref, choose, text);
+  onAnswered({ ask, choose, text });
+  invalidate(K.runsAttention);
+}
+
+function CompactAsk({
+  ask,
+  refusal,
+  onAnswered,
+  openAt,
+}: {
+  ask: ItemAsk;
+  refusal: string | undefined;
+  onAnswered: (record: AnsweredAsk) => void;
+  openAt: string;
+}): ReactElement {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const recommended = ask.options.find(option => option.id === ask.recommendation?.option);
+  const choose = (option: string): void => {
+    setBusy(true);
+    setError(undefined);
+    answer(ask, onAnswered, [option], undefined)
+      .catch((e: unknown) => {
+        setError(e instanceof Error ? e.message : 'The answer was not recorded.');
+      })
+      .finally(() => {
+        setBusy(false);
+      });
+  };
+  const button = 'shrink-0 rounded border px-2 py-1 text-console-11';
+  return (
+    <li
+      data-ask-ref={ask.ref}
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-warning/40 bg-surface px-3 py-2"
+    >
+      <span className="min-w-0 flex-1 basis-64">
+        <span className="block truncate text-console-12 text-text-secondary">
+          {ask.item?.title ?? 'Item'}{' '}
+          <span className="font-mono text-console-11 text-text-tertiary">{ask.item?.key}</span>
+        </span>
+        <span className="block truncate text-sm text-text-primary">{ask.message}</span>
+        {error !== undefined || refusal !== undefined ? (
+          <span className="block text-console-11 text-error">{error ?? refusal}</span>
+        ) : null}
+      </span>
+      {recommended === undefined ? (
+        <span data-no-recommendation className="text-console-11 text-text-tertiary">
+          no recommendation
+        </span>
+      ) : (
+        <button
+          type="button"
+          data-recommended={recommended.id}
+          disabled={busy || refusal !== undefined}
+          onClick={() => {
+            choose(recommended.id);
+          }}
+          className={`${button} border-warning bg-warning/15 text-warning hover:bg-warning/25 disabled:opacity-50`}
+        >
+          {recommended.label ?? recommended.id} · recommended
+        </button>
+      )}
+      <Link
+        to={openAt}
+        className={`${button} border-border text-text-secondary hover:text-text-primary`}
+      >
+        Open
+      </Link>
+    </li>
+  );
+}
+
 function AskedIn({ ask }: { ask: ItemAsk }): ReactElement | null {
   if (ask.askedIn === undefined) return null;
   return (
@@ -158,11 +295,8 @@ function OpenAsk({
   refusal: string | undefined;
   onAnswered: (record: AnsweredAsk) => void;
 }): ReactElement {
-  const submit = async (choose: string[], text: string | undefined): Promise<void> => {
-    await skill.answerAttentionItem(ask.ref, choose, text);
-    onAnswered({ ask, choose, text });
-    invalidate(K.runsAttention);
-  };
+  const submit = (choose: string[], text: string | undefined): Promise<void> =>
+    answer(ask, onAnswered, choose, text);
   return (
     <div data-ask-ref={ask.ref} className="mt-3">
       <p className="whitespace-pre-wrap text-sm text-text-primary">{ask.message}</p>

@@ -92,6 +92,9 @@
       "src/routes/api.packs.test.ts"
     ],
     [
+      "src/routes/api.observing.test.ts"
+    ],
+    [
       "src/routes/api.config.project.test.ts"
     ],
     [

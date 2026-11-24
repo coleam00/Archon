@@ -17,6 +17,20 @@ export const K = {
     `workflow:${encodeURIComponent(cwd)}:${encodeURIComponent(name)}`,
   worktrees: (projectId: string): string => `worktrees:${projectId}`,
   runsAttention: 'runs:attention' as const,
+  /** How many things wait on the operator, for the rail; only the attention stream refetches it. */
+  needsYouCount: 'needs-you:count' as const,
+  /** A project's open items, as the board lists them. Run and attention events refetch `board:*`. */
+  board: (projectId: string): string => `board:${projectId}`,
+  /** The newest few items at rest of one pack; under `board:` so the same events refetch it. */
+  /** The newest failed or stopped items of a project, which need a decision. */
+  boardDecide: (projectId: string): string => `board:${projectId}:decide`,
+  /** A pack's items with a run started since `since`, in any state. */
+  boardSince: (projectId: string, pack: string, since: string): string =>
+    `board:${projectId}:since:${pack}:${since}`,
+  boardDone: (projectId: string, pack: string): string =>
+    `board:${projectId}:done:${encodeURIComponent(pack)}`,
+  packGraph: (projectId: string, pack: string): string =>
+    `pack-graph:${projectId}:${encodeURIComponent(pack)}`,
   runs: (scope: Scope): string => `runs:${scopeKey(scope)}`,
   run: (id: string): string => `run:${id}`,
   metrics: (scope: Scope, since: string): string => `metrics:${scopeKey(scope)}:${since}`,
@@ -34,6 +48,7 @@ export const K = {
   // instead of issuing duplicate /api/health fetches.
   health: 'health' as const,
   providers: 'providers' as const,
+  observing: 'observing' as const,
   updateCheck: 'update-check' as const,
   githubConnection: 'github-connection' as const,
   providerConnections: 'provider-connections' as const,
