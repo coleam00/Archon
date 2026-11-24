@@ -1547,8 +1547,9 @@ Recording again replaces the branch. A run already started keeps the base it rec
 run that merges through `archon forge pr.merge` records the merged pull request's base
 branch as its item's landing by itself, together with the merge and under the same
 conditions (the forge plugin reports `merged_at`, and the item has no merge yet or a merge
-of that change with no landing), so later fresh runs on the merged item stay on the branch
-it landed on. A landing already recorded is never replaced this way.
+of that change), and only when the item has no landing yet, so later fresh runs on the
+merged item stay on the branch it landed on. A landing already recorded, such as one set
+with this command before the merge, is never replaced this way.
 
 Without `--from`, the command only records, and does not check the remote, so a branch may
 be recorded before it exists. With `--from`, it creates the branch on the remote first and

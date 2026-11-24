@@ -1011,7 +1011,7 @@ test("an applied merge from a run records the merge result's facts on the run's 
   ]);
   expect(result.audited).toEqual(['pr.merge']);
   expect(result.output).toEqual([
-    expect.objectContaining({ ok: true, itemRecord: { recorded: true } }),
+    expect.objectContaining({ ok: true, itemRecord: { recorded: true, landing: 'recorded' } }),
   ]);
   expect(result.stderr).toEqual([]);
 });
@@ -1088,7 +1088,7 @@ test("a merge refused as already merged records the refusal's facts of the earli
         outcome: 'refused',
         observed: expect.objectContaining({ state: 'merged' }),
       }),
-      itemRecord: { recorded: true },
+      itemRecord: { recorded: true, landing: 'recorded' },
     }),
   ]);
   expect(result.stderr).toEqual([]);

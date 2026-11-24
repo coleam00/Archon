@@ -858,7 +858,20 @@ test.serial(
     expect(untouched.merged).toBeNull();
     expect(untouched.landing).toBeNull();
 
-    expect(await record(onItem.id, facts.at)).toBe('recorded');
+    // A landing the operator set before the merge is recorded is kept, and the result says so.
+    const env = nodeEnv(onItem.id);
+    succeeded(
+      await invoke(host =>
+        workflowLandingCommand(
+          host,
+          projectRoot,
+          { itemOf: onItem.id, branch: 'release/planned' },
+          true,
+          env
+        )
+      )
+    );
+    expect(await record(onItem.id, facts.at)).toBe('landing_kept');
     const item = await readItemJson('item-1');
     expect(item.merged).toMatchObject({
       change: facts.change,
@@ -867,10 +880,10 @@ test.serial(
       via: 'forge',
       fromRun: { runId: onItem.id, nodePath: 'land' },
     });
-    expect(item.landing).toMatchObject({ branch: 'dev', from: { kind: 'own' } });
+    expect(item.landing).toMatchObject({ branch: 'release/planned', from: { kind: 'own' } });
 
-    // A pack that still records the merge and landing afterwards changes nothing.
-    const env = nodeEnv(onItem.id);
+    // A pack that still records the merge afterwards keeps the first; its own landing call
+    // sets the branch, as `workflow landing` always does.
     const merged = await invoke(host =>
       workflowMergedCommand(
         host,

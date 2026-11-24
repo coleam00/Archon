@@ -1946,6 +1946,7 @@ declare module 'archon:script' {
     readonly credentialSource?: string;
     readonly itemRecord?: {
       readonly recorded: true;
+      readonly landing: 'recorded' | 'kept';
     } | {
       readonly recorded: false;
       readonly reason: 'no_merge_time' | 'already_recorded' | 'write_failed';

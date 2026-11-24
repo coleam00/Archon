@@ -52,7 +52,8 @@ const credential = { credentialSource: z.string().min(1).optional() };
  * Absent for every other operation and outcome, and for a run on no item.
  */
 export const cliForgeItemRecordSchema = z.discriminatedUnion('recorded', [
-  z.object({ recorded: z.literal(true) }),
+  // `landing: "kept"`: the item already had a landing branch, which is never replaced.
+  z.object({ recorded: z.literal(true), landing: z.enum(['recorded', 'kept']) }),
   z.object({
     recorded: z.literal(false),
     reason: z.enum(['no_merge_time', 'already_recorded', 'write_failed']),

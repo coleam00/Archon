@@ -317,7 +317,8 @@ async function recordRunFacts(
     const recordMerge =
       context.dependencies.recordMerge ?? (await import('./forge-merge-record')).recordRunMerge;
     const outcome = await recordMerge(runId, facts, context.env);
-    if (outcome === 'recorded') record.itemRecord = { recorded: true };
+    if (outcome === 'recorded') record.itemRecord = { recorded: true, landing: 'recorded' };
+    if (outcome === 'landing_kept') record.itemRecord = { recorded: true, landing: 'kept' };
     if (outcome === 'already_recorded')
       record.itemRecord = { recorded: false, reason: 'already_recorded' };
     if (outcome === 'no_merge_time') {
