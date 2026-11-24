@@ -24,6 +24,9 @@ export const K = {
   /** The newest few items at rest of one pack; under `board:` so the same events refetch it. */
   /** The newest failed or stopped items of a project, which need a decision. */
   boardDecide: (projectId: string): string => `board:${projectId}:decide`,
+  /** A pack's items with a run started since `since`, in any state. */
+  boardSince: (projectId: string, pack: string, since: string): string =>
+    `board:${projectId}:since:${pack}:${since}`,
   boardDone: (projectId: string, pack: string): string =>
     `board:${projectId}:done:${encodeURIComponent(pack)}`,
   packGraph: (projectId: string, pack: string): string =>

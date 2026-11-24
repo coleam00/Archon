@@ -69,26 +69,51 @@ export function MetricsOverview({
                 {pack.pack}
               </h2>
             ) : null}
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              {pack.cards.map((view, i) => (
-                <Link
-                  key={i}
-                  to={`${detailsPath}#${metricAnchor(cardMetric(view))}`}
-                  className="flex flex-col gap-2 rounded-console-12 border border-border px-5 py-4 transition-colors hover:border-border-bright"
-                  data-card={view.shape}
-                >
-                  <h3 className="text-console-12 font-medium text-text-secondary">{view.title}</h3>
-                  {report === undefined ? (
-                    SKELETON
-                  ) : (
-                    <CardBody card={buildCard(view, report, calibrations)} names={names} />
-                  )}
-                </Link>
-              ))}
-            </div>
+            <MetricCards
+              cards={pack.cards}
+              report={report}
+              calibrations={calibrations}
+              names={names}
+              detailsPath={detailsPath}
+            />
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+/** A pack's cards over one report: titles over skeletons until the report has loaded. */
+export function MetricCards({
+  cards,
+  report,
+  calibrations,
+  names,
+  detailsPath,
+}: {
+  cards: MetricViews['packs'][number]['cards'];
+  report: MetricsReport | undefined;
+  calibrations: Calibrations;
+  names: ReadonlyMap<string, string>;
+  detailsPath: string;
+}): ReactElement {
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      {cards.map((view, i) => (
+        <Link
+          key={i}
+          to={`${detailsPath}#${metricAnchor(cardMetric(view))}`}
+          className="flex flex-col gap-2 rounded-console-12 border border-border px-5 py-4 transition-colors hover:border-border-bright"
+          data-card={view.shape}
+        >
+          <h3 className="text-console-12 font-medium text-text-secondary">{view.title}</h3>
+          {report === undefined ? (
+            SKELETON
+          ) : (
+            <CardBody card={buildCard(view, report, calibrations)} names={names} />
+          )}
+        </Link>
+      ))}
     </div>
   );
 }

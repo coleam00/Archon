@@ -36,6 +36,7 @@ describe("a pack's document", () => {
     );
     expect(await loadPackDocument(dir)).toEqual({
       document: 'docs/how.md',
+      text: '# How it works\n\n---\nnot frontmatter\n',
       groups: [
         { name: 'Make', stages: ['plan', 'build'] },
         { name: 'Check', stages: ['check'] },
@@ -47,6 +48,7 @@ describe("a pack's document", () => {
   test('a pack that names no document, or a document without frontmatter, declares no groups', async () => {
     expect(await loadPackDocument(await pack(undefined))).toEqual({
       document: null,
+      text: '',
       groups: [],
       problems: [],
     });

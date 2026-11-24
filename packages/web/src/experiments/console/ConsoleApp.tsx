@@ -9,6 +9,7 @@ import { BuilderConnected } from './builder/BuilderConnected';
 import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
 import { BoardPage } from './routes/BoardPage';
+import { OverviewPage } from './routes/OverviewPage';
 import { NeedsYouPage } from './routes/NeedsYouPage';
 import { PackSettingsPage } from './routes/PackSettingsPage';
 import { PackSetupPage } from './routes/PackSetupPage';
@@ -125,6 +126,7 @@ export function ConsoleApp(): ReactElement {
             <Route path="r/:runId" element={<RunDetailPage />} />
             <Route path="*" element={<Navigate to="/console" replace />} />
             <Route path="p/:projectId" element={<RunsPage />} />
+            <Route path="p/:projectId/overview" element={<OverviewPage />} />
             <Route path="p/:projectId/board" element={<BoardPage />} />
             <Route path="p/:projectId/packs/:pack/setup" element={<PackSetupPage />} />
             <Route path="p/:projectId/packs/:pack/settings" element={<PackSettingsPage />} />

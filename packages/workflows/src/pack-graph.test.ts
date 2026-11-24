@@ -638,6 +638,7 @@ describe('a pack graph', () => {
       loaded: [],
       otherCopies: [],
       document: null,
+      metricViews: null,
       groups: [],
       capacity: [],
       settings: [],

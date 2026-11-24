@@ -15,12 +15,13 @@ const EVERY_ITEM = '1970-01-01';
 
 /**
  * One page of a project's items standing in one of `states`, most recently active first;
- * `pack` keeps the items standing at a run of that pack.
+ * `pack` keeps the items standing at a run of that pack, and `since` the items with a run
+ * started at or after that time.
  */
 export async function listItemsPage(
   projectId: string,
   states: readonly ItemState[],
-  page: { after?: string; pack?: string; limit?: number } = {}
+  page: { after?: string; pack?: string; limit?: number; since?: string } = {}
 ): Promise<ItemPage> {
   return requestJson('/api/items/window', 'get', {
     query: {
@@ -28,7 +29,7 @@ export async function listItemsPage(
       states: states.join(','),
       limit: page.limit ?? 100,
       ...(page.pack === undefined ? {} : { pack: page.pack }),
-      ...(page.after === undefined ? { since: EVERY_ITEM } : { after: page.after }),
+      ...(page.after === undefined ? { since: page.since ?? EVERY_ITEM } : { after: page.after }),
     },
   });
 }

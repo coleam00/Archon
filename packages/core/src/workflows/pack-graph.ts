@@ -16,6 +16,7 @@ import {
   readProjectPackSettings,
   validateProjectPackSettings,
 } from '@archon/workflows/pack-settings';
+import { loadPackMetricViews } from '@archon/workflows/metric-views';
 import { groupProblems, loadPackDocument } from '@archon/workflows/pack-document';
 import {
   buildPackGraph,
@@ -197,6 +198,7 @@ export async function readPackGraph(
   // The nearest copy's document, as the nearest copy's bindings are the pack's.
   const dir = copies.loaded[0]?.dir ?? null;
   const read = dir === null ? null : await loadPackDocument(dir);
+  const views = dir === null ? null : await loadPackMetricViews(dir);
   const problems =
     read === null
       ? []
@@ -210,7 +212,11 @@ export async function readPackGraph(
   return {
     ...graph,
     ...copies,
-    document: read === null || read.document === null ? null : { path: read.document, problems },
+    document:
+      read === null || read.document === null
+        ? null
+        : { path: read.document, problems, text: read.text },
+    metricViews: views === null ? null : { names: {}, cards: [], problem: null, ...views },
     groups: read === null || problems.length > 0 ? [] : read.groups,
     ...(await packSettings(cwd, packKey, workflows)),
     capacity: await packCapacity(installed, deps),

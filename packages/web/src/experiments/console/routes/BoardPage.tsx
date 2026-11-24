@@ -9,8 +9,8 @@
  * pack's to say, in its own document: the graph read carries the groups and the board names
  * none itself.
  */
-import { useState, type ReactElement } from 'react';
-import { Link, useParams } from 'react-router';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { ItemAsksSection, itemAsksAnchor, useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { relativeTime } from '../lib/format';
@@ -31,7 +31,7 @@ import { K } from '../store/keys';
 type Chip = ItemRead['standing']['state'] | 'needs_you';
 
 /** The states of an item that is on a stage: something runs, is queued or waits on it. */
-const MOVING = ['running', 'waiting', 'queued'] as const;
+export const MOVING = ['running', 'waiting', 'queued'] as const;
 
 // The order chips are counted in on a stage heading.
 const CHIP: Record<Chip, { label: string; tone: string }> = {
@@ -46,7 +46,7 @@ const CHIP: Record<Chip, { label: string; tone: string }> = {
 };
 
 /** An item that waits on the operator says so, whatever else is true of it. */
-function chipOf(read: ItemRead): Chip {
+export function chipOf(read: ItemRead): Chip {
   const asked = read.questions.some(question => question.kind !== 'stopped');
   return asked && read.standing.state === 'waiting' ? 'needs_you' : read.standing.state;
 }
@@ -59,7 +59,7 @@ function orderOf(read: ItemRead): ItemRead['item'] | undefined {
 }
 
 /** The run the engine says the item stands at. */
-function standingRun(read: ItemRead): ItemRead['runs'][number] | undefined {
+export function standingRun(read: ItemRead): ItemRead['runs'][number] | undefined {
   return read.runs.find(run => run.id === read.standing.runId);
 }
 
@@ -170,7 +170,26 @@ function stageLine(items: ItemRead[]): string {
 }
 
 /** A column: a group the pack declares, or one stage, with its stages by their names in the pack. */
-type StageGroup = PackGraph['groups'][number];
+export type StageGroup = PackGraph['groups'][number];
+
+/**
+ * A pack's columns: each group its document declares, then each stage of its flow that no
+ * group holds, in the graph's order. A workflow only other workflows call is not a stage.
+ */
+export function columnsOf(graph: PackGraph | undefined): StageGroup[] {
+  const stages = (graph?.stages ?? []).filter(stage => stage.inFlow).map(stage => stage.workflow);
+  const groups: readonly StageGroup[] = graph?.groups ?? [];
+  const grouped = new Set(groups.flatMap(group => group.stages));
+  return [
+    ...groups.map(group => ({ ...group, stages: group.stages.filter(s => stages.includes(s)) })),
+    ...stages.filter(stage => !grouped.has(stage)).map(stage => ({ name: stage, stages: [stage] })),
+  ].filter(column => column.stages.length > 0);
+}
+
+/** The newest done items of a pack with the total: the board's Done column and the overview's. */
+export function newestDone(projectId: string, pack: string): Promise<ItemPage> {
+  return listItemsPage(projectId, ['done'], { pack, limit: DONE_SHOWN });
+}
 
 /**
  * One column with its items. An empty column collapses to a narrow heading, so the pack's
@@ -181,16 +200,24 @@ function Column({
   items,
   projectId,
   stageOf,
+  focus = false,
 }: {
   name: string;
   items: ItemRead[];
   projectId: string;
   /** Given for a column of several stages, so each card says which one it is on. */
   stageOf?: (read: ItemRead) => string | undefined;
+  /** The board was opened at this column (`?group=`): it is brought into view once. */
+  focus?: boolean;
 }): ReactElement {
   const empty = items.length === 0;
+  const column = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focus) column.current?.scrollIntoView({ block: 'nearest', inline: 'start' });
+  }, [focus]);
   return (
     <div
+      ref={column}
       data-stage={name}
       data-empty={empty ? '' : undefined}
       className={empty ? 'md:w-24 md:shrink-0' : 'md:w-64 md:shrink-0'}
@@ -398,17 +425,12 @@ export function PackBoard({
     getPackGraph(projectId, pack)
   );
   const newest = useEntity<ItemPage>(K.boardDone(projectId, pack), () =>
-    listItemsPage(projectId, ['done'], { pack, limit: DONE_SHOWN })
+    newestDone(projectId, pack)
   );
   const stageOf = (read: ItemRead): string | undefined => standingRun(read)?.pack?.workflow;
-  // A workflow of the pack that only other workflows call is not a stage an item stands at.
-  const stages = (graph?.stages ?? []).filter(stage => stage.inFlow).map(stage => stage.workflow);
-  const groups: readonly StageGroup[] = graph?.groups ?? [];
-  const grouped = new Set(groups.flatMap(group => group.stages));
-  const columns: StageGroup[] = [
-    ...groups.map(group => ({ ...group, stages: group.stages.filter(s => stages.includes(s)) })),
-    ...stages.filter(stage => !grouped.has(stage)).map(stage => ({ name: stage, stages: [stage] })),
-  ].filter(column => column.stages.length > 0);
+  const columns = columnsOf(graph);
+  const stages = columns.flatMap(column => column.stages);
+  const focus = useSearchParams()[0].get('group');
   // An item whose stage the pack no longer has, or whose pack could not be read, stays visible.
   const offStage = items.filter(read => !stages.includes(stageOf(read) ?? ''));
   // A pack with nothing open and nothing done has nothing to show.
@@ -447,6 +469,7 @@ export function PackBoard({
               items={items.filter(read => column.stages.includes(stageOf(read) ?? ''))}
               projectId={projectId}
               stageOf={column.stages.length > 1 ? stageOf : undefined}
+              focus={focus === column.name}
             />
           ))}
           {offStage.length > 0 ? (

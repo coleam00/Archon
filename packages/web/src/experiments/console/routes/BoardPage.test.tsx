@@ -85,6 +85,7 @@ const graph: PackGraph = {
   })),
   entries: [],
   document: null,
+  metricViews: null,
   groups: [],
   arrows: [],
   capacity: [],

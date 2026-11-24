@@ -72,6 +72,21 @@ export async function discoverMetricViews(
   };
 }
 
+/**
+ * The metric views one pack directory declares: null when it declares none, a problem when
+ * its file does not read or validate.
+ */
+export async function loadPackMetricViews(
+  packDir: string
+): Promise<
+  Pick<MetricViewsListing['packs'][number], 'names' | 'cards'> | { problem: string } | null
+> {
+  const listed = await readDeclaration(METRIC_VIEWS, '', 'project', packDir);
+  if (listed === undefined) return null;
+  if ('error' in listed) return { problem: listed.error };
+  return { names: listed.declared.names ?? {}, cards: listed.declared.cards };
+}
+
 export interface ItemMetricsListing {
   packs: (Located & { metrics: ItemMetricDefinition[] })[];
   errors: Unreadable[];

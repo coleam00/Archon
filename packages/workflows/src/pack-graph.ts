@@ -20,6 +20,7 @@ import { loopBodyStepNamePrefix, resolvedBodyNodes } from './graph-plan';
 import { isComposeFanOutNode, isLoopGroupNode } from './schemas/node-guards';
 import { isBinaryBuild } from './defaults/bundled-defaults';
 import { packGroupSchema } from './pack-document';
+import { metricViewSchema } from './schemas/metric-view';
 import { readsLinkedEntry } from './schemas/binding-input-source';
 import {
   asksSettledTriggerSchema,
@@ -230,7 +231,26 @@ export const packGraphSchema = z.object({
    * The document the pack's manifest names (`document`), as a path within the pack, with
    * what is wrong with it; null for a pack that names none. See `pack-document.ts`.
    */
-  document: z.object({ path: z.string(), problems: z.array(z.string()) }).nullable(),
+  document: z
+    .object({
+      path: z.string(),
+      problems: z.array(z.string()),
+      /** The document's markdown after its frontmatter, as the pack wrote it. */
+      text: z.string(),
+    })
+    .nullable(),
+  /**
+   * The overview cards the pack declares in `.shared/metric-views.json`, with the plain
+   * names it gives its metrics; null for a pack that declares none. A file that does not
+   * read or validate has no cards and says why in `problem`. See `schemas/metric-view.ts`.
+   */
+  metricViews: z
+    .object({
+      names: z.record(z.string(), z.string()),
+      cards: z.array(metricViewSchema),
+      problem: z.string().nullable(),
+    })
+    .nullable(),
   /**
    * How the pack groups its stages for display, from its document's frontmatter: each a
    * name and stages by their `workflow` name, in order. Empty when the pack declares none
@@ -735,7 +755,14 @@ export function buildPackGraph(
   input: GraphInput
 ): Omit<
   PackGraph,
-  'loaded' | 'otherCopies' | 'document' | 'groups' | 'settings' | 'settingsFile' | 'capacity'
+  | 'loaded'
+  | 'otherCopies'
+  | 'document'
+  | 'metricViews'
+  | 'groups'
+  | 'settings'
+  | 'settingsFile'
+  | 'capacity'
 > {
   const arrows = graphArrows(input);
   // Only an outcome arrow starts something for an outcome; an asks arrow starts on answers.

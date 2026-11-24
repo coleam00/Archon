@@ -2,7 +2,7 @@
  * A pack's own document: one markdown file the pack's manifest names (`document`), which
  * explains the pack to an operator. Its frontmatter may declare `groups`, how the pack's
  * stages group into a few columns for display. The engine reads the groups and checks them
- * against the pack's stages; it gives the document's text no meaning.
+ * against the pack's stages; it gives the document's text no meaning and serves it as written.
  */
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -24,6 +24,19 @@ function frontmatter(text: string): string | undefined {
   if (lines[0]?.trim() !== '---') return undefined;
   const end = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
   return end === -1 ? undefined : lines.slice(1, end).join('\n');
+}
+
+/** A document's text after its frontmatter: what an operator reads. */
+export function documentBody(text: string): string {
+  const lines = text.replaceAll('\r\n', '\n').split('\n');
+  if (lines[0]?.trim() !== '---') return text;
+  const end = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
+  return end === -1
+    ? text
+    : lines
+        .slice(end + 1)
+        .join('\n')
+        .trimStart();
 }
 
 /** The groups a document's frontmatter declares (none without frontmatter), or why it does not read. */
@@ -69,29 +82,31 @@ export function groupProblems(groups: readonly PackGroup[], stages: readonly str
  */
 export async function loadPackDocument(
   packDir: string
-): Promise<{ document: string | null; groups: PackGroup[]; problems: string[] }> {
+): Promise<{ document: string | null; text: string; groups: PackGroup[]; problems: string[] }> {
   let manifest: z.infer<typeof workflowPackManifestSchema>;
   try {
     const raw: unknown = JSON.parse(await readFile(join(packDir, PLUGIN_MANIFEST_FILE), 'utf-8'));
     manifest = workflowPackManifestSchema.parse(raw);
   } catch {
     // No manifest, or one discovery already reports: the pack has no document.
-    return { document: null, groups: [], problems: [] };
+    return { document: null, text: '', groups: [], problems: [] };
   }
   const document = manifest.document ?? null;
-  if (document === null) return { document, groups: [], problems: [] };
+  if (document === null) return { document, text: '', groups: [], problems: [] };
   let text: string;
   try {
     text = await readFile(join(packDir, document), 'utf-8');
   } catch (error) {
     return {
       document,
+      text: '',
       groups: [],
       problems: [`${document} could not be read: ${(error as Error).message}`],
     };
   }
   const read = documentGroups(text);
+  const body = documentBody(text);
   return 'problem' in read
-    ? { document, groups: [], problems: [`${document}: ${read.problem}`] }
-    : { document, groups: read.groups, problems: [] };
+    ? { document, text: body, groups: [], problems: [`${document}: ${read.problem}`] }
+    : { document, text: body, groups: read.groups, problems: [] };
 }
