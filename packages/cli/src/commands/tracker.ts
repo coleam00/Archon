@@ -17,8 +17,8 @@ import { writeStdout } from '../utils/stdout';
 export async function activateConfiguredTracker(
   forgeTrustedEnv: NodeJS.ProcessEnv
 ): Promise<ItemTracker | undefined> {
-  // Host creation runs this for every command, so reading the tracker config must not
-  // create the global config.
+  // A database-backed execution host runs this on creation, including for `trigger check`,
+  // so reading the tracker config must not create the global config.
   const { itemTracker } = await loadConfig(undefined, { readOnly: true });
   if (!itemTracker) return undefined;
   const tracker = new ItemTracker(itemTracker, hostItemTrackerForge(forgeTrustedEnv));

@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TrackerPassReport } from '@archon/adapters/item-tracker/item-tracker';
@@ -8,16 +8,30 @@ import { clearConfigCache, loadConfig } from '@archon/core/config/config-loader'
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { activateConfiguredTracker, trackerSyncCommand } from './tracker';
+import { activateConfiguredTracker, trackerReleaseCommand, trackerSyncCommand } from './tracker';
 
 const tempRoots = trackTempRoots();
 const previousHome = process.env.ARCHON_HOME;
+const previousAssistant = process.env.DEFAULT_AI_ASSISTANT;
 
 afterEach(() => {
   if (previousHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = previousHome;
+  if (previousAssistant === undefined) delete process.env.DEFAULT_AI_ASSISTANT;
+  else process.env.DEFAULT_AI_ASSISTANT = previousAssistant;
   clearConfigCache();
 });
+
+/** An empty ARCHON_HOME whose config loads regardless of the caller's provider setting. */
+async function freshHome(): Promise<string> {
+  const home = tempRoots(await mkdtemp(join(tmpdir(), 'archon-tracker-home-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DEFAULT_AI_ASSISTANT = '';
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  clearConfigCache();
+  return home;
+}
 
 const scanned: TrackerPassReport = {
   project: 'acme/widgets',
@@ -73,16 +87,20 @@ test('tracker sync exits 1 when a tracked project could not be scanned at all', 
 });
 
 test('reading the tracker config on a fresh home creates no config.yaml; a default load still does', async () => {
-  const home = tempRoots(await mkdtemp(join(tmpdir(), 'archon-tracker-home-')));
-  process.env.ARCHON_HOME = home;
-  registerBuiltinProviders();
-  setPlatformPolicies([]);
-  clearConfigCache();
+  const home = await freshHome();
 
-  // Host creation for every `trigger` and `workflow` command reads the tracker config here.
   expect(await activateConfiguredTracker({})).toBeUndefined();
-  expect(await readdir(home)).toEqual([]);
+  expect(existsSync(join(home, 'config.yaml'))).toBe(false);
 
   await loadConfig();
   expect(existsSync(join(home, 'config.yaml'))).toBe(true);
+});
+
+test('tracker release on a fresh home refuses an untracked project without creating config.yaml', async () => {
+  const home = await freshHome();
+
+  expect(await trackerReleaseCommand('acme/widgets', { json: true, stdout: async () => {} })).toBe(
+    1
+  );
+  expect(existsSync(join(home, 'config.yaml'))).toBe(false);
 });
