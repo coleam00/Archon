@@ -11,7 +11,7 @@ import type {
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
 import { SUBRUN_METADATA_KEYS } from '../schemas';
-import { asksResultMetadata, itemStoppedMetadata } from '../schemas/run-metadata';
+import { keptAsksResult, stoppedItem } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import {
   RESULT_COMMIT_METADATA_KEY,
@@ -22,7 +22,7 @@ import { readCompletingResult, sampleResultCommit } from '../run-result';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
-import { declaredOutcome, isFinalOutcome, readCompletedOutcome } from '../completed-outcome';
+import { declaredOutcome, readCompletedOutcome } from '../completed-outcome';
 import { readCompletedItemFacts, type CompletedItemFacts } from '../completed-asks';
 import {
   asksCheckoutMetadata,
@@ -164,34 +164,8 @@ function completionResult(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
-/**
- * The stop this completion records, or undefined when the run's item keeps moving or the
- * run is on none. An item stops when a top-level run on it completes with a declared outcome
- * that is not final, its end started nothing, and it left no ask or wait: nothing follows,
- * so the attention queue lists the item until a newer run starts on it. Without a reader of
- * run-ended bindings the engine cannot know that nothing started, so it records nothing.
- */
-function stoppedItem(
-  { deps, workflow, workflowRun }: RunTerminalContext,
-  { outcome, asks, waits }: ReturnedResult,
-  starts: RunEndedStarts,
-  result: JsonValue | undefined
-): Record<string, unknown> | undefined {
-  if (workflowRun.parent_run_id !== null || workflowRun.item_id === null) return undefined;
-  if (outcome === undefined || deps.runEndedStarts === undefined) return undefined;
-  if (isFinalOutcome(workflow, outcome.value)) return undefined;
-  if ((asks?.length ?? 0) > 0 || (waits?.length ?? 0) > 0) return undefined;
-  if (starts.receipts.length > 0 || starts.linked.length > 0) return undefined;
-  const field = workflow.result?.summary;
-  const value =
-    field !== undefined && result !== null && typeof result === 'object' && !Array.isArray(result)
-      ? result[field]
-      : undefined;
-  return itemStoppedMetadata(typeof value === 'string' ? value : null);
-}
-
 /** What the run's returns node said the engine records with the completion. */
-type ReturnedResult = CompletedItemFacts & { outcome?: RunCompletedOutcome };
+export type ReturnedResult = CompletedItemFacts & { outcome?: RunCompletedOutcome };
 
 /**
  * The outcome, asks and waits the run completes with, or undefined when one is not of its
@@ -280,7 +254,6 @@ async function readHandOffs(
   const { deps, workflow, workflowRun } = ctx;
   const startsOnEnd = outcome !== undefined && deps.runEndedStarts !== undefined;
   try {
-    // A declared summary is read for the stop this completion may record.
     const result =
       startsOnEnd || asks !== undefined || workflow.result?.summary !== undefined
         ? await readCompletingResult(deps.store, workflowRun, workflow.returns)
@@ -323,14 +296,6 @@ function runEndedFacts(
     result,
     inputs: resolveRunInputs(workflowRun) ?? {},
   };
-}
-
-/** The asking run's result, kept on its row for the bindings its settled asks start. */
-function keptAsksResult(
-  completion: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3],
-  value: JsonValue | undefined
-): Record<string, string> {
-  return completion?.asks === undefined || value === undefined ? {} : asksResultMetadata(value);
 }
 
 /**
@@ -560,7 +525,6 @@ async function completeRun(
           // the row alone. Gated on the asks a top-level run declares, like the asks.
           ...keptAsksResult(result, returnedValue),
           ...(asksCheckout === undefined ? {} : asksCheckoutMetadata(asksCheckout)),
-          // The item stopped: nothing follows this end. Written only by this write.
           ...stopped,
         },
         // The one write of the run's outcome (#5660): it lands with the completed status,

@@ -770,11 +770,8 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
   for (const arrow of graph.arrows) lines.push(arrowText(arrow));
   const nothing = graph.stages.flatMap(stage =>
     (stage.outcome?.values ?? [])
-      .filter(v => v.startsNothing)
-      .map(
-        v =>
-          `  ${stage.name}:${v.value}${v.final ? ' (final)' : stage.asks || stage.waits ? '' : ' (no asks or waits: the item stops, and attention lists it)'}`
-      )
+      .filter(v => v.startsNothing && !v.final)
+      .map(v => `  ${stage.name}:${v.value}${stage.asks || stage.waits ? '' : ' (item stops)'}`)
   );
   if (nothing.length > 0) lines.push('', 'Outcomes that start nothing:', ...nothing);
   if (graph.discoveryErrors.length > 0)

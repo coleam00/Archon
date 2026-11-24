@@ -7,20 +7,18 @@
  * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
  * `readItemStopped`) is listed while it is the newest run on the item; it takes no answer.
  */
+import { askItemRef, stoppedItemRef, waitItemRef } from './attention-item-refs';
 import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
 import {
-  askItemRef,
   projectRef,
   projectRefForRun,
   runProject,
-  waitItemRef,
   type AskQueueItem,
   type AttentionQueueItemSources,
   type AttentionQueueItemWithoutRun,
   type CodebaseCache,
   type OverdueWaitQueueItem,
   type StoppedQueueItem,
-  stoppedItemRef,
 } from './attention-queue';
 import { readItemStopped } from './schemas/run-metadata';
 import type { WorkflowRun } from './schemas/workflow-run';

@@ -351,10 +351,8 @@ export interface IWorkflowStore
    */
   withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
   /**
-   * The completed runs that stopped their item (`readItemStopped`) and are still its last
-   * run, in the order the item's runs are read: any run started on the item after this one,
-   * whatever its status, ends the stop. Oldest stop first, with a degraded report for each unreadable row. A store
-   * without items has none.
+   * Completed runs that stopped their item (`readItemStopped`) and are still its last run; any
+   * run started on the item after one ends its stop. A store without items has none.
    */
   listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ runs: DeletedWorkflowRun[] }>;

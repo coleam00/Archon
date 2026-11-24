@@ -49,6 +49,7 @@ import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
 import type { AttentionQueueCounts } from './attention-counts';
 import type { IWorkflowStore } from './store';
+import { isItemWithoutRunRef } from './attention-item-refs';
 
 /**
  * A project as the engine identifies it. `key` is the identity: the project storage key
@@ -247,54 +248,6 @@ export type AttentionQueueItemWithoutRun =
 export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
 /** A stopped item's queue item. */
 export type StoppedQueueItem = Extract<AttentionQueueItem, { kind: 'stopped' }>;
-
-const ASK_REF_PREFIX = 'ask:';
-
-/**
- * The ref of an ask a completed run left. `askIdOfRef` reads it back; nothing else builds
- * or parses one. A run id is a UUID, so no run ref takes this form.
- */
-export function askItemRef(askId: string): string {
-  return `${ASK_REF_PREFIX}${askId}`;
-}
-
-/** The ask id an ask ref names, or undefined when the ref is not an ask's. */
-export function askIdOfRef(ref: string): string | undefined {
-  return ref.startsWith(ASK_REF_PREFIX) && ref.length > ASK_REF_PREFIX.length
-    ? ref.slice(ASK_REF_PREFIX.length)
-    : undefined;
-}
-
-const WAIT_REF_PREFIX = 'wait:';
-
-/**
- * The ref of the waits a completed run left, as one item: the set is met, replaced or
- * withdrawn together. `waitRunIdOfRef` reads it back.
- */
-export function waitItemRef(runId: string): string {
-  return `${WAIT_REF_PREFIX}${runId}`;
-}
-
-/** The run a wait ref names, or undefined when the ref is not a wait's. */
-export function waitRunIdOfRef(ref: string): string | undefined {
-  return ref.startsWith(WAIT_REF_PREFIX) && ref.length > WAIT_REF_PREFIX.length
-    ? ref.slice(WAIT_REF_PREFIX.length)
-    : undefined;
-}
-
-const STOPPED_REF_PREFIX = 'stopped:';
-
-/** The ref of the item a completed run stopped. `stoppedRunIdOfRef` reads it back. */
-export function stoppedItemRef(runId: string): string {
-  return `${STOPPED_REF_PREFIX}${runId}`;
-}
-
-/** The run a stopped item's ref names, or undefined when the ref is not a stopped item's. */
-export function stoppedRunIdOfRef(ref: string): string | undefined {
-  return ref.startsWith(STOPPED_REF_PREFIX) && ref.length > STOPPED_REF_PREFIX.length
-    ? ref.slice(STOPPED_REF_PREFIX.length)
-    : undefined;
-}
 
 const RUN_REF_SEPARATOR = ':';
 
@@ -710,12 +663,7 @@ export async function readAttentionQueueItemByRef(
   );
   if (withoutRun !== undefined) return { kind: 'found', item: withoutRun };
   // An ask, a set of waits or a stop that closed is no longer an item: its ref names nothing open.
-  if (
-    askIdOfRef(ref) !== undefined ||
-    waitRunIdOfRef(ref) !== undefined ||
-    stoppedRunIdOfRef(ref) !== undefined
-  )
-    return { kind: 'none' };
+  if (isItemWithoutRunRef(ref)) return { kind: 'none' };
   const runId = runIdOfRef(ref);
   if (runId === '') return { kind: 'unknown' };
   const item = await readAttentionQueueItem(source, runId);

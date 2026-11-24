@@ -5,12 +5,11 @@
  * run's own permission rule. For an ask a completed run left, it is the ask's answer,
  * held to the rule of the run that left it; an ask can also be withdrawn.
  */
+import { askIdOfRef, waitRunIdOfRef } from '@archon/workflows/attention-item-refs';
 import {
-  askIdOfRef,
   isHeldByRun,
   leftByRun,
   readAttentionQueueItemByRef,
-  waitRunIdOfRef,
   type AskQueueItem,
   type AttentionQueueItem,
   type AttentionQueueItemWithoutRun,

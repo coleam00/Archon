@@ -2,6 +2,7 @@
  * What a run's row and its events say about an attention item that closed and a run that
  * ended, for the attention stream (`attention-watch.ts`).
  */
+import { askIdOfRef } from './attention-item-refs';
 import { createLogger } from '@archon/paths';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -19,7 +20,6 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { IWorkflowStore, WorkflowEventPage } from './store';
-import { askIdOfRef } from './attention-queue';
 import type { StoredItemAsk } from './schemas/item-ask';
 import { failedOutcomeReason, getTerminalRecord } from './terminal-record';
 

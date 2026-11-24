@@ -14,8 +14,8 @@ import {
   createRunEndedStarts,
   launchProjectKey,
   readTriggerFileHosts,
-  runEndedStops,
 } from './run-ended';
+import { runEndedStops } from './run-ended-stops';
 
 /** No project is registered in these tests. */
 const NO_PROJECT_LOOKUPS = {
