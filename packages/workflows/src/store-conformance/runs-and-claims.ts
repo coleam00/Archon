@@ -98,6 +98,20 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       });
     });
 
+    test('a top-level null in a metadata write removes the key and keeps nulls inside a value', async () => {
+      const patch = { cleared: null, nested: { a: null } };
+      const expected = { kept: true, nested: { a: null } };
+      const run = await create(store, { metadata: { cleared: 'set', kept: true } });
+      await store.updateWorkflowRun(run.id, { metadata: patch });
+      expect((await store.getWorkflowRun(run.id))?.metadata).toEqual(expected);
+      const live = await running(store, { metadata: { cleared: 'set', kept: true } });
+      expect(await store.updateWorkflowRunMetadataIfRunning(live.id, patch)).toBe(true);
+      expect((await store.getWorkflowRun(live.id))?.metadata).toEqual(
+        expect.objectContaining(expected)
+      );
+      expect((await store.getWorkflowRun(live.id))?.metadata).not.toHaveProperty('cleared');
+    });
+
     test.each(['spawn', null, 42, undefined])(
       'top-level creation strips caller-supplied child provenance: %s',
       async marker => {

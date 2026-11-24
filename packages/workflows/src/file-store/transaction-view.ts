@@ -5,6 +5,7 @@ import {
 } from '../schemas/run-metadata';
 import { prepareWorkflowRunFailure } from '../workflow-run-failure';
 import { FileStoreUnsupportedError } from './errors';
+import { applyMetadataPatch } from './metadata-patch';
 import { resumeRun } from './run-resume';
 import { createLogger } from '@archon/paths';
 import {
@@ -158,7 +159,7 @@ export function createTransactionView(
     validateWorkflowWaitMetadata(metadata);
     const run = runs.get(id);
     if (run?.status !== status) return false;
-    Object.assign(run.metadata, structuredClone(mutableRunMetadata(metadata)));
+    applyMetadataPatch(run.metadata, mutableRunMetadata(metadata));
     return true;
   };
   const record = (input: WorkflowEventInput): void => {
@@ -348,8 +349,10 @@ export function createTransactionView(
       const run = row(id);
       if (updates.status !== undefined && isTerminalRunStatus(updates.status))
         throw new Error('Terminal workflow status requires a lifecycle writer');
+      const metadata = { ...run.metadata };
+      applyMetadataPatch(metadata, mutableRunMetadata(updates.metadata));
       Object.assign(run, updates, {
-        metadata: { ...run.metadata, ...mutableRunMetadata(updates.metadata) },
+        metadata,
         output_root: run.output_root ?? updates.output_root ?? null,
         working_path: run.working_path ?? updates.working_path ?? null,
       });
@@ -392,7 +395,7 @@ export function createTransactionView(
       const outcome = result?.outcome;
       run.outcome = outcome?.kind === 'boolean' ? outcome.value : null;
       run.completed_outcome = outcome?.value ?? null;
-      Object.assign(run.metadata, mutableRunMetadata(metadata));
+      applyMetadataPatch(run.metadata, mutableRunMetadata(metadata));
       terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.completed,
@@ -419,11 +422,8 @@ export function createTransactionView(
       const run = row(id);
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
       run.status = 'paused';
-      run.metadata = {
-        ...run.metadata,
-        ...mutableRunMetadata(metadata),
-        approval: structuredClone(approval),
-      };
+      applyMetadataPatch(run.metadata, mutableRunMetadata(metadata));
+      run.metadata.approval = structuredClone(approval);
       run.metadata[PAUSE_CAUSE_METADATA_KEY] = pauseCauseOfApproval(approval);
       // A gate replaces a finished wait's context, exactly as the SQL store does.
       delete run.metadata.wait;
@@ -438,7 +438,7 @@ export function createTransactionView(
       validateWorkflowWaitMetadata(metadata);
       const run = runs.get(id);
       if (!run || !gateOpen(run, expected)) return { resolved: false };
-      Object.assign(run.metadata, structuredClone(mutableRunMetadata(metadata)));
+      applyMetadataPatch(run.metadata, mutableRunMetadata(metadata));
       for (const event of gateEvents) record({ ...event, workflow_run_id: id });
       return { resolved: true };
     },
@@ -625,7 +625,7 @@ export function createTransactionView(
       await beforePublish?.();
       run.status = 'paused';
       run.last_activity_at = new Date();
-      Object.assign(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));
+      applyMetadataPatch(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));
       record(sourceReleasedEvent(id, release));
       return { released: true };
     },
@@ -633,7 +633,7 @@ export function createTransactionView(
       const run = runs.get(id);
       if (!run) return undefined;
       const write = operatorPauseRequestWrite(run, requested);
-      if (write?.metadata) Object.assign(run.metadata, structuredClone(write.metadata));
+      if (write?.metadata) applyMetadataPatch(run.metadata, write.metadata);
       return write?.request;
     },
     pauseWorkflowRunForOperator: async (id, claimId) => {
@@ -642,7 +642,7 @@ export function createTransactionView(
       if (!run || write === undefined) return { paused: false };
       run.status = 'paused';
       run.last_activity_at = new Date();
-      Object.assign(run.metadata, write.metadata);
+      applyMetadataPatch(run.metadata, write.metadata);
       record(write.event);
       return { paused: true };
     },
