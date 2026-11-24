@@ -31,7 +31,17 @@ inputs:
     result_of: archon-review
     description: What the last review of the item ended with. Read from the item.
 
-returns: { node: checks, outcome: outcome, asks: asks, summary: summary }
+returns:
+  node: checks
+  outcome: outcome
+  asks: asks
+  summary: summary
+  # One option set for every ask; the asks-settled bindings in .pack/pack.yaml route on these ids.
+  options:
+    - { id: send-back, does: 'The same builder continues the change with your answer and ci.md, and the review sees it again.', cost: 'One build run and one more review and host round.' }
+    - { id: take-as-is, does: 'The land stage judges the pull request as it is.', cost: 'What the host found stays unfixed.' }
+    - { id: replan, does: 'The item goes back to planning with your answer.', cost: 'The work so far may be discarded.' }
+    - { id: stop, does: 'Nothing more runs. An operator lands or closes the change by hand.', cost: 'The item ends here unless someone takes it on.' }
 
 nodes:
   - id: threads

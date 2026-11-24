@@ -85,7 +85,6 @@ When every ask a run left is answered, the answer starts the next stage. Most st
 | review | `take-as-is` | the host stage, on the change as it is |
 | host | `take-as-is` | the land stage |
 | review, host | `replan` | planning |
-| review, host | `one-more-round` | the builder once more past its round limit |
 | land | `land` | the land stage again, approving the pull request at the head the question named |
 | land | `send-back` | the builder |
 | review, host, land | `stop` | nothing; land or close the change by hand |
@@ -98,7 +97,7 @@ Triage's `plan` and `build` go through the link stage first, which decides wheth
 
 ## Round limits
 
-A change goes back to its builder at most three times per way back (from review, from host, from land) until the item is planned again. The bindings carry the limit, and the engine refuses a start past it. Before sending a change back, the stage reads where the limit stands (`startLimits` in `archon workflow runs --item <key> --json`); when none is left, it asks instead, with what is still wrong. Answer `one-more-round` to allow one more round, `take-as-is` to go on, `replan` to plan again, or `stop`.
+A change goes back to its builder at most three times per way back (from review, from host, from land) until the item is planned again. The bindings carry the limit, and the engine refuses a start past it. Before sending a change back, the stage reads where the limit stands (`startLimits` in `archon workflow runs --item <key> --json`); when none is left, it asks instead, with what is still wrong. Answer `send-back` to allow one more round, `take-as-is` to go on, `replan` to plan again, or `stop`.
 
 ## Landing
 

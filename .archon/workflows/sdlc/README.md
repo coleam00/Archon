@@ -21,7 +21,7 @@ An **operator** is whoever runs the pack: a person, or more often that person's 
 | `archon-investigate` | Proves the causal chain from symptom to root cause and decides the fix. | Triage `investigate`; its own answers | `rooted` (build); `refuted`, `inconclusive` (start nothing); `ask` |
 | `archon-split` | Decides whether a large issue is built whole or as pieces, files the next piece as its own issue (once, by a marker), links it `part_of` the item and puts it in triage. | Triage `split`; its own answers | `split` (the pieces come back through triage); `plan`, `build` (built whole); `ask` |
 | `archon-plan` | Chooses the approach, breaks it into verifiable steps and names the validation. | Link or split `plan`; build or review `replan`; a `replan` answer; its own answers | `planned` (build); `ask` |
-| `archon-build` | Builds the change, commits, pushes and opens a draft pull request; when the change comes back, continues it in the same session on the same branch. | Plan `planned`, investigate `rooted`, link or split `build`; a return from review, host or land; a `send-back` or `one-more-round` answer; its own answers | `built` (review); `replan`; `ask` |
+| `archon-build` | Builds the change, commits, pushes and opens a draft pull request; when the change comes back, continues it in the same session on the same branch. | Plan `planned`, investigate `rooted`, link or split `build`; a return from review, host or land; a `send-back` answer; its own answers | `built` (review); `replan`; `ask` |
 | `archon-review` | Seven lenses (scope, seams, code, tests, errors, docs, ux) and a simplify pass beside them, three verifiers on the blocking findings, and one verdict; a smaller shape simplify names goes back to the builder; posts the report on the pull request. Also reviews any pull request by hand. | Build `built` | `approve` (host); `return` (build); `replan`; `ask`. By hand: `ready`, `not_ready` |
 | `archon-host` | Answers the review threads the builder settled, updates the description, checks the merge with the base, reads CI once and takes the pull request out of draft. | Review `approve`; a `take-as-is` answer on a review ask | `ready` (land); `return` (build); `ask` |
 | `archon-land` | Judges the pull request against the project's land policy, merges it pinned to the head whose checks it read, and the forge records the merge on the item. | Host `ready`; a `take-as-is` answer on a host ask; a `land` answer | `merged` (discoveries); `return` (build); `ask` |
@@ -42,8 +42,9 @@ An **operator** is whoever runs the pack: a person, or more often that person's 
   stage's own asks start that stage again with the answers as decisions made
   (`plan-after-answers`). The asks of review, host and land offer fixed option ids, and
   the option chosen picks the stage: `send-back` the builder, `take-as-is` the next
-  stage, `replan` planning, `land` the land stage again, `one-more-round` the builder
-  once past its limit; `stop` starts nothing.
+  stage, `replan` planning, `land` the land stage again; `stop` starts nothing. Past
+  the round limit, `send-back` gives the builder one more round. Each of these stages
+  declares its option set under `returns.options`, so its agent writes none.
 
 - **Linked bindings** start link again on every item that holds a `depends_on` link to an
   item that just landed or ended without landing, so an item that waits goes on by itself.

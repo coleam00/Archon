@@ -49,8 +49,8 @@ Before you hand off, read the pull request's head again; when it is no longer th
 ## How the stage ends
 
 - `ready` hands the pull request to the land stage.
-- `pr_caused` returns it to its builder: the outcome is `return`. Before you return it, read `rounds.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`): the binding is `build-after-host`. When its limit is used up, the outcome is `ask` instead, with the options `one-more-round` (the builder fixes what `ci.md` names once more), `take-as-is`, `replan` and `stop` (below).
-- `other` is an ask: the outcome is `ask`. Write the question as `asks.md` says, with these fixed options, because the answer's option starts the next stage: `send-back` (the builder continues with the operator's answer and `ci.md`), `take-as-is` (the land stage judges the pull request as it is), `replan` (the item goes back to planning) and `stop` (nothing more runs; an operator lands or closes the change by hand). Write what each means for this pull request in `context`, and recommend one, or `null` with why you cannot choose.
+- `pr_caused` returns it to its builder: the outcome is `return`. Before you return it, read `rounds.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`): the binding is `build-after-host`. When its limit is used up, the outcome is `ask` instead: `send-back` then gives the builder one more round with `ci.md`.
+- `other` is an ask: the outcome is `ask`. Write the question as `asks.md` says. The workflow declares the options every ask offers, because the answer's option starts the next stage; you write none. Write what each means for this pull request in `context`, and recommend one, or `null` with why you cannot choose.
 
 ## Declare
 

@@ -71,7 +71,7 @@ option:
 - An ask from review or host offers `send-back` (the builder continues with your
   answer), `take-as-is` (the next stage takes the change as it is), `replan` (back to
   planning) and `stop` (nothing more runs; you land or close the change by hand). At
-  the round limit it offers `one-more-round` in place of `send-back`.
+  the round limit, `send-back` gives the builder one more round.
 - An ask from land offers `land` (approves the pull request at the head the ask names;
   land runs again and merges it), `send-back` and `stop`.
 
@@ -94,7 +94,7 @@ investigate `refuted`), link starts again on every item that waits on it.
 
 A change goes back to its builder at most three times per way back (from review, host
 and land) until the item is planned again. The stage that would send it back past the
-limit asks instead, with `one-more-round`; choosing it allows one more start. The
+limit asks instead; answering `send-back` allows one more round. The
 item's limits are under `startLimits` in `archon workflow runs --item issue-<n> --json`.
 
 ## Starting a stage by hand

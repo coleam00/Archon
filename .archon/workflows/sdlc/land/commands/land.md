@@ -55,11 +55,7 @@ A `return` always carries a `brief`, and so does an `ask`: the brief the builder
 
 ## The question
 
-Write each ask as `asks.md` says: `question` is one sentence that names the pull request and the decision, and `context` is what is at stake, including the head you judged and what you would send back and why when that is what you recommend. It is left on the issue's item and this run ends; the answer starts the next stage. The options are fixed, because the answer's option is what starts it:
-
-- `land` approves the pull request at the head you name. The land stage starts again and merges it once the gate passes there.
-- `send-back` sends it back to its builder with your `brief` and the operator's words as what to change.
-- `stop` stops work on the item: nothing more runs, and an operator lands or closes the change by hand.
+Write each ask as `asks.md` says: `question` is one sentence that names the pull request and the decision, and `context` is what is at stake, including the head you judged and what you would send back and why when that is what you recommend. It is left on the issue's item and this run ends; the answer starts the next stage. The workflow declares the options every ask offers, because the answer's option is what starts it; you write none. `land` approves the pull request at the head you name, so name it.
 
 ## Declare
 
@@ -73,4 +69,4 @@ Write each ask as `asks.md` says: `question` is one sentence that names the pull
 - `base` — the base branch as you found it; when red, the diagnosis.
 - `recorded` — with `merged`, the merge response's `itemRecord.recorded`; otherwise false.
 - `report` — the absolute path of `$ARTIFACTS_DIR/land.md`, or the empty string when you wrote none.
-- `asks` — with `ask`, the question with the options above; otherwise empty.
+- `asks` — with `ask`, the question; otherwise empty.

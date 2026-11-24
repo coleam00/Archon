@@ -48,7 +48,18 @@ inputs:
     result_of: archon-review
     description: What the previous review of the item ended with, so this round continues it.
 
-returns: { node: verdict, outcome: outcome, asks: asks, final: [ready, not_ready], summary: findings_summary }
+returns:
+  node: verdict
+  outcome: outcome
+  asks: asks
+  final: [ready, not_ready]
+  summary: findings_summary
+  # One option set for every ask; the asks-settled bindings in .pack/pack.yaml route on these ids.
+  options:
+    - { id: send-back, does: 'The same builder continues the change with your answer and this review report, in its own session, and the review sees it again.', cost: 'One build run and one more review round.' }
+    - { id: take-as-is, does: 'The change goes on to the host stage as it is.', cost: 'What the review returned stays unfixed.' }
+    - { id: replan, does: 'The item goes back to planning with your answer.', cost: 'The work so far may be discarded.' }
+    - { id: stop, does: 'Nothing more runs. An operator lands or closes the change by hand.', cost: 'The item ends here unless someone takes it on.' }
 
 nodes:
   - id: scope

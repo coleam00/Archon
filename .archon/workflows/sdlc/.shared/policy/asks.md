@@ -26,9 +26,9 @@ they are shown: no step rewrites or completes them.
   nobody answers. End with the links the decision rests on, one per line, such as the
   issue, the pull request, the review report and the failing checks.
 - `options`: at least two, each a kebab-case `id`, what it `does` and what it `cost`s.
-  When your prompt names a fixed set of options, offer exactly those ids: the answer's
-  option is what starts the next stage, and an id the pack does not bind starts
-  nothing. Every ask also offers `other`, answered with text, for an answer none of
+  When your workflow declares the options its asks offer, write none: the workflow
+  owns them, because the answer's option is what starts the next stage, and your
+  `recommendation.option` names one of them. Every ask also offers `other`, answered with text, for an answer none of
   yours covers; never declare an option with that id.
 - `recommendation`: the `option` you recommend and `why`, in a sentence. When you have
   no basis to choose, set it to `null` and say in `context` why you cannot choose and

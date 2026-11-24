@@ -18,6 +18,6 @@ entry in `runs` names the item; `startLimits` lists each limit on it with `start
 binding your prompt names. When its `left` is `0`, and no start of `archon-build` is
 already queued on the item, the builder will not start again: end with `ask` instead.
 The ask says what is still wrong, whether it is the same kind of finding the earlier
-rounds returned, and what you recommend, and offers the options your prompt lists,
-`one-more-round` among them. When the item shows no such limit, the change was not
+rounds returned, and what you recommend. Its `send-back` option starts the builder for
+one more round; every round past the limit is asked this way. When the item shows no such limit, the change was not
 started by the pack's bindings: end with `return` as usual.

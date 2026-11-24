@@ -258,8 +258,9 @@ bindings:
 
   # A change sent back continues in the builder's own session, on its own branch. Each
   # way back is limited to three starts per item until the item is planned again; the
-  # stage that would send it back past the limit asks instead, and `one-more-round`
-  # grants one more start.
+  # stage that would send it back past the limit asks instead, and a `send-back` answer
+  # gives the builder one more round. The option ids are the ones review, host and land
+  # declare under `returns.options`.
   build-after-review:
     workflow: archon-build
     resource: sdlc-build
@@ -280,14 +281,6 @@ bindings:
     overlap: queue
     asks_settled: { workflow: archon-review, settled: answered, option: send-back, checkout: asking-run }
     inputs: *returned
-  build-after-review-one-more:
-    workflow: archon-build
-    resource: sdlc-build
-    capacity: 5
-    overlap: queue
-    grants: build-after-review
-    asks_settled: { workflow: archon-review, settled: answered, option: one-more-round, checkout: asking-run }
-    inputs: *returned
   build-after-host:
     workflow: archon-build
     resource: sdlc-build
@@ -302,14 +295,6 @@ bindings:
     capacity: 5
     overlap: queue
     asks_settled: { workflow: archon-host, settled: answered, option: send-back, checkout: asking-run }
-    inputs: *returned
-  build-after-host-one-more:
-    workflow: archon-build
-    resource: sdlc-build
-    capacity: 5
-    overlap: queue
-    grants: build-after-host
-    asks_settled: { workflow: archon-host, settled: answered, option: one-more-round, checkout: asking-run }
     inputs: *returned
   build-after-land:
     workflow: archon-build

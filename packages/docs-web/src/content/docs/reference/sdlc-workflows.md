@@ -74,7 +74,7 @@ Turns an issue whose outcome is decided into an implementable plan: the approach
 
 Implements the work with focused checks on what it changed, commits, pushes the branch and opens a draft pull request, written to the project's propose policy. When the change comes back from the review, the host, the land stage or an operator, the same node continues it in the session it last had on the item, on the same branch. The report is `implementation.md`, which records the disposition of every finding and review thread that came back.
 
-- **Started by** plan `planned`, investigate `rooted`, link or split `build`; review, host or land `return`; a `send-back` or `one-more-round` answer; or its own answers.
+- **Started by** plan `planned`, investigate `rooted`, link or split `build`; review, host or land `return`; a `send-back` answer; or its own answers.
 - **Inputs**: `issue`, `returned` (the result of the stage that sent the change back; `null` on a first build); reads the latest plan, investigation, triage and split from the item.
 - **Outcomes**: `built` starts the review on the commit it pushed. `replan` starts planning. `ask` leaves a decision that is not the builder's; the answers start the build again in the same session.
 
@@ -91,7 +91,7 @@ Beside the lenses, a simplify pass judges whether the change delivers its outcom
   ```
 
 - **Inputs**: `issue` (empty by hand), `pr` (by hand: the pull request's number or URL; empty means the builder's pull request, or the current branch's); reads the last build and review from the item.
-- **Outcomes in delivery**: `approve` starts the host stage. `return` sends the change back to its builder; past the round limit it is `ask` instead, offering `one-more-round`. `replan` starts planning. `ask` offers fixed options: `send-back` (the builder continues with your answer), `take-as-is` (the host stage starts on the change as it is), `replan` and `stop` (nothing more runs).
+- **Outcomes in delivery**: `approve` starts the host stage. `return` sends the change back to its builder; past the round limit it is `ask` instead, and `send-back` gives one more round. `replan` starts planning. `ask` offers the options the workflow declares under `returns.options`: `send-back` (the builder continues with your answer), `take-as-is` (the host stage starts on the change as it is), `replan` and `stop` (nothing more runs).
 - **Outcomes by hand**: `ready` or `not_ready`; nothing starts.
 
 ### `archon-host`
@@ -100,7 +100,7 @@ Hands a reviewed pull request to its host in three agent steps: it answers and r
 
 - **Started by** review `approve`, or a `take-as-is` answer on a review ask. By hand: `--branch <head-branch>`.
 - **Inputs**: `issue`; reads the last build and review from the item.
-- **Outcomes**: `ready` starts the land stage. `return` sends the change back to its builder for a red check it caused, a conflict, or an open thread; past the limit it asks, offering `one-more-round`. `ask` offers `send-back`, `take-as-is` (the land stage judges it as it is), `replan` and `stop`.
+- **Outcomes**: `ready` starts the land stage. `return` sends the change back to its builder for a red check it caused, a conflict, or an open thread; past the limit it asks, and `send-back` gives one more round. `ask` offers the declared `send-back`, `take-as-is` (the land stage judges it as it is), `replan` and `stop`.
 
 ### `archon-land`
 

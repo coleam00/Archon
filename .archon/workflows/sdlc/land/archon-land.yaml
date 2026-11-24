@@ -36,7 +36,16 @@ inputs:
     result_of: archon-land
     description: What the last land run on the item ended with, for the head an approval names.
 
-returns: { node: land, outcome: outcome, asks: asks, summary: reason }
+returns:
+  node: land
+  outcome: outcome
+  asks: asks
+  summary: reason
+  # One option set for every ask; the asks-settled bindings in .pack/pack.yaml route on these ids.
+  options:
+    - { id: land, does: 'Approves the pull request at the head the question names. The land stage starts again and merges it once the gate passes there.', cost: 'The change lands on the branch everyone builds on.' }
+    - { id: send-back, does: 'The same builder continues the change with your answer and the land brief, and it is reviewed again.', cost: 'One build run and another review, host and land round.' }
+    - { id: stop, does: 'Nothing more runs. An operator lands or closes the change by hand.', cost: 'The item ends here unless someone takes it on.' }
 
 nodes:
   - id: land
