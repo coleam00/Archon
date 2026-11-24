@@ -17,10 +17,10 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 const mockLoadRepoConfig = mock(() => Promise.resolve(null));
 const mockLoadConfig = mock(() =>
   Promise.resolve({
-    assistant: 'claude',
+    assistant: 'claude' as string | undefined,
     aliases: {},
     tiers: {},
-    assistants: { claude: {} },
+    assistants: { claude: {} } as Record<string, object>,
     envVars: undefined as Record<string, string> | undefined,
   })
 );
@@ -492,6 +492,47 @@ describe('validateWorkflowsCommand', () => {
     } finally {
       write.mockRestore();
     }
+  });
+
+  test('missing default assistant fails an unqualified prompt and passes bash and script', async () => {
+    mockLoadConfig.mockResolvedValue({
+      assistant: undefined,
+      aliases: {},
+      tiers: {},
+      assistants: {},
+      envVars: undefined,
+    });
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        makeTestWorkflowWithSource(
+          { name: 'needs-provider', nodes: [{ id: 'draft', prompt: 'Write the change.' }] },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+
+    expect(await validateWorkflowsCommand(validationCwd)).toBe(1);
+    expect(mockConsoleLog.mock.calls.flat().join('\n')).toContain('draft');
+
+    mockConsoleLog.mockClear();
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        makeTestWorkflowWithSource(
+          {
+            name: 'deterministic',
+            nodes: [
+              { id: 'shell', bash: 'true' },
+              { id: 'job', script: 'console.log(1)', runtime: 'bun' },
+            ],
+          },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+
+    expect(await validateWorkflowsCommand(validationCwd)).toBe(0);
   });
 
   afterEach(async () => {
