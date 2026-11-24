@@ -1517,7 +1517,8 @@ A run that merges through [`archon forge pr.merge`](/reference/forge/#workflow-h
 records the merge on its item by itself (`via: forge`) when the forge plugin reports the
 merge time (`merged_at`), so a later `workflow merged` for that item keeps the forge's
 record. So does one the forge refuses because the pull request is already merged, from the
-facts of the earlier merge the refusal carries. An item that already has a merge keeps it.
+facts of the earlier merge the refusal carries. An item that already has a merge keeps it;
+for that same change it only gains the landing branch when it has none.
 With a plugin that omits the merge time, nothing is recorded and the merge still succeeds.
 
 ### `workflow landing`
@@ -1545,8 +1546,9 @@ archon workflow link --item issue-42 --kind part_of --to WO-12
 Recording again replaces the branch. A run already started keeps the base it recorded. A
 run that merges through `archon forge pr.merge` records the merged pull request's base
 branch as its item's landing by itself, together with the merge and under the same
-conditions (the forge plugin reports `merged_at`, and the item has no merge yet), so later
-fresh runs on the merged item stay on the branch it landed on.
+conditions (the forge plugin reports `merged_at`, and the item has no merge yet or a merge
+of that change with no landing), so later fresh runs on the merged item stay on the branch
+it landed on. A landing already recorded is never replaced this way.
 
 Without `--from`, the command only records, and does not check the remote, so a branch may
 be recorded before it exists. With `--from`, it creates the branch on the remote first and

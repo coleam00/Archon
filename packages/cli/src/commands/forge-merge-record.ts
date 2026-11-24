@@ -3,14 +3,15 @@
  * refused it because the pull request was already merged: the merge, as `workflow merged`
  * records it, and the landing branch, as `workflow landing` does. The facts come from the
  * forge's answer, never from the request: the merge result, or the refusal's evidence of
- * the earlier merge. The store keeps the first merge, and the landing is written only with
- * it, so a repeat, a pack that still calls `recordMerge` afterwards, or a merge of another
- * pull request leaves both records as they were.
+ * the earlier merge. The store keeps the first merge, and the landing is written with it,
+ * or later for that same change when the item has none. A repeat, a pack that still calls
+ * `recordMerge` afterwards, or a merge of another pull request changes no record.
  */
 import { closeDatabase } from '@archon/core/db/connection';
 import { readCallingNode } from '../utils/calling-node';
 import { createCliWorkflowHost } from '../utils/workflow-host';
-import { NoRunItemError, resolveItemTarget } from './item-target';
+import type { WorkflowItem } from '@archon/workflows/schemas/workflow-run';
+import { NoRunItemError, resolveRunItem } from './item-target';
 
 export interface RunMergeFacts {
   /** The merged pull request's URL. */
@@ -25,8 +26,8 @@ export interface RunMergeFacts {
 /**
  * `no_merge_time`: the run is on an item, but the plugin reported no merge time, so
  * nothing is recorded rather than a time the forge did not give. `already_recorded`: the
- * item already has a merge, so neither record is written. A file-store run is never on an
- * item, so it resolves to `no_item`.
+ * item already has its merge and landing, or a merge of another change, so nothing is
+ * written. A file-store run is never on an item, so it resolves to `no_item`.
  */
 export async function recordRunMerge(
   runId: string,
@@ -35,9 +36,9 @@ export async function recordRunMerge(
 ): Promise<'recorded' | 'already_recorded' | 'no_item' | 'no_merge_time'> {
   try {
     const host = await createCliWorkflowHost();
-    let target: { projectKey: string; key: string };
+    let item: WorkflowItem;
     try {
-      target = await resolveItemTarget(host, process.cwd(), { itemOf: runId });
+      item = await resolveRunItem(host, runId);
     } catch (error) {
       if (error instanceof NoRunItemError) return 'no_item';
       throw error;
@@ -46,6 +47,7 @@ export async function recordRunMerge(
     if (at === undefined) return 'no_merge_time';
     const fromRun = readCallingNode(runId, env);
     const { store } = host.deps;
+    const target = { projectKey: item.projectKey, key: item.key };
     const recorded = await store.recordItemMerge({
       ...target,
       change,
@@ -55,7 +57,14 @@ export async function recordRunMerge(
       fromRun,
     });
     if (recorded === null) throw new Error(`No item '${target.key}' in this project.`);
-    if (!recorded.recorded) return 'already_recorded';
+    // The item already has a merge. Its landing is filled only when that merge is this
+    // change and records no branch: `workflow merged` writes none, and a run can stop
+    // between the two writes. A landing already there, perhaps corrected, is kept.
+    if (
+      !recorded.recorded &&
+      (recorded.merge.change !== change || (await store.getItemLanding(item.id)) !== null)
+    )
+      return 'already_recorded';
     await store.recordItemLanding({ ...target, branch, fromRun });
     return 'recorded';
   } finally {

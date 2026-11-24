@@ -1948,7 +1948,7 @@ declare module 'archon:script' {
       readonly recorded: true;
     } | {
       readonly recorded: false;
-      readonly reason: 'no_merge_time' | 'already_recorded';
+      readonly reason: 'no_merge_time' | 'already_recorded' | 'write_failed';
     };
     readonly unsupported?: ReadonlyArray<string>;
     readonly remedy?: string;

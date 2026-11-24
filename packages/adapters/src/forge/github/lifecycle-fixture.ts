@@ -180,6 +180,8 @@ export function mergeGitHub(
     readFailed?: boolean;
     /** Merged before the request, by hand. */
     alreadyMerged?: boolean;
+    /** The forge reports no merge time for the merged pull request. */
+    noMergeTime?: boolean;
   } = {}
 ) {
   let wrote = options.alreadyMerged ?? false;
@@ -210,7 +212,7 @@ export function mergeGitHub(
         draft: false,
         merged: wrote,
         state: wrote ? 'closed' : 'open',
-        merged_at: wrote ? MERGED_AT : null,
+        merged_at: wrote && !options.noMergeTime ? MERGED_AT : null,
         closed_at: wrote ? MERGED_AT : null,
       }),
       head: {

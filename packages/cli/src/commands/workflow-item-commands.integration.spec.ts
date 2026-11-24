@@ -904,21 +904,50 @@ test.serial(
         )
       )
     );
-    let repeat: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
-    await invoke(async () => {
-      repeat = await recordRunMerge(
-        onItem.id,
-        { ...facts, change: 'https://github.com/acme/web/pull/5', branch: 'main' },
-        env
-      );
-    });
-    expect(repeat).toBe('already_recorded');
-    const repeated = await readItemJson('item-1');
-    expect(repeated.merged).toEqual(item.merged);
-    expect(repeated.landing?.branch).toBe('release/next');
+    for (const repeat of [facts, { ...facts, change: 'https://github.com/acme/web/pull/5' }]) {
+      let outcome: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
+      await invoke(async () => {
+        outcome = await recordRunMerge(onItem.id, { ...repeat, branch: 'main' }, env);
+      });
+      expect(outcome).toBe('already_recorded');
+      const repeated = await readItemJson('item-1');
+      expect(repeated.merged).toEqual(item.merged);
+      expect(repeated.landing?.branch).toBe('release/next');
+    }
 
     // A run on no item writes nothing.
     expect(await record(bare.id, facts.at)).toBe('no_item');
     expect(merges()).toEqual([{ n: 1 }]);
+
+    // A merge recorded by hand, which writes no landing, gets its landing from the forge's
+    // answer for that same change; the merge stays as it was recorded.
+    const second = runsWithItems().find(row => row.item_key === 'item-2');
+    if (!second) throw new Error('Expected a run on item-2');
+    succeeded(
+      await invoke(host =>
+        workflowMergedCommand(
+          host,
+          projectRoot,
+          { item: 'item-2', change: facts.change, at: facts.at },
+          true,
+          env
+        )
+      )
+    );
+    const byHand = (await readItemJson('item-2')).merged;
+    expect(byHand).toMatchObject({ change: facts.change, via: 'cli' });
+    let filled: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
+    const fill = await invoke(async () => {
+      filled = await recordRunMerge(
+        second.id,
+        { ...facts, branch: 'release/1' },
+        nodeEnv(second.id)
+      );
+    });
+    expect(fill.exitCode, fill.stderr).toBe(0);
+    expect(filled).toBe('recorded');
+    const recovered = await readItemJson('item-2');
+    expect(recovered.merged).toEqual(byHand);
+    expect(recovered.landing?.branch).toBe('release/1');
   }
 );

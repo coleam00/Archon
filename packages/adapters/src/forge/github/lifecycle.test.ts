@@ -561,6 +561,13 @@ test('merge refuses a pull request merged earlier and reports the facts of that 
     },
   });
   expect(github.writes).toEqual([]);
+  // Without a merge time from the forge, none is supplied; a close time never stands in.
+  const untimed = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: mergeGitHub({ alreadyMerged: true, noMergeTime: true }).fetch,
+  });
+  expect(untimed).toMatchObject({ ok: false, mutation: { observed: { state: 'merged' } } });
+  expect(untimed.ok ? undefined : untimed.mutation?.merge).not.toHaveProperty('merged_at');
 });
 
 test.each([

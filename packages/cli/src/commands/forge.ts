@@ -329,6 +329,7 @@ async function recordRunFacts(
     }
   } catch (error) {
     record.failed = true;
+    record.itemRecord = { recorded: false, reason: 'write_failed' };
     const reason = error instanceof Error ? error.message : String(error);
     record.stderr.push(
       `Forge operation ${context.operationId} ${merged} ${facts.change} but the item record could not be written: ${reason}`

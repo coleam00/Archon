@@ -46,13 +46,17 @@ const credential = { credentialSource: z.string().min(1).optional() };
  * What the host recorded on the run's item for a `pr.merge` from a run on an item: on the
  * success response for an applied merge, and on the refusal of a pull request the forge
  * reports already merged. `no_merge_time`: the forge reported no merge time, so nothing
- * was recorded. `already_recorded`: the item already had a merge, so neither record was
- * written. Either way the merge itself happened. Absent for every other operation and
- * outcome, and for a run on no item.
+ * was recorded. `already_recorded`: the item already had its merge and landing, or a merge
+ * of another change, so nothing was written. `write_failed`: the store refused the write,
+ * and the command exits 2 with the reason on stderr. The merge itself happened either way.
+ * Absent for every other operation and outcome, and for a run on no item.
  */
 export const cliForgeItemRecordSchema = z.discriminatedUnion('recorded', [
   z.object({ recorded: z.literal(true) }),
-  z.object({ recorded: z.literal(false), reason: z.enum(['no_merge_time', 'already_recorded']) }),
+  z.object({
+    recorded: z.literal(false),
+    reason: z.enum(['no_merge_time', 'already_recorded', 'write_failed']),
+  }),
 ]);
 export type CliForgeItemRecord = z.infer<typeof cliForgeItemRecordSchema>;
 

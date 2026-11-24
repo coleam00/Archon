@@ -170,3 +170,43 @@ test('a stored attachment answers the request only when its digest, size and typ
   expect(answer({ bytes: bytes.byteLength + 1 })).toBe(false);
   expect(answer({ contentType: 'image/gif' })).toBe(false);
 });
+
+test('a merge refusal that observed another pull request merged does not answer the request', () => {
+  const repo = { host: 'forge.example', path: 'team/repo' };
+  const request = {
+    operationId: 'merge',
+    op: 'pr.merge' as const,
+    ref: { repo, number: 51 },
+    method: 'squash' as const,
+    conditions: { head: 'head' },
+  };
+  const refusal = (number: number) => ({
+    operationId: 'merge',
+    ok: false as const,
+    error: { kind: 'conflict' as const, message: 'already merged' },
+    mutation: {
+      op: 'pr.merge' as const,
+      target: request.ref,
+      outcome: 'refused' as const,
+      merge: { method: 'squash' as const, conditions: request.conditions },
+      observed: {
+        repo,
+        number,
+        schemaVersion: 1 as const,
+        url: `https://forge.example/team/repo/pull/${String(number)}`,
+        head: 'feat',
+        base: 'dev',
+        is_draft: false,
+        state: 'merged' as const,
+        head_repo: repo,
+        head_revision: 'head',
+        base_revision: 'base',
+        maintainer_can_modify: null,
+      },
+    },
+  });
+  expect(matchesForgeOperationResponse(request, refusal(51), metadata, 'forge.example')).toBe(true);
+  expect(matchesForgeOperationResponse(request, refusal(52), metadata, 'forge.example')).toBe(
+    false
+  );
+});

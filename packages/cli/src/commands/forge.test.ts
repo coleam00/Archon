@@ -1058,8 +1058,9 @@ test('a merge outside a run records nothing', async () => {
 test('a store failure keeps the applied merge on stdout and exits 2', async () => {
   const result = await runMerge({ record: 'throws' });
   expect(result.code).toBe(2);
-  expect(result.output).toEqual([expect.objectContaining({ ok: true })]);
-  expect(result.output[0]).not.toHaveProperty('itemRecord');
+  expect(result.output).toEqual([
+    expect.objectContaining({ ok: true, itemRecord: { recorded: false, reason: 'write_failed' } }),
+  ]);
   expect(result.stderr).toHaveLength(1);
   expect(result.stderr[0]).toContain(
     `merged ${mergedPr.url} but the item record could not be written: store unavailable`
@@ -1118,4 +1119,15 @@ test('a merge already recorded on the item says nothing was written', async () =
     itemRecord: { recorded: false, reason: 'already_recorded' },
   });
   expect(result.stderr).toEqual([]);
+});
+
+test('an already-merged refusal whose item write fails says so and exits 2', async () => {
+  const result = await runMerge({ outcome: 'already-merged', record: 'throws' });
+  expect(result.code).toBe(2);
+  expect(result.output[0]).toMatchObject({
+    ok: false,
+    mutation: { observed: { state: 'merged' } },
+    itemRecord: { recorded: false, reason: 'write_failed' },
+  });
+  expect(result.stderr).toHaveLength(1);
 });
