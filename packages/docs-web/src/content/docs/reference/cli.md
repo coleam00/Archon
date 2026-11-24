@@ -1516,7 +1516,9 @@ registered project. Every later item read carries the fact as
 A run that merges through [`archon forge pr.merge`](/reference/forge/#workflow-host-integration-and-audit)
 records the merge on its item by itself (`via: forge`) when the forge plugin reports the
 merge time (`merged_at`), so a later `workflow merged` for that item keeps the forge's
-record. With a plugin that omits it, nothing is recorded and the merge still succeeds.
+record. So does one the forge refuses because the pull request is already merged: the host
+reads the merge's facts from the forge. With a plugin that omits the merge time, nothing is
+recorded and the merge still succeeds.
 
 ### `workflow landing`
 

@@ -12,6 +12,7 @@ import {
   mutationTarget,
   mutationAttempt,
   type ForgeRequest,
+  type ForgeResponse,
 } from '@archon/forge/operations';
 import {
   cliForgeCheckRequestSchema,
@@ -22,7 +23,7 @@ import {
 } from '@archon/forge';
 import { z } from '@hono/zod-openapi';
 import { writeJsonLine } from '../utils/stdout';
-import type { recordRunMerge } from './forge-merge-record';
+import type { recordRunMerge, RunMergeFacts } from './forge-merge-record';
 
 async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<void> {
   const { persistWorkflowEvent } = await import('@archon/core/db/workflow-events');
@@ -104,9 +105,8 @@ export async function forgeCommand(
     response = result.response;
     const runId = env.WORKFLOW_ID;
     if (runId) {
-      const recorded = await recordRunFacts(runId, result, context);
-      if (recorded.itemRecord && response.ok)
-        response = { ...response, itemRecord: recorded.itemRecord };
+      const recorded = await recordRunFacts(runId, result, input, context);
+      if (recorded.itemRecord) response = { ...response, itemRecord: recorded.itemRecord };
       for (const line of recorded.stderr) process.stderr.write(`${line}\n`);
       if (recorded.failed) {
         // Retain the actual operation outcome on stdout. A failure to record it is a
@@ -291,55 +291,145 @@ interface RunRecord {
 }
 
 /**
- * What a run-owned operation leaves on the run: its audit, and for an applied `pr.merge`
- * on a run with an item, the merge and landing branch on that item, from the merge result.
- * Nothing here throws, because the operation has already reached the forge.
+ * What a run-owned operation leaves on the run: its audit, and for a `pr.merge` on a run
+ * with an item, the merge and landing branch on that item. An applied merge supplies the
+ * facts from its own result. A merge refused because the forge reports the pull request
+ * already merged supplies them from `pr.view` and `pr.merge-state` reads of that pull
+ * request. Nothing here throws, because the operation has already reached the forge.
  */
 async function recordRunFacts(
   runId: string,
   { response, audit }: ForgeDispatchResult,
+  input: ForgeInput,
   context: ForgeCommandContext
 ): Promise<RunRecord> {
   const record: RunRecord = { stderr: [], failed: false };
-  try {
-    await (context.dependencies.audit ?? persistAudit)(audit, runId);
-  } catch {
-    record.failed = true;
-    record.stderr.push(
-      `Forge operation ${context.operationId} completed but its run audit could not be persisted.`
-    );
-  }
-  if (!response.ok || response.result.op !== 'pr.merge') return record;
-  const merged = response.result.value;
+  await persistRunAudit(audit, runId, context, record);
+  const merge = await runMergeFacts(runId, response, input, context, record);
+  if (!merge) return record;
+  const { facts, merged } = merge;
   try {
     const recordMerge =
       context.dependencies.recordMerge ?? (await import('./forge-merge-record')).recordRunMerge;
-    const outcome = await recordMerge(
-      runId,
-      {
-        change: merged.pr.url,
-        commit: merged.landed.commit,
-        at: merged.merged_at,
-        branch: merged.pr.base,
-      },
-      context.env
-    );
+    const outcome = await recordMerge(runId, facts, context.env);
     if (outcome === 'recorded') record.itemRecord = { recorded: true };
     if (outcome === 'no_merge_time') {
-      // The merge happened, so this is no failure: the caller is told, and the exit stays 0.
+      // The merge happened, so this is no failure: the caller is told, and the exit is unchanged.
       record.itemRecord = { recorded: false, reason: 'no_merge_time' };
       record.stderr.push(
-        `Forge operation ${context.operationId} merged ${merged.pr.url}, but the forge plugin reported no merge time, so the merge and its landing branch were not recorded on the run's item. Update the forge plugin: find its id with \`archon plugin list\`, then run \`archon plugin update <id>\`.`
+        `Forge operation ${context.operationId} ${merged} ${facts.change}, but the forge plugin reported no merge time, so the merge and its landing branch were not recorded on the run's item. Update the forge plugin: find its id with \`archon plugin list\`, then run \`archon plugin update <id>\`.`
       );
     }
   } catch (error) {
     record.failed = true;
     const reason = error instanceof Error ? error.message : String(error);
     record.stderr.push(
-      `Forge operation ${context.operationId} merged ${merged.pr.url} but the item record could not be written: ${reason}`
+      `Forge operation ${context.operationId} ${merged} ${facts.change} but the item record could not be written: ${reason}`
     );
   }
   return record;
+}
+
+async function persistRunAudit(
+  audit: ForgeOperationAudit,
+  runId: string,
+  context: ForgeCommandContext,
+  record: RunRecord
+): Promise<void> {
+  try {
+    await (context.dependencies.audit ?? persistAudit)(audit, runId);
+  } catch {
+    record.failed = true;
+    record.stderr.push(
+      `Forge operation ${audit.operationId} completed but its run audit could not be persisted.`
+    );
+  }
+}
+
+/**
+ * The merge facts a `pr.merge` response gives, if the forge says the pull request merged.
+ * A refusal the forge observed as `merged` (merged by hand, or by an earlier run that died
+ * after the merge) carries no commit or merge time, so they are read from the forge. Any
+ * other refusal, including a closed and unmerged pull request, gives none.
+ */
+async function runMergeFacts(
+  runId: string,
+  response: ForgeResponse,
+  input: ForgeInput,
+  context: ForgeCommandContext,
+  record: RunRecord
+): Promise<{ facts: RunMergeFacts; merged: 'merged' | 'found already merged' } | undefined> {
+  if (response.ok) {
+    if (response.result.op !== 'pr.merge') return undefined;
+    const { pr, landed, merged_at } = response.result.value;
+    return {
+      merged: 'merged',
+      facts: { change: pr.url, commit: landed.commit, at: merged_at, branch: pr.base },
+    };
+  }
+  const { mutation } = response;
+  const request = context.attempt.request;
+  // Dispatch has already checked that `observed` is the requested pull request.
+  if (
+    request?.op !== 'pr.merge' ||
+    mutation?.outcome !== 'refused' ||
+    mutation.observed?.state !== 'merged'
+  )
+    return undefined;
+  const facts = await readMergedFacts(request.ref, runId, input, context, record);
+  if ('failure' in facts) {
+    record.failed = true;
+    record.stderr.push(
+      `Forge operation ${context.operationId} found ${mutation.observed.url} already merged, but ${facts.failure}, so the merge was not recorded on the run's item. Record it with \`archon workflow merged\`.`
+    );
+    return undefined;
+  }
+  return { merged: 'found already merged', facts };
+}
+
+/** The facts of a merged pull request, read from the forge as the merge itself was dispatched. */
+async function readMergedFacts(
+  ref: Extract<ForgeRequest, { op: 'pr.merge' }>['ref'],
+  runId: string,
+  input: ForgeInput,
+  context: ForgeCommandContext,
+  record: RunRecord
+): Promise<RunMergeFacts | { failure: string }> {
+  const read = async (request: ForgeRequest): Promise<ForgeResponse> => {
+    const { response, audit } = await (context.dependencies.dispatch ?? dispatchForge)(request, {
+      ...trustedDiscovery(input, context),
+      credentialEnv: context.env,
+    });
+    await persistRunAudit(audit, runId, context, record);
+    return response;
+  };
+  const failed = (response: ForgeResponse, op: string): { failure: string } => ({
+    failure: response.ok
+      ? `${op} no longer reports it merged`
+      : `${op} failed (${response.error.kind}: ${response.error.message})`,
+  });
+  try {
+    const view = await read({
+      operationId: randomUUID(),
+      op: 'pr.view',
+      selector: { kind: 'number', ref },
+    });
+    const viewed = view.ok && view.result.op === 'pr.view' ? view.result.value : null;
+    if (viewed?.pr.state !== 'merged') return failed(view, 'pr.view');
+    const state = await read({ operationId: randomUUID(), op: 'pr.merge-state', ref });
+    if (!state.ok || state.result.op !== 'pr.merge-state') return failed(state, 'pr.merge-state');
+    const { pr, timestamps } = viewed;
+    return {
+      change: pr.url,
+      commit: state.result.value.merge_commit,
+      at: timestamps?.merged_at ?? undefined,
+      branch: pr.base,
+    };
+  } catch (error) {
+    return {
+      failure: `reading it failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
 }
 
 /**

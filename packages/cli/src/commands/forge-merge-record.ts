@@ -1,8 +1,10 @@
 /**
- * A `pr.merge` the forge applied for a run records itself on the run's item: the merge, as
- * `workflow merged` records it, and the landing branch, as `workflow landing` does. The
- * facts come from the forge's merge result, never from the request. A pack that still
- * calls `recordMerge` afterwards keeps this record: the store keeps the first merge.
+ * A `pr.merge` from a run records itself on the run's item when the forge applied it, or
+ * refused it because the pull request was already merged: the merge, as `workflow merged`
+ * records it, and the landing branch, as `workflow landing` does. The facts come from the
+ * forge, never from the request: from the merge result, or for an already-merged refusal
+ * from `pr.view` and `pr.merge-state`. A pack that still calls `recordMerge` afterwards
+ * keeps this record: the store keeps the first merge.
  */
 import { closeDatabase } from '@archon/core/db/connection';
 import { readCallingNode } from '../utils/calling-node';

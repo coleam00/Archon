@@ -1941,6 +1941,12 @@ declare module 'archon:script' {
       readonly outcome: 'outcome_unknown';
     };
     readonly credentialSource?: string;
+    readonly itemRecord?: {
+      readonly recorded: true;
+    } | {
+      readonly recorded: false;
+      readonly reason: 'no_merge_time';
+    };
     readonly unsupported?: ReadonlyArray<string>;
     readonly remedy?: string;
   };

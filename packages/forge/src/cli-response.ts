@@ -43,9 +43,11 @@ const [success, failure] = forgeResponseSchema.options;
 const credential = { credentialSource: z.string().min(1).optional() };
 
 /**
- * What the host recorded on the run's item for an applied `pr.merge` from a run on an item.
- * `no_merge_time`: the plugin's result carries no `merged_at`, so nothing was recorded; the
- * merge itself still happened. Absent for every other operation and for a run on no item.
+ * What the host recorded on the run's item for a `pr.merge` from a run on an item: on the
+ * success response for an applied merge, and on the refusal for a pull request the forge
+ * reports already merged. `no_merge_time`: the forge reported no merge time, so nothing was
+ * recorded; the merge itself still happened. Absent for every other operation and outcome,
+ * and for a run on no item.
  */
 export const cliForgeItemRecordSchema = z.discriminatedUnion('recorded', [
   z.object({ recorded: z.literal(true) }),
@@ -66,6 +68,7 @@ export const cliForgeResponseSchema = z.discriminatedUnion('ok', [
   }),
   failure.extend({
     ...credential,
+    itemRecord: cliForgeItemRecordSchema.optional(),
     // `forge check` only: the named capabilities the plugin does not advertise, and the
     // operator's next step, from the plugin when it states one.
     unsupported: z.array(z.string().min(1)).optional(),
