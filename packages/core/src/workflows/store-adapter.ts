@@ -26,6 +26,7 @@ import * as itemLandingsDb from '../db/item-landings';
 import * as itemAsksDb from '../db/item-asks';
 import * as itemWaitsDb from '../db/item-waits';
 import * as workflowDb from '../db/workflows';
+import * as itemStarts from '../db/item-starts';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
 import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
@@ -193,13 +194,14 @@ export function createWorkflowStore(): IWorkflowStore {
     hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
     acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf),
     getStartReceipt: resourceStarts.getStartReceipt,
+    listStartReceiptSources: resourceStarts.listStartReceiptSources,
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
     getResourceStartRequest: resourceStarts.getResourceStartRequest,
-    listSkippedItemStarts: resourceStarts.listSkippedItemStarts,
+    listSkippedItemStarts: itemStarts.listSkippedItemStarts,
     listWaitedItemHolders: resourceStarts.listWaitedItemHolders,
     listQueuedResourceStartsForHost: resourceStarts.listQueuedResourceStartsForHost,
-    listQueuedItemStarts: resourceStarts.listQueuedItemStarts,
+    listQueuedItemStarts: itemStarts.listQueuedItemStarts,
     withdrawQueuedResourceStart: resourceStarts.withdrawQueuedResourceStart,
     claimStartBindingPreparation: resourceStarts.claimStartBindingPreparation,
     completeStartBindingPreparation: resourceStarts.completeStartBindingPreparation,

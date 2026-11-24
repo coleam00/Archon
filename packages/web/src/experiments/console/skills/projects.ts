@@ -7,8 +7,14 @@ export async function listProjects(): Promise<Project[]> {
   return raw.map(toProject);
 }
 
-export async function getProject(id: string): Promise<Project> {
-  const raw = await requestJson('/api/codebases/{id}', 'get', { params: { id } });
+export async function getProject(
+  id: string,
+  init: { signal?: AbortSignal } = {}
+): Promise<Project> {
+  const raw = await requestJson('/api/codebases/{id}', 'get', {
+    params: { id },
+    signal: init.signal,
+  });
   return toProject(raw);
 }
 

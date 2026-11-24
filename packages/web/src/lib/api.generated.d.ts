@@ -3935,6 +3935,438 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/factory/views': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The factory views that apply to a project
+     * @description A view applies when the project ships its own `.archon/packs/<pack key>.factory-view.json`, or when a pack declares one and the project has run a workflow the view names. Declarations that could not be read or did not validate are listed under `errors` with their file.
+     */
+    get: {
+      parameters: {
+        query: {
+          /** @description The project whose factory views to list. */
+          codebaseId: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['FactoryViews'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/factory/packs': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Every pack with a factory overview, and the projects that run it
+     * @description The hand-written explainers of how each pack's factory runs, across the install: the pack's own `.shared/factory-overview.json` first, else the first project (by name) shipping `.archon/packs/<pack key>.factory-overview.json`, named in `readFrom`. A pack whose files are all broken is listed with a null `overview` and its `errors`. `projects` are the projects a factory view of the pack applies to. A project that could not be read is listed under `unreadProjects`; the other packs still list.
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['FactoryPacks'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/factory/pack-settings': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * A pack's declared settings, and what each project that runs it sets
+     * @description Every setting the pack declares in its `.pack/pack.yaml` (`inputs:`), in its order, presented as the `settings` map of the overview `GET /api/factory/packs` shows for it says (shadow, and whether the value names a policy or the checks file). For each project a factory view of the pack applies to: its value of each setting from `.archon/packs/<pack key>.yaml`, the file a policy or checks setting names looked up in its checkout (a checks file listed), and the keys it sets that the pack does not declare. A map key the pack does not declare is listed under `mapErrors`. A project whose settings file cannot be read carries its `error`; the others still read. Nothing is written.
+     */
+    get: {
+      parameters: {
+        query: {
+          /** @description The pack's key, as `GET /api/factory/packs` lists it. */
+          pack: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['FactoryPackSettings'];
+          };
+        };
+        /** @description No pack with a factory overview has this key */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/factory/discoveries': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * What a project's discoveries drains decided to file
+     * @description Every finding the completed runs of the workflow the first applying factory view's `discoveries` field names decided to file, newest first, with how many they held and dropped, read at the pointers that field declares. `shadow` says the drains only decide what they would file. A finding's `coveredBy` names an item on the project with the same title (case-insensitive), null while none has it. A drain whose result has no decisions at those pointers counts under `unreadable`.
+     */
+    get: {
+      parameters: {
+        query: {
+          /** @description The project whose discoveries drains to read. */
+          codebaseId: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['FactoryDiscoveries'];
+          };
+        };
+        /** @description Codebase not found, no factory view applies to it, or it declares no discoveries */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/factory/item': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * One item with its progress and the story facts of each of its runs
+     * @description The item's read, as `GET /api/items` returns it, with its `progress` as `GET /api/factory/progress` reads it, plus `runs`: for each of the item's runs, in the item read's order, the workflow as the view declares it, the run's cost, its running step while it runs, its check rounds (a declared loop's iterations, or the run's one round when its workflow is a stage-form rounds source) with the steps that recorded an outcome in each, what each shadow step the view declares decided on that run (`shadows`, one per completed step and round, in recording order; a run of the discoveries workflow included), the pull request the run named at the view's `change` pointer (`change`), what it said in its own words at the view's `story.said` pointers (`said`), the models its steps ran on (`models`), and when each of its steps started (`steps`, as the engine records the step id).
+     */
+    get: {
+      parameters: {
+        query: {
+          /** @description The project the item belongs to. */
+          codebaseId: string;
+          /** @description The item's key in the project, as `GET /api/items` takes it. */
+          key: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['FactoryItemDetail'];
+          };
+        };
+        /** @description Invalid query */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found, no factory view applies to it, or no such item */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/factory/progress': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The board progress of a project's items, by key
+     * @description What the board needs of each item that its read (`GET /api/items/window`) does not carry, derived through the first factory view that applies to the project (`pack` names it): the running step, its check rounds (the iterations of a declared loop, or one round per run of a declared stage-form workflow, numbered by its result), how often a return point sent it back, its title, the work order the declared `partOf` result names, the newest decision of each shadow step the view declares (`shadows`: what it would have done; nothing acted on it), and its change, with whether that merged: merged as the engine recorded it when the item carries a merge record (`archon workflow merged`, or a land run), and the change host is then not asked whether it merged (only, once and in the background, for a pull request number no audit row of its runs names, which fills a later read); else as the change host reports it (cached on the server; `pending` when the server is still asking it, so read again shortly). `members` lists, for each asked item, the items with an active `part_of` link to it. A key may name an item with no runs (a work order); a key the project has no item under is left out; an item whose progress could not be derived reads null.
+     */
+    get: {
+      parameters: {
+        query: {
+          /** @description The project the items belong to. */
+          codebaseId: string;
+          /** @description The items' keys, as `GET /api/items` takes them: repeat `keys` once per item, up to a page of `GET /api/items/window`. */
+          keys: string | string[];
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['FactoryProgress'];
+          };
+        };
+        /** @description Invalid query */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found, or no factory view applies to it */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/factory/workflow': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * One workflow's steps, as a factory view draws them
+     * @description The steps of a workflow a factory view applying to the project names, from the definition runs execute: each step keyed as run events name it, the loop groups and included workflows that frame it, its kind, declared model, `when:`, the prompt it runs and the YAML its author wrote. The first applying view whose stages name the workflow says which pack's workflow it is.
+     */
+    get: {
+      parameters: {
+        query: {
+          /** @description The project whose factory view to read. */
+          codebaseId: string;
+          /** @description A workflow a factory view's stage names, as the view names it. */
+          workflow: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['FactoryWorkflow'];
+          };
+        };
+        /** @description Codebase, view or workflow not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/packs/{pack}/graph': {
     parameters: {
       query?: never;
@@ -11273,6 +11705,1524 @@ export interface components {
         /** @enum {string} */
         source: 'project' | 'bundled' | 'global' | 'installed';
         error: string;
+      }[];
+    };
+    FactoryViews: {
+      views: {
+        pack: string;
+        packKey: string;
+        runNames: {
+          [key: string]: string;
+        };
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed' | 'project-file';
+        path: string;
+        declaration: {
+          /** @enum {number} */
+          version: 1;
+          pack: string;
+          title: string;
+          summary: string;
+          stages: {
+            id: string;
+            label: string;
+            blurb: string;
+            short?: string;
+            /** @enum {string} */
+            group: 'intake' | 'build' | 'check' | 'land';
+            workflows: string[];
+            nodes?: string[];
+            drilldown?: {
+              phases: {
+                label: string;
+                cards: {
+                  title: string;
+                  text: string;
+                  /** @enum {string} */
+                  icon:
+                    | 'inbox'
+                    | 'scale'
+                    | 'link'
+                    | 'ruler'
+                    | 'scissors'
+                    | 'database'
+                    | 'clipboard-list'
+                    | 'pencil'
+                    | 'wrench'
+                    | 'git-branch'
+                    | 'search-code'
+                    | 'flask-conical'
+                    | 'monitor-check'
+                    | 'gavel'
+                    | 'message-square'
+                    | 'circle-alert'
+                    | 'git-pull-request'
+                    | 'flag'
+                    | 'send'
+                    | 'shield-check'
+                    | 'git-merge';
+                  /** @enum {string} */
+                  kind: 'agent' | 'check' | 'script' | 'you';
+                  covers: {
+                    workflow: string;
+                    steps: string[];
+                  }[];
+                }[];
+              }[];
+              loop?: {
+                label: string;
+                from: number;
+                to: number;
+                workflow: string;
+                step: string;
+              };
+            };
+          }[];
+          columns?: {
+            id: string;
+            label: string;
+            blurb: string;
+            stages: string[];
+          }[];
+          placement: {
+            [key: string]: string;
+          };
+          endings: {
+            [key: string]: string;
+          };
+          landed: {
+            stage: string;
+          };
+          rounds?:
+            | {
+                workflow: string;
+                loop: string;
+              }
+            | {
+                workflow: string;
+                round: string;
+                allowance: string;
+              }
+            | (
+                | {
+                    workflow: string;
+                    loop: string;
+                  }
+                | {
+                    workflow: string;
+                    round: string;
+                    allowance: string;
+                  }
+              )[];
+          returns?: {
+            workflow: string;
+            node: string;
+            outcome: string;
+          }[];
+          approves?: {
+            workflow: string;
+            node: string;
+            outcome: string;
+          }[];
+          verdicts?: {
+            [key: string]: {
+              [key: string]: {
+                [key: string]: 'approved' | 'returned' | 'asked';
+              };
+            };
+          };
+          asked?: string[];
+          parked?: {
+            [key: string]: {
+              label: string;
+              why?: string;
+            };
+          };
+          awaits?: {
+            [key: string]: {
+              label: string;
+              why?: string;
+              questions?: string;
+              next?: string;
+            };
+          };
+          retired?: string[];
+          change?:
+            | {
+                workflow: string;
+                pointer: string;
+              }
+            | {
+                workflow: string;
+                pointer: string;
+              }[];
+          partOf?: {
+            workflow: string;
+            pointer: string;
+            outcome: string;
+          };
+          discoveries?: {
+            workflow: string;
+            shadow: boolean;
+            filed: string;
+            held: string;
+            dropped: string;
+            entry: {
+              title: string;
+              kind?: string;
+              verified?: string;
+            };
+          };
+          shadows?: (
+            | {
+                workflow: string;
+                node: string;
+                label: string;
+                /** @enum {string} */
+                reads: 'verdict';
+                pointer: string;
+                words: {
+                  [key: string]: string;
+                };
+                why?: string;
+              }
+            | {
+                workflow: string;
+                node: string;
+                label: string;
+                /** @enum {string} */
+                reads: 'checks';
+                results: string;
+                entry: {
+                  name: string;
+                  passed: string;
+                  seconds?: string;
+                  tail?: string;
+                };
+              }
+            | {
+                workflow: string;
+                node: string;
+                label: string;
+                /** @enum {string} */
+                reads: 'lists';
+                lists: {
+                  pointer: string;
+                  words: string;
+                }[];
+                why?: string;
+              }
+          )[];
+          itemTitle?: {
+            input: string;
+          };
+          steps?: {
+            [key: string]: {
+              [key: string]: string;
+            };
+          };
+          story?: {
+            outcomes: {
+              [key: string]:
+                | string
+                | {
+                    withChange: string;
+                    withoutChange: string;
+                  };
+            };
+            steps?: {
+              [key: string]: {
+                [key: string]: string;
+              };
+            };
+            said?: string[];
+          };
+          answers?: {
+            [key: string]: {
+              starts: string;
+            };
+          };
+          map: {
+            cards: {
+              stage: string;
+              col?: number;
+              row?: number;
+            }[];
+            arrows: {
+              from: string;
+              to: string;
+              label?: string;
+              back?: boolean;
+              person?: boolean;
+            }[];
+            notes?: {
+              text: string;
+              near: string;
+            }[];
+          };
+        };
+      }[];
+      errors: {
+        pack: string;
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed' | 'project-file';
+        path: string;
+        error: string;
+      }[];
+    };
+    FactoryPacks: {
+      packs: {
+        pack: string;
+        key: string;
+        overview: {
+          pack: string;
+          /** @enum {string} */
+          source: 'project' | 'bundled' | 'global' | 'installed' | 'project-file';
+          path: string;
+          declaration: {
+            /** @enum {number} */
+            version: 1;
+            pack: string;
+            title: string;
+            caption: string;
+            root: string;
+            views: {
+              [key: string]: {
+                caption?: string;
+                groups?: {
+                  id: string;
+                  label: string;
+                }[];
+                cards: {
+                  id: string;
+                  title: string;
+                  text: string;
+                  /** @enum {string} */
+                  icon:
+                    | 'inbox'
+                    | 'issue'
+                    | 'order'
+                    | 'search'
+                    | 'scale'
+                    | 'map'
+                    | 'list'
+                    | 'hammer'
+                    | 'git-pull-request'
+                    | 'check'
+                    | 'flask'
+                    | 'eye'
+                    | 'sparkles'
+                    | 'gavel'
+                    | 'users'
+                    | 'flag'
+                    | 'rotate';
+                  /** @enum {string} */
+                  kind: 'input' | 'stage' | 'check' | 'person' | 'gate' | 'outcome';
+                  col: number;
+                  row: number;
+                  group?: string;
+                  opens?: string;
+                }[];
+                edges: {
+                  from: string;
+                  to: string;
+                  /** @enum {string} */
+                  kind: 'feeds' | 'calls' | 'loops-back';
+                  label?: string;
+                  shadow?: boolean;
+                }[];
+              };
+            };
+            settings?: {
+              [key: string]: {
+                shadow?: boolean;
+                /** @enum {string} */
+                points_to?: 'policy' | 'checks';
+                section?: string;
+                when_live?: string;
+              };
+            };
+            setting_sections?: {
+              id: string;
+              eyebrow: string;
+              title: string;
+              /** @enum {string} */
+              kind: 'input' | 'stage' | 'check' | 'person' | 'gate' | 'outcome';
+              /** @enum {string} */
+              icon:
+                | 'inbox'
+                | 'issue'
+                | 'order'
+                | 'search'
+                | 'scale'
+                | 'map'
+                | 'list'
+                | 'hammer'
+                | 'git-pull-request'
+                | 'check'
+                | 'flask'
+                | 'eye'
+                | 'sparkles'
+                | 'gavel'
+                | 'users'
+                | 'flag'
+                | 'rotate';
+            }[];
+          };
+        } | null;
+        readFrom: {
+          codebaseId: string;
+          name: string;
+        } | null;
+        projects: {
+          codebaseId: string;
+          name: string;
+        }[];
+        errors: {
+          pack: string;
+          /** @enum {string} */
+          source: 'project' | 'bundled' | 'global' | 'installed' | 'project-file';
+          path: string;
+          error: string;
+        }[];
+      }[];
+      errors: {
+        pack: string;
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed' | 'project-file';
+        path: string;
+        error: string;
+      }[];
+      unreadProjects: {
+        codebaseId: string;
+        name: string;
+        error: string;
+      }[];
+    };
+    FactoryPackSettings: {
+      pack: string;
+      declaration: {
+        path: string;
+        error: string | null;
+      } | null;
+      settingsFile: string;
+      sections: {
+        id: string;
+        eyebrow: string;
+        title: string;
+        /** @enum {string} */
+        kind: 'input' | 'stage' | 'check' | 'person' | 'gate' | 'outcome';
+        /** @enum {string} */
+        icon:
+          | 'inbox'
+          | 'issue'
+          | 'order'
+          | 'search'
+          | 'scale'
+          | 'map'
+          | 'list'
+          | 'hammer'
+          | 'git-pull-request'
+          | 'check'
+          | 'flask'
+          | 'eye'
+          | 'sparkles'
+          | 'gavel'
+          | 'users'
+          | 'flag'
+          | 'rotate';
+      }[];
+      settings: {
+        name: string;
+        description: string | null;
+        default: string | null;
+        /** @enum {string} */
+        type: 'string' | 'bool' | 'list' | 'enum';
+        shadow: boolean;
+        /** @enum {string|null} */
+        pointsTo: 'policy' | 'checks' | null;
+        section: string | null;
+        whenLive: string | null;
+      }[];
+      mapErrors: string[];
+      projects: {
+        codebaseId: string;
+        name: string;
+        error: string | null;
+        values: {
+          [key: string]:
+            | {
+                /** @enum {string} */
+                state: 'unset';
+              }
+            | {
+                /** @enum {string} */
+                state: 'empty';
+              }
+            | {
+                /** @enum {string} */
+                state: 'set';
+                value: string;
+                problem: string | null;
+                file: {
+                  display: string;
+                  full: string;
+                  /** @enum {string} */
+                  status: 'found' | 'missing' | 'unreadable';
+                  error: string | null;
+                  checks:
+                    | {
+                        name: string;
+                        run: string;
+                      }[]
+                    | null;
+                } | null;
+              };
+        };
+        undeclared: {
+          name: string;
+          value: string;
+        }[];
+      }[];
+    };
+    FactoryDiscoveries: {
+      pack: string;
+      shadow: boolean;
+      unreadable: number;
+      held: number;
+      dropped: number;
+      findings: {
+        title: string;
+        kind: string | null;
+        verified: string | null;
+        from: {
+          key: string;
+          title: string | null;
+        };
+        /** Format: date-time */
+        decidedAt: string;
+        runId: string;
+        coveredBy: string | null;
+      }[];
+    };
+    FactoryItemDetail: {
+      pack: string;
+      item: {
+        item: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        runs: {
+          id: string;
+          workflow: string;
+          pack: {
+            key: string;
+            workflow: string;
+          } | null;
+          /** @enum {string} */
+          status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          outcome: string | null;
+          /** Format: date-time */
+          startedAt: string;
+          /** Format: date-time */
+          completedAt: string | null;
+          cause:
+            | {
+                /** @enum {string} */
+                kind: 'run_ended';
+                runId: string;
+                sourceInstanceId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'asks_settled';
+                runId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'run_fired';
+                runId: string;
+                node: string | null;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'receipt';
+                receiptId: string;
+                sourceInstanceId: string;
+              }
+            | unknown;
+          awaitingExecution: {
+            requestId: string;
+            hostId: string;
+            /** @enum {string} */
+            state: 'starting' | 'unowned' | 'unknown';
+            executor: {
+              host: string;
+              pid: number;
+              uid?: number;
+            } | null;
+          } | null;
+          spend: {
+            usd: number | null;
+            inputTokens: number | null;
+            outputTokens: number | null;
+          };
+          heldBehind: {
+            runId: string;
+            workflow: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            /** @enum {string|null} */
+            owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+          operatorPause: {
+            /** @enum {string} */
+            state: 'requested' | 'paused';
+            requested: {
+              /** Format: date-time */
+              at: string;
+              via: string;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+          } | null;
+          hasResult: boolean;
+          resultCommit: string | null;
+        }[];
+        queued: {
+          requestId: string;
+          workflow: string | null;
+          resource: string;
+          hostId: string;
+          /** Format: date-time */
+          queuedAt: string;
+          ahead: number;
+          heldBehind: {
+            runId: string;
+            workflow: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            /** @enum {string|null} */
+            owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+          waitsForRunLimit: boolean;
+        }[];
+        skipped: {
+          requestId: string;
+          workflow: string | null;
+          resource: string;
+          heldBehind: {
+            runId: string;
+            workflow: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            /** @enum {string|null} */
+            owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+        }[];
+        hold: {
+          setBy: string;
+          /** Format: date-time */
+          setAt: string;
+        } | null;
+        held: {
+          receiptId: string;
+          bindingId: string;
+          hostId: string | null;
+          workflow: string | null;
+          receivedAt: string;
+        }[];
+        runLimit: {
+          limit: number;
+          live: number;
+        } | null;
+        waits: {
+          event: string;
+          about: string;
+          workflow: string;
+          runId: string;
+          /** Format: date-time */
+          waitingSince: string;
+          /** Format: date-time */
+          deadline: string;
+          overdue: boolean;
+        }[];
+        questions: (
+          | {
+              /** @enum {string} */
+              kind: 'attention';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run?: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+                occurrence: string;
+              };
+              message: string;
+              /** @enum {string} */
+              form: 'message' | 'approval' | 'select' | 'multi_select';
+              options: {
+                id: string;
+                label?: string;
+                does?: string;
+                value?: unknown;
+                cost?: string;
+              }[];
+              /** @enum {boolean} */
+              other?: true;
+              recommendation?: {
+                option: string;
+                why: string;
+                /** @enum {string} */
+                confidence?: 'low' | 'medium' | 'high';
+              };
+              context?: string;
+              artifacts?: {
+                /** @enum {string} */
+                type: 'archon_artifact';
+                run_id: string;
+                path: string;
+              }[];
+              askedIn?: {
+                runId: string;
+                workflow: string;
+              };
+            }
+          | {
+              /** @enum {string} */
+              kind: 'awaiting_response';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+                occurrence: string;
+              };
+              message: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'usage_limit';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+              };
+              /** Format: date-time */
+              resetAt: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'unreadable';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+              };
+              /** @enum {string} */
+              reason:
+                | 'malformed_tool_call_attention'
+                | 'malformed_gate'
+                | 'unrecognized_gate_type'
+                | 'child_pointer_missing'
+                | 'child_run_missing'
+                | 'child_chain_too_deep'
+                | 'source_release_not_continued';
+              detail: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'owner_lost';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+              };
+              /** @enum {string} */
+              observedStatus:
+                | 'pending'
+                | 'running'
+                | 'completed'
+                | 'failed'
+                | 'cancelled'
+                | 'paused';
+            }
+          | {
+              /** @enum {string} */
+              kind: 'overdue_wait';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              waitingIn: {
+                runId: string;
+                workflow: string;
+              };
+              waits: {
+                event: string;
+                about: string;
+              }[];
+              /** Format: date-time */
+              deadline: string;
+            }
+        )[];
+        answers: (
+          | {
+              /** @enum {string} */
+              kind: 'attention';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              answer:
+                | {
+                    text: string;
+                  }
+                | {
+                    decision: string;
+                    text: string;
+                  }
+                | {
+                    decisions: string[];
+                    text: string;
+                  }
+                | unknown;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'gate';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              decision: string | null;
+              text: string | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'ruling';
+              id: string;
+              text: string;
+              /** Format: date-time */
+              at: string;
+              via: string;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+              withdrawn: {
+                /** Format: date-time */
+                at: string;
+                via: string;
+                by:
+                  | {
+                      declared: string;
+                    }
+                  | {
+                      userId: string;
+                    }
+                  | unknown;
+                fromRun: {
+                  runId: string;
+                  nodePath: string;
+                } | null;
+              } | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'ask';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              ref: string;
+              question: string;
+              answer:
+                | {
+                    text: string;
+                  }
+                | {
+                    decision: string;
+                    text: string;
+                  }
+                | {
+                    decisions: string[];
+                    text: string;
+                  }
+                | unknown;
+              chosen: {
+                id: string;
+                does: string;
+              } | null;
+              withdrawn: boolean;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'asks_settled';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              answered: number;
+              withdrawn: number;
+            }
+        )[];
+        links: {
+          id: string;
+          /** @enum {string} */
+          kind: 'depends_on' | 'part_of' | 'duplicate_of';
+          /** @enum {string} */
+          direction: 'outgoing' | 'incoming';
+          other: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+          ended: {
+            /** Format: date-time */
+            at: string;
+            via: string;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          } | null;
+        }[];
+        merged: {
+          change: string;
+          commit: string | null;
+          /** Format: date-time */
+          at: string;
+          /** Format: date-time */
+          recordedAt: string;
+          via: string;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        } | null;
+        landing: {
+          branch: string;
+          from:
+            | {
+                /** @enum {string} */
+                kind: 'own';
+              }
+            | {
+                /** @enum {string} */
+                kind: 'part_of';
+                item: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+              };
+        } | null;
+        degraded: (
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'run_unreadable';
+              runId?: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'ruling_unreadable';
+              rulingId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'merge_unreadable';
+              itemId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'link_unreadable';
+              linkId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'landing_unresolved';
+              message: string;
+            }
+        )[];
+        progress: {
+          title: string | null;
+          running: {
+            runId: string;
+            workflow: string;
+            step: string | null;
+            /** Format: date-time */
+            startedAt: string;
+          } | null;
+          round: {
+            runId: string;
+            iteration: number;
+            max: number | null;
+            rounds: {
+              iteration: number;
+              /** @enum {string} */
+              verdict: 'approved' | 'returned' | 'undecided' | 'running' | 'stopped';
+              outcome: string | null;
+            }[];
+          } | null;
+          partOf: string | null;
+          returned: number;
+          change: {
+            url: string | null;
+            merged: boolean | 'unknown' | 'pending';
+            mergedAt: string | null;
+            number: number | null;
+          } | null;
+          runs: {
+            runId: string;
+            workflow: string;
+            failedStep: string | null;
+          }[];
+          shadows: {
+            workflow: string;
+            node: string;
+            round: number | null;
+            runId: string;
+            /** Format: date-time */
+            decidedAt: string;
+            read:
+              | {
+                  /** @enum {string} */
+                  reads: 'verdict';
+                  value: string;
+                  why: string | null;
+                }
+              | {
+                  /** @enum {string} */
+                  reads: 'checks';
+                  results: {
+                    name: string;
+                    passed: boolean;
+                    seconds: number | null;
+                    tail: string | null;
+                  }[];
+                }
+              | {
+                  /** @enum {string} */
+                  reads: 'lists';
+                  counts: number[];
+                  why: string | null;
+                }
+              | {
+                  /** @enum {string} */
+                  reads: 'unreadable';
+                };
+          }[];
+          parked: {
+            label: string;
+            why: string | null;
+          } | null;
+          awaits: {
+            label: string;
+            why: string | null;
+            questions: string[];
+            next: string | null;
+          } | null;
+        } | null;
+      };
+      runs: {
+        runId: string;
+        workflow: string | null;
+        cause?:
+          | {
+              /** @enum {string} */
+              kind: 'run_ended';
+              runId: string;
+              sourceInstanceId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'asks_settled';
+              runId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'run_fired';
+              runId: string;
+              node: string | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'receipt';
+              receiptId: string;
+              sourceInstanceId: string;
+            };
+        costUsd: number | null;
+        step: string | null;
+        shadows: {
+          workflow: string;
+          node: string;
+          round: number | null;
+          runId: string;
+          /** Format: date-time */
+          decidedAt: string;
+          read:
+            | {
+                /** @enum {string} */
+                reads: 'verdict';
+                value: string;
+                why: string | null;
+              }
+            | {
+                /** @enum {string} */
+                reads: 'checks';
+                results: {
+                  name: string;
+                  passed: boolean;
+                  seconds: number | null;
+                  tail: string | null;
+                }[];
+              }
+            | {
+                /** @enum {string} */
+                reads: 'lists';
+                counts: number[];
+                why: string | null;
+              }
+            | {
+                /** @enum {string} */
+                reads: 'unreadable';
+              };
+        }[];
+        rounds: {
+          max: number | null;
+          rounds: {
+            iteration: number;
+            /** @enum {string} */
+            verdict: 'approved' | 'returned' | 'undecided' | 'running' | 'stopped';
+            outcome: string | null;
+            summary: string | null;
+            steps: {
+              node: string;
+              outcome: string;
+              summary: string | null;
+            }[];
+          }[];
+        } | null;
+        change: string | null;
+        said: string | null;
+        models: string[];
+        steps: {
+          node: string;
+          /** Format: date-time */
+          startedAt: string;
+        }[];
+      }[];
+    };
+    FactoryProgress: {
+      pack: string;
+      progress: {
+        [key: string]: {
+          title: string | null;
+          running: {
+            runId: string;
+            workflow: string;
+            step: string | null;
+            /** Format: date-time */
+            startedAt: string;
+          } | null;
+          round: {
+            runId: string;
+            iteration: number;
+            max: number | null;
+            rounds: {
+              iteration: number;
+              /** @enum {string} */
+              verdict: 'approved' | 'returned' | 'undecided' | 'running' | 'stopped';
+              outcome: string | null;
+            }[];
+          } | null;
+          partOf: string | null;
+          returned: number;
+          change: {
+            url: string | null;
+            merged: boolean | 'unknown' | 'pending';
+            mergedAt: string | null;
+            number: number | null;
+          } | null;
+          runs: {
+            runId: string;
+            workflow: string;
+            failedStep: string | null;
+          }[];
+          shadows: {
+            workflow: string;
+            node: string;
+            round: number | null;
+            runId: string;
+            /** Format: date-time */
+            decidedAt: string;
+            read:
+              | {
+                  /** @enum {string} */
+                  reads: 'verdict';
+                  value: string;
+                  why: string | null;
+                }
+              | {
+                  /** @enum {string} */
+                  reads: 'checks';
+                  results: {
+                    name: string;
+                    passed: boolean;
+                    seconds: number | null;
+                    tail: string | null;
+                  }[];
+                }
+              | {
+                  /** @enum {string} */
+                  reads: 'lists';
+                  counts: number[];
+                  why: string | null;
+                }
+              | {
+                  /** @enum {string} */
+                  reads: 'unreadable';
+                };
+          }[];
+          parked: {
+            label: string;
+            why: string | null;
+          } | null;
+          awaits: {
+            label: string;
+            why: string | null;
+            questions: string[];
+            next: string | null;
+          } | null;
+        } | null;
+      };
+      members: {
+        [key: string]: string[];
+      };
+    };
+    FactoryWorkflow: {
+      name: string;
+      runName: string;
+      steps: {
+        key: string;
+        label: string;
+        group: string | null;
+        dependsOn: string[];
+        /** @enum {string} */
+        kind: 'agent' | 'bash' | 'script' | 'loop' | 'approval' | 'wait' | 'other';
+        includedFrom: string | null;
+        model: string[] | null;
+        when: string | null;
+        whenClauses:
+          | {
+              reads:
+                | {
+                    /** @enum {string} */
+                    kind: 'step';
+                    key: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    kind: 'input';
+                    name: string;
+                  };
+              /** @enum {string} */
+              operator: '==' | '!=' | '<=' | '>=' | '<' | '>';
+              value: string;
+            }[][]
+          | null;
+        command: string | null;
+        prompt: string | null;
+        promptError: string | null;
+        references: (
+          | {
+              /** @enum {string} */
+              kind: 'input';
+              token: string;
+              name: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'output' | 'prior-output';
+              token: string;
+              key: string;
+              path: string | null;
+            }
+        )[];
+        script: {
+          /** @enum {string} */
+          runtime: 'sh' | 'bun' | 'uv';
+          name: string | null;
+          body: string;
+        } | null;
+        scriptError: string | null;
+        yaml: string | null;
+        yamlError: string | null;
+      }[];
+      groups: {
+        id: string;
+        /** @enum {string} */
+        kind: 'loop' | 'include';
+        parent: string | null;
+        label: string;
+        maxRounds: number | null;
+        when: string | null;
+        whenClauses:
+          | {
+              reads:
+                | {
+                    /** @enum {string} */
+                    kind: 'step';
+                    key: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    kind: 'input';
+                    name: string;
+                  };
+              /** @enum {string} */
+              operator: '==' | '!=' | '<=' | '>=' | '<' | '>';
+              value: string;
+            }[][]
+          | null;
+        dependsOn: string[];
       }[];
     };
     PackGraph: {

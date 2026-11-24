@@ -1,0 +1,682 @@
+{
+  "note": "GET /api/factory/item for item 113, copied 2026-11-22 from dev:console on a fresh read-only copy of the live factory database, after #122 added each run's change, said, models and steps. Run pack and the item run limit, which the API gained after the capture, filled as null. The live home path is replaced by <live-home>.",
+  "response": {
+    "pack": "Wirasm/archon-software-factory",
+    "item": {
+      "item": {
+        "id": "ba5289f9ccedcf2d35aa451c86dcb645",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "113"
+      },
+      "runs": [
+        {
+          "id": "44eb5f37-1d04-4835-828b-ea8203a1a68d",
+          "workflow": "Wirasm/archon-software-factory:order",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-20T21:31:57.000Z",
+          "completedAt": "2026-11-20T21:32:19.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "5a390ec5-7831-4a30-8022-ba1832fcf133",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "bd1e7dc0-b4cc-4eed-8a3b-3a4fe824f67e",
+          "workflow": "Wirasm/archon-software-factory:triage",
+          "pack": null,
+          "status": "completed",
+          "outcome": "build",
+          "startedAt": "2026-11-20T21:32:23.000Z",
+          "completedAt": "2026-11-20T21:33:46.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "44eb5f37-1d04-4835-828b-ea8203a1a68d",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.7296578,
+            "inputTokens": 339031,
+            "outputTokens": 3885
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "4dacfc2d-582c-457f-aa70-39688a131224",
+          "workflow": "Wirasm/archon-software-factory:plan",
+          "pack": null,
+          "status": "completed",
+          "outcome": "planned",
+          "startedAt": "2026-11-20T21:33:53.000Z",
+          "completedAt": "2026-11-20T21:35:41.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "bd1e7dc0-b4cc-4eed-8a3b-3a4fe824f67e",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.44094520000000004,
+            "inputTokens": 136485,
+            "outputTokens": 2869
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "2ec16169-a850-4759-a4f5-efb27a267a9c",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-20T21:35:49.000Z",
+          "completedAt": "2026-11-20T21:38:05.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "4dacfc2d-582c-457f-aa70-39688a131224",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.2035669,
+            "inputTokens": 92277,
+            "outputTokens": 1622
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "2fd6990d-2a82-429a-b93e-3511309e9676",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-20T21:39:55.000Z",
+          "completedAt": "2026-11-20T21:48:52.000Z",
+          "cause": {
+            "kind": "asks_settled",
+            "runId": "2ec16169-a850-4759-a4f5-efb27a267a9c"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 1.0782564200000002,
+            "inputTokens": 1391256,
+            "outputTokens": 14710
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "377877305493c4f2886844980db400b96616bf5d"
+        },
+        {
+          "id": "df30b636-bef1-4f38-8ab5-474217919693",
+          "workflow": "Wirasm/archon-software-factory:discoveries",
+          "pack": null,
+          "status": "completed",
+          "outcome": null,
+          "startedAt": "2026-11-20T21:48:56.000Z",
+          "completedAt": "2026-11-20T21:49:19.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "2fd6990d-2a82-429a-b93e-3511309e9676",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-discoveries-after-deliver-ready-e89b89823cf2"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        },
+        {
+          "id": "955a6328-6f83-40ec-97ec-ed19abedb125",
+          "workflow": "Wirasm/archon-software-factory:landgate",
+          "pack": null,
+          "status": "completed",
+          "outcome": null,
+          "startedAt": "2026-11-20T21:48:59.000Z",
+          "completedAt": "2026-11-20T21:50:14.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "2fd6990d-2a82-429a-b93e-3511309e9676",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landgate-after-deliver-ready-1c0ffe07697c"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.1299077,
+            "inputTokens": 259040,
+            "outputTokens": 2020
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "9b43d1c1a969fb1c1f044318f10e4224323e650e"
+        }
+      ],
+      "queued": [],
+      "skipped": [],
+      "hold": null,
+      "held": [],
+      "runLimit": null,
+      "waits": [],
+      "questions": [],
+      "answers": [
+        {
+          "kind": "ask",
+          "runId": "2ec16169-a850-4759-a4f5-efb27a267a9c",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-20T21:39:52.509Z",
+          "via": "cli",
+          "ref": "ask:60a7c82297593bd647cef19b7967d739",
+          "question": "Which title should docs/factory-console/answers/send-back.md have?",
+          "answer": {
+            "decision": "send-back",
+            "text": "imperative-title: the title is 'Send it back'."
+          },
+          "chosen": {
+            "id": "send-back",
+            "does": "The same builder continues on the change with what you say in your answer."
+          },
+          "withdrawn": false,
+          "by": {
+            "declared": "cole-owner"
+          },
+          "fromRun": null
+        },
+        {
+          "kind": "asks_settled",
+          "runId": "2ec16169-a850-4759-a4f5-efb27a267a9c",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-20T21:39:52.509Z",
+          "via": null,
+          "answered": 1,
+          "withdrawn": 0
+        }
+      ],
+      "links": [],
+      "merged": null,
+      "landing": null,
+      "degraded": [],
+      "progress": {
+        "title": "Docs: what the send-back answer on a delivery ask does (ask-routing test)",
+        "running": null,
+        "round": {
+          "runId": "2fd6990d-2a82-429a-b93e-3511309e9676",
+          "iteration": 1,
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "approved",
+              "outcome": "approve"
+            }
+          ]
+        },
+        "partOf": null,
+        "returned": 0,
+        "change": {
+          "url": "https://github.com/coleam00/archon-factory-console/pull/116",
+          "merged": true,
+          "mergedAt": "2026-11-20T21:52:34Z",
+          "number": 116
+        },
+        "runs": [
+          {
+            "runId": "44eb5f37-1d04-4835-828b-ea8203a1a68d",
+            "workflow": "order",
+            "failedStep": null
+          },
+          {
+            "runId": "bd1e7dc0-b4cc-4eed-8a3b-3a4fe824f67e",
+            "workflow": "triage",
+            "failedStep": null
+          },
+          {
+            "runId": "4dacfc2d-582c-457f-aa70-39688a131224",
+            "workflow": "plan",
+            "failedStep": null
+          },
+          {
+            "runId": "2ec16169-a850-4759-a4f5-efb27a267a9c",
+            "workflow": "deliver",
+            "failedStep": null
+          },
+          {
+            "runId": "2fd6990d-2a82-429a-b93e-3511309e9676",
+            "workflow": "deliver",
+            "failedStep": null
+          },
+          {
+            "runId": "955a6328-6f83-40ec-97ec-ed19abedb125",
+            "workflow": "landgate",
+            "failedStep": null
+          }
+        ],
+        "shadows": [
+          {
+            "workflow": "triage",
+            "node": "admit",
+            "round": null,
+            "runId": "bd1e7dc0-b4cc-4eed-8a3b-3a4fe824f67e",
+            "decidedAt": "2026-11-20T21:33:46.000Z",
+            "read": {
+              "reads": "verdict",
+              "value": "auto",
+              "why": "The item is an issue in coleam00/archon-factory-console, written as the owner's own operator test. It adds one docs file under docs/factory-console and touches no schema, engine behaviour or DESIGN.md decision, and the issue settles its scope. The issue text does not name its author, so owner authorship is inferred from the wording rather than confirmed."
+            }
+          },
+          {
+            "workflow": "deliver",
+            "node": "rounds.checks",
+            "round": 1,
+            "runId": "2fd6990d-2a82-429a-b93e-3511309e9676",
+            "decidedAt": "2026-11-20T21:48:52.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": false,
+                  "seconds": 36,
+                  "tail": "pe-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/adapters type-check: Exited with code 1\n@archon/server type-check: error TS2688: Cannot find type definition file for 'bun-types'.\n@archon/server type-check:   The file is in the program because:\n@archon/server type-check:     Entry point of type library 'bun-types' specified in compilerOptions\n@archon/server type-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/cli type-check: error TS2688: Cannot find type definition file for 'bun-types'.\n@archon/cli type-check:   The file is in the program because:\n@archon/cli type-check:     Entry point of type library 'bun-types' specified in compilerOptions\n@archon/cli type-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/server type-check: Exited with code 1\n@archon/cli type-check: Exited with code 1\n\n$ bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json && bun x tsc --noEmit -p .archon/workflows/tsconfig.json\nerror: script \"type-check\" exited with code 1"
+                },
+                {
+                  "name": "lint",
+                  "passed": false,
+                  "seconds": 1,
+                  "tail": "$ bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-mock-modules.ts && bun run scripts/check-pack-portability.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && bun run scripts/check-web-api-types.ts && bun run scripts/check-console-tokens.ts && biome lint --error-on-warnings .\nerror: Cannot find package 'typescript' from '<live-home>\\workspaces\\coleam00\\archon-factory-console\\worktrees\\archon\\task-wirasm-archon-software-factory-deliver-2ec16169\\scripts\\check-test-cleanup-drift.ts'\n\nBun v1.4.2 (Windows x64)\nerror: script \"lint\" exited with code 1"
+                },
+                {
+                  "name": "format",
+                  "passed": false,
+                  "seconds": 1,
+                  "tail": "$ biome format .\nbun: command not found: biome\nerror: script \"format:check\" exited with code 1"
+                },
+                {
+                  "name": "web tests",
+                  "passed": false,
+                  "seconds": 2,
+                  "tail": "$ bun run ../../scripts/package-tests.ts\nerror: Cannot find module '@archon/paths/test-utils' from '<live-home>\\workspaces\\coleam00\\archon-factory-console\\worktrees\\archon\\task-wirasm-archon-software-factory-deliver-2ec16169\\scripts\\bun-test-command.ts'\n\nBun v1.4.2 (Windows x64)\nerror: script \"test\" exited with code 1"
+                }
+              ]
+            }
+          },
+          {
+            "workflow": "discoveries",
+            "node": "result",
+            "round": null,
+            "runId": "df30b636-bef1-4f38-8ab5-474217919693",
+            "decidedAt": "2026-11-20T21:49:19.000Z",
+            "read": {
+              "reads": "lists",
+              "counts": [0, 0, 0, 0],
+              "why": "Nothing was noticed, so there was nothing to decide."
+            }
+          }
+        ],
+        "parked": null,
+        "awaits": null
+      }
+    },
+    "runs": [
+      {
+        "runId": "44eb5f37-1d04-4835-828b-ea8203a1a68d",
+        "workflow": "order",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "5a390ec5-7831-4a30-8022-ba1832fcf133",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+        },
+        "costUsd": null,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": [
+          {
+            "node": "order",
+            "startedAt": "2026-11-20T21:32:11.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "bd1e7dc0-b4cc-4eed-8a3b-3a4fe824f67e",
+        "workflow": "triage",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "44eb5f37-1d04-4835-828b-ea8203a1a68d",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+        },
+        "costUsd": 0.7296578,
+        "step": null,
+        "rounds": null,
+        "shadows": [
+          {
+            "workflow": "triage",
+            "node": "admit",
+            "round": null,
+            "runId": "bd1e7dc0-b4cc-4eed-8a3b-3a4fe824f67e",
+            "decidedAt": "2026-11-20T21:33:46.000Z",
+            "read": {
+              "reads": "verdict",
+              "value": "auto",
+              "why": "The item is an issue in coleam00/archon-factory-console, written as the owner's own operator test. It adds one docs file under docs/factory-console and touches no schema, engine behaviour or DESIGN.md decision, and the issue settles its scope. The issue text does not name its author, so owner authorship is inferred from the wording rather than confirmed."
+            }
+          }
+        ],
+        "change": null,
+        "said": "Issue 113 asks for one new docs file, docs/factory-console/answers/send-back.md (5-10 lines), explaining what the `send-back` answer does on a delivery ask. The title is reserved for the owner. The item is a deliberate test of answer routing. This repo names no triage policy of its own, and the pack default says to judge against the project's own AGENTS.md. Nothing there conflicts with a small docs-only addition under docs/factory-console. The docs/factory-console/answers/ directory does not exist yet; it has only DESIGN.md, ENGINEERING.md, factory-checks.yaml and policy/, so the build creates it.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "judge__judge",
+            "startedAt": "2026-11-20T21:32:49.000Z"
+          },
+          {
+            "node": "link__link",
+            "startedAt": "2026-11-20T21:33:20.000Z"
+          },
+          {
+            "node": "split",
+            "startedAt": "2026-11-20T21:33:21.000Z"
+          },
+          {
+            "node": "admit",
+            "startedAt": "2026-11-20T21:33:22.000Z"
+          },
+          {
+            "node": "admitted",
+            "startedAt": "2026-11-20T21:33:39.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "4dacfc2d-582c-457f-aa70-39688a131224",
+        "workflow": "plan",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "bd1e7dc0-b4cc-4eed-8a3b-3a4fe824f67e",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+        },
+        "costUsd": 0.44094520000000004,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "It is the item exactly as the owner wrote it: the title ask is the deliverable of the first build, and the file follows only once the owner has answered.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "plan",
+            "startedAt": "2026-11-20T21:34:37.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "2ec16169-a850-4759-a4f5-efb27a267a9c",
+        "workflow": "deliver",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "4dacfc2d-582c-457f-aa70-39688a131224",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-deliver-after-plan-planned-a996def02838"
+        },
+        "costUsd": 0.2035669,
+        "step": null,
+        "rounds": {
+          "max": null,
+          "rounds": []
+        },
+        "shadows": [],
+        "change": null,
+        "said": "The item keeps the title of docs/factory-console/answers/send-back.md for the owner. No answer and nothing in the plan has chosen it yet, so this first build writes no file and asks the owner one question: which title. The item says this ask is the complete, correct result of the first build.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-20T21:37:30.000Z"
+          },
+          {
+            "node": "result",
+            "startedAt": "2026-11-20T21:37:59.000Z"
+          },
+          {
+            "node": "reported",
+            "startedAt": "2026-11-20T21:38:01.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "2fd6990d-2a82-429a-b93e-3511309e9676",
+        "workflow": "deliver",
+        "cause": {
+          "kind": "asks_settled",
+          "runId": "2ec16169-a850-4759-a4f5-efb27a267a9c"
+        },
+        "costUsd": 1.0782564200000002,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "approved",
+              "outcome": "approve",
+              "summary": "Approve. The change adds one 9-line file, docs/factory-console/answers/send-back.md, titled \"Send it back\" as the owner decided on 2026-11-20, and touches nothing else. The review and product review each checked every claim against the installed pack's deliver.yaml result routes and pack.yaml asks-settled bindings, and both found them accurate. No check returned a finding; two low-stakes notes are kept on the record below.",
+              "steps": [
+                {
+                  "node": "rounds.review__review",
+                  "outcome": "approve",
+                  "summary": "Approve. The change adds one file, docs/factory-console/answers/send-back.md, titled \"Send it back\" as the owner chose. It is 9 lines and changes nothing else. I checked every claim in it against the installed pack's deliver.yaml result node and its pack.yaml asks_settled bindings, and each one matches."
+                },
+                {
+                  "node": "rounds.product__product",
+                  "outcome": "approve",
+                  "summary": "The change adds one file, docs/factory-console/answers/send-back.md, and changes nothing else. Its title is \"Send it back\", the imperative title the owner chose on 2026-11-20. The file has 9 lines, 5 of them with text. It says what starts next, what it costs and when to pick send-back over the other three answers. Every claim matches the installed pack: the `routes` in the result node of deliver/deliver.yaml and the `deliver-after-answers` and `plan-after-deliver-replan` asks-settled bindings in .pack/pack.yaml. It has no em dashes and uses plain words, as DESIGN.md asks of anything a person reads. The item got what it was for."
+                },
+                {
+                  "node": "rounds.tests__tests",
+                  "outcome": "sound",
+                  "summary": "The change is docs-only. It adds one 9-line file, `docs/factory-console/answers/send-back.md`, titled \"Send it back\" as the owner decided. It adds and edits no tests, and the item says no test is needed. Nothing in the suite gets worse, so it can land on test grounds."
+                },
+                {
+                  "node": "rounds.verdict__verdict",
+                  "outcome": "approve",
+                  "summary": "Approve. The change adds one 9-line file, docs/factory-console/answers/send-back.md, titled \"Send it back\" as the owner decided on 2026-11-20, and touches nothing else. The review and product review each checked every claim against the installed pack's deliver.yaml result routes and pack.yaml asks-settled bindings, and both found them accurate. No check returned a finding; two low-stakes notes are kept on the record below."
+                },
+                {
+                  "node": "rounds.shown",
+                  "outcome": "approve",
+                  "summary": "Approve. The change adds one 9-line file, docs/factory-console/answers/send-back.md, titled \"Send it back\" as the owner decided on 2026-11-20, and touches nothing else. The review and product review each checked every claim against the installed pack's deliver.yaml result routes and pack.yaml asks-settled bindings, and both found them accurate. No check returned a finding; two low-stakes notes are kept on the record below."
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [
+          {
+            "workflow": "deliver",
+            "node": "rounds.checks",
+            "round": 1,
+            "runId": "2fd6990d-2a82-429a-b93e-3511309e9676",
+            "decidedAt": "2026-11-20T21:48:52.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": false,
+                  "seconds": 36,
+                  "tail": "pe-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/adapters type-check: Exited with code 1\n@archon/server type-check: error TS2688: Cannot find type definition file for 'bun-types'.\n@archon/server type-check:   The file is in the program because:\n@archon/server type-check:     Entry point of type library 'bun-types' specified in compilerOptions\n@archon/server type-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/cli type-check: error TS2688: Cannot find type definition file for 'bun-types'.\n@archon/cli type-check:   The file is in the program because:\n@archon/cli type-check:     Entry point of type library 'bun-types' specified in compilerOptions\n@archon/cli type-check: ../workflows/src/schemas/node-output.ts(27,14): error TS7056: The inferred type of this node exceeds the maximum length the compiler will serialize. An explicit type annotation is needed.\n@archon/server type-check: Exited with code 1\n@archon/cli type-check: Exited with code 1\n\n$ bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json && bun x tsc --noEmit -p .archon/workflows/tsconfig.json\nerror: script \"type-check\" exited with code 1"
+                },
+                {
+                  "name": "lint",
+                  "passed": false,
+                  "seconds": 1,
+                  "tail": "$ bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-mock-modules.ts && bun run scripts/check-pack-portability.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && bun run scripts/check-web-api-types.ts && bun run scripts/check-console-tokens.ts && biome lint --error-on-warnings .\nerror: Cannot find package 'typescript' from '<live-home>\\workspaces\\coleam00\\archon-factory-console\\worktrees\\archon\\task-wirasm-archon-software-factory-deliver-2ec16169\\scripts\\check-test-cleanup-drift.ts'\n\nBun v1.4.2 (Windows x64)\nerror: script \"lint\" exited with code 1"
+                },
+                {
+                  "name": "format",
+                  "passed": false,
+                  "seconds": 1,
+                  "tail": "$ biome format .\nbun: command not found: biome\nerror: script \"format:check\" exited with code 1"
+                },
+                {
+                  "name": "web tests",
+                  "passed": false,
+                  "seconds": 2,
+                  "tail": "$ bun run ../../scripts/package-tests.ts\nerror: Cannot find module '@archon/paths/test-utils' from '<live-home>\\workspaces\\coleam00\\archon-factory-console\\worktrees\\archon\\task-wirasm-archon-software-factory-deliver-2ec16169\\scripts\\bun-test-command.ts'\n\nBun v1.4.2 (Windows x64)\nerror: script \"test\" exited with code 1"
+                }
+              ]
+            }
+          }
+        ],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/116",
+        "said": "PR 116 adds docs/factory-console/answers/send-back.md (9 lines, titled \"Send it back\" as the owner chose). I took it out of draft. All 11 checks are green and it merges cleanly with main (0 behind). The only reviews are two notes from the factory review, and neither holds the change.",
+        "models": ["claude-opus-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-20T21:40:18.000Z"
+          },
+          {
+            "node": "rounds",
+            "startedAt": "2026-11-20T21:41:07.000Z"
+          },
+          {
+            "node": "rounds.base",
+            "startedAt": "2026-11-20T21:41:08.000Z"
+          },
+          {
+            "node": "rounds.checks",
+            "startedAt": "2026-11-20T21:41:11.000Z"
+          },
+          {
+            "node": "rounds.review__review",
+            "startedAt": "2026-11-20T21:41:11.000Z"
+          },
+          {
+            "node": "rounds.product__product",
+            "startedAt": "2026-11-20T21:41:12.000Z"
+          },
+          {
+            "node": "rounds.tests__tests",
+            "startedAt": "2026-11-20T21:41:12.000Z"
+          },
+          {
+            "node": "rounds.verdict__verdict",
+            "startedAt": "2026-11-20T21:42:53.000Z"
+          },
+          {
+            "node": "rounds.shown",
+            "startedAt": "2026-11-20T21:43:17.000Z"
+          },
+          {
+            "node": "hostrounds",
+            "startedAt": "2026-11-20T21:43:31.000Z"
+          },
+          {
+            "node": "hostrounds.host__host",
+            "startedAt": "2026-11-20T21:43:32.000Z"
+          },
+          {
+            "node": "result",
+            "startedAt": "2026-11-20T21:48:47.000Z"
+          },
+          {
+            "node": "reported",
+            "startedAt": "2026-11-20T21:48:48.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "df30b636-bef1-4f38-8ab5-474217919693",
+        "workflow": "discoveries",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "2fd6990d-2a82-429a-b93e-3511309e9676",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-discoveries-after-deliver-ready-e89b89823cf2"
+        },
+        "costUsd": null,
+        "step": null,
+        "rounds": null,
+        "shadows": [
+          {
+            "workflow": "discoveries",
+            "node": "result",
+            "round": null,
+            "runId": "df30b636-bef1-4f38-8ab5-474217919693",
+            "decidedAt": "2026-11-20T21:49:19.000Z",
+            "read": {
+              "reads": "lists",
+              "counts": [0, 0, 0, 0],
+              "why": "Nothing was noticed, so there was nothing to decide."
+            }
+          }
+        ],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": [
+          {
+            "node": "intake",
+            "startedAt": "2026-11-20T21:49:15.000Z"
+          },
+          {
+            "node": "result",
+            "startedAt": "2026-11-20T21:49:16.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "955a6328-6f83-40ec-97ec-ed19abedb125",
+        "workflow": "landgate",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "2fd6990d-2a82-429a-b93e-3511309e9676",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landgate-after-deliver-ready-1c0ffe07697c"
+        },
+        "costUsd": 0.1299077,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "PR 116 adds one Markdown file under docs/factory-console/answers/. All 10 checks are green on the head commit and it merges cleanly with main at 0 behind. It touches no page a person sees, no schema and no engine behaviour.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "gate",
+            "startedAt": "2026-11-20T21:49:18.000Z"
+          }
+        ]
+      }
+    ]
+  }
+}

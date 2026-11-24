@@ -252,6 +252,7 @@ export function createInMemoryWorkflowStore(
     hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),
     acceptStartReceipt: admit(admission.acceptStartReceipt.bind(admission)),
     getStartReceipt: admit(admission.getStartReceipt.bind(admission)),
+    listStartReceiptSources: admit(admission.listStartReceiptSources.bind(admission)),
     listStartReceipts: admit(admission.listStartReceipts.bind(admission)),
     listPendingStartBindings: admit(admission.listPendingStartBindings.bind(admission)),
     getResourceStartRequest: admit(admission.getResourceStartRequest.bind(admission)),

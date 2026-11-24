@@ -5,7 +5,7 @@
  * that pins the window, so following it returns each remaining item once.
  */
 import { z } from 'zod';
-import { assembleItemRead, itemReadSchema, readItemQueue, type ItemReadSource } from './item-read';
+import { assembleItemReads, itemReadSchema, readItemQueue, type ItemReadSource } from './item-read';
 import { MetricsQueryError, resolveMetricsWindow } from './metrics';
 import type { IWorkflowStore } from './store';
 
@@ -119,14 +119,13 @@ export async function readItemWindow(
   const window = { since: since.toISOString(), until: until.toISOString() };
   const last = page.at(-1);
   if (last === undefined) return { window, items: [], next: null };
-  const queue = await readItemQueue(source);
-  const items = [];
-  for (const item of page) {
-    const read = await assembleItemRead(source, item, queue);
+  const reads = await assembleItemReads(source, page, await readItemQueue(source));
+  const items = page.map((item, index) => {
+    const read = reads[index] ?? null;
     // Items are never deleted, so one the window listed is still there.
     if (read === null) throw new Error(`Item '${item.key}' was listed but not found`);
-    items.push(read);
-  }
+    return read;
+  });
   return {
     window,
     items,

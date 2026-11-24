@@ -244,6 +244,26 @@ export async function readProjectPackSettings(
   return readProjectValues(cwd, pack.key, pack.settings ?? {});
 }
 
+/**
+ * The raw `settings:` map of a project's `.archon/packs/<key>.yaml`, for display: values
+ * are as YAML read them and no key is checked against a declaration, so a reader can show
+ * a key the pack does not declare instead of refusing the file. `settings` is undefined
+ * when the file does not exist.
+ *
+ * @throws PackSettingsError when the file cannot be read, is not YAML, or holds a top-level
+ *   key other than `settings:`.
+ */
+export async function readProjectPackSettingsRaw(
+  cwd: string,
+  packKey: string
+): Promise<{ path: string; settings: Record<string, unknown> | undefined }> {
+  const path = projectPackSettingsPath(cwd, packKey);
+  const fail = failIn(path);
+  const text = await readOptionalFile(path, fail);
+  if (text === undefined) return { path, settings: undefined };
+  return { path, settings: topLevelMappings(text, ['settings'], fail).settings ?? {} };
+}
+
 /** Check project values without requiring inputs that an invocation may supply. */
 export async function validateProjectPackSettings(
   cwd: string,

@@ -27,7 +27,8 @@ export const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 export interface InMemoryStore extends IWorkflowStore {}
 
 export class InMemoryStore {
-  listSkippedItemStarts: IWorkflowStore['listSkippedItemStarts'] = async () => [];
+  listSkippedItemStarts: IWorkflowStore['listSkippedItemStarts'] = async itemIds =>
+    new Map(itemIds.map(id => [id, []]));
   listWaitedItemHolders: IWorkflowStore['listWaitedItemHolders'] = async () => [];
   releasePausedRunSlot: IWorkflowStore['releasePausedRunSlot'] = async () => ({
     released: false,

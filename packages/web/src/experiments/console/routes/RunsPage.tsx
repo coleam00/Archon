@@ -4,6 +4,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ActiveRunCard } from '../components/ActiveRunCard';
 import { RecentRunRow } from '../components/RecentRunRow';
 import { FilterChips, FILTER_ORDER, type Filter } from '../components/FilterChips';
+import { ProjectHeader } from '../components/ProjectHeader';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { DraftRunCard } from '../components/DraftRunCard';
 import { PendingInputBanner } from '../components/PendingInputBanner';
@@ -682,51 +683,51 @@ function RunsHeader({
 }: RunsHeaderProps): ReactElement {
   const heading = scope === 'all' ? 'All projects' : (project?.name ?? 'Project');
   return (
-    <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
-      <div className="flex items-baseline justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="truncate text-base font-medium text-text-primary">{heading}</h1>
-          <p className="text-xs text-text-tertiary">
-            {scope === 'all' ? 'Every run, across every project.' : (project?.path ?? 'Loading…')}
-            {demoMode ? (
-              <span className="ml-2 rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-console-10 uppercase tracking-widest text-warning">
-                demo mocks on
-              </span>
-            ) : null}
-          </p>
+    <ProjectHeader
+      title={heading}
+      subtitle={
+        scope === 'all' ? 'Every run, across every project.' : (project?.path ?? 'Loading…')
+      }
+      aside={
+        <div className="flex shrink-0 items-center gap-3">
+          {demoMode ? (
+            <span className="rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-console-10 uppercase tracking-widest text-warning">
+              demo mocks on
+            </span>
+          ) : null}
+          <div
+            className="flex h-9.5 w-75 max-w-[34vw] shrink-0 items-center gap-2 rounded-lg border bg-surface-elevated px-3 text-text-tertiary transition-colors focus-within:text-text-secondary"
+            // Inline because the console scope's wildcard border-color rule
+            // repaints Tailwind border utilities (see theme.css).
+            style={{ borderColor: 'var(--border)' }}
+          >
+            <span aria-hidden className="font-mono text-console-13 leading-none">
+              ⌕
+            </span>
+            <input
+              ref={searchRef}
+              type="text"
+              value={query}
+              onChange={e => {
+                onQueryChange(e.target.value);
+              }}
+              onKeyDown={e => {
+                // Esc unfocuses + clears so `/` → type → esc returns control
+                // to the global keymap without trapping the user in the box.
+                if (e.key === 'Escape') {
+                  e.currentTarget.blur();
+                  onQueryChange('');
+                }
+              }}
+              aria-label="Search runs"
+              placeholder="Search workflow, project, run id…"
+              spellCheck={false}
+              className="min-w-0 flex-1 bg-transparent font-mono text-console-13 text-text-primary outline-none placeholder:text-text-tertiary"
+            />
+          </div>
         </div>
-        <div
-          className="flex h-9.5 w-75 max-w-[34vw] shrink-0 items-center gap-2 rounded-lg border bg-surface-elevated px-3 text-text-tertiary transition-colors focus-within:text-text-secondary"
-          // Inline because the console scope's wildcard border-color rule
-          // repaints Tailwind border utilities (see theme.css).
-          style={{ borderColor: 'var(--border)' }}
-        >
-          <span aria-hidden className="font-mono text-console-13 leading-none">
-            ⌕
-          </span>
-          <input
-            ref={searchRef}
-            type="text"
-            value={query}
-            onChange={e => {
-              onQueryChange(e.target.value);
-            }}
-            onKeyDown={e => {
-              // Esc unfocuses + clears so `/` → type → esc returns control
-              // to the global keymap without trapping the user in the box.
-              if (e.key === 'Escape') {
-                e.currentTarget.blur();
-                onQueryChange('');
-              }
-            }}
-            aria-label="Search runs"
-            placeholder="Search workflow, project, run id…"
-            spellCheck={false}
-            className="min-w-0 flex-1 bg-transparent font-mono text-console-13 text-text-primary outline-none placeholder:text-text-tertiary"
-          />
-        </div>
-      </div>
-
+      }
+    >
       {scope === 'all' ? (
         <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-console-12 text-text-tertiary">
           Choose a project to start a run.
@@ -734,7 +735,7 @@ function RunsHeader({
       ) : (
         <ProjectViewTabs projectId={scope} active="runs" />
       )}
-    </header>
+    </ProjectHeader>
   );
 }
 

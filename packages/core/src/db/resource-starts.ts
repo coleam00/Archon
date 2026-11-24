@@ -13,10 +13,10 @@ import type {
   PreparedBindingInput,
   StartBindingInspection,
   StartReceiptInspection,
+  StartReceiptSource,
   ResourceBlocker,
   ResourceStartRequestInspection,
   QueuedResourceStartInspection,
-  SkippedItemStart,
 } from '@archon/workflows/resource-start-store';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
@@ -27,7 +27,6 @@ export type {
 } from '@archon/workflows/resource-start-store';
 import type {
   PreparedWorkflowLaunch,
-  QueuedItemStart,
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
@@ -63,7 +62,6 @@ import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold'
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
-import { toHydratedTimestamp } from './timestamps';
 import { InstallHeldError } from '@archon/workflows/store';
 
 interface RequestRow {
@@ -389,6 +387,36 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
   };
 }
 
+/** A receipt row's cause fields, read one way for `getStartReceipt` and `listStartReceiptSources`. */
+function receiptSource(row: Record<string, unknown>): StartReceiptSource {
+  return {
+    id: String(row.id),
+    sourceInstanceId: String(row.source_instance_id),
+    sourceActor: sourceReceiptInputSchema.shape.sourceActor.parse(
+      parseStoredJson(row.source_actor)
+    ),
+  };
+}
+
+/** `$1, $2, ...`, one for each of `values`. */
+function placeholderList(values: readonly unknown[]): string {
+  return values.map((_, index) => `$${String(index + 1)}`).join(', ');
+}
+
+export async function listStartReceiptSources(
+  ids: readonly string[]
+): Promise<ReadonlyMap<string, StartReceiptSource>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return new Map();
+  // By primary key alone: the cause fields need no bindings join.
+  const result = await getDatabase().query<Record<string, unknown>>(
+    `SELECT id, source_instance_id, source_actor FROM remote_agent_start_receipts
+      WHERE id IN (${placeholderList(unique)})`,
+    unique
+  );
+  return new Map(result.rows.map(row => [String(row.id), receiptSource(row)]));
+}
+
 export const receiptBindingsSql = `SELECT b.*, r.id AS request_id, r.status AS request_status,
             r.blocker_run_id AS request_blocker_id, r.blocker_kind AS request_blocker_kind
        FROM remote_agent_start_receipt_bindings b
@@ -404,9 +432,10 @@ export async function getStartReceipt(id: string): Promise<StartReceiptInspectio
   if (!receipt.rows[0]) return null;
   const bindings = await getDatabase().query<Record<string, unknown>>(receiptBindingsSql, [id]);
   const row = receipt.rows[0];
+  const source = receiptSource(row);
   return {
-    id: String(row.id),
-    sourceInstanceId: String(row.source_instance_id),
+    id: source.id,
+    sourceInstanceId: source.sourceInstanceId,
     deliveryId: typeof row.delivery_id === 'string' ? row.delivery_id : null,
     contentDigest: String(row.content_digest),
     receivedAt:
@@ -417,9 +446,7 @@ export async function getStartReceipt(id: string): Promise<StartReceiptInspectio
         : typeof row.occurred_at === 'string'
           ? row.occurred_at
           : null,
-    sourceActor: sourceReceiptInputSchema.shape.sourceActor.parse(
-      parseStoredJson(row.source_actor)
-    ),
+    sourceActor: source.sourceActor,
     itemKey: typeof row.item_key === 'string' ? row.item_key : null,
     outcome: row.outcome as StartReceiptInspection['outcome'],
     reason: typeof row.reason === 'string' ? row.reason : null,
@@ -532,27 +559,6 @@ export async function getResourceStartRequest(
   return result.rows[0] ? inspectRequest(result.rows[0]) : null;
 }
 
-export const skippedItemStartsSql = `SELECT id, resource_key, blocker_kind, blocker_run_id, launch
-       FROM remote_agent_resource_start_requests
-      WHERE item_id = $1 AND status = 'skipped'
-      ORDER BY queue_position`;
-
-export async function listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]> {
-  const result = await getDatabase().query<{
-    id: string;
-    resource_key: string;
-    blocker_kind: string | null;
-    blocker_run_id: string | null;
-    launch: unknown;
-  }>(skippedItemStartsSql, [itemId]);
-  return result.rows.map(row => ({
-    requestId: row.id,
-    workflow: storedWorkflowName(row.launch),
-    resource: row.resource_key,
-    blockerRunId: row.blocker_kind === 'run' ? row.blocker_run_id : null,
-  }));
-}
-
 /** Runs by id; a row that cannot be normalized is reported `run_unreadable`. */
 async function readRunsForAttention(ids: readonly string[]): Promise<AttentionRead<WorkflowRun>[]> {
   const runs: AttentionRead<WorkflowRun>[] = [];
@@ -626,47 +632,6 @@ export async function listQueuedResourceStartsForHost(
       };
     }
   });
-}
-
-const storedWorkflowNameSchema = z.object({ run: z.object({ workflow_name: z.string() }) });
-
-/** The launch's workflow name, or null when the stored launch does not read. */
-export function storedWorkflowName(launch: unknown): string | null {
-  try {
-    const parsed = storedWorkflowNameSchema.safeParse(parseStoredJson(launch));
-    return parsed.success ? parsed.data.run.workflow_name : null;
-  } catch {
-    // Malformed JSON: the item read reports the start without its workflow.
-    return null;
-  }
-}
-
-export const queuedItemStartsSql = `SELECT r.id, r.resource_key, r.host_id, r.launch, r.created_at,
-       (SELECT COUNT(*) FROM remote_agent_resource_start_requests q
-         WHERE q.resource_key = r.resource_key AND q.host_id = r.host_id
-           AND q.status = 'queued' AND q.queue_position < r.queue_position) AS ahead
-       FROM remote_agent_resource_start_requests r
-      WHERE r.item_id = $1 AND r.status = 'queued'
-      ORDER BY r.queue_position`;
-
-export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]> {
-  const result = await getDatabase().query<{
-    id: string;
-    resource_key: string;
-    host_id: string;
-    launch: unknown;
-    created_at: string | Date;
-    ahead: number | string;
-  }>(queuedItemStartsSql, [itemId]);
-  return result.rows.map(row => ({
-    requestId: row.id,
-    workflow: storedWorkflowName(row.launch),
-    resource: row.resource_key,
-    hostId: row.host_id,
-    queuedAt: toHydratedTimestamp(row.created_at).toISOString(),
-    // Postgres returns COUNT(*) as a string.
-    ahead: Number(row.ahead),
-  }));
 }
 
 export async function withdrawQueuedResourceStart(

@@ -1,38 +1,223 @@
 import { useState, type MouseEvent, type KeyboardEvent, type ReactElement } from 'react';
+import {
+  answerProblem,
+  isOtherOption,
+  optionLabel,
+  pickOption,
+  recommendationWhy,
+  recommendedLabel,
+  takesText,
+  tileOrder,
+  type AttentionWait,
+} from '../lib/ask-card';
+import { offeredPlaceholder, type Offered } from '../lib/ask-offered';
+import { errorDetail } from '../lib/http';
 import * as skill from '../skills';
 import { invalidate } from '../store/cache';
 import { K } from '../store/keys';
-import type { ItemAsk, Run } from '../primitives/run';
+import type { Run } from '../primitives/run';
+import { AskConfirm, type ConfirmDraft } from './ask-card/AskConfirm';
+import { AskTiles, type AskTile } from './ask-card/AskTiles';
 
 type Attention = Extract<NonNullable<Run['attention']>, { kind: 'attention' }>;
 
-/**
- * What an answer form renders, shared by a paused run's wait and an ask a completed run
- * left; only an ask's options carry a cost.
- */
-export type AnswerFields = Pick<ItemAsk, 'form' | 'options' | 'other' | 'recommendation'>;
+/** Sends a chosen answer; throws the server's refusal. */
+type SubmitAnswer = (choose: string[], text: string | undefined) => Promise<void>;
 
-/** True for a wait paused before answers existed; only `resume` continues it. */
-export function isLegacyAttention(attention: Attention): boolean {
+/**
+ * True for a wait paused before answers existed; only `resume` continues it. Takes the
+ * occurrence alone so a run's attention and a queue item's run share this one check.
+ */
+export function isLegacyAttention(attention: { occurrence: string }): boolean {
   return attention.occurrence.startsWith('legacy:');
 }
 
 /**
- * The reserved option of a wait declared with `other: true` is answered with text. The
- * engine adds it after the declared options, so the flag names it without its id.
+ * Answer a queue item by its ref, then refresh every `runs` key (the project's queue, which
+ * the answered item leaves, and the runs feed the answer moved on) and every `factory-items`
+ * key (an item page lists the answer among its answers). A refusal refreshes too: it usually
+ * means the item closed, so the stale card should go.
  */
-function needsText(fields: AnswerFields, optionId: string, text: string): boolean {
-  return fields.other === true && optionId === fields.options.at(-1)?.id && text.trim() === '';
+export function answerByRef(ref: string): SubmitAnswer {
+  return async (choose, text) => {
+    try {
+      await skill.answerAttentionItem(ref, { choose, ...(text === undefined ? {} : { text }) });
+    } finally {
+      invalidate('runs');
+      invalidate('factory-items');
+    }
+  };
 }
 
-function textPlaceholder(fields: AnswerFields): string {
-  if (fields.form === 'message') return 'Your answer';
-  return fields.other === true ? 'Optional text; required for Other' : 'Optional text';
+function tilesOf(
+  wait: AttentionWait,
+  starts: ((optionId: string) => string | undefined) | undefined
+): AskTile[] {
+  return tileOrder(wait).map(option => {
+    const started = starts?.(option.id);
+    return {
+      id: option.id,
+      label: optionLabel(wait, option),
+      ...(started === undefined ? {} : { starts: started }),
+      ...(option.does === undefined ? {} : { does: option.does }),
+      ...(option.cost === undefined ? {} : { cost: option.cost }),
+      recommended: option.id === wait.recommendation?.option,
+      other: isOtherOption(wait, option.id),
+    };
+  });
 }
 
 /**
- * Answer a paused attention wait in its declared form. The answer names the occurrence it
- * was read at, so the server refuses it if the run has moved on.
+ * What the confirm row asks for, given the picks so far. While the card shows what the stage
+ * offered, a pick's optional note asks which of those is meant, on every tile: the routes are
+ * the pack's, and the console names none of them (rule 1). An answer in words keeps its own
+ * prompt, and whether text is required does not change.
+ */
+function draftOf(
+  wait: AttentionWait,
+  tiles: readonly AskTile[],
+  picks: readonly string[],
+  offered: Offered | null
+): ConfirmDraft {
+  const labels = picks.map(id => tiles.find(tile => tile.id === id)?.label ?? id);
+  if (wait.form === 'message') return { labels, text: 'required', placeholder: 'Your answer' };
+  if (takesText(wait, picks))
+    return { labels, text: 'required', placeholder: 'Say what to do instead' };
+  const placeholder =
+    offered === null ? 'Optional note with your answer' : offeredPlaceholder(offered);
+  return { labels, text: 'optional', placeholder };
+}
+
+/**
+ * Answer a paused attention wait in its declared form, as the ask card draws it (DESIGN.md,
+ * Visual standard rule 9): one tile per option, the recommended one first and marked with
+ * why; choosing a tile (or several, for multi_select) opens the confirm row, and Confirm
+ * sends. An answer only in words has no tiles and opens with the textarea. Confirm is enabled
+ * when the engine would accept the answer (`answerProblem`), and for an answer only in words
+ * only once its text has a non-blank character, which the engine does not require. `submit` sends; a
+ * refusal shows in the server's own words. `onAnswered` hears the chosen words once sent.
+ * `offered`, from the ask card, is what the stage offered in its own words (`parseOffered`).
+ * `starts` gives what choosing an option starts, in the factory view's words, and
+ * `unrecommended` why a stage that left the ask could not choose (`unrecommendedOf`).
+ */
+export function AttentionAnswerForm({
+  wait,
+  submit,
+  onAnswered,
+  offered = null,
+  starts,
+  unrecommended,
+  refusal,
+}: {
+  wait: AttentionWait;
+  submit: SubmitAnswer;
+  onAnswered?: (label: string) => void;
+  offered?: Offered | null;
+  starts?: (optionId: string) => string | undefined;
+  unrecommended?: string;
+  /** The server's reason the caller may not answer: the options show, with no way to choose. */
+  refusal?: string;
+}): ReactElement {
+  const [picks, setPicks] = useState<string[]>([]);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const tiles = tilesOf(wait, starts);
+  const draft = draftOf(wait, tiles, picks, offered);
+  const open = refusal === undefined && (wait.form === 'message' || picks.length > 0);
+
+  const reset = (): void => {
+    setPicks([]);
+    setText('');
+    setError(null);
+  };
+  const confirm = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const trimmed = text.trim();
+      await submit(picks, trimmed.length > 0 ? trimmed : undefined);
+      reset();
+      onAnswered?.(draft.labels.length > 0 ? draft.labels.join(', ') : 'in words');
+    } catch (e: unknown) {
+      setError(errorDetail(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // The card can sit inside a clickable run card; a choice made here must not open the run.
+  const stopPropagation = (e: MouseEvent | KeyboardEvent): void => {
+    e.stopPropagation();
+  };
+  return (
+    <div className="flex flex-col gap-3" onClick={stopPropagation} onKeyDown={stopPropagation}>
+      {wait.form === 'message' ? null : (
+        <AskTiles
+          tiles={tiles}
+          picks={picks}
+          disabled={busy || refusal !== undefined}
+          onPick={id => {
+            setPicks(pickOption(wait, picks, id));
+            setError(null);
+          }}
+        />
+      )}
+      <RecommendationWhy wait={wait} unrecommended={unrecommended} />
+      {refusal === undefined ? null : (
+        <p className="text-console-13 text-text-secondary">You can't answer this: {refusal}</p>
+      )}
+      {open ? (
+        <AskConfirm
+          draft={draft}
+          value={text}
+          onChange={setText}
+          accepted={
+            answerProblem(wait, { choose: picks, text }) === undefined &&
+            !(wait.form === 'message' && text.trim() === '')
+          }
+          busy={busy}
+          error={error}
+          onConfirm={() => void confirm()}
+          {...(wait.form === 'message' ? {} : { onCancel: reset })}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * One line under the tiles: why the recommended option, naming it when no tile carries it; for
+ * an ask without one, why the stage could not choose, when the card says.
+ */
+function RecommendationWhy({
+  wait,
+  unrecommended,
+}: {
+  wait: AttentionWait;
+  unrecommended: string | undefined;
+}): ReactElement | null {
+  const { recommendation } = wait;
+  if (recommendation === undefined)
+    return unrecommended === undefined ? null : (
+      <p
+        data-unrecommended=""
+        className="text-console-13 text-text-secondary [overflow-wrap:anywhere]"
+      >
+        {unrecommended}
+      </p>
+    );
+  const matched = wait.options.some(option => option.id === recommendation.option);
+  return (
+    <p className="text-console-13 text-text-secondary [overflow-wrap:anywhere]">
+      {matched ? '' : `Recommended: ${recommendedLabel(wait) ?? ''}. `}
+      {recommendationWhy(recommendation)}
+    </p>
+  );
+}
+
+/**
+ * A run's paused attention wait, answered at the occurrence the run reports, so the server
+ * refuses the answer if the run has moved on.
  */
 export function AttentionAnswerPanel({
   run,
@@ -42,166 +227,20 @@ export function AttentionAnswerPanel({
   attention: Attention;
 }): ReactElement | null {
   if (isLegacyAttention(attention)) return null;
-  const submit = async (choose: string[], text: string | undefined): Promise<void> => {
-    if (!run.id.startsWith('demo-'))
-      await skill.answerRun(run.id, attention.occurrence, choose, text);
-    invalidate('runs');
-    invalidate(K.run(run.id));
-  };
-  return <AttentionAnswerForm fields={attention} submit={submit} />;
-}
-
-/**
- * An answer in the declared form: free text for a message, one option for approval and
- * select, one or more for multi_select. Options keep the order they are listed in. With a
- * `refusal`, the options and recommendation are shown with the reason and no controls.
- */
-export function AttentionAnswerForm({
-  fields,
-  submit,
-  refusal,
-}: {
-  fields: AnswerFields;
-  submit: (choose: string[], text: string | undefined) => Promise<void>;
-  refusal?: string;
-}): ReactElement {
-  const [text, setText] = useState('');
-  const [chosen, setChosen] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const answer = async (choose: string[]): Promise<void> => {
-    setBusy(true);
-    setError(null);
+  const submit: SubmitAnswer = async (choose, text) => {
     try {
-      const trimmed = text.trim();
-      await submit(choose, trimmed.length > 0 ? trimmed : undefined);
-      setText('');
-      setChosen([]);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Answer failed.');
+      if (!run.id.startsWith('demo-')) {
+        await skill.answerRun(run.id, attention.occurrence, choose, text);
+      }
     } finally {
-      setBusy(false);
+      // A refusal usually means the run moved on; refresh so the stale wait goes too.
+      invalidate('runs');
+      invalidate(K.run(run.id));
     }
   };
-  const stopPropagation = (e: MouseEvent | KeyboardEvent): void => {
-    e.stopPropagation();
-  };
-  const button =
-    'rounded bg-warning/15 px-2 py-1 text-console-12 font-semibold text-warning hover:bg-warning/25 disabled:opacity-50';
-  const { recommendation } = fields;
-
   return (
-    <div
-      className="mt-2 flex flex-col gap-2 rounded border border-warning/30 bg-warning/[0.06] p-3"
-      onClick={stopPropagation}
-      onKeyDown={stopPropagation}
-    >
-      <AnswerSummary fields={fields} />
-      {refusal !== undefined ? (
-        <p className="text-console-12 text-text-secondary">You can't answer this: {refusal}</p>
-      ) : (
-        <>
-          {fields.form === 'multi_select' ? (
-            <div className="flex flex-wrap gap-3 text-console-12">
-              {fields.options.map(option => (
-                <label key={option.id} className="flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    checked={chosen.includes(option.id)}
-                    onChange={event => {
-                      setChosen(
-                        event.target.checked
-                          ? [...chosen, option.id]
-                          : chosen.filter(id => id !== option.id)
-                      );
-                    }}
-                  />
-                  {option.label ?? option.id}
-                </label>
-              ))}
-            </div>
-          ) : null}
-          <textarea
-            value={text}
-            onChange={event => {
-              setText(event.target.value);
-            }}
-            placeholder={textPlaceholder(fields)}
-            rows={2}
-            className="rounded border border-border bg-surface px-2 py-1 text-console-12 text-text-primary"
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            {fields.form === 'message' || fields.form === 'multi_select' ? (
-              <button
-                type="button"
-                disabled={
-                  busy ||
-                  (fields.form === 'multi_select' && chosen.length === 0) ||
-                  (fields.form === 'message' && text.trim() === '')
-                }
-                onClick={() => void answer(chosen)}
-                className={button}
-              >
-                {busy ? 'Answering…' : 'Answer'}
-              </button>
-            ) : (
-              fields.options.map(option => (
-                <button
-                  key={option.id}
-                  type="button"
-                  disabled={busy || needsText(fields, option.id, text)}
-                  onClick={() => void answer([option.id])}
-                  className={
-                    recommendation?.option === option.id ? `${button} ring-1 ring-warning` : button
-                  }
-                >
-                  {`${option.label ?? option.id}${recommendation?.option === option.id ? ' (recommended)' : ''}`}
-                </button>
-              ))
-            )}
-            {error !== null ? (
-              <span className="font-mono text-console-12 text-error">{error}</span>
-            ) : null}
-          </div>
-        </>
-      )}
+    <div className="@container mt-2">
+      <AttentionAnswerForm wait={attention} submit={submit} />
     </div>
-  );
-}
-
-/** The recommendation and what each option does and costs, in the order they are listed. */
-function AnswerSummary({ fields }: { fields: AnswerFields }): ReactElement {
-  const { recommendation } = fields;
-  const optionName = (id: string): string =>
-    fields.options.find(option => option.id === id)?.label ?? id;
-  const described = fields.options.filter(
-    option => option.does !== undefined || option.cost !== undefined
-  );
-  return (
-    <>
-      {recommendation !== undefined ? (
-        <p className="text-console-12 text-text-primary">
-          <span className="font-semibold">Recommended: {optionName(recommendation.option)}</span>
-          {recommendation.confidence !== undefined
-            ? ` (${recommendation.confidence} confidence)`
-            : ''}
-          . {recommendation.why}
-        </p>
-      ) : null}
-      {described.length > 0 ? (
-        <ul className="flex flex-col gap-1 text-console-12 text-text-secondary">
-          {described.map(option => (
-            <li key={option.id}>
-              <span className="font-semibold text-text-primary">{option.label ?? option.id}</span>
-              {option.does !== undefined ? `: ${option.does}` : ''}
-              {option.cost !== undefined ? (
-                <span className="text-text-tertiary"> Cost: {option.cost}</span>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </>
   );
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { useParams } from 'react-router';
 import { ChatStream } from '../components/ChatStream';
 import { ChatComposer } from '../components/ChatComposer';
+import { ProjectHeader } from '../components/ProjectHeader';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { WorkingIndicator } from '../components/WorkingIndicator';
 import { WorkflowDock } from '../components/WorkflowDock';
@@ -320,22 +321,19 @@ export function ChatPage(): ReactElement {
 
   return (
     <section className="flex h-full flex-col">
-      <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
-        <div className="flex items-baseline justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-medium text-text-primary">
-              {project?.name ?? 'Project'}
-            </h1>
-            <p className="text-xs text-text-tertiary">{project?.path ?? 'Loading…'}</p>
-          </div>
+      <ProjectHeader
+        title={project?.name ?? 'Project'}
+        subtitle={project?.path ?? 'Loading…'}
+        aside={
           <ConversationPicker
             conversations={webConversations}
             active={activeConvId}
             onSelect={selectConversation}
           />
-        </div>
+        }
+      >
         <ProjectViewTabs projectId={projectId} active="chat" />
-      </header>
+      </ProjectHeader>
 
       <div className="relative min-h-0 flex-1">
         <div

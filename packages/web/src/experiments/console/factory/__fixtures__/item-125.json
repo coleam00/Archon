@@ -1,0 +1,1975 @@
+{
+  "note": "GET /api/factory/item for item 125, copied 2026-11-22 from dev:console on a fresh read-only copy of the live factory database, after #122 added each run's change, said, models and steps. Run pack and the item run limit, which the API gained after the capture, filled as null. The live home path is replaced by <live-home>.",
+  "response": {
+    "pack": "Wirasm/archon-software-factory",
+    "item": {
+      "item": {
+        "id": "bff9c26bb8c6ab38e43d8fb5fd2ec4ec",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "125"
+      },
+      "runs": [
+        {
+          "id": "bd5ea7d5-3ae0-4d6e-b676-db1c61c09841",
+          "workflow": "Wirasm/archon-software-factory:order",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-22T02:40:54.000Z",
+          "completedAt": "2026-11-22T02:41:43.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "92e7f91d-8572-4050-83a2-ee1c874b51ec",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "34bb4461af41054747004b4d0baaf45df9948598"
+        },
+        {
+          "id": "337f403e-b1f5-4176-be9f-4d28765b8fb4",
+          "workflow": "Wirasm/archon-software-factory:triage",
+          "pack": null,
+          "status": "completed",
+          "outcome": "build",
+          "startedAt": "2026-11-22T02:41:50.000Z",
+          "completedAt": "2026-11-22T02:44:33.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "bd5ea7d5-3ae0-4d6e-b676-db1c61c09841",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.3390402,
+            "inputTokens": 430363,
+            "outputTokens": 7909
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "34bb4461af41054747004b4d0baaf45df9948598"
+        },
+        {
+          "id": "28d7be31-b6d8-4bf8-b59c-d29b39b6f173",
+          "workflow": "Wirasm/archon-software-factory:plan",
+          "pack": null,
+          "status": "cancelled",
+          "outcome": null,
+          "startedAt": "2026-11-22T02:44:39.000Z",
+          "completedAt": "2026-11-22T02:50:22.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "337f403e-b1f5-4176-be9f-4d28765b8fb4",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": false,
+          "resultCommit": null
+        },
+        {
+          "id": "f327dd85-8c55-4deb-85da-562a2a83fbbd",
+          "workflow": "Wirasm/archon-software-factory:order",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-22T02:50:30.000Z",
+          "completedAt": "2026-11-22T02:51:36.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "bbfe9e1c-49d6-49d0-8832-86233fbc8968",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "e9269ce416f936f5398ca8aec69d57feb56bd7ff"
+        },
+        {
+          "id": "aaed7cbb-7d0f-4052-b5df-1d1adc3fdadf",
+          "workflow": "Wirasm/archon-software-factory:triage",
+          "pack": null,
+          "status": "completed",
+          "outcome": "split",
+          "startedAt": "2026-11-22T02:51:42.000Z",
+          "completedAt": "2026-11-22T02:54:41.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "f327dd85-8c55-4deb-85da-562a2a83fbbd",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.1318547,
+            "inputTokens": 171707,
+            "outputTokens": 4155
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "e9269ce416f936f5398ca8aec69d57feb56bd7ff"
+        },
+        {
+          "id": "40ecd9bf-d2bc-48c1-bd96-5dea359f75fc",
+          "workflow": "Wirasm/archon-software-factory:split",
+          "pack": null,
+          "status": "completed",
+          "outcome": "whole",
+          "startedAt": "2026-11-22T02:54:45.000Z",
+          "completedAt": "2026-11-22T02:56:16.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "aaed7cbb-7d0f-4052-b5df-1d1adc3fdadf",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-split-after-triage-split-0d75baca22bd"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.5655515999999999,
+            "inputTokens": 396711,
+            "outputTokens": 3238
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "e9269ce416f936f5398ca8aec69d57feb56bd7ff"
+        },
+        {
+          "id": "d6816af4-e71b-4c3c-a1b8-05df295c9661",
+          "workflow": "Wirasm/archon-software-factory:plan",
+          "pack": null,
+          "status": "completed",
+          "outcome": "planned",
+          "startedAt": "2026-11-22T02:56:29.000Z",
+          "completedAt": "2026-11-22T03:17:41.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "40ecd9bf-d2bc-48c1-bd96-5dea359f75fc",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-split-whole-677649abc653"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 6.068247600000001,
+            "inputTokens": 5790416,
+            "outputTokens": 71357
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "e9269ce416f936f5398ca8aec69d57feb56bd7ff"
+        },
+        {
+          "id": "6766bfc4-ca1e-42f6-b28b-b81747822c43",
+          "workflow": "Wirasm/archon-software-factory:stage-build",
+          "pack": null,
+          "status": "completed",
+          "outcome": "built",
+          "startedAt": "2026-11-22T03:17:47.000Z",
+          "completedAt": "2026-11-22T04:51:46.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "d6816af4-e71b-4c3c-a1b8-05df295c9661",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-build-after-plan-planned-3a1c5bf7b0d9"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 16.976460100000004,
+            "inputTokens": 41363300,
+            "outputTokens": 133473
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "a7b61a2be8ff33f55464773f6c5a090a2bf42a2c"
+        },
+        {
+          "id": "20e1db24-c3da-4525-b76f-f362dba2dd2e",
+          "workflow": "Wirasm/archon-software-factory:stage-check",
+          "pack": null,
+          "status": "completed",
+          "outcome": "return",
+          "startedAt": "2026-11-22T04:51:52.000Z",
+          "completedAt": "2026-11-22T05:22:39.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "6766bfc4-ca1e-42f6-b28b-b81747822c43",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-check-after-build-built-a375ce4b6093"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 8.67466436,
+            "inputTokens": 15694091,
+            "outputTokens": 99578
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "a7b61a2be8ff33f55464773f6c5a090a2bf42a2c"
+        },
+        {
+          "id": "8d95ba65-ffc7-4b90-b3c7-9152c8043356",
+          "workflow": "Wirasm/archon-software-factory:stage-build",
+          "pack": null,
+          "status": "completed",
+          "outcome": "built",
+          "startedAt": "2026-11-22T05:22:43.000Z",
+          "completedAt": "2026-11-22T05:30:31.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "20e1db24-c3da-4525-b76f-f362dba2dd2e",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-build-after-check-return-c7676cf13a69"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 1.4956362000000034,
+            "inputTokens": 5121914,
+            "outputTokens": 10038
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "779ca5f47e38f0c83ae7e3407d02a85ca250ae66"
+        },
+        {
+          "id": "bb11ef33-963a-4a1a-8bf5-3f50e84a711e",
+          "workflow": "Wirasm/archon-software-factory:stage-check",
+          "pack": null,
+          "status": "completed",
+          "outcome": "return",
+          "startedAt": "2026-11-22T05:30:35.000Z",
+          "completedAt": "2026-11-22T06:19:34.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "8d95ba65-ffc7-4b90-b3c7-9152c8043356",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-check-after-build-built-a375ce4b6093"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 5.95540014,
+            "inputTokens": 9161565,
+            "outputTokens": 79364
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "779ca5f47e38f0c83ae7e3407d02a85ca250ae66"
+        },
+        {
+          "id": "f734fcaa-2f48-44c0-9b08-8539303f633c",
+          "workflow": "Wirasm/archon-software-factory:stage-build",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-22T06:19:39.000Z",
+          "completedAt": "2026-11-22T06:29:12.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "bb11ef33-963a-4a1a-8bf5-3f50e84a711e",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-build-after-check-return-c7676cf13a69"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 1.468912000000003,
+            "inputTokens": 4763517,
+            "outputTokens": 13703
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "c28a1ede61dff625dda44e03891c25a9c5c698f8"
+        },
+        {
+          "id": "5380dbc6-db5f-4070-934f-672620717bcf",
+          "workflow": "Wirasm/archon-software-factory:stage-build",
+          "pack": null,
+          "status": "completed",
+          "outcome": "built",
+          "startedAt": "2026-11-22T06:31:13.000Z",
+          "completedAt": "2026-11-22T06:34:44.000Z",
+          "cause": {
+            "kind": "asks_settled",
+            "runId": "f734fcaa-2f48-44c0-9b08-8539303f633c"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.5388583999999987,
+            "inputTokens": 1682284,
+            "outputTokens": 2980
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "c28a1ede61dff625dda44e03891c25a9c5c698f8"
+        },
+        {
+          "id": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c",
+          "workflow": "Wirasm/archon-software-factory:stage-check",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-22T06:34:52.000Z",
+          "completedAt": "2026-11-22T06:54:30.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "5380dbc6-db5f-4070-934f-672620717bcf",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-check-after-build-built-a375ce4b6093"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 3.8379480900000007,
+            "inputTokens": 6698208,
+            "outputTokens": 49585
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "c28a1ede61dff625dda44e03891c25a9c5c698f8"
+        },
+        {
+          "id": "9aafcbaa-5d54-4a2f-8be7-ca4172609002",
+          "workflow": "Wirasm/archon-software-factory:stage-build",
+          "pack": null,
+          "status": "completed",
+          "outcome": "built",
+          "startedAt": "2026-11-22T06:59:05.000Z",
+          "completedAt": "2026-11-22T07:05:50.000Z",
+          "cause": {
+            "kind": "asks_settled",
+            "runId": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 1.1021935999999997,
+            "inputTokens": 3966571,
+            "outputTokens": 6625
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "e80bd912853c74064f81206711f3e3e028907a0f"
+        },
+        {
+          "id": "02e5f706-fb01-4039-8867-940e65e59c09",
+          "workflow": "Wirasm/archon-software-factory:stage-check",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-22T07:05:55.000Z",
+          "completedAt": "2026-11-22T07:19:27.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "9aafcbaa-5d54-4a2f-8be7-ca4172609002",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-check-after-build-built-a375ce4b6093"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 2.49933066,
+            "inputTokens": 4116723,
+            "outputTokens": 38593
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "e80bd912853c74064f81206711f3e3e028907a0f"
+        },
+        {
+          "id": "52f46ea3-f4d0-4455-85b5-f7c8e0e8b316",
+          "workflow": "Wirasm/archon-software-factory:stage-host",
+          "pack": null,
+          "status": "completed",
+          "outcome": "return",
+          "startedAt": "2026-11-22T07:23:29.000Z",
+          "completedAt": "2026-11-22T07:28:24.000Z",
+          "cause": {
+            "kind": "asks_settled",
+            "runId": "02e5f706-fb01-4039-8867-940e65e59c09"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.20942770000000002,
+            "inputTokens": 444500,
+            "outputTokens": 2524
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "e80bd912853c74064f81206711f3e3e028907a0f"
+        },
+        {
+          "id": "5063913b-7863-4f5e-a444-0c7e417fb1c3",
+          "workflow": "Wirasm/archon-software-factory:stage-build",
+          "pack": null,
+          "status": "completed",
+          "outcome": "built_for_host",
+          "startedAt": "2026-11-22T07:28:30.000Z",
+          "completedAt": "2026-11-22T07:42:46.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "52f46ea3-f4d0-4455-85b5-f7c8e0e8b316",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-build-after-host-return-6c9a4a3de3ba"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 2.2433321999999905,
+            "inputTokens": 8811761,
+            "outputTokens": 11967
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "372bbbee8c9d0dfea0edc499003acea036480bd3"
+        },
+        {
+          "id": "d2faac1f-6d47-47f5-b30e-f441b6d83b52",
+          "workflow": "Wirasm/archon-software-factory:stage-host",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-22T07:42:59.000Z",
+          "completedAt": "2026-11-22T07:51:10.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "5063913b-7863-4f5e-a444-0c7e417fb1c3",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-host-after-fix-built-for-host-f112132f9f70"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.178895,
+            "inputTokens": 400147,
+            "outputTokens": 2847
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "372bbbee8c9d0dfea0edc499003acea036480bd3"
+        },
+        {
+          "id": "de4b08d3-152a-42c3-9268-0de9f83fd398",
+          "workflow": "Wirasm/archon-software-factory:landgate",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-22T07:51:35.000Z",
+          "completedAt": "2026-11-22T07:53:53.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "d2faac1f-6d47-47f5-b30e-f441b6d83b52",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landgate-after-stage-host-ready-218113235efa"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.11914119999999999,
+            "inputTokens": 182288,
+            "outputTokens": 1898
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "372bbbee8c9d0dfea0edc499003acea036480bd3"
+        },
+        {
+          "id": "00acfd73-2453-49ad-9fec-784ae29b4e6d",
+          "workflow": "Wirasm/archon-software-factory:land",
+          "pack": null,
+          "status": "completed",
+          "outcome": "landed",
+          "startedAt": "2026-11-22T07:55:13.000Z",
+          "completedAt": "2026-11-22T07:59:43.000Z",
+          "cause": {
+            "kind": "asks_settled",
+            "runId": "de4b08d3-152a-42c3-9268-0de9f83fd398"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.2515517,
+            "inputTokens": 873997,
+            "outputTokens": 3530
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "372bbbee8c9d0dfea0edc499003acea036480bd3"
+        },
+        {
+          "id": "77baacc9-492b-4d08-bb86-5f419cff1a9b",
+          "workflow": "Wirasm/archon-software-factory:discoveries",
+          "pack": null,
+          "status": "completed",
+          "outcome": null,
+          "startedAt": "2026-11-22T07:59:48.000Z",
+          "completedAt": "2026-11-22T08:00:45.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "00acfd73-2453-49ad-9fec-784ae29b4e6d",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-discoveries-after-land-landed-100eef62f716"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "1ad8b4b5f98bf0d66b4d9fcb4363a2200114e776"
+        },
+        {
+          "id": "621679a2-a90a-4fae-91c0-9f9d8ef29812",
+          "workflow": "Wirasm/archon-software-factory:landed",
+          "pack": null,
+          "status": "completed",
+          "outcome": "waiting",
+          "startedAt": "2026-11-22T07:59:55.000Z",
+          "completedAt": "2026-11-22T08:02:00.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "00acfd73-2453-49ad-9fec-784ae29b4e6d",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landed-after-land-landed-b76c9e17f50b"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.1292244,
+            "inputTokens": 305302,
+            "outputTokens": 2168
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": "1ad8b4b5f98bf0d66b4d9fcb4363a2200114e776"
+        }
+      ],
+      "queued": [],
+      "skipped": [],
+      "hold": null,
+      "held": [],
+      "runLimit": null,
+      "waits": [],
+      "questions": [],
+      "answers": [
+        {
+          "kind": "ask",
+          "runId": "f734fcaa-2f48-44c0-9b08-8539303f633c",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-22T06:31:08.198Z",
+          "via": "cli",
+          "ref": "ask:fe7a44ddd6ef42562fbf5cc4b91960c7",
+          "question": "While a stage-check round runs, should a card in Checks number the running round (\"Checks · round N of M\", as #125's text says), or keep the built \"round <last completed> of M, next one running\"?",
+          "answer": {
+            "decision": "send-back",
+            "text": "Owner ruling: keep-honest-wording. Keep 'round N of M, next one running' as built and documented in DESIGN.md; do not copy the pack's counting rule into the console. The operator asks the pack upstream to expose round and allowance at the start of stage-check (pack-records-round-at-start); that is not this item. Finish what the last check round returned, and nothing more."
+          },
+          "chosen": {
+            "id": "send-back",
+            "does": "The same builder continues on the change with what you say in your answer, and the checks look at it again."
+          },
+          "withdrawn": false,
+          "by": {
+            "declared": "cole-owner"
+          },
+          "fromRun": null
+        },
+        {
+          "kind": "asks_settled",
+          "runId": "f734fcaa-2f48-44c0-9b08-8539303f633c",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-22T06:31:08.198Z",
+          "via": null,
+          "answered": 1,
+          "withdrawn": 0
+        },
+        {
+          "kind": "ask",
+          "runId": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-22T06:59:01.533Z",
+          "via": "cli",
+          "ref": "ask:da4172842d05babbc8f26311e4d56cb4",
+          "question": "Should PR #128 go back to its builder once more to fix the two remaining findings, or go on to the host as it is?",
+          "answer": {
+            "decision": "one-more-round",
+            "text": "Owner: one more round, and it is the last. Fix exactly the two findings: stage-check's rounds step gets its own 'Post the review' card (the owner's card name 'Count the round' was wrong; keep the count card for allowance), and the OpenAPI description of GET /api/factory/progress names both rounds forms, with types regenerated. Nothing else."
+          },
+          "chosen": {
+            "id": "one-more-round",
+            "does": "This item is allowed one more round: the same builder fixes what was returned, and it is looked at again."
+          },
+          "withdrawn": false,
+          "by": {
+            "declared": "cole-owner"
+          },
+          "fromRun": null
+        },
+        {
+          "kind": "asks_settled",
+          "runId": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-22T06:59:01.533Z",
+          "via": null,
+          "answered": 1,
+          "withdrawn": 0
+        },
+        {
+          "kind": "ask",
+          "runId": "02e5f706-fb01-4039-8867-940e65e59c09",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-22T07:23:23.747Z",
+          "via": "cli",
+          "ref": "ask:e8b0f51610b78f0f015ccd0955690b65",
+          "question": "Should PR #128 get one more round to reword three doc comments that still say a check round is always an iteration of the declared rounds loop, or go on to the host as it is with the comments fixed in a follow-up?",
+          "answer": {
+            "decision": "take-as-is",
+            "text": "Owner reworded the three comments himself on the branch (commit pushed just now: factoryRoundVerdictSchema, factoryRoundSchema, buildTimeline now name both forms). Take it as is: go on to the host round."
+          },
+          "chosen": {
+            "id": "take-as-is",
+            "does": "The change goes on to the host round as it is."
+          },
+          "withdrawn": false,
+          "by": {
+            "declared": "cole-owner"
+          },
+          "fromRun": null
+        },
+        {
+          "kind": "asks_settled",
+          "runId": "02e5f706-fb01-4039-8867-940e65e59c09",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-22T07:23:23.747Z",
+          "via": null,
+          "answered": 1,
+          "withdrawn": 0
+        },
+        {
+          "kind": "ask",
+          "runId": "de4b08d3-152a-42c3-9268-0de9f83fd398",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-22T07:55:09.065Z",
+          "via": "cli",
+          "ref": "ask:5c571ec56673db349fae80eaa555215a",
+          "question": "PR #128 is green and mergeable but changes what the console shows (map, board card, item page). Have you looked at it in a browser on a copy of the live database, and may it land?",
+          "answer": {
+            "decision": "land",
+            "text": "Owner validated PR #128 (merged with main, head 372bbbee8) on a copy of the live database at 1440x900: the board shows three-stage items with their PR and round (#121 'Checks · Product check, round 1 of 3, next one running', PR #130; #118 and #119 merged with PRs #126 and #127), deliver items unchanged; the #119 item page shows PR #127 merged; shadows are admit, deliver checks, stage-check checks and discoveries, no land gate. Land it."
+          },
+          "chosen": {
+            "id": "land",
+            "does": "The land stage merges the change into its landing branch, when it still merges and its checks are green."
+          },
+          "withdrawn": false,
+          "by": {
+            "declared": "cole-owner"
+          },
+          "fromRun": null
+        },
+        {
+          "kind": "asks_settled",
+          "runId": "de4b08d3-152a-42c3-9268-0de9f83fd398",
+          "node": null,
+          "occurrence": null,
+          "at": "2026-11-22T07:55:09.065Z",
+          "via": null,
+          "answered": 1,
+          "withdrawn": 0
+        }
+      ],
+      "links": [],
+      "merged": {
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "commit": "1ad8b4b5f98bf0d66b4d9fcb4363a2200114e776",
+        "at": "2026-11-22T07:58:04.000Z",
+        "recordedAt": "2026-11-22T07:59:34.819Z",
+        "via": "cli",
+        "fromRun": {
+          "runId": "00acfd73-2453-49ad-9fec-784ae29b4e6d",
+          "nodePath": "end"
+        }
+      },
+      "landing": null,
+      "degraded": [],
+      "progress": {
+        "title": "The console reads the three-stage delivery: PR link, rounds and check verdicts",
+        "running": null,
+        "round": {
+          "runId": "02e5f706-fb01-4039-8867-940e65e59c09",
+          "iteration": 4,
+          "max": 4,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return"
+            },
+            {
+              "iteration": 2,
+              "verdict": "returned",
+              "outcome": "return"
+            },
+            {
+              "iteration": 3,
+              "verdict": "returned",
+              "outcome": "return"
+            },
+            {
+              "iteration": 4,
+              "verdict": "undecided",
+              "outcome": "ask"
+            }
+          ]
+        },
+        "partOf": null,
+        "returned": 4,
+        "change": {
+          "url": "https://github.com/coleam00/archon-factory-console/pull/128",
+          "merged": true,
+          "mergedAt": "2026-11-22T07:58:04Z",
+          "number": 128
+        },
+        "runs": [
+          {
+            "runId": "bd5ea7d5-3ae0-4d6e-b676-db1c61c09841",
+            "workflow": "order",
+            "failedStep": null
+          },
+          {
+            "runId": "337f403e-b1f5-4176-be9f-4d28765b8fb4",
+            "workflow": "triage",
+            "failedStep": null
+          },
+          {
+            "runId": "28d7be31-b6d8-4bf8-b59c-d29b39b6f173",
+            "workflow": "plan",
+            "failedStep": null
+          },
+          {
+            "runId": "f327dd85-8c55-4deb-85da-562a2a83fbbd",
+            "workflow": "order",
+            "failedStep": null
+          },
+          {
+            "runId": "aaed7cbb-7d0f-4052-b5df-1d1adc3fdadf",
+            "workflow": "triage",
+            "failedStep": null
+          },
+          {
+            "runId": "40ecd9bf-d2bc-48c1-bd96-5dea359f75fc",
+            "workflow": "split",
+            "failedStep": null
+          },
+          {
+            "runId": "d6816af4-e71b-4c3c-a1b8-05df295c9661",
+            "workflow": "plan",
+            "failedStep": null
+          },
+          {
+            "runId": "6766bfc4-ca1e-42f6-b28b-b81747822c43",
+            "workflow": "stage-build",
+            "failedStep": null
+          },
+          {
+            "runId": "20e1db24-c3da-4525-b76f-f362dba2dd2e",
+            "workflow": "stage-check",
+            "failedStep": null
+          },
+          {
+            "runId": "8d95ba65-ffc7-4b90-b3c7-9152c8043356",
+            "workflow": "stage-build",
+            "failedStep": null
+          },
+          {
+            "runId": "bb11ef33-963a-4a1a-8bf5-3f50e84a711e",
+            "workflow": "stage-check",
+            "failedStep": null
+          },
+          {
+            "runId": "f734fcaa-2f48-44c0-9b08-8539303f633c",
+            "workflow": "stage-build",
+            "failedStep": null
+          },
+          {
+            "runId": "5380dbc6-db5f-4070-934f-672620717bcf",
+            "workflow": "stage-build",
+            "failedStep": null
+          },
+          {
+            "runId": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c",
+            "workflow": "stage-check",
+            "failedStep": null
+          },
+          {
+            "runId": "9aafcbaa-5d54-4a2f-8be7-ca4172609002",
+            "workflow": "stage-build",
+            "failedStep": null
+          },
+          {
+            "runId": "02e5f706-fb01-4039-8867-940e65e59c09",
+            "workflow": "stage-check",
+            "failedStep": null
+          },
+          {
+            "runId": "52f46ea3-f4d0-4455-85b5-f7c8e0e8b316",
+            "workflow": "stage-host",
+            "failedStep": null
+          },
+          {
+            "runId": "5063913b-7863-4f5e-a444-0c7e417fb1c3",
+            "workflow": "stage-build",
+            "failedStep": null
+          },
+          {
+            "runId": "d2faac1f-6d47-47f5-b30e-f441b6d83b52",
+            "workflow": "stage-host",
+            "failedStep": null
+          },
+          {
+            "runId": "de4b08d3-152a-42c3-9268-0de9f83fd398",
+            "workflow": "landgate",
+            "failedStep": null
+          },
+          {
+            "runId": "00acfd73-2453-49ad-9fec-784ae29b4e6d",
+            "workflow": "land",
+            "failedStep": null
+          },
+          {
+            "runId": "621679a2-a90a-4fae-91c0-9f9d8ef29812",
+            "workflow": "landed",
+            "failedStep": null
+          }
+        ],
+        "shadows": [
+          {
+            "workflow": "triage",
+            "node": "admit",
+            "round": null,
+            "runId": "337f403e-b1f5-4176-be9f-4d28765b8fb4",
+            "decidedAt": "2026-11-22T02:44:33.000Z",
+            "read": {
+              "reads": "verdict",
+              "value": "ask",
+              "why": "The work reaches `packages/workflows` (`schemas/factory-view.ts`, `factory-items.ts`), which is outside the console paths the policy lists, and I cannot tell whether that counts as console or engine. Triage also flags that older binaries may read the view file and reject the new shapes."
+            }
+          },
+          {
+            "workflow": "stage-check",
+            "node": "checks",
+            "round": null,
+            "runId": "02e5f706-fb01-4039-8867-940e65e59c09",
+            "decidedAt": "2026-11-22T07:19:27.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": true,
+                  "seconds": 147,
+                  "tail": null
+                },
+                {
+                  "name": "lint",
+                  "passed": true,
+                  "seconds": 96,
+                  "tail": null
+                },
+                {
+                  "name": "format",
+                  "passed": true,
+                  "seconds": 2,
+                  "tail": null
+                },
+                {
+                  "name": "web tests",
+                  "passed": true,
+                  "seconds": 39,
+                  "tail": null
+                }
+              ]
+            }
+          },
+          {
+            "workflow": "discoveries",
+            "node": "result",
+            "round": null,
+            "runId": "77baacc9-492b-4d08-bb86-5f419cff1a9b",
+            "decidedAt": "2026-11-22T08:00:45.000Z",
+            "read": {
+              "reads": "lists",
+              "counts": [0, 0, 0, 0],
+              "why": "Nothing was noticed, so there was nothing to decide."
+            }
+          }
+        ],
+        "parked": null,
+        "awaits": null
+      }
+    },
+    "runs": [
+      {
+        "runId": "bd5ea7d5-3ae0-4d6e-b676-db1c61c09841",
+        "workflow": "order",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "92e7f91d-8572-4050-83a2-ee1c874b51ec",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+        },
+        "costUsd": null,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": [
+          {
+            "node": "order",
+            "startedAt": "2026-11-22T02:41:23.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "337f403e-b1f5-4176-be9f-4d28765b8fb4",
+        "workflow": "triage",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "bd5ea7d5-3ae0-4d6e-b676-db1c61c09841",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+        },
+        "costUsd": 0.3390402,
+        "step": null,
+        "rounds": null,
+        "shadows": [
+          {
+            "workflow": "triage",
+            "node": "admit",
+            "round": null,
+            "runId": "337f403e-b1f5-4176-be9f-4d28765b8fb4",
+            "decidedAt": "2026-11-22T02:44:33.000Z",
+            "read": {
+              "reads": "verdict",
+              "value": "ask",
+              "why": "The work reaches `packages/workflows` (`schemas/factory-view.ts`, `factory-items.ts`), which is outside the console paths the policy lists, and I cannot tell whether that counts as console or engine. Triage also flags that older binaries may read the view file and reject the new shapes."
+            }
+          }
+        ],
+        "change": null,
+        "said": "The console's view-file schema reads the pull request address and check rounds from the single `deliver` workflow. On the three-stage delivery (`stage-build`, `stage-check`, `stage-host`, then `landgate`, `land`), that data lives in other runs, so the board, item page and map show no PR and no 'Checks · round N of M'. The issue asks for `change` to accept a list of `{workflow, pointer}`, with the newest non-empty value winning. It also asks for `rounds` to gain a stage form, `{workflow, round, allowance}`, where each run of the workflow is one round. The view file gets `stage-check` entries under `returns`, `approves` and `verdicts`, and the readers use whichever shape the item is on. `deliver` items must render exactly as today. The relevant code is `schemas/factory-view.ts` (`rounds` at line 285, `change` at line 325), `factory-items.ts:296-327` (which gates facts on a single workflow), and the web readers under `packages/web/src/experiments/console/factory/`. I did not run anything, so the checks and browser evidence are untested. I did not look at the web readers or the `check:factory-view` script.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "judge__judge",
+            "startedAt": "2026-11-22T02:42:40.000Z"
+          },
+          {
+            "node": "link__link",
+            "startedAt": "2026-11-22T02:43:59.000Z"
+          },
+          {
+            "node": "admit",
+            "startedAt": "2026-11-22T02:43:59.000Z"
+          },
+          {
+            "node": "admitted",
+            "startedAt": "2026-11-22T02:44:29.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "28d7be31-b6d8-4bf8-b59c-d29b39b6f173",
+        "workflow": "plan",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "337f403e-b1f5-4176-be9f-4d28765b8fb4",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-triage-build-831924269c5f"
+        },
+        "costUsd": null,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": [
+          {
+            "node": "plan",
+            "startedAt": "2026-11-22T02:45:17.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "f327dd85-8c55-4deb-85da-562a2a83fbbd",
+        "workflow": "order",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "bbfe9e1c-49d6-49d0-8832-86233fbc8968",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+        },
+        "costUsd": null,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": [
+          {
+            "node": "order",
+            "startedAt": "2026-11-22T02:51:03.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "aaed7cbb-7d0f-4052-b5df-1d1adc3fdadf",
+        "workflow": "triage",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "f327dd85-8c55-4deb-85da-562a2a83fbbd",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+        },
+        "costUsd": 0.1318547,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "Issue 125 asks the factory console to read the three-stage delivery (stage-build, stage-check, stage-host, then landgate, land and landed). It wants the PR link (`change` as a list of workflow/pointer pairs, first non-empty result wins, newest run first), a stage form of `rounds` (`{workflow, round, allowance}`, one run per round), and stage-check entries in returns, approves and verdicts. The board card, item page and map chips must read \"Checks · round N of M\" with M from allowance. It also asks to restore the reverted mapping from 34bb4461a and draw it on the map within the DESIGN.md rules: back-edges join the one dashed send-back lane, a skip is a bypass that crosses no card, and a self-hand-off is a lane label. Items from before 2026-11-21 must render unchanged. The project names no triage policy, so AGENTS.md was the standard. The reader and schema half and the map half are separable, so the recommendation is to split them.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "judge__judge",
+            "startedAt": "2026-11-22T02:53:09.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "40ecd9bf-d2bc-48c1-bd96-5dea359f75fc",
+        "workflow": "split",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "aaed7cbb-7d0f-4052-b5df-1d1adc3fdadf",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-split-after-triage-split-0d75baca22bd"
+        },
+        "costUsd": 0.5655515999999999,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "Triage's reason to split does not hold in this code. `workflowReferenceIssues` in packages/workflows/src/schemas/factory-view.ts rejects a view whose `change`, `rounds`, `returns`, `approves` or `verdicts` names a workflow that no stage lists. Once a stage lists `stage-check` and the rest, `factory-view-coverage.ts` requires every hand-off the pack graph reports between listed workflows to be declared as a map arrow (`undeclared-hand-off`). Those arrows are exactly what broke the 10 map tests. So the reader half cannot point the view file at a three-stage workflow, or show a three-stage PR or round in a browser, without the mapping and the map drawing in the same change. Without them it is a layer-only slice that proves nothing anyone can see. One outcome, about m to l, and one run can deliver it.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "cut",
+            "startedAt": "2026-11-22T02:55:11.000Z"
+          },
+          {
+            "node": "members",
+            "startedAt": "2026-11-22T02:56:05.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "d6816af4-e71b-4c3c-a1b8-05df295c9661",
+        "workflow": "plan",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "40ecd9bf-d2bc-48c1-bd96-5dea359f75fc",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-plan-after-split-whole-677649abc653"
+        },
+        "costUsd": 6.068247600000001,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "It does everything the item asks with the engine's own records and the map's existing rules. Each extra in the other options either restates pack logic in the console or adds map machinery for a hand-off that already draws truthfully.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "plan",
+            "startedAt": "2026-11-22T02:58:12.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "6766bfc4-ca1e-42f6-b28b-b81747822c43",
+        "workflow": "stage-build",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "d6816af4-e71b-4c3c-a1b8-05df295c9661",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-build-after-plan-planned-3a1c5bf7b0d9"
+        },
+        "costUsd": 16.976460100000004,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "Built and opened as draft PR #128 against main. On this Windows machine `check:changed` fails in the cli package, but the same suites fail the same way on main (details in checked).\n\nThree-stage items now show their PR and check rounds on the board and the item page. Live #118 shows PR #126 and \"round 1 of 3 · approved\". Live #119 in Checks shows \"round 1 of 3, next one running · returned ×2 · PR #127\".\n\nTwo schema fields can now take a list:\n- `change` accepts one source or a list of sources.\n- `rounds` accepts one source or a list, each in the deliver loop form or the new stage form `{workflow, round, allowance}`.\n\nThe owner's mapping from 34bb4461a is back, and the map draws it within its rules. Lane pills are now clamped to the row, which fixes the one real drawing defect. `check:factory-view` passes against the live home, and the full web suite passes.\n\n`deliver` items render as before, with one exception. Old items such as 111 lose their Triage \"Would it be split\" shadow row. The installed triage no longer has a `split` step, and putting the shadow back makes `check:factory-view` fail.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-22T03:18:57.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T04:51:39.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "20e1db24-c3da-4525-b76f-f362dba2dd2e",
+        "workflow": "stage-check",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "6766bfc4-ca1e-42f6-b28b-b81747822c43",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-check-after-build-built-a375ce4b6093"
+        },
+        "costUsd": 8.67466436,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 1,
+              "verdict": "returned",
+              "outcome": "return",
+              "summary": "Return: two test-quality findings remain. The board test for a running stage-check run uses stage-build, so it cannot catch the loop-form filter in newRoundRunning being removed, which would wrongly add \"next one running\" to deliver cards. The shipped verdicts['stage-check'] entry, which the item asks for, is unguarded, so deleting it would break the item page's check wording unnoticed.\nThe review approves the change against #125 and the product review confirms it in a browser at 1440x900 on a scratch copy of the live DB (items 125, 118, 119, 111). The browser look the review left open is therefore covered. Check:factory-view is green, and the workflows and web factory tests pass.\nFour pack and view issues are noticed, not caused by this change: the pack's allowance numbering on item 119, a stale merge wording in the view file (owner change 10), a Merged card counting an already-merged item as needing a person, and the card's wording after a replan.",
+              "steps": [
+                {
+                  "node": "review__review",
+                  "outcome": "approve",
+                  "summary": "Approve: the change meets #125. Both forms of `change` and `rounds` are in the schema, the coverage check and the readers. The view file restores the owner's 34bb4461a mapping and adds the stage-check rounds, returns, approves, verdicts and the six change sources. The map draws the new hand-offs within its rules. `check:factory-view` against ARCHON_FACTORY_LIVE_HOME=<live-home> is green, the workflows tests pass 144/144 and the web package tests all pass. On a scratch server over a copy of the live DB: deliver item 111 still reads round 2 of 3 and PR #112 merged, and three-stage item 118 reads round 1 of 3 and PR #126 merged. I did not do the item's 1440x900 browser look: the web build fails in my scratch copy because the esbuild.exe path is too long. A maintainer should take that look, or confirm the builder did, before landing."
+                },
+                {
+                  "node": "tests__tests",
+                  "outcome": "return",
+                  "summary": "The tests this change adds are mostly real: I broke 30 behaviours in a scratch copy and almost every one made a test fail, including the replan cut, the allowance-of-4 bound, round 0 not counting, the newest non-empty change, the schema forms and duplicates, the coverage findings, lane-pill clamping and the shadow tally by label. Two things go back. First, the board test's last block says a deliver run going now adds no \"next one running\", but it uses `stage-build`, which has no rounds source, so it cannot fail when the loop-form filter in `newRoundRunning` is removed. That filter is what keeps deliver cards rendering exactly as today, and nothing else guards it. Second, the item asks for `stage-check` entries under `verdicts` in the view file so its checks read in the console's words. Deleting them breaks nothing, while deleting deliver's equivalent breaks two timeline tests."
+                },
+                {
+                  "node": "product__product",
+                  "outcome": "approve",
+                  "summary": "Approve. A three-stage item now shows its PR and its check round on the board card, the item page and the map, and the `deliver` items I opened still render as before. I used it in a browser at 1440x900 on a scratch copy of the live database. Real three-stage data already exists there, so no fixture was needed. Item 125 (stage-build, then stage-check running) reads \"Checks · Product check / first round running / PR #128\" on its card, and its item page shows PR #128. Item 118 (merged) shows PR #126 on its card and item page. Its timeline reads stage-build, stage-check \"round 1 of 3 · approved\" with a chip per check, stage-host, landgate, land and landed. Item 119's card read \"round 3 of 3\" with PR #127. Item 111 (merged, `deliver`) shows PR #112 and its two loop rounds with their check chips. I did not compare 111 against a base build: it renders correctly, and the deliver-fixture unit tests pass. The map draws the new hand-offs within DESIGN's rules. The send-back lane has one pill per target stage (\"pieces, broke the branch\", \"split\", \"replan, answers\", \"returned, sent back, answers\", \"land\"), nothing crosses a card, and Merged sits partly off the right as DESIGN says. \"fixed for CI\" joins \"built\" on the pill between Plan & build and Checks & review, which is DESIGN's \"Forward hand-offs\" rule for neighbouring cards. `check:factory-view` is green against ARCHON_FACTORY_LIVE_HOME=<live-home>. Web factory tests pass (616 of 616) and the workflows factory and schema tests pass (194 of 194). DESIGN.md is updated for the card's round wording, the list forms of `change` and `rounds`, the lane pills and the map width. Three things I only read, never saw on screen: a numbered \"Checks · round N of M\" while an item sits in Checks, an allowance of 4, and \"round N of M, next one running\". The tests cover them."
+                },
+                {
+                  "node": "verdict__verdict",
+                  "outcome": "return",
+                  "summary": "Return: two test-quality findings remain. The board test for a running stage-check run uses stage-build, so it cannot catch the loop-form filter in newRoundRunning being removed, which would wrongly add \"next one running\" to deliver cards. The shipped verdicts['stage-check'] entry, which the item asks for, is unguarded, so deleting it would break the item page's check wording unnoticed.\nThe review approves the change against #125 and the product review confirms it in a browser at 1440x900 on a scratch copy of the live DB (items 125, 118, 119, 111). The browser look the review left open is therefore covered. Check:factory-view is green, and the workflows and web factory tests pass.\nFour pack and view issues are noticed, not caused by this change: the pack's allowance numbering on item 119, a stale merge wording in the view file (owner change 10), a Merged card counting an already-merged item as needing a person, and the card's wording after a replan."
+                },
+                {
+                  "node": "rounds",
+                  "outcome": "return",
+                  "summary": "Return: two test-quality findings remain. The board test for a running stage-check run uses stage-build, so it cannot catch the loop-form filter in newRoundRunning being removed, which would wrongly add \"next one running\" to deliver cards. The shipped verdicts['stage-check'] entry, which the item asks for, is unguarded, so deleting it would break the item page's check wording unnoticed.\nThe review approves the change against #125 and the product review confirms it in a browser at 1440x900 on a scratch copy of the live DB (items 125, 118, 119, 111). The browser look the review left open is therefore covered. Check:factory-view is green, and the workflows and web factory tests pass.\nFour pack and view issues are noticed, not caused by this change: the pack's allowance numbering on item 119, a stale merge wording in the view file (owner change 10), a Merged card counting an already-merged item as needing a person, and the card's wording after a replan."
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [
+          {
+            "workflow": "stage-check",
+            "node": "checks",
+            "round": null,
+            "runId": "20e1db24-c3da-4525-b76f-f362dba2dd2e",
+            "decidedAt": "2026-11-22T05:22:39.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": true,
+                  "seconds": 208,
+                  "tail": null
+                },
+                {
+                  "name": "lint",
+                  "passed": true,
+                  "seconds": 99,
+                  "tail": null
+                },
+                {
+                  "name": "format",
+                  "passed": true,
+                  "seconds": 4,
+                  "tail": null
+                },
+                {
+                  "name": "web tests",
+                  "passed": true,
+                  "seconds": 38,
+                  "tail": null
+                }
+              ]
+            }
+          }
+        ],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "Return: two test-quality findings remain. The board test for a running stage-check run uses stage-build, so it cannot catch the loop-form filter in newRoundRunning being removed, which would wrongly add \"next one running\" to deliver cards. The shipped verdicts['stage-check'] entry, which the item asks for, is unguarded, so deleting it would break the item page's check wording unnoticed.\nThe review approves the change against #125 and the product review confirms it in a browser at 1440x900 on a scratch copy of the live DB (items 125, 118, 119, 111). The browser look the review left open is therefore covered. Check:factory-view is green, and the workflows and web factory tests pass.\nFour pack and view issues are noticed, not caused by this change: the pack's allowance numbering on item 119, a stale merge wording in the view file (owner change 10), a Merged card counting an already-merged item as needing a person, and the card's wording after a replan.",
+        "models": ["claude-opus-5-5", "claude-haiku-5-5"],
+        "steps": [
+          {
+            "node": "base",
+            "startedAt": "2026-11-22T04:53:03.000Z"
+          },
+          {
+            "node": "checks",
+            "startedAt": "2026-11-22T04:53:09.000Z"
+          },
+          {
+            "node": "tests__tests",
+            "startedAt": "2026-11-22T04:53:09.000Z"
+          },
+          {
+            "node": "review__review",
+            "startedAt": "2026-11-22T04:53:09.000Z"
+          },
+          {
+            "node": "product__product",
+            "startedAt": "2026-11-22T04:53:09.000Z"
+          },
+          {
+            "node": "verdict__verdict",
+            "startedAt": "2026-11-22T05:21:22.000Z"
+          },
+          {
+            "node": "rounds",
+            "startedAt": "2026-11-22T05:22:18.000Z"
+          },
+          {
+            "node": "allowance",
+            "startedAt": "2026-11-22T05:22:28.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T05:22:30.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "8d95ba65-ffc7-4b90-b3c7-9152c8043356",
+        "workflow": "stage-build",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "20e1db24-c3da-4525-b76f-f362dba2dd2e",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-build-after-check-return-c7676cf13a69"
+        },
+        "costUsd": 1.4956362000000034,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "I fixed both findings from the test check on PR #128 and pushed to the same branch. I proved each fix by breaking the code it guards and watching the new test fail, then restored the code.\n- **Board test:** it now uses a `deliver` run. It fails if `newRoundRunning` stops ignoring the deliver loop, which is what keeps deliver cards reading as they do today.\n- **Timeline test:** it reads a stage-check round through the shipped `verdicts['stage-check']`. It fails if those entries are deleted from the view file.\n\nI also removed one guard in `newRoundRunning` that could never trigger. I merged main (#127) into the branch with a merge commit, not a rebase. The regenerated API types match the merged file exactly.\n\nAfter the merge everything I ran passed: type-check, lint, the ratchet, `check:factory-view` against the live home, and the workflows, web and server tests. I did not rerun `check:changed` this round (details in checked).",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-22T05:23:24.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T05:30:24.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "bb11ef33-963a-4a1a-8bf5-3f50e84a711e",
+        "workflow": "stage-check",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "8d95ba65-ffc7-4b90-b3c7-9152c8043356",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-check-after-build-built-a375ce4b6093"
+        },
+        "costUsd": 5.95540014,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 2,
+              "verdict": "returned",
+              "outcome": "return",
+              "summary": "Return: one finding, a schema error message that does not name the entry or key, so a view-file author cannot act on it. It was reported by the product review only, and the review's approval did not cover error wording.\nThree notes are kept on the record and do not return the change. Three things are noticed upstream or in the view file, not caused here.\nThe round-wording question (running round vs last completed, and M after a one-more-round answer) is an open ask for the maintainer. It does not block the finding.",
+              "steps": [
+                {
+                  "node": "review__review",
+                  "outcome": "approve",
+                  "summary": "I'd land it. Both findings from the last round are fixed, and I proved each fix by breaking the code it guards in a scratch copy and watching its new test fail. The fix commit 3e903f323 changes two tests and removes one guard that could never trigger. The merge of main (#127, the Settings page) touches nothing on the factory-reading path. Type-check is clean in that copy, and the web factory tests (646) and the workflows factory and schema tests (222) all pass. The earlier round's approvals still hold, including the product review's 1440x900 browser look at items 111, 118, 119 and 125."
+                },
+                {
+                  "node": "tests__tests",
+                  "outcome": "sound",
+                  "summary": "Sound. Both test findings from the last round are fixed, and I proved each one by breaking the code in a scratch copy.\n- **Board test:** it now uses a `deliver` run. Removing the loop-form filter in `newRoundRunning` makes it fail. A second board test fails too (\"a running item says its round...\").\n- **Timeline test (new):** it reads the shipped `verdicts['stage-check']`. Deleting that whole block fails it. Deleting only the `tests__tests` entry or only the `review__review` entry also fails it.\n\nThe one code change, removing the unreachable `runId` guard, needs no test. The merge of main brings in only main's own changes. The web factory tests pass 646/646, and the two changed files passed 69/69 on three runs in a row, so nothing is flaky."
+                },
+                {
+                  "node": "product__product",
+                  "outcome": "return",
+                  "summary": "The console reads the three-stage delivery on real data. Board cards and item pages show the PR and rounds for #118, #119, #120 and #125. #111 (deliver) reads as before. The map draws the restored mapping within its rules, and check:factory-view is green against the live home. Returned for one regression a view-file author meets: any mistake in a `change` or `rounds` entry now reports only \"change: Invalid input\" or \"rounds: Invalid input\". The old single-object form named the missing key. Separately, a maintainer should decide what a card in Checks says while a check round runs. Today it reads \"round N of M, next one running\", where N is the previous round. The item asked for the current round."
+                },
+                {
+                  "node": "verdict__verdict",
+                  "outcome": "return",
+                  "summary": "Return: one finding, a schema error message that does not name the entry or key, so a view-file author cannot act on it. It was reported by the product review only, and the review's approval did not cover error wording.\nThree notes are kept on the record and do not return the change. Three things are noticed upstream or in the view file, not caused here.\nThe round-wording question (running round vs last completed, and M after a one-more-round answer) is an open ask for the maintainer. It does not block the finding."
+                },
+                {
+                  "node": "rounds",
+                  "outcome": "return",
+                  "summary": "Return: one finding, a schema error message that does not name the entry or key, so a view-file author cannot act on it. It was reported by the product review only, and the review's approval did not cover error wording.\nThree notes are kept on the record and do not return the change. Three things are noticed upstream or in the view file, not caused here.\nThe round-wording question (running round vs last completed, and M after a one-more-round answer) is an open ask for the maintainer. It does not block the finding."
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [
+          {
+            "workflow": "stage-check",
+            "node": "checks",
+            "round": null,
+            "runId": "bb11ef33-963a-4a1a-8bf5-3f50e84a711e",
+            "decidedAt": "2026-11-22T06:19:34.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": true,
+                  "seconds": 261,
+                  "tail": null
+                },
+                {
+                  "name": "lint",
+                  "passed": true,
+                  "seconds": 172,
+                  "tail": null
+                },
+                {
+                  "name": "format",
+                  "passed": true,
+                  "seconds": 8,
+                  "tail": null
+                },
+                {
+                  "name": "web tests",
+                  "passed": true,
+                  "seconds": 47,
+                  "tail": null
+                }
+              ]
+            }
+          }
+        ],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "Return: one finding, a schema error message that does not name the entry or key, so a view-file author cannot act on it. It was reported by the product review only, and the review's approval did not cover error wording.\nThree notes are kept on the record and do not return the change. Three things are noticed upstream or in the view file, not caused here.\nThe round-wording question (running round vs last completed, and M after a one-more-round answer) is an open ask for the maintainer. It does not block the finding.",
+        "models": ["claude-opus-5-5", "claude-haiku-5-5"],
+        "steps": [
+          {
+            "node": "base",
+            "startedAt": "2026-11-22T05:31:29.000Z"
+          },
+          {
+            "node": "checks",
+            "startedAt": "2026-11-22T05:31:35.000Z"
+          },
+          {
+            "node": "product__product",
+            "startedAt": "2026-11-22T05:31:35.000Z"
+          },
+          {
+            "node": "tests__tests",
+            "startedAt": "2026-11-22T05:31:35.000Z"
+          },
+          {
+            "node": "review__review",
+            "startedAt": "2026-11-22T05:31:36.000Z"
+          },
+          {
+            "node": "verdict__verdict",
+            "startedAt": "2026-11-22T06:16:37.000Z"
+          },
+          {
+            "node": "rounds",
+            "startedAt": "2026-11-22T06:18:25.000Z"
+          },
+          {
+            "node": "allowance",
+            "startedAt": "2026-11-22T06:18:56.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T06:19:16.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "f734fcaa-2f48-44c0-9b08-8539303f633c",
+        "workflow": "stage-build",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "bb11ef33-963a-4a1a-8bf5-3f50e84a711e",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-build-after-check-return-c7676cf13a69"
+        },
+        "costUsd": 1.468912000000003,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "I fixed the one returned finding, committed it as c28a1ede6 and pushed it to PR #128. A view-file author with a bad `rounds` or `change` entry now sees which entry and which key to fix, instead of \"Invalid input\". Through `check:factory-view` an author now reads: `rounds: [schema] entry 1: a stage-form rounds source { workflow, round, allowance } needs \\`round\\``.\n\nOne decision from the product review is still open and not mine to make: while a check round is running, should a card in Checks number that round? The item's wording says \"Checks · round N of M\"; the change as built says \"round <last completed> of M, next one running\". The work is finished apart from that answer.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-22T06:20:20.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T06:29:02.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "5380dbc6-db5f-4070-934f-672620717bcf",
+        "workflow": "stage-build",
+        "cause": {
+          "kind": "asks_settled",
+          "runId": "f734fcaa-2f48-44c0-9b08-8539303f633c"
+        },
+        "costUsd": 0.5388583999999987,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "Built. Draft PR #128 is at c28a1ede6, and nothing new needed building this round.\n\n- **The finding:** the last check round returned one finding: a bad `rounds` or `change` entry in the view file reported only \"Invalid input\". It was already fixed in c28a1ede6, which is pushed. The errors now name the entry and the key, for example `rounds: [schema] entry 1: a stage-form rounds source { workflow, round, allowance } needs \\`round\\``, and a test pins the wording.\n- **The round wording:** the owner ruled keep-honest-wording. A card in Checks keeps \\\"round N of M, next one running\\\", which is what is built and what DESIGN.md card line 5 already says.\n\nThis round I reran every check on c28a1ede6 and they all passed (listed in checked). The PR description now records the ruling instead of an open question.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-22T06:31:38.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T06:34:36.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c",
+        "workflow": "stage-check",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "5380dbc6-db5f-4070-934f-672620717bcf",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-check-after-build-built-a375ce4b6093"
+        },
+        "costUsd": 3.8379480900000007,
+        "step": null,
+        "rounds": {
+          "max": 3,
+          "rounds": [
+            {
+              "iteration": 3,
+              "verdict": "returned",
+              "outcome": "return",
+              "summary": "Return: two findings. The stage-check Checks card says the step counts the round, when it posts the review, and the OpenAPI progress description still says rounds come only from the loop.\nThe review approved and the product check returned; they disagree on card text, and the product finding stands. The schema, tests and round wording stand as reported.\nNotes: three (an unreachable empty-list guard, error wording, one uncovered test branch). Noticed: three, all pack, owner or live-data issues outside this change.",
+              "steps": [
+                {
+                  "node": "review__review",
+                  "outcome": "approve",
+                  "summary": "Approve: I'd land it. The one returned finding is fixed. A bad `rounds` or `change` entry in the view file now names the entry index and the missing or unknown key, both in the schema test and in my own run on edited copies of the shipped view file. The owner's ruling (keep-honest-wording) matches what is built and what DESIGN.md line 1122 says. check:factory-view is green against the live home, the workflows schema and factory tests pass (195), the web factory tests pass (646) and the workflows package type-checks clean."
+                },
+                {
+                  "node": "tests__tests",
+                  "outcome": "sound",
+                  "summary": "Sound. The one thing returned last round, schema errors that said only \"Invalid input\", is fixed in c28a1ede6. That commit adds one test, 'a bad rounds or change source says which entry and which key to fix'. It pins the exact error text for each case:\n- a stage form with no `round`, alone and as list entry 1;\n- a misspelt key;\n- a loop form given `round`;\n- a non-object rounds value;\n- a `change` entry with no `pointer`, alone and in a list.\n\nI broke the new error code five ways in a scratch copy and the test failed every time. It passed 3 runs in a row, so it is not flaky. The workflows factory and schema tests pass, 195 of 195. The earlier rounds' tests are unchanged and were already proved by mutation. Every test the change leaves behind earns its place."
+                },
+                {
+                  "node": "product__product",
+                  "outcome": "return",
+                  "summary": "The item mostly works for its users, but I'm returning it for one wrong card on the Checks stage. I ran it on a dev:console copy of the live database at 1440x900. Three-stage cards show their PR and round: #125 reads \"round 2 of 3, next one running\", \"returned ×2\", \"PR #128\", and #120 reads \"round 1 of 3, next one running\", \"PR #129\". The merged #118 and #119 show PR #126 and PR #127. The item pages for #118, #119 and #125 show the PR, and each stage-check run reads as a round with a verdict for each check. The deliver item #111 still reads as before: two rounds, PR #112, and the round and change from the API are what deliver gave before. The map draws the owner's three-stage arrows on the one send-back lane as labels on its pills (\"split\", \"pieces, broke the branch\", \"returned, sent back, answers\", \"replan, answers\", \"land\"), with \"fixed for CI\" on the forward line between neighbouring cards. The new schema errors name the entry and the key. check:factory-view is green against the live home, the web tests pass (1556) and the factory workflows tests pass (145). Blocking issue: the view file's Checks stage card for stage-check describes its `rounds` step as \"Count the round: Records the round and the rounds allowed\". That step posts the review on the PR. This change relabelled the same step \"Posts the review\" for the item page but did not fix the card. So two pages of the console now describe one step two ways, and the stage page credits nothing with posting the review."
+                },
+                {
+                  "node": "verdict__verdict",
+                  "outcome": "return",
+                  "summary": "Return: two findings. The stage-check Checks card says the step counts the round, when it posts the review, and the OpenAPI progress description still says rounds come only from the loop.\nThe review approved and the product check returned; they disagree on card text, and the product finding stands. The schema, tests and round wording stand as reported.\nNotes: three (an unreachable empty-list guard, error wording, one uncovered test branch). Noticed: three, all pack, owner or live-data issues outside this change."
+                },
+                {
+                  "node": "rounds",
+                  "outcome": "return",
+                  "summary": "Return: two findings. The stage-check Checks card says the step counts the round, when it posts the review, and the OpenAPI progress description still says rounds come only from the loop.\nThe review approved and the product check returned; they disagree on card text, and the product finding stands. The schema, tests and round wording stand as reported.\nNotes: three (an unreachable empty-list guard, error wording, one uncovered test branch). Noticed: three, all pack, owner or live-data issues outside this change."
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [
+          {
+            "workflow": "stage-check",
+            "node": "checks",
+            "round": null,
+            "runId": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c",
+            "decidedAt": "2026-11-22T06:54:30.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": true,
+                  "seconds": 171,
+                  "tail": null
+                },
+                {
+                  "name": "lint",
+                  "passed": true,
+                  "seconds": 101,
+                  "tail": null
+                },
+                {
+                  "name": "format",
+                  "passed": true,
+                  "seconds": 3,
+                  "tail": null
+                },
+                {
+                  "name": "web tests",
+                  "passed": true,
+                  "seconds": 39,
+                  "tail": null
+                }
+              ]
+            }
+          }
+        ],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "Return: two findings. The stage-check Checks card says the step counts the round, when it posts the review, and the OpenAPI progress description still says rounds come only from the loop.\nThe review approved and the product check returned; they disagree on card text, and the product finding stands. The schema, tests and round wording stand as reported.\nNotes: three (an unreachable empty-list guard, error wording, one uncovered test branch). Noticed: three, all pack, owner or live-data issues outside this change.",
+        "models": ["claude-opus-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "base",
+            "startedAt": "2026-11-22T06:35:52.000Z"
+          },
+          {
+            "node": "checks",
+            "startedAt": "2026-11-22T06:35:56.000Z"
+          },
+          {
+            "node": "product__product",
+            "startedAt": "2026-11-22T06:35:56.000Z"
+          },
+          {
+            "node": "review__review",
+            "startedAt": "2026-11-22T06:35:56.000Z"
+          },
+          {
+            "node": "tests__tests",
+            "startedAt": "2026-11-22T06:35:56.000Z"
+          },
+          {
+            "node": "verdict__verdict",
+            "startedAt": "2026-11-22T06:52:38.000Z"
+          },
+          {
+            "node": "rounds",
+            "startedAt": "2026-11-22T06:53:21.000Z"
+          },
+          {
+            "node": "allowance",
+            "startedAt": "2026-11-22T06:53:39.000Z"
+          },
+          {
+            "node": "exhausted",
+            "startedAt": "2026-11-22T06:53:43.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T06:54:12.000Z"
+          },
+          {
+            "node": "reported",
+            "startedAt": "2026-11-22T06:54:19.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "9aafcbaa-5d54-4a2f-8be7-ca4172609002",
+        "workflow": "stage-build",
+        "cause": {
+          "kind": "asks_settled",
+          "runId": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c"
+        },
+        "costUsd": 1.1021935999999997,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "Both findings the owner named for this last round are fixed in e80bd9128, pushed to draft PR #128.\n\n- **Post the review card:** stage-check's `rounds` step now has its own \"Post the review\" card in the Checks drill-down, matching deliver's. \"Count the round\" now covers only `allowance`. The new card is first in \"Round ends (stage)\", because \"Check round (stage)\" is already at the schema's six-card limit.\n- **API descriptions:** the description of `GET /api/factory/progress` now names both ways the console counts rounds (a loop's iterations, or one round per stage-check run). `GET /api/factory/item`'s description made the same claim and is corrected too. API types are regenerated.\n\n`check:factory-view` against the live home is green, and the workflows, web and server tests pass.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-22T06:59:41.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T07:05:43.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "02e5f706-fb01-4039-8867-940e65e59c09",
+        "workflow": "stage-check",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "9aafcbaa-5d54-4a2f-8be7-ca4172609002",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-check-after-build-built-a375ce4b6093"
+        },
+        "costUsd": 2.49933066,
+        "step": null,
+        "rounds": {
+          "max": 4,
+          "rounds": [
+            {
+              "iteration": 4,
+              "verdict": "undecided",
+              "outcome": "ask",
+              "summary": "Ask. Both returned findings are fixed, and every check that ran is green: check:factory-view, 195 workflows tests, 646 web factory tests, 34 server tests.\nOne finding remains: three doc comments that this change made untrue still describe a check round as always one iteration of the declared rounds loop. The pack's review policy returns a change for that in any round, so it goes back as a finding unless the owner declines another round.\nOwner decision needed: one more round for comment wording only (recommended), or take PR #128 as it is and fix the comments in a follow-up.",
+              "steps": [
+                {
+                  "node": "review__review",
+                  "outcome": "ask",
+                  "summary": "Ask: both returned findings are fixed and the change meets the item, but I found three code comments that the change makes untrue, and the owner ruled the last round was \"nothing else\". The owner needs to decide between one more round and landing as is. The comments sit on the round shapes in factory-items.ts and on buildTimeline in timeline.ts. They still say a round is always one iteration of \"the declared rounds loop\" and that its steps are \"the loop's steps\". A stage-check run's round is now read from the run's own result, and its steps are every step the run recorded. Project policy returns a change for a comment it makes untrue. The owner's ruling capped the rounds. I recommend landing it with a one-line follow-up: these are internal doc comments, they appear in neither the API docs nor any screen, and check:factory-view and the workflows and web tests are green at e80bd9128."
+                },
+                {
+                  "node": "tests__tests",
+                  "outcome": "sound",
+                  "summary": "Sound. The fix commit e80bd9128 adds and edits no tests. It changes three things:\n- the view file, where stage-check's `rounds` step moves to its own \"Post the review\" card and \"Count the round\" now covers only `allowance`;\n- two OpenAPI description strings in api.factory.ts;\n- the regenerated api.generated.d.ts.\n\nNeither finding returned last round asked for a test, and the item does not require any card wording. So nothing new needs a test, and no test lost its meaning. The schema test still parses the shipped view: 41 pass, 0 fail at e80bd9128. The tests from earlier rounds are untouched, and the last test check already proved them by mutation."
+                },
+                {
+                  "node": "product__product",
+                  "outcome": "approve",
+                  "summary": "Approve. I used the change on a scratch copy of the live database at 1440x900. Three-stage items now show their PR and their check rounds on the board card, the item page and the map. Deliver items read as before: 111 shows PR #112 merged, with \"round 1 of 3 · returned\" and \"round 2 of 3 · approved\" and per-check chips. 125 and 121 are running stage-check, and their cards read \"Checks · Code review / round 3 of 3, next one running / returned ×3 / PR #128\" and \"first round running / PR #130\". That wording follows the owner's keep-honest-wording ruling. 118 is a merged three-stage item. It shows PR #126 and \"round 1 of 3 · approved\" with a chip per check. The map draws the restored mapping on one dashed send-back lane, with labelled pills: \"pieces, broke the branch\", \"split\", \"replan, answers\", \"returned, sent back, answers\" and \"land\". \"fixed for CI\" is a label on the forward line between neighbouring cards, and no line crosses a card. check:factory-view is green against the live home. A broken stage-form rounds entry gets an error that names the entry and the key to fix."
+                },
+                {
+                  "node": "verdict__verdict",
+                  "outcome": "ask",
+                  "summary": "Ask. Both returned findings are fixed, and every check that ran is green: check:factory-view, 195 workflows tests, 646 web factory tests, 34 server tests.\nOne finding remains: three doc comments that this change made untrue still describe a check round as always one iteration of the declared rounds loop. The pack's review policy returns a change for that in any round, so it goes back as a finding unless the owner declines another round.\nOwner decision needed: one more round for comment wording only (recommended), or take PR #128 as it is and fix the comments in a follow-up."
+                },
+                {
+                  "node": "rounds",
+                  "outcome": "ask",
+                  "summary": "Ask. Both returned findings are fixed, and every check that ran is green: check:factory-view, 195 workflows tests, 646 web factory tests, 34 server tests.\nOne finding remains: three doc comments that this change made untrue still describe a check round as always one iteration of the declared rounds loop. The pack's review policy returns a change for that in any round, so it goes back as a finding unless the owner declines another round.\nOwner decision needed: one more round for comment wording only (recommended), or take PR #128 as it is and fix the comments in a follow-up."
+                }
+              ]
+            }
+          ]
+        },
+        "shadows": [
+          {
+            "workflow": "stage-check",
+            "node": "checks",
+            "round": null,
+            "runId": "02e5f706-fb01-4039-8867-940e65e59c09",
+            "decidedAt": "2026-11-22T07:19:27.000Z",
+            "read": {
+              "reads": "checks",
+              "results": [
+                {
+                  "name": "type-check",
+                  "passed": true,
+                  "seconds": 147,
+                  "tail": null
+                },
+                {
+                  "name": "lint",
+                  "passed": true,
+                  "seconds": 96,
+                  "tail": null
+                },
+                {
+                  "name": "format",
+                  "passed": true,
+                  "seconds": 2,
+                  "tail": null
+                },
+                {
+                  "name": "web tests",
+                  "passed": true,
+                  "seconds": 39,
+                  "tail": null
+                }
+              ]
+            }
+          }
+        ],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "Ask. Both returned findings are fixed, and every check that ran is green: check:factory-view, 195 workflows tests, 646 web factory tests, 34 server tests.\nOne finding remains: three doc comments that this change made untrue still describe a check round as always one iteration of the declared rounds loop. The pack's review policy returns a change for that in any round, so it goes back as a finding unless the owner declines another round.\nOwner decision needed: one more round for comment wording only (recommended), or take PR #128 as it is and fix the comments in a follow-up.",
+        "models": ["claude-opus-5-5", "claude-haiku-5-5"],
+        "steps": [
+          {
+            "node": "base",
+            "startedAt": "2026-11-22T07:06:56.000Z"
+          },
+          {
+            "node": "checks",
+            "startedAt": "2026-11-22T07:06:57.000Z"
+          },
+          {
+            "node": "product__product",
+            "startedAt": "2026-11-22T07:06:57.000Z"
+          },
+          {
+            "node": "review__review",
+            "startedAt": "2026-11-22T07:06:57.000Z"
+          },
+          {
+            "node": "tests__tests",
+            "startedAt": "2026-11-22T07:06:58.000Z"
+          },
+          {
+            "node": "verdict__verdict",
+            "startedAt": "2026-11-22T07:17:24.000Z"
+          },
+          {
+            "node": "rounds",
+            "startedAt": "2026-11-22T07:18:38.000Z"
+          },
+          {
+            "node": "allowance",
+            "startedAt": "2026-11-22T07:18:57.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T07:19:06.000Z"
+          },
+          {
+            "node": "reported",
+            "startedAt": "2026-11-22T07:19:14.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "52f46ea3-f4d0-4455-85b5-f7c8e0e8b316",
+        "workflow": "stage-host",
+        "cause": {
+          "kind": "asks_settled",
+          "runId": "02e5f706-fb01-4039-8867-940e65e59c09"
+        },
+        "costUsd": 0.20942770000000002,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "PR #128 no longer merges with main (conflict, 1 commit behind). The host has no checks on it. Both open review items were already settled by the owner's later decisions.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "rounds__host",
+            "startedAt": "2026-11-22T07:24:08.000Z"
+          },
+          {
+            "node": "allowance",
+            "startedAt": "2026-11-22T07:28:18.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T07:28:20.000Z"
+          },
+          {
+            "node": "reported",
+            "startedAt": "2026-11-22T07:28:22.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "5063913b-7863-4f5e-a444-0c7e417fb1c3",
+        "workflow": "stage-build",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "52f46ea3-f4d0-4455-85b5-f7c8e0e8b316",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-build-after-host-return-6c9a4a3de3ba"
+        },
+        "costUsd": 2.2433321999999905,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "PR #128 merges with main again: GitHub reports it MERGEABLE at 372bbbee8, which is pushed.\n\nI first fast-forwarded my branch to the owner's comment commit 534e6487f, then merged main 61f5022c2 (#129). Four files conflicted. I kept both sides in each:\n- **View file:** this change's three-stage mapping, plus main's owner change 10 wording (the factory merges on \\\"land\\\") and main's removal of the landgate shadow.\n- **DESIGN.md, shadows.test.ts, factory-view.test.ts:** the shadows are now admit, the project checks of deliver and of stage-check, and the drain.\n\nMain also brought in a docs guide (`docs-web/.../factory-console.md`) that described `rounds` and `change` as single objects. I updated it to describe both forms.\n\nAll checks pass after the merge (listed in checked), including `check:factory-view` against the live home and the full web suite.",
+        "models": ["claude-opus-5-5"],
+        "steps": [
+          {
+            "node": "build__build",
+            "startedAt": "2026-11-22T07:29:51.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T07:42:26.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "d2faac1f-6d47-47f5-b30e-f441b6d83b52",
+        "workflow": "stage-host",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "5063913b-7863-4f5e-a444-0c7e417fb1c3",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-stage-host-after-fix-built-for-host-f112132f9f70"
+        },
+        "costUsd": 0.178895,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "PR #128 at 372bbbee8 is clear. All 10 host checks are green, the branch is 0 commits behind main and merges cleanly, and no review comment that holds is open. The one conflict found last time is fixed.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "rounds__host",
+            "startedAt": "2026-11-22T07:44:26.000Z"
+          },
+          {
+            "node": "allowance",
+            "startedAt": "2026-11-22T07:50:20.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T07:50:35.000Z"
+          },
+          {
+            "node": "reported",
+            "startedAt": "2026-11-22T07:50:49.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "de4b08d3-152a-42c3-9268-0de9f83fd398",
+        "workflow": "landgate",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "d2faac1f-6d47-47f5-b30e-f441b6d83b52",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landgate-after-stage-host-ready-218113235efa"
+        },
+        "costUsd": 0.11914119999999999,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "CI is green and the branch merges cleanly, but the change alters what the console shows. The operator decisions on record cover wording and scope only, not a browser look on a live-DB copy, so the policy makes this an ask.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "gate",
+            "startedAt": "2026-11-22T07:52:44.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T07:53:45.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "00acfd73-2453-49ad-9fec-784ae29b4e6d",
+        "workflow": "land",
+        "cause": {
+          "kind": "asks_settled",
+          "runId": "de4b08d3-152a-42c3-9268-0de9f83fd398"
+        },
+        "costUsd": 0.2515517,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "said": "PR #128 is merged into main as one squashed commit, 1ad8b4b5f. It closes #125: the console now reads the PR link, check rounds and check verdicts from the three-stage delivery, and `deliver` items render as before. The operator had already validated the page in a browser and answered `land` at the gate.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "land",
+            "startedAt": "2026-11-22T07:55:49.000Z"
+          },
+          {
+            "node": "end",
+            "startedAt": "2026-11-22T07:59:08.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "77baacc9-492b-4d08-bb86-5f419cff1a9b",
+        "workflow": "discoveries",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "00acfd73-2453-49ad-9fec-784ae29b4e6d",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-discoveries-after-land-landed-100eef62f716"
+        },
+        "costUsd": null,
+        "step": null,
+        "rounds": null,
+        "shadows": [
+          {
+            "workflow": "discoveries",
+            "node": "result",
+            "round": null,
+            "runId": "77baacc9-492b-4d08-bb86-5f419cff1a9b",
+            "decidedAt": "2026-11-22T08:00:45.000Z",
+            "read": {
+              "reads": "lists",
+              "counts": [0, 0, 0, 0],
+              "why": "Nothing was noticed, so there was nothing to decide."
+            }
+          }
+        ],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": [
+          {
+            "node": "intake",
+            "startedAt": "2026-11-22T08:00:33.000Z"
+          },
+          {
+            "node": "result",
+            "startedAt": "2026-11-22T08:00:38.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "621679a2-a90a-4fae-91c0-9f9d8ef29812",
+        "workflow": "landed",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "00acfd73-2453-49ad-9fec-784ae29b4e6d",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-landed-after-land-landed-b76c9e17f50b"
+        },
+        "costUsd": 0.1292244,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "PR #128 is merged into main as 1ad8b4b5f, but five test jobs were still running when I read the commit: workflows, core, and the three cli shards. The jobs that finished (check, postgres, web, server, adapters) passed. I can't call it clear until the rest finish. The web job passing matters most here, because the reverted attempt broke 10 web tests.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "landed",
+            "startedAt": "2026-11-22T08:00:38.000Z"
+          }
+        ]
+      }
+    ]
+  }
+}

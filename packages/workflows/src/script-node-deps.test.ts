@@ -63,7 +63,9 @@ import * as subprocess from './subprocess';
 
 function createMockStore(): IWorkflowStore {
   return workflowStoreDouble<IWorkflowStore>({
-    listSkippedItemStarts: mock<IWorkflowStore['listSkippedItemStarts']>(async () => []),
+    listSkippedItemStarts: mock<IWorkflowStore['listSkippedItemStarts']>(
+      async itemIds => new Map(itemIds.map(id => [id, []]))
+    ),
     listWaitedItemHolders: mock<IWorkflowStore['listWaitedItemHolders']>(async () => []),
     releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
       Promise.resolve({ released: false })

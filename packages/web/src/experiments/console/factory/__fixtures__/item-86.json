@@ -1,0 +1,147 @@
+{
+  "note": "GET /api/factory/item for item 86, copied 2026-11-22 from dev:console on a fresh read-only copy of the live factory database, after #122 added each run's change, said, models and steps. Run pack and the item run limit, which the API gained after the capture, filled as null.",
+  "response": {
+    "pack": "Wirasm/archon-software-factory",
+    "item": {
+      "item": {
+        "id": "204a2066c35406d9f75a882e4cfc29ea",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "86"
+      },
+      "runs": [
+        {
+          "id": "dae1ad50-8013-4777-b898-e36ffb815a0f",
+          "workflow": "Wirasm/archon-software-factory:order",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-19T04:35:42.000Z",
+          "completedAt": "2026-11-19T04:35:58.000Z",
+          "cause": {
+            "kind": "receipt",
+            "receiptId": "e4148436-fde1-42f2-98f1-45f5e696c8a6",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": null,
+            "inputTokens": null,
+            "outputTokens": null
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": null
+        },
+        {
+          "id": "8c908de7-fe2e-4079-a72b-d01c81a33077",
+          "workflow": "Wirasm/archon-software-factory:triage",
+          "pack": null,
+          "status": "completed",
+          "outcome": "park",
+          "startedAt": "2026-11-19T04:36:02.000Z",
+          "completedAt": "2026-11-19T04:37:24.000Z",
+          "cause": {
+            "kind": "run_ended",
+            "runId": "dae1ad50-8013-4777-b898-e36ffb815a0f",
+            "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+          },
+          "awaitingExecution": null,
+          "spend": {
+            "usd": 0.25867320000000005,
+            "inputTokens": 346167,
+            "outputTokens": 4225
+          },
+          "heldBehind": null,
+          "operatorPause": null,
+          "hasResult": true,
+          "resultCommit": null
+        }
+      ],
+      "queued": [],
+      "skipped": [],
+      "hold": null,
+      "held": [],
+      "runLimit": null,
+      "waits": [],
+      "questions": [],
+      "answers": [],
+      "links": [],
+      "merged": null,
+      "landing": null,
+      "degraded": [],
+      "progress": {
+        "title": "Cold first read after a server start takes ~4.4 s: forge merge lookups block the event loop",
+        "running": null,
+        "round": null,
+        "partOf": null,
+        "returned": 0,
+        "change": null,
+        "runs": [
+          {
+            "runId": "dae1ad50-8013-4777-b898-e36ffb815a0f",
+            "workflow": "order",
+            "failedStep": null
+          },
+          {
+            "runId": "8c908de7-fe2e-4079-a72b-d01c81a33077",
+            "workflow": "triage",
+            "failedStep": null
+          }
+        ],
+        "shadows": [],
+        "parked": {
+          "label": "Parked by triage",
+          "why": "The cause is unproven: discovery in forge-host.ts looks cheap and async, so measure where the event loop stalls before changing engine code."
+        },
+        "awaits": null
+      }
+    },
+    "runs": [
+      {
+        "runId": "dae1ad50-8013-4777-b898-e36ffb815a0f",
+        "workflow": "order",
+        "cause": {
+          "kind": "receipt",
+          "receiptId": "e4148436-fde1-42f2-98f1-45f5e696c8a6",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-order-803abe774be4"
+        },
+        "costUsd": null,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": null,
+        "models": [],
+        "steps": [
+          {
+            "node": "order",
+            "startedAt": "2026-11-19T04:35:52.000Z"
+          }
+        ]
+      },
+      {
+        "runId": "8c908de7-fe2e-4079-a72b-d01c81a33077",
+        "workflow": "triage",
+        "cause": {
+          "kind": "run_ended",
+          "runId": "dae1ad50-8013-4777-b898-e36ffb815a0f",
+          "sourceInstanceId": "Wirasm.archon-software-factory-coleam00-archon-factory-console-triage-after-order-ready-da18e160b7b6"
+        },
+        "costUsd": 0.25867320000000005,
+        "step": null,
+        "rounds": null,
+        "shadows": [],
+        "change": null,
+        "said": "Issue #86 reports that the first factory read after a server start takes about 4.4 s. The reporter blames synchronous forge discovery or process spawning in changeMergeState (packages/adapters/src/forge-host.ts:194) for blocking the event loop, and proposes discovering forges once per process. I did not reproduce it. Reading the source, forgeHostDiscovery (lines 35-45) does an awaited config read, a path computation and sourceForgePlugins(), none of it visibly synchronous or heavy. The only Sync calls under packages/forge are in test fixtures. Discovery does run once per lookup, so up to 90 times for keys 1..90, and each lookup is followed by dispatchForge, which I did not read and which presumably spawns a plugin process. So a blocking spawn, or a burst of concurrent spawns, there or in the fan-out in packages/server/src/routes/api.factory.ts could be the real cause. Caching discovery is plausible but unproven. AGENTS.md requires reproducing a bug or establishing a concrete causal chain before editing. The pack's default triage policy defers to the project's own guidance and no project policy is named.",
+        "models": ["claude-sonnet-5-5"],
+        "steps": [
+          {
+            "node": "judge__judge",
+            "startedAt": "2026-11-19T04:36:30.000Z"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "_comment": "Where a step of a workflow counts: the stage whose nodes name it (equal, or a prefix followed by '.'), else the workflow's first stage without nodes, else its first stage; a null step is a run between steps. The coverage check (stageOfWorkflowStep) and the web console's placement (stageOfWorkflow) both read this file, so the two copies of the rule cannot drift.",
+  "view": {
+    "version": 1,
+    "pack": "o/p",
+    "title": "Fixture",
+    "summary": "Stages that split one workflow by its steps.",
+    "stages": [
+      {
+        "id": "intake",
+        "label": "Intake",
+        "blurb": "Does intake.",
+        "group": "build",
+        "workflows": ["intake"]
+      },
+      {
+        "id": "make",
+        "label": "Make",
+        "blurb": "Does make.",
+        "group": "build",
+        "workflows": ["make"],
+        "nodes": ["write", "loop.fix"]
+      },
+      {
+        "id": "check",
+        "label": "Check",
+        "blurb": "Does check.",
+        "group": "check",
+        "workflows": ["make"],
+        "nodes": ["loop.review"]
+      },
+      {
+        "id": "finish",
+        "label": "Finish",
+        "blurb": "Does finish.",
+        "group": "check",
+        "workflows": ["make"],
+        "nodes": ["end", "tail"]
+      },
+      {
+        "id": "rest",
+        "label": "Rest",
+        "blurb": "Does rest.",
+        "group": "check",
+        "workflows": ["make"]
+      },
+      {
+        "id": "gate-a",
+        "label": "Gate-A",
+        "blurb": "Does gate-a.",
+        "group": "land",
+        "workflows": ["gate"],
+        "nodes": ["g1"]
+      },
+      {
+        "id": "gate-b",
+        "label": "Gate-B",
+        "blurb": "Does gate-b.",
+        "group": "land",
+        "workflows": ["gate"],
+        "nodes": ["g2"]
+      },
+      {
+        "id": "landed",
+        "label": "Landed",
+        "blurb": "Does landed.",
+        "group": "land",
+        "workflows": []
+      }
+    ],
+    "placement": {},
+    "endings": {},
+    "landed": {
+      "stage": "landed"
+    },
+    "map": {
+      "cards": [],
+      "arrows": []
+    }
+  },
+  "cases": [
+    {
+      "workflow": "intake",
+      "step": null,
+      "stage": "intake"
+    },
+    {
+      "workflow": "intake",
+      "step": "take",
+      "stage": "intake"
+    },
+    {
+      "workflow": "make",
+      "step": "write",
+      "stage": "make"
+    },
+    {
+      "workflow": "make",
+      "step": "loop.fix",
+      "stage": "make"
+    },
+    {
+      "workflow": "make",
+      "step": "loop.review",
+      "stage": "check"
+    },
+    {
+      "workflow": "make",
+      "step": "tail.x",
+      "stage": "finish"
+    },
+    {
+      "workflow": "make",
+      "step": "end",
+      "stage": "finish"
+    },
+    {
+      "workflow": "make",
+      "step": "other",
+      "stage": "rest"
+    },
+    {
+      "workflow": "make",
+      "step": null,
+      "stage": "rest"
+    },
+    {
+      "workflow": "gate",
+      "step": null,
+      "stage": "gate-a"
+    },
+    {
+      "workflow": "gate",
+      "step": "g2",
+      "stage": "gate-b"
+    },
+    {
+      "workflow": "gate",
+      "step": "g3",
+      "stage": "gate-a"
+    }
+  ]
+}

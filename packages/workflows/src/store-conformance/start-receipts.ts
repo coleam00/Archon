@@ -394,6 +394,40 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       expect(await store.hasStartReceiptForDelivery('source', 'other-delivery')).toBe(false);
       expect(await store.hasStartReceiptForDelivery('other-source', 'delivery')).toBe(false);
     });
+    test("receipt sources read the receipts' cause fields by id, and skip an id the store lacks", async () => {
+      const plain = acceptance();
+      const fired = acceptance();
+      fired.receipt = {
+        ...fired.receipt,
+        deliveryId: 'fired',
+        sourceInstanceId: 'other-source',
+        sourceActor: { source: 'archon-run', id: 'run-1', display: 'node' },
+      };
+      await store.acceptStartReceipt(plain);
+      await store.acceptStartReceipt(fired);
+      const sources = await store.listStartReceiptSources([
+        plain.receipt.id,
+        crypto.randomUUID(),
+        fired.receipt.id,
+      ]);
+      expect([...sources.keys()].sort()).toEqual([plain.receipt.id, fired.receipt.id].sort());
+      // The same fields `getStartReceipt` reads.
+      for (const id of [plain.receipt.id, fired.receipt.id]) {
+        const receipt = await store.getStartReceipt(id);
+        if (receipt === null) throw new Error('Expected the accepted receipt');
+        expect(sources.get(id)).toEqual({
+          id,
+          sourceInstanceId: receipt.sourceInstanceId,
+          sourceActor: receipt.sourceActor,
+        });
+      }
+      expect(sources.get(fired.receipt.id)?.sourceActor).toEqual({
+        source: 'archon-run',
+        id: 'run-1',
+        display: 'node',
+      });
+      expect(await store.listStartReceiptSources([])).toEqual(new Map());
+    });
     test('receiptIds selects only the pending bindings of those receipts, and none when empty', async () => {
       const store = harness.store;
       const older = acceptance();

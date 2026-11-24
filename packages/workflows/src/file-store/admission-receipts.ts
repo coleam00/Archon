@@ -22,6 +22,7 @@ import {
   type DamagedStartReceipt,
   type IResourceStartStore,
   type StartBindingInspection,
+  type StartReceiptSource,
 } from '../resource-start-store';
 import { readJson } from './commit';
 import { FileStoreUnsupportedError } from './errors';
@@ -37,6 +38,7 @@ type ReceiptOperations = Pick<
   | 'acceptStartReceipt'
   | 'hasStartReceiptForDelivery'
   | 'getStartReceipt'
+  | 'listStartReceiptSources'
   | 'listStartReceipts'
   | 'listPendingStartBindings'
   | 'claimStartBindingPreparation'
@@ -158,6 +160,17 @@ export function createReceiptOperations(
               ),
             }
           : null;
+      }),
+    listStartReceiptSources: ids =>
+      query(async tx => {
+        const sources = new Map<string, StartReceiptSource>();
+        for (const id of ids) {
+          const row = await tx.receipt(id);
+          if (!row) continue;
+          const { sourceInstanceId, sourceActor } = receiptFieldsSchema.parse(row);
+          sources.set(id, { id, sourceInstanceId, sourceActor });
+        }
+        return sources;
       }),
     listStartReceipts: limit =>
       query(async () =>

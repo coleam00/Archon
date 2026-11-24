@@ -568,7 +568,7 @@ export function describeSqlStatusReadConformance(
     }
   });
 
-  test("an item's queued starts count only the same resource and host starts queued ahead of them", async () => {
+  test("items' queued and skipped starts are read for many items at once, each in queue order", async () => {
     const harness = await makeHarness();
     try {
       const { db, store } = harness;
@@ -587,16 +587,22 @@ export function describeSqlStatusReadConformance(
       const otherHolder = { ...start(), resource: 'other' };
       const otherResource = { ...start(), resource: 'other' };
       const waiting = start();
+      const refused = start('skip');
+      const refusedLater = start('skip');
       expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      expect(await store.admitResourceStart(refused)).toMatchObject({ status: 'skipped' });
       expect(await store.admitResourceStart(before)).toMatchObject({ status: 'queued' });
       expect(await store.admitResourceStart(elsewhere)).toMatchObject({ status: 'queued' });
       expect(await store.admitResourceStart(otherHolder)).toMatchObject({ status: 'admitted' });
       expect(await store.admitResourceStart(otherResource)).toMatchObject({ status: 'queued' });
       expect(await store.admitResourceStart(waiting)).toMatchObject({ status: 'queued' });
+      expect(await store.admitResourceStart(refusedLater)).toMatchObject({ status: 'skipped' });
       // Preparation writes a start's item onto its request; these starts have no receipt.
       for (const [intent, item] of [
         [before, x],
         [waiting, k1],
+        [refused, k1],
+        [refusedLater, k1],
       ] as const)
         await db.query(
           'UPDATE remote_agent_resource_start_requests SET item_id = $1 WHERE id = $2',
@@ -605,7 +611,10 @@ export function describeSqlStatusReadConformance(
 
       // `before` is ahead on the same resource and host. `elsewhere` (another host) and
       // `otherResource` (another resource) queued earlier and are not counted.
-      expect(await store.listQueuedItemStarts(k1)).toEqual([
+      // Every asked item is a key, in the order asked, with none when it has none.
+      const queued = await store.listQueuedItemStarts([k1, idle, x]);
+      expect([...queued.keys()]).toEqual([k1, idle, x]);
+      expect(queued.get(k1)).toEqual([
         {
           requestId: waiting.launch.run.id,
           workflow: 'conformance',
@@ -615,16 +624,29 @@ export function describeSqlStatusReadConformance(
           ahead: 1,
         },
       ]);
-      expect(await store.listQueuedItemStarts(idle)).toEqual([]);
+      expect(queued.get(idle)).toEqual([]);
+      expect(queued.get(x)).toMatchObject([{ requestId: before.launch.run.id, ahead: 0 }]);
+      expect(await store.listQueuedItemStarts([])).toEqual(new Map());
+
+      const skipped = await store.listSkippedItemStarts([idle, k1]);
+      expect([...skipped.keys()]).toEqual([idle, k1]);
+      expect(skipped.get(idle)).toEqual([]);
+      // Oldest first. A start refused behind a run names it; one refused behind a queued
+      // request names none.
+      const refusal = { workflow: 'conformance', resource: 'resource' };
+      expect(skipped.get(k1)).toEqual([
+        { ...refusal, requestId: refused.launch.run.id, blockerRunId: holder.launch.run.id },
+        { ...refusal, requestId: refusedLater.launch.run.id, blockerRunId: null },
+      ]);
+      expect(await store.listSkippedItemStarts([])).toEqual(new Map());
 
       // Once admitted, a start has a run and leaves the list.
       await store.claimPendingWorkflowRun(holder.launch.run.id);
       await store.completeWorkflowRun(holder.launch.run.id, { duration_ms: 1 });
       await store.drainResourceStarts({ resource: 'resource', hostId: 'host' });
-      expect(await store.listQueuedItemStarts(x)).toEqual([]);
-      expect(await store.listQueuedItemStarts(k1)).toMatchObject([
-        { requestId: waiting.launch.run.id, ahead: 0 },
-      ]);
+      const drained = await store.listQueuedItemStarts([x, k1]);
+      expect(drained.get(x)).toEqual([]);
+      expect(drained.get(k1)).toMatchObject([{ requestId: waiting.launch.run.id, ahead: 0 }]);
     } finally {
       await harness.close();
     }

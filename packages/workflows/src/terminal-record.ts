@@ -271,6 +271,30 @@ export function buildNodeOutcomes(
   });
 }
 
+/** One completed node invocation and the record data its completion wrote. */
+interface CompletedNodeData {
+  path: string;
+  loopPath: NodeInvocation['loopPath'];
+  data: Record<string, unknown>;
+}
+
+/**
+ * Every node invocation that stands completed, in the order each first appeared, with the
+ * record data its completion wrote (`structured_output`, `node_output`...). The same fold as
+ * `buildNodeOutcomes`: an invocation later reset, failed or skipped is absent.
+ */
+export function buildCompletedNodeData(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): CompletedNodeData[] {
+  // `nodes` keeps each key where it first appeared; `outputs` drops and re-adds a rerun.
+  const { nodes, outputs } = foldNodeEvents(run, events, nodeInvocationKey);
+  return [...nodes.keys()].flatMap(key => {
+    const data = outputs.get(key);
+    return data === undefined ? [] : [{ ...parseNodeInvocationKey(key), data }];
+  });
+}
+
 /**
  * Each round of each `loop_group` the run has entered, in the order each round first
  * appeared, with the body node invocations it recorded. A running round lists the nodes

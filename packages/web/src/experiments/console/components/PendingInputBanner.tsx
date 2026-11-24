@@ -1,4 +1,5 @@
 import { useState, type ReactElement } from 'react';
+import { displayItemKey } from '../factory/lib/item-key';
 import { Link } from 'react-router';
 import { StatusStrip } from './StatusStrip';
 import { OriginBadge } from './OriginBadge';
@@ -214,7 +215,7 @@ function OwnerLostCard({
       setBusy(false);
     }
   };
-  const item = holder.itemKey ?? '(unread)';
+  const item = holder.itemKey === null ? '(unread)' : displayItemKey(holder.itemKey, null);
   return (
     <article
       data-owner-lost-run-id={holder.runId}

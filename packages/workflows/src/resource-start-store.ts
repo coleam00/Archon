@@ -152,6 +152,12 @@ export interface StartReceiptInspection {
   bindings: StartBindingInspection[];
 }
 
+/** The receipt fields a start's cause reads (`startCause`). */
+export type StartReceiptSource = Pick<
+  StartReceiptInspection,
+  'id' | 'sourceInstanceId' | 'sourceActor'
+>;
+
 export interface ResourceStartRequestInspection {
   id: string;
   resource: string;
@@ -626,6 +632,12 @@ export interface IResourceStartStore {
     input: SourceReceiptAcceptance
   ): Promise<{ receiptId: string; replay: boolean }>;
   getStartReceipt(id: string): Promise<StartReceiptInspection | null>;
+  /**
+   * What a start's cause reads from each receipt in `ids` (`startCause`), without the
+   * bindings `getStartReceipt` joins to their requests. An id the store does not hold is
+   * absent from the map.
+   */
+  listStartReceiptSources(ids: readonly string[]): Promise<ReadonlyMap<string, StartReceiptSource>>;
   listStartReceipts(
     limit?: number
   ): Promise<
@@ -646,10 +658,12 @@ export interface IResourceStartStore {
   }): Promise<PendingStartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
   /**
-   * The start requests on item `itemId` that were refused (`skipped`), oldest first. A
-   * store without items returns none.
+   * The start requests on each item in `itemIds` that were refused (`skipped`), oldest first.
+   * Every asked id is a key, with none when it has none. A store without items returns none.
    */
-  listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]>;
+  listSkippedItemStarts(
+    itemIds: readonly string[]
+  ): Promise<ReadonlyMap<string, SkippedItemStart[]>>;
   /**
    * The runs that hold their item (`holdsItem`) while a later start of their workflow on
    * it waits: a queued start request, or a pending hand start that holds nothing. A holder
@@ -657,8 +671,11 @@ export interface IResourceStartStore {
    */
   listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
-  /** The starts on item `itemId` whose status is `queued`, in queue order. */
-  listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]>;
+  /**
+   * The starts on each item in `itemIds` whose status is `queued`, in queue order. Every
+   * asked id is a key, with none when it has none.
+   */
+  listQueuedItemStarts(itemIds: readonly string[]): Promise<ReadonlyMap<string, QueuedItemStart[]>>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
   claimStartBindingPreparation(input: {
     receiptId: string;
