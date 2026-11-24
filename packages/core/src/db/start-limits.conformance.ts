@@ -22,9 +22,10 @@ type LimitFields = Pick<ResourceStartBindingIntent, 'limit' | 'grants'>;
 /**
  * Starts on items through the real receipt, preparation and admission path. Nothing here
  * edits a timestamp: these run within one second, so on SQLite a start and the reset after
- * it share a timestamp, and the count must still order them.
+ * it share a timestamp, and the count must still order them. The item-end conformance
+ * uses them too.
  */
-function starts(harness: Harness) {
+export function starts(harness: Harness) {
   const { store } = harness;
   const { launch } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
   const start = async (itemKey: string | undefined, fields: LimitFields) => {

@@ -30,6 +30,7 @@
     "./attention-needs": "./src/attention-needs.ts",
     "./item-read": "./src/item-read.ts",
     "./item-window": "./src/item-window.ts",
+    "./item-end": "./src/item-end.ts",
     "./item-landing": "./src/item-landing.ts",
     "./item-metrics": "./src/item-metrics.ts",
     "./item-hold": "./src/item-hold.ts",

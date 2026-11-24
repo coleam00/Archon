@@ -2530,7 +2530,7 @@ export interface paths {
             'application/json': components['schemas']['ItemEnd'];
           };
         };
-        /** @description Bad request or an unknown project */
+        /** @description Bad request, an unknown project, or an operator request with no `as` */
         400: {
           headers: {
             [name: string]: unknown;
@@ -9921,8 +9921,8 @@ export interface components {
             /** @enum {string} */
             kind: 'run';
             runId: string;
-            /** @enum {string|null} */
-            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused' | null;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
           }
         | {
             /** @enum {string} */

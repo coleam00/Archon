@@ -599,7 +599,8 @@ export class SqliteAdapter implements IDatabase {
         from_node_path TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         run_id TEXT,
-        run_completed_at TEXT
+        reopen_after TEXT NOT NULL DEFAULT (datetime('now')),
+        runs_seen INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_item_ends_item_id ON remote_agent_item_ends(item_id);
 

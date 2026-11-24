@@ -520,7 +520,7 @@ export const recordItemEndBodySchema = z
     project: z.string().min(1),
     key: itemKeySchema,
     reason: z.string().refine(reason => reason.trim() !== '', 'An end needs a reason'),
-    /** The name the operator declares for itself; ignored for an identified user. */
+    /** The name the operator declares for itself, required for it; ignored for an identified user. */
     as: declaredAnswererNameSchema.optional(),
   })
   .openapi('RecordItemEndBody');

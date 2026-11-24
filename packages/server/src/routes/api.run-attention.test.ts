@@ -30,7 +30,7 @@ import { describe, test, expect } from 'bun:test';
 import { heldRunOf } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
-import { itemEndSchema } from '@archon/workflows/schemas/item-end';
+import { ItemEndRefusedError, itemEndSchema } from '@archon/workflows/schemas/item-end';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ItemRulingNotFoundError,
@@ -536,17 +536,17 @@ describe('ending an item over HTTP', () => {
     });
   const body = { project: item.projectKey, key: item.key, reason: 'Folded into issues/7.' };
 
-  test('an item with a running run is 409 naming it; once it ended, the end is 201', async () => {
-    const running: WorkflowRun = { ...MOCK_RUNNING_RUN, id: 'run-live', item_id: item.id };
-    mockGetItemRuns.mockImplementation(async () => ({ item, runs: [running], descendantIds: [] }));
+  test('a refusal is 409 naming what is live; an end is 201', async () => {
+    const failed: WorkflowRun = { ...MOCK_RUNNING_RUN, status: 'failed', item_id: item.id };
+    mockGetItemRuns.mockImplementation(async () => ({ item, runs: [failed], descendantIds: [] }));
     try {
-      const refused = await post(body);
-      expect(refused.status).toBe(409);
-      expect(await refused.json()).toMatchObject({
-        blocker: { kind: 'run', runId: 'run-live', status: 'running' },
+      const blocker = { kind: 'run', runId: 'run-live', status: 'running' } as const;
+      mockRecordItemEnd.mockImplementationOnce(async () => {
+        throw new ItemEndRefusedError(item.key, blocker);
       });
-      const failed = { ...running, status: 'failed' as const };
-      mockGetItemRuns.mockImplementation(async () => ({ item, runs: [failed], descendantIds: [] }));
+      const refused = await post({ ...body, as: 'triage-agent' });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ blocker });
       mockRecordItemEnd.mockImplementationOnce(async input => ({
         kind: 'ended',
         id: 'end-1',
@@ -570,9 +570,27 @@ describe('ending an item over HTTP', () => {
     }
   });
 
-  test('an unknown key is 404 and a blank reason is 400', async () => {
-    expect((await post(body)).status).toBe(404);
-    expect((await post({ ...body, reason: ' ' })).status).toBe(400);
+  test('an unknown key is 404, a blank reason or an operator naming nobody is 400', async () => {
+    expect((await post({ ...body, as: 'triage-agent' })).status).toBe(404);
+    expect((await post({ ...body, as: 'triage-agent', reason: ' ' })).status).toBe(400);
+    const failed: WorkflowRun = { ...MOCK_RUNNING_RUN, status: 'failed', item_id: item.id };
+    mockGetItemRuns.mockImplementation(async () => ({ item, runs: [failed], descendantIds: [] }));
+    try {
+      expect((await post(body)).status).toBe(400);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
+  });
+
+  test('a user who is not an admin is refused, and nothing is written', async () => {
+    const calls = mockRecordItemEnd.mock.calls.length;
+    setSessionUserId('member');
+    try {
+      expect((await post(body)).status).toBe(403);
+    } finally {
+      setSessionUserId(undefined);
+    }
+    expect(mockRecordItemEnd.mock.calls.length).toBe(calls);
   });
 });
 

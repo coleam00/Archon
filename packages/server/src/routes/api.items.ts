@@ -28,7 +28,11 @@ import {
   ItemRulingOutsideProjectError,
   ItemRulingWithdrawnError,
 } from '@archon/workflows/schemas/item-ruling';
-import { ItemEndNotFoundError, ItemEndRefusedError } from '@archon/workflows/schemas/item-end';
+import {
+  ItemEndNotFoundError,
+  ItemEndRefusedError,
+  ItemEndUnattributedError,
+} from '@archon/workflows/schemas/item-end';
 import type { Context } from 'hono';
 import { resolveRunActor } from './api-request-auth';
 import {
@@ -139,7 +143,7 @@ const recordEndRoute = createRoute({
       content: { 'application/json': { schema: itemEndResponseSchema } },
       description: 'The end as recorded',
     },
-    400: jsonError('Bad request or an unknown project'),
+    400: jsonError('Bad request, an unknown project, or an operator request with no `as`'),
     403: jsonError('Only the operator or an admin may end an item'),
     404: jsonError('No item under that key in the project'),
     409: {
@@ -247,6 +251,7 @@ export function registerItemRoutes(app: OpenAPIHono): void {
       return c.json(end, 201);
     } catch (error) {
       if (error instanceof ItemRulingForbiddenError) return apiError(c, 403, error.message);
+      if (error instanceof ItemEndUnattributedError) return apiError(c, 400, error.message);
       if (error instanceof ItemEndNotFoundError) return apiError(c, 404, error.message);
       if (error instanceof ItemEndRefusedError)
         return c.json({ error: error.message, blocker: error.blocker }, 409);

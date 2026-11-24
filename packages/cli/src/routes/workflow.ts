@@ -652,7 +652,14 @@ export async function runWorkflowEnd(route: WorkflowRoute): Promise<number> {
   const reason = positionals[2];
   if (item === undefined || !reason?.trim() || positionals[3] !== undefined)
     return await fail(json, commands.WORKFLOW_END_USAGE);
-  return await commands.workflowEndCommand(route.host, effectiveCwd, { item, reason, as }, json);
+  const request = { item, reason, as };
+  return await commands.workflowEndCommand(
+    route.host,
+    effectiveCwd,
+    request,
+    json,
+    route.inheritedEnv
+  );
 }
 
 export async function runWorkflowItems(route: WorkflowRoute): Promise<number> {

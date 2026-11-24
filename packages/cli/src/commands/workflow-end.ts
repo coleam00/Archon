@@ -10,9 +10,11 @@ import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-chec
 import {
   ItemEndNotFoundError,
   ItemEndRefusedError,
+  ItemEndUnattributedError,
   type ItemEnd,
 } from '@archon/workflows/schemas/item-end';
 import { cliActor } from '../utils/calling-node';
+import { resolveCliUserId } from '../utils/cli-user';
 import { writeJsonLine } from '../utils/stdout';
 import { inheritedWorkflowCodebase } from './workflow-shared';
 
@@ -39,9 +41,17 @@ async function end(
   return recordItemEnd(
     host.deps.store,
     { projectKey: projectRefForCodebase(codebase).key, key: request.item, reason: request.reason },
-    cliActor(request.as, env),
+    // Who ends it is recorded: `--as`, else the CLI identity (ARCHON_USER_ID or $USER).
+    cliActor(request.as ?? resolveCliUserId(env) ?? undefined, env),
     'cli'
   );
+}
+
+/** The fixed code of a refusal a caller acts on; any other failure reports its message. */
+function refusalCode(error: unknown): string | undefined {
+  if (error instanceof ItemEndNotFoundError) return 'not_found';
+  if (error instanceof ItemEndUnattributedError) return 'unattributed';
+  return undefined;
 }
 
 export async function workflowEndCommand(
@@ -63,7 +73,7 @@ export async function workflowEndCommand(
       await writeJsonLine(
         error instanceof ItemEndRefusedError
           ? { ok: false, error: error.blocker.kind, blocker: error.blocker, message }
-          : { ok: false, error: error instanceof ItemEndNotFoundError ? 'not_found' : message }
+          : { ok: false, error: refusalCode(error) ?? message }
       );
     else console.error(`Error: ${message}`);
     return 1;

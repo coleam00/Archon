@@ -1,9 +1,9 @@
 /**
  * An end: an operator's statement that nothing more will happen on an item. It is a fact
- * about the item, like a ruling, and nothing records one by itself. The end records the
- * item's latest run when it was made, and it holds while that run is still the item's
- * latest and unchanged: a newer run, or a resume of that run, opens the item again without
- * a write. While it holds, the item is at rest and its stop is not in the attention queue.
+ * about the item, like a ruling, and nothing records one by itself. It holds until work
+ * starts on the item again: a run on it starts or resumes at or after the end, or a start
+ * waits on it. Opening the item writes nothing, and deleting old runs does not undo an end.
+ * While it holds, the item is at rest and its stop is not in the attention queue.
  */
 import { z } from 'zod';
 import { itemActFields } from './item-act';
@@ -29,13 +29,13 @@ export type ItemEndDegraded = z.infer<typeof itemEndDegradedSchema>;
 
 /**
  * What keeps an item from being ended: work on it that is still active or waiting. `run`
- * has a null status when its row could not be read, so it may be active.
+ * is one of the item's runs or a run below one of them.
  */
 export const itemEndBlockerSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('run'),
     runId: z.string(),
-    status: workflowRunStatusSchema.nullable(),
+    status: workflowRunStatusSchema,
   }),
   z.object({ kind: z.literal('queued_start'), requestId: z.string() }),
   z.object({ kind: z.literal('held_start'), receiptId: z.string() }),
@@ -47,9 +47,7 @@ export type ItemEndBlocker = z.infer<typeof itemEndBlockerSchema>;
 function blockerText(key: string, blocker: ItemEndBlocker): string {
   switch (blocker.kind) {
     case 'run':
-      return blocker.status === null
-        ? `Run ${blocker.runId} on item ${key} cannot be read, so it may still be active.`
-        : `Run ${blocker.runId} on item ${key} is ${blocker.status}; resume, cancel or abandon it first.`;
+      return `Run ${blocker.runId} on item ${key} is ${blocker.status}; let it end, or cancel or abandon it first.`;
     case 'queued_start':
       return `Start ${blocker.requestId} on item ${key} is queued; \`archon trigger withdraw ${blocker.requestId}\` withdraws it.`;
     case 'held_start':
@@ -80,5 +78,13 @@ export class ItemEndNotFoundError extends Error {
   ) {
     super(`Project ${projectKey} has no item '${key}'.`);
     this.name = 'ItemEndNotFoundError';
+  }
+}
+
+/** Nobody said who ends the item; an end records who said it. */
+export class ItemEndUnattributedError extends Error {
+  constructor() {
+    super('Say who ends the item: pass --as <name> on the CLI, or `as` in an operator request.');
+    this.name = 'ItemEndUnattributedError';
   }
 }

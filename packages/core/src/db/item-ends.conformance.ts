@@ -1,8 +1,9 @@
 /**
  * Conformance for ending an item on the SQL stores, run by the SQLite and PostgreSQL
- * integration tests: an end takes a stopped item out of the attention queue and holds while
- * the item's last run is unchanged; a newer run, or a resume of the last one, opens the item
- * again. An end is refused while anything on the item is active, naming it.
+ * integration tests: an end takes a stopped item out of the attention queue and holds until
+ * a run on the item starts or resumes, or a start is queued on it; deleting old runs does
+ * not undo it. An end is refused, naming it, while anything on the item is live. The runs
+ * follow each other at once, as fast stages do, so on SQLite they share one second.
  */
 import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
@@ -12,27 +13,43 @@ import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
 import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
 import { recordItemEnd } from '../operations/item-ends';
 import { itemDeps, operator, type Harness } from './item-asks.conformance';
+import { starts } from './start-limits.conformance';
 
 const projectKey = projectKeyForCodebase({ name: 'conformance', default_cwd: '/conformance' }, '');
 const end = { projectKey, key: 'pr-7', reason: 'Done by hand in another repository.' };
 
-async function startOnItem(harness: Harness, workflow: string): Promise<string> {
+async function createOnItem(harness: Harness, parent?: string): Promise<string> {
   const run = await harness.store.createWorkflowRun({
-    workflow_name: workflow,
+    workflow_name: 'deliver',
     user_message: '',
     codebase_id: CONFORMANCE_CODEBASE_ID,
-    item_key: 'pr-7',
+    ...(parent === undefined ? { item_key: 'pr-7' } : { parent_run_id: parent }),
   });
-  await harness.store.claimPendingWorkflowRun(run.id);
   return run.id;
 }
 
-async function stopOnItem(harness: Harness, workflow: string): Promise<string> {
-  const id = await startOnItem(harness, workflow);
+async function startOnItem(harness: Harness, parent?: string): Promise<string> {
+  const id = await createOnItem(harness, parent);
+  await harness.store.claimPendingWorkflowRun(id);
+  return id;
+}
+
+async function stopOnItem(harness: Harness): Promise<string> {
+  const id = await startOnItem(harness);
   await harness.store.completeWorkflowRun(id, { duration_ms: 1 }, itemStoppedMetadata('stop'), {
     outcome: { kind: 'enum', value: 'replan' },
   });
   return id;
+}
+
+/** Move a run's times `days` into the past, as an old run's are. */
+async function backdate(harness: Harness, runId: string, days: number): Promise<void> {
+  const at = new Date(Date.now() - days * 86_400_000).toISOString();
+  await harness.db.query(
+    `UPDATE remote_agent_workflow_runs
+     SET started_at = $1, active_phase_started_at = $1, completed_at = $1 WHERE id = $2`,
+    [at, runId]
+  );
 }
 
 async function stoppedRefs(harness: Harness): Promise<string[]> {
@@ -41,10 +58,10 @@ async function stoppedRefs(harness: Harness): Promise<string[]> {
   );
 }
 
-async function itemId(harness: Harness): Promise<string> {
+async function holding(harness: Harness) {
   const found = await harness.store.getItemRuns(projectKey, 'pr-7');
   if (found === null) throw new Error('No item pr-7');
-  return found.item.id;
+  return harness.store.getHoldingItemEnd(found.item.id);
 }
 
 async function refusal(promise: Promise<unknown>): Promise<ItemEndRefusedError> {
@@ -57,78 +74,133 @@ async function refusal(promise: Promise<unknown>): Promise<ItemEndRefusedError> 
 }
 
 export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness>): void {
-  test('an ended stopped item leaves attention until a newer run starts on it', async () => {
+  test('an end takes an old stop out of attention and outlasts deleting runs', async () => {
     const harness = await makeHarness();
     try {
-      const stopped = await stopOnItem(harness, 'deliver');
-      expect(await stoppedRefs(harness)).toEqual([`stopped:${stopped}`]);
+      const older = await stopOnItem(harness);
+      const latest = await stopOnItem(harness);
+      await backdate(harness, older, 61);
+      await backdate(harness, latest, 60);
+      // Nothing ends an item by age: the old stop is listed until the operator ends it.
+      expect(await stoppedRefs(harness)).toEqual([`stopped:${latest}`]);
 
+      const before = Date.now();
       const recorded = await recordItemEnd(harness.store, end, operator, 'cli');
       expect(recorded).toMatchObject({
         kind: 'ended',
         reason: end.reason,
         by: { declared: 'maintainer' },
         via: 'cli',
-        runId: stopped,
+        runId: latest,
       });
+      expect(Date.parse(recorded.at)).toBeGreaterThanOrEqual(before);
+      expect(Date.parse(recorded.at)).toBeLessThanOrEqual(Date.now());
       expect(await stoppedRefs(harness)).toEqual([]);
-      expect(await harness.store.getHoldingItemEnd(await itemId(harness))).toEqual(recorded);
+      // Ending changes no run.
+      expect(await harness.store.getWorkflowRunStatus(latest)).toBe('completed');
 
-      // Runs follow at once, so on SQLite the newer run can share the stopped run's second.
-      const again = await stopOnItem(harness, 'deliver');
-      expect(await harness.store.getHoldingItemEnd(await itemId(harness))).toBeNull();
-      expect(await stoppedRefs(harness)).toEqual([`stopped:${again}`]);
+      // Run cleanup deletes the latest run: the older stop is now the item's last, and stays
+      // out of attention, and the end still reads.
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      await deleteWorkflowRun(latest);
+      expect(await stoppedRefs(harness)).toEqual([]);
+      expect(await holding(harness)).toEqual(recorded);
     } finally {
       await harness.close();
     }
   });
 
-  test('a failed run resumed in place opens the item it ended', async () => {
+  test('a run that starts on an ended item opens it, while it runs and after', async () => {
     const harness = await makeHarness();
     try {
-      const failed = await startOnItem(harness, 'deliver');
+      await stopOnItem(harness);
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      const next = await startOnItem(harness);
+      expect(await holding(harness)).toBeNull();
+      await harness.store.completeWorkflowRun(
+        next,
+        { duration_ms: 1 },
+        itemStoppedMetadata('again'),
+        {
+          outcome: { kind: 'enum', value: 'replan' },
+        }
+      );
+      expect(await holding(harness)).toBeNull();
+      expect(await stoppedRefs(harness)).toEqual([`stopped:${next}`]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a start queued on an ended item opens it before its run exists', async () => {
+    const harness = await makeHarness();
+    try {
+      await stopOnItem(harness);
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      // A start on another item holds the resource, so the start on this item queues.
+      const { start } = starts(harness);
+      const holder = (await start('other', {})).result;
+      const queued = (await start('pr-7', {})).result;
+      if (holder?.status !== 'admitted' || queued?.status !== 'queued')
+        throw new Error('Expected one admitted start and one queued');
+      expect(await holding(harness)).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('resuming the failed run an item was ended on opens it, though it fails again at once', async () => {
+    const harness = await makeHarness();
+    try {
+      const failed = await startOnItem(harness);
       await harness.store.failWorkflowRun(failed, 'boom');
       await recordItemEnd(harness.store, end, operator, 'cli');
-      const id = await itemId(harness);
-      expect(await harness.store.getHoldingItemEnd(id)).toMatchObject({ runId: failed });
-      // A resume clears completed_at and the next failure writes a new one on the same row.
-      await harness.db.query(
-        'UPDATE remote_agent_workflow_runs SET completed_at = $1 WHERE id = $2',
-        [new Date(Date.now() + 60_000).toISOString(), failed]
-      );
-      expect(await harness.store.getHoldingItemEnd(id)).toBeNull();
+      expect(await holding(harness)).toMatchObject({ runId: failed });
+      expect(await harness.store.getWorkflowRunStatus(failed)).toBe('failed');
+      await harness.store.resumeWorkflowRun(failed);
+      expect(await holding(harness)).toBeNull();
+      await harness.store.failWorkflowRun(failed, 'boom again');
+      expect(await holding(harness)).toBeNull();
     } finally {
       await harness.close();
     }
   });
 
-  test('an end is refused, naming what is active, while a run or a start is on the item', async () => {
+  test('an end is refused, naming it, while a run, a child run or a queued start is live', async () => {
     const harness = await makeHarness();
     try {
-      const running = await startOnItem(harness, 'deliver');
-      expect((await refusal(recordItemEnd(harness.store, end, operator, 'cli'))).blocker).toEqual({
-        kind: 'run',
-        runId: running,
-        status: 'running',
-      });
-      await harness.store.completeWorkflowRun(running, { duration_ms: 1 });
-      const queued = {
-        ...harness.store,
-        listQueuedItemStarts: async () => [
-          {
-            requestId: 'request-1',
-            workflow: 'deliver',
-            resource: 'build',
-            hostId: 'host',
-            queuedAt: new Date().toISOString(),
-            ahead: 0,
-          },
-        ],
-      };
-      const refused = await refusal(recordItemEnd(queued, end, operator, 'cli'));
-      expect(refused.blocker).toEqual({ kind: 'queued_start', requestId: 'request-1' });
-      expect(refused.message).toContain('request-1');
-      expect(await harness.store.getHoldingItemEnd(await itemId(harness))).toBeNull();
+      const refusedBy = async (store = harness.store) =>
+        (await refusal(recordItemEnd(store, end, operator, 'cli'))).blocker;
+
+      const pending = await createOnItem(harness);
+      expect(await refusedBy()).toEqual({ kind: 'run', runId: pending, status: 'pending' });
+      // The store refuses by itself too, so a run that slips in after any earlier check is
+      // seen in the same transaction that writes the end, and nothing is written.
+      const item = await harness.store.getItemRuns(projectKey, 'pr-7');
+      await expect(
+        harness.store.recordItemEnd({
+          itemId: item?.item.id ?? '',
+          key: 'pr-7',
+          reason: 'x',
+          via: 'cli',
+          by: { declared: 'maintainer' },
+          fromRun: null,
+        })
+      ).rejects.toBeInstanceOf(ItemEndRefusedError);
+      await harness.store.claimPendingWorkflowRun(pending);
+      const child = await startOnItem(harness, pending);
+      await harness.store.failWorkflowRun(pending, 'parent failed');
+      expect(await refusedBy()).toEqual({ kind: 'run', runId: child, status: 'running' });
+      await harness.store.completeWorkflowRun(child, { duration_ms: 1 });
+
+      // A start on another item holds the resource, so the start on this item queues.
+      const { start } = starts(harness);
+      const holder = (await start('other', {})).result;
+      const queued = (await start('pr-7', {})).result;
+      if (holder?.status !== 'admitted' || queued?.status !== 'queued')
+        throw new Error('Expected one admitted start and one queued');
+      expect(await refusedBy()).toEqual({ kind: 'queued_start', requestId: queued.requestId });
+      expect(await holding(harness)).toBeNull();
     } finally {
       await harness.close();
     }

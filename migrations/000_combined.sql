@@ -808,12 +808,14 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
 );
 
 -- Ends of an item: an operator's statement that nothing more will happen on it. Append-only,
--- like rulings: no row is updated or deleted, and nothing writes one by itself. run_id and
--- run_completed_at copy the item's latest run, if any, when the end was recorded; the end
--- holds while that run is still the item's latest with the same completed_at, so a newer run
--- or a resume opens the item again without a write. run_completed_at has the type of
--- remote_agent_workflow_runs.completed_at so the two compare exactly. from_run_id and run_id
--- have no foreign key, so run cleanup keeps the end.
+-- like rulings: no row is updated or deleted, and nothing writes one by itself. run_id names
+-- the item's latest run, if any, when the end was recorded. reopen_after is the database's
+-- clock at that moment, the clock run start and resume times use: the end holds until a run
+-- on the item starts or resumes at or after it, or a start waits on the item, so opening
+-- the item writes nothing and deleting old runs does not undo the end. runs_seen is the
+-- highest run rowid when the end was recorded, on SQLite only, where run times have second
+-- precision and a later rowid tells a newer run within the second; NULL here. from_run_id
+-- and run_id have no foreign key, so run cleanup keeps the end.
 CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   -- Recording order; timestamps tie within a millisecond and `id` is random.
@@ -827,7 +829,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
   from_node_path TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   run_id TEXT,
-  run_completed_at TIMESTAMP WITH TIME ZONE
+  reopen_after TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  runs_seen BIGINT
 );
 
 -- The merge of an item's change, as the forge reported it to the caller that recorded it.

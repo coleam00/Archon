@@ -243,8 +243,9 @@ export interface IWorkflowStore
     input: { rulingId: string; projectKey?: string } & ItemAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
   /**
-   * The newest end on an item that still holds (`schemas/item-end.ts`), or null. An
-   * unreadable row is reported, not thrown.
+   * The newest end on an item while no run on it is live or started or resumed since, and
+   * no start is queued on it (`schemas/item-end.ts`), or null. Held trigger starts are left
+   * to `readHoldingItemEnd`. An unreadable row is reported, not thrown.
    */
   getHoldingItemEnd(
     itemId: string
@@ -252,11 +253,12 @@ export interface IWorkflowStore
     import('./schemas/item-end').ItemEnd | import('./schemas/item-end').ItemEndDegraded | null
   >;
   /**
-   * Record an end on item `itemId`, which copies the item's latest run. The caller checks
-   * that nothing on the item is active; this only writes.
+   * Record an end on item `itemId` (named `key` in the refusal), naming its latest run.
+   * Throws `ItemEndRefusedError` and writes nothing while a run on the item or below one of
+   * its runs is live, or a start is queued, or an ask or a wait is open on it.
    */
   recordItemEnd(
-    input: { itemId: string; reason: string } & ItemAct
+    input: { itemId: string; key: string; reason: string } & ItemAct
   ): Promise<import('./schemas/item-end').ItemEnd>;
   /**
    * The items of a project with one of their own runs (`item_id` set, so not a
@@ -368,8 +370,7 @@ export interface IWorkflowStore
   withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
   /**
    * Completed runs that stopped their item (`readItemStopped`) and are still its last run; any
-   * run started on the item after one ends its stop. A run a holding end recorded is left out:
-   * the item is at rest. A store without items has none.
+   * run started on the item after one ends its stop. A store without items has none.
    */
   listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ runs: DeletedWorkflowRun[] }>;

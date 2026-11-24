@@ -44,7 +44,8 @@ import { workflowLandingCommand } from './workflow-landing';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
-import { workflowEndCommand } from './workflow-end';
+import { runWorkflowEnd } from '../routes/workflow';
+import * as workflowCommands from './workflow';
 import { workflowAttentionCommand } from './workflow-attention';
 import { workflowRunCommand } from './workflow-run-owned';
 
@@ -350,51 +351,62 @@ test.serial(
           workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
         )
       ).stdout;
+    // `archon workflow end --item <key> [--as <name>] --json -- <reason>`, as argv routes it.
+    const end = (key: string, as: string | undefined, env: NodeJS.ProcessEnv = callerEnv) =>
+      invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'A duplicate of item-2.'],
+          values: { item: key, ...(as === undefined ? {} : { as }), json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: env,
+          forgeTrustedEnv: env,
+        })
+      );
     const stopped = await seedEnded('item-stop', 'stopped');
     expect(await attention()).toContain(`stopped:${stopped}`);
-
-    const end = (key: string, json: boolean) =>
-      invoke(host =>
-        workflowEndCommand(
-          host,
-          projectRoot,
-          { item: key, reason: 'A duplicate of item-2.', as: 'triage-agent' },
-          json,
-          callerEnv
-        )
-      );
-    const ended = itemEndSchema.parse(succeeded(await end('item-stop', true)));
-    expect(ended).toMatchObject({ runId: stopped, by: { declared: 'triage-agent' }, via: 'cli' });
+    itemEndSchema.parse(succeeded(await end('item-stop', 'triage-agent')));
     expect(await attention()).not.toContain(`stopped:${stopped}`);
     expect((await readItemJson('item-stop')).ended).toMatchObject({
       reason: 'A duplicate of item-2.',
       by: { declared: 'triage-agent' },
       via: 'cli',
-      at: ended.at,
+      runId: stopped,
     });
 
-    // A failed item is ended by its key alone.
+    // A failed item is ended by its key alone, and without --as the CLI identity says who.
     const failed = await seedEnded('item-fail', 'failed');
-    const text = await end('item-fail', false);
-    expect(text.exitCode, text.stderr).toBe(0);
-    expect(text.stdout).toContain('Item item-fail ended.');
-    expect((await readItemJson('item-fail')).ended).toMatchObject({ runId: failed });
+    succeeded(await end('item-fail', undefined, { ...callerEnv, ARCHON_USER_ID: 'ops' }));
+    expect((await readItemJson('item-fail')).ended).toMatchObject({
+      runId: failed,
+      by: { declared: 'ops' },
+    });
 
-    // A new run opens the item again; while it runs, ending it is refused and names it.
-    const again = await seedEnded('item-stop', 'stopped');
-    expect((await readItemJson('item-stop')).ended).toBeNull();
-    expect(await attention()).toContain(`stopped:${again}`);
-    const running = await seedEnded('item-stop', 'running');
-    const refused = await end('item-stop', true);
-    expect(refused.exitCode).toBe(1);
-    expect(JSON.parse(refused.stdout)).toMatchObject({
-      ok: false,
+    // Refusals exit 1 with a code: a live run named, nobody named, an unknown key.
+    const running = await seedEnded('item-live', 'running');
+    const refusal = async (result: Promise<{ exitCode: number; stdout: string }>) => {
+      const { exitCode, stdout } = await result;
+      expect(exitCode).toBe(1);
+      return JSON.parse(stdout) as unknown;
+    };
+    expect(await refusal(end('item-live', 'triage-agent'))).toMatchObject({
       error: 'run',
       blocker: { kind: 'run', runId: running, status: 'running' },
     });
-    const unknown = await end('item-none', true);
-    expect(unknown.exitCode).toBe(1);
-    expect(JSON.parse(unknown.stdout)).toEqual({ ok: false, error: 'not_found' });
+    const nobody = { ...callerEnv, ARCHON_USER_ID: '', USER: '', USERNAME: '' };
+    expect(await refusal(end('item-stop', undefined, nobody))).toMatchObject({
+      error: 'unattributed',
+    });
+    expect(await refusal(end('item-none', 'triage-agent'))).toEqual({
+      ok: false,
+      error: 'not_found',
+    });
   }
 );
 

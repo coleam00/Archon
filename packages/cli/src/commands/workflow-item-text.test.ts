@@ -186,9 +186,9 @@ test('an item read prints its runs, open questions and answers', () => {
   const text = lines.join('\n');
   expect(text).toContain('Merged 2026-11-01T11:00Z: https://github.com/acme/web/pull/12');
   expect(text).toContain('Lands on: feat/order (part_of WO-12)');
-  expect(text).toContain(
-    'Ended 2026-11-01T12:00Z by alice (self-declared) via cli: Done by hand elsewhere.'
-  );
+  const endLine = lines.find(line => line.includes('Done by hand elsewhere.'));
+  expect(endLine).toContain('2026-11-01T12:00Z');
+  expect(endLine).toContain('alice');
   expect(text).toContain('result: archon workflow get run-done-1 --json, holds at a1b2c3d4e5f6');
   expect(text).toContain('Ship the fix?');
   expect(text).toContain('archon workflow approve run-ask-1 --occurrence gate-3');

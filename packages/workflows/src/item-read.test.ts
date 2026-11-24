@@ -442,7 +442,7 @@ describe('reading an item', () => {
     ]);
   });
 
-  test('an end that holds reads as ended until a start waits on the item', async () => {
+  test('an end the store holds reads as ended until a held trigger start waits on the item', async () => {
     const end: ItemEnd = {
       kind: 'ended',
       id: 'end-1',
@@ -458,23 +458,22 @@ describe('reading an item', () => {
       store: { ...source.store, getHoldingItemEnd: async id => (id === item.id ? end : null) },
     };
     expect((await readItem(ended, item.projectKey, item.key))?.ended).toEqual(end);
-    const restarted: ItemReadSource = {
+    const held: ItemReadSource = {
       ...ended,
       store: {
         ...ended.store,
-        listQueuedItemStarts: async () => [
+        listHeldItemStarts: async () => [
           {
-            requestId: 'again',
-            workflow: 'review',
-            resource: 'build',
+            receiptId: 'receipt-1',
+            bindingId: 'binding',
             hostId: 'host',
-            queuedAt: '2026-11-01T11:00:00.000Z',
-            ahead: 0,
+            workflow: 'review',
+            receivedAt: '2026-11-01T11:00:00.000Z',
           },
         ],
       },
     };
-    expect((await readItem(restarted, item.projectKey, item.key))?.ended).toBeNull();
+    expect((await readItem(held, item.projectKey, item.key))?.ended).toBeNull();
   });
 
   test('a landing that cannot be resolved is reported, and the rest of the item still reads', async () => {
