@@ -61,6 +61,8 @@ instead ([`rounds.md`](.shared/policy/rounds.md)).
 
 `archon pack graph sdlc` draws the stages and the arrows between them for a project.
 
+Every binding holds a resource named `sdlc-<stage>` (`sdlc-build`, `sdlc-land`): its capacity is how many runs of that stage move at once, and `concurrency.resources` in `~/.archon/config.yaml`, keyed by the full resource name the generated binding file holds, overrides it. `sdlc-land` has one slot, so changes land one at a time.
+
 ## Set it up
 
 Follow the steps in order, from a clone of the repository the pack works on. If you are
@@ -206,5 +208,11 @@ The pack is a pattern, not a framework. To build a pack of your own:
 6. **Write a script only where an agent cannot do the job**: a plain fact read at a
    boundary, or a write that must come from the forge's own record. Here that is one:
    `land/scripts/record.ts`, which records the merge as the forge reports it.
+
+7. **Keep your names your own.** Another pack may run on the same install. A run-ended
+   binding matches the ended run's workflow name alone, so a stage named `plan` in two
+   packs would start each other's next stages: prefix your workflow names, as this pack
+   does with `archon-`. Name your resources after your pack too (`sdlc-plan`), so two
+   packs never share a stage's slots.
 
 How the pack is written, and why, is in [`CONSTITUTION.md`](CONSTITUTION.md).

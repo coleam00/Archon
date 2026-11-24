@@ -60,7 +60,7 @@ bindings:
   # webhook, or reads it with `observe` on an install with no webhooks.
   triage-on-label:
     workflow: archon-triage
-    resource: triage
+    resource: sdlc-triage
     capacity: 3
     overlap: queue
     event:
@@ -76,7 +76,7 @@ bindings:
       repo_path: { repo: path }
   triage-after-answers:
     workflow: archon-triage
-    resource: triage
+    resource: sdlc-triage
     capacity: 3
     overlap: queue
     asks_settled: { workflow: archon-triage, settled: answered }
@@ -90,7 +90,7 @@ bindings:
   # change, and send what is known (to plan) or ready (to build) through the link stage.
   investigate-after-triage:
     workflow: archon-investigate
-    resource: investigate
+    resource: sdlc-investigate
     capacity: 3
     overlap: queue
     run_ended: { workflow: archon-triage, outcome: investigate }
@@ -101,21 +101,21 @@ bindings:
       answers: { item: answers }
   investigate-after-answers:
     workflow: archon-investigate
-    resource: investigate
+    resource: sdlc-investigate
     capacity: 3
     overlap: queue
     asks_settled: { workflow: archon-investigate, settled: answered }
     inputs: *asked
   split-after-triage:
     workflow: archon-split
-    resource: split
+    resource: sdlc-split
     capacity: 2
     overlap: queue
     run_ended: { workflow: archon-triage, outcome: split }
     inputs: *ended
   split-after-answers:
     workflow: archon-split
-    resource: split
+    resource: sdlc-split
     capacity: 2
     overlap: queue
     asks_settled: { workflow: archon-split, settled: answered }
@@ -126,21 +126,21 @@ bindings:
   # item that depends on it.
   link-after-triage:
     workflow: archon-link
-    resource: link
+    resource: sdlc-link
     capacity: 3
     overlap: queue
     run_ended: { workflow: archon-triage, outcome: [plan, build] }
     inputs: *ended
   link-after-answers:
     workflow: archon-link
-    resource: link
+    resource: sdlc-link
     capacity: 3
     overlap: queue
     asks_settled: { workflow: archon-link, settled: answered }
     inputs: *asked
   link-after-blocker-landed:
     workflow: archon-link
-    resource: link
+    resource: sdlc-link
     capacity: 3
     overlap: queue
     run_ended: { workflow: archon-land, outcome: merged, linked: { kind: depends_on, holder: from } }
@@ -150,21 +150,21 @@ bindings:
       repo_path: { repo: path }
   link-after-blocker-closed:
     workflow: archon-link
-    resource: link
+    resource: sdlc-link
     capacity: 3
     overlap: queue
     run_ended: { workflow: archon-triage, outcome: [close, split], linked: { kind: depends_on, holder: from } }
     inputs: *blocker
   link-after-blocker-refuted:
     workflow: archon-link
-    resource: link
+    resource: sdlc-link
     capacity: 3
     overlap: queue
     run_ended: { workflow: archon-investigate, outcome: refuted, linked: { kind: depends_on, holder: from } }
     inputs: *blocker
   plan-after-link:
     workflow: archon-plan
-    resource: plan
+    resource: sdlc-plan
     capacity: 3
     overlap: queue
     run_ended: { workflow: archon-link, outcome: plan }
@@ -175,14 +175,14 @@ bindings:
       answers: { item: answers }
   plan-after-split:
     workflow: archon-plan
-    resource: plan
+    resource: sdlc-plan
     capacity: 3
     overlap: queue
     run_ended: { workflow: archon-split, outcome: plan }
     inputs: *ended
   plan-after-answers:
     workflow: archon-plan
-    resource: plan
+    resource: sdlc-plan
     capacity: 3
     overlap: queue
     asks_settled: { workflow: archon-plan, settled: answered }
@@ -190,28 +190,28 @@ bindings:
   # Delivery found that the plan cannot deliver the outcome: plan it again.
   plan-after-build:
     workflow: archon-plan
-    resource: plan
+    resource: sdlc-plan
     capacity: 3
     overlap: queue
     run_ended: { workflow: archon-build, outcome: replan }
     inputs: *ended
   plan-after-review:
     workflow: archon-plan
-    resource: plan
+    resource: sdlc-plan
     capacity: 3
     overlap: queue
     run_ended: { workflow: archon-review, outcome: replan }
     inputs: *ended
   plan-after-review-answers:
     workflow: archon-plan
-    resource: plan
+    resource: sdlc-plan
     capacity: 3
     overlap: queue
     asks_settled: { workflow: archon-review, settled: answered, option: replan }
     inputs: *asked
   plan-after-host-answers:
     workflow: archon-plan
-    resource: plan
+    resource: sdlc-plan
     capacity: 3
     overlap: queue
     asks_settled: { workflow: archon-host, settled: answered, option: replan }
@@ -222,35 +222,35 @@ bindings:
   # that the link stage placed.
   build-after-link:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     run_ended: { workflow: archon-link, outcome: build }
     inputs: *linked
   build-after-split:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     run_ended: { workflow: archon-split, outcome: build }
     inputs: *ended
   build-after-investigate:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     run_ended: { workflow: archon-investigate, outcome: rooted }
     inputs: *ended
   build-after-plan:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     run_ended: { workflow: archon-plan, outcome: planned }
     inputs: *ended
   build-after-answers:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     asks_settled: { workflow: archon-build, settled: answered, checkout: asking-run }
@@ -262,7 +262,7 @@ bindings:
   # grants one more start.
   build-after-review:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     limit: { starts: 3, reset_on: archon-plan }
@@ -275,14 +275,14 @@ bindings:
       returned: { result: "" }
   build-after-review-answers:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     asks_settled: { workflow: archon-review, settled: answered, option: send-back, checkout: asking-run }
     inputs: *returned
   build-after-review-one-more:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     grants: build-after-review
@@ -290,7 +290,7 @@ bindings:
     inputs: *returned
   build-after-host:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     limit: { starts: 3, reset_on: archon-plan }
@@ -298,14 +298,14 @@ bindings:
     inputs: *returned
   build-after-host-answers:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     asks_settled: { workflow: archon-host, settled: answered, option: send-back, checkout: asking-run }
     inputs: *returned
   build-after-host-one-more:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     grants: build-after-host
@@ -313,7 +313,7 @@ bindings:
     inputs: *returned
   build-after-land:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     limit: { starts: 3, reset_on: archon-plan }
@@ -321,7 +321,7 @@ bindings:
     inputs: *returned
   build-after-land-answers:
     workflow: archon-build
-    resource: build
+    resource: sdlc-build
     capacity: 5
     overlap: queue
     asks_settled: { workflow: archon-land, settled: answered, option: send-back, checkout: asking-run }
@@ -330,7 +330,7 @@ bindings:
   # Review every build, on the commit it ended on.
   review-after-build:
     workflow: archon-review
-    resource: review
+    resource: sdlc-review
     capacity: 5
     overlap: queue
     run_ended: { workflow: archon-build, outcome: built, checkout: ended-run }
@@ -339,14 +339,14 @@ bindings:
   # Host: the pull request's own checks, review threads and description.
   host-after-review:
     workflow: archon-host
-    resource: host
+    resource: sdlc-host
     capacity: 5
     overlap: queue
     run_ended: { workflow: archon-review, outcome: approve, checkout: ended-run }
     inputs: *ended
   host-after-review-answers:
     workflow: archon-host
-    resource: host
+    resource: sdlc-host
     capacity: 5
     overlap: queue
     asks_settled: { workflow: archon-review, settled: answered, option: take-as-is, checkout: asking-run }
@@ -355,21 +355,21 @@ bindings:
   # Land, one change at a time: the second is judged against a branch that has the first.
   land-after-host:
     workflow: archon-land
-    resource: land
+    resource: sdlc-land
     capacity: 1
     overlap: queue
     run_ended: { workflow: archon-host, outcome: ready, checkout: ended-run }
     inputs: *ended
   land-after-host-answers:
     workflow: archon-land
-    resource: land
+    resource: sdlc-land
     capacity: 1
     overlap: queue
     asks_settled: { workflow: archon-host, settled: answered, option: take-as-is, checkout: asking-run }
     inputs: *asked
   land-after-answers:
     workflow: archon-land
-    resource: land
+    resource: sdlc-land
     capacity: 1
     overlap: queue
     asks_settled: { workflow: archon-land, settled: answered, option: land, checkout: asking-run }
@@ -378,14 +378,14 @@ bindings:
   # Once a change has landed, what the item's runs noticed outside it is decided.
   discoveries-after-land:
     workflow: archon-discoveries
-    resource: discoveries
+    resource: sdlc-discoveries
     capacity: 1
     overlap: queue
     run_ended: { workflow: archon-land, outcome: merged }
     inputs: *ended
   discoveries-after-answers:
     workflow: archon-discoveries
-    resource: discoveries
+    resource: sdlc-discoveries
     capacity: 1
     overlap: queue
     asks_settled: { workflow: archon-discoveries, settled: answered }

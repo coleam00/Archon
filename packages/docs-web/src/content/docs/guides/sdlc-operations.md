@@ -39,6 +39,8 @@ archon pack graph sdlc
 
 To change a binding after a pack update, write the files again with `--force` and add each one again.
 
+Each binding holds a resource named `sdlc-<stage>`, such as `sdlc-build` (five runs at once) or `sdlc-land` (one, so changes land one at a time). Set another number with `concurrency.resources` in `~/.archon/config.yaml`, keyed by the full resource name the generated binding file holds.
+
 ## Start work with a label
 
 Adding the label `archon-triage` to an issue starts triage on its item. Only an account with triage rights on the repository can add a label, so an issue nobody labelled reaches no agent. Opening or editing an issue starts nothing.
