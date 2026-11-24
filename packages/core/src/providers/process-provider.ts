@@ -6,7 +6,7 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
-import { createLogger, getLogLevel } from '@archon/paths';
+import { createLogger } from '@archon/paths';
 import {
   buildProviderSubprocessEnv,
   providerCredentialInputSchema,
@@ -87,9 +87,6 @@ function startProcess(
   // would outlive any test that replaces createLogger to observe these diagnostics.
   const log = createLogger('core.provider-process');
   const env = buildProviderSubprocessEnv(options.execContext?.kind === 'container' ? {} : options);
-  // The host's level is authoritative: a plugin left on an inherited LOG_LEVEL would drop
-  // records (the credential input among them) that `--verbose` asked the host to show.
-  env.LOG_LEVEL = getLogLevel();
   const secrets = [
     ...collectCredentialValues(env, options.protectedEnvKeys),
     ...collectCredentialValues(

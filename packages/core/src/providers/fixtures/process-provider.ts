@@ -157,11 +157,7 @@ async function writeQueryLogs(
       },
     });
   }
-  // Gated like a real plugin's logger, which reads LOG_LEVEL when it loads.
-  if (
-    mode === 'logs-credential' &&
-    ['trace', 'debug', 'info'].includes(process.env.LOG_LEVEL ?? 'info')
-  ) {
+  if (mode === 'logs-credential') {
     await log({
       level: 'info',
       msg: 'claude.credential_input',

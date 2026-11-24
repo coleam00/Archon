@@ -103,11 +103,11 @@ The host logs `provider.plugin.log` at the supplied severity through `provider.<
 using its own descriptor id. Set `bindings.failureClass` to one of the contract's failure
 classes, `bindings.lifecycle` to one of its lifecycle events
 (`providerLifecycleEventSchema`), or `bindings.credentialInput` to one of its credential
-inputs (`providerCredentialInputSchema`), on any record the operator should see. With a
+inputs (`providerCredentialInputSchema`, explained in
+[troubleshooting](/reference/troubleshooting/#claude-signs-in-with-the-wrong-account-or-reports-not-logged-in)), on any record the operator should see. With a
 lifecycle event, a non-negative integer `bindings.waitedMs` is forwarded too. With a
 credential input, the names in `bindings.credentialKeys` that are in the contract's
-closed list (`providerCredentialKeySchema`) are forwarded too. The host sets the plugin's
-`LOG_LEVEL` to its own level, so a record below that level is not sent at all. The host forwards those values
+closed list (`providerCredentialKeySchema`) are forwarded too. The host forwards those values
 and nothing else, and drops a record with no enum value. `msg`, plugin module identity, and all
 other bindings remain withheld. Never put credentials, tokens, or message text in log
 records. Keep stdout exclusively for RPC; configure other logging to stderr before
