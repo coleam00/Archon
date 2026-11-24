@@ -28,7 +28,7 @@ inputs:
     result_of: archon-review
     description: What the latest review of the item ended with, with its accepted discoveries.
 
-returns: { node: decide, outcome: outcome, asks: asks }
+returns: { node: decide, outcome: outcome, asks: asks, final: [decided], summary: summary }
 
 nodes:
   - id: decide

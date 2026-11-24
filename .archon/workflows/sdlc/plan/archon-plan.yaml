@@ -38,7 +38,7 @@ inputs:
     result_of: archon-review
     description: What the last review of the item ended with, when delivery sent it back to planning.
 
-returns: { node: plan, outcome: outcome, asks: asks }
+returns: { node: plan, outcome: outcome, asks: asks, summary: summary }
 
 nodes:
   - id: plan

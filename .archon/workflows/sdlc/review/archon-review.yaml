@@ -48,7 +48,7 @@ inputs:
     result_of: archon-review
     description: What the previous review of the item ended with, so this round continues it.
 
-returns: { node: verdict, outcome: outcome, asks: asks }
+returns: { node: verdict, outcome: outcome, asks: asks, final: [ready, not_ready], summary: findings_summary }
 
 nodes:
   - id: scope

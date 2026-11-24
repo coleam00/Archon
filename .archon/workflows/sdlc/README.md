@@ -59,6 +59,12 @@ planned again. The bindings declare that as `limit: { starts: 3, reset_on: archo
 the stage that would send it back past the limit reads where the limit stands and asks
 instead ([`rounds.md`](.shared/policy/rounds.md)).
 
+An outcome that ends the item on purpose, such as a closed issue or a waiting one, is listed
+in the stage's `returns.final`. Any other outcome that starts nothing and leaves no ask
+stops the item: `archon workflow attention` lists it as `stopped`, with the stage's
+`returns.summary` as the reason. Triage's `not_triaged` and investigate's `inconclusive`
+are such stops on purpose: an operator decides what follows.
+
 `archon pack graph sdlc` draws the stages and the arrows between them for a project.
 
 Every binding holds a resource named `sdlc-<stage>` (`sdlc-build`, `sdlc-land`): its capacity is how many runs of that stage move at once, and `concurrency.resources` in `~/.archon/config.yaml`, keyed by the full resource name the generated binding file holds, overrides it. `sdlc-land` has one slot, so changes land one at a time.
@@ -197,7 +203,8 @@ The pack is a pattern, not a framework. To build a pack of your own:
    judges.
 2. **End with a named outcome.** `returns: { node: <id>, outcome: outcome, asks: asks }`
    on the node whose output decides. The outcome is what a binding starts the next stage
-   on; the asks are what an operator decides. A stage never pauses mid-run.
+   on; the asks are what an operator decides. List the outcomes that end the item on
+   purpose in `final:`, and name a one-line reason in `summary:`. A stage never pauses mid-run.
 3. **Read, don't carry.** Declare `result_of: <stage>` inputs for what an earlier stage
    returned, and pass `answers: { item: answers }` on every binding.
 4. **Wire it in `.pack/pack.yaml`.** A `run_ended:` binding per hand-off, an

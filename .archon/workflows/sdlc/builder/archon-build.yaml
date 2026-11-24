@@ -39,7 +39,7 @@ inputs:
     result_of: archon-split
     description: What the split stage concluded, when the item came through one. Read from the item.
 
-returns: { node: build, outcome: outcome, asks: asks }
+returns: { node: build, outcome: outcome, asks: asks, summary: summary }
 
 nodes:
   # The first build and every later fix are this one node on purpose: `context: same`

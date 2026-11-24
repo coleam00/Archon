@@ -32,7 +32,7 @@ inputs:
     result_of: archon-split
     description: What the last split of this item ended with, so no piece is filed twice.
 
-returns: { node: split, outcome: outcome, asks: asks }
+returns: { node: split, outcome: outcome, asks: asks, final: [split], summary: summary }
 
 nodes:
   - id: split

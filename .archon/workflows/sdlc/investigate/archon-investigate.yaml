@@ -28,7 +28,7 @@ inputs:
     result_of: archon-triage
     description: What triage concluded about the issue. Read from the item.
 
-returns: { node: investigate, outcome: verdict, asks: asks }
+returns: { node: investigate, outcome: verdict, asks: asks, final: [refuted], summary: summary }
 
 nodes:
   - id: investigate

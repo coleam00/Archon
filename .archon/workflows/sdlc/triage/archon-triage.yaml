@@ -28,7 +28,7 @@ inputs:
     description: Every answer an operator gave on this item, oldest first.
 
 # The engine defines `asks` and adds it to the triage node's output, so the node does not declare it.
-returns: { node: triage, outcome: outcome, asks: asks }
+returns: { node: triage, outcome: outcome, asks: asks, final: [questions, blocked, close], summary: summary }
 
 nodes:
   - id: triage

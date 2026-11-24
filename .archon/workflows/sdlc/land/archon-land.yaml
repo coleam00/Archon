@@ -36,7 +36,7 @@ inputs:
     result_of: archon-land
     description: What the last land run on the item ended with, for the head an approval names.
 
-returns: { node: land, outcome: outcome, asks: asks }
+returns: { node: land, outcome: outcome, asks: asks, summary: reason }
 
 nodes:
   - id: land

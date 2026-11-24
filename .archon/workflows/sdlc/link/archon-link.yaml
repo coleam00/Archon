@@ -35,7 +35,7 @@ inputs:
     result_of: archon-link
     description: What the last link run on this item returned. Null on the first.
 
-returns: { node: link, outcome: outcome, asks: asks }
+returns: { node: link, outcome: outcome, asks: asks, final: [waiting, fold, dropped, none], summary: summary }
 
 nodes:
   - id: link

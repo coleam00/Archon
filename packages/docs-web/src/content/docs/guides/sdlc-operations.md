@@ -62,6 +62,10 @@ Each run shows the outcome it ended with and, for a stage a binding started, the
 
 To see progress on the issue itself, turn on the item tracker (`itemTracker` in `~/.archon/config.yaml`, see [show progress on the item's tracker](/guides/workflow-triggers/#show-progress-on-the-items-tracker)). The engine keeps one status comment on the issue, posts each question with the command that answers it, and posts the result when the item stops.
 
+## When an item stops
+
+A stage that ends with an outcome nothing starts from, and leaves no ask, stops its item unless the outcome is one its workflow declares final (a closed issue, an item that waits, a review by hand). `archon workflow attention` lists a stopped item as `stopped`, with the stage's one-line summary. Triage's `not_triaged` (a forge read failed) and investigate's `inconclusive` stop on purpose: start the next stage by hand, or start the stage again.
+
 ## Answer what a stage asks
 
 A stage that needs a decision ends and leaves its questions as asks on the item. List and answer them:
