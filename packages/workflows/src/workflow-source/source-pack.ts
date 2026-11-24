@@ -7,6 +7,7 @@ import {
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
 import { hasGitMarker, runGit } from '../checkout-observation';
+import { isReservedScopeDirName } from '../workflow-discovery/pack-layout';
 import { isDirectory, listTree, type TreeFile, type TreeListing } from './tree';
 
 /**
@@ -23,7 +24,10 @@ export interface SourcePackFolder {
   readonly dir: string;
 }
 
-/** A pack folder that also holds `.archon/workflows/<name>/`: two copies of one pack. */
+/**
+ * A pack folder that also holds `.archon/workflows/<name>/` as a pack, as discovery reads
+ * it: two copies of one pack.
+ */
 export class AmbiguousSourcePackError extends Error {
   constructor(
     readonly packName: string,
@@ -41,12 +45,14 @@ export class AmbiguousSourcePackError extends Error {
 /**
  * The pack folder `dir` is, or null when its root has no plugin manifest or the manifest
  * is not a workflow pack. Every reader that maps a project source to its packs (discovery,
- * script discovery, `packDirectory`, the run capture), live or captured, asks this, so they
- * cannot disagree about what a pack folder is.
+ * script discovery, `packDirectory`, the run capture, the console lookup), live or captured,
+ * asks this, so they cannot disagree about what a pack folder is.
  *
  * Throws on an unreadable or invalid workflow-pack manifest, and when the folder also
- * holds `.archon/workflows/<name>/`: two copies of one pack in one source is ambiguous,
- * and picking one would run bytes the author did not choose.
+ * holds `.archon/workflows/<name>/` that discovery reads as pack `<name>`: two copies of one
+ * pack in one source is ambiguous, and picking one would run bytes the author did not choose.
+ * A `defaults` or `fixtures` directory there is project data (`isReservedScopeDirName`),
+ * not a copy, so a pack with either name still loads from its folder.
  */
 export async function sourcePackFolder(dir: string): Promise<SourcePackFolder | null> {
   const file = join(dir, PLUGIN_MANIFEST_FILE);
@@ -72,7 +78,8 @@ export async function sourcePackFolder(dir: string): Promise<SourcePackFolder | 
   const { name } = parsed.data;
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
   const nested = join(dir, workflowFolder, name);
-  if (await isDirectory(nested)) throw new AmbiguousSourcePackError(name, file, nested);
+  if (!isReservedScopeDirName(name) && (await isDirectory(nested)))
+    throw new AmbiguousSourcePackError(name, file, nested);
   return { name, dir };
 }
 

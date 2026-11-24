@@ -453,7 +453,7 @@ The local copy runs under project naming: its workflows by their YAML `name:` (`
 
 A run freezes what an install of the folder would hold: in a git checkout, its tracked files and the untracked ones git does not ignore, so ignored files such as `node_modules` or build output stay out; outside git, the whole folder. A `.env` file is never frozen, and the folder's own `.archon/` is frozen as for any project (its workflows, commands and scripts). The folder is read live, as any explicit `--workflow-source` is; a worktree run without the flag reads its definitions from the base branch, which covers only the `.archon/` definition paths, so pass the flag to run a pack folder.
 
-A pack folder that also holds `.archon/workflows/<name>/` has two copies of one pack, and neither loads. An invalid manifest fails the same way. Either is reported as that pack's load error, and the project's other workflows still run. A manifest of another kind (provider, forge) does not make its directory a pack folder.
+A pack folder that also holds `.archon/workflows/<name>/` has two copies of one pack, and neither loads. A `defaults` or `fixtures` directory there is project data, not a copy, so a pack with either name still loads from its folder. An invalid manifest fails the same way. Either is reported as that pack's load error, and the project's other workflows still run. A manifest of another kind (provider, forge) does not make its directory a pack folder.
 
 The capture lives at `~/.archon/workspaces/<project>/workflow-source/runs/<run-id>/`, beside the run's artifacts, and is kept as long as the run's other output. It is not inside `$ARTIFACTS_DIR`, which is the run's output channel. Its manifest records a content digest and the source-resolution settings, and the run row stores both too. Archon hashes the full capture during discovery, on resume and before every later command, named script or composed-source read, and refuses the read, and any container dispatch, when the capture changed. Start a fresh run to execute the current workflow.
 
@@ -1513,6 +1513,11 @@ item under `--item-of` (`error: "no_item"`), a malformed flag, or a directory wi
 registered project. Every later item read carries the fact as
 `merged`. It needs the database store.
 
+A run that merges through [`archon forge pr.merge`](/reference/forge/#workflow-host-integration-and-audit)
+records the merge on its item by itself (`via: forge`) when the forge plugin reports the
+merge time (`merged_at`), so a later `workflow merged` for that item keeps the forge's
+record. With a plugin that omits it, nothing is recorded and the merge still succeeds.
+
 ### `workflow title`
 
 Set what an item is called. Every read of the item returns the title beside the key:
@@ -1557,7 +1562,11 @@ archon workflow link --item issue-42 --kind part_of --to WO-12
 | `--from <start-point>` | Create the branch on the project's remote from this start point before recording it (alias `--from-branch`) |
 | `--json` | Print `{ branch, recordedAt, fromRun }`, with `create` added when `--from` is given, or `{ ok: false, error }` |
 
-Recording again replaces the branch. A run already started keeps the base it recorded.
+Recording again replaces the branch. A run already started keeps the base it recorded. A
+run that merges through `archon forge pr.merge` records the merged pull request's base
+branch as its item's landing by itself, together with the merge and under the same
+condition (the forge plugin reports `merged_at`), so later fresh runs on the merged item
+stay on the branch it landed on.
 
 Without `--from`, the command only records, and does not check the remote, so a branch may
 be recorded before it exists. With `--from`, it creates the branch on the remote first and
@@ -3086,7 +3095,7 @@ A run started with no item, and no run to inherit one from, has none. One item i
 
 `archon workflow items` reads every item of the project that had a run in a window, a page at a time ([`workflow items`](#workflow-items)).
 
-The merge of an item's change is the one fact about it that comes from outside the engine. The caller that saw the forge report it records it once with [`workflow merged`](#workflow-merged), and every read of the item carries it as `merged`.
+The merge of an item's change is the one fact about it that comes from outside the engine. The caller that saw the forge report it records it once with [`workflow merged`](#workflow-merged), and every read of the item carries it as `merged`. A merge a run on the item makes through `archon forge pr.merge` is recorded by itself, with its landing branch, when the forge plugin reports the merge time.
 
 A ruling is a decision recorded on the item without a question having been asked ([`workflow rule`](#workflow-rule)). It is a fact about the item, like an answer, and needs no run: recording one on a key nothing has named writes the item. Withdrawing a ruling keeps the record and marks it withdrawn. A workflow reads its item's answers and rulings through `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to); the engine passes them to no node on its own.
 

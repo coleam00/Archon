@@ -2,6 +2,7 @@
 /**
  * The item commands against a real SQLite store, in-process: `workflow run --item` and
  * `--supersedes`, `workflow runs --item` and `--item-of`, `workflow rule`, `workflow merged`,
+ * the merge record an applied forge `pr.merge` writes,
  * `workflow items` and `workflow link`. The store's conformance tests prove what is
  * recorded; these prove each command's request, refusal codes and JSON and text output.
  * Which item a trigger start lands on needs detached runs and stays in the trigger spec.
@@ -32,6 +33,7 @@ import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
+import { recordRunMerge } from './forge-merge-record';
 import { projectAddCommand } from './project';
 import { workflowLinkCommand } from './workflow-link';
 import { workflowItemsCommand } from './workflow-items';
@@ -845,5 +847,76 @@ test.serial(
       expect(JSON.parse(refused.stdout)).toEqual({ ok: false, error: 'no_item' });
     }
     expect(facts()).toBe(before);
+  }
+);
+
+test.serial(
+  "a forge merge records itself on the run's item, and the script calls after it keep it",
+  async () => {
+    const onItem = runsWithItems().find(row => row.item_key === 'item-1');
+    const bare = runsWithItems().find(row => row.item_key === null);
+    if (!onItem || !bare) throw new Error('Expected a run on item-1 and a run with no item');
+    const facts = {
+      change: 'https://github.com/acme/web/pull/3',
+      commit: 'a'.repeat(40),
+      at: '2026-11-20T09:30:00Z',
+      branch: 'dev',
+    };
+    const nodeEnv = (runId: string): NodeJS.ProcessEnv => ({
+      WORKFLOW_ID: runId,
+      ARCHON_NODE_EXECUTION: JSON.stringify({ runId, path: 'land' }),
+    });
+    const record = async (runId: string, at: string | undefined) => {
+      let outcome: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
+      const result = await invoke(async () => {
+        outcome = await recordRunMerge(runId, { ...facts, at }, nodeEnv(runId));
+      });
+      expect(result.exitCode, result.stderr).toBe(0);
+      return outcome;
+    };
+    const merges = () => rows<{ n: number }>('SELECT count(*) AS n FROM remote_agent_item_merges');
+
+    // A plugin that reports no merge time leaves the item as it was, merge and landing alike.
+    expect(await record(onItem.id, undefined)).toBe('no_merge_time');
+    const untouched = await readItemJson('item-1');
+    expect(untouched.merged).toBeNull();
+    expect(untouched.landing).toBeNull();
+
+    expect(await record(onItem.id, facts.at)).toBe('recorded');
+    const item = await readItemJson('item-1');
+    expect(item.merged).toMatchObject({
+      change: facts.change,
+      commit: facts.commit,
+      at: '2026-11-20T09:30:00.000Z',
+      via: 'forge',
+      fromRun: { runId: onItem.id, nodePath: 'land' },
+    });
+    expect(item.landing).toMatchObject({ branch: 'dev', from: { kind: 'own' } });
+
+    // A pack that still records the merge and landing afterwards changes nothing.
+    const env = nodeEnv(onItem.id);
+    const merged = await invoke(host =>
+      workflowMergedCommand(
+        host,
+        projectRoot,
+        { itemOf: onItem.id, change: facts.change, at: facts.at, commit: facts.commit },
+        true,
+        env
+      )
+    );
+    expect(succeeded(merged)).toMatchObject({ recorded: false, merge: { via: 'forge' } });
+    succeeded(
+      await invoke(host =>
+        workflowLandingCommand(host, projectRoot, { itemOf: onItem.id, branch: 'dev' }, true, env)
+      )
+    );
+    const after = await readItemJson('item-1');
+    expect(after.merged).toEqual(item.merged);
+    expect(after.landing?.branch).toBe('dev');
+    expect(merges()).toEqual([{ n: 1 }]);
+
+    // A run on no item writes nothing.
+    expect(await record(bare.id, facts.at)).toBe('no_item');
+    expect(merges()).toEqual([{ n: 1 }]);
   }
 );

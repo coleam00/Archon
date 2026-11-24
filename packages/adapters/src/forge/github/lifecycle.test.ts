@@ -6,7 +6,15 @@ import {
   type ForgeMutationRequest,
 } from '@archon/forge/operations';
 import { githubPluginMetadata, handleGithubOperation } from './operations';
-import { json, pull, fakeGitHub, mergeGitHub, rerunGitHub, run } from './lifecycle-fixture';
+import {
+  json,
+  pull,
+  fakeGitHub,
+  MERGED_AT,
+  mergeGitHub,
+  rerunGitHub,
+  run,
+} from './lifecycle-fixture';
 import { prRecord } from './pull-requests';
 
 const repo = { host: 'github.com', path: 'archon/test' };
@@ -513,6 +521,8 @@ test.each(['merge', 'squash'] as const)(
         value: {
           landed: { commit: 'landed', tree: 'landed-tree', parents: ['base', 'headsha'] },
           enforcedConditions: ['head'],
+          // The merge time comes from the read-back after the merge, not from the host.
+          merged_at: MERGED_AT,
         },
       },
     });
@@ -565,7 +575,9 @@ test('unavailable supplemental merge evidence remains explicitly null', async ()
     })
   ).toMatchObject({
     ok: true,
-    result: { value: { landed: { commit: 'landed', tree: null, parents: null } } },
+    result: {
+      value: { landed: { commit: 'landed', tree: null, parents: null }, merged_at: MERGED_AT },
+    },
   });
 });
 
