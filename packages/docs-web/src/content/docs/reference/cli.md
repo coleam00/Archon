@@ -1425,9 +1425,10 @@ archon workflow end --item issue-42 --as triage-agent -- "Folded into issue-40"
 | `--json` | Print the end as the item read shows it under `ended`, or `{ ok: false, error }` |
 
 The reason goes after `--`, and must not be blank. The end names the item's last run as
-`runId` and changes no run. It holds until work starts on the item again: a run on the item
-created after the end, a [resume](#workflow-resume) of one of its runs, or a start waiting on
-it opens the item, with no further command, and the item's next stop is listed as usual.
+`runId` and changes no run. It holds until work starts on the item again: a new run or a
+queued start on the item, a [resume](#workflow-resume) of one of its runs, or a trigger start
+waiting to be prepared opens the item, with no further command, and the item's next stop is
+listed as usual.
 Deleting old runs ([`workflow cleanup`](#workflow-cleanup)) does not undo an end. Ending the
 item again records a new end.
 

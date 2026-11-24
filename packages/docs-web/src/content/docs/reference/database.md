@@ -333,7 +333,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_item_ends`** - Ends of an item: an operator's statement that nothing more will happen on it (`archon workflow end`)
   - Append-only: no row is updated or deleted, and nothing writes one by itself. `seq` is the recording order and `id` is text in both dialects
   - `item_id`, `reason`, `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at`, as for rulings
-  - `run_id` names the item's last run, if it had one, when the end was recorded. `reopen_after` is the database's clock then, the clock run times use, and `runs_seen` the highest run rowid on SQLite (null on PostgreSQL), where run times have second precision. An end holds until a run on the item is created after it or resumed at or after `reopen_after`, a run on the item is live, or a start is queued on it; opening writes nothing, and deleting old runs leaves the end holding. A binary that predates the table never reads it and shows the item as before
+  - `run_id` names the item's last run, if it had one, when the end was recorded. A binary that predates the table never reads it and shows the item as before
+- **`remote_agent_item_end_runs`** - The runs an end saw on its item, copied in the transaction that records the end
+  - One row per run: `end_id`, `run_id` (no foreign key) and the run's `active_phase_started_at`, which only a resume writes, in the same type as the run's column
+  - An end holds while every run on its item is one it saw and not resumed since, no run on the item is live, and no start is queued on it. A new run or a resume, even from a transaction that overlapped the end's, opens the item; opening writes nothing, and deleting runs the end saw leaves it holding
 - **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
   - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
   - `change` (the forge's identity of the merged change, never parsed), `merge_commit` (nullable), `merged_at` (the forge's merge time), `via`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`

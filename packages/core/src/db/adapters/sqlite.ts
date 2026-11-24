@@ -598,11 +598,16 @@ export class SqliteAdapter implements IDatabase {
         from_run_id TEXT,
         from_node_path TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        run_id TEXT,
-        reopen_after TEXT NOT NULL DEFAULT (datetime('now')),
-        runs_seen INTEGER
+        run_id TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_item_ends_item_id ON remote_agent_item_ends(item_id);
+      -- The runs an end saw on its item; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_end_runs (
+        end_id TEXT NOT NULL REFERENCES remote_agent_item_ends(id),
+        run_id TEXT NOT NULL,
+        active_phase_started_at TEXT,
+        PRIMARY KEY (end_id, run_id)
+      );
 
       -- An item's merged fact, recorded once; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_merges (

@@ -1,15 +1,11 @@
 /**
- * Ends of an item (`remote_agent_item_ends`): append-only facts, never updated or deleted.
- * An end holds until work starts on the item again (`schemas/item-end.ts`). The rule reads
- * the runs that exist: a run on the item created after the end, a run resumed at or after
- * it, a run on it that is not terminal, or a queued start opens the item. So opening writes
- * nothing, and deleting old runs, which all predate the end, leaves it holding.
- * `reopen_after` is the database's clock, the clock run times are written with; resume is
- * the only write of `active_phase_started_at`. On PostgreSQL a run created after the end
- * starts after `reopen_after`. On SQLite run times have second precision, so a run is newer
- * when its rowid is above `runs_seen`, the highest when the end was written, or it started
- * in a later second; a resume in the end's own second opens the item, which shows it again
- * rather than hiding new work.
+ * Ends of an item (`remote_agent_item_ends`) and the runs each saw
+ * (`remote_agent_item_end_runs`): append-only facts, never updated or deleted. An end holds
+ * until work starts on the item again (`schemas/item-end.ts`): a run on the item the end did
+ * not see, a run resumed since (its `active_phase_started_at` changed), a live run, or a
+ * queued start. The rule compares run identities and copied values, never clocks, so a run
+ * whose transaction overlapped the end's, or a run row id reused after cleanup, still opens
+ * the item. Opening writes nothing, and deleting runs the end saw leaves it holding.
  */
 import {
   itemEndBlockerSchema,
@@ -48,18 +44,21 @@ function endRead(row: EndRow): ItemEnd | ItemEndDegraded {
 
 const LIVE = "('pending', 'running', 'paused')";
 
-/** SQL true while end `e` holds: nothing on its item started, resumed or waits since it. */
+/**
+ * SQL true while end `e` holds: every run on its item is one the end saw, not resumed since
+ * (resume is the only write of `active_phase_started_at`), no run on it is live, and no start
+ * is queued on it.
+ */
 function holds(): string {
-  const sqlite = getDatabaseType() === 'sqlite';
-  const newer = sqlite
-    ? `(n.rowid > e.runs_seen OR datetime(n.started_at) > datetime(e.reopen_after))`
-    : 'n.started_at >= e.reopen_after';
-  const resumed = sqlite
-    ? 'datetime(n.active_phase_started_at) >= datetime(e.reopen_after)'
-    : 'n.active_phase_started_at >= e.reopen_after';
+  const same = getDatabaseType() === 'sqlite' ? 'IS' : 'IS NOT DISTINCT FROM';
   return `NOT EXISTS (
       SELECT 1 FROM remote_agent_workflow_runs n
-      WHERE n.item_id = e.item_id AND (n.status IN ${LIVE} OR ${newer} OR ${resumed})
+      WHERE n.item_id = e.item_id
+        AND (n.status IN ${LIVE} OR NOT EXISTS (
+          SELECT 1 FROM remote_agent_item_end_runs k
+          WHERE k.end_id = e.id AND k.run_id = CAST(n.id AS TEXT)
+            AND k.active_phase_started_at ${same} n.active_phase_started_at
+        ))
     )
     AND NOT EXISTS (
       SELECT 1 FROM remote_agent_resource_start_requests q
@@ -103,33 +102,40 @@ async function blockerOf(query: TransactionQuery, itemId: string): Promise<ItemE
 }
 
 /**
- * Record an end on item `itemId`, naming its latest run. The end is written first and the
- * item checked after, in one transaction: on SQLite the write holds the database, so no run
- * or start can slip in between; on PostgreSQL a run committed before the check is seen. While
- * anything on the item is active or waiting, throws `ItemEndRefusedError` and writes nothing.
+ * Record an end on item `itemId`, naming its latest run, and copy the runs it sees on the
+ * item. The item is checked after the write, in the same transaction: on SQLite the write
+ * holds the database, so no run or start slips in between; on PostgreSQL a run committed
+ * before the check is seen, and one committed after it is not among the runs the end saw,
+ * so it opens the item. While anything on the item is active or waiting, throws
+ * `ItemEndRefusedError` and writes nothing.
  */
 export async function recordItemEnd(
   input: { itemId: string; key: string; reason: string } & ItemAct
 ): Promise<ItemEnd> {
   if (input.reason.trim() === '') throw new Error('An end needs a reason.');
-  const sqlite = getDatabaseType() === 'sqlite';
-  const tie = sqlite ? 'rowid' : 'id';
+  const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
   return getDatabase().withTransaction(async query => {
     const result = await query<EndRow>(
       `INSERT INTO remote_agent_item_ends
          (item_id, reason, by_declared, by_user_id, via, from_run_id, from_node_path, created_at,
-          run_id, runs_seen)
+          run_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
          (SELECT CAST(r.id AS TEXT) FROM remote_agent_workflow_runs r WHERE r.item_id = $1
-          ORDER BY r.started_at DESC, r.${tie} DESC LIMIT 1),
-         ${sqlite ? '(SELECT COALESCE(MAX(rowid), 0) FROM remote_agent_workflow_runs)' : 'NULL'})
+          ORDER BY r.started_at DESC, r.${tie} DESC LIMIT 1))
        RETURNING *`,
       [input.itemId, input.reason, ...actColumns(input)]
     );
-    const blocker = await blockerOf(query, input.itemId);
-    if (blocker !== null) throw new ItemEndRefusedError(input.key, blocker);
     const row = result.rows[0];
     if (row === undefined) throw new Error('The end was not written');
+    // Copied in SQL, so each time compares exactly with the column it came from.
+    await query(
+      `INSERT INTO remote_agent_item_end_runs (end_id, run_id, active_phase_started_at)
+       SELECT $1, CAST(r.id AS TEXT), r.active_phase_started_at
+       FROM remote_agent_workflow_runs r WHERE r.item_id = $2`,
+      [row.id, input.itemId]
+    );
+    const blocker = await blockerOf(query, input.itemId);
+    if (blocker !== null) throw new ItemEndRefusedError(input.key, blocker);
     const read = endRead(row);
     if ('type' in read) throw new Error(`End '${row.id}' was written but does not read back`);
     return read;

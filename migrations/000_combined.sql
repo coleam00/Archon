@@ -809,13 +809,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
 
 -- Ends of an item: an operator's statement that nothing more will happen on it. Append-only,
 -- like rulings: no row is updated or deleted, and nothing writes one by itself. run_id names
--- the item's latest run, if any, when the end was recorded. reopen_after is the database's
--- clock at that moment, the clock run start and resume times use: the end holds until a run
--- on the item starts or resumes at or after it, or a start waits on the item, so opening
--- the item writes nothing and deleting old runs does not undo the end. runs_seen is the
--- highest run rowid when the end was recorded, on SQLite only, where run times have second
--- precision and a later rowid tells a newer run within the second; NULL here. from_run_id
--- and run_id have no foreign key, so run cleanup keeps the end.
+-- the item's latest run, if any, when the end was recorded. from_run_id and run_id have no
+-- foreign key, so run cleanup keeps the end.
 CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   -- Recording order; timestamps tie within a millisecond and `id` is random.
@@ -828,9 +823,20 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
   from_run_id TEXT,
   from_node_path TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  run_id TEXT,
-  reopen_after TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  runs_seen BIGINT
+  run_id TEXT
+);
+
+-- The runs an end saw on its item, copied in the transaction that records it, each with its
+-- active_phase_started_at, which only a resume writes; same type as the run's column, so the
+-- two compare exactly. The end holds while every run on the item is one it saw, unresumed
+-- since, and none is live: a run created or resumed later, even by a transaction that
+-- overlapped the end's, opens the item for good, and deleting old runs leaves it holding.
+-- run_id has no foreign key, so run cleanup keeps the row.
+CREATE TABLE IF NOT EXISTS remote_agent_item_end_runs (
+  end_id TEXT NOT NULL REFERENCES remote_agent_item_ends(id),
+  run_id TEXT NOT NULL,
+  active_phase_started_at TIMESTAMP WITH TIME ZONE,
+  PRIMARY KEY (end_id, run_id)
 );
 
 -- The merge of an item's change, as the forge reported it to the caller that recorded it.

@@ -166,6 +166,39 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
     }
   });
 
+  test('a run started right after the newest run in the store is deleted opens the item', async () => {
+    const harness = await makeHarness();
+    try {
+      // On SQLite the next run can reuse the deleted run's row id, within the same second.
+      const failed = await startOnItem(harness);
+      await harness.store.failWorkflowRun(failed, 'boom');
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      await deleteWorkflowRun(failed);
+      expect(await holding(harness)).not.toBeNull();
+      const next = await startOnItem(harness);
+      await harness.store.failWorkflowRun(next, 'boom again');
+      expect(await holding(harness)).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a run the end did not see opens the item, however old its start time', async () => {
+    const harness = await makeHarness();
+    try {
+      await stopOnItem(harness);
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      // The state a run leaves when its transaction began before the end and committed after.
+      const late = await startOnItem(harness);
+      await harness.store.failWorkflowRun(late, 'boom');
+      await backdate(harness, late, 1);
+      expect(await holding(harness)).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('an end is refused, naming it, while a run, a child run or a queued start is live', async () => {
     const harness = await makeHarness();
     try {
@@ -200,6 +233,37 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       if (holder?.status !== 'admitted' || queued?.status !== 'queued')
         throw new Error('Expected one admitted start and one queued');
       expect(await refusedBy()).toEqual({ kind: 'queued_start', requestId: queued.requestId });
+      expect(await holding(harness)).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+}
+
+/**
+ * PostgreSQL only, where two transactions overlap: a run created in a transaction still open
+ * while the end is recorded opens the item once it commits, and stays open after it fails.
+ */
+export function describePostgresItemEndOverlap(makeHarness: () => Promise<Harness>): void {
+  test('a run committed after an overlapping end opens the item for good', async () => {
+    const harness = await makeHarness();
+    try {
+      await stopOnItem(harness);
+      const found = await harness.store.getItemRuns(projectKey, 'pr-7');
+      const itemId = found?.item.id ?? '';
+      let late = '';
+      await harness.db.withTransaction(async query => {
+        const inserted = await query<{ id: string }>(
+          `INSERT INTO remote_agent_workflow_runs (workflow_name, user_message, item_id, codebase_id)
+           VALUES ('deliver', '', $1, $2) RETURNING id`,
+          [itemId, CONFORMANCE_CODEBASE_ID]
+        );
+        late = inserted.rows[0]?.id ?? '';
+        // The end's own transaction cannot see this run yet, so nothing refuses it.
+        await recordItemEnd(harness.store, end, operator, 'cli');
+      });
+      await harness.store.claimPendingWorkflowRun(late);
+      await harness.store.failWorkflowRun(late, 'boom');
       expect(await holding(harness)).toBeNull();
     } finally {
       await harness.close();

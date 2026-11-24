@@ -27,7 +27,10 @@ import { describeSqlItemAskStartConformance } from './item-ask-starts.conformanc
 import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { describeSqlRunDeleteConformance } from './workflow-run-delete.conformance';
 import { describeSqlItemStopConformance } from './item-stops.conformance';
-import { describeSqlItemEndConformance } from './item-ends.conformance';
+import {
+  describePostgresItemEndOverlap,
+  describeSqlItemEndConformance,
+} from './item-ends.conformance';
 import { describeSqlStartLimitConformance } from './start-limits.conformance';
 import {
   HEAD,
@@ -410,6 +413,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   describeSqlItemWaitConformance(makeHarness);
   describeSqlItemStopConformance(makeHarness);
   describeSqlItemEndConformance(makeHarness);
+  describePostgresItemEndOverlap(makeHarness);
   describeSqlItemAskStartConformance(makeHarness);
   describeSqlRunDeleteConformance(makeHarness);
   describeSqlStartLimitConformance(makeHarness);
