@@ -14,6 +14,7 @@ import { validateWorktreeConfig } from '@archon/isolation';
 import type { OpencodeProviderDefaults } from '@archon/providers/types';
 import { readFile as fsReadFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
+import { isDeepStrictEqual } from 'util';
 import { createLogger, getArchonConfigPath } from '@archon/paths';
 import { buildAiProfile, TIER_NAMES } from '@archon/workflows/model-validation';
 import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation';
@@ -480,7 +481,7 @@ export async function updateGlobalConfig(updates: GlobalConfigUpdates): Promise<
     validateGlobalConfigBlocks(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
-    const yaml = patchYamlText(text, current, merged);
+    const yaml = patchInPlace(text, current, merged, configPath);
     await mkdir(dirname(configPath), { recursive: true });
     await writeConfigFile(configPath, yaml);
 
@@ -492,6 +493,40 @@ export async function updateGlobalConfig(updates: GlobalConfigUpdates): Promise<
     logUpdateFailure(configPath, error);
     throw error;
   }
+}
+
+/**
+ * Write `merged` into the operator's file text, keeping its comments and layout, and prove
+ * the result loads back as `merged` with the loader's own parser. The patch is made with a
+ * different parser than the loader reads with, and where they disagree (a `<<` merge key, a
+ * repeated key, an anchor other keys share) the patch can land on a value the loader does
+ * not read. Such a save is refused rather than rewritten: a file using those features is
+ * hand-crafted, and a full rewrite would silently drop everything the operator wrote in it.
+ */
+function patchInPlace(
+  text: string,
+  current: GlobalConfig,
+  merged: GlobalConfig,
+  configPath: string
+): string {
+  const refuse = (cause?: unknown): ConfigParseError =>
+    new ConfigParseError(
+      'Global config',
+      configPath,
+      'cannot take this change without altering other settings (it uses YAML such as a `<<` merge key, a repeated key or a shared anchor where the change lands). Nothing was written; make the change by hand.',
+      { cause }
+    );
+  let patched: string;
+  try {
+    patched = patchYamlText(text, current, merged);
+  } catch (error) {
+    throw refuse(error);
+  }
+  // Compare with what a plain dump of `merged` loads as, so both sides go through Bun's
+  // parser and an undefined key counts as absent.
+  const expected = parseYaml(Bun.YAML.stringify(merged)) ?? {};
+  if (!isDeepStrictEqual(parseYaml(patched) ?? {}, expected)) throw refuse();
+  return patched;
 }
 
 /** Deep-merge: only overwrite defined keys. */

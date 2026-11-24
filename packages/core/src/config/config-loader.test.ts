@@ -585,22 +585,79 @@ assistants:
       expect(writtenContent).toContain('opus');
     });
 
-    test('keeps comments and layout in the file it rewrites', async () => {
-      mockFsReadFile.mockResolvedValue(`# my archon config
+    describe('keeps the file the operator wrote', () => {
+      const written = (): string => mockFsWriteFile.mock.calls[0]?.[1] as string;
+
+      test('comments, key order and layout survive; only the saved keys change', async () => {
+        const file = `# my archon config
 botName: Archon # keep this comment
+tiers:
+  # the cheap one
+  small: { provider: claude, model: haiku }
+  large:
+    provider: claude
+    model: sonnet # was sonnet
 assistants:
   claude:
     model: sonnet
+`;
+        mockFsReadFile.mockResolvedValue(file);
+
+        await updateGlobalConfig({
+          defaultAssistant: 'claude',
+          tiers: { large: { provider: 'claude', model: 'opus' } },
+        });
+
+        expect(written()).toBe(
+          file.replace('model: sonnet # was', 'model: opus # was') + 'defaultAssistant: claude\n'
+        );
+      });
+
+      test('the first-run template keeps its comments', async () => {
+        mockFsReadFile.mockResolvedValue('# Archon Global Configuration\n\n# botName: Archon\n');
+
+        await updateGlobalConfig({ defaultAssistant: 'claude' });
+
+        expect(written()).toBe(
+          '# Archon Global Configuration\n\n# botName: Archon\n\ndefaultAssistant: claude\n'
+        );
+      });
+
+      test('CRLF line endings are kept', async () => {
+        mockFsReadFile.mockResolvedValue('# note\r\nbotName: Archon\r\n');
+
+        await updateGlobalConfig({ defaultAssistant: 'claude' });
+
+        expect(written()).toBe('# note\r\nbotName: Archon\r\ndefaultAssistant: claude\r\n');
+      });
+
+      test('an unrelated save keeps settings that come through two merge keys', async () => {
+        const file = `a: &a { defaultAssistant: claude }
+b: &b { botName: Bot }
+assistants:
+  <<: *a
+  <<: *b
+`;
+        mockFsReadFile.mockResolvedValue(file);
+
+        await updateGlobalConfig({ botName: 'Archon' });
+
+        expect(written()).toBe(`${file}botName: Archon\n`);
+      });
+
+      test('a save the file cannot take in place is refused and nothing is written', async () => {
+        mockFsReadFile.mockResolvedValue(`base: &base
+  large: { provider: claude, model: opus }
+tiers:
+  <<: *base
+  small: { provider: claude, model: haiku }
 `);
 
-      await updateGlobalConfig({ defaultAssistant: 'claude' });
-
-      const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
-      expect(writtenContent).toContain('# my archon config\n');
-      expect(writtenContent).toContain('botName: Archon # keep this comment\n');
-      expect(Bun.YAML.parse(writtenContent)).toMatchObject({
-        botName: 'Archon',
-        defaultAssistant: 'claude',
+        // `large` comes through the merge key, so deleting it from `tiers` changes nothing.
+        await expect(updateGlobalConfig({ tiers: { large: null } })).rejects.toThrow(
+          /config\.yaml' cannot take this change/
+        );
+        expect(mockFsWriteFile).not.toHaveBeenCalled();
       });
     });
 
