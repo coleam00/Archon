@@ -13,11 +13,16 @@ import { loadConfig } from '@archon/core/config/config-loader';
 import { releaseTrackerPass } from '@archon/core/db/item-tracker';
 import { writeStdout } from '../utils/stdout';
 
-/** The configured tracker, activated; undefined when the config tracks no project. */
+/**
+ * The configured tracker, activated; undefined when the config tracks no project.
+ *
+ * The read leaves a missing config missing: every command that builds a workflow host
+ * comes through here, read-only ones such as `trigger check` included.
+ */
 export async function activateConfiguredTracker(
   forgeTrustedEnv: NodeJS.ProcessEnv
 ): Promise<ItemTracker | undefined> {
-  const { itemTracker } = await loadConfig();
+  const { itemTracker } = await loadConfig(undefined, { readOnly: true });
   if (!itemTracker) return undefined;
   const tracker = new ItemTracker(itemTracker, hostItemTrackerForge(forgeTrustedEnv));
   await tracker.activate();
@@ -93,7 +98,9 @@ export async function trackerReleaseCommand(
   options: { json: boolean; stdout?: typeof writeStdout }
 ): Promise<number> {
   const stdout = options.stdout ?? writeStdout;
-  const tracked = (await loadConfig()).itemTracker?.projects.some(p => p.project === project);
+  const tracked = (await loadConfig(undefined, { readOnly: true })).itemTracker?.projects.some(
+    p => p.project === project
+  );
   if (!tracked) {
     await stdout(
       options.json

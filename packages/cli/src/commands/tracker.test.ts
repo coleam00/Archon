@@ -1,6 +1,23 @@
-import { expect, test } from 'bun:test';
+import { afterEach, expect, test } from 'bun:test';
+import { existsSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { TrackerPassReport } from '@archon/adapters/item-tracker/item-tracker';
-import { trackerSyncCommand } from './tracker';
+import { clearConfigCache, loadConfig } from '@archon/core/config/config-loader';
+import { clearPlatformPolicies, setPlatformPolicies } from '@archon/core/platforms/registry';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
+import { activateConfiguredTracker, trackerReleaseCommand, trackerSyncCommand } from './tracker';
+
+registerBuiltinProviders();
+const trackTempRoot = trackTempRoots();
+const savedHome = process.env.ARCHON_HOME;
+afterEach(() => {
+  if (savedHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = savedHome;
+  clearConfigCache();
+  clearPlatformPolicies();
+});
 
 const scanned: TrackerPassReport = {
   project: 'acme/widgets',
@@ -53,4 +70,21 @@ test('tracker sync exits 1 when a tracked project could not be scanned at all', 
       code: 1,
       document: { ok: false, projects: [scanned, report] },
     });
+});
+
+test('reading the tracker config leaves a fresh home without a config.yaml', async () => {
+  const home = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-home-')));
+  process.env.ARCHON_HOME = home;
+  clearConfigCache();
+  setPlatformPolicies([]);
+  const configPath = join(home, 'config.yaml');
+
+  expect(await activateConfiguredTracker({})).toBeUndefined();
+  expect(
+    await trackerReleaseCommand('acme/widgets', { json: true, stdout: async () => undefined })
+  ).toBe(1);
+  expect(existsSync(configPath)).toBe(false);
+
+  await loadConfig();
+  expect(existsSync(configPath)).toBe(true);
 });
