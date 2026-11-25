@@ -30,6 +30,7 @@ import { getLog } from './log';
 import { incrementalLoopUsage, sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settleSequentially, settledValuesOrThrow } from './node-source';
 import type { OperatorPauseBoundary } from './operator-pause-boundary';
+import { endRunAtUnknownOutcome } from './unknown-outcome';
 import {
   beginExecution,
   ownsBodySessionCursor,
@@ -175,13 +176,16 @@ async function runLayerPhase(
           if (admitted === undefined)
             await observeReturnsCheckout(nodeCtx, node.id, result.output, mayRun);
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
+          if (result.output.state === 'failed') await endRunAtUnknownOutcome(ctx);
           return result;
         } catch (error) {
           if (isWorkflowExecutionInterruption(error)) throw error;
           nodeCtx.interactionAdmission?.failed(node.id);
           // A failed admission settles an invocation a prior pass may have left scratch for.
           await releaseInvocationScratch(nodeCtx, node, invocation.id);
-          return await recordPreExecutionFailure(nodeCtx, node, error);
+          const failed = await recordPreExecutionFailure(nodeCtx, node, error);
+          await endRunAtUnknownOutcome(ctx);
+          return failed;
         } finally {
           peers?.[index].finished();
         }

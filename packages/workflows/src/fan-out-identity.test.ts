@@ -2,6 +2,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   buildInstanceSnapshots,
+  composeFanOutJoinStep,
   composeFanOutScopeSegment,
   composeInstanceIdentity,
 } from './fan-out-identity';
@@ -58,5 +59,17 @@ describe('fan-out-identity (#2512)', () => {
     const second = composeFanOutScopeSegment('fan', [{ groupId: 'group', iteration: 12 }]);
     expect(first).not.toBe(second);
     expect(composeFanOutScopeSegment('fan', [])).toContain('root');
+  });
+
+  test('a stored scope name leads back to its join step', () => {
+    // The scope the composed fan-out stores is its step prefix plus the scope segment.
+    for (const [prefix, nodeId, loop] of [
+      ['', 'fan', []],
+      ['refine.', 'review__all', [{ groupId: 'refine', iteration: 3 }]],
+      ['outer__archon_fan_out__x__root__abc__', 'fan', []],
+    ] as const)
+      expect(composeFanOutJoinStep(prefix + composeFanOutScopeSegment(nodeId, loop))).toBe(
+        prefix + nodeId
+      );
   });
 });

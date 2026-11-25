@@ -39,6 +39,12 @@ import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { getTerminalRecord, terminalReason } from './terminal-record';
+import type { TerminalRecord } from './schemas/terminal-record';
+import {
+  isOutcomeUnknownRun,
+  liveUnknownOutcomes,
+  UNKNOWN_OUTCOME_EVENT_TYPES,
+} from './unknown-outcome';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { StoredItemWait } from './schemas/item-wait';
@@ -188,8 +194,9 @@ export type StoppedItemStore = Pick<
 /**
  * The queue item of an item `run` stopped, or null when the run has no item, or completed
  * and recorded no stop. A failed run stopped its item by failing: nothing moves it on by
- * itself. A run that settled asks may have no outcome; a refused start's stop dates from its
- * latest refusal. Nothing here changes the item. Each surface spells the commands that
+ * itself. A run that failed with stop reason `outcome_unknown` is listed with no item and as
+ * a child too. A run that settled asks may have no outcome; a refused start's stop dates from
+ * its latest refusal. Nothing here changes the item. Each surface spells the commands that
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
@@ -197,14 +204,16 @@ export async function stoppedQueueItem(
   run: WorkflowRun,
   codebases: CodebaseCache = new Map(),
   /** A failed run's `workflow_failed` events, which carry what failed first. */
-  failedEvents: readonly WorkflowEventRow[] = []
+  failedEvents: readonly WorkflowEventRow[] = [],
+  /** For a run that failed with an unknown outcome, its live ones (`liveUnknownOutcomes`). */
+  unknownNodes: readonly string[] = []
 ): Promise<StoppedQueueItem | null> {
   const failed = run.status === 'failed';
   const stopped: ItemStopped | undefined = failed
     ? { summary: null }
     : readItemStopped(run.metadata);
-  if (stopped === undefined || run.item_id === null) return null;
-  const item = await store.getItem(run.item_id);
+  if (stopped === undefined || (run.item_id === null && !isOutcomeUnknownRun(run))) return null;
+  const item = run.item_id === null ? null : await store.getItem(run.item_id);
   let codebase: AttentionQueueItemSources['codebase'] = null;
   if (run.codebase_id !== null) {
     const read = codebases.get(run.codebase_id) ?? store.getCodebase(run.codebase_id);
@@ -223,7 +232,7 @@ export async function stoppedQueueItem(
     summary: stopped.summary,
     ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
     ...(stopped.refused === undefined ? {} : { refused: stopped.refused }),
-    ...(failed ? { failed: { error: failureReason(run, failedEvents) } } : {}),
+    ...(failed ? { failed: failedStop(run, failedEvents, unknownNodes) } : {}),
     checkout: codebase?.default_cwd ?? null,
   };
 }
@@ -232,21 +241,32 @@ export async function stoppedQueueItem(
  * Why a failed run failed, as `workflow get` says it: the first failed node's error from the
  * terminal record. A run whose record is missing or unreadable falls back to the error the
  * run recorded (`metadata.error`), which `workflow get` shows too; null when it has neither.
+ * A run that failed with stop reason `outcome_unknown` also names its live unknown outcomes
+ * (`liveUnknownOutcomes`): an instance's or loop body's own step path.
  */
-function failureReason(run: WorkflowRun, events: readonly WorkflowEventRow[]): string | null {
-  let reason: string | undefined;
+function failedStop(
+  run: WorkflowRun,
+  events: readonly WorkflowEventRow[],
+  unknownNodes: readonly string[]
+): NonNullable<StoppedQueueItem['failed']> {
+  let record: TerminalRecord | null = null;
   try {
-    reason = terminalReason(getTerminalRecord('failed', events))[0];
+    record = getTerminalRecord('failed', events);
   } catch (error) {
-    reason = undefined;
     createLogger('workflow.attention_queue').warn(
       { err: error as Error, runId: run.id },
       'workflow.stopped_item_terminal_record_unreadable'
     );
   }
-  const error = run.metadata.error;
-  if (reason !== undefined && reason.trim() !== '') return reason;
-  return typeof error === 'string' && error.trim() !== '' ? error : null;
+  const reason = terminalReason(record)[0];
+  const recorded = run.metadata.error;
+  const error =
+    reason !== undefined && reason.trim() !== ''
+      ? reason
+      : typeof recorded === 'string' && recorded.trim() !== ''
+        ? recorded
+        : null;
+  return isOutcomeUnknownRun(run) ? { error, outcomeUnknown: [...unknownNodes] } : { error };
 }
 
 /**
@@ -268,13 +288,33 @@ export async function stoppedItems(
     failedIds.length === 0
       ? new Map<string, WorkflowEventRow[]>()
       : await store.listEventsForRuns(failedIds, ['workflow_failed']);
+  const unknownRuns = runs.filter(
+    (run): run is WorkflowRun => !isAttentionDegraded(run) && isOutcomeUnknownRun(run)
+  );
+  const unknownEvents =
+    unknownRuns.length === 0
+      ? new Map<string, WorkflowEventRow[]>()
+      : await store.listEventsForRuns(
+          unknownRuns.map(run => run.id),
+          UNKNOWN_OUTCOME_EVENT_TYPES
+        );
   for (const run of runs) {
     if (isAttentionDegraded(run)) {
       items.push(run);
       continue;
     }
-    if (await isItemDone(store, run.item_id)) continue;
-    const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
+    // A run whose outcome is unknown stays until resumed or abandoned, even past an item end.
+    if (!isOutcomeUnknownRun(run) && (await isItemDone(store, run.item_id))) continue;
+    const unknownNodes = isOutcomeUnknownRun(run)
+      ? liveUnknownOutcomes(run, unknownEvents.get(run.id) ?? [])
+      : [];
+    const item = await stoppedQueueItem(
+      store,
+      run,
+      codebases,
+      failedEvents.get(run.id),
+      unknownNodes
+    );
     if (item !== null) items.push(item);
   }
   return items;

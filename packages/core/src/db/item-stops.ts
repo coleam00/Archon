@@ -13,6 +13,7 @@ import {
   ITEM_STOPPED_METADATA_KEY,
   itemStoppedMetadata,
   readItemStopped,
+  RUN_STOP_REASON_METADATA_KEY,
   type StoppedLimit,
   type StoppedRefusal,
 } from '@archon/workflows/schemas/run-metadata';
@@ -33,13 +34,17 @@ import { getLog } from './workflow-run-shared';
  * has an open ask is not listed: the ask is in attention and is what needs someone, and the
  * stop shows once it closes. Nor is one with an open wait, unless its stop names a refused
  * start: a wait not yet overdue is in no list, so the refusal beside it would show nowhere.
+ * A run that failed with stop reason `outcome_unknown` is listed by status alone, child runs
+ * and runs with no item included: only resuming or abandoning it ends that.
  */
 export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]> {
   const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
   const result = await pool.query<WorkflowRunRow>(
     `SELECT r.*, CAST(r.origin AS TEXT) AS origin
      FROM remote_agent_workflow_runs r
-     WHERE r.item_id IS NOT NULL
+     WHERE (r.status = 'failed'
+            AND ${getDialect().jsonText('r.metadata', `${RUN_STOP_REASON_METADATA_KEY}.reason`)} = 'outcome_unknown')
+       OR (r.item_id IS NOT NULL
        AND ((r.status = 'completed'
              AND ${getDialect().jsonText('r.metadata', ITEM_STOPPED_METADATA_KEY)} IS NOT NULL)
          OR (r.status = 'failed' AND r.parent_run_id IS NULL
@@ -60,7 +65,7 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
                         WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)
        AND (${getDialect().jsonText('r.metadata', `${ITEM_STOPPED_METADATA_KEY}.refused`)} IS NOT NULL
          OR NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
-                         WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL))
+                         WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)))
      ORDER BY r.started_at, r.${tie}`
   );
   const runs: AttentionRead<WorkflowRun>[] = [];

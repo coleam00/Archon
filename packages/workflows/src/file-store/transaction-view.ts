@@ -4,6 +4,7 @@ import {
   mutableRunMetadata,
 } from '../schemas/run-metadata';
 import { prepareWorkflowRunFailure } from '../workflow-run-failure';
+import { isAutomaticClaim, liveUnknownOutcomes } from '../unknown-outcome';
 import { FileStoreUnsupportedError } from './errors';
 import { mergeRunMetadata } from './merge-run-metadata';
 import { resumeRun } from './run-resume';
@@ -104,7 +105,6 @@ export type TransactionView = Omit<
   | 'withdrawItemAsk'
   | 'listOpenItemWaits'
   | 'withdrawItemWaits'
-  | 'listStoppedItemRuns'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
@@ -182,6 +182,10 @@ export function createTransactionView(
     const run = row(id);
     const statusAllows = isResumable(run) || cursor?.kind === 'ownerless';
     if (!statusAllows || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
+      throw new WorkflowNotResumableError(id, run.status);
+    // An automatic claim never continues a run holding a live unknown outcome.
+    const runEvents = events.filter(event => event.workflow_run_id === id);
+    if (isAutomaticClaim(cursor) && liveUnknownOutcomes(run, runEvents).length > 0)
       throw new WorkflowNotResumableError(id, run.status);
     return run;
   };
