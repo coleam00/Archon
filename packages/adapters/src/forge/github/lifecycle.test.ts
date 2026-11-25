@@ -569,13 +569,13 @@ test.each(['merge', 'squash'] as const)(
 );
 
 test('merge refuses stale and unsupported conditions before writing', async () => {
-  for (const conditions of [
-    {},
-    { head: 'headsha', base: 'base' },
-    { head: 'headsha', tree: 'tree' },
-    { head: 'headsha' },
-  ]) {
-    const github = mergeGitHub({ stale: true });
+  // Unsupported conditions at the current head, so only the condition check can refuse them.
+  for (const [conditions, stale] of [
+    [{ head: 'headsha', base: 'base' }, false],
+    [{ head: 'headsha', tree: 'tree' }, false],
+    [{ head: 'headsha' }, true],
+  ] as const) {
+    const github = mergeGitHub({ stale });
     const response = await handleGithubOperation(
       { ...mergeRequest, conditions },
       { token: 'token', fetch: github.fetch }
