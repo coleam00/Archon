@@ -18,14 +18,14 @@ export function HookEventItem({ event, timestamp }: HookEventItemProps): ReactEl
         compact
         headerRight={
           <span
-            className={`shrink-0 font-mono text-[11.5px] ${failed ? 'text-error' : 'text-text-secondary'}`}
+            className={`shrink-0 font-mono text-console-12 ${failed ? 'text-error' : 'text-text-secondary'}`}
           >
             {event.status}
             {event.exitCode !== undefined ? ` (exit ${event.exitCode.toString()})` : ''}
           </span>
         }
       >
-        <div className="flex min-w-0 items-baseline gap-2.5 font-mono text-[12px]">
+        <div className="flex min-w-0 items-baseline gap-2.5 font-mono text-console-12">
           <span className="break-all font-bold text-text-primary">
             {event.hookName || event.hookId}
           </span>

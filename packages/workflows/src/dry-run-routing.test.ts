@@ -55,7 +55,7 @@ describe('dry-run reachability and missing stubs', () => {
 
     expect(result.trace.map(entry => [entry.nodeId, entry.state, entry.reason])).toEqual([
       ['source', 'stubbed', undefined],
-      ['false', 'skipped', 'when_condition_false'],
+      ['false', 'skipped', 'when_condition'],
       ['malformed', 'skipped', 'when_condition_parse_error'],
     ]);
     expect(result.missingStubs).toEqual([]);
@@ -93,7 +93,7 @@ describe('dry-run reachability and missing stubs', () => {
     });
     expect(result.trace.find(entry => entry.nodeId === 'both')).toMatchObject({
       state: 'skipped',
-      reason: 'when_condition_false',
+      reason: 'when_condition',
       cause: { kind: 'condition', expr: "$a.output > 50 && $b.output == 'ok'" },
     });
     expect(result.missingStubs).toEqual([]);

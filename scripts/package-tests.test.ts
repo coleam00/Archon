@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
-import { TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
+import { TEST_ISOLATION_DIRECTIVE, WINDOWS_TEST_DIRECTIVE } from './package-test-groups';
 import {
   junitDestination,
   parseTestArguments,
@@ -755,43 +755,47 @@ test('single-group name filters preserve caller Bun options for test subprocesse
   expect(await run(root, ['src/', '-t', 'wanted'])).toBe(0);
 });
 
-for (const selection of ['mixed', 'uncovered', 'covered']) {
-  test(`requested manifest coverage is enforced before execution: ${selection}`, async () => {
-    const declaration = { testGroups: [['src/covered.test.ts']] };
-    const root = fixture(declaration);
-    testFile(root, 'covered', `test('covered', () => appendFileSync('covered', 'ran'));`);
-    testFile(
-      root,
-      'unlisted',
-      `test('unlisted', () => { throw new Error('must not disappear'); });`
-    );
-    const args =
-      selection === 'mixed'
-        ? ['src/']
-        : [selection === 'covered' ? 'covered.test' : 'unlisted.test'];
-    const report = join(root, 'coverage.xml');
-    if (selection === 'covered') {
-      expect(resolveRequestedTestGroups(root, declaration, args).groups).toEqual([
-        ['./src/covered.test.ts'],
-      ]);
-    } else {
-      expect(() => resolveRequestedTestGroups(root, declaration, args)).toThrow(
-        'Requested test is not covered by testGroups: src/unlisted.test.ts'
-      );
-    }
-    const result = await runResult(root, [
-      ...args,
-      '--reporter=junit',
-      '--reporter-outfile',
-      report,
-    ]);
-    expect(result.status).toBe(selection === 'covered' ? 0 : 1);
-    expect(existsSync(join(root, 'covered'))).toBe(selection === 'covered');
-    expect(existsSync(report)).toBe(selection === 'covered');
-    if (selection === 'covered') expect(readFileSync(report, 'utf8')).toContain('name="covered"');
-    else expect(result.stderr).toContain('src/unlisted.test.ts');
-  });
-}
+test('a test that testGroups does not name still runs, whole or requested', async () => {
+  const declaration = { testGroups: [['src/covered.test.ts']] };
+  const root = fixture(declaration);
+  testFile(root, 'covered', `test('covered', () => appendFileSync('ran', 'covered;'));`);
+  testFile(root, 'unlisted', `test('unlisted', () => appendFileSync('ran', 'unlisted;'));`);
+  expect(resolveRequestedTestGroups(root, declaration, ['src/']).groups).toEqual([
+    ['./src/covered.test.ts'],
+    ['./src/unlisted.test.ts'],
+  ]);
+  expect(await run(root)).toBe(0);
+  expect(readFileSync(join(root, 'ran'), 'utf8')).toBe('covered;unlisted;');
+  unlinkSync(join(root, 'ran'));
+  expect(await run(root, ['unlisted.test'])).toBe(0);
+  expect(readFileSync(join(root, 'ran'), 'utf8')).toBe('unlisted;');
+});
+
+test(
+  '--windows runs exactly the marked files, not unmarked files whose path ends the same way',
+  async () => {
+    const root = fixture();
+    const probe = `import { test } from 'bun:test';\nimport { appendFileSync } from 'node:fs';\ntest('ran', () => appendFileSync('ran', import.meta.path + '\\n'));\n`;
+    mkdirSync(join(root, 'src/db'), { recursive: true });
+    mkdirSync(join(root, 'src/fixtures/src/db'), { recursive: true });
+    writeFileSync(join(root, 'src/db/probe.test.ts'), `${WINDOWS_TEST_DIRECTIVE}\n${probe}`);
+    writeFileSync(join(root, 'src/fixtures/src/db/probe.test.ts'), probe);
+
+    expect(await run(root, ['--windows'])).toBe(0);
+    expect(
+      readFileSync(join(root, 'ran'), 'utf8')
+        .trim()
+        .split('\n')
+        .map(path => path.replaceAll('\\', '/'))
+    ).toEqual([realpathSync(join(root, 'src/db/probe.test.ts')).replaceAll('\\', '/')]);
+
+    unlinkSync(join(root, 'src/db/probe.test.ts'));
+    unlinkSync(join(root, 'ran'));
+    expect(await run(root, ['--windows'])).toBe(0);
+    expect(existsSync(join(root, 'ran'))).toBe(false);
+  },
+  testTimeout(20_000)
+);
 
 test('JUnit destination follows the final reporter and outfile options', () => {
   for (const [args, expected] of [

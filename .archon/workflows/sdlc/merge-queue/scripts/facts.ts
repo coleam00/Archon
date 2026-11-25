@@ -1,236 +1,135 @@
 /**
- * Claim the merge queue's items and read the facts the sweep decides from.
+ * Read what one merge run decides from: the issue's work item, its pull request and the
+ * run's base branch (`readBase`).
  *
- * Enrolls listed maintainers' own open pull requests that opted in (`maintainers.ts`), then
- * live claims, in intake's order, every item the build queue finished, up to `limit`,
- * including answered own-PR parks whose head changed, and reads each pull request
- * in one snapshot: its head, the trusted review
- * verdict, CI and review threads at that head, and whether it merges cleanly. An item
- * whose pull request is already merged or closed, or that names none, is settled without
- * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
- * read with the reason, without stopping the rest of the batch. Successful reads reset
- * that sequence durably before the sweep, keeping the claim until record settles it.
- * A red default branch reaches the sweep even when no pull request waits. An unreadable
- * base reaches record for independent bookkeeping before the run reports the failure.
+ * The run is on the issue's item, where the engine admits one merge run at a time, so it
+ * takes no claim. It refuses an item that is not the merge stage's (`mergeAccepts`), which
+ * includes one the build queue would accept for another round. A parked item is accepted:
+ * only an operator's own start reaches it.
+ *
+ * `path` says what follows. `settle`: there is nothing to judge, because the pull
+ * request is already merged or closed, the item names none, or a maintainer answered the
+ * stage's ask with a return or a park. `wait`: a check woke the run and what it waited
+ * for is still not there (the head's checks still pending at the commit the wait
+ * named), so the item waits again without the agent. `judge`:
+ * the agent decides, on a snapshot of the pull request's gate facts.
+ *
+ * A read that fails refuses the run. The backstop leaves an item whose newest run failed
+ * to the operator, who resumes or abandons that run.
+ *
+ * Bound inputs: INPUTS_WAITED, the wait a check met (a wake binding's `{ wait: true }`);
+ * INPUTS_DECISIONS, the settled answers to the stage's ask, and INPUTS_ASKED, the result
+ * of the run that asked (an asks-settled binding's `{ answers: true }` and
+ * `{ result: "" }`); the pack settings INPUTS_CI, INPUTS_MERGE_LANE and
+ * INPUTS_PROTECTED_PATHS. Each binding input is empty when another start made the run.
  */
 
-import { join } from 'node:path';
-import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, input, item as runItem, refuse } from 'archon:script';
+import { latestValidation } from '../../.shared/build.ts';
+import { sameRepo } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
+import { readMaintainers } from '../../.shared/maintainers.ts';
 import {
-  answeredOwnPrParkHead,
+  ASK_OPTIONS,
+  type CiMode,
+  issueOfItem,
   itemPr,
-  mergeWaits,
-  MERGE_METHODS,
-  MERGE_PICKUP,
-  type MergeMethod,
-  type MergeRecord,
-  type MergeSettled,
+  listSetting,
+  type MergeAnswer,
+  type MergeStart,
+  mergeAccepts,
+  parseCiMode,
+  parseLane,
   type PrFacts,
+  protectedChanges,
   readBase,
   readPr,
-  requireMergeSource,
-  UNREADABLE,
-  withMerge,
 } from '../../.shared/merge.ts';
-import { readMaintainerList } from '../../.shared/maintainers.ts';
-import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
-import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
+import { workflowRepo } from '../../.shared/remote.ts';
+import { readWorkItem, type WorkItem } from '../../.shared/workitem.ts';
 
-interface Item {
-  /** The issue whose work item the queue claimed. */
-  readonly item: QualifiedPr;
-  readonly pr: QualifiedPr;
-  readonly url: string;
-  readonly facts: PrFacts;
-  readonly record: MergeRecord | null;
-  /** A maintainer's own pull request the queue enrolled: no issue and no build round behind it. */
-  readonly own_pr: boolean;
-}
-
-function positive(name: string, value: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
-  return parsed;
-}
-
-function parseMethod(value: string): MergeMethod {
-  const method = MERGE_METHODS.find(candidate => candidate === value);
-  if (method === undefined) throw new Error(`merge_method must be one of ${MERGE_METHODS.join(', ')}, not "${value}"`);
-  return method;
-}
-
-/** A shell word: the sweep pastes the gate command into its shell. */
-function quoted(word: string): string {
-  return `'${word.replaceAll("'", "'\\''")}'`;
-}
-
-function claimAll(limit: number, runId: string, pickup: Pickup): WorkItem[] {
-  const claimed: WorkItem[] = [];
-  const at = new Date().toISOString();
-  while (claimed.length < limit) {
-    const doc = claimNext(at, runId, pickup);
-    if (doc === null) break;
-    claimed.push(doc);
-  }
-  return claimed;
-}
-
-type Snapshot = { readonly ok: true; readonly facts: PrFacts } | { readonly ok: false; readonly error: unknown };
-
-function snapshotReader(maintainers: ReadonlySet<string>): (pr: QualifiedPr) => PrFacts {
-  const snapshots = new Map<string, Snapshot>();
-  return pr => {
-    const key = JSON.stringify([pr.repo.host, pr.repo.path, pr.number]);
-    let result = snapshots.get(key);
-    if (result === undefined) {
-      try {
-        result = { ok: true, facts: readPr(pr, maintainers) };
-      } catch (error) {
-        result = { ok: false, error };
-      }
-      snapshots.set(key, result);
-    }
-    if (!result.ok) throw result.error;
-    return result.facts;
-  };
-}
-
-function recoveryPickup(snapshot: (pr: QualifiedPr) => PrFacts): Pickup {
-  const reported = new Set<string>();
-  return {
-    ...MERGE_PICKUP,
-    waits: doc => {
-      if (mergeWaits(doc)) return true;
-      if (answeredOwnPrParkHead(doc) === null) return false;
-      const url = doc.facts.own_pr?.url ?? '';
-      try {
-        const pr = itemPr(doc);
-        if (pr === null) throw new Error('the work item names no pull request');
-        return mergeWaits(doc, snapshot(pr).head_revision);
-      } catch (error) {
-        if (!reported.has(url)) {
-          note(`merge-queue facts: cannot reconsider ${url}: ${error instanceof Error ? error.message : String(error)}`);
-          reported.add(url);
-        }
-        return false;
-      }
-    },
-  };
+/** One settled ask, as an asks-settled binding's `{ answers: true }` passes it. */
+interface SettledAsk {
+  readonly closedAs: 'answered' | 'withdrawn';
+  readonly answer: { readonly text: string } | null;
+  readonly option: { readonly id: string } | null;
+  readonly at: string;
 }
 
 /**
- * Enrollment only adds work items, so a failed listing must not stop the sweep merging
- * the ones that already exist. Items enrolled before the failure are kept.
+ * A maintainer's answer to the stage's ask: the option chosen, by its id. The pack binds
+ * only the three options, so a start with any other answer is refused, never guessed
+ * from the answer's words.
  */
-function enrollOrNote(repo: QualifiedPr['repo'], authors: ReadonlySet<string>): void {
-  try {
-    enrollOwnPrs(repo, authors);
-  } catch (error) {
-    note(`merge-queue facts: own-PR enrollment stopped: ${error instanceof Error ? error.message : String(error)}`);
+function answer(): MergeAnswer | null {
+  const settled = (nullableJson(input('decisions')) ?? []) as SettledAsk[];
+  const asked = nullableJson(input('asked')) as { readonly head?: string; readonly brief?: string } | null;
+  const answered = settled.find(entry => entry.closedAs === 'answered');
+  if (answered === undefined || asked === null) return null;
+  const chosen = ASK_OPTIONS.find(option => option.id === answered.option?.id);
+  if (chosen === undefined) throw new Error(`the answer chose "${answered.option?.id ?? 'no option'}", which is none of ${ASK_OPTIONS.map(option => option.id).join(', ')}`);
+  return { effect: chosen.id, text: answered.answer?.text.trim() ?? '', at: answered.at, head: asked.head ?? '', brief: asked.brief ?? '' };
+}
+
+/** Whether what the met wait was about still reads as it did when the item began to wait. */
+function stillWaits(facts: PrFacts, ci: CiMode): boolean {
+  const waited = nullableJson(input('waited')) as { readonly event?: string; readonly about?: string } | null;
+  return waited?.event === 'checks' && ci === 'forge' && waited.about === facts.head_revision && facts.checks.state === 'pending';
+}
+
+/** The work item of the issue whose item the run is on, when it is the merge stage's; a refusal otherwise. */
+function ownItem(repo: ReturnType<typeof workflowRepo>): WorkItem {
+  const number = issueOfItem(runItem()?.item.key);
+  const issue = `issue ${String(number)}`;
+  const doc = readWorkItem(number);
+  if (doc === null) throw new Error(`${issue} has no work item: intake has not recorded it`);
+  if (!sameRepo(doc.subject.repo, repo)) {
+    throw new Error(`${issue}'s work item is ${doc.subject.repo.host}/${doc.subject.repo.path}'s, not ${repo.host}/${repo.path}'s`);
   }
-}
-
-function unreadableItem(doc: WorkItem, pr: QualifiedPr | null, error: unknown): MergeSettled {
-  const reason = `its pull request could not be read: ${error instanceof Error ? error.message : String(error)}`;
-  const prior = doc.facts.merge;
-  const consecutive = prior?.status === 'waiting' && prior.decisions.at(-1)?.decision === UNREADABLE;
-  const status = consecutive ? 'parked' : 'waiting';
-  return { item: doc.subject, pr, status, decision: UNREADABLE, reason };
-}
-
-function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem {
-  if (doc.facts.merge?.decisions.at(-1)?.decision !== UNREADABLE) return doc;
-  const at = new Date().toISOString();
-  return updateClaimed(doc.subject, runId, current => withMerge(current, {
-    at,
-    run_id: runId,
-    entry: { at, run_id: runId, decision: 'readable', reason: 'its pull request was read successfully', links: [], head: facts.head_revision, reran: false },
-    status: 'waiting',
-    pr: facts.pr,
-    release: false,
-  }));
-}
-
-function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: readonly MergeSettled[], gate: string): void {
-  // The default branch is read on every run: a red one after the last merge needs the
-  // sweep's question even when no pull request waits.
-  let inspection: { base: ReturnType<typeof readBase>; error: '' } | { base: null; error: string };
-  try {
-    inspection = { base: readBase(repo), error: '' };
-  } catch (error) {
-    inspection = { base: null, error: `merge-queue facts: ${error instanceof Error ? error.message : String(error)}` };
+  if (!mergeAccepts(doc)) {
+    const build = doc.facts.build?.status ?? 'none';
+    throw new Error(`${issue} is not the merge stage's: build status ${build}, merge status ${doc.facts.merge?.status ?? 'none'}`);
   }
-  const { base } = inspection;
-  const path = base === null
-    ? 'record'
-    : items.length > 0 || base.checks.state === 'red'
-      ? 'sweep'
-      : settled.length > 0 ? 'record' : 'idle';
-  emit({
-    path,
-    base,
-    base_error: inspection.error,
-    items,
-    settled,
-    gate,
-  });
+  return doc;
 }
 
 function main(): void {
-  const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
-  const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
-  const repo = { host: trimmed(process.env.INPUTS_REPO_HOST), path: trimmed(process.env.INPUTS_REPO_PATH) };
-  if (repo.host === '' || repo.path === '') throw new Error('repo_host and repo_path are required');
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const ci = parseCiMode(input('ci').trim());
+  const lane = parseLane('merge_lane', input('merge_lane').trim());
+  const repo = workflowRepo();
+  const doc = ownItem(repo);
 
-  requireMergeSource(repo);
-  const list = readMaintainerList(repo);
-  const maintainers = list.logins;
-  enrollOrNote(repo, list.ownPrs);
-  const snapshot = snapshotReader(maintainers);
-  const pickup = recoveryPickup(snapshot);
-  const items: Item[] = [];
-  const settled: MergeSettled[] = [];
-  for (const doc of claimAll(limit, runId, pickup)) {
-    let pr: QualifiedPr | null = null;
-    let facts: PrFacts;
-    try {
-      pr = itemPr(doc);
-      if (pr === null) {
-        settled.push({ item: doc.subject, pr: null, status: 'parked', decision: 'parked', reason: 'the build record names no pull request' });
-        continue;
-      }
-      facts = snapshot(pr);
-    } catch (error) {
-      settled.push(unreadableItem(doc, pr, error));
-      continue;
-    }
-    const current = recordReadable(doc, facts, runId);
-    if (facts.state !== 'open') {
-      const status = facts.state === 'merged' ? 'merged' : 'parked';
-      settled.push({ item: doc.subject, pr, status, decision: status, reason: `${facts.url} was ${facts.state} before this sweep` });
-      continue;
-    }
-    items.push({
-      item: doc.subject,
-      pr,
-      url: facts.url,
-      facts,
-      record: current.facts.merge ?? null,
-      own_pr: isOwnPr(doc),
-    });
+  const answered = answer();
+  const pr = itemPr(doc);
+  const settle = { path: 'settle', item: doc.subject, pr, url: '', facts: null, base: null, record: doc.facts.merge ?? null, validation: null, protected: [], lane, ci, answer: answered } as const;
+  const out = (start: MergeStart): void => emit(start);
+  if (answered !== null && answered.effect !== 'merge') {
+    out({ ...settle, settled: { status: answered.effect === 'return' ? 'returned' : 'parked', reason: `a maintainer answered ${answered.effect}` } });
+    return;
   }
-  const gate = [
-    process.execPath,
-    join(import.meta.dir, 'gate.ts'),
-    '--method',
-    method,
-  ]
-    .map(quoted)
-    .join(' ');
-  emitFacts(repo, items, settled, gate);
+  if (pr === null) {
+    out({ ...settle, settled: { status: 'parked', reason: 'the build record names no pull request' } });
+    return;
+  }
+  const facts = readPr(pr, readMaintainers(repo));
+  if (facts.state !== 'open') {
+    const status = facts.state === 'merged' ? 'merged' : 'parked';
+    out({ ...settle, url: facts.url, facts, settled: { status, reason: `${facts.url} was ${facts.state} before this run` } });
+    return;
+  }
+  const base = readBase(repo);
+  out({
+    ...settle,
+    path: stillWaits(facts, ci) ? 'wait' : 'judge',
+    url: facts.url,
+    facts,
+    base,
+    // The judge and the gate read an approval just given as the record will hold it.
+    record: answered === null ? settle.record : { ...settle.record, approval: { head: answered.head, at: answered.at } },
+    validation: latestValidation(doc),
+    protected: protectedChanges(pr, listSetting(input('protected_paths'))),
+    settled: null,
+  });
 }
 
 try {

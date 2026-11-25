@@ -24,6 +24,10 @@ mock.module('@archon/paths', () => ({
 
 await mkdir(join(app, 'workflows'), { recursive: true });
 await pack(join(app, 'workflows'), 'shipped', 'shipped-flow');
+await write(
+  join(app, 'workflows', 'shipped', '.pack', 'pack.yaml'),
+  'inputs:\n  mode:\n    type: enum\n    values: [a, b]\n    default: a\n    section: Gates\n  policy:\n    file: true\n    section: Docs\n'
+);
 await pack(join(app, 'workflows'), 'excluded', 'excluded-flow');
 await pack(join(project, '.archon', 'workflows'), 'project-only', 'project-flow');
 await pack(join(home, 'workflows'), 'home-only', 'home-flow');
@@ -54,6 +58,7 @@ const { validateWorkflowResources } = await import('./validator');
 const { captureWorkflowSource, capturedSourceRoots } = await import('./workflow-source');
 const { formatPackagedResourceReference } = await import('./packaged-workflow');
 const { parseWorkflow } = await import('./loader');
+const { resolveRunStartInputs } = await import('./pack-settings');
 
 const deps: Pick<WorkflowDeps, 'loadConfig'> = {
   loadConfig: async () => ({
@@ -251,7 +256,9 @@ test.each([false, true])(
   async binaryMode => {
     const name = 'private-bundle';
     const filename = `${name}.yaml`;
-    const yaml = 'name: private\ndescription: ARCHON_BUNDLE_SECRET_SENTINEL\nnodes: [';
+    // The sentinel sits on the offending line, so the diagnostic quotes it: the test then
+    // proves the author sees the line while the logs do not.
+    const yaml = 'name: private\ndescription: ARCHON_BUNDLE_SECRET_SENTINEL: stray\nnodes: []';
     const path = join(app, 'workflows', 'shipped', name, filename);
     const lines: string[] = [];
     await write(path, yaml);
@@ -260,20 +267,16 @@ test.each([false, true])(
       [name]: `workflows/shipped/${name}/${filename}`,
     });
     binary = binaryMode;
-    const message = 'Unexpected token at line 3: ARCHON_BUNDLE_SECRET_SENTINEL';
-    const parse = Bun.YAML.parse;
-    const parser = spyOn(Bun.YAML, 'parse').mockImplementation(content => {
-      if (content === yaml) throw new SyntaxError(message);
-      return parse(content);
-    });
     setLogSink(line => lines.push(line));
     try {
       const result = await discoverWorkflows(project, { providers: providerRegistry });
       expect(result.errors).toContainEqual({
         filename,
         errorType: 'parse_error',
-        error: `YAML parse error (near line 3): ${message}`,
+        error: expect.stringContaining(`${filename}:2:14: YAML syntax error:`),
       });
+      const diagnostic = result.errors.find(entry => entry.filename === filename)?.error;
+      expect(diagnostic).toContain('ARCHON_BUNDLE_SECRET_SENTINEL');
       expect(lines.join('')).not.toContain('ARCHON_BUNDLE_SECRET_SENTINEL');
       expect(lines.join('')).not.toContain('name: private');
       const event = lines
@@ -286,7 +289,6 @@ test.each([false, true])(
       expect(event).toBeDefined();
       expect(JSON.stringify(event)).toContain(filename);
     } finally {
-      parser.mockRestore();
       setLogSink(undefined);
       Reflect.deleteProperty(defaults.BUNDLED_WORKFLOWS, name);
       Reflect.deleteProperty(defaults.BUNDLED_WORKFLOW_PATHS, name);
@@ -360,3 +362,34 @@ test('a pack-root fixtures directory is not a bundled workflow in live or captur
     await removeTempTree(fixtures);
   }
 });
+
+test.each([false, true])(
+  "a bundled pack's settings resolve from the project file, live and captured (binary %s)",
+  async binaryMode => {
+    binary = binaryMode;
+    await write(join(project, '.archon', 'packs', 'shipped.yaml'), 'settings:\n  mode: b\n');
+    const capture = await captureWorkflowSource({
+      sourceRoot: project,
+      captureRoot: join(root, `settings-capture-${String(binaryMode)}`),
+    });
+    try {
+      for (const sourceRoots of [undefined, capturedSourceRoots(capture.anchor)]) {
+        const result = await discoverWorkflows(project, {
+          providers: providerRegistry,
+          sourceRoots,
+        });
+        const shipped = result.workflows.find(entry => entry.workflow.name === 'shipped-flow');
+        if (!shipped) throw new Error('shipped-flow not discovered');
+        expect(shipped.workflow.pack?.settings).toEqual({
+          mode: { type: 'enum', values: ['a', 'b'], default: 'a', section: 'Gates' },
+          policy: { type: 'string', file: true, section: 'Docs' },
+        });
+        expect((await resolveRunStartInputs(project, shipped.workflow, undefined)).inputs).toEqual({
+          mode: 'b',
+        });
+      }
+    } finally {
+      await removeTempTree(join(project, '.archon', 'packs'));
+    }
+  }
+);

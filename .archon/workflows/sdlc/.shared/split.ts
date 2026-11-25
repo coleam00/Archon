@@ -11,18 +11,21 @@
  * the item's outcome waits on those as much as on the filed ones.
  */
 
+import type { OUTPUT_ENUMS } from './outputs.generated.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
-/** What the slice agent judged the item to be; a test proves archon-split.yaml's enum agrees. */
-export const SPLIT_KINDS = ['prd', 'epic', 'bundle'] as const;
-export type SplitKind = (typeof SPLIT_KINDS)[number];
+/** What the slice agent judged the item to be, as archon-split.yaml's slice node declares it. */
+export type SplitKind = (typeof OUTPUT_ENUMS)['archon-split']['slice']['split.anyOf[0].kind'][number];
 
 export interface SplitIssue {
   readonly key: string;
   readonly number: number;
   readonly url: string;
-  /** The title it was filed with, so a later split's comment still names it. */
-  readonly title: string;
+  /**
+   * The title it was filed with, so a later split's comment still names it. Absent on
+   * records written before titles were recorded.
+   */
+  readonly title?: string;
 }
 
 /** An existing issue the item's outcome depends on, which the split did not file. */

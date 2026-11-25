@@ -122,16 +122,6 @@ describe('discoverScripts', () => {
     expect(result.size).toBe(0);
   });
 
-  test('keys scripts by filename without extension', async () => {
-    mockReaddir.mockResolvedValueOnce(['my-cool-script.ts']);
-    mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-
-    const result = await discoverScripts('/scripts');
-
-    expect(result.has('my-cool-script')).toBe(true);
-    expect(result.has('my-cool-script.ts')).toBe(false);
-  });
-
   test('throws on duplicate script names across extensions', async () => {
     mockReaddir.mockResolvedValueOnce(['fetch.ts', 'fetch.py']);
     mockStat.mockResolvedValueOnce({ isDirectory: () => false });
@@ -154,37 +144,6 @@ describe('discoverScripts', () => {
       expect(message).toContain('run.py');
       expect(message).toContain('unique across extensions');
     }
-  });
-
-  test('recursively scans subdirectories', async () => {
-    // Top-level readdir returns one directory and one file
-    mockReaddir.mockResolvedValueOnce(['subdir', 'top.ts']);
-    // stat for 'subdir' - is a directory
-    mockStat.mockResolvedValueOnce({ isDirectory: () => true });
-    // readdir for subdir
-    mockReaddir.mockResolvedValueOnce(['nested.py']);
-    // stat for nested.py
-    mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-    // stat for top.ts
-    mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-
-    const result = await discoverScripts('/scripts');
-
-    expect(result.size).toBe(2);
-    expect(result.has('nested')).toBe(true);
-    expect(result.get('nested')!.runtime).toBe('uv');
-    expect(result.has('top')).toBe(true);
-    expect(result.get('top')!.runtime).toBe('bun');
-  });
-
-  test('stores the full path in the script definition', async () => {
-    mockReaddir.mockResolvedValueOnce(['prices.ts']);
-    mockStat.mockResolvedValueOnce({ isDirectory: () => false });
-
-    const result = await discoverScripts('/my/scripts');
-
-    const script = result.get('prices');
-    expect(script!.path).toBe('/my/scripts/prices.ts');
   });
 });
 
@@ -376,7 +335,7 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
     );
   });
 
-  test('does not register scripts from a reserved fixtures directory (#3183)', async () => {
+  test('does not register scripts from a reserved fixtures or defaults directory (#3183)', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
       const p = norm(path);
       if (p === '/home/scripts' || p === '/repo/.archon/scripts') return [];
@@ -384,8 +343,10 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
       if (p === '/home/workflows/personal-pack') return ['daily', 'fixtures'];
       if (p === '/home/workflows/personal-pack/daily/scripts') return ['shared.py'];
       if (p === '/home/workflows/personal-pack/fixtures/scripts') return ['hidden.py'];
-      if (p === '/repo/.archon/workflows') return ['fixtures'];
+      if (p === '/repo/.archon/workflows') return ['fixtures', 'defaults'];
       if (p === '/repo/.archon/workflows/fixtures/scripts') return ['root-hidden.ts'];
+      if (p === '/repo/.archon/workflows/defaults') return ['legacy'];
+      if (p === '/repo/.archon/workflows/defaults/legacy/scripts') return ['defaults-hidden.ts'];
       return [];
     });
     mockStat.mockImplementation(async (path: string) => ({

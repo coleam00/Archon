@@ -11,7 +11,8 @@ import {
   setFailTestFeedReads,
   resetCommittedTestEvents,
 } from '../test-support/workflow-command-harness';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { getArchonHome, getRunArtifactsDirForRoot } from '@archon/paths';
 import * as isolation from '@archon/isolation';
 import { realReleaseRunVerificationImages } from '../test-support/workflow-harness-checkout';
 import { hostname, tmpdir } from 'node:os';
@@ -38,9 +39,23 @@ import { serializeNodeStateRecord } from '@archon/workflows/node-record-serializ
 import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
+import { presentRunResult } from './workflow-run-output';
+import { deadlineWaitCursor } from '@archon/workflows/store';
 import { resolveCliExitCode, WorkflowRunFailedError } from '../utils/workflow-exit-code';
 
 const trackTempRootsForOutput = trackTempRoots();
+
+/** An output root in which `runId` recorded a verification build, as `docker build --iidfile` does. */
+async function recordedBuildRoot(runId: string): Promise<string> {
+  const { VERIFICATION_IMAGE_RECORD_DIR } = await import(
+    '../../../core/src/services/cleanup/run-verification-images'
+  );
+  const root = trackTempRootsForOutput(await mkdtemp(join(getArchonHome(), 'archon-cli-images-')));
+  const dir = join(getRunArtifactsDirForRoot(root, runId), VERIFICATION_IMAGE_RECORD_DIR);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'check'), 'sha256:built');
+  return root;
+}
 
 describe('workflowRunCommand — progress rendering', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
@@ -55,7 +70,7 @@ describe('workflowRunCommand — progress rendering', () => {
           name: 'plan',
           description: 'Plan work',
           returns: 'result',
-          outcome_field: 'ready',
+          result: { outcome: 'ready' },
           nodes: [
             {
               id: 'result',
@@ -95,17 +110,21 @@ describe('workflowRunCommand — progress rendering', () => {
   async function runOutcomeFixture(
     execution: WorkflowExecutionResult,
     status: 'completed' | 'failed' | 'paused',
-    outcome: 'succeeded' | 'failed' | null
+    outcome: 'succeeded' | 'failed' | null = null
   ): Promise<unknown> {
     setupWorkflowMocks(true);
     const { executeWorkflow } = require('@archon/workflows/executor');
     const workflowDb = require('@archon/core/db/workflows');
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce(execution);
-    if (!('handedOff' in execution)) {
+    // Paused runs are read for their pause, never for an authored outcome.
+    const readsRun = !('handedOff' in execution);
+    if (readsRun) {
       (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
         id: execution.workflowRunId,
         status,
-        outcome,
+        // The CLI reads completed_outcome; the legacy column stays empty so it cannot stand in.
+        outcome: null,
+        completed_outcome: outcome,
         metadata: { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
       });
     }
@@ -119,11 +138,44 @@ describe('workflowRunCommand — progress rendering', () => {
     } catch (error) {
       return error;
     } finally {
-      expect(workflowDb.getWorkflowRun.mock.calls.length - readsBefore).toBe(
-        'handedOff' in execution ? 0 : 1
-      );
+      expect(workflowDb.getWorkflowRun.mock.calls.length - readsBefore).toBe(readsRun ? 1 : 0);
     }
   }
+
+  async function runPauseFixture(
+    metadata: Record<string, unknown> | Error | null,
+    byOperator = false
+  ): Promise<string> {
+    setupWorkflowMocks();
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ask',
+      paused: true,
+      ...(byOperator ? { byOperator: true } : {}),
+    });
+    const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
+    const host = createTestWorkflowHost();
+    host.deps.releaseRunResources = undefined;
+    host.deps.store.getWorkflowRun = async () => {
+      if (metadata instanceof Error) throw metadata;
+      return metadata === null
+        ? null
+        : { ...mockWorkflowRun, id: 'run-ask', status: 'paused', metadata };
+    };
+    await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
+    return consoleSpy.mock.calls.flat().join('\n');
+  }
+
+  const attentionWait = {
+    owner: 'node',
+    nodeId: 'question',
+    kind: 'attention',
+    waitingSince: '2026-11-22T10:00:00.000Z',
+    pauseId: 'ask-1',
+    form: 'message',
+    message: 'Which destination should receive the report?',
+  } as const;
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
@@ -144,56 +196,37 @@ describe('workflowRunCommand — progress rendering', () => {
     stderrSpy.mockRestore();
   });
 
-  it('keeps a successful foreground host workflow successful without Docker', async () => {
-    setupWorkflowMocks();
-    const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'test-run-id',
-    });
-    const { hostname } = await import('node:os');
-    const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
-    const { createRunResourceRelease } = await import(
-      '../../../core/src/services/cleanup/run-verification-images'
-    );
-    const host = createTestWorkflowHost();
-    const row = {
-      ...mockWorkflowRun,
-      id: 'test-run-id',
-      status: 'completed' as const,
-      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-    };
-    const previousPath = process.env.PATH;
-    process.env.PATH = '';
-    try {
-      host.deps.releaseRunResources = createRunResourceRelease({ getWorkflowRun: async () => row });
-      await expect(
-        workflowRunCommand(host, '/test/path', 'plan', 'hello', {})
-      ).resolves.toBeUndefined();
-    } finally {
-      process.env.PATH = previousPath;
-    }
-  });
-
-  it.each(['host-inventory', 'container-inventory', 'isolation-container'])(
-    'preserves foreground exit policy for %s failure',
-    async stage => {
+  // Whether a run built images comes from its recorded --iidfile build, never its
+  // isolation: an unrecorded run stays silent with Docker down, a recorded one reports.
+  it.each([
+    ['host', 'unrecorded'],
+    ['container', 'unrecorded'],
+    ['host', 'recorded'],
+    ['container', 'recorded'],
+    ['isolation-container', 'recorded'],
+  ] as const)(
+    'warns about a %s inventory failure only for a recorded run (%s)',
+    async (kind, record) => {
       setupWorkflowMocks();
       const { executeWorkflow } = require('@archon/workflows/executor');
       (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
         success: true,
         workflowRunId: 'test-run-id',
       });
-      const { hostname } = await import('node:os');
       const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
       const { createRunResourceRelease } = await import(
         '../../../core/src/services/cleanup/run-verification-images'
       );
-      const container = stage === 'container-inventory' || stage === 'isolation-container';
+      const container = kind !== 'host';
+      const outputRoot =
+        record === 'recorded'
+          ? await recordedBuildRoot('test-run-id')
+          : trackTempRootsForOutput(await mkdtemp(join(getArchonHome(), 'archon-cli-images-')));
       const row = {
         ...mockWorkflowRun,
         id: 'test-run-id',
         status: 'completed' as const,
+        output_root: outputRoot,
         metadata: {
           execution_owner: { host: hostname(), pid: process.pid },
           ...(container ? { isolation: 'container', isolation_env_id: 'env-a' } : {}),
@@ -202,20 +235,14 @@ describe('workflowRunCommand — progress rendering', () => {
       const calls: string[][] = [];
       const runner: isolation.DockerRunner = async args => {
         calls.push(args);
-        if (args[0] === 'container' && stage !== 'isolation-container') {
+        if (args[0] === 'container' && kind !== 'isolation-container') {
           return { stdout: '', stderr: '' };
         }
-        throw new Error('inventory or isolation-container unavailable');
+        throw new Error('Cannot connect to the Docker daemon');
       };
       const release = spyOn(isolation, 'releaseRunVerificationImages').mockImplementation(
         (id, env) => realReleaseRunVerificationImages(id, env, runner)
       );
-      const root = trackTempRootsForOutput(await mkdtemp(join(tmpdir(), 'archon-cli-inventory-')));
-      await writeFile(join(root, process.platform === 'win32' ? 'docker.cmd' : 'docker'), '', {
-        mode: 0o755,
-      });
-      const previousPath = process.env.PATH;
-      process.env.PATH = root;
       const warning = spyOn(console, 'error').mockImplementation(() => {});
       try {
         const host = createTestWorkflowHost();
@@ -226,24 +253,25 @@ describe('workflowRunCommand — progress rendering', () => {
         const error = await workflowRunCommand(host, '/test/path', 'plan', 'hello', {}).catch(
           (err: unknown) => err
         );
+        const text = warning.mock.calls.flat().join(' ');
+        if (record === 'unrecorded') {
+          expect(error).toBeUndefined();
+          expect(text).not.toContain('verification image');
+          expect(text).not.toContain('inconclusive');
+          expect(calls).toEqual([]);
+          return;
+        }
         if (container) {
           expect(error).toBeInstanceOf(Error);
           expect(resolveCliExitCode(error)).toBe(1);
-        } else {
-          expect(error).toBeUndefined();
-        }
-        const text = warning.mock.calls.flat().join(' ');
-        expect(text).toContain('test-run-id');
-        if (container) {
-          expect(text).toContain('retained verification images');
+          expect(text).toContain('WARNING: Run test-run-id retained verification images');
           expect(text).not.toContain('cleanup is inconclusive');
         } else {
-          expect(text).toContain('cleanup is inconclusive');
-          expect(text).toContain(`label=${isolation.VERIFICATION_IMAGE_RUN_LABEL}=test-run-id`);
-          expect(text).toContain('docker image rm --no-prune <full-id>');
+          expect(error).toBeUndefined();
+          expect(text).toContain('Run test-run-id verification image inventory failed');
         }
         expect(calls.map(args => args.slice(0, 2))).toEqual(
-          stage === 'isolation-container'
+          kind === 'isolation-container'
             ? [['container', 'ls']]
             : container
               ? [
@@ -254,7 +282,6 @@ describe('workflowRunCommand — progress rendering', () => {
         );
       } finally {
         warning.mockRestore();
-        process.env.PATH = previousPath;
         release.mockRestore();
       }
     }
@@ -296,6 +323,7 @@ describe('workflowRunCommand — progress rendering', () => {
         ...mockWorkflowRun,
         id: 'test-run-id',
         status: 'completed' as const,
+        output_root: await recordedBuildRoot('test-run-id'),
         metadata: {
           execution_owner: { host: hostname(), pid: process.pid },
           isolation: 'container',
@@ -425,31 +453,14 @@ describe('workflowRunCommand — progress rendering', () => {
     );
   });
 
-  it('keeps a failed execution non-zero when the authored outcome succeeded', async () => {
+  it('exits 1 for a failed run and still reports its cost', async () => {
     const thrown = await runOutcomeFixture(
       { success: false, workflowRunId: 'run-1', error: 'later node failed' },
-      'failed',
-      'succeeded'
+      'failed'
     );
 
     expect(resolveCliExitCode(thrown)).toBe(1);
     expect(consoleSpy).toHaveBeenCalledWith('    Cost: $0.024');
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '\nWorkflow finished.\n  Status: failed\n  Authored outcome: succeeded'
-    );
-  });
-
-  it('renders a persisted succeeded outcome while execution is paused', async () => {
-    await runOutcomeFixture(
-      { success: true, paused: true, workflowRunId: 'run-1' },
-      'paused',
-      'succeeded'
-    );
-
-    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Usage');
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '\nWorkflow paused — waiting for approval.\n  Status: paused\n  Authored outcome: succeeded'
-    );
   });
 
   it('preserves the existing completion text when authored outcome is null', async () => {
@@ -508,20 +519,182 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(mockLogger.warn).not.toHaveBeenCalled();
   });
 
-  it('does not look up usage for an approval pause without an authored outcome', async () => {
-    setupWorkflowMocks();
-    const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'run-paused',
-      paused: true,
+  it('reports an attention pause as an ask with its answer command', async () => {
+    const text = await runPauseFixture({ pause_cause: 'wait', wait: attentionWait });
+    expect(text).toContain('waiting for an answer');
+    expect(text).toContain('archon workflow attention run-ask');
+    expect(text).toContain('archon workflow approve run-ask <your answer>');
+    expect(text).not.toContain('waiting for approval');
+    expect(text).not.toContain('Usage');
+    expect(text).not.toContain('Authored outcome');
+  });
+
+  it.each([undefined, 'approval'] as const)('reports an approval gate (type=%s)', async type => {
+    const text = await runPauseFixture({
+      pause_cause: 'gate',
+      approval: { nodeId: 'review', message: 'Ready to proceed?', pauseId: 'gate-1', type },
     });
-    const workflowDb = require('@archon/core/db/workflows');
-    const lookup = workflowDb.getWorkflowRun as ReturnType<typeof mock>;
-    const readsBefore = lookup.mock.calls.length;
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
-    expect(lookup.mock.calls.length).toBe(readsBefore);
-    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Usage');
+    expect(text).toContain('waiting for approval');
+    expect(text).toContain('archon workflow approve run-ask --occurrence gate-1 [comment]');
+    expect(text).toContain('archon workflow attention run-ask');
+    expect(text).not.toContain('interactive input');
+  });
+
+  it('reports the recorded interactive-loop gate as input with a feedback command', async () => {
+    const text = await runPauseFixture({
+      pause_cause: 'gate',
+      approval: {
+        nodeId: 'revise',
+        message: 'Give feedback for the next iteration',
+        pauseId: 'loop-1',
+        type: 'interactive_loop',
+        iteration: 2,
+        sessionId: null,
+        completionSignaled: false,
+        signaledOutput: null,
+        signaledStructuredOutput: null,
+        iterationOutput: 'Draft report',
+        signaledTokens: null,
+        signaledCostUsd: null,
+        commandSnapshot: 'Revise the report',
+      },
+    });
+    expect(text).toContain('waiting for interactive input');
+    expect(text).toContain('archon workflow approve run-ask --occurrence loop-1 <your feedback>');
+    expect(text).not.toContain('waiting for approval');
+  });
+
+  it.each([
+    { form: 'approval', command: 'archon workflow approve run-ask [text]' },
+    { form: 'select', command: 'archon workflow respond run-ask email [text]' },
+    {
+      form: 'multi_select',
+      command: 'archon workflow answer run-ask --occurrence ask-1 --choose <id>',
+    },
+  ] as const)(
+    'uses the existing answer command for an attention $form',
+    async ({ form, command }) => {
+      const text = await runPauseFixture({
+        wait: {
+          ...attentionWait,
+          form,
+          options: [{ id: 'email', does: 'Send the report by email' }],
+        },
+      });
+      expect(text).toContain('waiting for an answer');
+      expect(text).toContain(command);
+      expect(text).not.toContain('waiting for approval');
+    }
+  );
+
+  it('gives legacy attention waits their usable resume command', async () => {
+    const { pauseId: _pauseId, form: _form, ...legacyWait } = attentionWait;
+    const text = await runPauseFixture({ wait: legacyWait });
+    expect(text).toContain('waiting for an answer');
+    expect(text).toContain('archon workflow resume run-ask');
+    expect(text).not.toContain('archon workflow approve');
+    expect(text).not.toContain('archon workflow answer');
+  });
+
+  it.each(['operator', 'source_release'] as const)(
+    'does not treat historical wait and gate metadata as the current %s pause',
+    async pauseCause => {
+      const text = await runPauseFixture({
+        pause_cause: pauseCause,
+        ...(pauseCause === 'source_release'
+          ? { source_release: { nodeId: 'next', releasedAt: '2026-11-22T10:00:00.000Z' } }
+          : {}),
+        wait: attentionWait,
+        approval: { nodeId: 'old-review', message: 'Old gate', type: 'interactive_loop' },
+      });
+      expect(text).not.toContain('waiting for approval');
+      expect(text).not.toContain('waiting for an answer');
+      expect(text).not.toContain('interactive input');
+      if (pauseCause === 'operator') {
+        expect(text).toContain('paused by an operator');
+        expect(text).toContain('archon workflow resume run-ask');
+      } else expect(text).toContain('archon workflow get run-ask');
+    }
+  );
+
+  it('preserves an explicit operator pause even when its row is unavailable', async () => {
+    const text = await runPauseFixture(new Error('row must not be read'), true);
+    expect(text).toContain('paused by an operator');
+    expect(text).toContain('archon workflow resume run-ask');
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'missing row', metadata: null },
+    { name: 'read failure', metadata: new Error('pause read failed') },
+    { name: 'missing metadata', metadata: {} },
+    { name: 'malformed gate', metadata: { approval: { nodeId: 'review' } } },
+    { name: 'malformed wait', metadata: { wait: { kind: 'attention' } } },
+    {
+      name: 'unknown gate',
+      metadata: { approval: { nodeId: 'review', message: 'Unrecognized gate', type: 'future' } },
+    },
+  ])('does not invent approval when pause metadata is $name', async ({ metadata }) => {
+    const text = await runPauseFixture(metadata);
+    expect(text).toContain('Workflow paused');
+    expect(text).toContain('archon workflow get run-ask');
+    expect(text).not.toContain('waiting for approval');
+    expect(text).not.toContain('waiting for an answer');
+    expect(text).not.toContain('waiting for interactive input');
+    if (metadata instanceof Error)
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: metadata, workflowRunId: 'run-ask' }),
+        'cli.workflow_summary_lookup_failed'
+      );
+  });
+
+  it.each(['attention', 'approval'] as const)(
+    'does not ask again for an answered %s pause',
+    async kind => {
+      const text = await runPauseFixture(
+        kind === 'attention'
+          ? { wait: { ...attentionWait, answer: { text: 'Email' } } }
+          : { approval: { nodeId: 'review', message: 'Ready?', resolved: 'approved' } }
+      );
+      expect(text).not.toContain('waiting for an answer');
+      expect(text).not.toContain('waiting for approval');
+      expect(text).toContain('archon workflow get run-ask');
+    }
+  );
+
+  it('keeps the durable wait cursor and its original destination', async () => {
+    const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
+    const { CLIAdapter } = await import('../adapters/cli-adapter');
+    const wait = {
+      owner: 'node',
+      nodeId: 'delay',
+      kind: 'time',
+      waitingSince: '2026-11-22T10:00:00.000Z',
+      resumeAt: '2026-11-22T11:00:00.000Z',
+      pauseId: 'delay-1',
+    } as const;
+    const run = { ...mockWorkflowRun, status: 'paused' as const, metadata: { wait } };
+    const host = createTestWorkflowHost();
+    host.deps.store.getWorkflowRun = mock(async () => run);
+    const cursor = deadlineWaitCursor(wait);
+    const destination = { kind: 'headless' as const, correlationId: 'original-destination' };
+    const continuation = await presentRunResult({
+      host,
+      workflow: resolveWorkflow({ name: 'delay', description: 'Wait', nodes: [] }),
+      result: { success: true, workflowRunId: run.id, paused: true, waitCursor: cursor },
+      adapter: new CLIAdapter(),
+      conversationId: 'original-conversation',
+      destination,
+      detachedProcessOwner: false,
+    });
+    expect(continuation).toEqual({
+      run,
+      wait: { stepName: 'delay', cursor, signaled: false },
+      destination,
+    });
+    expect(host.deps.store.getWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(consoleSpy.mock.calls.flat().join('\n')).toContain("waiting for 'delay' until");
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('waiting for approval');
   });
 
   const completionUsageCases = [
@@ -577,6 +750,7 @@ describe('workflowRunCommand — progress rendering', () => {
                 id: 'run-usage',
                 status: 'completed',
                 outcome: 'failed',
+                completed_outcome: 'failed',
                 metadata,
               }
         );
@@ -588,11 +762,6 @@ describe('workflowRunCommand — progress rendering', () => {
       expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
       expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
       for (const line of expected) expect(consoleSpy).toHaveBeenCalledWith(line);
-      if (kind === 'rejected')
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          expect.objectContaining({ err: expect.any(Error), workflowRunId: 'run-usage' }),
-          'cli.workflow_summary_lookup_failed'
-        );
     }
   );
 
@@ -730,7 +899,12 @@ describe('workflowRunCommand — progress rendering', () => {
       text: 'not a tool line',
     });
     runNode(OWNED_RUN, 'build', { status: 'completed' }, 90_000);
-    runNode(CHILD_RUN, 'build', { status: 'failed', error: 'timeout exceeded' }, 1_000);
+    runNode(
+      CHILD_RUN,
+      'build',
+      { status: 'failed', error: 'output missed its schema', failureKind: 'schema_unmet' },
+      1_000
+    );
     commitTestEvent({
       workflow_run_id: 'unrelated-run-id',
       event_type: 'node_started',
@@ -802,7 +976,7 @@ describe('workflowRunCommand — progress rendering', () => {
     '[build] Started',
     '[build] Completed (1m30s)',
     '[build] Started',
-    '[build] Failed: timeout exceeded',
+    '[build] Failed (schema_unmet): output missed its schema',
     '[deploy] Skipped (condition: $plan.output == deploy)',
     '[plan-cmd] Skipped (prior_success)',
     '[review] Completed (500ms)',
@@ -1005,8 +1179,14 @@ describe('workflowRunCommand — progress rendering', () => {
     const defaultRelease = mock(async () => {
       throw new Error('wrong daemon');
     });
+    const output_root = await recordedBuildRoot(OWNED_RUN);
     const release = createRunResourceRelease(
-      { getWorkflowRun: id => host.deps.store.getWorkflowRun(id) },
+      {
+        getWorkflowRun: async id => {
+          const run = await host.deps.store.getWorkflowRun(id);
+          return run && { ...run, output_root };
+        },
+      },
       defaultRelease
     );
     mockFolderBackendReleaseImages.mockClear();
@@ -1068,6 +1248,7 @@ describe('workflowRunCommand — progress rendering', () => {
         codebase_id: 'cb-folder',
         status: end === 'unresolved-writeback' ? 'failed' : (status ?? 'running'),
         outcome: null,
+        completed_outcome: null,
         user_message: 'go',
         metadata:
           end === 'unresolved-writeback'
@@ -1077,6 +1258,7 @@ describe('workflowRunCommand — progress rendering', () => {
                 isolation: 'container',
                 isolation_env_id: 'container-env-1',
               },
+        active_phase_started_at: null,
         started_at: new Date(),
         completed_at: new Date(),
         last_activity_at: null,
@@ -1086,6 +1268,7 @@ describe('workflowRunCommand — progress rendering', () => {
         adopted_from_run_id: null,
         output_root: null,
         checkout_baseline: null,
+        item_id: null,
         origin: null,
       };
     };
@@ -1453,8 +1636,8 @@ describe('workflowRunCommand — dispatch and result cards', () => {
       );
       expect(resultCalls).toHaveLength(0);
 
-      // Confirm paused message was printed
-      expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow paused — waiting for approval.');
+      // No pause metadata was recorded by this executor fixture.
+      expect(consoleSpy.mock.calls.flat().join('\n')).toContain('Workflow paused');
     } finally {
       consoleSpy.mockRestore();
     }

@@ -119,6 +119,8 @@ describe('codebases', () => {
     test('absolute spelling is preserved on write and read', async () => {
       const path = resolve('project') + sep + '..' + sep + 'project' + sep;
       mockQuery
+        // Registered projects, read before the transaction for their remote identities.
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, default_cwd: path }]));
@@ -147,6 +149,7 @@ describe('codebases', () => {
   describe('createCodebase', () => {
     test('creates codebase with all fields', async () => {
       mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([mockCodebase]));
@@ -182,6 +185,7 @@ describe('codebases', () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
 
       const result = await createCodebase({
@@ -195,23 +199,6 @@ describe('codebases', () => {
         ['test-project', null, '/workspace/test-project', null, null, 'repo']
       );
     });
-
-    test('explicit ai_assistant_type takes priority over env var', async () => {
-      process.env.DEFAULT_AI_ASSISTANT = 'codex';
-      mockQuery
-        .mockResolvedValueOnce(createQueryResult([]))
-        .mockResolvedValueOnce(createQueryResult([]))
-        .mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, ai_assistant_type: 'pi' }]));
-
-      await createCodebase({
-        name: 'test-project',
-        default_cwd: '/workspace/test-project',
-        ai_assistant_type: 'pi',
-      });
-
-      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['pi']));
-      delete process.env.DEFAULT_AI_ASSISTANT;
-    });
   });
 
   test.each(['registered', 'unregistered'])(
@@ -224,9 +211,10 @@ describe('codebases', () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([mockCodebase]));
       await createCodebase({ name: mockCodebase.name, default_cwd: mockCodebase.default_cwd });
-      const registrationLock = mockQuery.mock.calls[0];
+      const registrationLock = mockQuery.mock.calls[1];
       mockQuery.mockClear();
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
@@ -427,17 +415,6 @@ describe('codebases', () => {
         [JSON.stringify(commands), 'codebase-123']
       );
     });
-
-    test('handles empty commands object', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await updateCodebaseCommands('codebase-123', {});
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_codebases SET commands = $1, updated_at = NOW() WHERE id = $2',
-        ['{}', 'codebase-123']
-      );
-    });
   });
 
   describe('getCodebaseCommands', () => {
@@ -529,30 +506,6 @@ describe('codebases', () => {
   });
 
   describe('findCodebaseByDefaultCwd', () => {
-    test('should find codebase by default_cwd', async () => {
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([
-          {
-            id: 'cb-123',
-            name: 'test-repo',
-            default_cwd: '/workspace/test-repo',
-            ai_assistant_type: 'claude',
-            repository_url: null,
-            commands: {},
-            created_at: new Date(),
-            updated_at: new Date(),
-          },
-        ])
-      );
-
-      const result = await findCodebaseByDefaultCwd('/workspace/test-repo');
-      expect(result).toBeDefined();
-      expect(result?.name).toBe('test-repo');
-      expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_codebases ORDER BY created_at DESC'
-      );
-    });
-
     test('returns the newest row whose default_cwd matches, skipping others', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
@@ -563,6 +516,10 @@ describe('codebases', () => {
       );
 
       expect((await findCodebaseByDefaultCwd('/workspace/test-repo'))?.id).toBe('newer');
+      // The mock cannot sort, so the newest-first order is held by the query itself.
+      expect(mockQuery).toHaveBeenCalledWith(
+        'SELECT * FROM remote_agent_codebases ORDER BY created_at DESC'
+      );
     });
 
     test('should return null when codebase not found', async () => {
@@ -818,18 +775,6 @@ describe('codebases', () => {
         'DELETE FROM remote_agent_codebases WHERE id = $1',
         ['codebase-123']
       );
-    });
-
-    test('should handle codebase with no sessions or conversations', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ id: 'codebase-123' }]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await deleteCodebase('codebase-456');
-
-      expect(mockQuery).toHaveBeenCalledTimes(5);
     });
   });
 });

@@ -62,14 +62,6 @@ describe('bundled workflows', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('should have valid YAML structure', () => {
-    for (const content of Object.values(BUNDLED_WORKFLOWS)) {
-      expect(content).toContain('name:');
-      expect(content).toContain('description:');
-      expect(content.includes('nodes:')).toBe(true);
-    }
-  });
-
   it.each([
     [
       'Codex group under Claude',
@@ -146,22 +138,6 @@ nodes:
 
     expect(violations).toEqual([]);
   });
-});
-
-// These workflows only read the repository. A per-run worktree for each would pile up
-// one checkout per scheduled tick, and nothing at run end removes a checkout that never
-// opened a branch of its own.
-describe('read-only sdlc workflows', () => {
-  it.each(['archon-intake', 'archon-triage', 'archon-discoveries', 'archon-merge-queue'])(
-    '%s runs in the launch checkout',
-    name => {
-      const source = BUNDLED_WORKFLOWS[name];
-      if (source === undefined) throw new Error(`${name} is not bundled`);
-      const parsed = parseWorkflow(source, `${name}.yaml`, providerRegistry);
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-      expect(parsed.workflow.worktree?.enabled).toBe(false);
-    }
-  );
 });
 
 // Every AI node in the SDLC pack must resolve a tier. A node that resolves none

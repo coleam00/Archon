@@ -73,7 +73,11 @@ async function paused(
   form: NonNullable<WorkflowAttentionWaitContext['form']> | undefined,
   pauseId: string | null = 'pause-1'
 ): Promise<string> {
-  const run = await store.createWorkflowRun({ workflow_name: 'ask', user_message: '' });
+  const run = await store.createWorkflowRun({
+    workflow_name: 'ask',
+    user_message: '',
+    working_path: '/workspace/ask',
+  });
   await store.claimPendingWorkflowRun(run.id);
   await store.pauseWorkflowRunForWait(
     run.id,
@@ -139,6 +143,8 @@ describe('answering an attention wait', () => {
 
   const refusals = [
     ['message', { choose: ['a'] }, 'takes only text'],
+    ['message', { choose: [] }, 'needs text'],
+    ['message', { choose: [], text: '   ' }, 'needs text'],
     ['approval', { choose: ['maybe'] }, "does not declare option 'maybe'"],
     ['approval', { choose: [] }, 'takes exactly one option'],
     ['select', { choose: ['c'] }, "does not declare option 'c'"],
@@ -147,7 +153,9 @@ describe('answering an attention wait', () => {
     ['multi_select', { choose: ['a', 'a'] }, 'takes each option at most once'],
   ] as const;
   for (const [form, request, problem] of refusals) {
-    test(`a ${form} wait refuses ${JSON.stringify(request.choose)}`, async () => {
+    const textLabel =
+      'text' in request ? ` with text ${JSON.stringify((request as { text?: string }).text)}` : '';
+    test(`a ${form} wait refuses ${JSON.stringify(request.choose)}${textLabel}`, async () => {
       await setup();
       const id = await paused(form);
       await expect(operations.answerWorkflow(id, request, operator, cli)).rejects.toThrow(problem);
@@ -172,6 +180,43 @@ describe('answering an attention wait', () => {
     await expect(operations.answerWorkflow(id, { choose: ['b'] }, operator, cli)).rejects.toThrow(
       'already answered'
     );
+  });
+
+  test('an answer records the name its answerer declared, and refuses a malformed one', async () => {
+    await setup();
+    const id = await paused('select');
+    const named = (declared: string) => ({ kind: 'operator', declared }) as const;
+    await expect(
+      operations.answerWorkflow(id, { choose: ['a'] }, named('two\nlines'), cli)
+    ).rejects.toThrow('The declared answerer name must be 1 to 64 characters on one line.');
+    expect(await storedWait(id)).not.toHaveProperty('answer');
+    await operations.answerWorkflow(id, { choose: ['a'] }, named('triage-agent'), cli);
+    expect(await storedWait(id)).toMatchObject({
+      answeredVia: 'cli',
+      answeredBy: { declared: 'triage-agent' },
+    });
+  });
+
+  test('an answer given from inside a run records that run and node, and only a run the store knows', async () => {
+    await setup();
+    const answered = async (id: string): Promise<unknown> =>
+      (await store.listWorkflowEvents(id)).find(event => event.event_type === 'wait_answered')
+        ?.data;
+    const outside = await paused('select');
+    await operations.answerWorkflow(outside, { choose: ['a'] }, operator, cli);
+    expect(await answered(outside)).not.toHaveProperty('fromRun');
+
+    const asked = await paused('select');
+    const from = (runId: string) =>
+      ({ kind: 'operator', fromRun: { runId, nodePath: 'triage.decide' } }) as const;
+    await expect(
+      operations.answerWorkflow(asked, { choose: ['a'] }, from('no-such-run'), cli)
+    ).rejects.toThrow('which this store does not know');
+    expect(await storedWait(asked)).not.toHaveProperty('answer');
+    await operations.answerWorkflow(asked, { choose: ['a'] }, from(outside), cli);
+    expect(await answered(asked)).toMatchObject({
+      fromRun: { runId: outside, nodePath: 'triage.decide' },
+    });
   });
 
   test('approve, reject and respond answer an attention wait as sugar; reject never cancels', async () => {

@@ -1,6 +1,10 @@
 /** Walks a graph plan node by node: the reach checks every node shares, then its kind's simulator. */
 import { peerAdmissions } from '../interaction-admission';
-import { checkComposedBlockBoundaries, checkTriggerRule } from '../dag/trigger-rule';
+import {
+  checkComposedBlockBoundaries,
+  checkTriggerRule,
+  skipReasonForCause,
+} from '../dag/trigger-rule';
 import { evaluateCondition } from '../condition-evaluator';
 import { observeCheckout } from '../checkout-observation';
 import { executionMetadata, newNodeInvocation, startNodeExecution } from '../node-execution';
@@ -23,7 +27,10 @@ import { simulateLoopGroup } from './nodes/loop-group';
 import { simulateWait } from './nodes/wait';
 import { simulateChildRunNode } from './nodes/workflow';
 import { nodePackDir } from '../pack-dir';
-import { runWithPackDir } from '../workflow-variables';
+import { runWithNodeScratch, runWithPackDir } from '../workflow-variables';
+import { getNodeScratchDir } from '@archon/paths/archon-paths';
+import { randomUUID } from 'node:crypto';
+import { releaseNodeScratch } from '../run-scratch';
 
 /** Whether the node runs at all; a node the trigger rule or its `when:` turns away is recorded here. */
 function isReached(
@@ -32,20 +39,28 @@ function isReached(
   ctx: DryRunContext,
   iteration?: number
 ): boolean {
-  const boundaryDecision = checkComposedBlockBoundaries(node, outputs, ctx.inputs, {
-    loopBodyScopes: ctx.loopBodyScopes,
-  });
-  if (boundaryDecision.decision === 'skip') {
-    recordSkipped(node, outputs, ctx, 'trigger_rule', boundaryDecision.cause, iteration);
-    return false;
-  }
-  const triggerDecision = checkTriggerRule(node, outputs);
-  if (triggerDecision.decision === 'skip') {
-    recordSkipped(node, outputs, ctx, 'trigger_rule', triggerDecision.cause, iteration);
-    return false;
-  }
-  if (node.when) {
-    try {
+  try {
+    const boundaryDecision = checkComposedBlockBoundaries(node, outputs, ctx.inputs, {
+      loopBodyScopes: ctx.loopBodyScopes,
+    });
+    if (boundaryDecision.decision === 'skip') {
+      recordSkipped(
+        node,
+        outputs,
+        ctx,
+        skipReasonForCause(boundaryDecision.cause),
+        boundaryDecision.cause,
+        iteration,
+        boundaryDecision.error instanceof Error ? boundaryDecision.error.message : undefined
+      );
+      return false;
+    }
+    const triggerDecision = checkTriggerRule(node, outputs);
+    if (triggerDecision.decision === 'skip') {
+      recordSkipped(node, outputs, ctx, 'trigger_rule', triggerDecision.cause, iteration);
+      return false;
+    }
+    if (node.when) {
       // `ctx.inputs` mirrors the executor's `resolveRunInputs` (#2610): a `when:`
       // referencing `$INPUTS.<name>` branches on the same effective map a real run reads.
       const condition = evaluateCondition(node.when, outputs, ctx.inputs, {
@@ -67,16 +82,16 @@ function isReached(
           node,
           outputs,
           ctx,
-          'when_condition_false',
+          'when_condition',
           { kind: 'condition', expr: node.when },
           iteration
         );
         return false;
       }
-    } catch (error) {
-      recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
-      return false;
     }
+  } catch (error) {
+    recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
+    return false;
   }
   return true;
 }
@@ -132,9 +147,25 @@ async function simulateNode(
     return;
   }
   try {
-    await runWithPackDir(await nodePackDir(ctx.sourceRoots, ctx.workflow.pack, node), async () =>
-      simulateNodeKind(node, outputs, ctx, iteration, execution)
-    );
+    const packDir = await nodePackDir(ctx.sourceRoots, ctx.workflow.pack, node);
+    // Released when the simulated node ends, as in a live run, so a dependent that adds a
+    // worktree on the same branch behaves as it would live.
+    const invocationId = randomUUID();
+    try {
+      await runWithNodeScratch(getNodeScratchDir(ctx.artifactsDir, invocationId), () =>
+        runWithPackDir(packDir, async () =>
+          simulateNodeKind(node, outputs, ctx, iteration, execution)
+        )
+      );
+    } finally {
+      await releaseNodeScratch({
+        artifactsDir: ctx.artifactsDir,
+        invocationId,
+        repoPath: ctx.execWorkspace,
+        execContext: { kind: 'host' },
+        logContext: { workflowRunId: 'dry-run', nodeId: node.id, invocationId },
+      });
+    }
   } catch (error) {
     recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
   }
@@ -194,6 +225,17 @@ async function simulateLayerNode(
   await simulateNode(node, outputs, ctx, iteration, execution);
   const result = outputs.get(node.id);
   if (result?.state === 'failed') ctx.interactionAdmission?.failed(node.id);
+  // The real run's rule (`writeTypedArtifacts`): a completed node that declares a type.
+  if (result?.state === 'completed' && node.output_type) {
+    ctx.typedOutputs.push({
+      nodeId: node.id,
+      outputType: node.output_type,
+      ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: [...ctx.loopGroupPath] } : {}),
+      producedAt: new Date().toISOString(),
+      source: `the simulated output of node '${node.id}'`,
+      text: result.output,
+    });
+  }
   if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
     outputs.set(node.id, { ...result, execution });
   }

@@ -5,9 +5,17 @@ import type {
   IncludeDirective,
   ResolvedWorkflow,
 } from '../../../schemas';
-import { type JsonValue } from '../../../output-ref';
-import type { IncludeCommandContent } from '../../../compiled-command';
-import { instantiateResolvedInclude } from '../../../include/inline';
+import { parseWholeInputsRef, type JsonValue } from '../../../output-ref';
+import {
+  readComposedMeta,
+  readForwardedFanOutWith,
+  type IncludeCommandContent,
+} from '../../../compiled-command';
+import {
+  boundaryIdComponent,
+  instantiateResolvedInclude,
+  type PackIdentity,
+} from '../../../include/inline';
 import { buildInstanceSnapshots, type FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { getLog } from '../../log';
 import { type RunLayersContext } from '../../run-context';
@@ -68,7 +76,24 @@ export async function planComposeInstances(
     return { snapshots: persistedSnapshots };
   }
 
-  const staticInputs = resolveFanOutStaticInputs(node, ctx);
+  // An implicit same-pack forward still standing as `$INPUTS.<name>` reaches the run's own
+  // setting. It is left out of the snapshot, so each instance's same-pack instantiation
+  // forwards it again as a reference, exactly as a static include does. Resolved here, its
+  // value would be spliced into text surfaces at instantiation, and a `when:` such as
+  // `$INPUTS.enabled == true` would become the unparseable `true == true`.
+  const forwarded = readForwardedFanOutWith(node);
+  const withMap = Object.entries(node.with ?? {}).filter(
+    ([name, value]) =>
+      !(
+        forwarded.includes(name) &&
+        typeof value === 'string' &&
+        parseWholeInputsRef(value) === name
+      )
+  );
+  const staticInputs = resolveFanOutStaticInputs(
+    { id: node.id, with: Object.fromEntries(withMap) },
+    ctx
+  );
   if ('error' in staticInputs) {
     return {
       error: staticInputs.error,
@@ -110,7 +135,10 @@ export function expandComposeInstance(
   identity: string,
   inputs: Record<string, JsonValue>,
   definition: ResolvedWorkflow,
-  commandContents: ReadonlyMap<string, IncludeCommandContent>
+  commandContents: ReadonlyMap<string, IncludeCommandContent>,
+  // The pack of the workflow that authored `node`, as its load-time instantiation saw it.
+  includerPack: PackIdentity,
+  includeId = `${boundaryIdComponent(node.id)}/${boundaryIdComponent(identity)}`
 ): { nodes: DagNode[]; primarySink: string } | { error: string } {
   const directiveId = `${node.id}__${identity}`;
   const directive: IncludeDirective = {
@@ -119,7 +147,15 @@ export function expandComposeInstance(
     include: node.include,
     ...(Object.keys(inputs).length > 0 ? { with: inputs } : {}),
   };
-  const expanded = instantiateResolvedInclude(directive, definition, commandContents);
+  // The directive id is generated per item; the inner nodes name the fan-out node's
+  // authored include path instead, which an enclosing include already recorded on it.
+  const origin = readComposedMeta(node);
+  const expanded = instantiateResolvedInclude(directive, definition, {
+    commandContents,
+    includeId,
+    includes: origin !== undefined ? [...origin.includes, origin.nodeId] : [node.id],
+    includerPack,
+  });
   const primarySink = expanded.primarySink;
   if (primarySink === '') {
     return { error: `composed block '${definition.name}' has no sink node` };

@@ -1,0 +1,60 @@
+# Dry-run fixture, an ask: route cannot launch the item and asks. The run ends `asked`
+# with route's question left on the item, and no wait. The answer starts the next run.
+facts:
+  path: route
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  url: "https://github.com/example/repo/issues/7"
+  read_at: "2026-11-18T00:00:00.000Z"
+  record: {}
+  brief: ""
+  rounds: []
+  at_cap: false
+  pull_request: null
+  continues: null
+  branch: "build/7-stub-fixture"
+  related: []
+  answered: null
+route:
+  decision: ask
+  route: plan
+  continues: null
+  ready_head: null
+  brief: "stub-brief: build issue 7 under the ruling"
+  reason: "stub: the body names two outcomes that conflict"
+  ask:
+    question: &question "Issue 7: build the import as a new command, or extend `sync`?"
+    context: &context "stub: The body asks for both. https://github.com/example/repo/issues/7"
+    options:
+      - id: new-command
+        does: &new-does "Launches a round that adds `import` and leaves `sync` alone."
+        cost: &new-cost "stub: one more command to maintain."
+        effect: continue
+        ruling: "The import is its own command; `sync` does not change."
+      - id: park
+        does: &park-does "Stops the queue working the item until a re-triage."
+        cost: &park-cost "stub: nothing is built."
+        effect: park
+        ruling: ""
+    recommendation: &recommendation { option: new-command, why: "The acceptance list only names `import`." }
+apply:
+  decision: asked
+  summary: "stub: Issue 7: asked."
+  asks:
+    - question: *question
+      context: *context
+      options:
+        - { id: new-command, does: *new-does, cost: *new-cost }
+        - { id: park, does: *park-does, cost: *park-cost }
+      recommendation: *recommendation
+      artifacts: []
+  asked:
+    brief: "stub-brief: build issue 7 under the ruling"
+    by: route
+    options:
+      - { id: new-command, effect: continue, ruling: "The import is its own command; `sync` does not change." }
+      - { id: park, effect: park, ruling: "" }
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }
+  expect: completed
+  authored: asked
+  reached: [facts, route, apply]

@@ -1,6 +1,6 @@
 {
   "name": "@archon/adapters",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -14,7 +14,6 @@
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit",
     "build:github-plugin": "bun build --compile ./src/forge/github/plugin.ts --outfile ./dist/archon-forge-github",
     "build:github-source-plugin": "bun build ./src/forge/github/source-plugin.ts --target=bun --outfile=dist/github-source-plugin.mjs"
   },
@@ -104,7 +103,11 @@
       "src/forge/github/merge-facts.test.ts",
       "src/forge/github/workitems.test.ts",
       "src/forge/github/review-threads.test.ts",
-      "src/forge/github/files.test.ts"
+      "src/forge/github/reviews.test.ts",
+      "src/forge/github/attachments.test.ts",
+      "src/forge/github/files.test.ts",
+      "src/forge/github/search-and-logs.test.ts",
+      "src/forge/github/plugin.test.ts"
     ],
     [
       "src/platform-policies.test.ts",
@@ -112,6 +115,9 @@
     ],
     [
       "src/sources/standard-webhooks/"
+    ],
+    [
+      "src/item-tracker/item-tracker.integration.test.ts"
     ]
   ]
 }

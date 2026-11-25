@@ -56,7 +56,7 @@ export function MetricsOverview({
         <EmptyState
           title="No pack declares overview cards."
           action={
-            <Link to={detailsPath} className="text-[12px] text-accent-bright underline">
+            <Link to={detailsPath} className="text-console-12 text-accent-bright underline">
               Details
             </Link>
           }
@@ -65,7 +65,7 @@ export function MetricsOverview({
         packs.map(pack => (
           <div key={`${pack.source}:${pack.pack}`} className="flex flex-col gap-2">
             {packs.length > 1 ? (
-              <h2 className="font-mono text-[11px] uppercase tracking-[0.1em] text-text-tertiary">
+              <h2 className="font-mono text-console-11 uppercase tracking-widest text-text-tertiary">
                 {pack.pack}
               </h2>
             ) : null}
@@ -74,10 +74,10 @@ export function MetricsOverview({
                 <Link
                   key={i}
                   to={`${detailsPath}#${metricAnchor(cardMetric(view))}`}
-                  className="flex flex-col gap-2 rounded-[12px] border border-border px-5 py-4 transition-colors hover:border-border-bright"
+                  className="flex flex-col gap-2 rounded-console-12 border border-border px-5 py-4 transition-colors hover:border-border-bright"
                   data-card={view.shape}
                 >
-                  <h3 className="text-[12px] font-medium text-text-secondary">{view.title}</h3>
+                  <h3 className="text-console-12 font-medium text-text-secondary">{view.title}</h3>
                   {report === undefined ? (
                     SKELETON
                   ) : (
@@ -97,7 +97,7 @@ function Alert({ children }: { children: ReactNode }): ReactElement {
   return (
     <p
       role="alert"
-      className="rounded border border-error/40 bg-error/10 px-4 py-2 text-[12.5px] text-error"
+      className="rounded border border-error/40 bg-error/10 px-4 py-2 text-console-13 text-error"
     >
       {children}
     </p>
@@ -106,7 +106,7 @@ function Alert({ children }: { children: ReactNode }): ReactElement {
 
 const SKELETON = (
   <div aria-hidden className="flex animate-pulse flex-col gap-2">
-    <div className="h-[34px] w-20 rounded bg-surface-inset" />
+    <div className="h-8.5 w-20 rounded bg-surface-inset" />
     <div className="h-3 w-40 rounded bg-surface-inset" />
   </div>
 );
@@ -125,14 +125,14 @@ function CardBody({
 
 function Figure({ children }: { children: ReactNode }): ReactElement {
   return (
-    <div className="font-mono text-[34px] leading-none tabular-nums text-text-primary">
+    <div className="font-mono text-console-34 leading-none tabular-nums text-text-primary">
       {children}
     </div>
   );
 }
 
 function Line({ children }: { children: ReactNode }): ReactElement {
-  return <div className="text-[12px] text-text-tertiary">{children}</div>;
+  return <div className="text-console-12 text-text-tertiary">{children}</div>;
 }
 
 // "not recorded" read as a broken instrument; an empty window is what the records show.
@@ -213,7 +213,7 @@ function Pill({ children, title }: { children: ReactNode; title?: string }): Rea
   return (
     <span
       title={title}
-      className="rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[11px] text-warning"
+      className="rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-console-11 text-warning"
     >
       {children}
     </span>

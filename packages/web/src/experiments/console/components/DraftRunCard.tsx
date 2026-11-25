@@ -14,7 +14,8 @@ import { K } from '../store/keys';
 import * as skill from '../skills';
 import { HttpError } from '../lib/http';
 import { orderWithRecommended } from '../lib/recommended';
-import { missingRequiredInputs, collectSuppliedInputs } from '../lib/workflow-inputs';
+import { collectSuppliedInputs } from '../lib/workflow-inputs';
+import { takeRerun } from '../lib/rerun';
 import { collectRunModelOverrides, type RunModelOverrideRow } from '../lib/run-model-overrides';
 
 interface DraftRunCardProps {
@@ -25,6 +26,13 @@ interface DraftRunCardProps {
 type Mode = 'collapsed' | 'expanded';
 
 const LAST_WORKFLOW_KEY = 'archon.console.lastWorkflow';
+
+interface InputDraft {
+  workflow: string;
+  values: Readonly<Record<string, string>>;
+}
+
+const NO_INPUTS: InputDraft = { workflow: '', values: {} };
 
 const MAX_FILES = 5;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -84,30 +92,39 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Values for the selected workflow's declared `inputs:` (#2554), keyed by input name.
-  // Cleared whenever the selected workflow changes so one workflow's values can never
-  // be submitted against another's declaration.
-  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  // Values for a workflow's declared `inputs:` (#2554), keyed by input name, held with
+  // the workflow they were filled for, so one workflow's values can never be shown or
+  // submitted against another's declaration, whichever path changes the workflow.
+  const [inputDraft, setInputDraft] = useState<InputDraft>(NO_INPUTS);
+  const inputValues = inputDraft.workflow === workflowName ? inputDraft.values : {};
+
+  // Picking another workflow discards what was filled for the previous one; confirming
+  // the selected one keeps it. A handler, not an effect on `workflowName`: that would
+  // also run after a re-run sets the workflow and its inputs together, and wipe them.
+  const pickWorkflow = (name: string): void => {
+    if (name === workflowName) return;
+    setWorkflowName(name);
+    setInputDraft(NO_INPUTS);
+  };
   const [modelOverrideRows, setModelOverrideRows] = useState<RunModelOverrideRow[]>([]);
   const nextModelOverrideId = useRef(1);
 
-  // Pre-fill from `?rerun=1&workflow=…&message=…` query params (set by the
-  // ↻ rerun button on RecentRunRow). Reacts to searchParams so the card
-  // expands whether you arrive by navigation (same project, params change
-  // only) or by a fresh mount. Strips the params on entry so reload
-  // doesn't re-trigger and so the URL stays clean.
+  // Pre-fill from the re-run link (`lib/rerun.ts`). Reacts to searchParams so the card
+  // expands whether you arrive by navigation (same project, params change only) or by a
+  // fresh mount. Strips the params on entry so reload doesn't re-trigger.
   useEffect(() => {
-    if (searchParams.get('rerun') !== '1') return;
-    const wf = searchParams.get('workflow');
-    const msg = searchParams.get('message');
-    if (wf !== null && wf.length > 0) setWorkflowName(wf);
-    if (msg !== null) setContext(msg);
+    const taken = takeRerun(searchParams);
+    if (taken === null) return;
+    const { rerun, rest } = taken;
+    // A re-run replaces the whole draft: nothing typed before it is sent along.
+    if (rerun.workflow.length > 0) setWorkflowName(rerun.workflow);
+    setInputDraft({ workflow: rerun.workflow, values: rerun.inputs });
+    setContext(rerun.message ?? '');
+    setFiles([]);
+    setModelOverrideRows([]);
+    setError(null);
     setMode('expanded');
-    const next = new URLSearchParams(searchParams);
-    next.delete('rerun');
-    next.delete('workflow');
-    next.delete('message');
-    setSearchParams(next, { replace: true });
+    setSearchParams(rest, { replace: true });
   }, [searchParams, setSearchParams]);
 
   const addFiles = (incoming: File[]): void => {
@@ -132,9 +149,12 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     setFiles(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const { data: workflowData } = useEntity(K.workflows(projectCwd), () =>
+  const { data: workflowData, error: workflowsError } = useEntity(K.workflows(projectCwd), () =>
     skill.listWorkflows(projectCwd)
   );
+  // Until the declarations load, the card cannot tell which filled inputs to send, and
+  // sending none would drop a re-run's inputs, so it does not start.
+  const workflowsLoaded = workflowData !== undefined;
 
   const allWorkflows = workflowData?.workflows ?? [];
   const recommendedNames = workflowData?.recommended ?? [];
@@ -143,25 +163,22 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   // source/name. The picker draws a divider between the groups.
   const { ordered: sortedWorkflows } = orderWithRecommended(allWorkflows, recommendedNames);
 
-  // Default workflow: last-used if still valid, else first available.
+  // Default workflow: last-used if still valid, else first available. An updater, so a
+  // re-run's workflow set in the same commit is judged rather than overwritten.
   useEffect(() => {
-    if (sortedWorkflows.length === 0) return;
-    if (workflowName.length > 0 && sortedWorkflows.some(w => w.name === workflowName)) {
-      return;
-    }
     const pick = sortedWorkflows[0];
-    if (pick !== undefined) setWorkflowName(pick.name);
-  }, [sortedWorkflows, workflowName]);
+    if (pick === undefined) return;
+    setWorkflowName(current =>
+      current.length > 0 && sortedWorkflows.some(w => w.name === current) ? current : pick.name
+    );
+  }, [sortedWorkflows]);
 
   // Declared inputs of the selected workflow (#2554). Empty for the overwhelming
   // majority of workflows, which declare none and render exactly as before.
   const declaredInputs = sortedWorkflows.find(w => w.name === workflowName)?.inputs ?? [];
-  const missingRequired = missingRequiredInputs(declaredInputs, inputValues);
 
-  // Switching workflows discards values collected for the previous one — they were
-  // typed against a different declaration and would be rejected as undeclared keys.
+  // Switching workflows discards the model bindings collected for the previous one.
   useEffect(() => {
-    setInputValues({});
     setModelOverrideRows([]);
   }, [workflowName]);
 
@@ -206,14 +223,9 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   }, [mode]);
 
   const submit = async (): Promise<void> => {
+    if (!workflowsLoaded) return;
     if (workflowName.length === 0) {
       setError('Pick a workflow first.');
-      return;
-    }
-    if (missingRequired.length > 0) {
-      setError(
-        `Fill in ${missingRequired.map(n => `"${n}"`).join(', ')} before starting this run.`
-      );
       return;
     }
     setError(null);
@@ -242,7 +254,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       // as the row exists, instead of waiting for the next 3s poll tick.
       setContext('');
       setFiles([]);
-      setInputValues({});
+      setInputDraft(NO_INPUTS);
       setModelOverrideRows([]);
       setMode('collapsed');
       invalidate('runs');
@@ -264,7 +276,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const collapse = (): void => {
     setMode('collapsed');
     setFiles([]);
-    setInputValues({});
+    setInputDraft(NO_INPUTS);
     setModelOverrideRows([]);
     setError(null);
   };
@@ -337,11 +349,11 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             }
             aria-label="Attach files"
           >
-            <span aria-hidden className="text-[12px]">
+            <span aria-hidden className="text-console-12">
               📎
             </span>
           </button>
-          <span className="flex items-center gap-3.5 font-mono text-[11px] text-text-tertiary">
+          <span className="flex items-center gap-3.5 font-mono text-console-11 text-text-tertiary">
             <span>
               <span className="rounded border border-border px-1.5 py-px text-text-secondary">
                 ↵
@@ -365,28 +377,22 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={submitting || workflowName.length === 0 || missingRequired.length > 0}
-          title={
-            missingRequired.length > 0 ? `Fill in ${missingRequired.join(', ')} first` : undefined
-          }
-          className="brand-bar flex items-center gap-1.5 rounded-[9px] px-[15px] py-[9px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
+          disabled={submitting || !workflowsLoaded || workflowName.length === 0}
+          className="brand-bar flex items-center gap-1.5 rounded-lg px-3.75 py-2.25 text-console-13 font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
         >
           {submitting ? 'Starting…' : 'Start run'}
-          <span aria-hidden className="text-[10px] leading-none opacity-80">
+          <span aria-hidden className="text-console-10 leading-none opacity-80">
             ▶
           </span>
         </button>
       </div>
 
-      {/* Say WHY the button is disabled — a dead control with no reason is the
-              failure mode this replaces. */}
-      {error === null && missingRequired.length > 0 ? (
-        <p className="mt-1 font-mono text-[11px] text-text-tertiary">
-          needs {missingRequired.join(', ')}
+      {error !== null ? <p className="mt-1 font-mono text-console-11 text-error">{error}</p> : null}
+      {workflowsError !== undefined && !workflowsLoaded ? (
+        <p className="mt-1 font-mono text-console-11 text-error">
+          Could not load workflows: {workflowsError.message}
         </p>
       ) : null}
-
-      {error !== null ? <p className="mt-1 font-mono text-[11px] text-error">{error}</p> : null}
     </>
   );
 
@@ -397,18 +403,18 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         onClick={() => {
           setMode('expanded');
         }}
-        className="group flex w-full items-center gap-[11px] rounded-[12px] border border-dashed border-border bg-surface px-[18px] py-[15px] text-left transition-colors hover:border-accent-bright/50 hover:bg-surface-elevated"
+        className="group flex w-full items-center gap-2.75 rounded-console-12 border border-dashed border-border bg-surface px-4.5 py-3.75 text-left transition-colors hover:border-accent-bright/50 hover:bg-surface-elevated"
         title="Start a new run — press N"
       >
         <span aria-hidden className="flex text-accent-bright">
           +
         </span>
-        <span className="text-[14px] font-semibold text-text-secondary transition-colors group-hover:text-text-primary">
+        <span className="text-console-14 font-semibold text-text-secondary transition-colors group-hover:text-text-primary">
           Start a new run
         </span>
         <span
           aria-hidden
-          className="ml-auto rounded border border-border px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-text-secondary"
+          className="ml-auto rounded border border-border px-1.5 py-0.5 font-mono text-console-11 tabular-nums text-text-secondary"
         >
           N
         </span>
@@ -418,7 +424,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
 
   return (
     <article
-      className="relative rounded-[12px] border bg-surface-elevated"
+      className="relative rounded-console-12 border bg-surface-elevated"
       style={{
         // Soft-magenta hairline border on all four sides; the brand-gradient
         // strip is painted as an absolute child so the card can keep
@@ -433,14 +439,14 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     >
       <span
         aria-hidden
-        className="brand-bar pointer-events-none absolute bottom-0 left-0 top-0 w-[3px] rounded-l-[12px]"
+        className="brand-bar pointer-events-none absolute bottom-0 left-0 top-0 w-0.75 rounded-l-console-12"
       />
       {dragOver ? (
         <div
           aria-hidden
           className="brand-bar-soft pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded"
         >
-          <span className="rounded border border-[color:var(--brand-magenta)] bg-surface px-3 py-1.5 font-mono text-[11px] text-[color:var(--brand-magenta)]">
+          <span className="rounded border border-[color:var(--brand-magenta)] bg-surface px-3 py-1.5 font-mono text-console-11 text-[color:var(--brand-magenta)]">
             drop files to attach
           </span>
         </div>
@@ -449,7 +455,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         {/* Header: status dot + DRAFT label + workflow picker + close */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full bg-accent-bright" />
-          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-bright">
+          <span className="shrink-0 text-console-10 font-semibold uppercase tracking-console-label text-accent-bright">
             Draft
           </span>
           <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
@@ -457,7 +463,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             workflows={sortedWorkflows}
             recommendedNames={recommendedNames}
             value={workflowName}
-            onChange={setWorkflowName}
+            onChange={pickWorkflow}
             disabled={submitting}
             onClose={() => {
               requestAnimationFrame(() => {
@@ -473,23 +479,23 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             aria-label="Cancel draft"
             title="Cancel (Esc)"
           >
-            <span aria-hidden className="text-[12px]">
+            <span aria-hidden className="text-console-12">
               ✕
             </span>
           </button>
         </div>
 
-        {/* Declared inputs (#2554) — only for workflows that declare a signature.
-            Values are validated server-side against the same contract a composing
-            `with:` map goes through, before any worktree, clone, or AI cost. */}
+        {/* Declared inputs (#2554) — only for workflows that declare a signature. The card
+            shows the declaration and checks nothing itself: the run route answers with the
+            engine's refusal, which is shown below, before any worktree, clone, or AI cost. */}
         {declaredInputs.length > 0 ? (
-          <div className="mt-3 space-y-2.5 rounded-[10px] border border-border bg-surface-inset px-3 py-2.5">
-            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-tertiary">
+          <div className="mt-3 space-y-2.5 rounded-lg border border-border bg-surface-inset px-3 py-2.5">
+            <p className="font-mono text-console-10 uppercase tracking-console-label text-text-tertiary">
               Inputs
             </p>
             {declaredInputs.map(declared => (
               <label key={declared.name} className="block">
-                <span className="flex items-baseline gap-1.5 font-mono text-[11px] text-text-secondary">
+                <span className="flex items-baseline gap-1.5 font-mono text-console-11 text-text-secondary">
                   {declared.name}
                   {declared.required ? (
                     <span className="text-[color:var(--brand-magenta)]" title="Required">
@@ -498,7 +504,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                   ) : null}
                 </span>
                 {declared.description !== null ? (
-                  <span className="mt-0.5 block text-[11px] leading-snug text-text-tertiary">
+                  <span className="mt-0.5 block text-console-11 leading-snug text-text-tertiary">
                     {declared.description}
                   </span>
                 ) : null}
@@ -507,25 +513,28 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                   value={inputValues[declared.name] ?? ''}
                   onChange={e => {
                     const { value } = e.target;
-                    setInputValues(prev => ({ ...prev, [declared.name]: value }));
+                    setInputDraft({
+                      workflow: workflowName,
+                      values: { ...inputValues, [declared.name]: value },
+                    });
                     if (error !== null) setError(null);
                   }}
                   placeholder={declared.default ?? (declared.required ? 'required' : 'optional')}
                   disabled={submitting}
-                  className="mt-1 w-full rounded-[8px] border border-border bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:ring-[3px] focus:ring-accent-bright/10 disabled:opacity-50"
+                  className="mt-1 w-full rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-console-12 text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:ring-[3px] focus:ring-accent-bright/10 disabled:opacity-50"
                 />
               </label>
             ))}
           </div>
         ) : null}
 
-        <div className="mt-3 rounded-[10px] border border-border bg-surface-inset px-3 py-2.5">
+        <div className="mt-3 rounded-lg border border-border bg-surface-inset px-3 py-2.5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-tertiary">
+              <p className="font-mono text-console-10 uppercase tracking-console-label text-text-tertiary">
                 Model bindings
               </p>
-              <p className="mt-0.5 text-[11px] text-text-tertiary">
+              <p className="mt-0.5 text-console-11 text-text-tertiary">
                 {modelOverrideRows.length === 0
                   ? 'As authored'
                   : 'Only the named tiers and aliases change for this run.'}
@@ -539,7 +548,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                 setModelOverrideRows(prev => [...prev, { id, name: '', spec: '' }]);
               }}
               disabled={submitting}
-              className="shrink-0 rounded border border-border px-2.5 py-1 font-mono text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40"
+              className="shrink-0 rounded border border-border px-2.5 py-1 font-mono text-console-11 text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40"
             >
               + binding
             </button>
@@ -562,9 +571,9 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                     placeholder="large or @planner"
                     aria-label="Tier or alias"
                     disabled={submitting}
-                    className="w-[150px] rounded-[8px] border border-border bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
+                    className="w-37.5 rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-console-12 text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
                   />
-                  <span className="font-mono text-[11px] text-text-tertiary">=</span>
+                  <span className="font-mono text-console-11 text-text-tertiary">=</span>
                   <input
                     value={row.spec}
                     onChange={e => {
@@ -579,7 +588,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                     placeholder="openai/gpt-5.6"
                     aria-label="Model spec"
                     disabled={submitting}
-                    className="min-w-0 flex-1 rounded-[8px] border border-border bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
+                    className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-console-12 text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
                   />
                   <button
                     type="button"
@@ -618,7 +627,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             }
             rows={2}
             disabled={submitting}
-            className="min-h-[74px] w-full resize-none rounded-[10px] border border-border bg-surface px-3.5 py-[13px] text-[14px] leading-normal text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:ring-[3px] focus:ring-accent-bright/10 disabled:opacity-50"
+            className="min-h-18.5 w-full resize-none rounded-lg border border-border bg-surface px-3.5 py-3.25 text-console-14 leading-normal text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:ring-[3px] focus:ring-accent-bright/10 disabled:opacity-50"
           />
 
           {files.length > 0 ? (
@@ -626,10 +635,10 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
               {files.map((f, idx) => (
                 <li
                   key={`${f.name}:${idx.toString()}`}
-                  className="flex items-center gap-1.5 rounded border border-border bg-surface-inset px-2 py-1 font-mono text-[11px] text-text-secondary"
+                  className="flex items-center gap-1.5 rounded border border-border bg-surface-inset px-2 py-1 font-mono text-console-11 text-text-secondary"
                 >
                   <span aria-hidden>📎</span>
-                  <span className="max-w-[160px] truncate">{f.name}</span>
+                  <span className="max-w-40 truncate">{f.name}</span>
                   <span className="text-text-tertiary">{formatBytes(f.size)}</span>
                   <button
                     type="button"

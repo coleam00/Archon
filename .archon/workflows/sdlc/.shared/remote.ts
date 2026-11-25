@@ -11,7 +11,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { sameRepo, type QualifiedPr } from './forge.ts';
+import { forge, input } from 'archon:script';
+import { type QualifiedPr, sameRepo } from './identity.ts';
 import { git, gitOrThrow } from './git.ts';
 
 type Repo = QualifiedPr['repo'];
@@ -45,8 +46,10 @@ export function urlRepo(url: string): Repo | undefined {
   return { host, path };
 }
 
-/** Every configured remote's name and the repository its URL names, if any. */
-function remotes(checkout = process.cwd()): { readonly name: string; readonly repo: Repo | undefined }[] {
+/** Every configured remote's name, URL, and the repository its URL names, if any. */
+function remotes(
+  checkout = process.cwd()
+): { readonly name: string; readonly url: string; readonly repo: Repo | undefined }[] {
   const listed = git('-C', checkout, 'config', '--get-regexp', '^remote\\..*\\.url$');
   // Exit 1 means no remote is configured at all; anything else non-zero is a failure.
   if (listed.code !== 0 && listed.code !== 1) {
@@ -55,19 +58,43 @@ function remotes(checkout = process.cwd()): { readonly name: string; readonly re
   return listed.stdout.split('\n').flatMap(line => {
     const space = line.indexOf(' ');
     if (space === -1) return [];
-    return [
-      { name: line.slice('remote.'.length, space - '.url'.length), repo: urlRepo(line.slice(space + 1)) },
-    ];
+    const url = line.slice(space + 1);
+    return [{ name: line.slice('remote.'.length, space - '.url'.length), url, repo: urlRepo(url) }];
   });
 }
 
-/** The distinct repositories this checkout's remotes name. */
-export function remoteRepos(): Repo[] {
-  const repos: Repo[] = [];
-  for (const { repo } of remotes()) {
-    if (repo && !repos.some(known => sameRepo(known, repo))) repos.push(repo);
+/**
+ * The repository a workflow works on: its `repo_host` and `repo_path` inputs when both
+ * are set, otherwise the repository the forge's `resolve` finds for this checkout's
+ * remote. That remote is the only one, or `origin` among several, the remote git
+ * clones and Archon registers by default. A checkout whose `origin` is a fork works on
+ * the fork, so a run there passes both inputs; a binding always does.
+ */
+export function workflowRepo(): Repo {
+  const host = input('repo_host').trim();
+  const path = input('repo_path').trim();
+  if (host !== '' && path !== '') return { host, path };
+  if (host !== '' || path !== '') throw new Error('set both repo_host and repo_path, or neither');
+  // A remote with several `url` entries is listed once per URL; git fetches from the first.
+  const all = remotes();
+  const names = [...new Set(all.map(candidate => candidate.name))];
+  const chosen = names.length === 1 ? names[0] : names.find(name => name === 'origin');
+  const remote = all.find(candidate => candidate.name === chosen);
+  if (remote === undefined) {
+    throw new Error(
+      all.length === 0
+        ? 'repo_host and repo_path are empty, and this checkout has no git remote'
+        : `repo_host and repo_path are empty, and this checkout has several git remotes and none is origin (${names.join(', ')}); set both inputs`
+    );
   }
-  return repos;
+  // The URL stays out of the message: a configured remote URL can carry a credential.
+  const value = forge('resolve', { remote: remote.url });
+  if (value.kind !== 'resolved') {
+    throw new Error(
+      `repo_host and repo_path are empty, and git remote ${remote.name} does not resolve to a repository through an installed forge plugin`
+    );
+  }
+  return value.repo;
 }
 
 /** The one remote whose URL names `repo`, undefined when none does; refuses on several. */
@@ -109,6 +136,29 @@ export function fetchDefaultBranch(repo: Repo): { readonly branch: string; reado
       throw new Error(`${remote} default branch changed during fetch; cannot verify the fetched snapshot`);
     }
     return { branch, sha };
+  } finally {
+    gitOrThrow('update-ref', '-d', ref);
+  }
+}
+
+/**
+ * The run's base branch as the engine resolved it (`$BASE_BRANCH`): the item's landing
+ * branch when it has one, else the repository's base. The build checkout and the merge
+ * gate both judge against it, so a pull request is built and merged on the same branch.
+ */
+export function runBase(): string {
+  const base = process.env.BASE_BRANCH;
+  if (!base) throw new Error('the run has no base branch ($BASE_BRANCH)');
+  return base;
+}
+
+/** The commit `branch` is at on the remote that names `repo`, fetched into a unique ref as above. */
+export function fetchBranch(repo: Repo, branch: string): string {
+  const remote = remoteFor(repo);
+  const ref = `refs/archon/fetch/${randomUUID()}`;
+  try {
+    gitOrThrow('fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--refmap=', remote, `refs/heads/${branch}:${ref}`);
+    return gitOrThrow('rev-parse', '--verify', ref);
   } finally {
     gitOrThrow('update-ref', '-d', ref);
   }

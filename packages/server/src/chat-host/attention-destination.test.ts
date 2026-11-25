@@ -28,7 +28,10 @@ function notice(
   kind: AttentionNotice['kind'],
   status: WorkflowRun['status'],
   metadata: Record<string, unknown>,
-  outcome: WorkflowRun['outcome'] = null
+  outcomes: Pick<WorkflowRun, 'outcome' | 'completed_outcome'> = {
+    outcome: null,
+    completed_outcome: null,
+  }
 ): AttentionNotice {
   return {
     kind,
@@ -42,9 +45,10 @@ function notice(
       parent_conversation_id: null,
       codebase_id: null,
       status,
-      outcome,
+      ...outcomes,
       user_message: 'private input',
       metadata,
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,
@@ -54,6 +58,7 @@ function notice(
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      item_id: null,
     },
   };
 }
@@ -133,6 +138,26 @@ test('attention waits carry their form, options and pause identity when they hav
   });
 });
 
+test("the reserved 'other' option is an instruction in the message, never a control", () => {
+  const projected = chatAttentionNotice(
+    notice('attention', 'paused', {
+      wait: {
+        ...wait,
+        pauseId: 'p2',
+        form: 'select',
+        options: [{ id: 'use-main' }, { id: 'other', label: 'Other' }],
+        other: true,
+      },
+    }),
+    '/fixture-workflow '
+  );
+  expect(projected).toMatchObject({
+    options: [{ id: 'use-main' }],
+    message:
+      'Pick a base\n\nNone of these? Answer in your own words: `/fixture-workflow respond run other <your answer>`',
+  });
+});
+
 test('an attention notice carries the recommendation and what options do, never their value', () => {
   const recommendation = { option: 'use-main', why: 'Main has the fix.' };
   const projected = chatAttentionNotice(
@@ -152,15 +177,31 @@ test('an attention notice carries the recommendation and what options do, never 
   ]);
 });
 
-test('terminal notices carry status, authored outcome and cost', () => {
+test.each([
+  [
+    'a named outcome',
+    'completed',
+    { outcome: null, completed_outcome: 'built' },
+    { completedOutcome: 'built' },
+  ],
+  [
+    'a boolean outcome',
+    'completed',
+    { outcome: 'failed', completed_outcome: 'failed' },
+    { completedOutcome: 'failed', authoredOutcome: 'failed' },
+  ],
+  ['no declared outcome', 'completed', { outcome: null, completed_outcome: null }, {}],
+  // An older binary may write the legacy outcome while the run runs; it did not complete.
+  ['no outcome for a failed run', 'failed', { outcome: 'succeeded', completed_outcome: null }, {}],
+] as const)('a terminal notice carries status, cost and %s', (_, status, outcomes, expected) => {
   expect(
-    chatAttentionNotice(notice('terminal', 'failed', { total_cost_usd: 0.25 }, 'failed'))
+    chatAttentionNotice(notice('terminal', status, { total_cost_usd: 0.25 }, outcomes))
   ).toEqual({
     type: 'terminal',
     runId: 'run',
     workflowName: 'nightly',
-    status: 'failed',
-    authoredOutcome: 'failed',
+    status,
+    ...expected,
     totalCostUsd: 0.25,
   });
 });

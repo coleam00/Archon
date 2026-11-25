@@ -6,8 +6,10 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { checkCredentialStatuses } from '@archon/provider-contract/conformance';
 import { resolvePiAuth } from './auth';
 import { PiProvider } from './provider';
+import * as sdkSetup from './sdk-setup';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { ModelsError } from '@earendil-works/pi-ai';
+import * as bunOAuth from '@earendil-works/pi-ai/bun-oauth';
 
 const trackTempRoot = trackTempRoots();
 const secret = 'planted-pi-credential';
@@ -17,6 +19,7 @@ const keys = [
   'ANTHROPIC_OAUTH_TOKEN',
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_FEDERATION_RULE_ID',
+  'XAI_API_KEY',
   'PI_FIXTURE_TOKEN',
   'PI_HOST_ONLY_KEY',
   'PI_CONFIG_ONLY_KEY',
@@ -95,6 +98,86 @@ describe('Pi native credentials', () => {
       await new PiProvider().checkCredential({ env: {}, signal: new AbortController().signal })
     ).toEqual({ state: 'usable', source: 'native' });
   });
+  test.each([
+    ['anthropic', 'anthropic/claude-sonnet-4-6'],
+    ['xai', 'xai/grok-4.3'],
+  ])(
+    'a login check for %s finishes OAuth registration before reading a stored grant',
+    async (provider, model) => {
+      sdkSetup.resetOAuthFlowRegistrationForTest();
+      writeFileSync(
+        join(root, 'auth.json'),
+        JSON.stringify({
+          [provider]: {
+            type: 'oauth',
+            access: secret,
+            refresh: 'refresh-token',
+            expires: Date.now() + 3_600_000,
+          },
+        })
+      );
+      // ensurePiOAuthFlowsRegistered swallows a failed registration, and source
+      // mode can still load the flow without it, so a usable status alone does
+      // not prove registration worked. Watch the bundled loaders get registered.
+      const realRegisterFlows = bunOAuth.registerBunOAuthFlows;
+      const registerFlows = spyOn(bunOAuth, 'registerBunOAuthFlows').mockImplementation(() =>
+        realRegisterFlows()
+      );
+      // Hold the registration promise open. create() is the first read of the
+      // stored grant, so it must not start until that promise settles.
+      let releaseRegistration = (): void => {};
+      const gate = new Promise<void>(resolve => {
+        releaseRegistration = resolve;
+      });
+      let registrationStarted = (): void => {};
+      const started = new Promise<void>(resolve => {
+        registrationStarted = resolve;
+      });
+      let registration: Promise<void> | undefined;
+      const realRegister = sdkSetup.ensurePiOAuthFlowsRegistered;
+      const register = spyOn(sdkSetup, 'ensurePiOAuthFlowsRegistered').mockImplementation(() => {
+        registration = realRegister();
+        registrationStarted();
+        return registration.then(() => gate);
+      });
+      // Record whether the gate was open at each create() call, so the ordering
+      // check holds however fast registration settles.
+      let released = false;
+      const createdAfterRelease: boolean[] = [];
+      const realCreate = ModelRuntime.create.bind(ModelRuntime);
+      const create = spyOn(ModelRuntime, 'create').mockImplementation(options => {
+        createdAfterRelease.push(released);
+        return realCreate(options);
+      });
+      const status = check(model);
+      try {
+        await Promise.race([
+          started,
+          status.then(result => {
+            throw new Error(`check settled before OAuth registration: ${JSON.stringify(result)}`);
+          }),
+        ]);
+        await registration;
+        expect(registerFlows.mock.results).toEqual([{ type: 'return', value: undefined }]);
+        released = true;
+        releaseRegistration();
+        expect(await status).toEqual({ state: 'usable', source: 'native' });
+        expect(register).toHaveBeenCalledTimes(1);
+        expect(create).toHaveBeenCalled();
+        expect(createdAfterRelease).not.toContain(false);
+      } finally {
+        // Let the check finish before the spies come off, so it never runs
+        // against the real create() or a reset registration cache. The drain
+        // swallows its own error so it cannot mask a failed assertion above.
+        releaseRegistration();
+        await status.catch(() => undefined);
+        create.mockRestore();
+        register.mockRestore();
+        registerFlows.mockRestore();
+        sdkSetup.resetOAuthFlowRegistrationForTest();
+      }
+    }
+  );
   test('a request env key overrides a stored OAuth grant', async () => {
     writeFileSync(
       join(root, 'auth.json'),

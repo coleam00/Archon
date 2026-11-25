@@ -42,7 +42,7 @@ interface GitResult {
   stdout: Buffer;
 }
 
-const REPOSITORY_SELECTORS = new Set([
+export const REPOSITORY_SELECTORS: ReadonlySet<string> = new Set([
   'GIT_DIR',
   'GIT_WORK_TREE',
   'GIT_INDEX_FILE',
@@ -54,7 +54,7 @@ const REPOSITORY_SELECTORS = new Set([
  * Run git read-only. Repository-selecting variables are dropped so the observation reads
  * the checkout at `cwd`, not whatever repository the engine process happened to inherit.
  */
-function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult> {
+export function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult> {
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !REPOSITORY_SELECTORS.has(key))
@@ -89,12 +89,12 @@ function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult>
   });
 }
 
-function text(buffer: Buffer): string {
+export function text(buffer: Buffer): string {
   return buffer.toString('utf8').trim();
 }
 
 /** The checkout's own marker walk: a directory with no `.git` in any ancestor is not Git. */
-function hasGitMarker(cwd: string): boolean {
+export function hasGitMarker(cwd: string): boolean {
   let dir: string;
   try {
     dir = realpathSync(cwd);
@@ -124,7 +124,7 @@ type ContainerProbe = 'marker' | 'none' | 'failed';
  * calls, so tests can answer for a container that does not exist instead of spawning
  * `docker`.
  */
-async function probeContainerMarker(
+export async function probeContainerMarker(
   cwd: string,
   execContext: Extract<ExecutionContext, { kind: 'container' }>
 ): Promise<ContainerProbe> {
@@ -359,6 +359,8 @@ function stdinPath(path: string): string {
   return `"${path.replace(/[\\"\n]/g, char => (char === '\n' ? '\\n' : `\\${char}`))}"\n`;
 }
 
+type StatusReader = (cwd: string, args: string[]) => Promise<GitResult>;
+
 const STATUS_ARGS = [
   'status',
   '--porcelain=v2',
@@ -378,7 +380,8 @@ const STATUS_ARGS = [
 export async function sampleCheckout(
   cwd: string,
   execContext: ExecutionContext,
-  now: () => Date = () => new Date()
+  now: () => Date = () => new Date(),
+  readStatus: StatusReader = runGit
 ): Promise<CheckoutSample> {
   const sampledAt = now().toISOString();
   if (execContext.kind === 'container') {
@@ -395,7 +398,7 @@ export async function sampleCheckout(
   if (!hasGitMarker(cwd)) return { observation: { kind: 'not_git', sampledAt } };
 
   for (let attempt = 0; attempt < HEAD_READ_ATTEMPTS; attempt++) {
-    const sample = await sampleGit(cwd, sampledAt);
+    const sample = await sampleGit(cwd, sampledAt, readStatus);
     if (sample !== 'head_moved') return sample;
   }
   return FAILED(sampledAt);
@@ -406,8 +409,12 @@ export async function sampleCheckout(
  * commit and `git status`, so the status would describe a different commit than the one
  * read.
  */
-async function sampleGit(cwd: string, sampledAt: string): Promise<CheckoutSample | 'head_moved'> {
-  const read = await readStatusAtHead(cwd);
+async function sampleGit(
+  cwd: string,
+  sampledAt: string,
+  readStatus: StatusReader
+): Promise<CheckoutSample | 'head_moved'> {
+  const read = await readStatusAtHead(cwd, readStatus);
   if (read === 'head_moved') return read;
   if (read === 'failed') return FAILED(sampledAt);
   const { head, tree, statusOutput, status } = read;
@@ -416,7 +423,8 @@ async function sampleGit(cwd: string, sampledAt: string): Promise<CheckoutSample
   if (status.entries.length === 0) return { observation, worktree: { status: 'clean' } };
 
   const entries = await classifyEntries(top, objectFormat, status.entries);
-  if (!(await markChangedWhileObserving(top, statusOutput, entries))) return FAILED(sampledAt);
+  if (!(await markChangedWhileObserving(top, statusOutput, entries, readStatus)))
+    return FAILED(sampledAt);
   entries.sort((a, b) => Buffer.compare(checkoutPathBytes(a.path), checkoutPathBytes(b.path)));
   return {
     observation,
@@ -442,7 +450,10 @@ interface StatusAtHead {
 }
 
 /** Read HEAD, its tree, and a status that provably compared against that same commit. */
-async function readStatusAtHead(cwd: string): Promise<StatusAtHead | 'failed' | 'head_moved'> {
+async function readStatusAtHead(
+  cwd: string,
+  readStatus: StatusReader
+): Promise<StatusAtHead | 'failed' | 'head_moved'> {
   const head = await readHead(cwd);
   if (head === undefined) return 'failed';
   const { top, commit } = head;
@@ -450,7 +461,7 @@ async function readStatusAtHead(cwd: string): Promise<StatusAtHead | 'failed' | 
   // commit. It runs alongside status.
   const treeRead =
     commit === null ? undefined : runGit(top, ['rev-parse', '-q', '--verify', `${commit}^{tree}`]);
-  const statusRead = await runGit(top, STATUS_ARGS);
+  const statusRead = await readStatus(top, STATUS_ARGS);
   const treeResult = await treeRead;
   if (statusRead.code !== 0) return 'failed';
   let status: Status;
@@ -660,9 +671,10 @@ async function hashObjectIds(top: string, names: string[]): Promise<(string | un
 async function markChangedWhileObserving(
   top: string,
   before: Buffer,
-  entries: CheckoutManifestEntry[]
+  entries: CheckoutManifestEntry[],
+  readStatus: StatusReader
 ): Promise<boolean> {
-  const after = await runGit(top, STATUS_ARGS);
+  const after = await readStatus(top, STATUS_ARGS);
   if (after.code !== 0) return false;
   if (after.stdout.equals(before)) return true;
   const changed = changedPaths(before, after.stdout);

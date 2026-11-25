@@ -16,6 +16,13 @@ export {
   type ProviderLifecycleEvent,
 } from './lifecycle';
 export {
+  providerCredentialInputSchema,
+  providerCredentialKeySchema,
+  providerCredentialKeysSchema,
+  type ProviderCredentialInput,
+  type ProviderCredentialKey,
+} from './credential-input';
+export {
   credentialSourceSchema,
   credentialStatusSchema,
   type CredentialSource,
@@ -28,6 +35,8 @@ export {
   SESSION_PREVIEW_LENGTH,
   sessionPreview,
   tokenUsageSchema,
+  modelCallUsageSchema,
+  type ModelCallUsage,
   type ProviderResult,
   type ProviderStopReason,
   type ResolvedModel,
@@ -42,6 +51,7 @@ export {
   mcpServerStatusSchema,
   providerChunkSchema,
   providerEventSchema,
+  providerSessionSchema,
   providerWarningSchema,
   stateUpdateSchema,
   subtaskSchema,
@@ -55,9 +65,15 @@ export {
   warningSchema,
   type ProviderChunk,
   type ProviderEvent,
+  type ProviderSession,
   type ProviderWarning,
 } from './events';
 export { awaitingTurnSettlement, providerSettledSchema, type ProviderSettled } from './settled';
+export {
+  createTurnMessageQueue,
+  TURN_MESSAGE_REFUSED_WARNING_CODE,
+  type TurnMessageQueue,
+} from './turn-messages';
 export { providerCapabilitiesSchema, type ProviderCapabilities } from './capabilities';
 
 export {
@@ -155,6 +171,7 @@ export {
 } from './config-schema';
 
 export { nativeToolInputParser } from './native-tools';
+export { nativeToolInputSchema } from './agent-provider';
 
 export {
   normalizeJsonSchemaForOpenAiStrict,

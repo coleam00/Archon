@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import {
+  ARCHON_SKILL_NAME as CURRENT_SKILL_ROOT,
+  RETIRED_ARCHON_SKILL_NAMES as RETIRED_SKILL_ROOTS,
+} from '@archon/plugin-manifest';
 import type { CheckResult } from './doctor-check';
-
-const RETIRED_SKILL_ROOTS = ['archon', 'manage-run'] as const;
-const CURRENT_SKILL_ROOT = 'archon-cli';
 
 type LoadBundledSkillFiles = () => Promise<Record<string, string>>;
 

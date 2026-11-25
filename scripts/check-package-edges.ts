@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, posix, resolve } from 'node:path';
+import { dirname, join, posix, relative, resolve } from 'node:path';
 import ts from 'typescript';
+import { ROOT_TSC_PROJECTS } from './type-check';
 
 const dependencySections = [
   'dependencies',
@@ -40,13 +41,14 @@ export type Layering = Readonly<
 export const PACKAGE_LAYERING: Layering = {
   paths: { runtime: [] },
   'provider-contract': { runtime: [] },
+  'script-api': { runtime: [], test: ['paths'] },
   'chat-contract': { runtime: ['provider-contract'] },
   'plugin-manifest': { runtime: ['chat-contract', 'paths', 'provider-contract'] },
   git: { runtime: ['paths'] },
   forge: { runtime: ['paths'] },
   providers: { runtime: ['paths', 'provider-contract'] },
   workflows: {
-    runtime: ['git', 'paths', 'plugin-manifest', 'provider-contract'],
+    runtime: ['forge', 'git', 'paths', 'plugin-manifest', 'provider-contract', 'script-api'],
     test: ['providers'],
   },
   isolation: { runtime: ['git', 'paths', 'provider-contract', 'workflows'] },
@@ -71,6 +73,7 @@ export const PACKAGE_LAYERING: Layering = {
       'adapters',
       'chat-contract',
       'core',
+      'forge',
       'git',
       'paths',
       'provider-contract',
@@ -418,6 +421,73 @@ export function findLayeringViolations(
   return violations;
 }
 
+/** A TypeScript project: its `tsconfig.json` and the directories its `references` name. */
+export interface TscProject {
+  path: string;
+  references: readonly string[];
+}
+
+/**
+ * Every tsconfig reference names a workspace package its owning manifest declares: the
+ * package's own `package.json`, or the root one for a root project. `check:changed` scopes from
+ * the manifests, so a reference without that edge is a dependent the scoped check never reaches.
+ * The other direction needs no check: `tsc` fails with TS6307 when a project imports a referenced
+ * package's source without the reference, and an unreferenced import into a non-composite
+ * project is only checked as source.
+ */
+export function findReferenceViolations(
+  projects: readonly TscProject[],
+  packages: readonly PackageManifest[],
+  rootManifest: PackageManifest
+): Violation[] {
+  const manifests = new Map(packages.map(manifest => [packageDirectory(manifest.path), manifest]));
+  const violations: Violation[] = [];
+  for (const project of projects) {
+    const path = normalizePath(project.path);
+    const owner = path.startsWith('packages/')
+      ? manifests.get(packageDirectory(path) ?? '')
+      : rootManifest;
+    if (owner === undefined) continue;
+    const declared = declaredArchonPackages(owner, dependencySections);
+    for (const reference of project.references) {
+      const target = normalizePath(reference);
+      const name = /^packages\/([^/]+)$/.exec(target)?.[1];
+      if (name === undefined || !manifests.has(name)) {
+        violations.push({
+          file: path,
+          message: `references ${target}, which is not a workspace package`,
+        });
+      } else if (!declared.has(name)) {
+        violations.push({
+          file: path,
+          message: `references ${target}, but ${owner.path} does not declare @archon/${name}`,
+        });
+      }
+    }
+  }
+  return violations;
+}
+
+/** The workspace package and root tsconfigs with their references, relative to `root`. */
+export function loadProjects(root: string): TscProject[] {
+  const paths = [
+    ...readdirSync(join(root, 'packages')).map(name => `packages/${name}/tsconfig.json`),
+    ...ROOT_TSC_PROJECTS,
+  ].filter(path => existsSync(join(root, path)));
+  return paths.map(path => {
+    const { config, error } = ts.readConfigFile(join(root, path), ts.sys.readFile);
+    if (error) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, '\n'));
+    const references = ((config as { references?: { path: string }[] }).references ?? []).map(
+      reference =>
+        normalizePath(relative(root, resolve(root, dirname(path), reference.path))).replace(
+          /\/tsconfig\.json$/,
+          ''
+        )
+    );
+    return { path, references };
+  });
+}
+
 const SCANNED_TREES = ['packages', '.archon/workflows', '.archon/scripts'];
 
 export function loadRepository(root = resolve(import.meta.dir, '..')): {
@@ -457,10 +527,19 @@ export function loadRepository(root = resolve(import.meta.dir, '..')): {
 
 if (import.meta.main) {
   const repository = loadRepository();
+  const root = resolve(import.meta.dir, '..');
+  const rootManifest = {
+    ...(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as Omit<
+      PackageManifest,
+      'path'
+    >),
+    path: 'package.json',
+  };
   const violations = [
     ...findLayeringViolations(repository.packages),
     ...findEdgeViolations(repository),
     ...findPackBoundaryViolations(repository.files),
+    ...findReferenceViolations(loadProjects(root), repository.packages, rootManifest),
   ];
   for (const violation of violations) {
     console.error(

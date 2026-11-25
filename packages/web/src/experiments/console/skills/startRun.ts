@@ -1,6 +1,16 @@
+import type { StartRunArgs } from '../primitives/launch';
+export type { StartRunArgs } from '../primitives/launch';
 import type { paths } from '../../../lib/api.generated';
-import { requestJson } from '../lib/http';
-import type { TierName } from '../lib/tiers';
+import { HttpError, requestJson } from '../lib/http';
+
+type WorkflowRunLaunchJson =
+  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['application/json'];
+type WorkflowRunLaunchMultipart =
+  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['multipart/form-data'];
+type WorkflowRunBody = Pick<
+  WorkflowRunLaunchJson,
+  'conversationId' | 'message' | 'inputs' | 'tiers' | 'aliases'
+>;
 
 /**
  * Start a run: hides the legacy conversation coupling from the console UI.
@@ -14,39 +24,14 @@ import type { TierName } from '../lib/tiers';
  *      not wait for it here — callers should invalidate the runs cache and
  *      let the list polling surface the new run as it appears.
  *
+ *      A 4xx answer means the route refused the start before dispatching, so
+ *      no run owns the conversation from step 1: startRun soft-deletes it and
+ *      rethrows the refusal. A 5xx or a transport failure keeps it, because a
+ *      proxy error can hide a start the server accepted.
+ *
  *      With files attached the dispatch route accepts multipart/form-data,
  *      mirroring /api/conversations/:id/message. Without files we use JSON.
- *
- * The word "conversation" appears nowhere in the console outside this file.
  */
-export interface StartRunArgs {
-  projectId: string;
-  workflow: string;
-  message: string;
-  files?: File[];
-  /**
-   * Values for the workflow's declared `inputs:` (#2554), keyed by input name.
-   * Omitted names take their declared default; a missing required input is refused by
-   * the server before any worktree, clone, or AI cost.
-   */
-  inputs?: Record<string, string>;
-  tiers?: Partial<Record<TierName, string>>;
-  aliases?: Record<string, string>;
-}
-
-type WorkflowRunLaunchJson =
-  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['application/json'];
-type WorkflowRunLaunchMultipart =
-  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['multipart/form-data'];
-type WorkflowRunFormFields = Pick<
-  WorkflowRunLaunchJson,
-  keyof WorkflowRunLaunchJson & keyof WorkflowRunLaunchMultipart
->;
-
-interface CreateConversationResponse {
-  conversationId: string;
-}
-
 export async function startRun({
   projectId,
   workflow,
@@ -56,12 +41,7 @@ export async function startRun({
   tiers,
   aliases,
 }: StartRunArgs): Promise<void> {
-  const conv = await requestJson<CreateConversationResponse>('/api/conversations', {
-    method: 'POST',
-    body: JSON.stringify({ codebaseId: projectId }),
-  });
-
-  const url = `/api/workflows/${encodeURIComponent(workflow)}/run`;
+  const conv = await requestJson('/api/conversations', 'post', { body: { codebaseId: projectId } });
 
   const hasInputs = inputs !== undefined && Object.keys(inputs).length > 0;
   const hasTiers = tiers !== undefined && Object.keys(tiers).length > 0;
@@ -73,25 +53,48 @@ export async function startRun({
     ...(hasInputs ? { inputs } : {}),
     ...(hasTiers ? { tiers } : {}),
     ...(hasAliases ? { aliases } : {}),
-  } satisfies WorkflowRunLaunchJson;
+  } satisfies WorkflowRunBody;
 
-  await requestJson<{ accepted: boolean; status: string }>(url, {
-    method: 'POST',
-    body:
-      files !== undefined && files.length > 0 ? buildRunForm(body, files) : JSON.stringify(body),
-  });
+  try {
+    await requestJson('/api/workflows/{name}/run', 'post', {
+      params: { name: workflow },
+      body: files !== undefined && files.length > 0 ? buildRunForm(body, files) : body,
+    });
+  } catch (err) {
+    if (err instanceof HttpError && err.status >= 400 && err.status < 500) {
+      await discardConversation(conv.conversationId);
+    }
+    throw err;
+  }
 }
 
-function buildRunForm(body: WorkflowRunFormFields, files: File[]): FormData {
+/** The refusal is what the operator needs to see, so a failed cleanup is only logged. */
+async function discardConversation(conversationId: string): Promise<void> {
+  try {
+    await requestJson('/api/conversations/{id}', 'delete', { params: { id: conversationId } });
+  } catch (err) {
+    console.warn('[console] start-run cleanup failed', { conversationId, err });
+  }
+}
+
+function buildRunForm(body: WorkflowRunBody, files: File[]): FormData {
   // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
-  for (const [key, value] of Object.entries(body)) {
+  const fields = {
+    conversationId: body.conversationId,
+    message: body.message,
+    inputs: JSON.stringify(body.inputs),
+    tiers: JSON.stringify(body.tiers),
+    aliases: JSON.stringify(body.aliases),
+  } satisfies { [Key in keyof Required<WorkflowRunBody>]: WorkflowRunLaunchMultipart[Key] };
+  for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) {
-      form.append(key, typeof value === 'string' ? value : JSON.stringify(value));
+      form.append(key, value);
     }
   }
+  const filesKey = 'files' satisfies keyof WorkflowRunLaunchMultipart;
   for (const file of files) {
-    form.append('files', file, file.name);
+    form.append(filesKey, file, file.name);
   }
   return form;
 }

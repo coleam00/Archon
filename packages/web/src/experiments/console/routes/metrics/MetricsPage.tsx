@@ -78,7 +78,7 @@ export function MetricsPage({ view = 'overview' }: { view?: MetricsView }): Reac
             <WindowButtons scope={scope} view={view} days={days} />
             <Link
               to={screenPath(scope, view === 'overview' ? 'details' : 'overview', days)}
-              className="text-[12px] text-accent-bright underline"
+              className="text-console-12 text-accent-bright underline"
             >
               {view === 'overview' ? 'Details' : 'Overview'}
             </Link>
@@ -86,7 +86,7 @@ export function MetricsPage({ view = 'overview' }: { view?: MetricsView }): Reac
         </div>
         {scope === ALL_SCOPE ? null : <ProjectViewTabs projectId={scope} active="metrics" />}
       </header>
-      <div className="flex-1 overflow-y-auto px-4 pb-[30px] pt-[22px] md:px-[30px]">
+      <div className="flex-1 overflow-y-auto px-4 pb-7.5 pt-5.5 md:px-7.5">
         <MetricsBody
           view={view}
           scope={scope}
@@ -172,7 +172,7 @@ function MetricsBody({
           <button
             type="button"
             onClick={retry}
-            className="rounded border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
+            className="rounded border border-border px-2.5 py-1 text-console-11 text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
           >
             Retry
           </button>
@@ -246,7 +246,7 @@ function WindowButtons({
           key={option}
           to={screenPath(scope, view, option)}
           aria-current={option === days ? 'true' : undefined}
-          className={`rounded px-2 py-1 font-mono text-[11px] transition-colors ${
+          className={`rounded px-2 py-1 font-mono text-console-11 transition-colors ${
             option === days
               ? 'bg-surface-elevated text-text-primary'
               : 'text-text-tertiary hover:text-text-primary'

@@ -1,5 +1,6 @@
 import {
   PR_VIEW_ANY_STATE,
+  RESOLVE_SUBJECT,
   type ForgeError,
   type ForgeMutationRequest,
   type ForgeRequest,
@@ -9,19 +10,24 @@ import {
   mutationTarget,
   mutationAttempt,
 } from '@archon/forge/operations';
-import { githubErrorDetail, parseRemote, TransientGitHubError, type Fetch } from './api';
+import { githubErrorDetail, parseRemote, parseSubjectUrl, type Fetch, type Sleep } from './api';
+import { handleGithubChecksLogs } from './check-logs';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
 import { handleGithubWorkItemComments } from './comments';
 import { handleGithubPrFiles, handleGithubRepoFile } from './files';
 import { handleGithubPrMergeState } from './merge-state';
 import { handleGithubMutation } from './lifecycle';
-import { handleGithubPrReviews, handleGithubPrView } from './pull-requests';
+import { handleGithubPrView } from './pull-requests';
+import { handleGithubPrReviews } from './reviews';
 import {
   handleGithubRepoLabelsList,
+  handleGithubWorkItemLabelAdded,
   handleGithubWorkItemList,
+  handleGithubWorkItemOpened,
   handleGithubWorkItemView,
 } from './workitems';
 import { handleGithubPrThreads } from './review-threads';
+import { handleGithubWorkItemSearch } from './search';
 
 export const githubPluginMetadata = {
   protocol: 1,
@@ -31,8 +37,10 @@ export const githubPluginMetadata = {
   hosts: ['github.com'],
   capabilities: [
     'resolve',
+    RESOLVE_SUBJECT,
     'checks.state',
     'checks.commit',
+    'checks.logs',
     'workitem.view',
     'workitem.comments',
     'workitem.create',
@@ -43,6 +51,9 @@ export const githubPluginMetadata = {
     'workitem.close',
     'workitem.edit-body',
     'workitem.list',
+    'workitem.label.added',
+    'workitem.opened',
+    'workitem.search',
     'repo.labels.list',
     'repo.label.ensure',
     'pr.view',
@@ -51,6 +62,7 @@ export const githubPluginMetadata = {
     'pr.edit-body',
     'pr.ready',
     'pr.draft',
+    'pr.close',
     'comment.upsert',
     'pr.merge',
     'checks.rerun',
@@ -61,39 +73,30 @@ export const githubPluginMetadata = {
     'repo.file',
     'pr.thread.reply',
     'pr.thread.resolve',
+    'pr.review.submit',
+    'attachment.put',
   ],
   mutationConditions: { 'pr.merge': ['head'] },
   token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
+  remedies: {
+    unsupported_op:
+      '`archon plugin update coleam00/Archon/plugins/forge-github` installs the latest ' +
+      'released plugin, which may not support this operation either.',
+    // Per-user GitHub mode scrubs the shared token from a run started by a user who has
+    // not connected their own identity, so a shared `GH_TOKEN` cannot fix that refusal.
+    no_credential:
+      "Set `GH_TOKEN` in Archon's env file (`~/.archon/.env`, `ARCHON_HOME/.env` when " +
+      'configured, or `/.archon/.env` in Docker), set `GITHUB_TOKEN`, use `gh auth login`, ' +
+      'or configure GitHub App mode. When per-user GitHub is enabled, connect your own ' +
+      'GitHub identity instead: `archon auth github` or the Web UI Settings page.',
+  },
 } satisfies PluginMetadata;
 
 export interface GitHubOperationOptions {
   readonly token: string | undefined;
   readonly fetch?: Fetch;
-  readonly sleep?: (ms: number) => Promise<unknown>;
-}
-
-/** The waits before each repeat of a read; their count is the number of repeats. */
-const READ_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
-
-/**
- * Run a read, repeating it from its start while it fails with a
- * {@link TransientGitHubError}. A read changes nothing, so a repeat is always
- * safe; a mutation never comes through here, because a 5xx can arrive after
- * GitHub applied it. Every other failure, and the last transient one, is thrown.
- */
-async function readWithRetry(
-  read: () => Promise<ForgeResponse>,
-  sleep: (ms: number) => Promise<unknown>
-): Promise<ForgeResponse> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await read();
-    } catch (cause) {
-      const delay = READ_RETRY_DELAYS_MS[attempt];
-      if (!(cause instanceof TransientGitHubError) || delay === undefined) throw cause;
-      await sleep(delay);
-    }
-  }
+  /** The wait inside a write's read-back; tests replace it so they do not sleep. */
+  readonly sleep?: Sleep;
 }
 
 function failure(operationId: string, error: ForgeError): ForgeResponse {
@@ -110,6 +113,9 @@ type ReadHandler<Op extends ReadOp> = (
 const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'workitem.view': handleGithubWorkItemView,
   'workitem.list': handleGithubWorkItemList,
+  'workitem.label.added': handleGithubWorkItemLabelAdded,
+  'workitem.opened': handleGithubWorkItemOpened,
+  'workitem.search': handleGithubWorkItemSearch,
   'workitem.comments': handleGithubWorkItemComments,
   'repo.labels.list': handleGithubRepoLabelsList,
   'pr.view': handleGithubPrView,
@@ -120,7 +126,27 @@ const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'repo.file': handleGithubRepoFile,
   'checks.state': handleGithubChecksState,
   'checks.commit': handleGithubChecksCommit,
+  'checks.logs': handleGithubChecksLogs,
 };
+
+type ResolveValue = Extract<
+  Extract<ForgeResponse, { ok: true }>['result'],
+  { op: 'resolve' }
+>['value'];
+
+/** A Git remote's repository, or with `web` the issue or pull request a web URL names. */
+function resolveGithub(remote: string | null, web: boolean): ResolveValue {
+  const subject = web ? parseSubjectUrl(remote) : null;
+  const repo = web ? subject?.repo : parseRemote(remote);
+  if (!repo) return { kind: 'none', forge: 'none' };
+  const resolved = {
+    kind: 'resolved' as const,
+    forge: 'github',
+    repo,
+    plugin: githubPluginMetadata,
+  };
+  return subject ? { ...resolved, subject: subject.subject } : resolved;
+}
 
 export async function handleGithubOperation(
   request: ForgeRequest,
@@ -128,16 +154,10 @@ export async function handleGithubOperation(
 ): Promise<ForgeResponse> {
   try {
     if (request.op === 'resolve') {
-      const repo = parseRemote(request.remote);
       return {
         operationId: request.operationId,
         ok: true,
-        result: {
-          op: 'resolve',
-          value: repo
-            ? { kind: 'resolved', forge: 'github', repo, plugin: githubPluginMetadata }
-            : { kind: 'none', forge: 'none' },
-        },
+        result: { op: 'resolve', value: resolveGithub(request.remote, request.web === true) },
       };
     }
 
@@ -163,11 +183,14 @@ export async function handleGithubOperation(
     }
     const fetchImpl = options.fetch ?? globalThis.fetch;
     const token = options.token;
-    if (isMutationRequest(request)) return await handleGithubMutation(request, fetchImpl, token);
+    const sleep = options.sleep ?? Bun.sleep;
+    if (isMutationRequest(request))
+      return await handleGithubMutation(request, fetchImpl, token, sleep);
     // Keyed by the request's own op, the handler takes that request; TypeScript cannot
     // correlate the table's members with the request union on its own.
     const read = readHandlers[request.op] as ReadHandler<ReadOp>;
-    return await readWithRetry(() => read(request, fetchImpl, token), options.sleep ?? Bun.sleep);
+    // A read that fails temporarily is repeated by the host, which records the repeats.
+    return await read(request, fetchImpl, token);
   } catch (cause) {
     return failure(request.operationId, githubErrorDetail(cause));
   }

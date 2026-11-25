@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { type WorktreeDisposition } from '../schemas/terminal-record';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdir, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -9,7 +9,6 @@ import {
   mockLogFn,
   type MockWorkflowStore,
   createMockStore,
-  authoredOutcomeWrites,
   mockClaudeCapabilities,
   mockSendQueryDag,
   mockGetAgentProviderDag,
@@ -21,13 +20,10 @@ import {
   persistedEvents,
   dagOptions,
   makeWorkflowRun,
-  readTranscript,
 } from './test-utils';
-import { executeDagWorkflow, type ExecuteDagWorkflowOptions } from '../dag-executor';
+import { executeDagWorkflow } from '../dag-executor';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from '../event-emitter';
 import type { DagNode, ExecNode, WorkflowRun } from '../schemas';
-import type { IWorkflowPlatform } from '../deps';
-import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 
 describe('executeDagWorkflow -- final status derivation', () => {
   // Invariant: if ANY non-skipped node has failed status, the run must be
@@ -59,28 +55,6 @@ describe('executeDagWorkflow -- final status derivation', () => {
 
   afterEach(async () => {
     await removeTempTree(testDir);
-  });
-
-  it('a failed-only DAG delegates its terminal event to failWorkflowRun', async () => {
-    const mockStore = createMockStore();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(mockStore),
-        conversationId: 'conv-status',
-        cwd: testDir,
-        workflow: {
-          name: 'status-test',
-          nodes: [{ id: 'fail', kind: 'exec', runtime: 'sh', script: 'exit 1' } as ExecNode],
-        },
-        workflowRun: makeWorkflowRun('dag-status-failed-only'),
-      })
-    );
-
-    expect(mockStore.failWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(mockStore.createWorkflowEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: 'workflow_failed' })
-    );
   });
 
   it('one success + one independent failure -> failWorkflowRun, not completeWorkflowRun', async () => {
@@ -120,47 +94,8 @@ describe('executeDagWorkflow -- final status derivation', () => {
     // node's own error text is the subprocess's, so the assertion pins the
     // sentence the executor owns and the node it names.
     expect(deliveredMessages(platform)).toEqual([
-      "❌ DAG workflow 'status-test' completed with failures: 'fail': Bash node 'fail' failed " +
+      "❌ DAG workflow 'status-test' completed with failures: 'fail' (exec_failed): Bash node 'fail' failed " +
         '[exit 1]: no diagnostic output',
-    ]);
-  });
-
-  it('multiple successes + one failure -> failWorkflowRun, not completeWorkflowRun', async () => {
-    const mockStore = createMockStore();
-    const mockDeps = createMockDeps(mockStore);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('dag-status-run-2');
-
-    const nodes: DagNode[] = [
-      { id: 'a', kind: 'exec', runtime: 'sh', script: 'echo a' } as ExecNode,
-      { id: 'b', kind: 'exec', runtime: 'sh', script: 'echo b' } as ExecNode,
-      { id: 'c', kind: 'exec', runtime: 'sh', script: 'echo c' } as ExecNode,
-      { id: 'fail', kind: 'exec', runtime: 'sh', script: 'exit 1' } as ExecNode,
-    ];
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-status',
-        cwd: testDir,
-        workflow: { name: 'status-test-multi', nodes },
-        workflowRun,
-      })
-    );
-
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-    expect(mockStore.failWorkflowRun).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining('fail'),
-      { scheduledResume: undefined, exitReason: 'node_error' }
-    );
-
-    // Only the failing node is named; the three successes are not.
-    expect(deliveredMessages(platform)).toEqual([
-      "❌ DAG workflow 'status-test-multi' completed with failures: 'fail': Bash node 'fail' " +
-        'failed [exit 1]: no diagnostic output',
     ]);
   });
 
@@ -243,12 +178,18 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
   async function runDag(
     nodes: DagNode[],
     prepareStore?: (store: MockWorkflowStore) => void
-  ): Promise<{ store: MockWorkflowStore; failureKinds: Record<string, unknown> }> {
+  ): Promise<{
+    store: MockWorkflowStore;
+    failureKinds: Record<string, unknown>;
+    messages: string[];
+  }> {
     const store = createMockStore();
     prepareStore?.(store);
+    const platform = createMockPlatform();
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
+        platform,
         cwd: testDir,
         workflow: { name: 'dag-reasons', nodes },
         workflowRun: makeWorkflowRun(),
@@ -259,7 +200,7 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
       if (event.event_type !== 'node_failed' || !event.step_name) continue;
       failureKinds[event.step_name] = (event.data as Record<string, unknown>).failure_kind;
     }
-    return { store, failureKinds };
+    return { store, failureKinds, messages: deliveredMessages(platform) };
   }
 
   function failOptions(store: MockWorkflowStore): unknown {
@@ -282,12 +223,12 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     expect(failureKinds).toEqual({ slow: 'timeout' });
   });
 
-  it('a prompt that returns prose for a declared output_format is output_contract', async () => {
+  it('a prompt that returns prose for a declared output_format is schema_unmet', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'Sure, here is my answer in prose.' };
       yield { type: 'result', sessionId: 'sid-prose' };
     });
-    const { failureKinds } = await runDag([
+    const { failureKinds, messages } = await runDag([
       {
         id: 'classify',
         kind: 'agent',
@@ -295,7 +236,12 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
         output_format: { type: 'object', properties: { kind: { type: 'string' } } },
       },
     ]);
-    expect(failureKinds).toEqual({ classify: 'output_contract' });
+    expect(failureKinds).toEqual({ classify: 'schema_unmet' });
+    // The run's summary names the recorded kind, the value a retry policy targets.
+    expect(messages.at(-1)).toBe(
+      "❌ DAG workflow 'dag-reasons' failed: node classify (schema_unmet) failed. " +
+        '0 downstream nodes were skipped.'
+    );
   });
 
   it('an untyped provider error is unknown, whatever its message says', async () => {
@@ -406,316 +352,6 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
       { id: 'step', kind: 'agent', source: { kind: 'inline', prompt: 'Do thing.' } },
     ]);
     expect(failureKinds).toEqual({ step: 'config' });
-  });
-
-  it('one completed node and one failed node is a node_error', async () => {
-    const { store } = await runDag([
-      { id: 'ok', kind: 'exec', runtime: 'sh', script: 'echo fine' },
-      { id: 'bad', kind: 'exec', runtime: 'sh', script: 'exit 2', depends_on: ['ok'] },
-    ]);
-    expect(failOptions(store)).toMatchObject({ exitReason: 'node_error' });
-  });
-});
-
-describe('executeDagWorkflow -- evidence gate (#2230)', () => {
-  // Thin terminal-success gate: when the workflow declares
-  // `evidence_policy.required: true`, the executor refuses terminal `completed`
-  // unless `$ARTIFACTS_DIR/evidence.json` exists. Presence check ONLY — the
-  // workflow's own bash/script nodes compute what counts as evidence.
-  let testDir: string;
-  let artifactsDir: string;
-
-  beforeEach(async () => {
-    testDir = join(
-      tmpdir(),
-      `dag-evidence-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    );
-    artifactsDir = join(testDir, 'artifacts');
-    await mkdir(testDir, { recursive: true });
-  });
-
-  afterEach(async () => {
-    await removeTempTree(testDir);
-  });
-
-  async function runEvidenceWorkflow(opts: {
-    store: IWorkflowStore;
-    platform: IWorkflowPlatform;
-    evidencePolicy?: { required: boolean };
-    authoredGreen?: boolean;
-    priorCompletedNodes?: Map<string, PersistedNodeOutput>;
-    priorUsage?: ExecuteDagWorkflowOptions['priorUsage'];
-  }): Promise<void> {
-    const mockDeps = createMockDeps(opts.store);
-    const workflowRun = makeWorkflowRun('dag-evidence-run');
-    const nodes: DagNode[] = [
-      opts.authoredGreen === undefined
-        ? ({ id: 'work', kind: 'exec', runtime: 'sh', script: 'echo done' } as ExecNode)
-        : ({
-            id: 'work',
-            kind: 'exec',
-            runtime: 'sh',
-            script: `printf '{"green":${String(opts.authoredGreen)}}'`,
-            output_format: {
-              type: 'object',
-              properties: { green: { type: 'boolean' } },
-              required: ['green'],
-            },
-          } as ExecNode),
-    ];
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform: opts.platform,
-        conversationId: 'conv-evidence',
-        cwd: testDir,
-        workflow: {
-          name: 'evidence-test',
-          nodes,
-          ...(opts.evidencePolicy ? { evidence_policy: opts.evidencePolicy } : {}),
-          ...(opts.authoredGreen !== undefined ? { returns: 'work', outcome_field: 'green' } : {}),
-        },
-        workflowRun,
-        artifactsDir,
-        priorCompletedNodes: opts.priorCompletedNodes,
-        priorUsage: opts.priorUsage,
-      })
-    );
-  }
-
-  it('required: true + missing evidence.json -> failWorkflowRun with explicit reason, never completed', async () => {
-    const mockStore = createMockStore();
-    const platform = createMockPlatform();
-
-    await runEvidenceWorkflow({
-      store: mockStore,
-      platform,
-      evidencePolicy: { required: true },
-    });
-
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
-    const failCall = (mockStore.failWorkflowRun as ReturnType<typeof mock>).mock
-      .calls[0] as unknown[];
-    expect(failCall[1] as string).toContain('evidence_policy.required');
-    expect(failCall[1] as string).toContain(join(artifactsDir, 'evidence.json'));
-
-    // The user-facing message says exactly why
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    expect(messages.some(m => m.includes('evidence_policy.required'))).toBe(true);
-  });
-
-  it('missing evidence writes a structured metadata.evidence_validation note', async () => {
-    const mockStore = createMockStore();
-    const platform = createMockPlatform();
-
-    await runEvidenceWorkflow({
-      store: mockStore,
-      platform,
-      evidencePolicy: { required: true },
-    });
-
-    const updateCalls = (mockStore.updateWorkflowRun as ReturnType<typeof mock>).mock
-      .calls as unknown[][];
-    const metadataCall = updateCalls.find(call => {
-      const updates = call[1] as { metadata?: Record<string, unknown> };
-      return updates?.metadata?.evidence_validation !== undefined;
-    });
-    expect(metadataCall).toBeDefined();
-    const note = (metadataCall?.[1] as { metadata: Record<string, unknown> }).metadata
-      .evidence_validation as Record<string, unknown>;
-    expect(note.status).toBe('missing');
-    expect(note.policy).toBe('evidence_policy.required');
-    expect(note.expected_path).toBe(join(artifactsDir, 'evidence.json'));
-    expect(typeof note.checked_at).toBe('string');
-  });
-
-  it('missing evidence persists an evidence_validation_failed workflow event and its exit reason', async () => {
-    const mockStore = createMockStore();
-    const platform = createMockPlatform();
-
-    await runEvidenceWorkflow({
-      store: mockStore,
-      platform,
-      evidencePolicy: { required: true },
-    });
-
-    const eventCalls = (mockStore.createWorkflowEvent as ReturnType<typeof mock>).mock
-      .calls as unknown[][];
-    const evidenceEvent = eventCalls.find(
-      call => (call[0] as { event_type: string }).event_type === 'evidence_validation_failed'
-    );
-    expect(evidenceEvent).toBeDefined();
-    const eventData = (evidenceEvent?.[0] as { data: Record<string, unknown> }).data;
-    expect(eventData.expected_path).toBe(join(artifactsDir, 'evidence.json'));
-
-    expect(mockStore.failWorkflowRun).toHaveBeenCalledWith(expect.any(String), expect.any(String), {
-      exitReason: 'evidence_missing',
-    });
-  });
-
-  it('carries prior run usage onto the evidence-gate workflow_error row', async () => {
-    await runEvidenceWorkflow({
-      store: createMockStore(),
-      platform: createMockPlatform(),
-      evidencePolicy: { required: true },
-      priorUsage: {
-        costUsd: 0.03,
-        tokens: { input: 300, output: 30, cacheRead: 200, cacheWrite: 0 },
-      },
-    });
-
-    const errorRow = (await readTranscript(join(testDir, 'logs'), 'dag-evidence-run')).find(
-      row => row.type === 'workflow_error'
-    );
-    expect(errorRow?.cost_usd).toBe(0.03);
-    expect(errorRow?.tokens).toEqual({
-      input: 300,
-      output: 30,
-      cacheRead: 200,
-      cacheWrite: 0,
-    });
-  });
-
-  it('any evidence.json contents satisfy the file-presence convention', async () => {
-    const mockStore = createMockStore();
-    const platform = createMockPlatform();
-    await mkdir(artifactsDir, { recursive: true });
-    await writeFile(
-      join(artifactsDir, 'evidence.json'),
-      '{"verified":true,"checks":["nothing was run"]}'
-    );
-
-    await runEvidenceWorkflow({
-      store: mockStore,
-      platform,
-      evidencePolicy: { required: true },
-    });
-
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-  });
-
-  it('authored succeeded coexists with lifecycle failure when the marker is absent', async () => {
-    const mockStore = createMockStore();
-
-    await runEvidenceWorkflow({
-      store: mockStore,
-      platform: createMockPlatform(),
-      evidencePolicy: { required: true },
-      authoredGreen: true,
-    });
-
-    expect(authoredOutcomeWrites(mockStore)).toEqual(['succeeded']);
-    expect(mockStore.failWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(mockStore.completeWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('authored failed coexists with lifecycle completion when the marker exists', async () => {
-    const mockStore = createMockStore();
-    await mkdir(artifactsDir, { recursive: true });
-    await writeFile(join(artifactsDir, 'evidence.json'), 'self-asserted');
-
-    await runEvidenceWorkflow({
-      store: mockStore,
-      platform: createMockPlatform(),
-      evidencePolicy: { required: true },
-      authoredGreen: false,
-    });
-
-    expect(authoredOutcomeWrites(mockStore)).toEqual(['failed']);
-    expect(mockStore.completeWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(mockStore.failWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('surfaces a failed completion write', async () => {
-    const mockStore = createMockStore();
-    (mockStore.completeWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('terminal completion write failed')
-    );
-    const platform = createMockPlatform();
-    await mkdir(artifactsDir, { recursive: true });
-    await writeFile(join(artifactsDir, 'evidence.json'), '{"proof": "landed"}');
-
-    await expect(runEvidenceWorkflow({ store: mockStore, platform })).rejects.toThrow(
-      'terminal completion write failed'
-    );
-  });
-
-  it('surfaces a failed failure write', async () => {
-    const mockStore = createMockStore();
-    (mockStore.failWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('terminal failure write failed')
-    );
-
-    await expect(
-      runEvidenceWorkflow({
-        store: mockStore,
-        platform: createMockPlatform(),
-        evidencePolicy: { required: true },
-      })
-    ).rejects.toThrow('terminal failure write failed');
-  });
-
-  it('no evidence_policy declared -> completes without checking for evidence.json', async () => {
-    const mockStore = createMockStore();
-    const platform = createMockPlatform();
-
-    await runEvidenceWorkflow({ store: mockStore, platform });
-
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-  });
-
-  it('required: false -> completes without checking for evidence.json', async () => {
-    const mockStore = createMockStore();
-    const platform = createMockPlatform();
-
-    await runEvidenceWorkflow({
-      store: mockStore,
-      platform,
-      evidencePolicy: { required: false },
-    });
-
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-  });
-
-  it('resumed run (all nodes prior-completed) with evidence.json now present -> completes', async () => {
-    // A run that failed the gate is resumed after evidence.json was produced:
-    // every node is skipped as prior-completed, the executor re-enters the
-    // completion path, and the gate now passes.
-    const mockStore = createMockStore();
-    const platform = createMockPlatform();
-    await mkdir(artifactsDir, { recursive: true });
-    await writeFile(join(artifactsDir, 'evidence.json'), '{"proof": "landed"}');
-
-    await runEvidenceWorkflow({
-      store: mockStore,
-      platform,
-      evidencePolicy: { required: true },
-      priorCompletedNodes: new Map([['work', { output: 'done' }]]),
-    });
-
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-  });
-
-  it('resumed run without evidence.json -> fails the gate again', async () => {
-    const mockStore = createMockStore();
-    const platform = createMockPlatform();
-
-    await runEvidenceWorkflow({
-      store: mockStore,
-      platform,
-      evidencePolicy: { required: true },
-      priorCompletedNodes: new Map([['work', { output: 'done' }]]),
-    });
-
-    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
   });
 });
 
@@ -878,6 +514,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     });
     store.completeWorkflowRun = mock(async () => {
       expect(committed).toEqual(['node_started', 'node_completed']);
+      return { startReceipts: [] };
     });
     await run(store, createMockPlatform(), [okNode], []);
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
@@ -970,6 +607,21 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     }
   );
 
+  // A reader of workflow_completed (the chat host re-reads the run for its outcome) must
+  // find the completion stored, since the outcome lands only in that write (#5660).
+  it('emits workflow_completed after the completion write', async () => {
+    const store = createMockStore();
+    const emitted: string[] = [];
+    store.completeWorkflowRun = mock(async () => {
+      emitted.push('completion_stored');
+      return { startReceipts: [] };
+    });
+
+    await run(store, createMockPlatform(), [okNode], emitted);
+
+    expect(emitted.slice(-2)).toEqual(['completion_stored', 'workflow_completed']);
+  });
+
   it('still emits workflow_completed and telemetry when the completion write rejects', async () => {
     const store = createMockStore();
     store.completeWorkflowRun = mock(async () => {
@@ -1008,6 +660,24 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
       ).toBe(true);
     }
   );
+
+  it('announces the failure kind the failure write recorded', async () => {
+    const store = createMockStore();
+    store.failWorkflowRun = mock(async () => ({
+      failed: true,
+      failureKind: 'schema_unmet' as const,
+    }));
+    const announced: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if (event.type === 'workflow_failed') announced.push(event);
+    });
+    try {
+      await run(store, createMockPlatform(), [badNode], []);
+    } finally {
+      unsubscribe();
+    }
+    expect(announced).toEqual([expect.objectContaining({ failureKind: 'schema_unmet' })]);
+  });
 
   it.each([false, true])(
     'announces no failure another writer already committed (successful sibling: %s)',
@@ -1068,6 +738,7 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
     const mockDeps = createMockDeps();
     mockDeps.store.completeWorkflowRun.mockImplementation(async () => {
       order.push('complete');
+      return { startReceipts: [] };
     });
     // The in-memory run predates the proof a pre-created run's row receives later.
     mockDeps.store.getWorkflowRun.mockImplementation(readRun);

@@ -6,9 +6,13 @@
  * This service never mutates run lifecycle state.
  */
 import { createLogger } from '@archon/paths';
+import { isPidProvablyGone } from '@archon/paths/process-owner';
+import type { StartExecutorObservation } from '@archon/workflows/schemas/start-executor';
 import {
+  readStartExecutor,
   TOOL_CALL_ATTENTION_METADATA_KEY,
   type ExecutionOwnerRecord,
+  type StartExecutorRecord,
   type RunAttention,
   type WorkflowRun,
   type WorkflowRunStatus,
@@ -305,6 +309,7 @@ function openAttentionWait(
     const observedStatus = latestRun.status;
     if (resolution.kind !== 'owner_required') {
       discardOwnerWatch();
+      await deliverAttached(observedStatus);
       return { kind: 'rechecked', observedStatus, resolution, ownerAttachment };
     }
     const reattached = await attachOwner(resolution);
@@ -322,6 +327,7 @@ function openAttentionWait(
     }
     if (verified.kind !== 'owner_required') {
       discardOwnerWatch();
+      await deliverAttached(verifiedRun.status);
     } else if ((await attachOwner(verified)) === 'attached' && !ownerWatchEnded) {
       await deliverAttached(verifiedRun.status);
     }
@@ -403,8 +409,10 @@ export function runOwnerLossWatch(store: RunAttentionReadStore): RunOwnerLossWat
 }
 
 /**
- * What this process observes about a running row's owner, by the rule `workflow wait`
- * uses for `owner_lost`. Null when the row is not running, so it makes no ownership claim.
+ * What this process observes about a row's owner, by the rule `workflow wait` uses for
+ * `owner_lost`: a running row, or a paused parent whose sub-run tree runs in its process.
+ * Null when the row's state needs no owner (an ordinary pause, a pending or terminal row),
+ * so it makes no ownership claim.
  * Reads only the owner endpoints and the stored row: how long the run has been quiet is
  * not an input, and the run is never mutated.
  */
@@ -419,7 +427,7 @@ export async function observeRunOwner(
   };
   let current: WorkflowRun | null = run;
   for (let read = 1; ; read++) {
-    if (current?.status !== 'running') return null;
+    if (current?.status !== 'running' && current?.status !== 'paused') return null;
     const resolution = await resolveRunAttention(ownerStore, withoutRunningAttention(current));
     if (resolution.kind !== 'owner_required') return null;
     const attachment = await attachRunOwner(resolution, () => undefined);
@@ -433,6 +441,55 @@ export async function observeRunOwner(
     if (read === 2) return 'unreachable';
     current = await store.getWorkflowRun(run.id);
   }
+}
+
+/**
+ * Observe the executor of a `pending` admitted run (`StartExecutorObservation`). Only the
+ * run's live-owner endpoint answering proves a process is executing it: `starting`. Without
+ * that, the run is read again, because its hand-off record may postdate the caller's copy,
+ * and the record (`readStartExecutor`) can prove only absence: a hand-off that started
+ * nothing, or a process it named on this host and user that no longer exists. That reads
+ * `unowned` once one more read finds the run still pending, since an executor claims the run
+ * before it can exit having run it. Every other case reads `unknown`: no record yet, an
+ * executor elsewhere, or a live pid, which may be an executor still booting or another
+ * process that reused the pid. Null once the run is not pending. Elapsed time is never an
+ * input. Observing never changes the run.
+ */
+export async function observeStartExecutor(
+  store: RunAttentionReadStore,
+  run: WorkflowRun
+): Promise<StartExecutorObservation | null> {
+  if (run.status !== 'pending') return null;
+  const endpoint = await watchRunLiveOwner(run.id, () => undefined);
+  if (endpoint.kind === 'attached') {
+    endpoint.handle.unsubscribe();
+    return { state: 'starting', executor: handedTo(readStartExecutor(run.metadata)) };
+  }
+  const current = await store.getWorkflowRun(run.id);
+  if (current?.status !== 'pending') return null;
+  const record = readStartExecutor(current.metadata);
+  const executor = handedTo(record);
+  if (endpoint.kind === 'unproven' || !provesAbsence(record)) return { state: 'unknown', executor };
+  return (await store.getWorkflowRun(run.id))?.status === 'pending'
+    ? { state: 'unowned', executor }
+    : null;
+}
+
+/** The process the record names, without its kind; null when it names none. */
+function handedTo(record: StartExecutorRecord | undefined): StartExecutorObservation['executor'] {
+  if (record?.kind !== 'handed_off') return null;
+  const { kind: _kind, ...executor } = record;
+  return executor;
+}
+
+/**
+ * True when the record proves nothing runs the start: its hand-off started nothing, or the
+ * process it named is on this host and user and no process has its pid (ESRCH).
+ */
+function provesAbsence(record: StartExecutorRecord | undefined): boolean {
+  if (record === undefined) return false;
+  if (record.kind === 'hand_off_failed') return true;
+  return isOwnerEndpointLocal(record) && isPidProvablyGone(record.pid);
 }
 
 function withoutRunningAttention(run: WorkflowRun): WorkflowRun;

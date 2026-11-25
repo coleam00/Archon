@@ -15,9 +15,11 @@ import {
 } from './dag-node';
 import type { DagNode, NestedKeySpec } from './dag-node';
 import { jsonValueSchema } from '../output-ref';
+import { workflowResourceSchema } from './resource-name';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
 import { modelRefSchema, type WorkflowModelRef } from './model-binding';
-import type { WorkflowPack } from './pack-settings';
+import type { WorkflowPackMember } from './pack-settings';
+import { declaredAskOptionsSchema } from './ask-option';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -108,27 +110,6 @@ export const workflowContainerPolicySchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Workflow-level evidence policy (#2230)
-// ---------------------------------------------------------------------------
-
-/**
- * Terminal file-presence gate. When `required: true`, the DAG executor
- * refuses to flip the run to `completed` unless `$ARTIFACTS_DIR/evidence.json`
- * exists — a missing file marks the run `failed` with a structured note at
- * `metadata.evidence_validation`. The engine gates only on file presence; any
- * contents satisfy it, and their presence does not prove that a check ran or
- * author a workflow outcome. Deterministic checks remain ordinary bash/script
- * nodes. Deliberately narrow — no schema validation, no content checks, and no
- * configurable path (see #2230).
- */
-export const workflowEvidencePolicySchema = z.object({
-  /** Refuse terminal `completed` unless the conventional marker file exists. */
-  required: z.boolean(),
-});
-
-export type WorkflowEvidencePolicy = z.infer<typeof workflowEvidencePolicySchema>;
-
-// ---------------------------------------------------------------------------
 // Workflow-level run budget (#2814)
 // ---------------------------------------------------------------------------
 
@@ -175,6 +156,19 @@ export const workflowInputSpecSchema = z.object({
   // logical type through the input contract instead of arriving as text.
   default: jsonValueSchema.optional(),
   description: z.string().optional(),
+  /**
+   * Fill this input, when the run is not supplied it, with the result of the latest
+   * completed run of the named workflow on the run's item: the value its `returns:` node
+   * completed with, or `null` when there is no such run or it has no readable result.
+   * Resolved once when the run starts; a run on no item is refused.
+   */
+  result_of: z.string().min(1).optional(),
+  /**
+   * With `result_of`: read the latest completed run of that workflow on the item whose
+   * result holds at the commit this run's checkout started on, as `{ commit, result }`, or
+   * `null`. Never the latest run in its place (#5769).
+   */
+  at: z.literal('checkout').optional(),
 });
 
 export type WorkflowInputSpec = z.infer<typeof workflowInputSpecSchema>;
@@ -213,7 +207,6 @@ export const workflowBaseSchema = z.object({
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
   container: workflowContainerPolicySchema.optional(),
-  evidence_policy: workflowEvidencePolicySchema.optional(),
   /**
    * Run-wide ceiling on total work and spend (#2814). Bounds total consumption,
    * not concurrency (that is `fan_out.max_parallel`), and applies alongside a
@@ -228,6 +221,13 @@ export const workflowBaseSchema = z.object({
    * Defaults to `true` (safe: serialize runs on the same path).
    */
   mutates_checkout: z.boolean().optional(),
+  /**
+   * The resource every top-level run of this workflow holds a slot on, however it was
+   * started, with the capacity its starts declare unless a binding sets its own. A start
+   * waits while the resource is full. An included workflow's resource is dropped: it runs
+   * inside its parent's run and slot.
+   */
+  resource: workflowResourceSchema.optional(),
   /**
    * Default for `persist_session` on every AI node in this workflow.
    * Individual nodes can override with `persist_session: false`.
@@ -258,15 +258,11 @@ export const workflowBaseSchema = z.object({
    * positional first-sink default) and the terminal output of a `workflow:`
    * sub-run child. Selecting by id (not text) works for every node type,
    * including a non-sink node.
+   *
+   * Authored as `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field>, waits?: <field>, final?: [<outcome>], summary?: <field> }`. The
+   * loader keeps the node id here and the rest of the declaration in `result`.
    */
   returns: z.string().min(1).optional(),
-  /**
-   * Required boolean property on the declared `returns:` node that records the
-   * workflow author's verdict independently from the run lifecycle (#2618).
-   * The loader validates the selected node's `output_format` contract; the
-   * engine maps exact true/false values to succeeded/failed without inference.
-   */
-  outcome_field: z.string().trim().min(1).optional(),
   /**
    * Marks the workflow deprecated (#2781): run-start surfaces announce removal
    * in an upcoming release with a switch/copy escape hatch, while it keeps
@@ -286,8 +282,59 @@ export type WorkflowBase = z.infer<typeof workflowBaseSchema>;
  * Workflow definition parsed from YAML.
  * All workflows use DAG-based execution with `nodes`.
  */
+/** What the engine reads from a workflow's result, each part named in `returns: { node, ... }`. */
+export const workflowResultContractSchema = z.strictObject({
+  /**
+   * A required property of the returns node's `output_format`: a boolean, or a string
+   * with an `enum`. Its value is the outcome the run completed with, written once, in
+   * the write that completes the run.
+   */
+  outcome: z.string().min(1).optional(),
+  /**
+   * A property of the returns node's output that holds the decisions the run leaves for
+   * an operator. The engine defines its schema (`schemas/item-ask.ts`) and adds it to the
+   * node's `output_format`; the asks a completed top-level run leaves open on its item in
+   * the write that completes it. A workflow that declares it runs on an item.
+   */
+  asks: z.string().min(1).optional(),
+  /**
+   * The one set of options every ask of the workflow offers, with `asks`. An answer's option
+   * id routes what starts next, so the workflow owns the ids, what each does and what it
+   * costs; the model writes no options and recommends a declared id or none
+   * (`schemas/item-ask.ts`). Without it, each ask carries the options the model wrote.
+   */
+  options: declaredAskOptionsSchema.optional(),
+  /**
+   * A property of the returns node's output that holds what the run's item now waits for
+   * outside Archon. The engine defines its schema (`schemas/item-wait.ts`) and adds it to
+   * the node's `output_format`; the waits a completed top-level run leaves open on its item
+   * in the write that completes it. A workflow that declares it runs on an item.
+   */
+  waits: z.string().min(1).optional(),
+  /**
+   * The outcomes after which the run's item needs nothing more: each one of the values
+   * `outcome` can take (the enum's values, or `succeeded`/`failed` for a boolean). A run
+   * that ends in one is never reported as a stopped item in the attention queue.
+   */
+  final: z.array(z.string().min(1)).min(1).optional(),
+  /**
+   * A string property of the returns node's output that the attention queue shows, as one
+   * line, when the run's item stops: it ended in an outcome that is not final, started
+   * nothing and left no ask or wait. Declared, never read from a property by its name.
+   */
+  summary: z.string().min(1).optional(),
+});
+
+export type WorkflowResultContract = z.infer<typeof workflowResultContractSchema>;
+
 const workflowDefinitionObjectSchema = workflowBaseSchema.extend({
   nodes: z.array(dagNodeSchema),
+  /**
+   * What the engine reads from the `returns:` node's output, from the object form of
+   * `returns:`. Not authorable on its own key: the loader is its only writer, and
+   * `KNOWN_WORKFLOW_KEYS` leaves it out so an authored `result:` warns as unknown.
+   */
+  result: workflowResultContractSchema.optional(),
 });
 export const workflowDefinitionSchema = z.preprocess(
   rejectRetiredThinking,
@@ -302,7 +349,7 @@ export const workflowDefinitionSchema = z.preprocess(
  */
 export type WorkflowDefinition = z.infer<typeof workflowDefinitionSchema> & {
   prompt?: never;
-  pack?: WorkflowPack;
+  pack?: WorkflowPackMember;
 };
 
 /** Static execution plan attached after include expansion and graph validation. */
@@ -334,7 +381,7 @@ export type ResolvedWorkflow = Omit<WorkflowDefinition, 'nodes'> &
  * Used by parseWorkflow to warn on unknown keys (#2213).
  */
 export const KNOWN_WORKFLOW_KEYS: ReadonlySet<string> = new Set(
-  Object.keys(workflowDefinitionObjectSchema.shape)
+  Object.keys(workflowDefinitionObjectSchema.shape).filter(key => key !== 'result')
 );
 
 /**
@@ -352,7 +399,8 @@ export const WORKFLOW_ONLY_KEYS: ReadonlySet<string> = new Set(
  * KNOWN_NODE_NESTED_KEYS — an unknown key one level down is stripped just as
  * silently as one at the top (#2213).
  *
- * `sandbox` (`.passthrough()`) is omitted because it preserves unknown fields.
+ * `sandbox` (`.passthrough()` at every level) is omitted because it preserves
+ * unknown fields, nested ones included.
  * `nodes` is handled by the per-node check, not here.
  *
  * Constructed with `keyof typeof workflowDefinitionObjectSchema.shape` as the key type
@@ -369,14 +417,10 @@ export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = ne
     'container',
     { kind: 'object', keys: new Set(Object.keys(workflowContainerPolicySchema.shape)) },
   ],
-  [
-    'evidence_policy',
-    { kind: 'object', keys: new Set(Object.keys(workflowEvidencePolicySchema.shape)) },
-  ],
   ['deprecated', { kind: 'object', keys: new Set(Object.keys(workflowDeprecationSchema.shape)) }],
   // First `record` entry in this map: `inputs` is a record of input-name → spec,
   // so unknown keys under an individual spec (e.g. `inputs.diff.typo`) warn.
-  // `returns` and `outcome_field` are plain strings and need no nested registration.
+  // `returns` is parsed by the loader, which refuses an unknown key in its object form.
   [
     'inputs',
     {
@@ -414,12 +458,24 @@ export type LoadCommandResult =
  */
 export type WorkflowExecutionResult =
   | { success: true; workflowRunId: string; summary?: string }
-  | { success: false; workflowRunId?: string; error: string }
+  | {
+      success: false;
+      workflowRunId?: string;
+      error: string;
+      /**
+       * No run was created: the continuation could not stay on the continued run's item
+       * (`ContinuedItemProjectError`). `error` names no flag, so a surface that has a way
+       * to name an item adds it.
+       */
+      continuedItemRefused?: true;
+    }
   | {
       success: true;
       paused: true;
       workflowRunId: string;
       waitCursor?: ReturnType<typeof deadlineWaitCursor>;
+      /** An operator paused the run (`archon workflow pause`); only an explicit resume continues it. */
+      byOperator?: true;
     }
   | {
       success: true;

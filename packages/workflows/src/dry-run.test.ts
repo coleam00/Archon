@@ -55,7 +55,7 @@ describe('dry-run outcomes and trace', () => {
       const workflow = makeTestWorkflow({
         name: 'authored-outcome',
         returns: 'verdict',
-        outcome_field: 'green',
+        result: { outcome: 'green' },
         nodes: [
           {
             id: 'verdict',
@@ -78,6 +78,34 @@ describe('dry-run outcomes and trace', () => {
     }
   );
 
+  test('derives a completed enum outcome, which the boolean column does not hold', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'enum-outcome',
+      returns: 'decide',
+      result: { outcome: 'stage' },
+      nodes: [
+        {
+          id: 'decide',
+          prompt: 'decide',
+          output_format: {
+            type: 'object',
+            properties: { stage: { type: 'string', enum: ['built', 'stop'] } },
+            required: ['stage'],
+          },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({ workflow, stubs: { decide: { stage: 'stop' } } });
+
+    expect(result).toMatchObject({
+      outcome: 'completed',
+      completedOutcome: 'stop',
+      authoredOutcome: null,
+    });
+    expect(formatDryRunTrace(result)).toContain('Authored outcome: stop');
+  });
+
   test.each([false, true])(
     'refuses an invalid structured result and authors no outcome (execCode: %s)',
     async execCode => {
@@ -85,7 +113,7 @@ describe('dry-run outcomes and trace', () => {
         workflow: makeTestWorkflow({
           name: 'invalid-authored-outcome',
           returns: 'verdict',
-          outcome_field: 'green',
+          result: { outcome: 'green' },
           nodes: [
             {
               id: 'verdict',
@@ -117,7 +145,7 @@ describe('dry-run outcomes and trace', () => {
     const workflow = makeTestWorkflow({
       name: 'authored-outcome-not-reached',
       returns: 'verdict',
-      outcome_field: 'green',
+      result: { outcome: 'green' },
       nodes: [
         { id: 'hold', wait: { duration_ms: 60_000 } },
         {
@@ -148,7 +176,7 @@ describe('dry-run outcomes and trace', () => {
         workflow: makeTestWorkflow({
           name: 'executed-authored-outcome',
           returns: 'verdict',
-          outcome_field: 'succeeded',
+          result: { outcome: 'succeeded' },
           nodes: [
             {
               id: 'verdict',
@@ -190,7 +218,7 @@ describe('dry-run outcomes and trace', () => {
         workflow: makeTestWorkflow({
           name: 'placeholder-authored-outcome',
           returns: 'verdict',
-          outcome_field: 'green',
+          result: { outcome: 'green' },
           nodes: [
             {
               id: 'verdict',
@@ -293,7 +321,7 @@ describe('dry-run outcomes and trace', () => {
   test('a stubbed child workflow node still fails on a binding a real launch would reject', async () => {
     const workflow = makeTestWorkflow({
       name: 'parent',
-      nodes: [{ id: 'child', workflow: 'other', with: { target: '$missing.output' } }],
+      nodes: [{ id: 'child', workflow: 'other', with: { target: '$missing.output.id' } }],
     });
     const result = await dryRunWorkflow({
       workflow,
@@ -316,44 +344,181 @@ describe('dry-run outcomes and trace', () => {
     expect(result.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
   });
 
-  test('a fan-out child workflow node cannot be stubbed and still fails loud', async () => {
-    const workflow = makeTestWorkflow({
-      name: 'parent',
-      nodes: [
-        {
-          id: 'spread',
-          workflow: 'other',
-          fan_out: { items: '["a"]', max_parallel: 1, join: 'all_done' },
-        },
-      ],
-    });
+  test.each([{ items: ['a', 'b'] }, { items: [] }])(
+    'a fan-out publishes its authored array in item order downstream (items: %j)',
+    async ({ items }) => {
+      const children = [
+        { item: 'a', result: 'first' },
+        { item: 'b', result: 'second' },
+      ];
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'parent',
+          inputs: { flag: { default: true } },
+          nodes: [
+            { id: 'pick', prompt: 'items' },
+            {
+              id: 'spread',
+              workflow: 'does-not-exist',
+              with: { source: '$pick.output', flag: '$INPUTS.flag', options: { strict: true } },
+              depends_on: ['pick'],
+              fan_out: { items: '$pick.output', max_parallel: 1, join: 'all_done' },
+            },
+            { id: 'after', prompt: 'Results: $spread.output', depends_on: ['spread'] },
+          ],
+        }),
+        stubs: { pick: [...items], ...(items.length ? { spread: children } : {}), after: 'done' },
+      });
+      const expected = JSON.stringify(items.length ? children : []);
+      expect(result.outcome).toBe('completed');
+      expect(result.trace[1]).toMatchObject({
+        nodeId: 'spread',
+        state: items.length ? 'stubbed' : 'completed',
+        output: expected,
+      });
+      expect(result.trace[2]).toMatchObject({
+        nodeId: 'after',
+        state: 'stubbed',
+        resolvedText: `Results: ${expected}`,
+      });
+    }
+  );
+
+  test('an empty fan-out ignores an authored stub', async () => {
     const result = await dryRunWorkflow({
-      workflow,
-      stubs: { spread: 'stub' },
+      workflow: makeTestWorkflow({
+        name: 'parent',
+        nodes: [{ id: 'spread', workflow: 'other', fan_out: { items: '[]' } }],
+      }),
+      stubs: { spread: 'unused' },
     });
-    expect(result.outcome).toBe('failed');
-    expect(result.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]).toMatchObject({ state: 'completed', output: '[]' });
+    expect(result.unusedStubs).toEqual(['spread']);
   });
 
-  test('fails loud on a reachable composed fan-out node instead of simulating it', async () => {
-    const workflow = makeTestWorkflow({
-      name: 'compose-fan',
-      nodes: [
-        {
-          id: 'fan',
-          kind: 'compose_fan_out',
-          include: 'some-block',
-          fan_out: { items: "['a']", as: 'item', max_parallel: 1 },
-        },
-      ],
-    });
+  test.each([{}, { defaultStubs: true }])(
+    'a non-empty fan-out requires an authored stub (%j)',
+    async options => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'parent',
+          nodes: [{ id: 'spread', workflow: 'other', fan_out: { items: '["a"]' } }],
+        }),
+        ...options,
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[0]?.reason).toContain('does not execute reachable workflow nodes');
+    }
+  );
+
+  test.each(['[{}]', {}, null])('a fan-out rejects a non-array stub (%j)', async spread => {
     const result = await dryRunWorkflow({
-      workflow,
+      workflow: makeTestWorkflow({
+        name: 'parent',
+        nodes: [{ id: 'spread', workflow: 'other', fan_out: { items: '["a"]' } }],
+      }),
+      stubs: { spread },
     });
     expect(result.outcome).toBe('failed');
-    expect(result.trace[0]?.nodeType).toBe('compose_fan_out');
-    expect(result.trace[0]?.reason).toContain('does not execute reachable compose_fan_out nodes');
+    expect(result.trace[0]?.reason).toContain('must be a JSON array');
   });
+
+  test.each([0, 1, 5])(
+    'a fan-out rejects %s stub results for three resolved items',
+    async count => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'parent',
+          nodes: [
+            { id: 'pick', prompt: 'items' },
+            {
+              id: 'spread',
+              workflow: 'other',
+              depends_on: ['pick'],
+              fan_out: { items: '$pick.output' },
+            },
+            { id: 'after', prompt: 'Results: $spread.output', depends_on: ['spread'] },
+          ],
+        }),
+        stubs: {
+          pick: ['a', 'b', 'c'],
+          spread: Array.from({ length: count }, () => ({ approved: true })),
+          after: 'must not run',
+        },
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[1]).toMatchObject({
+        nodeId: 'spread',
+        state: 'failed',
+        reason: expect.stringContaining(
+          `must contain one result per item (expected 3, received ${count})`
+        ),
+      });
+      expect(result.trace[2]).toMatchObject({ nodeId: 'after', state: 'skipped' });
+    }
+  );
+
+  test.each(['broken', '{}', '$missing.output.items'])(
+    'a fan-out resolves and validates items before accepting a stub (%s)',
+    async items => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'parent',
+          nodes: [{ id: 'spread', workflow: 'other', fan_out: { items } }],
+        }),
+        stubs: { spread: [] },
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[0]?.reason).toContain("fan_out.items on 'spread'");
+    }
+  );
+
+  test.each(['[]', '["a"]'])(
+    'a fan-out resolves static bindings before completion (items: %s)',
+    async items => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'parent',
+          nodes: [
+            {
+              id: 'spread',
+              workflow: 'other',
+              fan_out: { items },
+              with: { target: '$missing.output.field' },
+            },
+          ],
+        }),
+        stubs: { spread: [] },
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[0]?.reason).toContain("fan_out 'with:' on 'spread'");
+    }
+  );
+
+  test.each([false, true])(
+    'fails loud on a reachable composed fan-out node even with stubs (%j)',
+    async authoredStub => {
+      const workflow = makeTestWorkflow({
+        name: 'compose-fan',
+        nodes: [
+          {
+            id: 'fan',
+            kind: 'compose_fan_out',
+            include: 'some-block',
+            fan_out: { items: "['a']", as: 'item', max_parallel: 1 },
+          },
+        ],
+      });
+      const result = await dryRunWorkflow({
+        workflow,
+        stubs: authoredStub ? { fan: [] } : {},
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[0]?.nodeType).toBe('compose_fan_out');
+      expect(result.trace[0]?.reason).toContain('does not execute reachable compose_fan_out nodes');
+    }
+  );
 
   test('formats a stable human trace', async () => {
     const workflow = makeTestWorkflow({ name: 'format', nodes: [{ id: 'node', prompt: 'hello' }] });

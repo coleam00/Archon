@@ -2,12 +2,35 @@ import type { FanOutConfig, WorkflowNode } from '../../schemas';
 import type { JsonValue } from '../../output-ref';
 import { substituteWorkflowVariables } from '../../workflow-variables';
 import type { ChildWorkflowOutcome } from '../child-run';
+import { isBindingDirectiveShape } from '../../schemas';
 import {
   resolveRunInputs,
   nodeTemplateReferences,
   type ShellInputContext,
+  resolveBindingDirective,
   resolveWorkflowValue,
 } from '../references';
+
+/**
+ * Resolve a `workflow:` node's or runtime-width include's `with:` map for its child runs.
+ * A binding directive (#5760) resolves as on a command/script node, so a failed or
+ * fallback-less skipped producer throws before any child spawns; every other value keeps
+ * the lenient {@link resolveWorkflowValue} path. Executor and dry-run both call this.
+ */
+export function resolveChildRunInputs(
+  consumerId: string,
+  withMap: Record<string, JsonValue>,
+  ctx: ShellInputContext,
+  runInputs: Record<string, JsonValue> | undefined
+): Record<string, JsonValue> {
+  const resolved: Record<string, JsonValue> = {};
+  for (const [name, rawValue] of Object.entries(withMap)) {
+    resolved[name] = isBindingDirectiveShape(rawValue)
+      ? resolveBindingDirective(consumerId, name, rawValue, ctx)
+      : resolveWorkflowValue(rawValue, ctx, runInputs, false);
+  }
+  return resolved;
+}
 
 export function resolveFanOutItems(
   node: Pick<WorkflowNode, 'id'>,
@@ -48,18 +71,11 @@ export function resolveFanOutItems(
 
 export function resolveFanOutStaticInputs(
   node: Pick<WorkflowNode, 'id' | 'with'>,
-  ctx: ShellInputContext
+  ctx: ShellInputContext,
+  parentInputs: Record<string, JsonValue> | undefined = resolveRunInputs(ctx.workflowRun)
 ): { inputs: Record<string, JsonValue> } | { error: string } {
-  const parentInputs = resolveRunInputs(ctx.workflowRun);
   try {
-    return {
-      inputs: Object.fromEntries(
-        Object.entries(node.with ?? {}).map(([name, rawValue]) => [
-          name,
-          resolveWorkflowValue(rawValue, ctx, parentInputs, false),
-        ])
-      ),
-    };
+    return { inputs: resolveChildRunInputs(node.id, node.with ?? {}, ctx, parentInputs) };
   } catch (err) {
     return {
       error: `fan_out 'with:' on '${node.id}' could not be resolved: ${(err as Error).message}`,

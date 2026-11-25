@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import {
   createReleaseRepo,
@@ -219,6 +220,11 @@ test('release install registers a provider, runs a workflow, and removal rejects
   expect(() => parseProviderRunModel(registrations[0], '')).toThrow();
   await git(env.projectDir, 'init', '-q');
   await git(env.projectDir, 'commit', '--allow-empty', '-qm', 'initial');
+  // A worktree run reads its definitions from the base branch, so the project has a remote.
+  const remote = join(dirname(env.projectDir), 'remote.git');
+  await git(env.projectDir, 'init', '-q', '--bare', remote);
+  await git(env.projectDir, 'remote', 'add', 'origin', remote);
+  await git(env.projectDir, 'push', '-q', 'origin', 'HEAD');
   const workflowDir = join(env.projectDir, '.archon/workflows/echo');
   await mkdir(workflowDir, { recursive: true });
   await writeFile(

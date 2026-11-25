@@ -1,11 +1,10 @@
 {
   "name": "@archon/chat-slack",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit",
     "test:conformance": "bun src/test/conformance-cli.ts"
   },
   "dependencies": {

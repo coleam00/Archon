@@ -71,20 +71,12 @@ function activeIds(manager: ConversationLockManager): string[] {
 }
 
 describe('ConversationLockManager', () => {
-  test('initializes with correct maxConcurrent', () => {
-    const manager = new ConversationLockManager(5);
-    const stats = manager.getStats();
-    expect(stats.maxConcurrent).toBe(5);
-    expect(stats.active).toBe(0);
-    expect(stats.queuedTotal).toBe(0);
-  });
-
   test('getStats returns empty state initially', () => {
-    const manager = new ConversationLockManager(10);
+    const manager = new ConversationLockManager(5);
     const stats = manager.getStats();
     expect(stats).toEqual({
       active: 0,
-      maxConcurrent: 10,
+      maxConcurrent: 5,
       queuedTotal: 0,
       activeConversations: [],
       queuedConversations: [],
@@ -320,5 +312,50 @@ describe('ConversationLockManager', () => {
     await drainUntilStarted(log, 3);
     other.release();
     await drainUntilIdle(manager);
+  });
+});
+
+describe('ConversationLockManager.cancel', () => {
+  test('does nothing when no handler is active', () => {
+    const manager = new ConversationLockManager(5);
+    expect(manager.cancel('conv-a', 'no-such-turn')).toBe(false);
+  });
+
+  test('stops only the turn it names; a stop that arrives after the hand-off leaves the next turn running', async () => {
+    const manager = new ConversationLockManager(5);
+    const log: string[] = [];
+    const signals: AbortSignal[] = [];
+    const first = gate(log, 'first');
+    const second = gate(log, 'second');
+    const recording =
+      (h: GatedHandler) =>
+      (signal: AbortSignal): Promise<void> => {
+        signals.push(signal);
+        return h.handler();
+      };
+
+    const firstTurn = (await manager.acquireLock('conv-a', recording(first))).turnId;
+    const secondTurn = (await manager.acquireLock('conv-a', recording(second))).turnId;
+    await drainUntilStarted(log, 1);
+
+    // A queued turn is not stopped before it starts.
+    expect(manager.cancel('conv-a', secondTurn)).toBe(false);
+    expect(manager.cancel('conv-a', firstTurn)).toBe(true);
+    expect(signals[0]?.aborted).toBe(true);
+    // A second press before the stopped turn ends is a no-op.
+    expect(manager.cancel('conv-a', firstTurn)).toBe(false);
+
+    first.release();
+    await drainUntilStarted(log, 2);
+    expect(log).toEqual(['first', 'second']);
+    // A press for the first turn that lands after the hand-off stops nothing.
+    expect(manager.cancel('conv-a', firstTurn)).toBe(false);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(manager.cancel('conv-a', secondTurn)).toBe(true);
+    expect(signals[1]?.aborted).toBe(true);
+
+    second.release();
+    await drainUntilIdle(manager);
+    expect(manager.cancel('conv-a', secondTurn)).toBe(false);
   });
 });

@@ -8,11 +8,11 @@
  * again never files or comments twice. Last, each run's document records the refs this
  * pass decided and the questions it asked, and its claim is released, except on a run
  * with an asked record: it stays claimed by this run until the question is answered and
- * the run ends.
+ * the run ends. A `wait` writes nothing: its refs stay undecided, so a later pass queues
+ * them again.
  *
  * Bound inputs: INPUTS_PATH from facts; INPUTS_DECISIONS and INPUTS_SUMMARY from the
- * agent, `null` when it did not run; the workflow's INPUTS_REPO_HOST and
- * INPUTS_REPO_PATH.
+ * agent, `null` when it did not run; INPUTS_REPO, the repository facts resolved.
  */
 
 import { readFileSync } from 'node:fs';
@@ -27,11 +27,12 @@ import {
   refRun,
   runName,
 } from '../../.shared/discoveries.ts';
-import { sameRepo } from '../../.shared/forge.ts';
-import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId, state } from 'archon:script';
+import { sameRepo } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { createIssue, viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { stateGet, statePutClaimed } from '../../.shared/state.ts';
+import { putClaimed } from '../../.shared/workitem.ts';
 
 const IDLE = 'No finished run has undecided discoveries.';
 
@@ -52,18 +53,15 @@ function issueBody(decision: AgentDecision & { outcome: 'file' }, sha: string): 
 }
 
 function main(): void {
-  const idle = trimmed(process.env.INPUTS_PATH) === 'idle';
+  const idle = input('path').trim() === 'idle';
   if (idle) {
-    emit({ summary: IDLE, written: [], dropped: [], asked: [], question: '' });
+    emit({ summary: IDLE, written: [], dropped: [], asked: [], waiting: [], question: '' });
     return;
   }
-  const repo = {
-    host: trimmed(process.env.INPUTS_REPO_HOST),
-    path: trimmed(process.env.INPUTS_REPO_PATH),
-  };
+  const repo = nullableJson(input('repo')) as { host: string; path: string };
   const queue = JSON.parse(readFileSync(join(artifactsDir(), 'drain', 'queue.json'), 'utf8')) as Queue;
-  const decisions = (nullableJson(process.env.INPUTS_DECISIONS) ?? []) as AgentDecision[];
-  const summary = text(process.env.INPUTS_SUMMARY);
+  const decisions = (nullableJson(input('decisions')) ?? []) as AgentDecision[];
+  const summary = input('summary');
 
   const problems = checkDecisions(
     queue.runs.flatMap(run => run.records.map(record => record.ref)),
@@ -85,6 +83,9 @@ function main(): void {
   }
   const dropped = decisions.flatMap(decision =>
     decision.outcome === 'drop' ? [{ key: decision.key, reason: decision.reason }] : []
+  );
+  const waiting = decisions.flatMap(decision =>
+    decision.outcome === 'wait' ? [{ key: decision.key, reason: decision.reason }] : []
   );
   const asked = decisions.filter(
     (decision): decision is AgentDecision & { outcome: 'ask' } => decision.outcome === 'ask'
@@ -115,14 +116,16 @@ function main(): void {
   // Then each run's memory: the refs decided this pass, and the questions asked. A run
   // with an asked record keeps this run's claim, so no other pass asks again while the
   // question waits.
-  const self = trimmed(process.env.WORKFLOW_ID);
+  const self = workflowRunId();
   for (const run of queue.runs) {
     const name = runName(run.id);
-    const read = stateGet(name);
+    const read = state.get(name);
     const document = parseRunDocument(name, read.value);
     if (document?.claim?.run_id !== self) throw new Error(`${name} is no longer claimed by this run`);
     const ofRun = (refs: readonly string[]): string[] => refs.filter(ref => refRun(ref) === run.id);
-    const decided = decisions.filter(decision => decision.outcome !== 'ask').flatMap(decision => ofRun(decision.refs));
+    const decided = decisions
+      .filter(decision => decision.outcome !== 'ask' && decision.outcome !== 'wait')
+      .flatMap(decision => ofRun(decision.refs));
     const questions: Question[] = asked
       .filter(decision => ofRun(decision.refs).length > 0)
       .map(decision => ({
@@ -144,7 +147,7 @@ function main(): void {
         ...questions,
       ],
     };
-    if (statePutClaimed(name, next, read.revision) === 'conflict') {
+    if (!putClaimed(name, next, read.revision).ok) {
       throw new Error(`${name} changed while this run held its claim`);
     }
   }
@@ -153,6 +156,7 @@ function main(): void {
     written,
     dropped,
     asked: asked.map(decision => decision.key),
+    waiting,
     question: asked
       .map(
         (decision, index) =>

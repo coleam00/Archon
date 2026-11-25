@@ -55,8 +55,13 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { AttentionRouter } from './services/attention-router';
+import { hostItemTrackerForge, ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import { WebPushDestination } from './services/web-push';
-import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
+import {
+  createItemWaitObserver,
+  loadWebhookSourcePlugins,
+} from '@archon/core/workflows/source-plugins';
+import { hostSourceForgeReader } from '@archon/adapters/forge/source-forge-reader';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
 import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
@@ -108,6 +113,7 @@ import {
   removeServerRecord,
   writeServerRecord,
 } from '@archon/paths/server-discovery';
+import { readArchonCommit } from '@archon/git/archon-commit';
 import { appVersion } from './app-version';
 import { registerServerRoutes } from './server-routes';
 import { getLog } from './server-log';
@@ -212,6 +218,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   };
   if (!opts.skipPlatformAdapters) warnRetiredAdapters(adapterContext.installedChatIds);
   const chat = await startChatHosting(chatPlugins, config, lockManager, registry);
+  const tracker = config.itemTracker
+    ? new ItemTracker(config.itemTracker, hostItemTrackerForge())
+    : undefined;
+  // Each project's plugin check and activation baseline complete before its first scan.
+  await tracker?.activate();
 
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let adapters = NO_PLATFORM_ADAPTERS;
@@ -230,11 +241,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     webAdapter: web.adapter,
     lockManager,
     activePlatforms: registry.activePlatforms,
-    attention: { webPush: chat.webPush, router: chat.router },
+    attention: { webPush: chat.webPush, router: chat.router, tracker },
     adapters,
     webhookSources: resourceStarts.webhookSources,
     requestResourceStartDrain: resourceStarts.requestDrain,
     webDistPath: opts.webDistPath,
+    commit: await readArchonCommit(),
   });
 
   const hostname = process.env.HOST || '0.0.0.0';
@@ -261,18 +273,22 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   startWorkflowContinuationScheduler(
     createSqlWorkflowHost(),
     run => workflowResumeTargetForRun(run, registry.workflowPlatforms),
-    resourceStarts.requestDrain
+    () => {
+      resourceStarts.requestDrain?.();
+      resourceStarts.observeWaits?.();
+    }
   );
   if (resourceStarts.hostId)
     getLog().info({ hostId: resourceStarts.hostId }, 'resource_start_host_enabled');
 
-  const shutdown = createShutdown({ web, dashboard, chat, adapters, telegram });
+  const shutdown = createShutdown({ web, dashboard, chat, tracker, adapters, telegram });
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
   // Published only once shutdown is wired, so a clean stop always removes it.
   recordListeningServer({ port: server.port, host: hostname, storeId });
   chat.host.start();
   chat.router.start();
+  tracker?.start();
 
   // Every unhandled rejection or exception exits: vendor error text (such as the Claude
   // SDK's "Operation aborted") must not decide what gets suppressed. The one exception is
@@ -313,7 +329,7 @@ async function assertSqlStore(): Promise<void> {
 }
 
 /**
- * Anonymous once-per-boot startup event (self-gates on opt-out), plus a daily
+ * Anonymous startup event (self-gates on opt-out, sent at most once a day), plus a daily
  * heartbeat. Flushed by the shutdownTelemetry() call in the SIGINT/SIGTERM
  * shutdown handler. Deployment shape is categorical only — booleans/enums
  * derived from which integrations are configured, never the config values
@@ -331,7 +347,8 @@ function reportDeploymentShape(chatPlugins: readonly InstalledChatPlugin[]): voi
     adapterGitea: giteaEnv(process.env) !== undefined,
     adapterGitlab: gitlabEnv(process.env) !== undefined,
   };
-  captureArchonStarted({ surface: 'server', ...deploymentShape });
+  // assertSqlStore refused the file store at boot, so the store is the database.
+  captureArchonStarted({ surface: 'server', store: deploymentShape.dbKind, ...deploymentShape });
 
   // Daily heartbeat so long-running servers stay visible in active-install
   // metrics (a boot-only event undercounts server installs after day one).
@@ -511,6 +528,7 @@ async function createResourceStarts(): Promise<{
   webhookSources: Awaited<ReturnType<typeof loadWebhookSourcePlugins>> | undefined;
   hostId: string | undefined;
   requestDrain: (() => void) | undefined;
+  observeWaits: (() => void) | undefined;
 }> {
   const workflowHost = createSqlWorkflowHost();
   const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
@@ -520,13 +538,34 @@ async function createResourceStarts(): Promise<{
         isKnownUser: async id => (await workflowHost.records.users.getUserById(id)) !== null,
         hasDeliveryReceipt: (sourceInstanceId, deliveryId) =>
           workflowHost.deps.store.hasStartReceiptForDelivery(sourceInstanceId, deliveryId),
+        getReceipt: id => workflowHost.deps.store.getStartReceipt(id),
       })
     : undefined;
   // Explicit only: bindings choose their execution host, so the server never guesses one.
   const hostId = process.env.ARCHON_TRIGGER_HOST?.trim();
   const host = hostId ? createServerResourceStartHost(hostId, workflowHost) : undefined;
   const requestDrain = host ? (): void => void host.requestDrain() : undefined;
-  return { webhookSources, hostId, requestDrain };
+  const observer =
+    webhookSources &&
+    createItemWaitObserver({
+      sources: webhookSources,
+      store: workflowHost.deps.store,
+      forge: hostSourceForgeReader(),
+    });
+  for (const source of observer?.observing ?? []) getLog().info(source, 'webhook_source_observing');
+  // Runs on the continuation tick; the observer keeps each source's interval itself.
+  const observeWaits = observer
+    ? (): void =>
+        void observer
+          .pass(new Date())
+          .then(reports => {
+            if (reports.some(report => report.receipts.length > 0)) requestDrain?.();
+          })
+          .catch((error: unknown) => {
+            getLog().error({ err: error }, 'source_observe_failed');
+          })
+    : undefined;
+  return { webhookSources, hostId, requestDrain, observeWaits };
 }
 
 const isLoopbackHost = (hostname: string): boolean =>
@@ -595,6 +634,7 @@ interface ServerServices {
   web: WebPlatform;
   dashboard: DashboardFeed;
   chat: ChatHosting;
+  tracker: ItemTracker | undefined;
   adapters: PlatformAdapters;
   telegram: TelegramAdapter | null;
 }
@@ -634,9 +674,15 @@ async function stopServices({
   web,
   dashboard,
   chat,
+  tracker,
   adapters,
   telegram,
 }: ServerServices): Promise<void> {
+  try {
+    await tracker?.stop();
+  } catch (error) {
+    getLog().error({ err: error }, 'item_tracker_stop_error');
+  }
   try {
     await chat.router.stop();
     await chat.host.stop();

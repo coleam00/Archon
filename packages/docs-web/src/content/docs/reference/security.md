@@ -45,7 +45,7 @@ Archon runs the Claude Code SDK in `bypassPermissions` mode. This means the AI a
 - There is no per-action confirmation step.
 
 **Mitigations:**
-- Each conversation runs in an isolated git worktree by default, limiting the blast radius of any changes.
+- Each conversation runs in a git worktree by default, a checkout separate from the repository's main checkout. Runs that reuse a worktree, such as two runs on the same named branch, share its files. A worktree is not a security or network boundary: commands still run on the host, with its network and environment.
 - Workflows support per-node tool restrictions (see below) to constrain what the AI can do at each step.
 - The system is designed as a single-developer tool -- there is no multi-tenant isolation.
 
@@ -55,7 +55,7 @@ Because `bypassPermissions` grants full file and shell access, only run Archon i
 
 ## Git directory trust
 
-Archon's core and webhook clone handlers and worktree provider add clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Git consults that list only for a repository owned by another user, so on POSIX Archon skips the grant for a path not created yet when the running user (other than root) owns its nearest existing parent. Repeated setup removes duplicate exact entries from the global config files; a required config-write failure stops setup.
+Archon's core and webhook clone handlers and worktree provider add clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Git consults that list only for a repository owned by another user, so on POSIX Archon skips the grant for a path not created yet when the running user (other than root) owns its nearest existing parent. Repeated setup removes duplicate exact entries from the global config files. When two setups write the global config at once, the second waits for the first to release Git's config lock, for up to 30 seconds, and never removes it; a required config-write failure after that stops setup.
 
 Registering an existing local repository (Settings → Projects or `/register-project`) adds that exact path to the same list only when Git refuses it solely because another user owns it, as with a Docker bind mount. A path Git already accepts, or refuses for another reason (missing, unreadable, not a repository), gets no grant. Git matches the repository's top level, so register the repository root: a subdirectory of a repository owned by another user stays refused.
 
@@ -65,7 +65,9 @@ These grants persist if cloning, registration or worktree setup fails, adoption 
 
 ## Tool Restrictions
 
-Workflow nodes support `allowed_tools` and `denied_tools` to restrict which tools the AI can use at each step. This is useful for creating sandboxed steps that can only read code (not modify it) or preventing specific tool usage.
+Workflow nodes support `allowed_tools` and `denied_tools` to restrict the tools governed by each provider at each step. These fields can limit the built-in tools exposed to a node; they do not provide OS isolation or govern Pi extension tools.
+
+This example uses Claude tool names:
 
 ```yaml
 nodes:
@@ -75,14 +77,18 @@ nodes:
 
   - id: implement
     prompt: "Fix the issues found"
-    denied_tools: [WebSearch, WebFetch]  # No internet access
+    denied_tools: [WebSearch, WebFetch]  # Blocks WebSearch and WebFetch only
 ```
 
 **How it works:**
-- `allowed_tools` is a whitelist -- only listed tools are available. An empty list (`[]`) disables all tools.
-- `denied_tools` is a blacklist -- listed tools are blocked, all others are available.
-- If both are set, the provider's own precedence applies. Copilot gives `allowed_tools` precedence over `denied_tools` instead of removing the denied tools from the allowed set.
+- `allowed_tools` is an allow list for the provider's tool filter. An empty list (`[]`) selects no built-in tools governed by that filter. A Claude node that declares `skills` keeps the `Skill` tool even then. On Copilot the filter covers MCP tools too, so `[]` also removes them.
+- `denied_tools` blocks listed tools within the provider's restriction boundary. It removes only the named tools: denying `WebSearch` and `WebFetch` does not cut network access, because Bash and any other tool that can reach the network stay available.
+- If both are set on Claude, Pi or Copilot, `denied_tools` wins: a tool named in both lists is removed.
 - Support and tool names depend on the provider. See [Provider capabilities](/reference/provider-capabilities/#capabilities) for tool restriction support.
+
+Tool filtering is not a network boundary. To limit what a run can reach, use an execution environment that enforces it. On Claude, a node can set the [`sandbox:` option](/reference/workflow-language/#claude-sdk-advanced-options); Claude's [sandbox documentation](https://code.claude.com/docs/en/sandboxing) says which commands it confines and what runs outside it. A folder project's [container run](/reference/configuration/#container-isolation-folder-projects) takes a `network` setting. A worktree does not restrict the network.
+
+On Pi, the filter covers only `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. `allowed_tools: []` does not restrict user extension tools, and `denied_tools` cannot block them. Separately supplied Archon tools also remain available when added, including native tools such as `manage_run` and, when structured output is requested, `structured_output`. Extensions remain user-owned; remove or exclude unwanted extensions through Pi's native settings. See [Pi Extensions](/getting-started/ai-assistants/#extensions) for those controls and [workflow tool restrictions](/reference/workflow-language/#allowed_tools-and-denied_tools-for-tool-restrictions) for the full boundary.
 
 ## Data Privacy and Logging
 
@@ -162,7 +168,7 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 **Subprocess env isolation:**
 - At startup, `stripCwdEnv()` removes **all** keys named in the CWD project env files (`.env`, `.env.local`, `.env.development`, `.env.production`), whatever their value or source, including shell exports and direnv. Selected chat scope comes from the explicit `--chat-project-id` CLI argument, independent of env loading. It also strips nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`.
 - A source-checkout server then loads `<archon-checkout>/.env`, resolved from the server source location rather than CWD, without `override`: values remaining in the process environment win. This is Archon's own configuration, not a separate target repository's `.env`. The CLI and compiled server skip this step.
-- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope) with `override: true`. Repository env normally overrides user env. The CLI's `loadCliEnv` wrapper preserves the user-scope `GH_CONFIG_DIR` (including its absence), preventing repository env from redirecting the stored gh login. Inside a workflow, the CLI preserves inherited GitHub identity values over both env files, including empty values that disable host credentials. The standalone server follows the general load order, so repository env can override its `GH_CONFIG_DIR`. See [forge plugin configuration](/reference/forge/#plugin-configuration). The repo scope cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`; Archon refuses to start if it does, so a repository cannot choose which Archon home or plugin executables are used.
+- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope) with `override: true`. Repository env normally overrides user env. The CLI's `loadCliEnv` wrapper preserves the user-scope `GH_CONFIG_DIR` (including its absence), preventing repository env from redirecting the stored gh login. Inside a workflow, and in the start-time forge check of a pack that declares `forge:`, the CLI preserves inherited GitHub identity values over both env files, including empty values that disable host credentials. The standalone server follows the general load order, so repository env can override its `GH_CONFIG_DIR`. See [forge plugin configuration](/reference/forge/#plugin-configuration). The repo scope cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`; Archon refuses to start if it does, so a repository cannot choose which Archon home or plugin executables are used.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
 - A separate target repository's CWD env files are untrusted sources. They belong to the target project, not to Archon. The source server's checkout-root exception does not load a separate target repository's `.env`. See [`.env` file locations](/reference/configuration/#env-file-locations) for the complete load order.
 

@@ -1,3 +1,21 @@
+# What runs when:
+#   - A pull request runs the Linux jobs its change can affect. The Windows jobs, the macOS job,
+#     the Docker image build and the release-binary smoke wait for the push, unless the change
+#     touches a path that job exists to check or one that can break any job (the workflows, the
+#     install, the scripts that run the checks). scripts/should-run-test-suite.ts holds both lists.
+#   - A push to `dev` or `main` runs every job on every platform. On Windows a push to `dev` runs
+#     only the Windows set (`windows-set`); a push to `main` also runs the whole suite there
+#     (`test-windows`, `test-scripts-windows`, `test-pack-windows`). That run is the complete
+#     verification of a merge. It is skipped only when a pull request run already passed every
+#     job, the push-only ones included, on the same tree.
+#   - Once a day the schedule runs the whole suite on Windows for `dev` (`test-windows`,
+#     `test-scripts-windows`, `test-pack-windows`) and no other gated job. It skips them when a
+#     completed scheduled run already covered the `dev` head; a success or a failure counts, a
+#     cancelled run does not. A failed scheduled run comments on the open issue titled
+#     "Scheduled Windows suite fails on dev", or opens it (`report-scheduled-failure`).
+#   - To run every job on a branch before it merges, dispatch this workflow on it:
+#     `gh workflow run test.yml --ref <branch>`. The results appear on the branch's pull request.
+#     Add `-f windows-full-suite=true` for the whole suite on Windows too.
 name: Test Suite
 
 on:
@@ -11,6 +29,10 @@ on:
         description: 'Also run the workflow fixtures (bun run validate --only workflow-fixtures)'
         type: boolean
         default: false
+      windows-full-suite:
+        description: 'Also run the whole suite on Windows, as a push to main does'
+        type: boolean
+        default: false
   push:
     branches: [main, dev]
   # Draft pull requests skip the suite: their branches are pushed many times while the
@@ -18,12 +40,19 @@ on:
   pull_request:
     branches: [main, dev]
     types: [opened, synchronize, reopened, ready_for_review]
+  # A schedule runs on the default branch, `dev`. Off the hour: GitHub delays on-the-hour starts.
+  schedule:
+    - cron: '17 4 * * *'
 
 env:
-  BUN_VERSION: '1.4.2'
+  BUN_VERSION: '1.4.5'
 
+# A pull request's newer push replaces its older run. A push to dev or main is the complete
+# verification of that merge (the pull request ran only the Linux jobs), so each pushed
+# commit gets its own group and its run is never cancelled by the next merge. A scheduled run
+# has its own group too, so a dispatch on `dev` cannot cancel it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.event_name == 'schedule' && format('schedule-{0}', github.run_id) || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -41,6 +70,10 @@ jobs:
       run-workspace-tests: ${{ steps.decision.outputs.run-workspace-tests }}
       run-pack-tests: ${{ steps.decision.outputs.run-pack-tests }}
       run-pack-fixtures: ${{ steps.decision.outputs.run-pack-fixtures }}
+      run-full-matrix: ${{ steps.decision.outputs.run-full-matrix }}
+      run-windows-full-suite: ${{ steps.decision.outputs.run-windows-full-suite }}
+      run-docker-build: ${{ steps.decision.outputs.run-docker-build }}
+      run-serve-binary: ${{ steps.decision.outputs.run-serve-binary }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,15 +87,21 @@ jobs:
       # The script reads the event from GITHUB_EVENT_NAME and GITHUB_EVENT_PATH. A pull
       # request is judged on its whole diff. A push skips only when a pull request run
       # already passed every job on the same tree (proofFromPullRequestRun in the script),
-      # and otherwise runs the suite. A dispatch runs the suite, and the pack checks only when
-      # its `pack-tests` or `pack-fixtures` input asks.
+      # and otherwise runs every job. A dispatch runs every job, and the pack checks and the
+      # whole Windows suite only when its `pack-tests`, `pack-fixtures` or `windows-full-suite`
+      # input asks. `run-full-matrix` selects the Windows set and the macOS job;
+      # `run-windows-full-suite` the whole suite on Windows, which a push runs only on `main`;
+      # a schedule turns on only that and the pack checks, and only when `dev` moved since a
+      # scheduled run covered it (`coverageFromScheduledRuns`);
+      # `run-docker-build` and `run-serve-binary` each select one job.
       # Assign before echoing. A failing command substituted into another command's arguments
       # does not trip `set -e`, so `echo "run-tests=$(...)"` would report success and write an
       # empty decision that every downstream `== 'true'` gate reads as "skip".
       - name: Decide whether tests are needed
         id: decision
         env:
-          # A push asks the API whether a pull request run already passed this tree.
+          # A push asks the API whether a pull request run already passed this tree, and a
+          # schedule whether a scheduled run already covered this commit.
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           run_tests=$(bun scripts/should-run-test-suite.ts)
@@ -73,6 +112,14 @@ jobs:
           echo "run-pack-tests=$run_pack_tests" >> "$GITHUB_OUTPUT"
           run_pack_fixtures=$(bun scripts/should-run-test-suite.ts --pack-fixtures)
           echo "run-pack-fixtures=$run_pack_fixtures" >> "$GITHUB_OUTPUT"
+          run_full_matrix=$(bun scripts/should-run-test-suite.ts --full-matrix)
+          echo "run-full-matrix=$run_full_matrix" >> "$GITHUB_OUTPUT"
+          run_windows_full_suite=$(bun scripts/should-run-test-suite.ts --windows-full-suite)
+          echo "run-windows-full-suite=$run_windows_full_suite" >> "$GITHUB_OUTPUT"
+          run_docker_build=$(bun scripts/should-run-test-suite.ts --docker-build)
+          echo "run-docker-build=$run_docker_build" >> "$GITHUB_OUTPUT"
+          run_serve_binary=$(bun scripts/should-run-test-suite.ts --serve-binary)
+          echo "run-serve-binary=$run_serve_binary" >> "$GITHUB_OUTPUT"
 
   # CI splits `bun run validate` across jobs by check id so the slow checks run side by side
   # instead of one after another. A check whose result cannot depend on the OS (type-check,
@@ -81,40 +128,31 @@ jobs:
   # The test shards are the `shard` names in `ROOT_TEST_PLAN` (scripts/repo-tests.ts). The
   # workspace shards run here, the root scripts shard in `test-scripts`, and the pack shard in
   # `test-pack`. They are separate jobs because each has its own gate, and a job-level `if`
-  # cannot read the matrix. A skipped job, unlike a skipped step, keeps a pull request run from
-  # proving its merge, so the dev push then runs every shard.
+  # cannot read the matrix. For the same reason each has a `-windows` twin gated on
+  # `run-windows-full-suite`: the whole suite on Windows runs for a push to `main`, once a day
+  # for `dev` from the schedule, and on a pull request whose change runs every job. A push to
+  # `dev` runs `windows-set` instead. A skipped job, unlike a skipped step, keeps a pull request
+  # run from proving its merge, so the push then runs every job.
   test:
     needs: changes
     if: needs.changes.outputs.run-workspace-tests == 'true'
     strategy:
-      # Every leg must always report. With the default fail-fast, an ubuntu
-      # failure cancels windows, so a windows-only break stays invisible until
-      # the next round — and a cancelled leg blocks a merge once it is a
-      # required check.
+      # Every leg must always report: with the default fail-fast, one failing leg cancels the
+      # others, and a cancelled leg hides its own result until the next round.
       fail-fast: false
       # `check` is the validate id the leg runs, and `part` is its ARCHON_TEST_PART: a shard
       # too slow for one runner runs as parts split by measured group time
       # (`partitionTestGroups` in scripts/package-test-groups.ts, weights in
       # scripts/test-weights.json). The parts of a shard together run every one of its
       # groups, and scripts/validate.test.ts fails if a part is missing from this list.
-      #
-      # @archon/cli and @archon/core have their own shards: with every package on one 4-vCPU
-      # Windows runner the step took about 19 minutes (#4430). Whole, the Windows shards still
-      # took 5-7.5 minutes each, so each runs in two parts of about 2.5-3 minutes. On Linux
-      # only cli needs two parts; core and packages finish whole before the Windows parts.
+      # On Linux only cli needs two parts; core and packages finish whole.
       matrix:
         include:
-          - { os: ubuntu-latest, check: cli-tests, part: 1/2 }
-          - { os: ubuntu-latest, check: cli-tests, part: 2/2 }
-          - { os: ubuntu-latest, check: core-tests, part: 1/1 }
-          - { os: ubuntu-latest, check: package-tests, part: 1/1 }
-          - { os: windows-latest, check: cli-tests, part: 1/2 }
-          - { os: windows-latest, check: cli-tests, part: 2/2 }
-          - { os: windows-latest, check: core-tests, part: 1/2 }
-          - { os: windows-latest, check: core-tests, part: 2/2 }
-          - { os: windows-latest, check: package-tests, part: 1/2 }
-          - { os: windows-latest, check: package-tests, part: 2/2 }
-    runs-on: ${{ matrix.os }}
+          - { check: cli-tests, part: 1/2 }
+          - { check: cli-tests, part: 2/2 }
+          - { check: core-tests, part: 1/1 }
+          - { check: package-tests, part: 1/1 }
+    runs-on: ubuntu-latest
     # A hung test otherwise holds the runner for GitHub's 6-hour default while
     # every other PR queues behind it.
     timeout-minutes: 45
@@ -129,15 +167,58 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v4
 
-      # No Bun download cache on Windows either. Restoring the ~600MB cache took as long
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # A leg takes 4-7 minutes on dev. A test that hangs where Bun's own 20 s per-test
+      # timeout cannot stop it (a synchronous spin, a stuck runtime) would otherwise hold the
+      # leg to the job limit; this fails it in minutes instead. Bun names a case that times
+      # out; for a hang the log shows which test file started and never ended (#6283).
+      - name: Validate
+        timeout-minutes: 15
+        env:
+          ARCHON_TEST_PART: ${{ matrix.part }}
+        run: bun run validate --only ${{ matrix.check }}
+
+  # The workspace shards on Windows. The steps differ from `test` only where Windows needs it.
+  test-windows:
+    needs: changes
+    if: needs.changes.outputs.run-windows-full-suite == 'true'
+    strategy:
+      fail-fast: false
+      # @archon/cli and @archon/core have their own shards: with every package on one 4-vCPU
+      # Windows runner the step took about 19 minutes (#4430). Whole, the Windows shards still
+      # took 5-7.5 minutes each, so each runs in two parts of about 2.5-3 minutes.
+      matrix:
+        include:
+          - { check: cli-tests, part: 1/2 }
+          - { check: cli-tests, part: 2/2 }
+          - { check: core-tests, part: 1/2 }
+          - { check: core-tests, part: 2/2 }
+          - { check: package-tests, part: 1/2 }
+          - { check: package-tests, part: 2/2 }
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      # No Bun download cache on Windows. Restoring the ~600MB cache took as long
       # as a plain install (52s + 10s against 53s, measured side by side on PR #3438), and
       # it took Actions cache space that the Docker layer cache needs.
       #
       # Bun's install cache defaults to the user profile on C:, the slow remote-backed OS
-      # disk (see the Windows validate steps), and node_modules is on D: with the checkout.
+      # disk (see the validate step), and node_modules is on D: with the checkout.
       # With the cache on D: as well, a Windows install takes 14-19 s instead of 40-86 s.
       # The directory starts empty on every runner, so nothing carries over between runs.
-      # Every job with a Windows leg sets it.
+      # Every Windows job sets it.
       - name: Install dependencies
         run: bun install --frozen-lockfile
         env:
@@ -155,18 +236,12 @@ jobs:
       # uv-backed test's own budget made that test a budget-edge case by itself, so it is
       # paid here instead. Evidence on coleam00/Archon#3294.
       - name: Warm uv
-        if: runner.os == 'Windows'
         run: uv run python -c "print('uv warm')"
-
-      - name: Validate (Linux)
-        if: runner.os == 'Linux'
-        env:
-          ARCHON_TEST_PART: ${{ matrix.part }}
-        run: bun run validate --only ${{ matrix.check }}
 
       # The test checks use the shared 20 s per-test budget in scripts/bun-test-command.ts;
       # see coleam00/Archon#3294. The temp-disk and git-launcher settings below apply to
-      # every Windows test step, here and in `test-scripts`.
+      # every Windows test step: here, in `test-scripts-windows`, in `test-pack-windows` and in
+      # `windows-set`.
       #
       # Temp goes to the runner's local disk (`runner.temp`, D:). C: is the remote-backed
       # OS disk that Windows background maintenance also reads from: measured on this
@@ -178,8 +253,11 @@ jobs:
       # `Git\bin\git.exe` on the runner's PATH is a launcher that starts
       # `mingw64\bin\git.exe` as a second process, so every git call cost two processes
       # (about 4,700 extra per leg). Putting the real binary first removes the launcher.
-      - name: Validate (Windows)
-        if: runner.os == 'Windows'
+      #
+      # The step deadline is the Linux one's (#6283), set for Windows legs: successful ones
+      # have taken up to 13 minutes.
+      - name: Validate
+        timeout-minutes: 25
         env:
           ARCHON_TEST_PART: ${{ matrix.part }}
           TEMP: ${{ runner.temp }}
@@ -192,11 +270,49 @@ jobs:
   test-scripts:
     needs: changes
     if: needs.changes.outputs.run-tests == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Compile Slack chat conformance fixture
+        run: bun packages/chat-slack/src/test/build-conformance.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
+
+      - name: Run compiled Slack chat conformance
+        run: bun packages/chat-slack/src/test/conformance-cli.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
+
+      - name: Build and smoke-test Slack chat release binary
+        run: |
+          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig packages/chat-slack/src/main.ts --outfile "$RUNNER_TEMP/archon-chat-slack"
+          bun packages/chat-slack/src/test/smoke.ts "$RUNNER_TEMP/archon-chat-slack"
+
+      - name: Install Caddy for deployment recipe tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/caddy"
+          curl --fail --location --retry 3 https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/caddy.tar.gz"
+          tar -xzf "$RUNNER_TEMP/caddy.tar.gz" -C "$RUNNER_TEMP/caddy" caddy
+          echo "$RUNNER_TEMP/caddy" >> "$GITHUB_PATH"
+          docker compose version
+
+      - name: Validate
+        run: bun run validate --only installer,script-tests
+
+  # The root scripts shard on Windows.
+  test-scripts-windows:
+    needs: changes
+    if: needs.changes.outputs.run-windows-full-suite == 'true'
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -212,46 +328,17 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
         env:
-          # On D: beside the checkout; see the install step in `test`.
+          # On D: beside the checkout; see the install step in `test-windows`.
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
 
-      - name: Compile Slack chat conformance fixture
-        if: runner.os == 'Linux'
-        run: bun packages/chat-slack/src/test/build-conformance.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
-
-      - name: Run compiled Slack chat conformance
-        if: runner.os == 'Linux'
-        run: bun packages/chat-slack/src/test/conformance-cli.ts "$RUNNER_TEMP/archon-chat-slack-conformance"
-
-      - name: Build and smoke-test Slack chat release binary
-        if: runner.os == 'Linux'
-        run: |
-          bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig packages/chat-slack/src/main.ts --outfile "$RUNNER_TEMP/archon-chat-slack"
-          bun packages/chat-slack/src/test/smoke.ts "$RUNNER_TEMP/archon-chat-slack"
-
       - name: Warm uv
-        if: runner.os == 'Windows'
         run: uv run python -c "print('uv warm')"
 
-      - name: Install Caddy for deployment recipe tests
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p "$RUNNER_TEMP/caddy"
-          curl --fail --location --retry 3 https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/caddy.tar.gz"
-          tar -xzf "$RUNNER_TEMP/caddy.tar.gz" -C "$RUNNER_TEMP/caddy" caddy
-          echo "$RUNNER_TEMP/caddy" >> "$GITHUB_PATH"
-          docker compose version
-
-      - name: Validate (Linux, scripts)
-        if: runner.os == 'Linux'
-        run: bun run validate --only installer,script-tests
-
-      # The generated-file and import-boundary checks ride the Windows scripts shard as
-      # well as `static` because their scripts normalize Windows path separators, and only
-      # a Windows run proves that; they cost seconds. The installer check is POSIX-only
-      # (validate skips it on Windows). Temp and git settings: see the Windows steps in `test`.
-      - name: Validate (Windows, scripts)
-        if: runner.os == 'Windows'
+      # The generated-file and import-boundary checks ride this shard as well as `static`
+      # because their scripts normalize Windows path separators, and only a Windows run proves
+      # that; they cost seconds. The installer check is POSIX-only (validate skips it on
+      # Windows). Temp and git settings: see the validate step in `test-windows`.
+      - name: Validate
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
@@ -263,15 +350,45 @@ jobs:
   # them the SDLC pack's). They run when the change touches the pack or a contract it is written
   # against (`PACK_INPUTS` in scripts/should-run-test-suite.ts), or on a dispatch that asks.
   # Every step is gated, not the job: the job runs with the suite and passes having run nothing,
-  # so a pull request that leaves the pack alone still proves its merge.
+  # so a run of every job that leaves the pack alone still proves its merge.
   test-pack:
     needs: changes
     if: needs.changes.outputs.run-tests == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUN_PACK: ${{ needs.changes.outputs.run-pack-tests == 'true' || needs.changes.outputs.run-pack-fixtures == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.RUN_PACK == 'true'
+
+      - name: Setup Bun
+        if: env.RUN_PACK == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup uv
+        if: env.RUN_PACK == 'true'
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        if: env.RUN_PACK == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Pack script tests
+        if: needs.changes.outputs.run-pack-tests == 'true'
+        run: bun run validate --only pack-tests
+
+      - name: Workflow fixtures
+        if: needs.changes.outputs.run-pack-fixtures == 'true'
+        run: bun run validate --only workflow-fixtures
+
+  # The pack shard and the workflow fixtures on Windows, with the same step gates as `test-pack`.
+  test-pack-windows:
+    needs: changes
+    if: needs.changes.outputs.run-windows-full-suite == 'true'
+    runs-on: windows-latest
     timeout-minutes: 45
     env:
       RUN_PACK: ${{ needs.changes.outputs.run-pack-tests == 'true' || needs.changes.outputs.run-pack-fixtures == 'true' }}
@@ -293,20 +410,16 @@ jobs:
         if: env.RUN_PACK == 'true'
         run: bun install --frozen-lockfile
         env:
-          # On D: beside the checkout; see the install step in `test`.
+          # On D: beside the checkout; see the install step in `test-windows`.
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
 
       - name: Warm uv
-        if: env.RUN_PACK == 'true' && runner.os == 'Windows'
+        if: env.RUN_PACK == 'true'
         run: uv run python -c "print('uv warm')"
 
-      # Temp and git settings: see the Windows steps in `test`.
-      - name: Pack script tests (Linux)
-        if: needs.changes.outputs.run-pack-tests == 'true' && runner.os == 'Linux'
-        run: bun run validate --only pack-tests
-
-      - name: Pack script tests (Windows)
-        if: needs.changes.outputs.run-pack-tests == 'true' && runner.os == 'Windows'
+      # Temp and git settings: see the validate step in `test-windows`.
+      - name: Pack script tests
+        if: needs.changes.outputs.run-pack-tests == 'true'
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
@@ -314,12 +427,8 @@ jobs:
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only pack-tests
 
-      - name: Workflow fixtures (Linux)
-        if: needs.changes.outputs.run-pack-fixtures == 'true' && runner.os == 'Linux'
-        run: bun run validate --only workflow-fixtures
-
-      - name: Workflow fixtures (Windows)
-        if: needs.changes.outputs.run-pack-fixtures == 'true' && runner.os == 'Windows'
+      - name: Workflow fixtures
+        if: needs.changes.outputs.run-pack-fixtures == 'true'
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
@@ -327,9 +436,47 @@ jobs:
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only workflow-fixtures
 
+  # The Windows set: the test files marked `// @archon-test-windows` (CONTRIBUTING.md says which
+  # files join), and the generated-file and import-boundary checks, whose scripts normalize
+  # Windows path separators. On this runner the whole suite failed mostly on timing (#5926), so
+  # the `-windows` jobs above run it only for a push to `main`, the daily schedule on `dev`, a
+  # pull request whose change runs every job, or a dispatch with `windows-full-suite`.
+  # Install, temp and git settings: see `test-windows`.
+  windows-set:
+    needs: changes
+    if: needs.changes.outputs.run-full-matrix == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
+
+      - name: Warm uv
+        run: uv run python -c "print('uv warm')"
+
+      - name: Validate
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
+          bun run validate --only cli-import-boundary,package-edges,generated-files,windows-tests
+
   file-store-primitives-macos:
     needs: changes
-    if: needs.changes.outputs.run-tests == 'true'
+    if: needs.changes.outputs.run-full-matrix == 'true'
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
@@ -369,7 +516,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Validate
-        run: bun run validate --only cli-import-boundary,package-edges,generated-files,merge-sweep-contract,type-check,lint,format
+        run: bun run validate --only cli-import-boundary,package-edges,generated-files,type-check,lint,format
 
       # The ratchet compares against the merge base with origin/$GITHUB_BASE_REF, which the
       # full fetch above provides. A push skips it: the change is already merged, and a squash
@@ -446,9 +593,19 @@ jobs:
     # getLiveRunOwningEnv (cleanup's lock query) only executes here, against a
     # real server: an untyped parameter compared against text and UUID columns
     # in one OR parses fine on SQLite and would reach every Postgres install.
+    #
+    # These tests assert behaviour across stores, never durability, so the job keeps
+    # their writes off the runner's root disk: temp (the file store's root) goes to
+    # tmpfs through TMPDIR, and the server's data directory is a tmpfs mount. The
+    # durable fsyncs stalled single cheap tests for 1-5 s on a shared runner: in the
+    # attempt that timed out (2026-11-22) the median conformance test took 10 ms and
+    # eleven took over 1 s. Evidence on coleam00/Archon issue 6086. The mount path is
+    # PGDATA in the postgres 17 image; from 18 the image keeps data elsewhere.
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      TMPDIR: /dev/shm
     services:
       postgres:
         image: postgres:17-alpine
@@ -457,6 +614,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
@@ -547,7 +705,7 @@ jobs:
 
   docker-build:
     needs: changes
-    if: needs.changes.outputs.run-tests == 'true'
+    if: needs.changes.outputs.run-docker-build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -610,6 +768,13 @@ jobs:
           docker run --rm --platform linux/arm64 --network none --entrypoint bun archon-ci:slack-arm64 \
             -e 'import { inspectChatPlugin } from "./packages/cli/src/commands/inspect-chat-plugin"; const descriptor = await inspectChatPlugin("/opt/archon/image-plugins/archon-chat-slack"); if (descriptor.id !== "slack") process.exit(1);'
 
+      # The CLI imports the archon-cli skill files from outside packages/ (bundled-skill.ts);
+      # the import throws when the image lacks them, as it did while .dockerignore excluded .claude/.
+      - name: Smoke test — image carries the files the CLI imports
+        run: |
+          docker run --rm --entrypoint bun archon-ci:test \
+            -e 'await import("./packages/cli/src/bundled-skill")'
+
       - name: Smoke test — container starts and serves /api/health
         run: |
           docker run -d --name archon-smoke -e PORT=3000 -e CLAUDE_USE_GLOBAL_AUTH=true -p 3000:3000 archon-ci:test
@@ -626,7 +791,7 @@ jobs:
 
   serve-binary:
     needs: changes
-    if: needs.changes.outputs.run-tests == 'true'
+    if: needs.changes.outputs.run-serve-binary == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -649,7 +814,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
         env:
-          # On D: beside the checkout; see the install step in `test`.
+          # On D: beside the checkout; see the install step in `test-windows`.
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
       - name: Build web UI
         run: bun run build:web
@@ -676,6 +841,12 @@ jobs:
       - name: Smoke-test Pi Bedrock in the compiled plugin
         shell: bash
         run: bun packages/core/src/test/provider-plugin-smoke.ts pi-bedrock dist/archon-provider-pi-*
+      - name: Smoke-test Pi OAuth credential check in the compiled plugin
+        shell: bash
+        run: bun packages/core/src/test/provider-plugin-smoke.ts pi-oauth dist/archon-provider-pi-*
+      - name: Smoke-test archon doctor on Pi OAuth logins
+        shell: bash
+        run: bun packages/core/src/test/provider-plugin-smoke.ts pi-oauth-doctor dist/${{ matrix.binary }} dist/archon-provider-pi-*
 
   test-suite:
     name: Test Suite
@@ -684,8 +855,12 @@ jobs:
         changes,
         static,
         test,
+        test-windows,
+        windows-set,
         test-scripts,
+        test-scripts-windows,
         test-pack,
+        test-pack-windows,
         file-store-primitives-macos,
         schema-upgrade,
         postgres-parity,
@@ -711,3 +886,62 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: bun scripts/test-suite-outcome.ts
+
+  # A failed scheduled run leaves one open issue naming the failed jobs and their failing tests;
+  # a later failure comments on it. Outside `test-suite`'s needs, so the aggregate never judges it.
+  # The event gate is on the step, not the job: a skipped job keeps a pull request run from
+  # proving its merge (`proofFromPullRequestRun`), so on every other event the job runs and
+  # succeeds with nothing to do.
+  report-scheduled-failure:
+    needs: test-suite
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - name: Open or comment on the scheduled failure issue
+        if: github.event_name == 'schedule' && needs.test-suite.result == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          title='Scheduled Windows suite fails on dev'
+          report="$RUNNER_TEMP/scheduled-failure-full.md"
+          body="$RUNNER_TEMP/scheduled-failure.md"
+          {
+            echo "The scheduled Test Suite run $RUN_URL failed on \`dev\` at $HEAD_SHA."
+            echo
+            # The failed jobs of this attempt, without the aggregate, whose log only repeats them.
+            gh api "repos/$GH_REPO/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
+              --jq '.jobs[] | select(.name != "Test Suite" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out")) | [.id, .name, .conclusion, .html_url] | @tsv' |
+              while IFS=$'\t' read -r id name conclusion url; do
+                echo "### [$name]($url): $conclusion"
+                echo
+                # Bun's `(fail) ` lines name the failing tests. They only enrich the report; a job
+                # without them (an install failure, a timeout) still appears with its link.
+                fails=''
+                if log=$(gh api --allow-escape-sequences "repos/$GH_REPO/actions/jobs/$id/logs"); then
+                  fails=$(printf '%s\n' "$log" | grep -F '(fail) ' | sed -E 's/\x1b\[[0-9;]*m//g; s/\r$//; s/^[0-9-]+T[0-9:.]+Z //' | awk '!seen[$0]++' | cut -c1-300 | head -n 30) || true
+                fi
+                if [ -n "$fails" ]; then
+                  printf '```\n%s\n```\n\n' "$fails"
+                else
+                  echo "No \`(fail)\` lines; see the job log."
+                  echo
+                fi
+              done
+          } > "$report"
+          # GitHub refuses a body over 65,536 characters.
+          head -c 60000 "$report" > "$body"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "map(select(.title == \"$title\"))[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$body"
+          else
+            gh issue create --title "$title" --body-file "$body"
+          fi

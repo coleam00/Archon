@@ -1,12 +1,15 @@
-import { expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { expect, spyOn, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getPluginsPath } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { sourceForgePlugins } from '@archon/forge/host-plugins';
+import { renderHelp } from '../help';
 import { forgeCommand } from './forge';
 import {
   forgeAuditResponse,
+  type ForgeMutationFailure,
   type ForgeRequest,
   type ForgeResponse,
 } from '@archon/forge/operations';
@@ -70,6 +73,7 @@ test('records qualified target and evaluated revision through the host audit', a
             target: ref,
             plugin,
             result: forgeAuditResponse(response),
+            retries: 0,
             durationMs: 1,
           },
         };
@@ -154,6 +158,7 @@ test('the CLI does not inject a built-in producer into explicit plugin configura
             target: null,
             plugin: null,
             result: forgeAuditResponse(response),
+            retries: 0,
             durationMs: 0,
           },
         };
@@ -190,6 +195,7 @@ test('uses trusted discovery/runtime values while retaining repo credential valu
             target: null,
             plugin: null,
             result: forgeAuditResponse(response),
+            retries: 0,
             durationMs: 0,
           },
         };
@@ -270,6 +276,7 @@ test('reads an authored request from a file so no body reaches argv', async () =
               target: null,
               plugin: null,
               result: forgeAuditResponse(response),
+              retries: 0,
               durationMs: 0,
             },
           };
@@ -361,6 +368,75 @@ test('an invalid mutation request is refused before dispatch begins', async () =
   expect(output[0]).not.toHaveProperty('mutation');
 });
 
+test('a help template left partly unfilled is refused before anything runs', async () => {
+  // Every value of the help's template is a bare placeholder, so filling only the target
+  // still leaves a request that is not JSON.
+  const line = renderHelp('forge', 'workitem.edit-body')
+    .split('\n')
+    .find(l => l.includes("archon forge workitem.edit-body --data '"));
+  const template = (line ?? '').slice((line ?? '').indexOf("'") + 1, -1);
+  const partial = template
+    .replace('<host>', '"forge.example"')
+    .replace('<path>', '"a/b"')
+    .replace('<number: integer>', '4');
+  expect(partial).toContain('<body>');
+  const output: unknown[] = [];
+  let configRead = false;
+  const code = await forgeCommand(
+    'workitem.edit-body',
+    { data: partial },
+    {
+      readConfig: async () => {
+        configRead = true;
+        return {};
+      },
+      dispatch: async () => {
+        throw new Error('must not dispatch');
+      },
+      write: async value => {
+        output.push(value);
+      },
+      env: {},
+    }
+  );
+  expect(code).toBe(1);
+  expect(configRead).toBe(false);
+  expect(output[0]).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
+  expect(output[0]).not.toHaveProperty('mutation');
+});
+
+test('a refused request names the fields the schema refused, not their values', async () => {
+  const output: unknown[] = [];
+  const unit = { kind: 'check', id: 'job-secret-id', name: 'e2e' };
+  const code = await forgeCommand(
+    'checks.rerun',
+    {
+      data: JSON.stringify({
+        ref: { repo: { host: 'forge.example', path: 'a/b' }, number: 9 },
+        revision: 'head',
+        // A bare check unit, where the request takes `{unit, rerun}` entries.
+        units: [unit],
+      }),
+    },
+    {
+      readConfig: async () => ({}),
+      dispatch: async () => {
+        throw new Error('must not dispatch');
+      },
+      write: async value => {
+        output.push(value);
+      },
+      env: {},
+    }
+  );
+  expect(code).toBe(1);
+  const { error } = output[0] as { error: { kind: string; message: string } };
+  expect(error.kind).toBe('invalid_request');
+  expect(error.message).toContain('units.0.unit');
+  expect(error.message).toContain('units.0.rerun');
+  expect(error.message).not.toContain(unit.id);
+});
+
 test('new work-item mutations use file requests and record content-free verified audits', async () => {
   const repo = { host: 'forge.example', path: 'a/b' };
   const ref = { repo, number: 4 };
@@ -402,7 +478,8 @@ test('new work-item mutations use file requests and record content-free verified
             },
           ],
         }),
-        env: { WORKFLOW_ID: 'workitems-run' },
+        // Real discovery runs here, so it scans this home and never the developer's.
+        env: { HOME: directory, ARCHON_HOME: directory, WORKFLOW_ID: 'workitems-run' },
         write: async value => {
           output.push(value);
         },
@@ -464,6 +541,7 @@ test('reviews retain bodies in stdout and digest them through the CLI audit boun
             target: ref,
             plugin: null,
             result: forgeAuditResponse(response),
+            retries: 0,
             durationMs: 1,
           },
         };
@@ -513,4 +591,594 @@ test('host metadata exposes selected plugin capabilities without credentials or 
     ok: true,
     result: { op: 'metadata', value: { capabilities: ['pr.view', 'resolve'] } },
   });
+});
+
+/** An Archon home whose installed GitHub forge plugin is a file no host can execute. */
+function homeWithUnusableInstalledGithubPlugin(): string {
+  const home = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-source-')));
+  const plugins = getPluginsPath(home);
+  mkdirSync(plugins, { recursive: true });
+  const exe = process.platform === 'win32' ? '.exe' : '';
+  writeFileSync(join(plugins, `archon-forge-github${exe}`), 'not an executable', { mode: 0o755 });
+  return home;
+}
+
+async function githubMetadata(
+  home: string,
+  dependencies: Parameters<typeof forgeCommand>[2] = {}
+): Promise<unknown> {
+  const output: unknown[] = [];
+  await forgeCommand(
+    'metadata',
+    { data: JSON.stringify({ host: 'github.com' }) },
+    {
+      env: { HOME: home, ARCHON_HOME: home, PATH: process.env.PATH },
+      readConfig: async () => ({ scanPath: false }),
+      write: async value => {
+        output.push(value);
+      },
+      ...dependencies,
+    }
+  );
+  return output[0];
+}
+
+test('a source checkout runs the GitHub plugin from source, whatever is installed', async () => {
+  expect(await githubMetadata(homeWithUnusableInstalledGithubPlugin())).toMatchObject({
+    ok: true,
+    result: {
+      op: 'metadata',
+      value: { name: 'github', capabilities: expect.arrayContaining(['resolve:subject']) },
+    },
+  });
+});
+
+test('a release binary loads the installed GitHub plugin and nothing from source', async () => {
+  expect(sourceForgePlugins(true)).toEqual([]);
+  expect(
+    await githubMetadata(homeWithUnusableInstalledGithubPlugin(), { sourcePlugins: [] })
+  ).toMatchObject({
+    ok: false,
+    error: { kind: 'process_failed', message: 'discovery:github: metadata handshake failed' },
+  });
+});
+
+async function checkForge(
+  data: object,
+  env: NodeJS.ProcessEnv,
+  mode = 'token',
+  tokenEnv?: string
+): Promise<{ code: number; response: unknown }> {
+  const output: unknown[] = [];
+  const code = await forgeCommand(
+    'check',
+    { data: JSON.stringify(data) },
+    {
+      env,
+      readConfig: async () => ({
+        scanPath: false,
+        plugins: [
+          {
+            plugin: 'test',
+            command: process.execPath,
+            args: [
+              '--no-env-file',
+              join(import.meta.dir, '../../../forge/src/fixtures/test-plugin.ts'),
+              '--mode',
+              mode,
+            ],
+            ...(tokenEnv ? { token_env: tokenEnv } : {}),
+          },
+        ],
+      }),
+      dispatch: async () => {
+        throw new Error('forge check must not dispatch an operation');
+      },
+      write: async value => {
+        output.push(value);
+      },
+    }
+  );
+  return { code, response: output[0] };
+}
+
+test('forge check names the plugin and credential source without dispatching or printing the token', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = { HOME: root, ARCHON_HOME: root, PATH: '', TEST_FORGE_TOKEN: 'secret-token-value' };
+  const { code, response } = await checkForge(
+    { host: 'Forge.Example', operations: ['checks.state'] },
+    env
+  );
+  expect(code).toBe(0);
+  expect(response).toMatchObject({
+    ok: true,
+    result: {
+      op: 'check',
+      value: {
+        host: 'forge.example',
+        plugin: { name: 'test', version: '1.0.0' },
+        operations: ['checks.state'],
+        credentialSource: 'TEST_FORGE_TOKEN',
+      },
+    },
+  });
+  expect(JSON.stringify(response)).not.toContain('secret-token-value');
+});
+
+test('forge check exits 1 with a typed reason for a missing plugin, capability or credential', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = { HOME: root, ARCHON_HOME: root, PATH: '' };
+
+  const unclaimed = await checkForge({ host: 'other.example', operations: [] }, env);
+  expect(unclaimed.code).toBe(1);
+  expect(unclaimed.response).toMatchObject({
+    ok: false,
+    error: { kind: 'no_plugin_for_host' },
+    remedy: expect.stringContaining('archon plugin add'),
+  });
+
+  // Capabilities are refused before the credential is read, so the absent token is not the reason.
+  const unsupported = await checkForge(
+    { host: 'forge.example', operations: ['checks.state', 'pr.merge', 'pr.review.submit'] },
+    env
+  );
+  expect(unsupported.code).toBe(1);
+  expect(unsupported.response).toMatchObject({
+    ok: false,
+    error: {
+      kind: 'unsupported_op',
+      message: 'plugin test 1.0.0 does not support pr.merge, pr.review.submit',
+    },
+    unsupported: ['pr.merge', 'pr.review.submit'],
+    // The test plugin states no remedies, so forge names the generic step for its config entry.
+    remedy: expect.stringContaining('`forge` entry for plugin test'),
+  });
+
+  // A plugin's own remedy replaces forge's generic step.
+  const ownRemedy = await checkForge(
+    { host: 'forge.example', operations: ['pr.merge'] },
+    env,
+    'remedies'
+  );
+  expect(ownRemedy.code).toBe(1);
+  expect(ownRemedy.response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    remedy: 'Run the fixture upgrade.',
+  });
+
+  const noCredential = await checkForge(
+    { host: 'forge.example', operations: ['checks.state'] },
+    env
+  );
+  expect(noCredential.code).toBe(1);
+  expect(noCredential.response).toMatchObject({
+    ok: false,
+    error: { kind: 'no_credential' },
+    remedy: expect.stringContaining('TEST_FORGE_TOKEN'),
+  });
+});
+
+test('forge check names the configured token_env, not the plugin declaration, for a missing credential', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = { HOME: root, ARCHON_HOME: root, PATH: '', TEST_FORGE_TOKEN: 'ignored' };
+  const { code, response } = await checkForge(
+    { host: 'forge.example', operations: ['checks.state'] },
+    env,
+    'token',
+    'CONFIGURED_FORGE_TOKEN'
+  );
+  expect(code).toBe(1);
+  expect(response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
+  const remedy = (response as { remedy: string }).remedy;
+  expect(remedy).toContain('CONFIGURED_FORGE_TOKEN');
+  expect(remedy).not.toContain('TEST_FORGE_TOKEN');
+});
+
+test('forge check by remote selects the plugin a resolve of that remote selects', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = { HOME: root, ARCHON_HOME: root, PATH: '', TEST_FORGE_TOKEN: 'secret-token-value' };
+
+  for (const remote of ['git@forge.example:a/b.git', 'https://u:p@forge.example:443/a/b']) {
+    const { code, response } = await checkForge({ remote, operations: ['checks.state'] }, env);
+    expect(code).toBe(0);
+    expect(response).toMatchObject({
+      ok: true,
+      result: { op: 'check', value: { host: 'forge.example', plugin: { name: 'test' } } },
+    });
+  }
+
+  const local = await checkForge({ remote: '/srv/git/repo.git', operations: [] }, env);
+  expect(local.response).toMatchObject({ ok: false, error: { kind: 'no_plugin_for_host' } });
+  expect(JSON.stringify(local.response)).not.toContain('/srv/git');
+
+  const both = await checkForge({ host: 'forge.example', remote: 'git@forge.example:a/b' }, env);
+  expect(both.response).toMatchObject({
+    ok: false,
+    error: {
+      kind: 'invalid_request',
+      message: expect.stringContaining('name the forge by exactly one of host, remote or repo'),
+    },
+  });
+});
+
+test('forge check reads a remote or repository and refuses a credential the forge rejects', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = (token: string) => ({
+    HOME: root,
+    ARCHON_HOME: root,
+    PATH: '',
+    TEST_FORGE_TOKEN: token,
+  });
+  const operations = ['pr.view'];
+  const repo = { host: 'forge.example', path: 'a/b' };
+
+  for (const target of [{ remote: 'git@forge.example:a/b.git' }, { repo }]) {
+    const accepted = await checkForge({ ...target, operations }, env('accepted'), 'access');
+    expect(accepted.code).toBe(0);
+    expect(accepted.response).toMatchObject({
+      ok: true,
+      result: { op: 'check', value: { host: 'forge.example' } },
+    });
+
+    const expired = await checkForge({ ...target, operations }, env('expired-token'), 'access');
+    expect(expired.code).toBe(1);
+    expect(expired.response).toMatchObject({
+      ok: false,
+      error: { kind: 'authorization' },
+      remedy: expect.stringContaining('TEST_FORGE_TOKEN'),
+    });
+    expect(JSON.stringify(expired.response)).not.toContain('expired-token');
+  }
+
+  const unseen = await checkForge(
+    { repo: { host: 'forge.example', path: 'missing/repo' }, operations },
+    env('accepted'),
+    'access'
+  );
+  expect(unseen.code).toBe(1);
+  expect(unseen.response).toMatchObject({ ok: false, error: { kind: 'not_found' } });
+
+  // A host check names no repository, so it reads nothing, whatever the token.
+  const byHost = await checkForge(
+    { host: 'forge.example', operations },
+    env('expired-token'),
+    'access'
+  );
+  expect(byHost.response).toMatchObject({ ok: true });
+
+  // A plugin with no pr.view has no read to serve: the check passes as it did before.
+  const noRead = await checkForge(
+    { remote: 'git@forge.example:a/b.git', operations: ['checks.state'] },
+    env('expired-token')
+  );
+  expect(noRead.response).toMatchObject({ ok: true });
+});
+
+test('forge check under a source checkout answers for the source GitHub plugin', async () => {
+  const home = homeWithUnusableInstalledGithubPlugin();
+  const output: unknown[] = [];
+  const code = await forgeCommand(
+    'check',
+    { data: JSON.stringify({ host: 'github.com', operations: ['resolve:subject'] }) },
+    {
+      env: { HOME: home, ARCHON_HOME: home, PATH: process.env.PATH, GH_TOKEN: 'secret-token' },
+      readConfig: async () => ({ scanPath: false }),
+      write: async value => {
+        output.push(value);
+      },
+    }
+  );
+  expect(output[0]).toMatchObject({
+    ok: true,
+    result: {
+      op: 'check',
+      value: { host: 'github.com', plugin: { name: 'github' }, operations: ['resolve:subject'] },
+    },
+  });
+  expect(code).toBe(0);
+});
+
+test('forge check carries the GitHub plugin remedy for a missing credential', async () => {
+  const home = homeWithUnusableInstalledGithubPlugin();
+  const output: unknown[] = [];
+  await forgeCommand(
+    'check',
+    { data: JSON.stringify({ remote: 'git@github.com:o/r.git', operations: ['pr.view'] }) },
+    {
+      env: { HOME: home, ARCHON_HOME: home, PATH: '', GH_TOKEN: '' },
+      readConfig: async () => ({ scanPath: false }),
+      write: async value => {
+        output.push(value);
+      },
+    }
+  );
+  expect(output[0]).toMatchObject({
+    ok: false,
+    error: { kind: 'no_credential' },
+    remedy: expect.stringContaining('archon auth github'),
+  });
+});
+
+// A `pr.merge` the forge applied for a run.
+const mergeRef = { repo: { host: 'forge.example', path: 'acme/web' }, number: 7 };
+const mergeCommit = 'a'.repeat(40);
+const mergedAt = '2026-11-20T09:30:00Z';
+const mergedPr = {
+  ...mergeRef,
+  schemaVersion: 1 as const,
+  url: 'https://forge.example/acme/web/pull/7',
+  head: 'feat/x',
+  base: 'dev',
+  is_draft: false,
+  state: 'merged' as const,
+  head_repo: mergeRef.repo,
+  head_revision: 'b'.repeat(40),
+  base_revision: 'c'.repeat(40),
+  maintainer_can_modify: null,
+};
+const mergeRequest = { ref: mergeRef, method: 'squash', conditions: { head: 'b'.repeat(40) } };
+/**
+ * `applied-no-time` is an applied merge from a plugin released before `merged_at`.
+ * `already-merged` and `closed` are refusals that observed the pull request in that state;
+ * `already-merged-no-time` is the first from a plugin released before `merge.merged_at`.
+ */
+type MergeOutcome =
+  | 'applied'
+  | 'applied-no-time'
+  | 'refused'
+  | 'outcome_unknown'
+  | 'already-merged'
+  | 'already-merged-no-time'
+  | 'closed';
+/** An earlier merge, by hand: every fact differs from the applied fixture and the request. */
+const earlierMerge = {
+  pr: { ...mergedPr, url: 'https://forge.example/acme/web/pull/7#by-hand', base: 'release/1' },
+  commit: 'd'.repeat(40),
+  at: '2026-11-18T14:05:00Z',
+};
+
+const attempt = { method: 'squash' as const, conditions: mergeRequest.conditions };
+const earlierLanded = { commit: earlierMerge.commit, tree: null, parents: null };
+/** The evidence each failed outcome carries beyond the merge it attempted. */
+const failureEvidence = {
+  refused: { outcome: 'refused' },
+  outcome_unknown: { outcome: 'outcome_unknown' },
+  closed: { outcome: 'refused', observed: { ...mergedPr, state: 'closed' } },
+  'already-merged': {
+    outcome: 'refused',
+    observed: earlierMerge.pr,
+    merge: { ...attempt, landed: earlierLanded, merged_at: earlierMerge.at },
+  },
+  'already-merged-no-time': {
+    outcome: 'refused',
+    observed: earlierMerge.pr,
+    merge: { ...attempt, landed: earlierLanded },
+  },
+} as const satisfies Record<
+  Exclude<MergeOutcome, 'applied' | 'applied-no-time'>,
+  Partial<ForgeMutationFailure>
+>;
+
+function mergeResponse(request: ForgeRequest, outcome: MergeOutcome): ForgeResponse {
+  if (outcome !== 'applied' && outcome !== 'applied-no-time')
+    return {
+      operationId: request.operationId,
+      ok: false,
+      error: {
+        kind: outcome === 'outcome_unknown' ? 'process_failed' : 'conflict',
+        message: 'not merged',
+      },
+      mutation: { op: 'pr.merge', target: mergeRef, merge: attempt, ...failureEvidence[outcome] },
+    };
+  return {
+    operationId: request.operationId,
+    ok: true,
+    result: {
+      op: 'pr.merge',
+      value: {
+        target: mergeRef,
+        outcome: 'applied',
+        changed: true,
+        pr: mergedPr,
+        method: 'squash',
+        conditions: mergeRequest.conditions,
+        enforcedConditions: ['head'],
+        landed: { commit: mergeCommit, tree: null, parents: null },
+        ...(outcome === 'applied' ? { merged_at: mergedAt } : {}),
+      },
+    },
+  };
+}
+
+async function runMerge(options: {
+  outcome?: MergeOutcome;
+  env?: NodeJS.ProcessEnv;
+  record?: 'recorded' | 'already_recorded' | 'no_item' | 'throws';
+}) {
+  const dispatched: string[] = [];
+  const audited: string[] = [];
+  const recorded: unknown[] = [];
+  const recordedFor: string[] = [];
+  const output: unknown[] = [];
+  const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    const code = await forgeCommand(
+      'pr.merge',
+      { data: JSON.stringify(mergeRequest) },
+      {
+        readConfig: async () => ({}),
+        env: options.env ?? { WORKFLOW_ID: 'run-1' },
+        dispatch: async request => {
+          dispatched.push(request.op);
+          const response = mergeResponse(request, options.outcome ?? 'applied');
+          const plugin = { name: 'test', version: '1' };
+          return {
+            response,
+            plugin,
+            audit: {
+              operationId: request.operationId,
+              operation: request.op,
+              target: mergeRef,
+              plugin,
+              result: forgeAuditResponse(response),
+              retries: 0,
+              durationMs: 1,
+            },
+          };
+        },
+        audit: async audit => {
+          audited.push(audit.operation);
+        },
+        // Stands in for the store: a run on an item, unless `record` says otherwise.
+        recordMerge: async (runId, facts) => {
+          recordedFor.push(runId);
+          if (options.record === 'no_item') return 'no_item';
+          if (options.record === 'already_recorded') return 'already_recorded';
+          if (facts.at === undefined) return 'no_merge_time';
+          recorded.push(facts);
+          if (options.record === 'throws') throw new Error('store unavailable');
+          return 'recorded';
+        },
+        write: async value => {
+          output.push(value);
+        },
+      }
+    );
+    const lines = stderr.mock.calls.map(([line]) => String(line));
+    return { code, dispatched, audited, recorded, recordedFor, output, stderr: lines };
+  } finally {
+    stderr.mockRestore();
+  }
+}
+
+test("an applied merge from a run records the merge result's facts on the run's item", async () => {
+  const result = await runMerge({});
+  expect(result.code).toBe(0);
+  // Everything recorded comes from the merge result; the forge is not read again.
+  expect(result.dispatched).toEqual(['pr.merge']);
+  expect(result.recorded).toEqual([
+    { change: mergedPr.url, commit: mergeCommit, at: mergedAt, branch: 'dev' },
+  ]);
+  expect(result.audited).toEqual(['pr.merge']);
+  expect(result.output).toEqual([
+    expect.objectContaining({ ok: true, itemRecord: { recorded: true, landing: 'recorded' } }),
+  ]);
+  expect(result.stderr).toEqual([]);
+});
+
+test('a merge from a plugin that reports no merge time succeeds and says it was not recorded', async () => {
+  const result = await runMerge({ outcome: 'applied-no-time' });
+  // The merge happened, so the exit is 0: a caller must not treat a landed change as failed.
+  expect(result.code).toBe(0);
+  expect(result.recorded).toEqual([]);
+  expect(result.output).toEqual([
+    expect.objectContaining({
+      ok: true,
+      result: expect.objectContaining({ op: 'pr.merge' }),
+      itemRecord: { recorded: false, reason: 'no_merge_time' },
+    }),
+  ]);
+  expect(result.stderr).toHaveLength(1);
+  expect(result.stderr[0]).toContain('reported no merge time');
+  expect(result.stderr[0]).toContain('archon plugin update <id>');
+});
+
+test('a run on no item gets no item record and no item field', async () => {
+  const result = await runMerge({ record: 'no_item' });
+  expect(result.code).toBe(0);
+  expect(result.output[0]).not.toHaveProperty('itemRecord');
+  expect(result.stderr).toEqual([]);
+});
+
+test.each(['refused', 'outcome_unknown'] as const)('a %s merge records nothing', async outcome => {
+  const result = await runMerge({ outcome });
+  expect(result.code).toBe(1);
+  expect(result.recorded).toEqual([]);
+  expect(result.output[0]).not.toHaveProperty('itemRecord');
+});
+
+test('a merge outside a run records nothing', async () => {
+  const result = await runMerge({ env: {} });
+  expect(result.code).toBe(0);
+  expect(result.audited).toEqual([]);
+  expect(result.recorded).toEqual([]);
+  expect(result.output[0]).not.toHaveProperty('itemRecord');
+});
+
+test('a store failure keeps the applied merge on stdout and exits 2', async () => {
+  const result = await runMerge({ record: 'throws' });
+  expect(result.code).toBe(2);
+  expect(result.output).toEqual([
+    expect.objectContaining({ ok: true, itemRecord: { recorded: false, reason: 'write_failed' } }),
+  ]);
+  expect(result.stderr).toHaveLength(1);
+  expect(result.stderr[0]).toContain(
+    `merged ${mergedPr.url} but the item record could not be written: store unavailable`
+  );
+});
+
+test("a merge refused as already merged records the refusal's facts of the earlier merge", async () => {
+  const result = await runMerge({ outcome: 'already-merged' });
+  // Still a refusal: this call merged nothing, and the forge is not read again.
+  expect(result.code).toBe(1);
+  expect(result.dispatched).toEqual(['pr.merge']);
+  expect(result.recordedFor).toEqual(['run-1']);
+  expect(result.recorded).toEqual([
+    {
+      change: earlierMerge.pr.url,
+      commit: earlierMerge.commit,
+      at: earlierMerge.at,
+      branch: 'release/1',
+    },
+  ]);
+  expect(result.output).toEqual([
+    expect.objectContaining({
+      ok: false,
+      mutation: expect.objectContaining({
+        outcome: 'refused',
+        observed: expect.objectContaining({ state: 'merged' }),
+      }),
+      itemRecord: { recorded: true, landing: 'recorded' },
+    }),
+  ]);
+  expect(result.stderr).toEqual([]);
+});
+
+test('a merge refused on a closed, unmerged pull request records nothing', async () => {
+  const result = await runMerge({ outcome: 'closed' });
+  expect(result.code).toBe(1);
+  expect(result.recordedFor).toEqual([]);
+  expect(result.output[0]).not.toHaveProperty('itemRecord');
+  expect(result.output[0]).toMatchObject({ mutation: { observed: { state: 'closed' } } });
+});
+
+test('an already-merged refusal from a plugin without the merge time records nothing and says so', async () => {
+  const result = await runMerge({ outcome: 'already-merged-no-time' });
+  expect(result.code).toBe(1);
+  expect(result.recorded).toEqual([]);
+  expect(result.output[0]).toMatchObject({
+    itemRecord: { recorded: false, reason: 'no_merge_time' },
+  });
+  expect(result.stderr).toHaveLength(1);
+});
+
+test('a merge already recorded on the item says nothing was written', async () => {
+  const result = await runMerge({ outcome: 'already-merged', record: 'already_recorded' });
+  expect(result.code).toBe(1);
+  expect(result.output[0]).toMatchObject({
+    itemRecord: { recorded: false, reason: 'already_recorded' },
+  });
+  expect(result.stderr).toEqual([]);
+});
+
+test('an already-merged refusal whose item write fails says so and exits 2', async () => {
+  const result = await runMerge({ outcome: 'already-merged', record: 'throws' });
+  expect(result.code).toBe(2);
+  expect(result.output[0]).toMatchObject({
+    ok: false,
+    mutation: { observed: { state: 'merged' } },
+    itemRecord: { recorded: false, reason: 'write_failed' },
+  });
+  expect(result.stderr).toHaveLength(1);
 });

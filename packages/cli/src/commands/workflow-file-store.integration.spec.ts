@@ -1,7 +1,8 @@
+// @archon-test-isolated
 import { spawn } from 'node:child_process';
 import * as processTools from '@archon/paths/plugin-process';
 import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
-import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
+import { attentionQueueItemSchema, isHeldByRun } from '@archon/workflows/attention-queue';
 import {
   resourceStartDispositionSchema,
   type ResourceStartDisposition,
@@ -46,6 +47,8 @@ import {
   runWorkflowReject,
 } from '../routes/workflow';
 import { workflowContinuationCommand } from './workflow-continuations';
+import { workflowAttentionCommand } from './workflow-attention';
+import * as connection from '@archon/core/db/connection';
 const scopes: CliTestScope[] = [];
 let originalEnv: NodeJS.ProcessEnv;
 let originalLogLevel: ReturnType<typeof getLogLevel>;
@@ -189,58 +192,6 @@ async function commandResult(command: () => Promise<number | void>) {
     stdout.mockRestore();
   }
 }
-test('a timed-out CLI child settles before its fixture is removed', async () => {
-  const f = fixture();
-  const childRoot = join(f.root, 'timed-out');
-  mkdirSync(childRoot);
-  const pidFile = join(f.root, 'child.pid');
-  const proof = join(f.root, 'closed');
-  const continued = join(f.root, 'continued');
-  const spec = join(f.root, 'timeout.test.ts');
-  writeFileSync(
-    spec,
-    `
-import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
-import * as cleanup from ${JSON.stringify(join(repo, 'packages/paths/src/test-utils.ts'))};
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
-const scope = new CliTestScope(${JSON.stringify(childRoot)});
-afterEach(async () => {
-  expect(existsSync(scope.root)).toBe(true);
-  const pid = Number(readFileSync(${JSON.stringify(pidFile)}, 'utf8'));
-  const removeTempTree = cleanup.removeTempTree;
-  const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
-    expect(() => process.kill(pid, 0)).toThrow();
-    await removeTempTree(root);
-  });
-  try {
-    await scope.close();
-  } finally {
-    removal.mockRestore();
-  }
-  expect(existsSync(scope.root)).toBe(false);
-  expect(() => process.kill(pid, 0)).toThrow();
-  await expect(scope.run([process.execPath, '-e', ''], scope.root, process.env)).rejects.toThrow('scope is closed');
-  writeFileSync(${JSON.stringify(proof)}, 'closed');
-});
-let running: ReturnType<CliTestScope['run']>;
-beforeEach(async () => {
-  running = scope.run([process.execPath, '-e', ${JSON.stringify(`const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid)); fs.renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)}); setTimeout(() => process.exit(0), 1500);`)}], scope.root, process.env);
-  while (!existsSync(${JSON.stringify(pidFile)})) await Bun.sleep(10);
-});
-test('forced timeout', async () => {
-  await running;
-  writeFileSync(${JSON.stringify(continued)}, 'continued after timeout');
-}, 1000);
-`
-  );
-  const result = await f.scope.run([process.execPath, 'test', spec], repo, f.env);
-  expect(result.code).toBe(1);
-  expect(result.output + result.error).toContain('timed out');
-  expect(readFileSync(proof, 'utf8')).toBe('closed');
-  expect(existsSync(continued)).toBe(false);
-  expect(existsSync(childRoot)).toBe(false);
-});
 test('failed fixture closes still clean other scopes and restore shared state', async () => {
   const first = fixture();
   const second = fixture();
@@ -311,232 +262,6 @@ test('a refused detached group signal requires proof that the group is gone', as
     await exited;
   }
 });
-for (const launch of ['workflow', 'fire', 'drain'] as const) {
-  test(`a timed-out ${launch} launcher stops its detached execution before removal`, async () => {
-    setLogLevel('error');
-    const outer = fixture();
-    const f = fixture();
-    const executable = "'" + process.execPath.replaceAll("'", "'\\''") + "'";
-    writeFileSync(
-      join(f.project, '.archon/workflows/hold.yaml'),
-      `name: hold
-description: hold for teardown proof
-worktree:
-  enabled: false
-nodes:
-  - id: hold
-    bash: exec ${executable} hold.ts
-`
-    );
-    let args = ['workflow', 'run', 'hold', '--folder', '--no-worktree', '--detach'];
-    if (launch !== 'workflow') {
-      process.env = { ...f.env };
-      registerBuiltinProviders();
-      setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
-      const host = await createFileWorkflowHost(join(f.home, 'store'));
-      await host.records.codebases.createCodebase({
-        name: 'timeout-test',
-        default_cwd: realpathSync(f.project),
-        kind: 'folder',
-      });
-      const user = await host.records.users.findOrCreateUserByPlatformIdentity(
-        'cli',
-        'file-operator'
-      );
-      if (!user) throw new Error('Missing test user');
-      const config = join(f.root, 'trigger.json');
-      writeFileSync(
-        config,
-        JSON.stringify({
-          version: 1,
-          sourceInstanceId: 'timeout-test',
-          schedule: { intervalSeconds: 60, runAtLoad: false },
-          binding: {
-            bindingId: 'timeout-test',
-            bindingRevision: null,
-            hostId: 'timeout-test',
-            runAsUserId: user.id,
-            resource: 'timeout-test',
-            capacity: 1,
-            overlap: 'queue',
-            launch: {
-              cwd: f.project,
-              workflowName: 'hold',
-              inputs: {},
-              isolation: { kind: 'in-place' },
-            },
-          },
-        })
-      );
-      args = ['trigger', 'fire', '--config', config];
-      if (launch === 'drain') {
-        const blocker = randomUUID();
-        await host.deps.store.admitResourceStart({
-          resource: 'timeout-test',
-          capacity: 1,
-          hostId: 'timeout-test',
-          overlap: 'queue',
-          launch: {
-            version: 2,
-            run: {
-              id: blocker,
-              workflow_name: 'holder',
-              codebase_id: 'holder',
-              user_message: '',
-              metadata: {},
-            },
-            execution: {
-              cwd: join(f.root, 'holder'),
-              conversationId: blocker,
-              isolation: { kind: 'in-place' },
-            },
-          },
-        });
-        await host.deps.store.claimPendingWorkflowRun(blocker);
-        const queued = await commandResult(() =>
-          triggerCommand(host, 'fire', [], { config }, { env: {} })
-        );
-        expect(queued.code).toBe(0);
-        expect(JSON.parse(queued.output).bindings[0].disposition.status).toBe('queued');
-        await host.deps.store.completeWorkflowRun(blocker, { duration_ms: 1 });
-        args = ['trigger', 'drain', '--host', 'timeout-test'];
-      }
-    }
-    const proof = join(outer.root, 'closed');
-    const bodyStarted = join(outer.root, 'body-started');
-    const spec = join(outer.root, 'detached-timeout.test.ts');
-    writeFileSync(
-      spec,
-      `
-import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
-import * as cleanup from ${JSON.stringify(join(repo, 'packages/paths/src/test-utils.ts'))};
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
-const scope = new CliTestScope(${JSON.stringify(f.root)});
-const logs = ${JSON.stringify(join(f.home, 'logs'))};
-let ready = false;
-// The node records itself with the owners, then signals here, so teardown stops it by its own PID.
-// TCP may split the PID across data callbacks, so the signal is complete at its newline. It does not
-// wait for the node's half-close: a Windows setup once stalled with the node running and the
-// listener never seeing that end.
-const started = Promise.withResolvers<number>();
-let signal = '';
-// What the listener saw, so a setup timeout names the step that never happened.
-const events: string[] = [];
-const listener = Bun.listen({
-  hostname: '127.0.0.1',
-  port: 0,
-  socket: {
-    open: () => {
-      events.push('open');
-    },
-    data: (_socket, data) => {
-      events.push('data ' + JSON.stringify(data.toString()));
-      signal += data.toString();
-      if (signal.includes(String.fromCharCode(10))) started.resolve(Number(signal));
-    },
-    end: () => {
-      events.push('end');
-    },
-    close: (_socket, error) => {
-      events.push('close' + (error ? ' ' + String(error) : ''));
-    },
-    error: (_socket, error) => {
-      events.push('error ' + String(error));
-    },
-  },
-});
-function pids(records: string): number[] {
-  return records.split(String.fromCharCode(10)).filter(Boolean).map(Number);
-}
-function recorded(): number[] {
-  return existsSync(scope.detachedPids) ? pids(readFileSync(scope.detachedPids, 'utf8')) : [];
-}
-// The diagnostic must not throw, or teardown would leave the detached processes running.
-function read(path: string): string {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch (error) {
-    return 'unreadable: ' + ((error as NodeJS.ErrnoException).code ?? String(error));
-  }
-}
-function liveness(pid: number): string {
-  try {
-    process.kill(pid, 0);
-    return 'alive';
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code ?? String(error);
-  }
-}
-function runLogs(): string[] {
-  let names: string[];
-  try {
-    names = existsSync(logs) ? readdirSync(logs) : [];
-  } catch (error) {
-    return [logs + ' unreadable: ' + ((error as NodeJS.ErrnoException).code ?? String(error))];
-  }
-  if (!names.length) return ['no run log in ' + logs];
-  return names.map(name => '--- ' + name + ' ---' + String.fromCharCode(10) + read(join(logs, name)));
-}
-function setupState(): string {
-  const records = existsSync(scope.detachedPids) ? read(scope.detachedPids) : undefined;
-  return [
-    'Detached timeout setup did not finish. State before teardown:',
-    'recorded PIDs file: ' + (records === undefined ? 'missing' : JSON.stringify(records)),
-    ...pids(records ?? '').map(pid => 'PID ' + pid + ': ' + liveness(pid)),
-    'listener events: ' + (events.length ? events.join(', ') : 'none, the node never connected'),
-    ...runLogs(),
-  ].join(String.fromCharCode(10));
-}
-beforeEach(async () => {
-  // Exercise setup that exceeds the forced body timeout.
-  await Bun.sleep(100);
-  writeFileSync(${JSON.stringify(join(f.project, 'hold.ts'))}, [
-    "import { appendFileSync } from 'node:fs';",
-    'appendFileSync(' + JSON.stringify(scope.detachedPids) + ', process.pid + String.fromCharCode(10));',
-    "await Bun.connect({ hostname: '127.0.0.1', port: " + listener.port + ", socket: { open: socket => { socket.write(process.pid + String.fromCharCode(10)); }, data: () => {} } });",
-    'setInterval(() => {}, 1000);',
-  ].join(String.fromCharCode(10)));
-  const result = await scope.run(${JSON.stringify([process.execPath, f.entry, ...args])}, ${JSON.stringify(f.project)}, { ...process.env, ARCHON_HOME: ${JSON.stringify(f.home)}, LOG_LEVEL: 'info' });
-  expect(result, result.output + result.error).toMatchObject({ code: 0 });
-  const node = await started.promise;
-  expect(recorded()).toContain(node);
-  for (const pid of recorded()) process.kill(pid, 0);
-  ready = true;
-}, 10000);
-afterEach(async () => {
-  if (!ready) console.error(setupState());
-  listener.stop(true);
-  const removeTempTree = cleanup.removeTempTree;
-  const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
-    expect(existsSync(root)).toBe(true);
-    for (const pid of recorded()) expect(() => process.kill(pid, 0)).toThrow();
-    await removeTempTree(root);
-  });
-  try {
-    await scope.close();
-  } finally {
-    removal.mockRestore();
-  }
-  expect(existsSync(scope.root)).toBe(false);
-  writeFileSync(${JSON.stringify(proof)}, 'closed');
-}, 10000);
-test('forced detached timeout', async () => {
-  writeFileSync(${JSON.stringify(bodyStarted)}, 'started');
-  await Bun.sleep(60000);
-}, 50);
-`
-    );
-    const result = await outer.scope.run([process.execPath, 'test', spec], repo, f.env);
-    expect(result.code).toBe(1);
-    expect(result.output + result.error).toContain('timed out');
-    expect(existsSync(bodyStarted), result.output + result.error).toBe(true);
-    expect(existsSync(proof), result.output + result.error).toBe(true);
-    expect(readFileSync(proof, 'utf8')).toBe('closed');
-    expect(existsSync(f.root)).toBe(false);
-  }, 15000);
-}
 /** A Claude environment with no login, so only project settings can supply one. */
 function withoutClaudeLogin(f: Fixture, claudeConfig: string): NodeJS.ProcessEnv {
   return {
@@ -855,6 +580,211 @@ test('pause, approve in another process, and resume without any SQL connection',
   expect(log.filter(event => event.event_type === 'approval_received')).toHaveLength(1);
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+}, 60000);
+test('a hand start waits while its resource is full and --no-wait refuses it', async () => {
+  const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
+  const workflow = (name: string, bash: string): void =>
+    writeFileSync(
+      join(f.project, `.archon/workflows/${name}.yaml`),
+      `name: ${name}\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
+    );
+  workflow('held', 'touch held-started; while [ ! -f release ]; do sleep 0.1; done');
+  workflow('quick', 'echo ran > quick-ran');
+  const run = (...args: string[]) =>
+    cli(f, ['workflow', 'run', ...args, '--folder', '--no-worktree']);
+  const held = run('held');
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+  const refused = await run('quick', '--no-wait');
+  expect(refused.code, refused.output + refused.error).not.toBe(0);
+  expect(refused.output + refused.error).toContain("Resource 'build' is full");
+  expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
+
+  const waiting = run('quick');
+  await Bun.sleep(3000);
+  expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+  const waited = await waiting;
+  expect(waited, waited.output + waited.error).toMatchObject({ code: 0 });
+  expect(waited.output + waited.error).toContain("Waiting for resource 'build'");
+  expect(readFileSync(join(f.project, 'quick-ran'), 'utf8')).toBe('ran\n');
+}, 60000);
+test('trigger check refuses a run-ended binding on the file store', async () => {
+  const f = fixture('store: files\n');
+  mkdirSync(join(f.home, 'triggers'));
+  writeFileSync(
+    join(f.home, 'triggers', 'build-after-plan.json'),
+    JSON.stringify({
+      version: 1,
+      sourceInstanceId: 'build-after-plan',
+      binding: {
+        bindingId: 'build',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: 'build',
+        overlap: 'queue',
+        launch: {
+          cwd: f.project,
+          workflowName: 'build',
+          inputs: {},
+          isolation: { kind: 'default' },
+        },
+      },
+      on: { runEnded: { workflowName: 'plan', outcome: 'planned' } },
+    })
+  );
+
+  const checked = await cli(f, ['trigger', 'check']);
+  expect(checked.code, checked.output + checked.error).not.toBe(0);
+  expect(checked.output + checked.error).toContain('store: files does not support it');
+}, 60000);
+test('a hand start is checked against its own declared capacity, then the default 1', async () => {
+  const f = fixture('store: files\n');
+  // Runs in one checkout never overlap, so the later starts run in a second folder.
+  const other = join(f.home, '..', 'other');
+  mkdirSync(join(other, '.archon/workflows'), { recursive: true });
+  const workflow = (dir: string, name: string, resource: string, bash: string): void =>
+    writeFileSync(
+      join(dir, `.archon/workflows/${name}.yaml`),
+      `name: ${name}\ndescription: holds build\nresource: ${resource}\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
+    );
+  const pair = '{ name: build, capacity: 2 }';
+  workflow(
+    f.project,
+    'held',
+    pair,
+    'touch held-started; while [ ! -f release ]; do sleep 0.1; done'
+  );
+  workflow(other, 'second', pair, 'echo ran > second-ran');
+  workflow(other, 'plain', 'build', 'echo ran > plain-ran');
+  const run = (cwd: string, name: string) =>
+    cli(f, ['workflow', 'run', name, '--no-wait', '--folder', '--no-worktree'], f.env, '', cwd);
+  const held = run(f.project, 'held');
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+  const second = await run(other, 'second');
+  expect(second, second.output + second.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(other, 'second-ran'), 'utf8')).toBe('ran\n');
+  const plain = await run(other, 'plain');
+  expect(plain.code, plain.output + plain.error).not.toBe(0);
+  expect(plain.output + plain.error).toContain("Resource 'build' is full");
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+}, 60000);
+// Windows has no SIGINT or SIGTERM delivery to a child: kill() ends it at once, so no
+// handler can fail the pending run. There the wait ends like any abrupt kill.
+test.skipIf(process.platform === 'win32')(
+  'interrupting a hand start that waits for its resource leaves no pending run or request',
+  async () => {
+    const f = fixture('store: files\n');
+    const workflow = (name: string, bash: string): void =>
+      writeFileSync(
+        join(f.project, `.archon/workflows/${name}.yaml`),
+        `name: ${name}\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
+      );
+    workflow('held', 'touch held-started; while [ ! -f release ]; do sleep 0.1; done');
+    workflow('quick', 'echo ran > quick-ran');
+    const args = (name: string) => ['workflow', 'run', name, '--folder', '--no-worktree'];
+    const held = cli(f, args('held'));
+    while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+    const waiting = f.scope.start([process.execPath, f.entry, ...args('quick')], f.project, f.env);
+    await Bun.sleep(3000);
+    waiting.child.kill('SIGINT');
+    const interrupted = await waiting.result;
+    expect(interrupted.code).not.toBe(0);
+    expect(interrupted.output + interrupted.error).toContain("Waiting for resource 'build'");
+    writeFileSync(join(f.project, 'release'), '');
+    expect(await held).toMatchObject({ code: 0 });
+
+    const runs: { id: string; workflow_name: string; status: string }[] = JSON.parse(
+      (await cli(f, ['workflow', 'runs', '--json'])).output
+    ).runs;
+    const quick = runs.find(run => run.workflow_name === 'quick');
+    expect(quick?.status).toBe('failed');
+    const request = await cli(f, ['trigger', 'inspect', quick?.id ?? 'missing']);
+    expect(request.code).not.toBe(0);
+    expect(request.output + request.error).toContain('Trigger receipt or request not found');
+    expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
+  },
+  60000
+);
+test('a broken capacity config ends a waiting hand start instead of leaving it pending', async () => {
+  const config = 'store: files\nconcurrency:\n  resources:\n    build: 1\n';
+  const f = fixture(config);
+  writeFileSync(
+    join(f.project, '.archon/workflows/held.yaml'),
+    'name: held\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: touch held-started; while [ ! -f release ]; do sleep 0.1; done\n'
+  );
+  const run = () => cli(f, ['workflow', 'run', 'held', '--folder', '--no-worktree']);
+  const held = run();
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+  const waiting = run();
+  await Bun.sleep(2000);
+  writeFileSync(join(f.home, 'config.yaml'), config.replace('build: 1', 'build: 0'));
+  const refused = await waiting;
+  expect(refused.code, refused.output + refused.error).not.toBe(0);
+  expect(refused.output + refused.error).toContain("Resource 'build' admission failed");
+  writeFileSync(join(f.home, 'config.yaml'), config);
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+  const listed = await cli(f, ['workflow', 'runs', '--json']);
+  expect(
+    JSON.parse(listed.output)
+      .runs.map((r: { status: string }) => r.status)
+      .sort()
+  ).toEqual(['cancelled', 'completed']);
+}, 60000);
+test('a workflow that includes or runs another declaring its resource holds one slot', async () => {
+  const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
+  writeFileSync(
+    join(f.project, '.archon/workflows/block.yaml'),
+    'name: block\ndescription: included\nresource: build\nnodes:\n  - id: inner\n    bash: echo inner > inner-ran\n'
+  );
+  writeFileSync(
+    join(f.project, '.archon/workflows/outer.yaml'),
+    'name: outer\ndescription: includes block\nresource: build\nworktree:\n  enabled: false\nnodes:\n  - id: blk\n    include: block\n  - id: sub\n    depends_on: [blk]\n    workflow: block\n'
+  );
+  // The include and the sub-run both run inside the parent's slot. At capacity 1 a
+  // second slot would refuse under --no-wait.
+  const result = await cli(f, [
+    'workflow',
+    'run',
+    'outer',
+    '--no-wait',
+    '--folder',
+    '--no-worktree',
+  ]);
+  expect(result, result.output + result.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(f.project, 'inner-ran'), 'utf8')).toBe('inner\n');
+}, 60000);
+test('a sub-run whose parent holds no slot on its resource waits for one', async () => {
+  const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
+  const write = (name: string, body: string): void =>
+    writeFileSync(
+      join(f.project, `.archon/workflows/${name}.yaml`),
+      `name: ${name}\ndescription: ${name}\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n${body}`
+    );
+  write(
+    'held',
+    '  - id: work\n    bash: touch held-started; while [ ! -f release ]; do sleep 0.1; done\nresource: build\n'
+  );
+  write('block', '  - id: inner\n    bash: echo inner > inner-ran\nresource: build\n');
+  write('orchestrate', '  - id: sub\n    workflow: block\n');
+  const run = (name: string) => cli(f, ['workflow', 'run', name, '--folder', '--no-worktree']);
+  const held = run('held');
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+  const orchestrated = run('orchestrate');
+  await Bun.sleep(3000);
+  expect(existsSync(join(f.project, 'inner-ran'))).toBe(false);
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+  const result = await orchestrated;
+  expect(result, result.output + result.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(f.project, 'inner-ran'), 'utf8')).toBe('inner\n');
 }, 60000);
 test('detached JSON resume returns a refusal status to the process', async () => {
   const f = fixture();
@@ -1458,18 +1388,46 @@ test('independent questions survive separate CLI processes and apply second firs
   const f = fixture();
   for (const [name, yaml] of Object.entries(multiAttentionWorkflows))
     writeFileSync(join(f.project, '.archon/workflows', `${name}.yaml`), yaml);
+  // The subject is that the questions outlive the process that opened them and each answer
+  // comes from its own CLI process. The queue reads between them only read the store, so they
+  // run in-process, under the same SQL-open trap the child entry sets.
   const started = await cli(f, ['workflow', 'run', 'questions', '--folder', '--no-worktree']);
   expect(started, started.output + started.error).toMatchObject({ code: 0 });
-  const queue = async () => {
-    const result = await cli(f, ['workflow', 'attention', '--json']);
-    expect(result, result.error).toMatchObject({ code: 0 });
-    return attentionQueueItemSchema.array().parse(JSON.parse(result.output).items);
+  setLogLevel('error');
+  process.env = { ...f.env };
+  const host = await createFileWorkflowHost(join(f.home, 'store'));
+  const sqlOpen = (): never => {
+    throw new Error('SQL open trap');
   };
-  const items = (await queue()).sort((a, b) => a.fanOut!.index - b.fanOut!.index);
+  const attention = async (runId?: string) => {
+    const traps = [
+      spyOn(connection, 'getDatabase').mockImplementation(sqlOpen),
+      spyOn(connection, 'getDialect').mockImplementation(sqlOpen),
+      spyOn(connection.pool, 'query').mockImplementation(sqlOpen),
+    ];
+    try {
+      const result = await commandResult(() =>
+        workflowAttentionCommand(host, f.project, runId, { json: true, labels: [] })
+      );
+      for (const trap of traps) expect(trap).not.toHaveBeenCalled();
+      return result;
+    } finally {
+      for (const trap of traps) trap.mockRestore();
+    }
+  };
+  const queue = async () => {
+    const result = await attention();
+    expect(result, result.error).toMatchObject({ code: 0 });
+    return attentionQueueItemSchema
+      .array()
+      .parse(JSON.parse(result.output).items)
+      .filter(isHeldByRun);
+  };
+  const items = (await queue()).sort((a, b) => a.run.fanOut!.index - b.run.fanOut!.index);
   expect(items).toHaveLength(2);
   const [first, second] = items;
   for (const item of items) {
-    const read = await cli(f, ['workflow', 'attention', item.runId, '--json']);
+    const read = await attention(item.run.id);
     expect(read, read.error).toMatchObject({ code: 0 });
     expect(JSON.parse(read.output).item).toEqual(item);
   }
@@ -1478,9 +1436,9 @@ test('independent questions survive separate CLI processes and apply second firs
     const answered = await cli(f, [
       'workflow',
       'answer',
-      item.runId,
+      item.run.id,
       '--occurrence',
-      item.occurrence,
+      item.run.occurrence,
       '--choose',
       choose,
     ]);
@@ -1489,17 +1447,17 @@ test('independent questions survive separate CLI processes and apply second firs
   await answer(second, 'defer');
   expect(await queue()).toEqual([first]);
   const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
-  const parentId = first.fanOut!.parentRunId;
+  const parentId = first.run.fanOut!.parentRunId;
   expect((await store.getWorkflowRun(parentId))?.status).toBe('paused');
-  expect((await store.getWorkflowRun(second.runId))?.status).toBe('completed');
+  expect((await store.getWorkflowRun(second.run.id))?.status).toBe('completed');
   expect(
-    (await store.listWorkflowEvents(first.runId)).filter(e => e.step_name === 'apply')
+    (await store.listWorkflowEvents(first.run.id)).filter(e => e.step_name === 'apply')
   ).toEqual([]);
   await answer(first, 'accept');
   expect(await queue()).toEqual([]);
   expect((await store.getWorkflowRun(parentId))?.status).toBe('completed');
   expect((await store.findChildRuns(parentId)).map(r => r.id).sort()).toEqual(
-    items.map(i => i.runId).sort()
+    items.map(i => i.run.id).sort()
   );
   expect(
     (await store.listWorkflowEvents(parentId)).find(
@@ -1510,7 +1468,7 @@ test('independent questions survive separate CLI processes and apply second firs
     { key: 'second', decision: 'defer' },
   ]);
   for (const item of items) {
-    const events = await store.listWorkflowEvents(item.runId);
+    const events = await store.listWorkflowEvents(item.run.id);
     expect(events.filter(e => e.event_type === 'wait_answered')).toHaveLength(1);
     expect(
       events.filter(e => e.event_type === 'node_completed' && e.step_name === 'apply')

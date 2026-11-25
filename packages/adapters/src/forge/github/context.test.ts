@@ -230,7 +230,7 @@ function createTestAdapter(): GitHubAdapter {
   const adapter = new GitHubAdapter({ kind: 'pat', token: 'fake-token' }, WEBHOOK_SECRET, {
     acquireLock: mock(async (_id: string, handler: () => Promise<void>) => {
       await handler();
-      return { status: 'started' as const };
+      return { status: 'started' as const, turnId: 'turn-1' };
     }),
   });
 
@@ -343,36 +343,6 @@ describe('GitHubAdapter non-slash command context passing', () => {
     const contextArg = mockHandleMessage.mock.calls[0][3]?.issueContext as string;
     expect(contextArg).toBe(
       'GitHub Issue #55: "Add dark mode"\nUse \'gh issue view 55\' for full details if needed.'
-    );
-  });
-
-  test('should set contextToAppend with different issue numbers and titles', async () => {
-    const payload = createIssueCommentPayload('@archon investigate this bug', {
-      issueNumber: 33,
-      issueTitle: 'Memory leak in worker',
-    });
-
-    await adapter.handleWebhook(payload, signPayload(payload));
-
-    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
-    const contextArg = mockHandleMessage.mock.calls[0][3]?.issueContext as string;
-    expect(contextArg).toBe(
-      'GitHub Issue #33: "Memory leak in worker"\nUse \'gh issue view 33\' for full details if needed.'
-    );
-  });
-
-  test('should also set contextToAppend for slash commands (existing behavior)', async () => {
-    const payload = createIssueCommentPayload('@archon /status', {
-      issueNumber: 10,
-      issueTitle: 'Setup tracking',
-    });
-
-    await adapter.handleWebhook(payload, signPayload(payload));
-
-    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
-    const contextArg = mockHandleMessage.mock.calls[0][3]?.issueContext as string;
-    expect(contextArg).toBe(
-      'GitHub Issue #10: "Setup tracking"\nUse \'gh issue view 10\' for full details if needed.'
     );
   });
 

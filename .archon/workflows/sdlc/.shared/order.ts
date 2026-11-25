@@ -8,9 +8,8 @@
  * the parse below ignores fields it does not read.
  */
 
-import { note } from './io.ts';
-import { record } from './forge.ts';
-import { type Stored, stateDocuments, statePut } from './state.ts';
+import { state, type StateDocument } from 'archon:script';
+import { record } from './inputs.ts';
 import { read, type WorkItem } from './workitem.ts';
 
 export const ORDER_PREFIX = 'work-order/';
@@ -61,7 +60,7 @@ function finished(doc: WorkItem): boolean {
 
 function finishedNumbers(): Set<number> {
   const numbers = new Set<number>();
-  for (const stored of stateDocuments('work/')) {
+  for (const stored of state.listValues('work/')) {
     const item = read(stored.name, stored);
     if (item !== undefined && finished(item.doc)) numbers.add(item.doc.subject.number);
   }
@@ -73,7 +72,7 @@ function finishedNumbers(): Set<number> {
  * past an order the operator wrote wrong would build the wrong thing, or nothing,
  * without saying why.
  */
-function storedOrder(stored: Stored & { readonly name: string }): WorkOrder {
+function storedOrder(stored: StateDocument): WorkOrder {
   try {
     return parseWorkOrder(stored.value);
   } catch (error) {
@@ -87,7 +86,7 @@ function storedOrder(stored: Stored & { readonly name: string }): WorkOrder {
  * to mark.
  */
 export function openOrderMembers(at: string): Set<number> {
-  const open = stateDocuments(ORDER_PREFIX)
+  const open = state.listValues(ORDER_PREFIX)
     .map(stored => ({ stored, order: storedOrder(stored) }))
     .filter(({ order }) => order.status === 'open');
   if (open.length === 0) return new Set();
@@ -96,7 +95,7 @@ export function openOrderMembers(at: string): Set<number> {
   for (const { stored, order } of open) {
     if (order.members.every(number => finishedItems.has(number))) {
       const done: WorkOrder = { ...order, status: 'done', done_at: at };
-      if (statePut(stored.name, done, stored.revision) === 'ok') note(`${stored.name} is done: every member merged`);
+      if (state.put(stored.name, done, { ifRevision: stored.revision }).ok) console.error(`${stored.name} is done: every member merged`);
     } else {
       for (const number of order.members) members.add(number);
     }

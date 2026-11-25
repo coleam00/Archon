@@ -75,7 +75,7 @@ A run waiting at `review` is `paused`, and it gives its resource slot back while
 
 The run uses the provider configuration and credentials of `runAsUserId`. The `gh` CLI must be authenticated for that user on the execution host, because both agents and the `post` node call it.
 
-To run the same pattern on a timer instead, use a [schedule binding](/guides/workflow-triggers/#configure-a-native-macos-schedule). A schedule has no event to map from, so the workflow's first node has to find its own work, such as listing issues opened since the last run. Keep that cursor in a [durable state document](/reference/workflow-language/#durable-state-documents) and update it from a `bash:` or `script:` node, so the next run starts where this one stopped.
+To run the same pattern on a timer instead, use a [schedule binding](/guides/workflow-triggers/#configure-a-native-schedule). A schedule has no event to map from, so the workflow's first node has to find its own work, such as listing issues opened since the last run. Keep that cursor in a [durable state document](/reference/workflow-language/#durable-state-documents) and update it from a `bash:` or `script:` node, so the next run starts where this one stopped.
 
 ## Review the draft
 

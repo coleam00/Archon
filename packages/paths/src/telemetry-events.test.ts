@@ -1,6 +1,9 @@
 import { describe, test, expect } from 'bun:test';
 
 import {
+  chatTurnEventProperties,
+  workflowTerminalEventProperties,
+  type TelemetryUsageProperties,
   classifyWorkflowForTelemetry,
   resolveInstallChannel,
   runRefForTelemetry,
@@ -89,4 +92,43 @@ describe('sanitizeModelForTelemetry', () => {
   test('passes through undefined', () => {
     expect(sanitizeModelForTelemetry(undefined)).toBeUndefined();
   });
+});
+
+describe('shared telemetry usage wire contract', () => {
+  const specimen: Required<TelemetryUsageProperties> = {
+    costUsd: 0.75,
+    tokensIn: 5000,
+    tokensOut: 1200,
+    cacheReadTokens: 4000,
+    cacheWriteTokens: 250,
+    cachePartialTokens: true,
+  };
+  const wireKeys: Record<keyof TelemetryUsageProperties, string> = {
+    costUsd: 'cost_usd',
+    tokensIn: 'tokens_in',
+    tokensOut: 'tokens_out',
+    cacheReadTokens: 'cache_read_tokens',
+    cacheWriteTokens: 'cache_write_tokens',
+    cachePartialTokens: 'cache_partial',
+  };
+  const serializers = {
+    chat: (usage: TelemetryUsageProperties) =>
+      chatTurnEventProperties({ ...usage, outcome: 'completed' }),
+    terminal: (usage: TelemetryUsageProperties) =>
+      workflowTerminalEventProperties({ ...usage, outcome: 'completed', workflowName: 'custom' }),
+  };
+
+  for (const [name, serialize] of Object.entries(serializers)) {
+    test(`${name}: carries every shared usage property to its stable wire key`, () => {
+      const wire = serialize(specimen);
+      for (const axis of Object.keys(wireKeys) as (keyof TelemetryUsageProperties)[]) {
+        expect(wire[wireKeys[axis]], `${axis} -> ${wireKeys[axis]}`).toBe(specimen[axis]);
+      }
+    });
+
+    test(`${name}: leaves unreported shared usage properties absent`, () => {
+      const wire = serialize({});
+      for (const key of Object.values(wireKeys)) expect(wire).not.toHaveProperty(key);
+    });
+  }
 });

@@ -28,8 +28,12 @@ interface RunStreamProps {
   providerEvents: RunProviderEvents;
   showToolCalls: boolean;
   showSystem: boolean;
-  /** `'all'` shows every node; otherwise restrict the stream to one node's entries. */
-  selectedNodeId: string;
+  /** null shows every node; otherwise restrict the stream to one node's entries. */
+  selectedNodeId: string | null;
+  /** The run is running or paused, so more entries can still arrive. */
+  live: boolean;
+  /** The node a paused run waits at; the engine still reports it as running. */
+  waitingNodeId: string | null;
 }
 
 /**
@@ -62,7 +66,14 @@ type TimelineEntry =
       timestamp: string;
       nodeId: string | null;
     }
-  | { kind: 'node'; key: string; at: number; node: NodeRun; showDetail: boolean }
+  | {
+      kind: 'node';
+      key: string;
+      at: number;
+      node: NodeRun;
+      showDetail: boolean;
+      waiting: boolean;
+    }
   | {
       kind: 'hook';
       key: string;
@@ -298,7 +309,9 @@ export function RunStream({
   showToolCalls,
   showSystem,
   selectedNodeId,
-}: RunStreamProps): ReactElement {
+  live,
+  waitingNodeId,
+}: RunStreamProps): ReactElement | null {
   // Single source for the folded nodes — consumed by both the timeline (one
   // divider per node) and the node-filter window so they can't drift.
   const nodeRuns = useMemo(() => foldNodeRuns(events, nodes), [events, nodes]);
@@ -322,20 +335,21 @@ export function RunStream({
         at: new Date(nr.startedAt).getTime(),
         node: nr,
         showDetail: showSystem,
+        waiting: nr.nodeId === waitingNodeId && nr.status === 'running',
       });
     }
 
     entries.push(...runEventEntries(events));
     entries.sort((a, b) => a.at - b.at);
     return entries;
-  }, [messages, events, nodeRuns, toolCalls, providerEvents, showSystem]);
+  }, [messages, events, nodeRuns, toolCalls, providerEvents, showSystem, waitingNodeId]);
 
   // The selected node's execution slice `[startedAt, nextNode.startedAt)`. Used as
   // a positional fallback so node-blind entries (prose, artifacts, system rows, and
   // message-inline tools of a run with no recorded tool events) still resolve to a
   // node when filtering.
   const nodeWindow = useMemo<{ start: number; end: number } | null>(() => {
-    if (selectedNodeId === 'all') return null;
+    if (selectedNodeId === null) return null;
     const idx = nodeRuns.findIndex(r => r.nodeId === selectedNodeId);
     if (idx === -1) return null;
     const start = new Date(nodeRuns[idx].startedAt).getTime();
@@ -351,7 +365,7 @@ export function RunStream({
     // match by identity; every node-blind entry (prose, artifacts, system rows,
     // legacy message-inline tools) falls back to the node's time window so a
     // node's whole slice of the timeline stays visible.
-    if (selectedNodeId !== 'all') {
+    if (selectedNodeId !== null) {
       if (e.kind === 'node') return e.node.nodeId === selectedNodeId;
       if (e.kind === 'hook') return e.nodeId === selectedNodeId;
       if (e.kind === 'tool' && e.nodeId !== null) return e.nodeId === selectedNodeId;
@@ -361,6 +375,9 @@ export function RunStream({
   });
 
   if (visible.length === 0) {
+    // Only a live run is still waiting for anything; a finished one has its
+    // outcome in the lifecycle line below the stream.
+    if (!live) return null;
     return (
       <div className="flex min-h-[40vh] items-center justify-center text-center">
         <div className="flex flex-col items-center gap-2 text-text-tertiary">
@@ -430,7 +447,11 @@ function renderTimelineEntry(entry: TimelineEntry): ReactElement {
           skipReason={entry.node.skipReason}
           skipExpr={entry.node.skipExpr}
           fanOutOutcome={entry.node.fanOutOutcome}
+          output={entry.node.output}
+          error={entry.node.error}
+          failureKind={entry.node.failureKind}
           showDetail={entry.showDetail}
+          waiting={entry.waiting}
         />
       );
     }
@@ -448,7 +469,9 @@ function renderTimelineEntry(entry: TimelineEntry): ReactElement {
             label={label}
             headerRight={
               detail.length > 0 ? (
-                <span className="truncate font-mono text-[11px] text-text-secondary">{detail}</span>
+                <span className="truncate font-mono text-console-11 text-text-secondary">
+                  {detail}
+                </span>
               ) : null
             }
           />
@@ -465,7 +488,7 @@ function renderTimelineEntry(entry: TimelineEntry): ReactElement {
             label={entry.row.label}
             headerRight={
               entry.row.detail.length > 0 ? (
-                <span className="truncate font-mono text-[11px] text-text-secondary">
+                <span className="truncate font-mono text-console-11 text-text-secondary">
                   {entry.row.detail}
                 </span>
               ) : null

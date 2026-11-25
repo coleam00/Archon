@@ -52,14 +52,17 @@ function makeRaceStore(): RaceStore {
         codebase_id: null,
         user_id: null,
         outcome: null,
+        completed_outcome: null,
         parent_run_id: null,
         adopted_from_run_id: null,
+        active_phase_started_at: null,
         started_at: new Date(),
         last_activity_at: null,
         completed_at: null,
         working_path: null,
         output_root: null,
         checkout_baseline: null,
+        item_id: null,
       };
       return structuredClone(run);
     },

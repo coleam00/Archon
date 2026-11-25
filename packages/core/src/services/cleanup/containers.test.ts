@@ -1,10 +1,15 @@
 // @archon-test-isolated
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { getArchonHome, getRunArtifactsDirForRoot } from '@archon/paths/archon-paths';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import type { IIsolationStore } from '@archon/isolation';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { WorkflowStatusReadError } from '../../db/workflow-run-status';
 import { mockWorkflowRun } from '../../test/mocks/workflow-run';
+import { VERIFICATION_IMAGE_RECORD_DIR } from './run-verification-images';
 import {
   listContainerEnvironments,
   reclaimContainerEnv,
@@ -26,6 +31,19 @@ import {
 } from './test-harness';
 
 beforeEach(resetCleanupMocks);
+
+const trackTempRoot = trackTempRoots();
+
+/** An output root in which each run recorded a verification build, as `docker build --iidfile` does. */
+function recordedBuildRoot(...runIds: string[]): string {
+  const root = trackTempRoot(mkdtempSync(join(getArchonHome(), 'reap-images-')));
+  for (const runId of runIds) {
+    const dir = join(getRunArtifactsDirForRoot(root, runId), VERIFICATION_IMAGE_RECORD_DIR);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'check'), 'sha256:built');
+  }
+  return root;
+}
 
 describe('reclaimContainerEnv', () => {
   test('uses the supplied isolation store and preserves destroy failures', async () => {
@@ -104,6 +122,7 @@ describe('verification images after reaping', () => {
     const run = {
       ...mockWorkflowRun,
       status: mode === 'paused' ? ('paused' as const) : ('completed' as const),
+      output_root: recordedBuildRoot(mockWorkflowRun.id),
       metadata:
         mode === 'unknown-owner'
           ? {}
@@ -135,9 +154,11 @@ describe('verification images after reaping', () => {
 test('reaping releases every associated run and reports partial failures', async () => {
   mockListActiveContainerEnvironments.mockResolvedValue([makeContainerEnvironment()]);
   mockGetRunIdsByIsolationEnvId.mockResolvedValue(['older', 'newer']);
+  const output_root = recordedBuildRoot('older', 'newer');
   mockGetWorkflowRun.mockImplementation(async id => ({
     ...mockWorkflowRun,
     id,
+    output_root,
     status: 'completed',
     metadata: {
       execution_owner: { host: hostname(), pid: process.pid },

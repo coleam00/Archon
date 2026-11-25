@@ -7,6 +7,7 @@
  * - Explicit queueing with observability
  */
 
+import { randomUUID } from 'node:crypto';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -20,15 +21,25 @@ function getLog(): ReturnType<typeof createLogger> {
  * Represents a queued message waiting for processing
  */
 interface QueuedMessage {
-  handler: () => Promise<void>;
+  handler: LockHandler;
+  turnId: string;
   timestamp: number;
 }
+
+/**
+ * Work run while holding a conversation's slot. The signal aborts when the operator
+ * stops this turn through {@link ConversationLockManager.cancel}, which names it by
+ * `turnId`; a handler that has nothing to stop may ignore both.
+ */
+export type LockHandler = (signal: AbortSignal, turnId: string) => Promise<void>;
 
 /**
  * Result of acquiring a lock, indicating whether the message was started or queued
  */
 export interface LockAcquisitionResult {
   status: 'started' | 'queued-conversation' | 'queued-capacity';
+  /** Names this turn, started or queued, for {@link ConversationLockManager.cancel}. */
+  turnId: string;
 }
 
 /**
@@ -55,6 +66,9 @@ export interface ConversationLockSnapshot {
 interface ActiveConversation {
   promise: Promise<void>;
   acquiredAt: number;
+  turnId: string;
+  /** Aborts the active handler's signal; queued handlers get their own when they start. */
+  controller: AbortController;
 }
 
 /**
@@ -85,21 +99,27 @@ export class ConversationLockManager {
    * @param conversationId - Unique conversation identifier
    * @param handler - Async function to execute
    */
-  async acquireLock(
+  acquireLock(conversationId: string, handler: LockHandler): Promise<LockAcquisitionResult> {
+    return this.admit(conversationId, handler, randomUUID());
+  }
+
+  /** Start or queue one turn; a queued turn keeps the id its acquisition returned. */
+  private async admit(
     conversationId: string,
-    handler: () => Promise<void>
+    handler: LockHandler,
+    turnId: string
   ): Promise<LockAcquisitionResult> {
     // Check if conversation already active - queue if yes
     if (this.activeConversations.has(conversationId)) {
-      this.queueMessage(conversationId, handler);
-      return { status: 'queued-conversation' };
+      this.queueMessage(conversationId, handler, turnId);
+      return { status: 'queued-conversation', turnId };
     }
 
     // Check if at max capacity - queue if yes
     if (this.activeConversations.size >= this.maxConcurrent) {
       getLog().info({ maxConcurrent: this.maxConcurrent, conversationId }, 'queued_at_capacity');
-      this.queueMessage(conversationId, handler);
-      return { status: 'queued-capacity' };
+      this.queueMessage(conversationId, handler, turnId);
+      return { status: 'queued-capacity', turnId };
     }
 
     // Execute immediately
@@ -110,7 +130,8 @@ export class ConversationLockManager {
 
     // Store Promise in Map BEFORE awaiting (prevents race conditions)
     const acquiredAt = this.now();
-    const promise = handler()
+    const controller = new AbortController();
+    const promise = handler(controller.signal, turnId)
       .catch(error => {
         getLog().error({ err: error, conversationId }, 'conversation_handler_error');
       })
@@ -133,10 +154,25 @@ export class ConversationLockManager {
         });
       });
 
-    this.activeConversations.set(conversationId, { promise, acquiredAt });
+    this.activeConversations.set(conversationId, { promise, acquiredAt, turnId, controller });
 
     // Fire-and-forget: don't await here, return immediately
-    return { status: 'started' };
+    return { status: 'started', turnId };
+  }
+
+  /**
+   * Stop one turn by aborting its signal, while it is the conversation's active handler.
+   * Turns queued after it still run. Returns whether a stop was signalled: false when
+   * that turn is not the active one (it ended, or has not started) or was already
+   * stopped, so a repeated stop, or one that arrives after the queue handed the
+   * conversation to the next turn, stops nothing.
+   */
+  cancel(conversationId: string, turnId: string): boolean {
+    const active = this.activeConversations.get(conversationId);
+    if (active?.turnId !== turnId || active.controller.signal.aborted) return false;
+    active.controller.abort();
+    getLog().info({ conversationId, turnId }, 'conversation_cancel_requested');
+    return true;
   }
 
   /**
@@ -144,13 +180,14 @@ export class ConversationLockManager {
    * @param conversationId - Unique conversation identifier
    * @param handler - Async function to queue
    */
-  private queueMessage(conversationId: string, handler: () => Promise<void>): void {
+  private queueMessage(conversationId: string, handler: LockHandler, turnId: string): void {
     const queue = this.messageQueues.get(conversationId) ?? [];
     if (!this.messageQueues.has(conversationId)) {
       this.messageQueues.set(conversationId, queue);
     }
     queue.push({
       handler,
+      turnId,
       timestamp: this.now(),
     });
     getLog().debug({ conversationId, queueLength: queue.length }, 'message_queued');
@@ -172,7 +209,7 @@ export class ConversationLockManager {
     const waitTime = this.now() - next.timestamp;
     getLog().debug({ conversationId, waitTimeMs: waitTime }, 'queued_message_processing');
 
-    await this.acquireLock(conversationId, next.handler);
+    await this.admit(conversationId, next.handler, next.turnId);
   }
 
   /**

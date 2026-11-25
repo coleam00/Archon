@@ -302,7 +302,7 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
 
-    // The run's scratch waits for this point: until the container is gone, code in it can
+    // Scratch and tagged caches wait until the container is gone: code in it can
     // still write into, or plant links in, the artifacts directory it mounts.
     if (meta.artifactsMount !== undefined) {
       await removeRunScratch(meta.artifactsMount, { envId });

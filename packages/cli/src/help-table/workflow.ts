@@ -1,5 +1,10 @@
 import type { HelpGroup } from './types';
 
+const ALL_RUNS_FLAG = {
+  spec: '--all-runs',
+  description: 'With --item: act on every matching run instead of refusing when several match',
+};
+
 export const workflowHelp: HelpGroup = {
   entries: [
     {
@@ -20,7 +25,8 @@ export const workflowHelp: HelpGroup = {
       command: 'workflow',
       subcommand: 'run',
       spec: 'workflow run <name> [msg]',
-      description: 'Run a workflow with optional message',
+      description:
+        'Run a workflow with optional message\nWith no name, --supersedes <run-id> starts that run again from its record',
     },
     {
       command: 'workflow',
@@ -35,8 +41,16 @@ export const workflowHelp: HelpGroup = {
       description: 'List recent runs (all statuses) for this project',
       scopedFlags: [
         {
+          spec: '--throughput',
+          description: 'Show effective output tok/s per run and model across listed runs',
+        },
+        {
           spec: '--verbose, -v',
           description: "With --json: add each run's per-node state and attention",
+        },
+        {
+          spec: '--item-of <run-id>',
+          description: "Read the item a run belongs to (its root run's item), as --item reads it",
         },
       ],
     },
@@ -45,6 +59,12 @@ export const workflowHelp: HelpGroup = {
       subcommand: 'get',
       spec: 'workflow get <run-id>',
       description: 'Show detail for a single run (any status)',
+      scopedFlags: [
+        {
+          spec: '--throughput',
+          description: 'Show effective output tok/s per recorded agent attempt and run',
+        },
+      ],
     },
     {
       command: 'workflow',
@@ -61,15 +81,16 @@ export const workflowHelp: HelpGroup = {
     {
       command: 'workflow',
       subcommand: 'wait',
-      spec: 'workflow wait <run-id>',
-      description: 'Block until the run ends or needs attention',
+      spec: 'workflow wait <run-id> | --item <key>',
+      description:
+        'Block until the run ends or needs attention\nWith --item: until any live run on the item does; names the run',
     },
     {
       command: 'workflow',
       subcommand: 'attention',
-      spec: 'workflow attention [<run-id>]',
+      spec: 'workflow attention [<run-id>|ask:<id>]',
       description:
-        'List, count or stream the attention queue, or read the item one run stands for\n(defaults to the current project)',
+        'List, count or stream the attention queue, or read the item one run or ask stands for\n(defaults to the current project)',
       scopedFlags: [
         { spec: '--project <id|name|key>', description: 'Scope to another project' },
         { spec: '--all', description: 'The whole install' },
@@ -79,19 +100,42 @@ export const workflowHelp: HelpGroup = {
           description: 'Oldest pause first (default), or by a label',
         },
         {
-          spec: '--count-by project|label:<key>',
-          description: 'Count items per project or per label value',
+          spec: '--count-by project|label:<key>|answerer',
+          description: 'Count items per project or per label value; with --since also per answerer',
+        },
+        {
+          spec: '--since <40m|7d|24h|2w|ISO>',
+          description:
+            'With --count-by: count the attention waits opened since then, answered or\n' +
+            'still open, by the labels each opened with, and how many carried a\n' +
+            'recommendation and were answered as recommended',
         },
         {
           spec: '--watch',
           description:
-            'Stream readable changes until stopped; the open set comes first\n' +
-            'A degraded warning means coverage may have gaps. Repair and replay:\n' +
+            'Stream what needs someone until stopped: open items first, then items that\n' +
+            'open, change or close, and runs that fail or lose their owner\n' +
+            'A degraded warning means coverage may have gaps:\n' +
             'https://archon.diy/getting-started/operate/#stream-the-queue',
         },
         {
+          spec: '--notices',
+          description:
+            'With --watch: also what happened to work nobody has to act on (a run\n' +
+            'completed, was cancelled or resumed, or emitted a notice)\n' +
+            'With --since and no --watch: list the notices runs emitted since then, one\n' +
+            'line each, or count them with --count-by project|label:<key>',
+        },
+        {
+          spec: '--protocol',
+          description:
+            'With --watch: the full sync protocol for programs (ready, bookmark,\n' +
+            'every run end and resume)',
+        },
+        {
           spec: '--after <cursor>',
-          description: 'With --watch: replay readable events after a cursor; gaps may remain',
+          description:
+            'With --watch --protocol: replay readable events after a cursor; gaps may remain',
         },
       ],
     },
@@ -107,9 +151,16 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'pause',
+      spec: 'workflow pause <run-id>',
+      description:
+        "Request a pause before a running run's next node; a run with no node left completes\nOnce paused it keeps its slot and item; resume it with 'workflow resume'",
+    },
+    {
+      command: 'workflow',
       subcommand: 'resume',
       spec: 'workflow resume <run-id>',
-      description: 'Resume a failed or paused run from completed nodes',
+      description: 'Resume a failed, paused or killed run from completed nodes',
     },
     {
       command: 'workflow',
@@ -119,13 +170,29 @@ export const workflowHelp: HelpGroup = {
       scopedFlags: [
         {
           spec: '--watch',
-          description: 'Repeat serial passes every 5 seconds; drain execution on shutdown',
+          description:
+            'Repeat serial passes every 5 seconds; drain execution on shutdown;\n' +
+            'exit 75 when Archon is updated, for the supervisor to restart',
         },
         { spec: '--json', description: 'One JSON document per pass' },
-        { spec: 'schedule install|remove', description: 'Manage a macOS wake timer' },
+        {
+          spec: '--sources <file>',
+          description:
+            'The ARCHON_WEBHOOK_SOURCES file for this process only; install records\n' +
+            "the installing shell's ARCHON_WEBHOOK_SOURCES in the job this way",
+        },
+        {
+          spec: 'schedule install|remove|status',
+          description:
+            "Manage this install's wake --watch job (launchd, systemd user timer,\n" +
+            'or Task Scheduler); status says whether it is installed and loaded,\n' +
+            "and how the job's watch ended its last pass",
+        },
         {
           spec: '--interval <seconds>',
-          description: 'Timer interval (positive integer, default: 5)',
+          description:
+            'install only: seconds before an exited watch starts again (default: 5;\n' +
+            'Windows: whole minutes, default 60)',
         },
       ],
     },
@@ -149,14 +216,18 @@ export const workflowHelp: HelpGroup = {
     {
       command: 'workflow',
       subcommand: 'cancel',
-      spec: 'workflow cancel <run-id>',
-      description: 'Stop a running workflow (stops an owning process first)',
+      spec: 'workflow cancel <run-id> | --item <key>',
+      description:
+        "Stop a running workflow (stops an owning process first), or a queued one before it starts\nWith --item: the item's pending or running run; refuses when several are",
+      scopedFlags: [ALL_RUNS_FLAG],
     },
     {
       command: 'workflow',
       subcommand: 'abandon',
-      spec: 'workflow abandon <run-id>',
-      description: 'Mark a run cancelled, stopping a live owner first',
+      spec: 'workflow abandon <run-id> | --item <key>',
+      description:
+        "Mark a run cancelled, stopping a live owner first\nWith --item: the item's pending, running or paused run; refuses when several are",
+      scopedFlags: [ALL_RUNS_FLAG],
     },
     {
       command: 'workflow',
@@ -170,6 +241,14 @@ export const workflowHelp: HelpGroup = {
       spec: 'workflow respond <run-id> <decision> [text]',
       description:
         "Resolve a paused gate with any of its declared decisions\n('approve'/'reject' are sugar for the dedicated commands)",
+      scopedFlags: [
+        {
+          spec: '--recommended',
+          description:
+            'In place of <decision> [text]: answer an attention wait with the option it\n' +
+            'recommends; needs --occurrence, takes --text, refused when it recommends none',
+        },
+      ],
     },
     {
       command: 'workflow',
@@ -182,7 +261,20 @@ export const workflowHelp: HelpGroup = {
           description:
             'A declared option to choose; repeat for a multi_select (omit for a message form)',
         },
+        {
+          spec: '--recommended',
+          description: 'In place of --choose: the option the wait recommends',
+        },
         { spec: '--text <text>', description: 'Free text recorded with the answer' },
+        {
+          spec: '--ref <ref>',
+          description:
+            "In place of <run-id> --occurrence: the item's ref as workflow attention lists it.\nThe only way to answer an ask a completed run left",
+        },
+        {
+          spec: '--withdraw <ref>',
+          description: 'Withdraw an ask a completed run left; it closes unanswered',
+        },
       ],
     },
     {
@@ -205,6 +297,104 @@ export const workflowHelp: HelpGroup = {
           spec: '--yes',
           description: 'Confirm cross-scope reset; refused without --scope or --yes',
         },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'rule',
+      spec: 'workflow rule --item <key> -- <text>',
+      description:
+        "Record a ruling on an item of this project: a decision made without a question.\nEvery later read of the item shows it with the answers; prints the ruling's id",
+      scopedFlags: [
+        {
+          spec: '--withdraw <ruling-id>',
+          description: 'Withdraw a ruling instead; the record stays and says it was withdrawn',
+        },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'end',
+      spec: 'workflow end --item <key> -- <reason>',
+      description:
+        'End an item of this project: nothing more will happen on it. Its stop leaves attention and\nreads show who ended it and why; a newer run or start opens it again. Refused while anything\non the item is active or waiting, naming it',
+    },
+    {
+      command: 'workflow',
+      subcommand: 'link',
+      spec: 'workflow link --item <key> --kind <kind> --to <key>',
+      description:
+        "Record a link from one item of this project to another: depends_on, part_of or\nduplicate_of, read from --item to --to. Recording it again leaves one link; prints the link's id",
+      scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description:
+            'In place of --item: the item the run is on, in its own project; link it --to\nanother item, or --from another item to it',
+        },
+        {
+          spec: '--end <link-id>',
+          description: 'End a link instead; the record stays and says who ended it and when',
+        },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'items',
+      spec: 'workflow items',
+      description:
+        "This project's items with a run started in a window (default the last 30 days),\neach with all its runs, questions, answers and merge, ordered by item id",
+      scopedFlags: [
+        { spec: '--since <40m|7d|24h|2w|ISO>', description: 'Start of the window' },
+        { spec: '--until <ISO>', description: 'End of the window, exclusive (default now)' },
+        {
+          spec: '--after <cursor>',
+          description: "Read the page after the one that returned this 'next' cursor",
+        },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'merged',
+      spec: 'workflow merged --item <key> --change <ref> --at <ISO>',
+      description:
+        "Record that an item's change merged, as the forge reported it. Recorded once:\na second report keeps the first",
+      scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description: 'In place of --item: the item the run is on, in its own project',
+        },
+        { spec: '--change <ref>', description: 'The merged change, such as its pull request URL' },
+        { spec: '--at <ISO>', description: 'When the forge says it merged' },
+        { spec: '--commit <sha>', description: 'The merge commit, when the forge reported one' },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'landing',
+      spec: 'workflow landing --item <key> --branch <name> [--from <start-point>]',
+      description:
+        "Record the branch an item's change lands on. Every fresh run on the item, and on\nan item part_of it that records none, is cut from it and proposes against it.\nRecording again replaces it. With --from, first create the branch on the remote",
+      scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description: 'In place of --item: the item the run is on, in its own project',
+        },
+        { spec: '--branch <name>', description: 'The branch the item lands on' },
+        {
+          spec: '--from <start-point>',
+          description:
+            "Create the branch on the remote from this commit or branch (<remote>/main for the\nremote's tip) before recording; an existing branch is left as it is",
+        },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'notice',
+      spec: 'workflow notice <text>',
+      description:
+        'Inside a workflow node: say what the run did, for whoever watches attention\nwith --notices. Never pauses the run and cannot be answered',
+      scopedFlags: [
+        { spec: '--label <k=v>', description: 'A label to filter and count by; repeatable' },
       ],
     },
     {
@@ -233,6 +423,57 @@ export const workflowHelp: HelpGroup = {
       spec: 'workflow test [<name>|<folder>|<path>]',
       description:
         'Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a\nworkflow, a workflow folder or pack (by name or directory\npath); relative paths resolve from the invoking directory before the\nrepository root. With no target, runs every fixture. Never creates a\nrun or contacts a provider; exec-code fixtures execute in a\nscratch worktree of HEAD',
+    },
+    {
+      command: 'workflow',
+      subcommand: 'types',
+      spec: 'workflow types <name|folder|path>',
+      description:
+        "Generate TypeScript for each node's output_format: the node\noutput types and every enum's values. A pack (by name or\ndirectory path) writes <pack>/.shared/outputs.generated.ts; a single\nworkflow needs --out. --check exits 1 when the file is stale",
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write, relative to the invoking directory',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
+    },
+    {
+      command: 'script',
+      subcommand: 'types',
+      spec: 'script types',
+      description:
+        "Print the TypeScript declaration of the archon:script module a workflow\nscript imports, for an editor or tsc over a pack's scripts",
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write instead of stdout, relative to the invoking directory',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
+    },
+    {
+      command: 'script',
+      subcommand: 'preload',
+      spec: 'script preload',
+      description:
+        'Write the preload file that provides the archon:script module, to run or\ntest a workflow script outside a run: bun --preload <file> script.ts',
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write, relative to the invoking directory (required)',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
     },
   ],
   scopedOnly: [
@@ -266,7 +507,19 @@ export const workflowHelp: HelpGroup = {
       command: 'workflow',
       subcommand: 'cleanup',
       spec: 'workflow cleanup [days]',
-      description: 'Delete terminal runs older than N days (default: 7)',
+      description:
+        'Delete terminal runs older than N days (default: 7) with their artifacts, logs and frozen sources',
+      scopedFlags: [
+        {
+          spec: '--orphans',
+          description:
+            'Instead, list files of runs that have no row (deleted earlier), older than 6 hours',
+        },
+        {
+          spec: '--yes',
+          description: 'With --orphans, remove the listed files',
+        },
+      ],
     },
   ],
 };

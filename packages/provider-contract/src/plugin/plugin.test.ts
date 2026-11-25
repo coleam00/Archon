@@ -56,15 +56,15 @@ test('every event and result crosses the ACP lifecycle unchanged, including post
       const direct = await collect(fixtureProvider().sendQuery('turn', '/workspace'));
       expect(await collect(client.sendQuery('turn', '/workspace'))).toEqual(direct);
       expect(direct).toEqual(chunks);
-      expect(
+      const fixtureTypes: string[] = [...new Set(chunks.map(chunk => chunk.type))];
+      expect(fixtureTypes.sort()).toEqual(
         [
-          ...new Set(
-            chunks
-              .filter(chunk => chunk.type !== 'result' && chunk.type !== 'settled')
-              .map(chunk => chunk.type)
-          ),
+          ...providerEventSchema.options.map(schema => schema.shape.type.value),
+          'session',
+          'result',
+          'settled',
         ].sort()
-      ).toEqual(providerEventSchema.options.map(schema => schema.shape.type.value).sort());
+      );
       await responseWritten;
     },
     (side, value) => {

@@ -1,3 +1,4 @@
+import { WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { resumeRefusal } from '@archon/workflows/resource-start-store';
@@ -16,6 +17,7 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { WorkflowStoreHarness } from '@archon/workflows/store-conformance';
+import { workflowStoreDouble } from '@archon/workflows/test-utils';
 import {
   createTransactionView,
   isConversationResetTarget,
@@ -29,6 +31,7 @@ import {
 import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
 import type { User } from '@archon/core/schemas/user';
 import type { Codebase } from '@archon/core/schemas/codebase';
+import { defaultCwdKey, isSameDefaultCwd } from '@archon/core/utils/codebase-path';
 
 const unsupported = async (): Promise<never> => {
   throw new Error('Unsupported test-store operation');
@@ -44,10 +47,15 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
       listCodebases: async () => [...codebases.values()],
       listCodebaseClaims: async () => [...codebases.values()],
       findCodebaseByDefaultCwd: async cwd =>
-        [...codebases.values()].find(row => row.default_cwd === cwd) ?? null,
+        [...codebases.values()].find(row => isSameDefaultCwd(row.default_cwd, cwd)) ?? null,
       findCodebaseByPathPrefix: async cwd =>
         [...codebases.values()]
-          .filter(row => isPathInside(row.default_cwd, cwd, { includeRoot: true, lexical: true }))
+          .filter(row =>
+            isPathInside(defaultCwdKey(row.default_cwd), defaultCwdKey(cwd), {
+              includeRoot: true,
+              lexical: true,
+            })
+          )
           .sort((a, b) => resolve(b.default_cwd).length - resolve(a.default_cwd).length)[0] ?? null,
       findCodebaseByName: async name =>
         [...codebases.values()].find(row => row.name === name) ?? null,
@@ -134,7 +142,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
 }
 
 type InMemoryWorkflowStore = IWorkflowStore &
-  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait'>;
+  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait' | 'setResourceCapacity'>;
 
 /**
  * The file store's transaction view over in-memory maps. Every operation runs on a copy and
@@ -216,7 +224,19 @@ export function createInMemoryWorkflowStore(
           codebaseId: row.codebase_id,
           branch: row.workflow_id,
           workingPath: row.working_path,
-        }))
+        })),
+    notice =>
+      apply(async view => {
+        const prior =
+          (await view.listEventsForRuns([notice.runId], ['workflow_notice'])).get(notice.runId) ??
+          [];
+        if (prior.length >= WORKFLOW_NOTICE_LIMITS.perRun) return;
+        await view.persistWorkflowEvent({
+          workflow_run_id: notice.runId,
+          event_type: 'workflow_notice',
+          data: notice.data,
+        });
+      })
   );
   const admit =
     <Args extends unknown[], Result>(
@@ -224,9 +244,10 @@ export function createInMemoryWorkflowStore(
     ): ((...args: Args) => Promise<Result>) =>
     (...args) =>
       serialize(() => operation(...args));
-  return {
+  return workflowStoreDouble<InMemoryWorkflowStore>({
     ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
+    admitPendingRun: admit(admission.admitPendingRun.bind(admission)),
     drainResourceStarts: admit(admission.drainResourceStarts.bind(admission)),
     hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),
     acceptStartReceipt: admit(admission.acceptStartReceipt.bind(admission)),
@@ -234,16 +255,29 @@ export function createInMemoryWorkflowStore(
     listStartReceipts: admit(admission.listStartReceipts.bind(admission)),
     listPendingStartBindings: admit(admission.listPendingStartBindings.bind(admission)),
     getResourceStartRequest: admit(admission.getResourceStartRequest.bind(admission)),
+    listSkippedItemStarts: admit(admission.listSkippedItemStarts.bind(admission)),
+    readItemStartLimits: admit(admission.readItemStartLimits.bind(admission)),
+    getInstallHold: admit(admission.getInstallHold.bind(admission)),
+    getRunLimit: admit(admission.getRunLimit.bind(admission)),
+    setInstallHold: admit(admission.setInstallHold.bind(admission)),
+    liftInstallHold: admit(admission.liftInstallHold.bind(admission)),
+    listHeldStarts: admit(admission.listHeldStarts.bind(admission)),
+    listHeldItemStarts: admit(admission.listHeldItemStarts.bind(admission)),
+    listPreparingStarts: admit(admission.listPreparingStarts.bind(admission)),
+    listRefusedStarts: admit(admission.listRefusedStarts.bind(admission)),
     listQueuedResourceStartsForHost: admit(
       admission.listQueuedResourceStartsForHost.bind(admission)
     ),
+    listQueuedItemStarts: admit(admission.listQueuedItemStarts.bind(admission)),
     withdrawQueuedResourceStart: admit(admission.withdrawQueuedResourceStart.bind(admission)),
+    listUnreadableQueuedStarts: admit(admission.listUnreadableQueuedStarts.bind(admission)),
     claimStartBindingPreparation: admit(admission.claimStartBindingPreparation.bind(admission)),
     completeStartBindingPreparation: admit(
       admission.completeStartBindingPreparation.bind(admission)
     ),
     failStartBindingPreparation: admit(admission.failStartBindingPreparation.bind(admission)),
     resetStartBindingPreparation: admit(admission.resetStartBindingPreparation.bind(admission)),
+    setResourceCapacity: admit(admission.setResourceCapacity.bind(admission)),
     backdate: (id, dates) =>
       serialize(async () => {
         const run = runs.get(id);
@@ -267,6 +301,8 @@ export function createInMemoryWorkflowStore(
     updateWorkflowRun: (id, updates) => write(view => view.updateWorkflowRun(id, updates)),
     updateWorkflowRunMetadataIfRunning: (id, metadata) =>
       write(view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
+    updateWorkflowRunMetadataIfPending: (id, metadata) =>
+      write(view => view.updateWorkflowRunMetadataIfPending(id, metadata)),
     updateWorkflowActivity: id => write(view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write(view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
@@ -299,6 +335,10 @@ export function createInMemoryWorkflowStore(
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
     releaseRunForUnreadableSource: (id, release, beforePublish) =>
       write(view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
+    requestOperatorPause: (id, requested) =>
+      write(view => view.requestOperatorPause(id, requested)),
+    pauseWorkflowRunForOperator: (id, claimId) =>
+      write(view => view.pauseWorkflowRunForOperator(id, claimId)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write(view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, gateEvents, expected) =>
@@ -308,20 +348,20 @@ export function createInMemoryWorkflowStore(
         run => run.id === id,
         view => view.resolveAndCancelApprovalGate(id, gateEvents, cancellation, expected)
       ),
-    completeWorkflowRun: (id, completion, metadata) =>
+    completeWorkflowRun: (id, completion, metadata, result) =>
       terminalWrite(
         run => run.id === id,
-        view => view.completeWorkflowRun(id, completion, metadata)
+        view => view.completeWorkflowRun(id, completion, metadata, result)
       ),
     failWorkflowRun: (id, error, options) =>
       terminalWrite(
         run => run.id === id,
         view => view.failWorkflowRun(id, error, options)
       ),
-    cancelWorkflowRun: (id, details) =>
+    cancelWorkflowRun: (id, details, options) =>
       terminalWrite(
         run => run.id === id,
-        view => view.cancelWorkflowRun(id, details)
+        view => view.cancelWorkflowRun(id, details, options)
       ),
     cancelFanOutRun: (id, reason) =>
       terminalWrite(
@@ -364,19 +404,26 @@ export function createInMemoryWorkflowStore(
         };
       }),
     listWorkflowEvents: (id, options) => write(view => view.listWorkflowEvents(id, options)),
-    listEventsForRuns: (ids, types) => write(view => view.listEventsForRuns(ids, types)),
+    listEventsForRuns: (ids, types, options) =>
+      write(view => view.listEventsForRuns(ids, types, options)),
     listMetricRecords: () => write(view => view.listMetricRecords()),
+    listAttentionWaitStarts: () => write(view => view.listAttentionWaitStarts()),
+    listWorkflowNoticeRows: () => write(view => view.listWorkflowNoticeRows()),
     getDagResumeSnapshot: id => write(view => view.getDagResumeSnapshot(id)),
     listProviderEvents: (id, query) => write(view => view.listProviderEvents(id, query)),
     findChildRuns: id => write(view => view.findChildRuns(id)),
     getRunAncestry: id => write(view => view.getRunAncestry(id)),
     getActiveWorkflowRunByPath: (path, self) =>
       write(view => view.getActiveWorkflowRunByPath(path, self)),
-    findResumableRun: (name, path) => write(view => view.findResumableRun(name, path)),
     findWorkflowRunsByIdPrefix: (prefix, codebase) =>
       write(view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => write(view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => write(view => view.findOpenWorkRuns(options)),
+    listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
+    getItemAsk: async () => null,
+    listOpenItemWaits: async () => [],
+    listStoppedItemRuns: async () => [],
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),
@@ -385,6 +432,7 @@ export function createInMemoryWorkflowStore(
     answerAttentionWait: (id, answered) => write(view => view.answerAttentionWait(id, answered)),
     labelAttentionWait: (id, labelWrite) => write(view => view.labelAttentionWait(id, labelWrite)),
     listAttentionQueueRows: () => write(view => view.listAttentionQueueRows()),
+    listUnfinishedRuns: () => write(view => view.listUnfinishedRuns()),
     signalWorkflowWait: (id, wait, payload) =>
       write(view => view.signalWorkflowWait(id, wait, payload)),
     deleteOldWorkflowRuns: days => write(view => view.deleteOldWorkflowRuns(days)),
@@ -440,5 +488,5 @@ export function createInMemoryWorkflowStore(
           }
         return { deleted };
       }),
-  };
+  });
 }

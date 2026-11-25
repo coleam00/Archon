@@ -277,7 +277,7 @@ describe('discoverWorkflows — nested included command compilation', () => {
 
     expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
     const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;
-    expect(message).toContain("command 'leaky-command'");
+    expect(message).toContain('command leaky-command.md');
     expect(message).toContain("'$caller.output'");
     expect(message).toContain('inputs:');
     expect(message).toContain('with:');

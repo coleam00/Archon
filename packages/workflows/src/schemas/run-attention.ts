@@ -8,8 +8,10 @@ import {
   isGateResolved,
   isRecognizedSuspendReason,
 } from './approval-context';
+import { pauseContextsAreHistory, readPauseCause } from './pause-cause';
 import { attentionOccurrence, gateOccurrence } from './pause-occurrence';
 import { isContainerRun, readSourceRelease } from './run-metadata';
+import { readContinuationGiveUp } from './continuation-give-up';
 import {
   isTerminalRunStatus,
   terminalWorkflowRunStatusSchema,
@@ -20,6 +22,7 @@ import {
   attentionOptions,
   isWorkflowWaitContext,
   workflowWaitStepName,
+  type WorkflowAttentionWaitContext,
 } from './run-wait';
 import {
   attentionFormSchema,
@@ -77,6 +80,7 @@ export const runAttentionUnreadableReasonSchema = z.enum([
   'child_run_missing',
   'child_chain_too_deep',
   'source_release_not_continued',
+  'continuation_given_up',
 ]);
 export type RunAttentionUnreadableReason = z.infer<typeof runAttentionUnreadableReasonSchema>;
 
@@ -110,6 +114,8 @@ const nonTerminalRunAttentionSchemas = [
     occurrence: z.string(),
     form: attentionFormSchema,
     options: z.array(attentionOptionSchema),
+    /** The option with id `other` is the reserved one: an answer choosing it needs text. */
+    other: z.literal(true).optional(),
     recommendation: attentionRecommendationSchema.optional(),
   }),
   z.object({
@@ -158,7 +164,8 @@ export const runAttentionSchema = createRunAttentionSchema(z.date());
  * Terminal and gate attention, or advisory attention for overdue live tools.
  *
  * `runAttention` returns null for ordinary progress without an advisory, including
- * a resolved gate awaiting auto-resume and a `wait:` node whose timer or event has not fired.
+ * a resolved gate awaiting auto-resume, a `wait:` node whose timer or event has not fired,
+ * and a run an operator paused.
  * `usage_limit` is a run paused on a provider usage limit, or on a rate limit that
  * outlasted its retries: it needs no answer and tries again by itself at `resumeAt`, but an operator may still resume it sooner, cancel it or abandon it.
  *
@@ -266,7 +273,7 @@ function runningAttention(run: RunAttentionInput, now: number): RunAttention | n
       };
 }
 
-/** A paused run is released, waiting, or at a gate, checked in that order. */
+/** A paused run is released, paused by an operator, waiting, or at a gate, checked in that order. */
 function pausedAttention(run: RunAttentionInput): RunAttention | null {
   // A release is written only by the running -> paused transition and cleared on resume,
   // so while it is present it is why the run is paused; any gate or wait beside it is
@@ -281,6 +288,8 @@ function pausedAttention(run: RunAttentionInput): RunAttention | null {
         )
       : null;
   }
+  // An operator pause asks nothing; it ends on an explicit resume.
+  if (readPauseCause(run.metadata) === 'operator') return null;
 
   const wait = run.metadata?.wait;
   if (isWorkflowWaitContext(wait) && wait.kind === 'quota') {
@@ -289,16 +298,7 @@ function pausedAttention(run: RunAttentionInput): RunAttention | null {
   if (isWorkflowWaitContext(wait) && wait.kind === 'attention') {
     // Answered: like a resolved gate, it waits on the machine, not on an answer.
     if (wait.answer !== undefined) return null;
-    return {
-      kind: 'attention',
-      runId: run.id,
-      nodeId: workflowWaitStepName(wait),
-      message: wait.message,
-      occurrence: attentionOccurrence(wait),
-      form: attentionForm(wait),
-      options: [...attentionOptions(wait)],
-      ...(wait.recommendation !== undefined ? { recommendation: wait.recommendation } : {}),
-    };
+    return openAttention(run.id, wait);
   }
 
   const raw = run.metadata?.approval;
@@ -315,6 +315,21 @@ function pausedAttention(run: RunAttentionInput): RunAttention | null {
         );
   }
   return gateAttention(run.id, raw);
+}
+
+/** The attention an unanswered attention wait asks for. */
+function openAttention(runId: string, wait: WorkflowAttentionWaitContext): RunAttention {
+  return {
+    kind: 'attention',
+    runId,
+    nodeId: workflowWaitStepName(wait),
+    message: wait.message,
+    occurrence: attentionOccurrence(wait),
+    form: attentionForm(wait),
+    options: [...attentionOptions(wait)],
+    ...(wait.other === true ? { other: true } : {}),
+    ...(wait.recommendation !== undefined ? { recommendation: wait.recommendation } : {}),
+  };
 }
 
 /** The attention a recorded gate asks for: none once resolved, else whom to answer. */
@@ -416,6 +431,8 @@ export function isAttentionQueueRow(run: RunAttentionInput): boolean {
   const attention = runAttention(run);
   return (
     queuedRunAttention(run, attention) !== undefined ||
+    // A host that gave up on it records why; the queue lists it while it applies.
+    (run.status === 'paused' && readContinuationGiveUp(run.metadata ?? {}) !== undefined) ||
     (run.status === 'paused' &&
       (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children'))
   );
@@ -435,7 +452,8 @@ export interface PauseContinuation {
  *
  * Excluded: a parent blocked on a child (it continues through the child), a container
  * write-back (only a CLI holding the container can apply it), any container run (the
- * host cannot resume one), and a gate or attention wait from before `pauseId` existed
+ * host cannot resume one), a run released for its source or paused by an operator (its
+ * gate or wait is history, `pauseContextsAreHistory`), and a gate or attention wait from before `pauseId` existed
  * (no identity to claim against). A gate beside a `wait:` is a leftover the wait
  * replaced; that also covers file-store rows written before a wait pause began removing
  * the previous gate's answer. Time and event waits continue on their deadline instead
@@ -444,7 +462,7 @@ export interface PauseContinuation {
 export function continuablePause(
   run: Pick<WorkflowRun, 'status' | 'metadata'>
 ): (PauseContinuation & { answered: boolean }) | undefined {
-  if (run.status !== 'paused' || isContainerRun(run) || readSourceRelease(run.metadata))
+  if (run.status !== 'paused' || isContainerRun(run) || pauseContextsAreHistory(run))
     return undefined;
   const wait = run.metadata.wait;
   if (wait !== undefined) {

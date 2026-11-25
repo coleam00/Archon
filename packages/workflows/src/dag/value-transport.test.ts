@@ -21,6 +21,8 @@ import {
 import { executeDagWorkflow } from '../dag-executor';
 import type { DagNode, WorkflowRun, WorkflowDefinition } from '../schemas';
 import { dagNodeSchema } from '../schemas';
+import { expandWorkflowIncludes } from '../include-expander';
+import { mapOf, wf } from '../include-expander.fixtures';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 
 // ---------------------------------------------------------------------------
@@ -472,6 +474,94 @@ describe('value transport (#2637): persistence, resume, and node-local bindings'
     expect(String(failed?.data?.error)).toContain("'maybe' did not run");
     expect(String(failed?.data?.error)).toContain('if_skipped');
   });
+
+  // #5760: the same directive on an include's and a workflow node's `with:`. The block
+  // reads the input on each surface that can carry it: bash env, an AI prompt, and a
+  // nested workflow node's typed child inputs.
+  it.each(['ran', 'skipped', 'failed'] as const)(
+    "an include's and a workflow node's with: directive reads across a skipped branch (producer %s)",
+    async state => {
+      const prompts: string[] = [];
+      mockSendQueryDag.mockImplementation(async function* (prompt: string) {
+        prompts.push(prompt);
+        yield { type: 'agent_message_chunk', text: 'ok' };
+        yield { type: 'result', sessionId: 'sid' };
+      });
+      const childInputs: Record<string, unknown> = {};
+      const directive = { from: '$a.output.v', if_skipped: null };
+      const block = wf(
+        'reads-x',
+        [
+          { id: 'echo', bash: 'printf "x=%s" $INPUTS.x' },
+          { id: 'think', prompt: 'x=[$INPUTS.x]' },
+          { id: 'child', workflow: 'other', with: { x: '$INPUTS.x' } },
+        ],
+        { inputs: { x: {} } }
+      );
+      const parent = wf('parent', [
+        { id: 'seed', bash: `printf '%s' ${state === 'skipped' ? 'no' : 'yes'}` },
+        {
+          id: 'a',
+          bash: state === 'failed' ? 'exit 1' : `echo '{"v":7}'`,
+          output_format: { type: 'object', properties: { v: { type: 'number' } }, required: ['v'] },
+          depends_on: ['seed'],
+          when: "$seed.output == 'yes'",
+        },
+        {
+          id: 'use',
+          include: 'reads-x',
+          depends_on: ['a'],
+          trigger_rule: 'all_done',
+          with: { x: directive },
+        },
+        {
+          id: 'direct',
+          workflow: 'other',
+          depends_on: ['a'],
+          trigger_rule: 'all_done',
+          with: { x: directive },
+        },
+      ]);
+      const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+      expect(errors).toEqual([]);
+
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: ready({ name: 'parent', nodes: [...(workflows.get('parent')?.nodes ?? [])] }),
+          workflowRun: makeWorkflowRun(`include-directive-${state}`),
+          runChildWorkflow: async args => {
+            childInputs[args.nodeId] = args.inputs;
+            return { childRunId: `child-${args.nodeId}`, status: 'completed', output: 'done' };
+          },
+        })
+      );
+      const events = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+        (call: unknown[]) => call[0] as PersistedEvent
+      );
+      const event = (type: string, step: string) =>
+        events.find(e => e.event_type === type && e.step_name === step);
+
+      if (state === 'failed') {
+        // A failed producer never falls back to if_skipped, and no child is spawned.
+        for (const step of ['use__echo', 'use__think', 'use__child', 'direct']) {
+          expect(String(event('node_failed', step)?.data?.error)).toContain(
+            "binding 'x' reads '$a.output.v', but node 'a' failed"
+          );
+        }
+        expect(childInputs).toEqual({});
+        expect(prompts).toEqual([]);
+        return;
+      }
+      const value = state === 'ran' ? 7 : null;
+      expect(event('node_completed', 'use__echo')?.data?.node_output).toBe(`x=${String(value)}`);
+      expect(prompts).toEqual([`x=[${String(value)}]`]);
+      // The child runs receive the logical value: a number, or JSON null, never text.
+      expect(childInputs).toEqual({ use__child: { x: value }, direct: { x: value } });
+    }
+  );
 
   it('AC1+AC4 (issue acceptance): bindings resolve identically from a rehydrated snapshot after cold resume', async () => {
     await writeFile(

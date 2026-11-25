@@ -12,8 +12,12 @@ import * as codebaseDb from '../../db/codebases';
 import * as sessionDb from '../../db/sessions';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import { cleanupStaleWorktrees } from '../../services/cleanup-service';
-import { cleanupMergedWorktrees } from '../../services/cleanup/merged-sweep';
-import { getLiveRunBlocker } from '../../services/cleanup/run-lock';
+import {
+  cleanupMergedWorktrees,
+  type CleanupOperationResult,
+  type MergedCleanupOutcome,
+} from '../../services/cleanup/merged-sweep';
+import { getUseBlocker } from '../../services/cleanup/run-lock';
 import { ensureIsolationConfigured } from '../../orchestrator/dispatch/isolation-resolver';
 import { createRegisteredWorktree } from '../../workflows/registered-worktree';
 import { safeDeactivateSession } from '../../state/session-transitions';
@@ -243,12 +247,13 @@ async function removeWorktree(
   }
 
   try {
-    const liveRun = await getLiveRunBlocker(isolationEnvId);
-    if (liveRun) {
-      return {
-        success: false,
-        message: `Worktree kept: ${liveRun.display}. Resume or abandon the run before removing the worktree.`,
-      };
+    const inUse = await getUseBlocker(isolationEnvId);
+    if (inUse) {
+      const action =
+        inUse.reason === 'live_run'
+          ? 'Resume or abandon the run before removing the worktree.'
+          : 'It is released once that start has run, or has been withdrawn or refused.';
+      return { success: false, message: `Worktree kept: ${inUse.display}. ${action}` };
     }
 
     // Use isolation provider for removal (pass the working path, not UUID)
@@ -366,50 +371,79 @@ async function cleanupWorktrees(
   }
 
   try {
-    let result;
-    if (cleanupType === 'merged') {
-      result = await cleanupMergedWorktrees(codebaseId, mainPath);
-    } else {
-      result = await cleanupStaleWorktrees(codebaseId, mainPath);
+    if (cleanupType === 'stale') {
+      return await cleanupReport(
+        codebaseId,
+        cleanupType,
+        await cleanupStaleWorktrees(codebaseId, mainPath)
+      );
     }
-
-    let msg = '';
-
-    if (result.removed.length > 0) {
-      msg += `Cleaned up ${String(result.removed.length)} ${cleanupType} worktree(s):\n`;
-      for (const branch of result.removed) {
-        msg += `  • ${branch}\n`;
-      }
-      for (const { branchName, runId, reason } of result.releasedFailedRuns) {
-        msg += `  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}\n`;
-      }
-    } else {
-      msg += `No ${cleanupType} worktrees to clean up.\n`;
+    const outcome = await cleanupMergedWorktrees(codebaseId, mainPath);
+    if (outcome.kind === 'repository-gone') {
+      return { success: true, message: await repositoryGoneMessage(mainPath, codebaseId, outcome) };
     }
-
-    for (const { branchName, message } of result.warnings) {
-      msg += `  Warning: ${branchName}: ${message}\n`;
-    }
-
-    if (result.skipped.length > 0) {
-      msg += `\nSkipped ${String(result.skipped.length)} (protected):\n`;
-      for (const { branchName, reason } of result.skipped) {
-        msg += `  • ${branchName} (${reason})\n`;
-      }
-    }
-
-    msg += result.errors
-      .map(({ branchName, error }) => `  Failed: ${branchName} (${error})\n`)
-      .join('');
-
-    msg += `\n${await activeWorktreeCountMessage(codebaseId)}`;
-
-    return { success: result.errors.length === 0, message: msg.trim() };
+    return await cleanupReport(codebaseId, cleanupType, outcome.result);
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cleanupType, codebaseId: codebaseId }, 'cmd.worktree_cleanup_failed');
     return { success: false, message: `Failed to cleanup: ${err.message}` };
   }
+}
+
+/** What one cleanup sweep removed, kept and failed on. */
+async function cleanupReport(
+  codebaseId: string,
+  cleanupType: string,
+  result: CleanupOperationResult
+): Promise<CommandResult> {
+  let msg = '';
+
+  if (result.removed.length > 0) {
+    msg += `Cleaned up ${String(result.removed.length)} ${cleanupType} worktree(s):\n`;
+    for (const branch of result.removed) {
+      msg += `  • ${branch}\n`;
+    }
+    for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+      msg += `  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}\n`;
+    }
+  } else {
+    msg += `No ${cleanupType} worktrees to clean up.\n`;
+  }
+
+  for (const { branchName, message } of result.warnings) {
+    msg += `  Warning: ${branchName}: ${message}\n`;
+  }
+
+  if (result.skipped.length > 0) {
+    msg += `\nSkipped ${String(result.skipped.length)} (protected):\n`;
+    for (const { branchName, reason } of result.skipped) {
+      msg += `  • ${branchName} (${reason})\n`;
+    }
+  }
+
+  msg += result.errors
+    .map(({ branchName, error }) => `  Failed: ${branchName} (${error})\n`)
+    .join('');
+
+  msg += `\n${await activeWorktreeCountMessage(codebaseId)}`;
+
+  return { success: result.errors.length === 0, message: msg.trim() };
+}
+
+/** A gone checkout is reported, not a failure: nothing was checked or removed. */
+async function repositoryGoneMessage(
+  mainPath: string,
+  codebaseId: string,
+  outcome: Extract<MergedCleanupOutcome, { kind: 'repository-gone' }>
+): Promise<string> {
+  let msg = `Repository gone: ${mainPath} does not exist; its worktrees were not checked.\n`;
+  for (const { branchName, workingPath } of outcome.environments) {
+    msg += `  • ${branchName}: ${workingPath}\n`;
+  }
+  msg +=
+    'To release a record, delete its worktree directory once nothing in it is needed, ' +
+    'then run `archon isolation list`.\n';
+  return `${msg}\n${await activeWorktreeCountMessage(codebaseId)}`;
 }
 
 async function activeWorktreeCountMessage(codebaseId: string): Promise<string> {

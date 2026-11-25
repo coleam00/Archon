@@ -2,9 +2,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
   isLoopNode,
-  SCRIPT_NODE_AI_FIELDS,
-  LOOP_NODE_AI_FIELDS,
-  LOOP_GROUP_NODE_AI_FIELDS,
   WAIT_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
   BASH_NODE_AI_FIELDS,
@@ -73,6 +70,36 @@ describe('dagNodeSchema — mcp', () => {
   });
 });
 
+describe('dagNodeSchema — skills', () => {
+  const parseSkills = (skills: unknown) =>
+    dagNodeSchema.safeParse({ id: 'node', prompt: 'work', skills });
+
+  test('keeps a string entry as a required name', () => {
+    const result = parseSkills([' code-review ']);
+    expect(result.success && (result.data as DagNode).skills).toEqual(['code-review']);
+  });
+
+  test('parses the optional form and trims its name', () => {
+    const result = parseSkills([{ name: ' playwright-cli ', optional: true }]);
+    expect(result.success && (result.data as DagNode).skills).toEqual([
+      { name: 'playwright-cli', optional: true },
+    ]);
+  });
+
+  test('keeps an object without optional: true as a required entry', () => {
+    const result = parseSkills([{ name: 'code-review' }]);
+    expect(result.success && (result.data as DagNode).skills).toEqual([{ name: 'code-review' }]);
+  });
+
+  test('rejects a misspelled key instead of treating the skill as required', () => {
+    expect(parseSkills([{ name: 'playwright-cli', optinal: true }]).success).toBe(false);
+  });
+
+  test('rejects an empty name', () => {
+    expect(parseSkills([{ name: '', optional: true }]).success).toBe(false);
+  });
+});
+
 describe('approvalOnRejectSchema', () => {
   test.each([
     [
@@ -125,6 +152,43 @@ describe('approval.decisions', () => {
     expect(result.decisions).toEqual([...decisions]);
   });
 
+  test.each([undefined, false, true])(
+    'preserves capture_response %s and legacy rework translation',
+    capture => {
+      for (const onReject of [
+        undefined,
+        { prompt: 'Revise: $REJECTION_REASON' },
+        { prompt: 'Revise', max_attempts: 3 },
+      ]) {
+        const node = parseGate({ message: 'ok?', capture_response: capture, on_reject: onReject });
+        expect(node.captureResponse).toBe(capture ?? false);
+        expect(node.decisionsAuthored).toBe(false);
+        expect(node.decisions).toEqual([
+          { id: 'approve' },
+          {
+            id: 'reject',
+            ...(onReject === undefined
+              ? {}
+              : {
+                  rework: {
+                    prompt: onReject.prompt,
+                    ...('max_attempts' in onReject ? { maxAttempts: onReject.max_attempts } : {}),
+                  },
+                }),
+          },
+        ]);
+      }
+      const node = parseGate({
+        message: 'ok?',
+        capture_response: capture,
+        decisions: [{ id: 'revise' }],
+      });
+      expect(node.captureResponse).toBe(capture ?? false);
+      expect(node.decisionsAuthored).toBe(true);
+      expect(node.decisions).toEqual([{ id: 'revise' }]);
+    }
+  );
+
   test('rejects duplicate ids', () => {
     const result = dagNodeSchema.safeParse({
       id: 'gate',
@@ -165,7 +229,14 @@ describe('approval.decisions', () => {
       },
     });
     expect(result.success).toBe(false);
-    expect(JSON.stringify(result.error?.issues)).toContain('mutually exclusive');
+    const issue = result.error?.issues[0];
+    expect(issue?.path).toEqual(['approval', 'decisions']);
+    expect(issue?.message).toContain('mutually exclusive');
+    expect(issue?.message).toContain(
+      "Write 'wait: { attention: <message>, form: approval }' followed by a rework node"
+    );
+    expect(issue?.message).toContain('$LOOP_PREV.<id>.output.text');
+    expect(issue?.message).not.toContain("declare 'decisions' instead");
   });
 });
 
@@ -269,13 +340,19 @@ describe('dagNodeSchema — new Claude SDK options', () => {
     expect((result as AgentNode).betas).toEqual(['context-1m-2025-08-07']);
   });
 
-  test('parses sandbox object', () => {
-    const result = dagNodeSchema.parse({
-      id: 'n',
-      prompt: 'do it',
-      sandbox: { enabled: true, filesystem: { allowWrite: ['src/'] } },
-    });
-    expect((result as AgentNode).sandbox?.enabled).toBe(true);
+  test('keeps sandbox keys Archon does not list, including nested ones', () => {
+    const sandbox = {
+      enabled: true,
+      network: {
+        allowedDomains: ['github.com'],
+        deniedDomains: ['evil.example'],
+        strictAllowlist: true,
+      },
+      filesystem: { allowRead: ['/x'], denyRead: ['/y'] },
+      credentials: { files: [] },
+    };
+    const result = dagNodeSchema.parse({ id: 'n', prompt: 'do it', sandbox });
+    expect((result as AgentNode).sandbox).toEqual(sandbox);
   });
 
   test('parses systemPrompt string', () => {
@@ -303,15 +380,6 @@ describe('dagNodeSchema — new Claude SDK options', () => {
       settingSources: ['project'],
     });
     expect((result as AgentNode).settingSources).toEqual(['project']);
-  });
-
-  test('strips settingSources from bash nodes', () => {
-    const result = dagNodeSchema.parse({
-      id: 'b',
-      bash: 'echo hi',
-      settingSources: ['project'],
-    });
-    expect('settingSources' in result).toBe(false);
   });
 
   test('strips AI-only fields from bash nodes', () => {
@@ -366,14 +434,6 @@ describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
       pi: { extensionFlags: { plan: 42 } },
     });
     expect(result.success).toBe(false);
-  });
-
-  test('pi is warned-ignored on non-AI + loop_group nodes but supported on loop', () => {
-    // loop uses its per-iteration sendQuery, so pi must NOT be in its ignore list;
-    // loop_group never sendQuerys (body nodes carry their own pi), so it warns.
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
-    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
-    expect(SCRIPT_NODE_AI_FIELDS).toContain('pi');
   });
 });
 

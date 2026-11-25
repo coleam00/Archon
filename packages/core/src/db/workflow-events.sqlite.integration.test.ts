@@ -343,3 +343,40 @@ test('dashboard reports the latest durable parallel-agent total rather than the 
   const dashboard = await listDashboardRuns();
   expect(dashboard.runs.find(run => run.id === runId)?.agents_total).toBe(3);
 });
+
+test.each(['node_failed', 'node_suspended'] as const)(
+  'strict batch history rejects malformed %s data while polling remains tolerant',
+  async eventType => {
+    const runId = `malformed-${eventType}`;
+    await db.query(
+      `INSERT INTO remote_agent_workflow_runs
+         (id, workflow_name, conversation_id, user_message, status)
+       VALUES ($1, 'wf', 'conv-1', 'msg', 'paused')`,
+      [runId]
+    );
+    await persistWorkflowEvent({
+      workflow_run_id: runId,
+      event_type: 'node_completed',
+      step_name: 'valid',
+      data: { type: 'agent', tokens: { input: 10, output: 100 }, duration_ms: 1000 },
+    });
+    expect(
+      (await listEventsForRuns([runId], ['node_completed'], { strict: true })).get(runId)
+    ).toHaveLength(1);
+    await db.query(
+      `INSERT INTO remote_agent_workflow_events
+         (id, workflow_run_id, event_type, step_name, data)
+       VALUES ($1, $2, $3, 'broken', '{not json')`,
+      [runId, runId, eventType]
+    );
+    const types = ['node_completed', 'node_failed', 'node_suspended'] as const;
+    await expect(listEventsForRuns([runId], types, { strict: true })).rejects.toThrow(
+      'Failed to list events for runs'
+    );
+    await expect(listWorkflowEvents(runId)).rejects.toThrow();
+    expect((await listEventsForRuns([runId], types)).get(runId)?.at(-1)?.data).toEqual({});
+    expect((await readWorkflowEventsAfter('0', 1000)).find(row => row.id === runId)?.data).toEqual(
+      {}
+    );
+  }
+);

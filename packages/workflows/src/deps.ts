@@ -15,7 +15,7 @@ import type {
 } from '@archon/provider-contract';
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
-import type { AttentionOption } from './schemas/wait-node';
+import { OTHER_ATTENTION_OPTION, type AttentionOption } from './schemas/wait-node';
 import {
   describeAttentionRecommendation,
   legacyOccurrenceStep,
@@ -23,6 +23,14 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorktreeDisposition } from './schemas/terminal-record';
+import type {
+  AsksCheckout,
+  LinkedRunEndedStart,
+  SourceReceiptAcceptance,
+} from './schemas/resource-start';
+import type { RunCompletedOutcome } from './schemas';
+import type { JsonValue } from './output-ref';
+import type { OutcomeForm } from './completed-outcome';
 import type {
   IAgentProvider,
   MessageChunk,
@@ -73,7 +81,9 @@ export interface WorkflowMessageMetadata {
     | 'workflow_status'
     | 'workflow_dispatch_status'
     | 'isolation_context'
-    | 'workflow_result';
+    | 'workflow_result'
+    /** Marks where a chat reply the operator stopped was cut off. */
+    | 'chat_interrupted';
   segment?: 'new' | 'auto';
   workflowDispatch?: { workerConversationId: string; workflowName: string };
   workflowResult?: { workflowName: string; runId: string };
@@ -157,7 +167,7 @@ export function attentionAnswerLines(
   surface: WorkflowCommandSurface,
   attention: Pick<
     Extract<RunAttention, { kind: 'attention' }>,
-    'runId' | 'form' | 'options' | 'occurrence' | 'recommendation'
+    'runId' | 'form' | 'options' | 'other' | 'occurrence' | 'recommendation'
   >
 ): string[] {
   const { runId, options, recommendation } = attention;
@@ -187,7 +197,9 @@ export function attentionAnswerLines(
         ...recommended,
         ...options.map(
           option =>
-            `${choice(option)}: ${does(option)}${command(`respond ${runId} ${option.id} [text]`)}`
+            `${choice(option)}: ${does(option)}${command(
+              `respond ${runId} ${option.id} ${attention.other === true && option.id === OTHER_ATTENTION_OPTION.id ? '<text>' : '[text]'}`
+            )}`
         ),
       ];
     case 'multi_select':
@@ -266,10 +278,36 @@ export interface StoredProviderCredential {
 
 export type ReleaseVerificationImages = (runId: string, containerEnvId: string) => Promise<void>;
 
+/** What the engine knows about a run at the moment it completes with an outcome. */
+export interface RunEndedFacts {
+  run: WorkflowRun;
+  /** The input names the ended workflow declares: its `inputs:` and its pack's settings. */
+  declaredInputs: readonly string[];
+  /** The form of the declared outcome, so a binding can be checked against it. */
+  outcomeForm: OutcomeForm;
+  outcome: RunCompletedOutcome;
+  /**
+   * The run's result: the value its terminal record holds as `returns` (see
+   * `recordedReturn`), undefined when the record has none.
+   */
+  result: JsonValue | undefined;
+  /** The run's own inputs, as `$INPUTS` saw them. */
+  inputs: Readonly<Record<string, JsonValue>>;
+}
+
+/**
+ * The starts a completion causes: receipts for the ended run's own item, and linked
+ * starts the completing write resolves against the items linked to it.
+ */
+export interface RunEndedStarts {
+  receipts: readonly SourceReceiptAcceptance[];
+  linked: readonly LinkedRunEndedStart[];
+}
+
 export interface WorkflowDeps {
   /**
-   * Host cleanup after terminal execution; retains live writers and returns non-fatal warnings.
-   * Container cleanup requires a supplied effect or an explicitly bound host resource owner.
+   * Releases a terminal run's recorded verification images; retains live writers and returns
+   * non-fatal warnings. Container cleanup requires a supplied effect or a bound resource owner.
    */
   releaseRunResources?: (
     runId: string,
@@ -277,6 +315,29 @@ export interface WorkflowDeps {
   ) => Promise<void | string[]>;
   providers: ProviderRegistry;
   store: IWorkflowStore;
+  /**
+   * Optional: the starts a run's completion causes (run-ended bindings), as receipts and
+   * linked starts the completing write accepts in its own transaction. Absent, a
+   * completion causes none.
+   * It throws when a binding it must read is unreadable or invalid, and the run then
+   * fails naming the reason, so a completion never silently drops its hand-off.
+   */
+  runEndedStarts?: (ended: RunEndedFacts) => Promise<RunEndedStarts>;
+  /**
+   * Optional: the checkout a run that completes leaving asks hands an asks-settled binding
+   * with `checkout: "asking-run"`, read before the completing write, which records it on
+   * the run for the settling of its asks, and keeps the run's worktree for it. Undefined
+   * when no such binding matches the run.
+   * It throws when a binding it must read is unreadable, and the run then fails naming
+   * the reason, as for `runEndedStarts`.
+   */
+  asksCheckout?: (run: WorkflowRun) => Promise<AsksCheckout | undefined>;
+  /**
+   * Optional: refuse a run before it starts when a run-ended binding its end could fire
+   * is broken (a missing stage, an undeclared outcome or input), and likewise an
+   * asks-settled binding its asks could fire. Throws the reason.
+   */
+  checkRunEndedBindings?: (run: WorkflowRun) => Promise<void>;
   /**
    * Optional: release the worktree a completed run created. `assess` runs before the
    * completion write and its result goes into the terminal record; it returns null when

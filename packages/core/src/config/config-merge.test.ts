@@ -47,6 +47,7 @@ defaults:
       expect(config.concurrency.maxConversations).toBe(10);
       expect(config.workflows).toEqual({
         toolCallAttentionMs: 1800000,
+        stallMessageLimit: 2,
         autoResumeOnQuotaReset: true,
       });
     });
@@ -63,6 +64,7 @@ workflows:
         .mockResolvedValueOnce(`
 workflows:
   toolCallAttentionMs: 0
+  stallMessageLimit: 0
   quotaMaxAttempts: 3
   quotaDeadlineMs: 43200000
 `);
@@ -71,6 +73,7 @@ workflows:
 
       expect(config.workflows).toEqual({
         toolCallAttentionMs: 0,
+        stallMessageLimit: 0,
         autoResumeOnQuotaReset: true,
       });
     });

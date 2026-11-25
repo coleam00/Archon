@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { makeRun } from '../../test/orchestrator-agent-fixtures';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath } from 'node:fs/promises';
@@ -93,6 +94,7 @@ const mockCloseRunLiveOwner = mock(() => {
 const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
   return Promise.resolve({
+    lease: testRunOwnerLease(runId),
     close: mockCloseRunLiveOwner,
     isStopRequested: () => false,
     registerTerminationPreparation: () => () => undefined,
@@ -177,8 +179,10 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
     codebase_id: 'cb-1',
     status: 'pending',
     outcome: null,
+    completed_outcome: null,
     user_message: 'run it',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -188,6 +192,7 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
   });
 });
 const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() =>
@@ -217,6 +222,7 @@ mock.module('../../workflows/store-adapter', () => ({
 
 mock.module('../../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({})),
+  loadGlobalConfig: mock(() => Promise.resolve({})),
   loadRepoConfig: mock(() => Promise.resolve(null)),
 }));
 
@@ -229,7 +235,6 @@ mock.module('../../utils/workflow-source-root', () => ({
 
 mock.module('../../services/cleanup-service', () => ({
   getWorktreeStatusBreakdown: mock(() => Promise.resolve({ active: 0, stale: 0, merged: 0 })),
-  STALE_THRESHOLD_DAYS: 7,
 }));
 
 // Mock @archon/isolation — shared resolve mock so tests can control return values
@@ -247,10 +252,23 @@ class MockIsolationResolver {
 
 const {
   worktreeRegistrationMetadata,
+  generatedTaskBranch,
+  validateWorktreeConfig,
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
 } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  checkWorktreeStartable: mock(async () => undefined),
+  readWorktreeBaseBranch: () => undefined,
+  generatedTaskBranch,
+  validateWorktreeConfig,
+  resolveWorktreeBase: mock(async () => {
+    throw new Error('resolveWorktreeBase is not mocked here');
+  }),
+  refuseUnappliedStartPoint: mock(async () => undefined),
+  getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
+    state: 'NONE',
+  })),
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
   dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
@@ -390,7 +408,6 @@ mock.module('@archon/workflows/router', () => ({
   suggestWorkflowNames: mock<typeof import('@archon/workflows/router').suggestWorkflowNames>(
     () => []
   ),
-  findWorkflow: mock(() => undefined),
   // Statically imported by the background dispatch path; a named import must link even
   // when the test never exercises it.
   resolveWorkflowName: mock(() => undefined),
@@ -582,6 +599,69 @@ describe('dispatchBackgroundWorkflow', () => {
     } finally {
       factory.mockRestore();
       (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
+  });
+
+  test('forge refusal reads the registered checkout and prevents worker isolation and engine submission', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const refusal = new forgeAccess.ForgeRequirementError('forge-run', 'factory', [
+      { reason: 'no_forge_remote', message: 'the checkout has no git remote' },
+    ]);
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockRejectedValue(refusal);
+    try {
+      await expect(
+        dispatchBackgroundWorkflow(
+          makeRoutingCtx(),
+          makeTestResolvedWorkflow({ name: 'forge-run', nodes: [{ id: 'one', prompt: 'work' }] })
+        )
+      ).rejects.toBe(refusal);
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+        cwd: '/workspace/test-repo',
+        settingsCwd: '/workspace/test-repo',
+      });
+      expect(mockResolve).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
+  test("an adopted worktree's pack settings decide the repository the forge check judges", async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue(undefined);
+    const env = makeEnvRow();
+    mockAdoptedEnv.mockResolvedValueOnce(env);
+    try {
+      await dispatchBackgroundWorkflow(
+        makeRoutingCtx({ adoptionLane: { kind: 'reuse-worktree', environment: env } }),
+        makeWorkflow()
+      );
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+        cwd: '/workspace/test-repo',
+        settingsCwd: env.working_path,
+      });
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
+  test('the run is created with the inputs the forge check returns', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      goal: 'x',
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    try {
+      await dispatchBackgroundWorkflow(makeRoutingCtx({ inputs: { goal: 'x' } }), makeWorkflow());
+      expect(mockCreateWorkflowRun.mock.calls[0]?.[0].metadata?.inputs).toEqual({
+        goal: 'x',
+        repo_host: 'github.com',
+        repo_path: 'o/project',
+      });
+    } finally {
+      assertForge.mockRestore();
     }
   });
 

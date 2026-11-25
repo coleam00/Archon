@@ -6,7 +6,7 @@ import type { ReactElement } from 'react';
 import type { Project } from '../../primitives/project';
 
 const PICKER_CLASS =
-  'max-w-[220px] rounded-[8px] border border-border bg-surface px-2 py-1 font-mono text-[12px] text-text-primary outline-none focus:border-accent-bright/60';
+  'max-w-55 rounded-md border border-border bg-surface px-2 py-1 font-mono text-console-12 text-text-primary outline-none focus:border-accent-bright/60';
 
 interface PickerProps {
   label: string;
@@ -18,7 +18,7 @@ interface PickerProps {
 
 function Picker({ label, value, placeholder, options, onPick }: PickerProps): ReactElement {
   return (
-    <label className="flex items-center gap-2 text-[11.5px] text-text-tertiary">
+    <label className="flex items-center gap-2 text-console-12 text-text-tertiary">
       {label}
       <select
         value={value}
@@ -72,7 +72,7 @@ function WorkflowControls({
         type="button"
         disabled={!canSave}
         onClick={onSave}
-        className="rounded-[8px] bg-accent-bright px-3 py-1 text-[12px] font-semibold text-white/95 transition-opacity hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
+        className="rounded-md bg-accent-bright px-3 py-1 text-console-12 font-semibold text-white/95 transition-opacity hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
       >
         {readOnly ? 'Save as' : 'Save'}
       </button>
@@ -81,7 +81,7 @@ function WorkflowControls({
           type="button"
           disabled={busy}
           onClick={onRename}
-          className="rounded-[8px] border border-border bg-surface px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40"
+          className="rounded-md border border-border bg-surface px-2.5 py-1 text-console-12 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40"
         >
           Rename
         </button>
@@ -91,7 +91,7 @@ function WorkflowControls({
           type="button"
           disabled={busy}
           onClick={onDelete}
-          className="rounded-[8px] px-2.5 py-1 text-[12px] text-error transition-colors hover:bg-error/10 disabled:opacity-40"
+          className="rounded-md px-2.5 py-1 text-console-12 text-error transition-colors hover:bg-error/10 disabled:opacity-40"
         >
           Delete
         </button>
@@ -127,8 +127,8 @@ export function BuilderHeader({
 }: BuilderHeaderProps): ReactElement {
   return (
     <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
-      <h1 className="text-[14px] font-semibold text-text-primary">Workflow Builder</h1>
-      <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-tertiary">
+      <h1 className="text-console-14 font-semibold text-text-primary">Workflow Builder</h1>
+      <span className="rounded-full border border-border px-2 py-0.5 font-mono text-console-10 uppercase tracking-widest text-text-tertiary">
         beta
       </span>
 
@@ -154,7 +154,7 @@ export function BuilderHeader({
         <button
           type="button"
           onClick={onNew}
-          className="rounded-[8px] border border-border bg-surface px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          className="rounded-md border border-border bg-surface px-2.5 py-1 text-console-12 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
         >
           New
         </button>

@@ -165,6 +165,81 @@ describe('missing registered project directory', () => {
   });
 });
 
+describe('a repository with no remote', () => {
+  const trackTempRoot = trackTempRoots();
+  const originalArchonHome = process.env.ARCHON_HOME;
+  let repoPath: string;
+
+  beforeEach(async () => {
+    const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'archon-no-remote-'))));
+    process.env.ARCHON_HOME = join(root, 'archon-home');
+    repoPath = join(root, 'repo');
+    await mkdir(repoPath);
+    // Not `main`, so the base is visibly the checkout's own branch.
+    await git(repoPath, 'init', '-q', '-b', 'trunk');
+    await git(repoPath, 'config', 'user.email', 'test@example.com');
+    await git(repoPath, 'config', 'user.name', 'Archon Test');
+    await git(repoPath, 'config', 'commit.gpgsign', 'false');
+  });
+
+  afterEach(() => {
+    if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  async function commit(message: string): Promise<string> {
+    await git(repoPath, 'commit', '-q', '--allow-empty', '-m', message);
+    return (await git(repoPath, 'rev-parse', 'HEAD')).trim();
+  }
+
+  const request = (overrides: Partial<IsolationRequest> = {}): IsolationRequest =>
+    ({
+      codebaseId: 'cb-local',
+      codebaseName: 'repo',
+      canonicalRepoPath: toRepoPath(repoPath),
+      workflowType: 'task',
+      identifier: 'job',
+      ...overrides,
+    }) as IsolationRequest;
+
+  test('cuts the worktree from the current branch and records it', async () => {
+    const head = await commit('initial');
+    const env = await new WorktreeProvider().create(request());
+
+    expect(env.resolvedBaseBranch).toBe('trunk');
+    expect(env.metadata).toMatchObject({ provenance: 'created', cutFromCommit: head });
+    expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(head);
+  });
+
+  test('cuts from a named start commit', async () => {
+    const first = await commit('first');
+    await commit('second');
+    const env = await new WorktreeProvider().create(
+      request({ taskBranch: { kind: 'new', fromBranch: toBranchName(first) } })
+    );
+
+    expect((await git(env.workingPath, 'rev-parse', 'HEAD')).trim()).toBe(first);
+  });
+
+  test.each([
+    ['a configured base that does not exist', 'configured_branch_missing', 'nope'],
+    ['a detached HEAD and no configured base', 'no_local_base', 'detach'],
+    ['no commit at all', 'no_local_base', 'empty'],
+    ['a start point that does not exist', 'no_local_base', 'from'],
+  ] as const)('refuses %s', async (_name, kind, state) => {
+    if (state !== 'empty') await commit('initial');
+    if (state === 'detach') await git(repoPath, 'checkout', '-q', '--detach');
+    const overrides: Partial<IsolationRequest> =
+      state === 'nope'
+        ? { baseOverride: toBranchName('nope') }
+        : state === 'from'
+          ? { taskBranch: { kind: 'new', fromBranch: toBranchName('missing-start') } }
+          : {};
+    const failure = await typedFailure(new WorktreeProvider().create(request(overrides)));
+    expect(failure.kind).toBe(kind);
+  });
+});
+
 describe('WorktreeProvider against real git', () => {
   const trackTempRoot = trackTempRoots();
   const originalArchonHome = process.env.ARCHON_HOME;
@@ -393,16 +468,9 @@ describe('WorktreeProvider against real git', () => {
     expect(await gitModule.findWorktreeByBranch(toRepoPath(repoPath), validBranch)).toBe(
       validTarget
     );
-    expect((await provider.get(validTarget))?.workingPath).toBe(validTarget);
-    expect((await provider.adopt(validTarget))?.workingPath).toBe(validTarget);
-    expect((await provider.list(repoPath)).map(environment => environment.workingPath)).toEqual([
-      validTarget,
-    ]);
     expect(
       await gitModule.findWorktreeByBranch(toRepoPath(repoPath), toBranchName(branch))
     ).toBeNull();
-    expect(await provider.get(target)).toBeNull();
-    expect(await provider.adopt(target)).toBeNull();
     expect((await git(target, 'symbolic-ref', 'HEAD')).trim()).toBe(branch);
     expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
     expect(await git(target, 'status', '--porcelain')).toBe(status);
@@ -565,7 +633,6 @@ describe('WorktreeProvider against real git', () => {
       expect(created.workingPath).toBe(worktreePath);
       const adopted = await provider.create(request);
       expect(adopted.metadata.adopted).toBe(true);
-      expect(await provider.adopt(worktreePath)).not.toBeNull();
       const { stdout } = await execFileAsync('git', [
         'config',
         '--global',
@@ -578,6 +645,49 @@ describe('WorktreeProvider against real git', () => {
       else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previousOwnerCheck;
     }
   });
+
+  test.each([false, true])(
+    'two creates on one managed clone at the same moment both get a worktree (git checks ownership: %s)',
+    async checksOwnership => {
+      // A clone under the Archon workspaces is reset to its base before each cut, so the
+      // two creates take the clone's index lock together.
+      const remote = join(root, 'remote');
+      await cp(templateRepo, remote, { recursive: true });
+      const clone = join(root, 'archon-home', 'workspaces', 'acme', 'widgets', 'source');
+      await mkdir(join(clone, '..'), { recursive: true });
+      await git(root, 'clone', '-q', remote, clone);
+      const previousOwnerCheck = process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+      if (checksOwnership) {
+        // As on Windows: each new worktree's grant is written to the one global config.
+        await git(root, 'config', '--global', '--add', 'safe.directory', clone);
+        process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = '1';
+      }
+      try {
+        for (let round = 0; round < 4; round++) {
+          const starts = await Promise.allSettled(
+            ['1', '2'].map(n =>
+              provider.create({
+                codebaseId: request.codebaseId,
+                codebaseName: CODEBASE_NAME,
+                canonicalRepoPath: toRepoPath(clone),
+                workflowType: 'issue',
+                identifier: `${String(round)}${n}`,
+                baseBranch: toBranchName('main'),
+              })
+            )
+          );
+          expect(starts.map(start => (start.status === 'rejected' ? start.reason : 'ok'))).toEqual([
+            'ok',
+            'ok',
+          ]);
+        }
+      } finally {
+        if (previousOwnerCheck === undefined) delete process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER;
+        else process.env.GIT_TEST_ASSUME_DIFFERENT_OWNER = previousOwnerCheck;
+      }
+    },
+    30_000
+  );
 
   test('post-create sees copied files in a new checkout of an existing branch and skips reuse', async () => {
     await writeFile(join(repoPath, '.seed'), 'seed');
@@ -597,6 +707,55 @@ describe('WorktreeProvider against real git', () => {
     expect(executions).toBe(1);
     expect(await lockReasonOf(worktreePath)).toBeNull();
   });
+
+  test.if(process.platform === 'win32')(
+    'linkFiles is refused on Windows before any worktree is added',
+    async () => {
+      provider = new WorktreeProvider(async () => ({ linkFiles: ['.cache'] }));
+      await expect(provider.create(request)).rejects.toThrow(
+        'worktree.linkFiles is not supported on Windows'
+      );
+      expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
+    }
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'linked files are shared, stay out of git status, and survive destroying the worktree',
+    async () => {
+      await writeFile(join(repoPath, '.gitignore'), '.cache\n');
+      await git(repoPath, 'add', '.gitignore');
+      await git(repoPath, 'commit', '-qm', 'ignore the cache');
+      await git(repoPath, 'remote', 'add', 'origin', repoPath);
+      provider = new WorktreeProvider(
+        async () => ({ linkFiles: ['.cache'], postCreate: ['warm'] }),
+        async input => {
+          await writeFile(join(input.workingPath, '.cache', 'warm'), 'from setup');
+        }
+      );
+      const created = await provider.create({
+        ...request,
+        workflowType: 'task',
+        taskBranch: {
+          kind: 'new',
+          branch: toBranchName('linked'),
+          fromBranch: toBranchName('main'),
+        },
+      });
+      if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+
+      expect(await readFile(join(repoPath, '.cache', 'warm'), 'utf8')).toBe('from setup');
+      expect(await git(created.workingPath, 'status', '--porcelain')).toBe('');
+
+      const result = await provider.destroy(created.workingPath, {
+        canonicalRepoPath: request.canonicalRepoPath,
+        creationId: created.metadata.creationId,
+        branchName: created.branchName,
+      });
+      expect(result.worktreeRemoved).toBe(true);
+      expect(existsSync(created.workingPath)).toBe(false);
+      expect(await readFile(join(repoPath, '.cache', 'warm'), 'utf8')).toBe('from setup');
+    }
+  );
 
   test.each([false, true])(
     'failed post-create preserves installer output when present (%s)',
@@ -928,7 +1087,10 @@ describe('WorktreeProvider against real git', () => {
       const error = await provider.create(request).catch((error: unknown) => error);
       if (!(error instanceof Error)) throw new Error('Expected hook failure');
       expect(error.message).toContain('unowned-hook-failure');
-      expect(classifyIsolationError(error)).toContain('not owned by this attempt');
+      const notice = (error as Error & { cleanupFailure?: string }).cleanupFailure ?? '';
+      expect(notice).toContain(worktreePath);
+      expect(notice).not.toMatch(/\bremove\b/i);
+      if (reason === 'another-attempt') expect(notice).toContain('another-attempt');
       expect(await registeredWorktrees()).toContain(resolve(worktreePath));
       expect(await lockReasonOf(worktreePath)).toBe(
         reason === 'unlocked' ? null : 'archon: worktree setup in progress: another-attempt'
@@ -1084,9 +1246,14 @@ describe('WorktreeProvider against real git', () => {
     expect(existsSync(otherPath)).toBe(true);
   });
 
-  test.each(['unlocked', 'another-attempt'])(
-    'a fork add that loses its setup lock (%s) preserves the original error',
-    async reason => {
+  const otherAttempt = '0b1ee8da-1111-4222-8333-444455556666';
+  test.each([
+    { lock: null },
+    { lock: 'operator lock' },
+    { lock: `archon: worktree setup in progress: ${otherAttempt}` },
+  ])(
+    'a fork add whose setup lock becomes $lock keeps the checkout and never advises removing it',
+    async ({ lock }) => {
       const remotePath = join(root, 'remote.git');
       await git(root, 'init', '--bare', '-q', remotePath);
       await git(repoPath, 'remote', 'add', 'origin', remotePath);
@@ -1102,8 +1269,7 @@ describe('WorktreeProvider against real git', () => {
         isForkPR: true,
       };
       const path = provider.getWorktreePath(attempt, provider.generateBranchName(attempt));
-      const changeLock =
-        reason === 'unlocked' ? 'rm "$gd/locked"' : 'printf "operator lock" > "$gd/locked"';
+      const changeLock = lock === null ? 'rm "$gd/locked"' : `printf "${lock}" > "$gd/locked"`;
       await writeFile(
         join(repoPath, '.git', 'hooks', 'post-checkout'),
         `#!/bin/sh\ngd=$(git rev-parse --absolute-git-dir)\n${changeLock}\necho lock-lost-hook-failure >&2\nexit 42\n`,
@@ -1112,10 +1278,16 @@ describe('WorktreeProvider against real git', () => {
       const error = await provider.create(attempt).catch((error: unknown) => error);
       if (!(error instanceof Error)) throw new Error('Expected hook failure');
       expect(error.message).toContain('lock-lost-hook-failure');
-      expect(classifyIsolationError(error)).toContain('was left behind');
+      // The path is no longer provably this attempt's, so the notice names it without
+      // telling anyone to remove what another run may be using.
+      const notice = (error as Error & { cleanupFailure?: string }).cleanupFailure ?? '';
+      expect(classifyIsolationError(error)).toContain(notice);
+      expect(notice).toContain(path);
+      expect(notice).not.toMatch(/\bremove\b/i);
+      if (lock?.includes(otherAttempt)) expect(notice).toContain(otherAttempt);
       expect(await registeredWorktrees()).toContain(resolve(path));
       expect(existsSync(path)).toBe(true);
-      expect(await lockReasonOf(path)).toBe(reason === 'unlocked' ? null : 'operator lock');
+      expect(await lockReasonOf(path)).toBe(lock);
     }
   );
 
@@ -1325,13 +1497,6 @@ describe('WorktreeProvider against real git', () => {
       fresh.metadata.creationId
     );
     expect((await git(fresh.workingPath, 'status', '--porcelain')).trim()).toBe('');
-    const observed = await provider.get(fresh.id);
-    expect(observed?.metadata).toEqual({ provenance: 'observed', adopted: false });
-    const listed = await provider.list(repoPath);
-    expect(listed.find(env => env.id === fresh.id)?.metadata).toEqual({
-      provenance: 'observed',
-      adopted: false,
-    });
     const adopted = await provider.create(freshRequest);
     expect(adopted.metadata.provenance).toBe('adopted');
     expect(adopted.metadata.adopted).toBe(true);
@@ -1341,6 +1506,49 @@ describe('WorktreeProvider against real git', () => {
     const recreated = await provider.create(freshRequest);
     if (recreated.metadata.adopted) throw new Error('expected new generation');
     expect(recreated.metadata.creationId).not.toBe(fresh.metadata.creationId);
+  });
+
+  test('target-path reuse refuses a --from outside the worktree history and keeps one inside it', async () => {
+    await git(repoPath, 'remote', 'add', 'origin', repoPath);
+    const oldBase = (await git(repoPath, 'rev-parse', 'HEAD')).trim();
+    const reuseRequest = (fromBranch: string): IsolationRequest => ({
+      ...request,
+      workflowType: 'task',
+      taskBranch: {
+        kind: 'new',
+        branch: toBranchName('factory/x'),
+        fromBranch: toBranchName(fromBranch),
+      },
+    });
+    const { workingPath: target } = await provider.create(reuseRequest(oldBase));
+    await writeFile(join(target, 'work.txt'), 'branch work\n');
+    await git(target, 'add', 'work.txt');
+    await git(target, 'commit', '-qm', 'branch work');
+    await writeFile(join(repoPath, 'merged.txt'), 'merged on main\n');
+    await git(repoPath, 'add', 'merged.txt');
+    await git(repoPath, 'commit', '-qm', 'main moves on');
+    await writeFile(join(target, 'README.md'), 'operator edits\n');
+    const head = await git(target, 'rev-parse', 'HEAD');
+    const status = await git(target, 'status', '--porcelain');
+
+    const failure = await typedFailure(provider.create(reuseRequest('main')));
+    expect(failure.kind).toBe('branch_exists');
+    expect(failure.message).toContain(`worktree at ${target}`);
+    expect(failure.message).toContain('--from main');
+    expect(failure.message).toContain(`based on ${oldBase.slice(0, 12)}`);
+    // HEAD names the repository's HEAD, as on creation, not the worktree's own.
+    expect((await typedFailure(provider.create(reuseRequest('HEAD')))).kind).toBe('branch_exists');
+    const emptyTree = (await git(repoPath, 'hash-object', '-t', 'tree', '/dev/null')).trim();
+    const orphan = (await git(repoPath, 'commit-tree', emptyTree, '-m', 'unrelated')).trim();
+    await git(repoPath, 'branch', 'unrelated', orphan);
+    const unrelated = await typedFailure(provider.create(reuseRequest('unrelated')));
+    expect(unrelated.kind).toBe('branch_exists');
+    expect(unrelated.message).toContain('shares no history with --from');
+    expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
+    expect((await git(target, 'branch', '--show-current')).trim()).toBe('factory/x');
+    expect(await git(target, 'status', '--porcelain')).toBe(status);
+
+    expect((await provider.create(reuseRequest(oldBase))).workingPath).toBe(target);
   });
 
   test('marker write failure rolls back the locked setup and retains trust', async () => {

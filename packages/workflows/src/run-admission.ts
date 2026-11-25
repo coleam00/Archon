@@ -1,13 +1,11 @@
-import { ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
+import { CONTAINER_ISOLATION_MARKER, ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
-import { executionClaim } from './store';
-import { formatDuration } from '@archon/paths/duration';
+import { currentExecutionOwner, executionClaim } from './store';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
-import { hostname } from 'os';
 import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
+import { checkoutInUseMessage } from './checkout-in-use-message';
 import { gatherDescendantRunIds } from './child-runs';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
-import { attentionAnswerLines, spellWorkflowCommand } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
 import { type RunPhase } from './executor-shared';
@@ -22,16 +20,30 @@ import {
   EXECUTION_OWNER_METADATA_KEY,
   RUN_DISPATCH_METADATA_KEY,
   SUBRUN_METADATA_KEYS,
-  pendingWorkflowWaitDeadline,
   readSubrunMetadata,
-  runAttention,
   runInputsMetadata,
-  type ExecutionOwnerRecord,
 } from './schemas';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
-import type { WorkflowRunOrigin } from './schemas/workflow-run';
+import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
-import { parseDbTimestamp } from './utils/duration';
+import { refusePendingStart } from './start-refusal';
+import {
+  holdWorkflowResource,
+  installHold,
+  itemHold,
+  refuseStart,
+  runLimitHold,
+  waitForTurn,
+} from './resource-hold';
+import { resolveResultInputs, unsuppliedResultInputs } from './run-result';
+import {
+  ConcurrencyConfigError,
+  InstallHeldError,
+  PendingClaimRefusedError,
+  RunLimitError,
+  WorkflowItemHeldError,
+} from './store/errors';
+import { workflowPathPriorityTime } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -64,15 +76,6 @@ export async function admitWorkflowRun(
 ): Promise<RunPhase<AdmittedRun>> {
   const { preCreatedRun, priorCompletedNodes } = opts;
   const execContext = opts.execContext ?? { kind: 'host' };
-  // This process is the one executing the run, whether it created the row, claimed a
-  // row a launcher pre-created, or resumed one. `abandon` shows this record when no
-  // owner answers (#2325).
-  const uid = process.getuid?.();
-  const executionOwner: ExecutionOwnerRecord = {
-    host: hostname(),
-    pid: process.pid,
-    ...(uid === undefined ? {} : { uid }),
-  };
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {
     await notifyResumingRun(platform, conversationId, workflow.name, priorCompletedNodes);
@@ -91,41 +94,29 @@ export async function admitWorkflowRun(
       userMessage,
       origin,
       opts,
-      dispatch,
-      executionOwner
+      dispatch
     );
     if (created.stopped) return created;
     workflowRun = created.value;
   }
 
+  // A continuation's row already says everything this process adds: the store's resume
+  // recorded this process as its owner.
   let checkoutBaselineSample: CheckoutSample | undefined;
   if (!dispatch.isContinuation) {
-    const claimed = await claimPendingRun(
+    const started = await startFreshRun(
       deps,
       platform,
       conversationId,
       cwd,
+      workflow,
       workflowRun,
       execContext,
-      opts.onExecutionClaimed
-    );
-    if (claimed.stopped) return claimed;
-    checkoutBaselineSample = claimed.value;
-  }
-
-  if (preCreatedRun) {
-    const stamped = await stampPreCreatedRun(
-      deps,
-      platform,
-      conversationId,
-      cwd,
-      preCreatedRun,
       opts,
-      dispatch,
-      executionOwner
+      dispatch
     );
-    if (stamped.stopped) return stamped;
-    workflowRun = stamped.value;
+    if (started.stopped) return started;
+    ({ workflowRun, checkoutBaselineSample } = started.value);
   }
 
   const blocked = await holdCheckoutPathLock(
@@ -140,6 +131,70 @@ export async function admitWorkflowRun(
   return { stopped: false, value: { workflowRun, checkoutBaselineSample } };
 }
 
+/**
+ * Claim a fresh run and record a pre-created row's invocation, then fill its `result_of`
+ * inputs: read after the resource wait, they are the latest when the run starts work.
+ */
+async function startFreshRun(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun,
+  execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
+  opts: ExecuteWorkflowOptions,
+  dispatch: RunDispatch
+): Promise<RunPhase<AdmittedRun>> {
+  const notStarted = await refuseRunBeforeClaim(
+    deps,
+    platform,
+    conversationId,
+    workflow,
+    workflowRun,
+    dispatch.startInputs
+  );
+  if (notStarted) return { stopped: true, result: notStarted };
+  const claimed = await claimPendingRun(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    workflowRun,
+    execContext,
+    opts
+  );
+  if (claimed.stopped) return claimed;
+  let run = workflowRun;
+  if (opts.preCreatedRun) {
+    const stamped = await stampPreCreatedRun(
+      deps,
+      platform,
+      conversationId,
+      cwd,
+      opts.preCreatedRun,
+      opts,
+      dispatch
+    );
+    if (stamped.stopped) return stamped;
+    run = stamped.value;
+  }
+  const resolved = await resolveResultInputs(
+    deps,
+    platform,
+    conversationId,
+    run,
+    unsuppliedResultInputs(workflow, dispatch.startInputs),
+    claimed.value
+  );
+  if (resolved.stopped) return resolved;
+  return {
+    stopped: false,
+    value: { workflowRun: resolved.value, checkoutBaselineSample: claimed.value },
+  };
+}
+
 async function notifyResumingRun(
   platform: IWorkflowPlatform,
   conversationId: string,
@@ -149,7 +204,7 @@ async function notifyResumingRun(
   const resumeMsg =
     priorCompletedNodes.size > 0
       ? `▶️ **Resuming** workflow \`${workflowName}\` — skipping ${String(priorCompletedNodes.size)} already-completed node(s).`
-      : `▶️ **Resuming** workflow \`${workflowName}\` — continuing interactive loop.`;
+      : `▶️ **Resuming** workflow \`${workflowName}\`.`;
   await safeSendMessage(platform, conversationId, resumeMsg);
 }
 
@@ -162,8 +217,7 @@ async function createWorkflowRunRow(
   userMessage: string,
   origin: WorkflowRunOrigin | undefined,
   opts: ExecuteWorkflowOptions,
-  dispatch: RunDispatch,
-  executionOwner: ExecutionOwnerRecord
+  dispatch: RunDispatch
 ): Promise<RunPhase<WorkflowRun>> {
   const { preparedSource, codebaseId, issueContext, adoptedFromRunId, continuationMode } = opts;
   const { prepared, runSource } = dispatch;
@@ -185,9 +239,12 @@ async function createWorkflowRunRow(
           ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? CONTINUATION_MODES.adopt } }
           : {}),
         ...freshInvocationMetadata(opts, dispatch),
-        [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
+        // `abandon` shows this record when no owner answers (#2325). The pending claim
+        // records it again, in the update that makes the run `running`.
+        [EXECUTION_OWNER_METADATA_KEY]: currentExecutionOwner(),
       },
       ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
+      ...(opts.item === undefined ? {} : { item_key: opts.item }),
     });
     workflowRun.metadata = {
       ...workflowRun.metadata,
@@ -208,32 +265,98 @@ async function createWorkflowRunRow(
       workflowSource: runSource,
       exitReason: 'run_not_created',
     });
+    // A refused item is the caller's to fix, not a database fault: say what was refused.
+    const refusal = err.cause instanceof ContinuedItemProjectError ? err.cause.message : null;
     await sendCriticalMessage(
       platform,
       conversationId,
-      '❌ **Workflow failed**: Unable to start workflow (database error). Please try again later.'
+      `❌ **Workflow failed**: ${refusal ?? 'Unable to start workflow (database error). Please try again later.'}`
     );
     return {
       stopped: true,
-      result: { success: false, error: 'Database error creating workflow run' },
+      result:
+        refusal === null
+          ? { success: false, error: 'Database error creating workflow run' }
+          : { success: false, error: refusal, continuedItemRefused: true },
     };
   }
 }
 
-/** Win execution ownership of a pending row, then sample the checkout the run starts from. */
+/**
+ * Refuse a pending row before the claim, for every reason `refusePendingStart` decides,
+ * and tell the conversation why.
+ */
+async function refuseRunBeforeClaim(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun,
+  startInputs: RunDispatch['startInputs']
+): Promise<WorkflowExecutionResult | undefined> {
+  const reason = await refusePendingStart(deps, workflow, workflowRun, startInputs);
+  if (reason === undefined) return undefined;
+  await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
+  return { success: false, workflowRunId: workflowRun.id, error: reason };
+}
+
+/**
+ * Take the workflow's resource slot, win execution ownership of a pending row, then sample
+ * the checkout the run starts from. While another run of the workflow holds the run's item,
+ * or the install hold is set, the claim waits for it like a full resource, or is refused
+ * under `noWait`.
+ */
 async function claimPendingRun(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
   cwd: string,
+  workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun,
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
-  onExecutionClaimed: ExecuteWorkflowOptions['onExecutionClaimed']
+  { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
-  let claimed: WorkflowRun | null;
-  try {
-    claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
-  } catch (error) {
+  const refused = await holdWorkflowResource(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    workflowRun,
+    noWait === true
+  );
+  if (refused) return { stopped: true, result: refused };
+  const claim: { run?: WorkflowRun | null; error?: unknown } = {};
+  const itemRefused = await waitForTurn({
+    deps,
+    platform,
+    conversationId,
+    workflowRun,
+    noWait: noWait === true,
+    attempt: async () => {
+      try {
+        claim.run = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
+      } catch (error) {
+        if (error instanceof WorkflowItemHeldError)
+          return { held: itemHold(error.itemKey, error.holderRunId, error.workflow) };
+        if (error instanceof InstallHeldError) return { held: installHold(error.hold) };
+        if (error instanceof RunLimitError) return { held: runLimitHold(error.runLimit) };
+        // The claim refused before writing anything, so the start is refused with the fix.
+        if (error instanceof ConcurrencyConfigError)
+          return {
+            done: await refuseStart(deps, platform, conversationId, workflowRun, error.message),
+          };
+        // No claimant can start it, so this process, which knows why, ends it with the reason.
+        if (error instanceof PendingClaimRefusedError)
+          return { done: await failRefusedClaim(deps, platform, conversationId, error) };
+        claim.error = error;
+      }
+      return { done: undefined };
+    },
+  });
+  if (itemRefused) return { stopped: true, result: itemRefused };
+  if ('error' in claim) {
+    const error = claim.error;
     getLog().error({ err: error, workflowRunId: workflowRun.id }, 'workflow.pending_claim_failed');
     // A lost connection may hide a committed claim. Do not release ownership or
     // write a terminal state when this process cannot confirm the transition.
@@ -251,26 +374,53 @@ async function claimPendingRun(
       },
     };
   }
+  const claimed = claim.run;
   if (!claimed) {
+    // The run left pending first: whoever moved it owns it, so this process writes nothing.
     getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.pending_claim_lost');
     return {
       stopped: true,
       result: {
         success: false,
         workflowRunId: workflowRun.id,
-        error:
-          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
+        error: 'Workflow run is no longer pending',
       },
     };
   }
   onExecutionClaimed?.(executionClaim(claimed.metadata));
   workflowRun.status = claimed.status;
   workflowRun.started_at = claimed.started_at;
+  workflowRun.active_phase_started_at = claimed.active_phase_started_at;
   // The run's starting checkout is sampled the moment execution ownership is won, with
   // the final cwd and backend bound and before anything else can touch the checkout.
   // Its manifest is written, and the baseline persisted, once the run's artifacts
   // directory exists. A resume never samples: it keeps the baseline the run started with.
   return { stopped: false, value: await sampleCheckout(cwd, execContext) };
+}
+
+/**
+ * Fail a run whose claim was refused for a reason no claimant gets past, while it is still
+ * pending, so it ends with that reason instead of staying pending and holding its slot.
+ */
+async function failRefusedClaim(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  refusal: PendingClaimRefusedError
+): Promise<WorkflowExecutionResult> {
+  getLog().warn(
+    { workflowRunId: refusal.runId, reason: refusal.reason },
+    'workflow.pending_claim_refused'
+  );
+  const { failed } = await requireTerminalStatusWrite(
+    deps.store.failWorkflowRun(refusal.runId, refusal.message, {
+      pendingOnly: true,
+      exitReason: 'launch_failed',
+    }),
+    { workflowRunId: refusal.runId, site: 'workflow.pending_claim_refused', failure: refusal }
+  );
+  if (failed) await sendCriticalMessage(platform, conversationId, `❌ ${refusal.message}`);
+  return { success: false, workflowRunId: refusal.runId, error: refusal.message };
 }
 
 async function stampPreCreatedRun(
@@ -280,18 +430,13 @@ async function stampPreCreatedRun(
   cwd: string,
   preCreatedRun: WorkflowRun,
   opts: ExecuteWorkflowOptions,
-  dispatch: RunDispatch,
-  executionOwner: ExecutionOwnerRecord
+  dispatch: RunDispatch
 ): Promise<RunPhase<WorkflowRun>> {
-  const { isContinuation } = dispatch;
-  const invocationMetadata: Record<string, unknown> = {
-    ...(!isContinuation ? freshInvocationMetadata(opts, dispatch, preCreatedRun.metadata) : {}),
-    [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
-  };
+  const invocationMetadata = freshInvocationMetadata(opts, dispatch, preCreatedRun.metadata);
   try {
     await deps.store.updateWorkflowRun(preCreatedRun.id, {
       metadata: invocationMetadata,
-      ...(!isContinuation && preCreatedRun.working_path === null ? { working_path: cwd } : {}),
+      ...(preCreatedRun.working_path === null ? { working_path: cwd } : {}),
     });
   } catch (error) {
     const err = error as Error;
@@ -329,7 +474,7 @@ async function stampPreCreatedRun(
     stopped: false,
     value: {
       ...preCreatedRun,
-      working_path: preCreatedRun.working_path ?? (isContinuation ? null : cwd),
+      working_path: preCreatedRun.working_path ?? cwd,
       metadata: {
         ...preCreatedRun.metadata,
         ...invocationMetadata,
@@ -374,7 +519,9 @@ function freshInvocationMetadata(
     [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
     ...runStartMetadata(dispatch, existingMetadata),
     ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
-    ...(opts.execContext?.kind === 'container' ? { isolation: 'container' } : {}),
+    ...(opts.execContext?.kind === 'container'
+      ? { [CONTAINER_ISOLATION_MARKER.key]: CONTAINER_ISOLATION_MARKER.value }
+      : {}),
     ...(containerCtx ? { [ISOLATION_ENV_ID_METADATA_KEY]: containerCtx.envId } : {}),
     ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
   };
@@ -396,7 +543,7 @@ function freshInvocationMetadata(
  * block under `mutates_checkout: false`, only to record those events.
  *
  * Runs after workflowRun is finalized (pre-created, resumed, or freshly
- * created) so we always have self-ID + started_at for the deterministic
+ * created) so we always have self-ID + path priority for the deterministic
  * older-wins tiebreaker. The query treats `pending` rows older than 5 min
  * as orphaned, so leaks from crashed dispatches or resume orphans don't
  * permanently block the path.
@@ -425,7 +572,7 @@ async function holdCheckoutPathLock(
       ? null
       : await deps.store.getActiveWorkflowRunByPath(cwd, {
           id: workflowRun.id,
-          startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
+          startedAt: workflowPathPriorityTime(workflowRun),
           ...(pathLockExclude.length > 0 ? { excludeRunIds: pathLockExclude } : {}),
         });
     if (activeWorkflow) {
@@ -549,87 +696,6 @@ async function recordCheckoutSharing(
       }
     }
   }
-}
-
-/** Spell a workflow action the way the surface rendering the message accepts it. */
-function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId?: string): string {
-  return spellWorkflowCommand(platform, shortId ? `${action} ${shortId}` : action);
-}
-
-/** Explain which run holds the checkout and what the user can do about it. */
-function checkoutInUseMessage(platform: IWorkflowPlatform, activeWorkflow: WorkflowRun): string {
-  const elapsedMs = Date.now() - parseDbTimestamp(activeWorkflow.started_at);
-  const duration = formatDuration(elapsedMs);
-  const shortId = activeWorkflow.id.slice(0, 8);
-
-  let stateLine: string;
-  let actionLines: string;
-  if (activeWorkflow.status === 'paused') {
-    ({ stateLine, actionLines } = pausedCheckoutState(platform, activeWorkflow, duration, shortId));
-    actionLines +=
-      // Cancel stops live work, and a paused run has none: abandon discards it.
-      `• Discard it: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
-      '• Use a different branch: `--branch <other>`';
-  } else {
-    const verb = activeWorkflow.status === 'pending' ? 'starting' : 'running';
-    stateLine = `${verb} ${duration}, run \`${shortId}\``;
-    // Cancel only accepts a running run; a pending one has nothing executing yet.
-    const cancelLine =
-      activeWorkflow.status === 'running'
-        ? `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n`
-        : '';
-    actionLines =
-      `• Wait for it to finish: \`${formatRunCommand(platform, 'status')}\`\n` +
-      cancelLine +
-      `• If its process is gone: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
-      '• Use a different branch: `--branch <other>`';
-  }
-  return (
-    `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
-    `(${stateLine}).\n${actionLines}`
-  );
-}
-
-function pausedCheckoutState(
-  platform: IWorkflowPlatform,
-  activeWorkflow: WorkflowRun,
-  duration: string,
-  shortId: string
-): { stateLine: string; actionLines: string } {
-  let stateLine: string;
-  let actionLines: string;
-  const attention = runAttention(activeWorkflow);
-  const wait = pendingWorkflowWaitDeadline(activeWorkflow);
-  if (attention?.kind === 'attention') {
-    stateLine = `paused, needs attention (${duration} since started, run \`${shortId}\`)`;
-    actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(platform, attention)
-      .map(line => `• ${line}\n`)
-      .join('')}`;
-  } else if (wait) {
-    const waitingFor =
-      wait.kind === 'event'
-        ? `for event \`${wait.event}\` until`
-        : wait.kind === 'quota'
-          ? 'on a provider usage or rate limit, trying again at'
-          : 'until';
-    stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
-    actionLines =
-      (wait.kind === 'event'
-        ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
-        : '') + `• Wait until ${wait.resumeAt}: \`${formatRunCommand(platform, 'status')}\`\n`;
-  } else if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
-    // The parent takes no answer of its own; it continues when its sub-runs finish.
-    const childRunIds =
-      attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
-    stateLine = `paused waiting on sub-runs (${duration} since started, run \`${shortId}\`)`;
-    actionLines = `• Check sub-runs ${childRunIds.map(id => `\`${id}\``).join(', ')}: \`${formatRunCommand(platform, 'status')}\`\n`;
-  } else {
-    stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
-    actionLines =
-      `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
-      `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n`;
-  }
-  return { stateLine, actionLines };
 }
 
 /** Persist the baseline sampled at claim time, now that the run's artifacts directory exists. */

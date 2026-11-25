@@ -22,7 +22,7 @@ function ok(result: ScriptRun): { open: number; summary: string } {
   return JSON.parse(result.stdout) as { open: number; summary: string };
 }
 
-const listing = (result: ScriptRun): string => readFileSync(join(result.artifacts, 'threads.md'), 'utf8');
+const listing = (result: ScriptRun): string => readFileSync(join(result.artifacts, 'threads.json'), 'utf8');
 
 describe("deliver's review threads", () => {
   const ref = PR;
@@ -42,7 +42,14 @@ describe("deliver's review threads", () => {
         },
       ],
     });
-  const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
+  const written = { target: ref, outcome: 'applied', changed: true } as const;
+  const replied = forgeOperation('pr.thread.reply', {
+    ...written,
+    thread: 'T1',
+    comment: { ref, id: 'c2', url: `${PR_URL}#c2`, bodyDigest: 'sha256:reply' },
+  });
+  const resolvedThread = forgeOperation('pr.thread.resolve', { ...written, thread: 'T1', resolved: true });
+  const drafted = forgeOperation('pr.draft', { ...written, pr: forgePrRecord({ is_draft: true }) });
 
   it('answers a thread with a reply then a resolve on that thread, then rereads the threads', () => {
     const reply = 'Fixed in 1a2b3c4.';
@@ -52,8 +59,8 @@ describe("deliver's review threads", () => {
         response: [
           view(true),
           threads(false),
-          applied('pr.thread.reply'),
-          applied('pr.thread.resolve'),
+          replied,
+          resolvedThread,
           view(true),
           threads(true),
         ],
@@ -61,14 +68,8 @@ describe("deliver's review threads", () => {
       inputs: { INPUTS_ANSWERS: JSON.stringify([{ thread: 'T1', reply }]) },
     });
     expect(ok(result).open).toBe(0);
-    expect(result.forge.map(argv => argv.split(' ')[1])).toEqual([
-      'pr.view',
-      'pr.threads',
-      'pr.thread.reply',
-      'pr.thread.resolve',
-      'pr.view',
-      'pr.threads',
-    ]);
+    const writes = result.forge.map(argv => argv.split(' ')[1] ?? '').filter(op => op.startsWith('pr.thread.'));
+    expect(writes).toEqual(['pr.thread.reply', 'pr.thread.resolve']);
     expect(JSON.parse(result.forgeRequests[2] ?? '{}')).toMatchObject({ thread: 'T1', body: reply });
     expect(JSON.parse(result.forgeRequests[3] ?? '{}')).toMatchObject({ thread: 'T1' });
   });
@@ -77,17 +78,16 @@ describe("deliver's review threads", () => {
     const result = runPackScript('deliver/scripts/threads', {
       forge: {
         kind: 'fake',
-        response: [view(false), threads(false), forgeOperation('pr.draft', { pr: forgePrRecord({ is_draft: true }) })],
+        response: [view(false), threads(false), drafted],
       },
       inputs: { INPUTS_ANSWERS: 'null' },
     });
     expect(ok(result).open).toBe(1);
-    expect(listing(result)).toContain('- id: `T1`');
+    expect(JSON.parse(listing(result))).toMatchObject([{ id: 'T1', resolved: false }]);
     expect(result.forge.map(argv => argv.split(' ')[1])).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
   });
 
   const ops = (result: ScriptRun): string[] => result.forge.map(argv => argv.split(' ')[1] ?? '');
-  const drafted = forgeOperation('pr.draft', { pr: forgePrRecord({ is_draft: true }) });
 
   it('refuses an answer for a thread the pull request does not have, before writing anything', () => {
     const result = runPackScript('deliver/scripts/threads', {
@@ -104,7 +104,7 @@ describe("deliver's review threads", () => {
     const result = runPackScript('deliver/scripts/threads', {
       forge: {
         kind: 'fake',
-        response: [view(false), threads(false), applied('pr.thread.reply'), applied('pr.thread.resolve'), view(false), threads(false), drafted],
+        response: [view(false), threads(false), replied, resolvedThread, view(false), threads(false), drafted],
       },
       inputs: { INPUTS_ANSWERS: JSON.stringify([{ thread: 'T1', reply: 'Fixed in 1a2b3c4.' }]) },
     });

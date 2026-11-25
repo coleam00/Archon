@@ -65,13 +65,13 @@ export function YamlPreview({ yamlText }: YamlPreviewProps): ReactElement {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center justify-between border-b border-border px-3 py-1.5">
-        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-tertiary">
+        <span className="font-mono text-console-10 font-bold uppercase tracking-console-label text-text-tertiary">
           YAML · read-only
         </span>
         <button
           type="button"
           onClick={copy}
-          className="rounded border border-border bg-surface px-2 py-0.5 text-[10.5px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          className="rounded border border-border bg-surface px-2 py-0.5 text-console-11 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
         >
           {copied === 'idle' ? 'Copy' : copied === 'copied' ? 'Copied ✓' : 'Copy failed'}
         </button>
@@ -79,7 +79,7 @@ export function YamlPreview({ yamlText }: YamlPreviewProps): ReactElement {
       {/* The global `.hljs` rule paints the code background with --surface; the
           arbitrary child selectors make the generated <pre> fill + scroll the
           pane and drop react-markdown's default block margins. */}
-      <div className="min-h-0 flex-1 overflow-auto font-mono text-[12px] leading-relaxed [&_pre]:m-0 [&_pre]:min-h-full [&_pre]:p-3 [&_pre_code]:!bg-transparent">
+      <div className="min-h-0 flex-1 overflow-auto font-mono text-console-12 leading-relaxed [&_pre]:m-0 [&_pre]:min-h-full [&_pre]:p-3 [&_pre_code]:!bg-transparent">
         <ReactMarkdown rehypePlugins={REHYPE_PLUGINS}>{toYamlFence(yamlText)}</ReactMarkdown>
       </div>
     </div>

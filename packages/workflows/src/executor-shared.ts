@@ -5,7 +5,7 @@
 import { escapeRegExp } from '@archon/paths/regexp';
 import type { ExecNode, DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
-import type { NodeFailureKind } from './schemas/node-execution';
+import type { ExecutionOutput, NodeFailureKind } from './schemas/node-execution';
 import { transitiveDepsLookup } from './depends-on';
 import type { hostSpawnFailure, RawSubprocessRejection } from './subprocess';
 
@@ -173,7 +173,7 @@ export function getRetryDelayMs(
 /** How retry treats a failure; also the failure kinds a provider error can have. */
 export type RetryClass = Extract<
   NodeFailureKind,
-  'fatal' | 'transient' | 'rate_limited' | 'overloaded' | 'unknown'
+  'fatal' | 'transient' | 'rate_limited' | 'overloaded' | 'schema_unmet' | 'unknown'
 >;
 
 /** The node failure kind a provider's typed failure class maps to. */
@@ -187,6 +187,7 @@ export function nodeFailureKindOf(failure: ProviderFailure): RetryClass {
     case 'overloaded':
     case 'rate_limited':
     case 'transient':
+    case 'schema_unmet':
     case 'unknown':
       return failure.class;
     default: {
@@ -212,9 +213,12 @@ const RETRY_CLASS = {
   timeout: 'transient',
   // A script's exit is no evidence a re-run helps; `on_error: all` opts in.
   exec_failed: 'unknown',
-  // A fresh AI attempt can produce valid output under `on_error: all`. An exec contract
-  // failure is never retried: it records `retryable: false`.
+  // A rejected artifact pointer, an unserialisable value or a broken checkout guard;
+  // `on_error: all` opts in. An exec contract failure records `retryable: false`.
   output_contract: 'unknown',
+  // A final output that did not meet its schema; a fresh attempt usually gets past it.
+  // Retried under `on_error: schema_unmet` or `all`.
+  schema_unmet: 'schema_unmet',
   // `fatal` is the class retry never re-runs, even under `on_error: all`.
   config: 'fatal',
   cancelled: 'fatal',
@@ -311,7 +315,7 @@ export function formatSubprocessFailure(
     >
   >,
   label: string
-): { userMessage: string; logFields: Record<string, unknown> } {
+): SubprocessFailure {
   const stderr = (err.stderr ?? '').trim();
   const stdout = (err.stdout ?? '').trim();
   const rawMessage = (err.message ?? '').trim();
@@ -341,15 +345,47 @@ export function formatSubprocessFailure(
         ? ` [error ${errorCode}]`
         : '';
 
+  const exitCode = typeof err.code === 'number' ? err.code : undefined;
   return {
     userMessage: `${label} failed${codeSuffix}: ${truncated}`,
     logFields: {
-      exitCode: typeof err.code === 'number' ? err.code : undefined,
+      exitCode,
       errorCode,
       killed: err.killed === true,
       stderrTail,
       stdoutTail,
     },
+    exitCode,
+    capturedOutput: capturedStdout(err.stdout ?? ''),
+  };
+}
+
+/**
+ * A subprocess failure, split by consumer: `userMessage` and `logFields` are diagnostics
+ * (trimmed, one budget shared by both streams); `exitCode` and `capturedOutput` are the
+ * structured values a failed exec node persists.
+ */
+interface SubprocessFailure {
+  userMessage: string;
+  logFields: Record<string, unknown>;
+  /** The process's numeric exit status. Absent when it never produced one (spawn error). */
+  exitCode: number | undefined;
+  /** Stdout as the node's output, or undefined when the process wrote none. */
+  capturedOutput: ExecutionOutput | undefined;
+}
+
+/**
+ * Stdout kept as the failed node's output: untrimmed, so what a consumer reads is what
+ * the process wrote, and cut to its last `SUBPROCESS_ERROR_MAX_CHARS` characters. A cut
+ * is reported through `persisted.truncated`, because the head is gone.
+ */
+function capturedStdout(stdout: string): ExecutionOutput | undefined {
+  if (stdout.length === 0) return undefined;
+  if (stdout.length <= SUBPROCESS_ERROR_MAX_CHARS) return { text: stdout };
+  const tail = stdout.slice(-SUBPROCESS_ERROR_MAX_CHARS);
+  return {
+    text: tail,
+    persisted: { text: tail, truncated: true, originalBytes: Buffer.byteLength(stdout, 'utf8') },
   };
 }
 

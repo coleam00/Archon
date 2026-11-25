@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { RunActionBar } from './RunActionBar';
 import { PendingInputBanner } from './PendingInputBanner';
+import { NO_ITEM_ASKS } from './ItemAsksSection';
 import { toRun } from '../primitives/run';
 
 function buttonClick(node: ReactNode, label: string): (() => void) | undefined {
@@ -45,7 +46,12 @@ test('the attention banner Resume action dispatches one resume request and no ga
   }
   const html = renderToStaticMarkup(
     <MemoryRouter>
-      <PendingInputBanner runs={[run]} showProject={false} onDismiss={() => undefined} />
+      <PendingInputBanner
+        runs={[run]}
+        showProject={false}
+        onDismiss={() => undefined}
+        itemAsks={NO_ITEM_ASKS}
+      />
       <Probe />
     </MemoryRouter>
   );
@@ -85,7 +91,12 @@ test('a provider-limit wait in the banner shows its reset, Resume and Abandon, a
   });
   const html = renderToStaticMarkup(
     <MemoryRouter>
-      <PendingInputBanner runs={[run]} showProject={false} onDismiss={() => undefined} />
+      <PendingInputBanner
+        runs={[run]}
+        showProject={false}
+        onDismiss={() => undefined}
+        itemAsks={NO_ITEM_ASKS}
+      />
     </MemoryRouter>
   );
   expect(html).toContain('implement');
@@ -117,9 +128,14 @@ test.each([
   expect(html).toContain('Cancel');
 });
 
-test.each(['running', 'failed', 'paused'] as const)(
-  'Abandon dispatches one abandon request for a %s run',
-  async status => {
+test.each([
+  ['running', true],
+  ['failed', true],
+  ['paused', true],
+  ['failed', false],
+] as const)(
+  'Abandon on a %s run sends one abandon request only when confirmed (%s)',
+  async (status, confirmed) => {
     const run = toRun({
       id: 'abandon-run',
       workflow_name: 'implement',
@@ -151,6 +167,8 @@ test.each(['running', 'failed', 'paused'] as const)(
     );
     expect(click).toBeDefined();
     const originalFetch = globalThis.fetch;
+    const originalConfirm = globalThis.confirm;
+    globalThis.confirm = () => confirmed;
     const requests: { path: string; method: string | undefined }[] = [];
     globalThis.fetch = Object.assign(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -166,11 +184,30 @@ test.each(['running', 'failed', 'paused'] as const)(
     try {
       click?.();
       await new Promise(resolve => setTimeout(resolve, 0));
-      expect(requests).toEqual([
-        { path: '/api/workflows/runs/abandon-run/abandon', method: 'POST' },
-      ]);
+      expect(requests).toEqual(
+        confirmed ? [{ path: '/api/workflows/runs/abandon-run/abandon', method: 'POST' }] : []
+      );
     } finally {
       globalThis.fetch = originalFetch;
+      globalThis.confirm = originalConfirm;
     }
   }
 );
+
+test('a run that failed at launch offers Re-run and no Resume', () => {
+  const run = toRun({
+    id: 'never-launched',
+    workflow_name: 'implement',
+    codebase_id: 'project-1',
+    status: 'failed',
+    started_at: '2026-10-12T00:00:00.000Z',
+    metadata: { stop_reason: { reason: 'launch_failed' } },
+  });
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <RunActionBar run={run} />
+    </MemoryRouter>
+  );
+  expect(html).not.toContain('Resume');
+  expect(html).toContain('Re-run');
+});

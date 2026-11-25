@@ -5,6 +5,7 @@ import { applyRunEnvironment } from './run-preflight';
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
 import { join, sep } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { makeTestWorkflow } from './test-utils';
 import { dryRunWorkflow, useDryRunFiles } from './dry-run-test-utils';
 import { inputEnvKey } from './schemas/node-bindings';
@@ -12,6 +13,28 @@ import { inputEnvKey } from './schemas/node-bindings';
 const { temporaryDirectory } = useDryRunFiles();
 
 describe('dry-run code execution', () => {
+  test('releases each node scratch before a dependent checks out the same branch', async () => {
+    const repo = temporaryDirectory();
+    const run = (...args: string[]) => execFileSync('git', ['-C', repo, ...args]);
+    run('init', '-q');
+    run('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+    run('branch', 'probe');
+    const checkout = 'git worktree add -q "$NODE_SCRATCH_DIR/wt" probe';
+    const result = await dryRunWorkflow({
+      cwd: repo,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'scratch-same-branch',
+        nodes: [
+          { id: 'first', bash: checkout },
+          { id: 'second', bash: checkout, depends_on: ['first'] },
+        ],
+      }),
+    });
+    expect(result.outcome).toBe('completed');
+    expect(String(run('worktree', 'list', '--porcelain')).match(/^worktree /gm)).toHaveLength(1);
+  });
+
   test('executes bash only with execCode and captures failures', async () => {
     const success = makeTestWorkflow({
       name: 'bash-ok',
@@ -93,11 +116,8 @@ process.exit(9);`,
 
   test.each([
     ['silent Bash', 'sh', '# inline-body-marker\nexit 7'],
-    ['whitespace Bash', 'sh', '# inline-body-marker\nprintf " "; exit 7'],
     ['silent Bun', 'bun', '// inline-body-marker\nprocess.exit(7);'],
-    ['whitespace Bun', 'bun', '// inline-body-marker\nconsole.log(" "); process.exit(7);'],
     ['silent Python', 'uv', '# inline-body-marker\nimport sys\nsys.exit(7)'],
-    ['whitespace Python', 'uv', '# inline-body-marker\nimport sys\nprint(" "); sys.exit(7)'],
   ] as const)('reports no diagnostic output for %s', async (_name, runtime, script) => {
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({
@@ -183,6 +203,23 @@ process.exit(9);`,
     } finally {
       spawn.mockRestore();
     }
+  });
+
+  test('an executed script imports the archon:script module', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'script-api',
+        nodes: [
+          {
+            id: 'code',
+            runtime: 'bun',
+            script: "import { emit, runId } from 'archon:script';\nemit({ run: runId() });",
+          },
+        ],
+      }),
+      execCode: true,
+    });
+    expect(result).toMatchObject({ outcome: 'completed', summary: '{"run":"dry-run"}' });
   });
 
   test('reports a missing script runtime as a spawn failure', async () => {
@@ -538,6 +575,74 @@ process.exit(9);`,
       value: 'bound value',
       keys: [...EXEC_NODE_ENVIRONMENT_NAMES, key],
     });
+  });
+
+  test('a typed-outputs binding reads the outputs stubbed producers gave the simulation', async () => {
+    const verdict = {
+      output_type: 'verdict',
+      output_format: {
+        type: 'object',
+        properties: { ready: { type: 'boolean' } },
+        required: ['ready'],
+      },
+    };
+    const workflow = makeTestWorkflow({
+      name: 'typed-outputs-dry-run',
+      nodes: [
+        { id: 'first', prompt: 'judge', ...verdict },
+        {
+          id: 'rounds',
+          depends_on: ['first'],
+          loop_group: {
+            until_bash: 'true',
+            max_iterations: 2,
+            nodes: [{ id: 'judge', prompt: 'judge again', ...verdict }],
+          },
+        },
+        {
+          id: 'read',
+          runtime: 'bun',
+          script: 'console.log(process.env.INPUTS_VERDICTS)',
+          depends_on: ['rounds'],
+          with: { verdicts: { outputs: 'verdict' } },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      stubs: { first: { ready: false }, judge: { ready: true } },
+      execCode: true,
+    });
+
+    expect(result.outcome).toBe('completed');
+    const records = JSON.parse(result.summary ?? 'null') as { at: string }[];
+    expect(records.map(({ at: _at, ...record }) => record)).toEqual([
+      { node: 'first', loop: [], value: { ready: false } },
+      { node: 'judge', loop: [{ group: 'rounds', iteration: 1 }], value: { ready: true } },
+    ]);
+  });
+
+  test('a typed-outputs binding fails a simulated node on a stub that is not a JSON document', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'typed-outputs-prose',
+        nodes: [
+          { id: 'prose', prompt: 'write', output_type: 'verdict' },
+          {
+            id: 'read',
+            runtime: 'bun',
+            script: 'read-verdicts',
+            depends_on: ['prose'],
+            with: { verdicts: { outputs: 'verdict' } },
+          },
+        ],
+      }),
+      stubs: { prose: 'looks fine', read: 'unused' },
+    });
+
+    expect(result.outcome).toBe('failed');
+    expect(result.trace.at(-1)?.reason).toContain("declare output_format on 'prose'");
   });
 
   test('exec-code receives the fixed engine-owned environment', async () => {

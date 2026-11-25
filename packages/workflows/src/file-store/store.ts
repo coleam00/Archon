@@ -1,6 +1,11 @@
 import { createFileAdmissionStore } from './admission';
+import { FileStoreUnsupportedError } from './errors';
 import { createAdmissionTransaction } from './admission-transaction';
-import { type ReusableCheckout, resumeRefusal } from '../resource-start-store';
+import {
+  type ReusableCheckout,
+  type ResourceCapacityOverride,
+  resumeRefusal,
+} from '../resource-start-store';
 import {
   NODE_LIFECYCLE_EVENT_TYPES,
   WorkflowResourceBusyError,
@@ -15,7 +20,13 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '../store';
-import type { WorkflowRun } from '../schemas/workflow-run';
+import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
+import {
+  PendingClaimRefusedError,
+  WorkflowRunDeleteRefusedError,
+  liveAdoptersRefusal,
+  liveDescendantsRefusal,
+} from '../store/errors';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   workflowNodeSessionSchema,
@@ -53,6 +64,8 @@ export interface FileWorkflowStoreOptions {
   /** Called under the commit lock; must not enter store recovery or call this store. */
   listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>;
   isCheckoutReleased?: (run: WorkflowRun, workingPath?: string) => Promise<boolean>;
+  /** Called under the commit lock at every resource admission. */
+  resourceCapacity?: ResourceCapacityOverride;
 }
 export async function createFileWorkflowStore(
   options: FileWorkflowStoreOptions
@@ -117,7 +130,11 @@ export async function createFileWorkflowStore(
       const events = loadEvents ? await eventsFor([...runs.keys()]) : [];
       const prior = byRun(events);
       const priorIds = new Set(events.map(event => event.id));
-      const admission = createAdmissionTransaction(root, options.listReusableCheckouts);
+      const admission = createAdmissionTransaction(
+        root,
+        options.listReusableCheckouts,
+        options.resourceCapacity
+      );
       const result = await call(
         createTransactionView(runs, events, getCodebase, artifacts),
         admission
@@ -218,17 +235,22 @@ export async function createFileWorkflowStore(
     claimPendingWorkflowRun: (id, path) =>
       write([id], async (view, admission) => {
         const run = await view.getWorkflowRun(id);
-        if (
-          !run ||
-          !(await admission.canClaim(id)) ||
-          (await options.isCheckoutReleased?.(run, path))
-        )
-          return null;
+        if (!run) return null;
+        // A still-pending run refused by its own state: the claimant that tried fails it with
+        // the reason. Any other run is the view's compare-and-set to refuse.
+        if (run.status === 'pending') {
+          if (await options.isCheckoutReleased?.(run, path))
+            throw new PendingClaimRefusedError(id, 'checkout_released');
+          if (!(await admission.canClaim(id)))
+            throw new PendingClaimRefusedError(id, 'admission_revoked');
+        }
         return view.claimPendingWorkflowRun(id, path);
       }),
     updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
     updateWorkflowRunMetadataIfRunning: (id, metadata) =>
       write([id], view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
+    updateWorkflowRunMetadataIfPending: (id, metadata) =>
+      write([id], view => view.updateWorkflowRunMetadataIfPending(id, metadata)),
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write([id], view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
@@ -261,6 +283,10 @@ export async function createFileWorkflowStore(
       write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
     releaseRunForUnreadableSource: (id, release, beforePublish) =>
       write([id], view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
+    requestOperatorPause: (id, requested) =>
+      write([id], view => view.requestOperatorPause(id, requested)),
+    pauseWorkflowRunForOperator: (id, claimId) =>
+      write([id], view => view.pauseWorkflowRunForOperator(id, claimId)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write([id], view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, events, expected) =>
@@ -271,16 +297,16 @@ export async function createFileWorkflowStore(
         view => view.resolveAndCancelApprovalGate(id, events, cancellation, expected),
         await observedRun(id)
       ),
-    completeWorkflowRun: async (id, completion, metadata) =>
+    completeWorkflowRun: async (id, completion, metadata, result) =>
       write(
         [id],
-        view => view.completeWorkflowRun(id, completion, metadata),
+        view => view.completeWorkflowRun(id, completion, metadata, result),
         await observedRun(id)
       ),
     failWorkflowRun: async (id, error, options) =>
       write([id], view => view.failWorkflowRun(id, error, options), await observedRun(id)),
-    cancelWorkflowRun: async (id, event) =>
-      write([id], view => view.cancelWorkflowRun(id, event), await observedRun(id)),
+    cancelWorkflowRun: async (id, event, options) =>
+      write([id], view => view.cancelWorkflowRun(id, event, options), await observedRun(id)),
     cancelFanOutRun: async (id, reason) =>
       write([id], view => view.cancelFanOutRun(id, reason), await observedRun(id)),
     cancelResumableRunsForConversation: async (id, assertMayCancel) =>
@@ -324,8 +350,11 @@ export async function createFileWorkflowStore(
       write([input.workflow_run_id], view => view.persistWorkflowEventIfRunning(input, options)),
     listWorkflowEvents: (id, options) =>
       query([id], view => view.listWorkflowEvents(id, options), true),
-    listEventsForRuns: (ids, types) => query(ids, view => view.listEventsForRuns(ids, types), true),
+    listEventsForRuns: (ids, types, options) =>
+      query(ids, view => view.listEventsForRuns(ids, types, options), true),
     listMetricRecords: () => query('all', view => view.listMetricRecords(), true),
+    listAttentionWaitStarts: () => query('all', view => view.listAttentionWaitStarts(), true),
+    listWorkflowNoticeRows: () => query('all', view => view.listWorkflowNoticeRows(), true),
     getDagResumeSnapshot: id => query([id], view => view.getDagResumeSnapshot(id), true),
     listProviderEvents: (id, queryOptions) =>
       query([id], view => view.listProviderEvents(id, queryOptions), true),
@@ -333,11 +362,70 @@ export async function createFileWorkflowStore(
     getRunAncestry: id => query('all', view => view.getRunAncestry(id)),
     getActiveWorkflowRunByPath: (path, self) =>
       query('all', view => view.getActiveWorkflowRunByPath(path, self)),
-    findResumableRun: (name, path) => query('all', view => view.findResumableRun(name, path)),
     findWorkflowRunsByIdPrefix: (prefix, codebase) =>
       query('all', view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => query('all', view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => query('all', view => view.findOpenWorkRuns(options)),
+    getItemRuns: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    getItem: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    listItemRulings: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemRuling: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    withdrawItemRuling: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    // An end belongs to an item: none holds here, and none can be recorded.
+    getHoldingItemEnd: async () => null,
+    recordItemEnd: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    listItemsInWindow: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    getItemMerge: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemMerge: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    getItemLanding: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemLanding: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    listItemLinks: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemLink: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    endItemLink: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    // An ask belongs to an item, and this store holds none, so it holds no asks: the
+    // readers see an empty set rather than a failure that would break every queue read.
+    listOpenItemAsks: async () => [],
+    listItemAsks: async () => [],
+    getItemAsk: async () => null,
+    answerItemAsk: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    withdrawItemAsk: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    // A wait belongs to an item too: none are open, and none can be withdrawn.
+    listOpenItemWaits: async () => [],
+    withdrawItemWaits: async () => ({ kind: 'not_found' }),
+    // Only a run on an item stops one.
+    listStoppedItemRuns: async () => [],
     listWorkflowRuns: async options => {
       const result = await query('all', view => view.listWorkflowRuns(options));
       result.runs = await Promise.all(
@@ -378,6 +466,7 @@ export async function createFileWorkflowStore(
     labelAttentionWait: (id, labelWrite) =>
       write([id], view => view.labelAttentionWait(id, labelWrite)),
     listAttentionQueueRows: () => query('all', view => view.listAttentionQueueRows()),
+    listUnfinishedRuns: () => query('all', view => view.listUnfinishedRuns()),
     signalWorkflowWait: (id, wait, payload) =>
       write([id], view => view.signalWorkflowWait(id, wait, payload)),
     // Cleanup archives logs without hydrating current-state events.
@@ -387,8 +476,29 @@ export async function createFileWorkflowStore(
       commit(root, 'all', async runs => {
         const run = runs.get(id);
         if (!run) return { result: undefined, changes: {} };
-        if (!['completed', 'failed', 'cancelled'].includes(run.status))
-          throw new Error('Only terminal runs can be deleted');
+        if (!isTerminalRunStatus(run.status))
+          throw new WorkflowRunDeleteRefusedError(
+            `Cannot delete workflow run in '${run.status}' status — cancel it first`
+          );
+        // A sub-run that has not ended, at any depth, keeps its ancestors: deleting one would
+        // cut the tree that `concurrency.runs` counts as one.
+        const live: WorkflowRun[] = [];
+        const seen = new Set([id]);
+        const below = [id];
+        for (let parent = below.pop(); parent !== undefined; parent = below.pop()) {
+          for (const child of runs.values()) {
+            if (child.parent_run_id !== parent || seen.has(child.id)) continue;
+            seen.add(child.id);
+            below.push(child.id);
+            if (!isTerminalRunStatus(child.status)) live.push(child);
+          }
+        }
+        if (live.length > 0) throw liveDescendantsRefusal(id, live);
+        // A continuation that has not ended reads this run's artifacts.
+        const adopters = [...runs.values()].filter(
+          row => row.adopted_from_run_id === id && !isTerminalRunStatus(row.status)
+        );
+        if (adopters.length > 0) throw liveAdoptersRefusal(id, adopters);
         const changed = [...runs.values()]
           .filter(row => row.parent_run_id === id || row.adopted_from_run_id === id)
           .map(row => ({
@@ -481,7 +591,7 @@ export async function createFileWorkflowStore(
           changes: { documents: { [path]: [...rows.filter(row => row !== prior), next] } },
         };
       }),
-    ...createFileAdmissionStore(root, options.listReusableCheckouts),
+    ...createFileAdmissionStore(root, options.listReusableCheckouts, options.resourceCapacity),
     ...createFileStateDocumentStore(root),
   };
   return store;

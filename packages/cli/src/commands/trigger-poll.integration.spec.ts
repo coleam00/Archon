@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, realpath } from 'node:fs/promises';
@@ -17,7 +18,8 @@ import {
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
 import { registerFolder } from '@archon/core/handlers/clone';
-import { triggerCommand, type timerTriggerConfigSchema } from './trigger';
+import { triggerCommand } from './trigger';
+import type { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import type { z } from '@hono/zod-openapi';
 
 // Poll-style `trigger fire` behavior, run in-process: an external poller re-runs `fire`, and
@@ -25,7 +27,7 @@ import type { z } from '@hono/zod-openapi';
 
 const tempRoots = trackTempRoots();
 
-type TimerConfig = z.infer<typeof timerTriggerConfigSchema>;
+type FireConfig = z.infer<typeof triggerConfigSchema>;
 
 function hostForTest(): WorkflowHost {
   const records = createInMemoryWorkflowHostStore();
@@ -68,7 +70,7 @@ const undeclaredWorkflow =
 async function orderFixture(inputs: Record<string, string>): Promise<{
   host: WorkflowHost;
   workflowPath: string;
-  config: TimerConfig;
+  config: FireConfig;
   configPath: string;
   inputsPath: string;
   restore: () => void;
@@ -87,7 +89,7 @@ async function orderFixture(inputs: Record<string, string>): Promise<{
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
   if (!user) throw new Error('Expected test identity');
   const configPath = join(root, 'timer.json');
-  const config: TimerConfig = {
+  const config: FireConfig = {
     version: 1,
     sourceInstanceId: 'timer',
     binding: {
@@ -133,6 +135,7 @@ async function fireAndExecute(
   await triggerCommand(host, 'fire', [], options, {
     dispatch: async id => {
       admitted.push(id);
+      return null;
     },
     env: {},
   });
@@ -148,7 +151,7 @@ async function fireAndExecute(
 }
 
 /** `fire` awaits the write callback of the receipt it prints. */
-function silenceStdout(): { mockRestore: () => void } {
+function silenceStdout() {
   return spyOn(process.stdout, 'write').mockImplementation(((
     _chunk: unknown,
     encodingOrCallback?: unknown,
@@ -254,6 +257,68 @@ test('poll-style fires preserve unkeyed starts', async () => {
     const all = await runs();
     expect(all).toHaveLength(3);
     expect(all.every(run => run.status === 'completed')).toBe(true);
+  } finally {
+    stdout.mockRestore();
+    restore();
+  }
+});
+
+test('a fire-only binding starts a run on fire and has no timer to install', async () => {
+  const { host, config, configPath, restore } = await orderFixture({
+    order_id: 'literal-order',
+    mode: 'fire-only',
+  });
+  const stdout = silenceStdout();
+  try {
+    const { schedule: _schedule, ...fireOnly } = config;
+    await writeFile(configPath, JSON.stringify(fireOnly));
+
+    await fireAndExecute(host, { config: configPath });
+    const { runs } = await host.deps.store.listWorkflowRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: 'completed',
+      metadata: { resource_start: { bindingId: 'fired' } },
+    });
+
+    await expect(
+      triggerCommand(host, 'schedule', ['install'], { config: configPath })
+    ).rejects.toThrow("Binding 'fired' is fire-only");
+    // Status needs no schedule, so it still answers for a fire-only file.
+    const written = stdout.mock.calls.length;
+    await triggerCommand(host, 'schedule', ['status'], { config: configPath });
+    const lines = stdout.mock.calls.slice(written).map(([chunk]) => String(chunk));
+    expect(JSON.parse(lines.join(''))).toEqual({
+      bindingId: 'fired',
+      schedule: 'status',
+      installed: false,
+    });
+
+    // A schedule that is present but incomplete is a broken timer, not a fire-only binding.
+    await writeFile(configPath, JSON.stringify({ ...fireOnly, schedule: {} }));
+    await expect(fireAndExecute(host, { config: configPath })).rejects.toThrow(
+      'Invalid trigger configuration fields: schedule.intervalSeconds'
+    );
+  } finally {
+    stdout.mockRestore();
+    restore();
+  }
+});
+
+test("a binding start holds its workflow's declared resource instead of the binding's", async () => {
+  const { host, workflowPath, configPath, restore } = await orderFixture({
+    order_id: 'literal-order',
+    mode: 'resource',
+  });
+  const stdout = silenceStdout();
+  try {
+    await writeFile(workflowPath, orderWorkflow.replace('worktree:', 'resource: build\nworktree:'));
+    await fireAndExecute(host, { config: configPath });
+    const { runs } = await host.deps.store.listWorkflowRuns();
+    expect(runs).toMatchObject([{ status: 'completed' }]);
+    expect(await host.deps.store.getResourceStartRequest(runs[0]?.id ?? '')).toMatchObject({
+      resource: 'build',
+    });
   } finally {
     stdout.mockRestore();
     restore();

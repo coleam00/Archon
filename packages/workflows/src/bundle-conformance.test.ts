@@ -24,6 +24,7 @@ const records = await writeFakeBundle(
   {
     'fake/.shared/message.ts': "export const message = 'shared';\n",
     'fake/.shared/policy.md': '# Policy\n',
+    'fake/.pack/pack.yaml': 'inputs:\n  mode:\n    default: a\n',
     'fake/flow/fake-flow.yaml':
       'name: fake-flow\ndescription: Flow fixture.\nnodes:\n  - id: work\n    command: work\n',
     'fake/flow/commands/work.md': 'Do the work the flow describes.\n',

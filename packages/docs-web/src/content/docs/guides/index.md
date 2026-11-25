@@ -39,7 +39,7 @@ Support varies by provider. See the [provider capability matrix](/reference/prov
 
 ## Bundled Workflows
 
-Archon ships the `sdlc` workflow pack, a software factory from an incoming issue to a merged pull request. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it on your repository, and [SDLC pack workflows](/reference/sdlc-workflows/) describes each workflow.
+Archon ships the `sdlc` workflow pack, a software factory from an incoming issue to a merged pull request. [The SDLC factory](/getting-started/sdlc-factory/) introduces it and points at its setup guide, and [SDLC pack workflows](/reference/sdlc-workflows/) describes each workflow.
 
 To customize the pack, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it -- same-named workflows override the bundled ones. Copy the pack rather than one workflow folder: its workflows include each other and share scripts in `sdlc/.shared/`.
 

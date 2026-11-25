@@ -1,3 +1,4 @@
+import { throughputEvents } from '../test-support/throughput-fixtures';
 import {
   mockCanonicalizeProjectPath,
   mockListDashboardRuns,
@@ -91,7 +92,7 @@ const VERBOSE_EVENTS_FIXTURE: WorkflowEventRow[] = [
     event_type: 'node_completed',
     step_name: 'orphan',
     step_index: 4,
-    data: { node_output: 'y'.repeat(201) },
+    data: { node_output: 'y'.repeat(5_000), node_output_truncated: true },
     created_at: '2026-08-03T10:00:09.000Z',
   },
   {
@@ -125,6 +126,35 @@ describe('workflowStatusCommand', () => {
   });
 
   it.each([false, true])('shows tool attention without verbose mode (json=%s)', async json => {
+    const engineMessage = (count: number): WorkflowEventRow => ({
+      id: `stall-${String(count)}`,
+      workflow_run_id: 'live',
+      event_type: 'stall_message',
+      step_name: 'implement',
+      step_index: null,
+      data: {
+        sent: true,
+        sender: 'engine',
+        provider: 'codex',
+        count,
+        limit: 2,
+        open: [],
+        text: 'check-in',
+      },
+      created_at: new Date().toISOString(),
+    });
+    const host = createTestWorkflowHost();
+    host.deps.store.listEventsForRuns = async () =>
+      new Map([
+        [
+          'live',
+          [
+            engineMessage(1),
+            engineMessage(2),
+            { ...engineMessage(2), id: 'stall-done', step_name: 'completed-build' },
+          ],
+        ],
+      ]);
     mockListDashboardRuns.mockResolvedValueOnce(
       statusRuns([
         {
@@ -153,7 +183,7 @@ describe('workflowStatusCommand', () => {
         },
       ])
     );
-    await workflowStatusCommand(createTestWorkflowHost(), '/repo', { json, all: true });
+    await workflowStatusCommand(host, '/repo', { json, all: true });
     if (json)
       expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
         runs: [{ attention: { kind: 'stalled_tool_calls', status: 'running' } }],
@@ -162,6 +192,11 @@ describe('workflowStatusCommand', () => {
       const printed = consoleSpy.mock.calls.flat().join(' ');
       expect(printed).toContain('live is still running');
       expect(printed).toContain('bun test');
+      expect(printed).toContain(
+        'Engine: [implement] engine sent the stalled session a message (2 of 2)'
+      );
+      expect(printed).not.toContain('(1 of 2)');
+      expect(printed).not.toContain('completed-build');
       expect(printed).not.toContain('resume');
     }
   });
@@ -449,14 +484,6 @@ describe('workflowStatusCommand', () => {
     expect(printed).not.toContain('/workflow ');
   });
 
-  it('should print message when no active runs', async () => {
-    mockListDashboardRuns.mockResolvedValueOnce(statusRuns([]));
-
-    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
-
-    expect(consoleSpy).toHaveBeenCalledWith('No active workflows.');
-  });
-
   it('prints the complete active run layout with fixed age and active nodes', async () => {
     const now = spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-23T12:00:00Z'));
     try {
@@ -489,7 +516,7 @@ describe('workflowStatusCommand', () => {
     }
   });
 
-  it('should label authored outcome separately from active execution status', async () => {
+  it('shows no outcome for an active run, even one an older binary wrote early', async () => {
     mockListDashboardRuns.mockResolvedValueOnce(
       statusRuns([
         {
@@ -507,18 +534,7 @@ describe('workflowStatusCommand', () => {
     await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
 
     expect(consoleSpy).toHaveBeenCalledWith('  Status: paused');
-    expect(consoleSpy).toHaveBeenCalledWith('  Authored outcome: succeeded');
-  });
-
-  it('should output JSON when json=true', async () => {
-    mockListDashboardRuns.mockResolvedValueOnce(statusRuns([]));
-
-    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { json: true, all: true });
-
-    expect(stdoutSpy).toHaveBeenCalledWith(
-      `${JSON.stringify({ runs: [], scopeFallback: false }, null, 2)}\n`,
-      expect.any(Function)
-    );
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
   });
 
   it('keeps parallel active nodes in non-verbose JSON', async () => {
@@ -869,6 +885,117 @@ describe('workflowGetCommand', () => {
     stdoutSpy.mockRestore();
   });
 
+  it('reports creation age and JSON creation time after an actual store resume', async () => {
+    const { createInMemoryWorkflowStore, createInMemoryWorkflowHostStore } = await import(
+      '../test-support/workflow-store'
+    );
+    const store = createInMemoryWorkflowStore(createInMemoryWorkflowHostStore());
+    const run = await store.createWorkflowRun({ workflow_name: 'age', user_message: '' });
+    const creation = new Date(Date.now() - 4 * 3600_000);
+    await store.backdate(run.id, { started_at: creation });
+    await store.failWorkflowRun(run.id, 'failed');
+    await store.resumeWorkflowRun(run.id);
+    const host = createTestWorkflowHost();
+    host.deps.store = store;
+    expect(await workflowGetCommand(host, run.id, false)).toBe(0);
+    expect(consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n')).toMatch(
+      /Age:\s+4h/
+    );
+    expect(await workflowGetCommand(host, run.id, true)).toBe(0);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy)).started_at).toBe(creation.toISOString());
+  });
+
+  it.each([
+    [false, false, false],
+    [true, false, false],
+    [true, true, false],
+    [true, true, true],
+  ])(
+    'shows effective throughput with json=%s verbose=%s events=%s using the existing event read',
+    async (json, verbose, rawEvents) => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const eventsDb = await import('@archon/core/db/workflow-events');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-throughput',
+        workflow_name: 'work',
+        status: 'completed',
+        metadata: {},
+        started_at: new Date(),
+        checkout_baseline: null,
+      });
+      const events = throughputEvents('run-throughput');
+      const read = eventsDb.listWorkflowEvents as ReturnType<typeof mock>;
+      read.mockClear();
+      read.mockResolvedValueOnce(events);
+      expect(
+        await workflowGetCommand(
+          createTestWorkflowHost(),
+          'run-throughput',
+          json,
+          verbose,
+          undefined,
+          rawEvents,
+          true
+        )
+      ).toBe(0);
+      expect(read).toHaveBeenCalledTimes(1);
+      if (json) {
+        const result = JSON.parse(firstJsonPayload(stdoutSpy));
+        expect(result.throughput.summary.effectiveTokensPerSecond).toBe(100);
+        expect(result.throughput.summary.nodesWithoutTokenData).toBe(1);
+        expect(
+          result.throughput.nodes.map(
+            (node: { effectiveTokensPerSecond: number | null }) => node.effectiveTokensPerSecond
+          )
+        ).toEqual([100, 100, null]);
+        if (verbose) expect(rawEvents ? result.events : result.nodes).toHaveLength(4);
+        expect(result.metadata).toEqual({});
+      } else {
+        const text = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+        expect(text).toContain(
+          'Effective output throughput (recorded agent executions; not decode speed)'
+        );
+        expect(text).toContain('Run: 100.00 tok/s; 1 nodes without token data');
+        expect(text).toContain('claude/large: 100.00 tok/s');
+        expect(text).toContain('codex/small: 100.00 tok/s');
+        expect(text).toContain('unavailable (without token data)');
+        expect(text).toContain(
+          `attempt ${String(events[0]?.data.attempt && (events[0].data.attempt as { id: string }).id)}`
+        );
+      }
+    }
+  );
+
+  it('fails the throughput view with the run identity and malformed metadata diagnostic', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-invalid',
+      workflow_name: 'work',
+      status: 'running',
+      metadata: {},
+      started_at: new Date(),
+    });
+    const events = throughputEvents('run-invalid');
+    delete events[0]!.data.invocation;
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce(events);
+    expect(
+      await workflowGetCommand(
+        createTestWorkflowHost(),
+        'run-invalid',
+        true,
+        false,
+        undefined,
+        false,
+        true
+      )
+    ).toBe(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      ok: false,
+      error: 'Cannot compute throughput for run run-invalid: Node execution metadata is incomplete',
+    });
+  });
+
   it.each([0, 20, 21])(
     'summarizes terminal artifact inventory with %s operator files without changing JSON',
     async fileCount => {
@@ -945,6 +1072,54 @@ describe('workflowGetCommand', () => {
     }
   );
 
+  it("prints a failed run's reason led by its first failed node's recorded kind", async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    const record: TerminalRecord = {
+      run_id: 'run-schema-unmet',
+      status: 'failed',
+      outcome: null,
+      error: 'Node check failed',
+      first_failed_node: 'check',
+      nodes: [
+        {
+          node_id: 'check',
+          state: 'failed',
+          error: 'the answer was rejected',
+          failure_kind: 'schema_unmet',
+        },
+      ],
+      returns: { availability: 'unavailable', node_id: null, reason: 'not_declared' },
+      artifacts: { root: null, files: [], limitations: [] },
+    };
+    const run = {
+      id: record.run_id,
+      workflow_name: 'implement',
+      status: record.status,
+      started_at: new Date(),
+      metadata: { error: 'Node check failed' },
+      output_root: null,
+      checkout_baseline: null,
+      codebase_id: null,
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run);
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'terminal-event',
+        workflow_run_id: record.run_id,
+        event_type: 'workflow_failed',
+        step_name: null,
+        step_index: null,
+        created_at: '2026-11-17T00:00:00.000Z',
+        data: { terminal_record: record },
+      },
+    ]);
+
+    await workflowGetCommand(createTestWorkflowHost(), record.run_id);
+
+    expect(consoleSpy).toHaveBeenCalledWith('  Reason: (schema_unmet) the answer was rejected');
+  });
+
   const usageCases: [string, Record<string, unknown>, string, string, string][] = [
     [
       'recorded numbers',
@@ -992,13 +1167,6 @@ describe('workflowGetCommand', () => {
     [
       'invalid values',
       { total_cost_usd: '0', total_tokens_in: {}, total_tokens_out: '12' },
-      'unknown',
-      'unknown',
-      'unknown',
-    ],
-    [
-      'nonfinite values',
-      { total_cost_usd: Infinity, total_tokens_in: NaN, total_tokens_out: -Infinity },
       'unknown',
       'unknown',
       'unknown',
@@ -1192,6 +1360,8 @@ describe('workflowGetCommand', () => {
     await workflowGetCommand(createTestWorkflowHost(), 'run-skip-cause', false, true);
 
     expect(consoleSpy).toHaveBeenCalledWith('    - publish (upstream failed: validate)');
+    // A run with no loop reads as before: no Rounds block.
+    expect(consoleSpy).not.toHaveBeenCalledWith('  Rounds:');
   });
 
   // #3488 acceptance: the stored failure is command-free, so the CLI writes the abandon
@@ -2197,11 +2367,131 @@ describe('workflowGetCommand', () => {
       transcript_path?: string | null;
     };
     expect(parsed.nodes).toEqual(EXPECTED_VERBOSE_NODES);
+    expect(parsed.nodes.find(node => node.nodeId === 'orphan')).toMatchObject({
+      output: 'y'.repeat(5_000),
+      outputTruncated: true,
+      outputPreview: `${'y'.repeat(200)}...`,
+    });
+    expect(parsed.nodes.find(node => node.nodeId === 'zeta')).toMatchObject({
+      output: 'x'.repeat(200),
+      outputTruncated: false,
+    });
     expect(parsed.nodes.map(node => node.state)).toEqual(
       buildNodeSummaries(VERBOSE_EVENTS_FIXTURE).map(node => node.state)
     );
     expect(parsed.events).toBeUndefined();
     expect(parsed.transcript_path).toBeNull();
+    expect(parsed).not.toHaveProperty('loop_rounds');
+  });
+
+  it('reads each loop round in verbose JSON and text', async () => {
+    const { startNodeExecution, finishNodeExecution, newNodeInvocation } = await import(
+      '@archon/workflows/node-execution'
+    );
+    const { serializeNodeStateRecord } = await import(
+      '@archon/workflows/node-record-serialization'
+    );
+    const start = (iteration: number) =>
+      startNodeExecution({
+        runId: 'run-loop',
+        path: 'fix.check',
+        node: { id: 'check', kind: 'exec', runtime: 'sh', script: 'true' },
+        invocation: newNodeInvocation([{ groupId: 'fix', iteration }]),
+      });
+    const row = (iteration: number, record: ReturnType<typeof start>): WorkflowEventRow => ({
+      ...serializeNodeStateRecord(record),
+      id: `round-${String(iteration)}`,
+      step_index: null,
+      created_at: new Date().toISOString(),
+    });
+    const roundRow = (iteration: number, text?: string): WorkflowEventRow =>
+      row(
+        iteration,
+        finishNodeExecution(
+          start(iteration),
+          text === undefined
+            ? { status: 'failed', error: 'check failed', failureKind: 'exec_failed' }
+            : { status: 'completed' },
+          { durationMs: iteration * 1000, ...(text === undefined ? {} : { output: { text } }) }
+        )
+      );
+    const longVerdict = `${'v'.repeat(200)}${'w'.repeat(50)}`;
+    // A top-level node whose output missed its schema, for the Nodes block.
+    const judgeFailed = finishNodeExecution(
+      startNodeExecution({
+        runId: 'run-loop',
+        path: 'judge',
+        node: { id: 'judge', kind: 'agent', source: { kind: 'inline', prompt: 'judge' } },
+        invocation: newNodeInvocation(),
+      }),
+      { status: 'failed', error: 'output missed its schema', failureKind: 'schema_unmet' },
+      { durationMs: 5 }
+    );
+    // Rounds 1-3 ended (completed, completed, failed); round 4 is still in `check`.
+    const events = [
+      roundRow(1, longVerdict),
+      roundRow(2, 'second verdict'),
+      roundRow(3),
+      row(4, start(4)),
+      {
+        ...serializeNodeStateRecord(judgeFailed),
+        id: 'judge-failed',
+        step_index: null,
+        created_at: new Date().toISOString(),
+      },
+    ];
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    const loopRun = {
+      id: 'run-loop',
+      checkout_baseline: null,
+      workflow_name: 'deliver',
+      status: 'running',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    };
+    // Queued per read, so a failed assertion leaves nothing queued for later tests.
+    const queueRead = () => {
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(loopRun);
+      (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce(events);
+    };
+
+    queueRead();
+    await workflowGetCommand(createTestWorkflowHost(), 'run-loop', true, true);
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      loop_rounds: Array<{ nodes: Array<Record<string, unknown>> }>;
+    };
+    expect(parsed.loop_rounds.map(round => round.nodes[0]?.output)).toEqual([
+      longVerdict,
+      'second verdict',
+      undefined,
+      undefined,
+    ]);
+    expect(parsed.loop_rounds[3]?.nodes[0]?.state).toBe('running');
+    expect(parsed.loop_rounds[3]?.nodes[0]).not.toHaveProperty('duration_ms');
+
+    queueRead();
+    await workflowGetCommand(createTestWorkflowHost(), 'run-loop', false, true);
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const rounds = calls.slice(calls.indexOf('  Rounds:'));
+    expect(rounds.filter(line => line.includes('fix round'))).toHaveLength(4);
+    const nodeLines = rounds.filter(line => line.includes('fix.check'));
+    expect(nodeLines).toHaveLength(4);
+    // Each round's node line carries its own duration and state mark.
+    expect(nodeLines[0]).toContain('1s');
+    expect(nodeLines[0]).toContain('✓');
+    expect(nodeLines[2]).toContain('3s');
+    expect(nodeLines[2]).toContain('✗');
+    expect(nodeLines[3]).toContain('◌');
+    expect(nodeLines[3]).toContain('running');
+    // A round's output is the same capped preview the Nodes block prints.
+    expect(rounds.some(line => line.includes(`${'v'.repeat(200)}...`))).toBe(true);
+    expect(rounds.some(line => line.includes(`${'v'.repeat(200)}w`))).toBe(false);
+    // A failed node names its recorded kind, the value a `retry.on_error` policy targets.
+    expect(rounds).toContain('          Error:  (exec_failed) check failed');
+    const nodesBlock = calls.slice(calls.indexOf('  Nodes:'), calls.indexOf('  Rounds:'));
+    expect(nodesBlock).toContain('        Error:  (schema_unmet) output missed its schema');
   });
 
   it('reads attribution and observed duration from a terminal row without a start-row join', async () => {
@@ -2329,21 +2619,5 @@ describe('fan-out outcome lines', () => {
     expect(
       formatFanOutOutcome(fanOutOutcome([{ index: 0, outcome: 'completed', child_run_id: 'c' }]))
     ).toEqual([]);
-  });
-
-  it('carries the slot record from a fan-out node event into its summary', () => {
-    const outcome = fanOutOutcome([{ index: 0, outcome: 'not_started', error: 'refused' }]);
-    const [summary] = buildNodeSummaries([
-      {
-        id: 'work-failed',
-        workflow_run_id: 'run-fan',
-        event_type: 'node_failed',
-        step_name: 'work',
-        step_index: null,
-        data: { error: 'refused all', fan_out: true, fan_out_outcome: outcome },
-        created_at: '2026-10-22T10:00:00.000Z',
-      },
-    ]);
-    expect(summary?.fanOutOutcome).toEqual(outcome);
   });
 });

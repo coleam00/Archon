@@ -20,9 +20,8 @@ mock.module('@archon/paths', () => ({
 }));
 const stdout = mock(async (_text: string) => undefined);
 mock.module('../utils/stdout', () => ({ writeStdout: stdout }));
-const { workflowContinuationCommand, workflowWakeScheduleConfig } = await import(
-  './workflow-continuations'
-);
+const { workflowContinuationCommand } = await import('./workflow-continuations');
+const { workflowWakeScheduleConfig } = await import('./wake-schedule');
 const trackTempRoot = trackTempRoots();
 
 async function wakeScheduled(host: WorkflowHost) {
@@ -114,11 +113,13 @@ for (const source of [
       workflow_name: 'deliver',
       status: 'paused',
       outcome: null,
+      completed_outcome: null,
       origin: null,
       conversation_id: source.endsWith('-origin') ? 'origin' : null,
       parent_conversation_id: source.endsWith('-origin') ? 'origin' : null,
       codebase_id: null,
       user_message: '',
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,
@@ -128,6 +129,7 @@ for (const source of [
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      item_id: null,
       metadata: {
         workflow_source: {
           version: 1,

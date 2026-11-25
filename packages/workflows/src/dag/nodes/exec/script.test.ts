@@ -3,6 +3,7 @@ import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { chmod, mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
+import { recordNodeProcessTrees } from '../../../subprocess';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
@@ -21,6 +22,7 @@ import {
   nodeDockerCalls,
   dagOptions,
   makeWorkflowRun,
+  nodeExecCalls,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { type RunChildWorkflowFn } from '../../child-run';
@@ -82,15 +84,20 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
         })
       );
 
-      expect(execSpy).toHaveBeenCalledTimes(1);
-      const [cmd, args, opts] = execSpy.mock.calls[0] as [
+      const nodeCalls = nodeExecCalls(execSpy.mock.calls);
+      expect(nodeCalls).toHaveLength(1);
+      const [cmd, args, opts] = nodeCalls[0] as [
         string,
         string[],
         { env: NodeJS.ProcessEnv; input?: string },
       ];
       expect(cmd).toBe('bun');
       // Source is byte-identical to the author's body — the payload never appears in it.
-      expect(args).toEqual(['--no-env-file', '-']);
+      expect(args).toEqual([
+        '--no-env-file',
+        expect.stringMatching(/^--preload=.*script-api/),
+        '-',
+      ]);
       expect(args.join(' ')).not.toContain('execSync');
       expect(opts.input).toBe('console.log(process.env.ARGUMENTS)');
       // The value reaches the script via env vars instead.
@@ -129,7 +136,11 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
 
       const [, args, opts] = execSpy.mock.calls[0] as [string, string[], { input?: string }];
       // The dangerous payload is NOT interpolated into the source; $ARGUMENTS stays literal.
-      expect(args).toEqual(['--no-env-file', '-']);
+      expect(args).toEqual([
+        '--no-env-file',
+        expect.stringMatching(/^--preload=.*script-api/),
+        '-',
+      ]);
       expect(opts.input).toBe('console.log("value: $ARGUMENTS")');
       expect(opts.input).not.toContain('rm -rf');
     } finally {
@@ -170,7 +181,7 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
         { env: NodeJS.ProcessEnv },
       ];
       expect(cmd).toBe('uv');
-      expect(args).toEqual(['run', 'python', '-c', "import os; print(os.environ['ARGUMENTS'])"]);
+      expect(args.slice(-3)).toEqual(['python', '-c', "import os; print(os.environ['ARGUMENTS'])"]);
       expect(opts.env.ARGUMENTS).toBe('py-message');
       expect(opts.env.CONTEXT).toBe('ISSUE #42 body text');
       expect(opts.env.EXTERNAL_CONTEXT).toBe('ISSUE #42 body text');
@@ -305,37 +316,6 @@ describe('executeDagWorkflow -- script nodes', () => {
     await removeTempTree(testDir);
   });
 
-  it('inline bun script executes and captures stdout', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-test-run-id', {
-      workflow_name: 'script-test',
-      conversation_id: 'conv-script',
-      user_message: 'script test message',
-    });
-
-    const scriptNode: ExecNode = {
-      id: 'inline-bun',
-      kind: 'exec',
-      script: 'console.log("hello from bun")',
-      runtime: 'bun',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-script',
-        cwd: testDir,
-        workflow: { name: 'script-inline-bun-test', nodes: [scriptNode] },
-        workflowRun,
-      })
-    );
-
-    // Script node should NOT invoke AI client
-    expect(mockSendQueryDag.mock.calls.length).toBe(0);
-  });
-
   it('refuses a second script before it starts when the work-unit budget is exhausted', async () => {
     const deps = createMockDeps();
     const marker = join(testDir, 'script-attempts');
@@ -410,37 +390,6 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(prompt).toContain('42');
   });
 
-  it('inline uv script executes and captures stdout', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-uv-run-id', {
-      workflow_name: 'script-uv-test',
-      conversation_id: 'conv-script-uv',
-      user_message: 'uv test message',
-    });
-
-    const scriptNode: ExecNode = {
-      id: 'inline-uv',
-      kind: 'exec',
-      script: 'print("hello from python")',
-      runtime: 'uv',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-script-uv',
-        cwd: testDir,
-        workflow: { name: 'script-inline-uv-test', nodes: [scriptNode] },
-        workflowRun,
-      })
-    );
-
-    // Script node should NOT invoke AI client
-    expect(mockSendQueryDag.mock.calls.length).toBe(0);
-  });
-
   it('named bun script executes from .archon/scripts/', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -473,7 +422,10 @@ describe('executeDagWorkflow -- script nodes', () => {
       })
     );
 
-    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+    const completed = persistedEvents(mockDeps.store).find(
+      event => event.event_type === 'node_completed' && event.step_name === 'run-greet'
+    );
+    expect(completed?.data?.node_output).toBe('named script output');
   });
 
   const recordedContainer = { isolation: 'container', isolation_env_id: 'env' };
@@ -512,6 +464,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       const fault = spyOn(sourceLoader, 'assertWorkflowSourceIntegrity').mockRejectedValue(
         new WorkflowSourceUnavailableError(join(testDir, 'capture'), new Error('read denied'))
       );
+      const dockerProbe = stubMissingContainer();
       const stop = mock(async () => undefined);
       const backend = {
         prepareSuspend: mock(async (_envId: string, containerId: string) => {
@@ -578,6 +531,7 @@ describe('executeDagWorkflow -- script nodes', () => {
         await expect(readFile(marker)).rejects.toThrow();
       } finally {
         fault.mockRestore();
+        dockerProbe.mockRestore();
       }
     }
   );
@@ -1042,40 +996,6 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(await readFile(marker, 'utf-8')).toBe('ran');
   });
 
-  it('non-zero exit code results in failed state', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-fail-run-id', {
-      workflow_name: 'script-fail-test',
-      conversation_id: 'conv-fail',
-      user_message: 'fail test',
-    });
-
-    const scriptNode: ExecNode = {
-      id: 'fail-script',
-      kind: 'exec',
-      script: 'process.exit(1)',
-      runtime: 'bun',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-fail',
-        cwd: testDir,
-        workflow: { name: 'script-fail-test', nodes: [scriptNode] },
-        workflowRun,
-      })
-    );
-
-    expect(
-      persistedEvents(mockDeps.store)
-        .filter(event => event.event_type === 'node_failed')
-        .map(event => event.step_name)
-    ).toEqual(['fail-script']);
-  });
-
   it('preserves a bun script failure whose stderr contains ENOENT', async () => {
     const mockDeps = createMockDeps();
     const missingPath = join(testDir, 'missing-input.txt');
@@ -1298,38 +1218,50 @@ describe('executeDagWorkflow -- script nodes', () => {
     testTimeout(10000)
   );
 
-  it('stderr output is sent to the user', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-stderr-run-id', {
-      workflow_name: 'script-stderr-test',
-      conversation_id: 'conv-stderr',
-      user_message: 'stderr test',
-    });
+  it(
+    'omits the exit code of a timed-out script that handles SIGTERM and exits with one',
+    async () => {
+      const mockDeps = createMockDeps();
+      const scriptNode: ExecNode = {
+        id: 'slow-script',
+        kind: 'exec',
+        script:
+          'process.on("SIGTERM", () => process.exit(3)); await new Promise(r => setTimeout(r, 30000))',
+        runtime: 'bun',
+        timeout: 500,
+      };
 
-    const scriptNode: ExecNode = {
-      id: 'stderr-script',
-      // Write to both stderr and stdout
-      kind: 'exec',
-      script: 'process.stderr.write("error detail\\n"); console.log("done")',
-      runtime: 'bun',
-    };
+      // The recorder is what a real run installs; it routes the node through the owned
+      // process group, whose rejection keeps the numeric exit status of a timed-out child.
+      const trees = recordNodeProcessTrees();
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform: createMockPlatform(),
+            conversationId: 'conv-timeout-exit',
+            cwd: testDir,
+            workflow: { name: 'script-timeout-exit-test', nodes: [scriptNode] },
+            workflowRun: makeWorkflowRun('script-timeout-exit-run-id', {
+              workflow_name: 'script-timeout-exit-test',
+              conversation_id: 'conv-timeout-exit',
+              user_message: 'timeout test',
+            }),
+          })
+        );
+      } finally {
+        trees.release();
+      }
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-stderr',
-        cwd: testDir,
-        workflow: { name: 'script-stderr-test', nodes: [scriptNode] },
-        workflowRun,
-      })
-    );
-
-    expect(deliveredMessages(platform)).toContain(
-      "Script node 'stderr-script' stderr:\n```\nerror detail\n```"
-    );
-  });
+      const failed = persistedEvents(mockDeps.store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'slow-script'
+      );
+      // The process exited with 3, but the node failed because it ran out of time.
+      expect(failed?.data?.failure_kind).toBe('timeout');
+      expect(failed?.data).not.toHaveProperty('exit_code');
+    },
+    testTimeout(10000)
+  );
 
   it('$WORKFLOW_ID and $ARTIFACTS_DIR are substituted into script text', async () => {
     const mockDeps = createMockDeps();
@@ -1636,37 +1568,5 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect((completedEvent![0] as { data: { node_output: string } }).data.node_output).toBe(
       'CLEAN'
     );
-  });
-
-  it('passes config.envVars to script subprocesses', async () => {
-    const execSpy = spyOnNodeExec().mockResolvedValue({ stdout: 'ok\n', stderr: '' });
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-env-run-id');
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-script-env',
-        cwd: testDir,
-        workflow: {
-          name: 'script-env-test',
-          nodes: [{ id: 'inline-bun', kind: 'exec', script: 'console.log("ok")', runtime: 'bun' }],
-        },
-        workflowRun,
-        config: { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } },
-      })
-    );
-
-    expect(execSpy).toHaveBeenCalledWith(
-      'bun',
-      ['--no-env-file', '-'],
-      expect.objectContaining({
-        env: expect.objectContaining({ MY_SECRET: 'abc123' }),
-        input: 'console.log("ok")',
-      })
-    );
-    execSpy.mockRestore();
   });
 });

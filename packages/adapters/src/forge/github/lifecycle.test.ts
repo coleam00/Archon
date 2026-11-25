@@ -6,7 +6,15 @@ import {
   type ForgeMutationRequest,
 } from '@archon/forge/operations';
 import { githubPluginMetadata, handleGithubOperation } from './operations';
-import { json, pull, fakeGitHub, mergeGitHub, rerunGitHub, run } from './lifecycle-fixture';
+import {
+  json,
+  pull,
+  fakeGitHub,
+  MERGED_AT,
+  mergeGitHub,
+  rerunGitHub,
+  run,
+} from './lifecycle-fixture';
 import { prRecord } from './pull-requests';
 
 const repo = { host: 'github.com', path: 'archon/test' };
@@ -320,7 +328,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     });
   });
 
-  test('verification failed: the read-back after an acknowledged write could not run', async () => {
+  test('verification failed: a read-back that could not run reports its own error', async () => {
     let submitted = false;
     const github = fakeGitHub({
       status: (url, method) => {
@@ -328,7 +336,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
           submitted = true;
           return undefined;
         }
-        return submitted && url.includes('/pulls/7') ? 500 : undefined;
+        return submitted && url.includes('/pulls/7') ? 429 : undefined;
       },
     });
     const response = await run(
@@ -337,15 +345,54 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     );
     expect(response).toMatchObject({
       ok: false,
-      mutation: { op: 'pr.edit-body', outcome: 'verification_failed' },
+      error: { kind: 'rate_limited' },
+      mutation: {
+        op: 'pr.edit-body',
+        outcome: 'verification_failed',
+        leaveBehind: 'the pull request body may have changed',
+      },
     });
   });
+
+  test.each([
+    ['pr.create', create, 'pull request 7 may exist'],
+    [
+      'pr.draft',
+      { operationId: 'draft', op: 'pr.draft', ref } as const,
+      'the pull request draft state may have changed',
+    ],
+    [
+      'comment.upsert',
+      { operationId: 'comment', op: 'comment.upsert', ref, marker, body: report } as const,
+      'comment 900 may have changed',
+    ],
+  ] satisfies [string, ForgeMutationRequest, string][])(
+    'verification failed: a %s read-back that fails keeps its error and leaveBehind',
+    async (_op, request, leaveBehind) => {
+      const github = fakeGitHub({ pull: pull({ draft: false }) });
+      let wrote = false;
+      const response = await run(request, {
+        ...github,
+        fetch: async (input, init) => {
+          const method = init?.method ?? 'GET';
+          if (method !== 'GET') wrote = true;
+          else if (wrote) return json({ message: 'gone' }, 404);
+          return github.fetch(input, init);
+        },
+      });
+      expect(response).toMatchObject({
+        ok: false,
+        error: { kind: 'not_found', status: 404 },
+        mutation: { op: request.op, outcome: 'verification_failed', leaveBehind },
+      });
+    }
+  );
 
   test('outcome unknown: the request was submitted and its answer was lost', async () => {
     const dropped = await run(create, fakeGitHub({ network: (_url, method) => method === 'POST' }));
     expect(dropped).toMatchObject({
       ok: false,
-      error: { kind: 'forge_error' },
+      error: { kind: 'unavailable' },
       mutation: { op: 'pr.create', outcome: 'outcome_unknown' },
     });
 
@@ -513,6 +560,8 @@ test.each(['merge', 'squash'] as const)(
         value: {
           landed: { commit: 'landed', tree: 'landed-tree', parents: ['base', 'headsha'] },
           enforcedConditions: ['head'],
+          // The merge time comes from the read-back after the merge, not from the host.
+          merged_at: MERGED_AT,
         },
       },
     });
@@ -520,13 +569,13 @@ test.each(['merge', 'squash'] as const)(
 );
 
 test('merge refuses stale and unsupported conditions before writing', async () => {
-  for (const conditions of [
-    {},
-    { head: 'headsha', base: 'base' },
-    { head: 'headsha', tree: 'tree' },
-    { head: 'headsha' },
-  ]) {
-    const github = mergeGitHub({ stale: true });
+  // Unsupported conditions at the current head, so only the condition check can refuse them.
+  for (const [conditions, stale] of [
+    [{ head: 'headsha', base: 'base' }, false],
+    [{ head: 'headsha', tree: 'tree' }, false],
+    [{ head: 'headsha' }, true],
+  ] as const) {
+    const github = mergeGitHub({ stale });
     const response = await handleGithubOperation(
       { ...mergeRequest, conditions },
       { token: 'token', fetch: github.fetch }
@@ -534,6 +583,30 @@ test('merge refuses stale and unsupported conditions before writing', async () =
     expect(response).toMatchObject({ ok: false, mutation: { outcome: 'refused' } });
     expect(github.writes).toEqual([]);
   }
+});
+
+test('merge refuses a pull request merged earlier and reports the facts of that merge', async () => {
+  const github = mergeGitHub({ alreadyMerged: true });
+  const response = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: github.fetch,
+  });
+  expect(forgeResponseSchema.parse(response)).toMatchObject({
+    ok: false,
+    mutation: {
+      outcome: 'refused',
+      observed: { state: 'merged' },
+      merge: { landed: { commit: 'landed' }, merged_at: MERGED_AT },
+    },
+  });
+  expect(github.writes).toEqual([]);
+  // Without a merge time from the forge, none is supplied; a close time never stands in.
+  const untimed = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: mergeGitHub({ alreadyMerged: true, noMergeTime: true }).fetch,
+  });
+  expect(untimed).toMatchObject({ ok: false, mutation: { observed: { state: 'merged' } } });
+  expect(untimed.ok ? undefined : untimed.mutation?.merge).not.toHaveProperty('merged_at');
 });
 
 test.each([
@@ -557,6 +630,19 @@ test.each([
   expect(github.writes).toHaveLength(1);
 });
 
+test('a merge whose read-back fails keeps the read-back error on verification_failed', async () => {
+  // pr.merge has no read-back catch of its own, so this goes through lifecycle's.
+  const response = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: mergeGitHub({ readFailed: true }).fetch,
+  });
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'unavailable', status: 500 },
+    mutation: { outcome: 'verification_failed', leaveBehind: 'the acknowledged write may remain' },
+  });
+});
+
 test('unavailable supplemental merge evidence remains explicitly null', async () => {
   expect(
     await handleGithubOperation(mergeRequest, {
@@ -565,7 +651,9 @@ test('unavailable supplemental merge evidence remains explicitly null', async ()
     })
   ).toMatchObject({
     ok: true,
-    result: { value: { landed: { commit: 'landed', tree: null, parents: null } } },
+    result: {
+      value: { landed: { commit: 'landed', tree: null, parents: null }, merged_at: MERGED_AT },
+    },
   });
 });
 
@@ -624,16 +712,52 @@ test.each([
   expect(github.posted).toEqual([]);
 });
 
-test.each([{ oldAttempt: true }, { readFailed: true }])(
-  'acknowledged rerun without newer attempt evidence fails verification: %j',
-  async options => {
-    const github = rerunGitHub(options);
-    expect(
-      await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
-    ).toMatchObject({ ok: false, mutation: { outcome: 'verification_failed' } });
-    expect(github.posted).toEqual(['100']);
-  }
-);
+test('a rerun whose newer attempt appears after the first read-back is applied', async () => {
+  const github = rerunGitHub({ staleReads: 2 });
+  const waits: number[] = [];
+  const response = await handleGithubOperation(rerunRequest, {
+    token: 'token',
+    fetch: github.fetch,
+    sleep: async ms => void waits.push(ms),
+  });
+  expect(response).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied', units: [{ rerun: { id: '100', attempt: 2 } }, {}] } },
+  });
+  expect(waits).toHaveLength(2);
+  expect(github.posted).toEqual(['100']);
+});
+
+test('an accepted rerun whose newer attempt never appears is unverified, not refused', async () => {
+  const github = rerunGitHub({ oldAttempt: true });
+  let waited = 0;
+  const response = await handleGithubOperation(rerunRequest, {
+    token: 'token',
+    fetch: github.fetch,
+    sleep: async ms => void (waited += ms),
+  });
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response' },
+    mutation: {
+      outcome: 'verification_failed',
+      leaveBehind: expect.any(String),
+      rerun: { requested: rerunRequest.units, observed: [] },
+    },
+  });
+  // The wait stays well inside the 30 second limit the host gives a plugin process.
+  expect(waited).toBeGreaterThan(0);
+  expect(waited).toBeLessThanOrEqual(15_000);
+  expect(github.posted).toEqual(['100']);
+});
+
+test('an accepted rerun whose read-back request fails is unverified', async () => {
+  const github = rerunGitHub({ readFailed: true });
+  expect(
+    await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
+  ).toMatchObject({ ok: false, mutation: { outcome: 'verification_failed' } });
+  expect(github.posted).toEqual(['100']);
+});
 
 test.each([
   [403, 'verification_failed'],
@@ -677,12 +801,13 @@ test('reviews paginate submissions and root diff comments, retaining author and 
     id: 1,
     html_url: 'https://github.com/a/b/pull/7#review-1',
     body: 'private body',
-    user: { id: 2, login: 'reviewer' },
+    user: { id: 2, login: 'reviewer', type: 'User' },
     commit_id: 'headsha',
     state: 'COMMENTED',
     submitted_at: '2026-10-06T10:00:00Z',
     created_at: '2026-10-06T10:00:00Z',
   };
+  const comment = { ...item, path: 'a.ts' };
   const calls: string[] = [];
   const response = await handleGithubOperation(
     { operationId: 'reviews', op: 'pr.reviews', ref },
@@ -701,27 +826,39 @@ test('reviews paginate submissions and root diff comments, retaining author and 
                 ]
           );
         return json([
-          { ...item, state: undefined },
-          { ...item, id: 2, in_reply_to_id: 1 },
-          { ...item, id: 3, user: null, commit_id: null, created_at: null },
+          { ...comment, state: undefined },
+          { ...comment, id: 2, in_reply_to_id: 1 },
+          { ...comment, id: 3, user: null, commit_id: null, created_at: null },
+          { ...comment, id: 4, user: { id: 3, login: 'ci[bot]', type: 'Bot' } },
+          { ...comment, id: 5, user: { id: 4, login: 'acme', type: 'Organization' } },
+          { ...comment, id: 6, user: { id: 5, login: 'old' } },
+          { ...comment, id: 7, user: { id: 6, login: 'ghost', type: 'Mannequin' } },
         ]);
       },
     }
   );
   expect(response).toMatchObject({ ok: true, result: { op: 'pr.reviews' } });
   if (!response.ok || response.result.op !== 'pr.reviews') throw new Error('expected reviews');
-  expect(response.result.value.items).toHaveLength(103);
-  expect(response.result.value.items.at(-2)).toMatchObject({
+  expect(response.result.value.items).toHaveLength(107);
+  const items = response.result.value.items;
+  expect(items.at(-6)).toMatchObject({
     kind: 'review_comment',
-    author: { host: repo.host, id: '2', login: 'reviewer' },
+    author: { host: repo.host, id: '2', login: 'reviewer', type: 'user' },
     commit: 'headsha',
     state: null,
   });
-  expect(response.result.value.items.at(-1)).toMatchObject({
+  expect(items.at(-5)).toMatchObject({
     author: null,
     commit: null,
     createdAt: null,
   });
+  expect(items.slice(-4).map(entry => entry.author?.type)).toEqual([
+    'bot',
+    'organization',
+    null,
+    null,
+  ]);
+  expect(forgeResponseSchema.safeParse(response).success).toBe(true);
   expect(calls.some(url => url.endsWith('page=2'))).toBe(true);
 });
 
@@ -854,22 +991,101 @@ describe('GitHub draft conversion', () => {
   });
 });
 
-test('a mutation GitHub answers 502 is sent once, never repeated', async () => {
+test('a mutation GitHub answers 502 is sent once and keeps its unknown outcome', async () => {
   const github = fakeGitHub({
     status: (_url: string, method: string) => (method === 'PATCH' ? 502 : undefined),
   });
-  const waits: number[] = [];
   const response = await handleGithubOperation(
     { operationId: 'edit', op: 'pr.edit-body', ref, body: 'next' },
-    {
-      token: 'token',
-      fetch: github.fetch,
-      sleep: async ms => {
-        waits.push(ms);
-      },
-    }
+    { token: 'token', fetch: github.fetch }
   );
-  expect(response).toMatchObject({ ok: false, mutation: { outcome: 'outcome_unknown' } });
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'unavailable', status: 502 },
+    mutation: { outcome: 'outcome_unknown' },
+  });
   expect(github.calls.filter(call => call.method === 'PATCH')).toHaveLength(1);
-  expect(waits).toEqual([]);
+});
+
+describe('GitHub pull request close', () => {
+  const request = { operationId: 'close', op: 'pr.close', ref } satisfies ForgeMutationRequest;
+
+  test('closes an open pull request with one state update and nothing else', async () => {
+    const github = fakeGitHub();
+    const writes: unknown[] = [];
+    const response = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async (input, init) => {
+        if (init?.method && init.method !== 'GET')
+          writes.push({
+            url: String(input),
+            method: init.method,
+            body: JSON.parse(String(init.body)),
+          });
+        return github.fetch(input, init);
+      },
+    });
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        op: 'pr.close',
+        value: { outcome: 'applied', changed: true, pr: { state: 'closed' } },
+      },
+    });
+    // No merge, no branch deletion, no comment: one PATCH to the pull request.
+    expect(writes).toEqual([
+      { url: expect.stringMatching(/\/pulls\/7$/), method: 'PATCH', body: { state: 'closed' } },
+    ]);
+  });
+
+  test.each([
+    [
+      false,
+      { ok: true, result: { op: 'pr.close', value: { changed: false, pr: { state: 'closed' } } } },
+    ],
+    [
+      true,
+      {
+        ok: false,
+        error: { kind: 'conflict' },
+        mutation: { op: 'pr.close', outcome: 'refused', observed: { state: 'merged' } },
+      },
+    ],
+  ] as const)('a closed pull request (merged=%s) is not written', async (merged, expected) => {
+    const github = fakeGitHub({ pull: pull({ state: 'closed', merged }) });
+    expect(await run(request, github)).toMatchObject(expected);
+    expect(github.calls.every(call => call.method === 'GET')).toBe(true);
+  });
+
+  test('a read-back that is still open is not reported as closed', async () => {
+    expect(await run(request, fakeGitHub({ lose: true }))).toMatchObject({
+      ok: false,
+      mutation: { op: 'pr.close', outcome: 'verification_failed', observed: { state: 'open' } },
+    });
+  });
+
+  test.each([
+    [403, 'authorization'],
+    [503, 'unavailable'],
+  ] as const)('a read-back that fails with HTTP %i keeps its cause', async (status, kind) => {
+    const github = fakeGitHub();
+    let patched = false;
+    const response = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async (input, init) => {
+        if (init?.method === 'PATCH') patched = true;
+        else if (patched) return json({}, status);
+        return github.fetch(input, init);
+      },
+    });
+    expect(response).toMatchObject({
+      ok: false,
+      error: { kind, status },
+      mutation: {
+        op: 'pr.close',
+        outcome: 'verification_failed',
+        leaveBehind: 'the pull request may be closed',
+      },
+    });
+  });
 });

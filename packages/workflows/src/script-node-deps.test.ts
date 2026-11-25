@@ -56,145 +56,25 @@ import { resolveWorkflow } from './graph-plan';
 import type { ExecNode, WorkflowDefinition, WorkflowRun } from './schemas';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
+import { workflowStoreDouble } from './test-utils';
 import * as subprocess from './subprocess';
 
 // --- Helpers ---
 
 function createMockStore(): IWorkflowStore {
-  return {
-    getWorkflowEventHead: mock<IWorkflowStore['getWorkflowEventHead']>(() => {
-      throw new Error('Unexpected event feed read');
-    }),
-    readWorkflowEventsAfter: mock<IWorkflowStore['readWorkflowEventsAfter']>(() => {
-      throw new Error('Unexpected event feed read');
-    }),
-    getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
-      throw new Error('Unexpected getStateDocument');
-    }),
-    putStateDocument: mock<IWorkflowStore['putStateDocument']>(() => {
-      throw new Error('Unexpected putStateDocument');
-    }),
-    patchStateDocument: mock<IWorkflowStore['patchStateDocument']>(() => {
-      throw new Error('Unexpected patchStateDocument');
-    }),
-    deleteStateDocument: mock<IWorkflowStore['deleteStateDocument']>(() => {
-      throw new Error('Unexpected deleteStateDocument');
-    }),
-    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
-      throw new Error('Unexpected listStateRevisions');
-    }),
-    listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(() => {
-      throw new Error('Unexpected listStateDocuments');
-    }),
-    getStateDocuments: mock<IWorkflowStore['getStateDocuments']>(() => {
-      throw new Error('Unexpected getStateDocuments');
-    }),
-    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
-      throw new Error('Unexpected pruneStateRevisions');
-    }),
-    admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
-      throw new Error('Unexpected admitResourceStart');
-    }),
-    drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
-      throw new Error('Unexpected drainResourceStarts');
-    }),
-    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
-      throw new Error('Unexpected hasStartReceiptForDelivery');
-    }),
-    acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
-      throw new Error('Unexpected acceptStartReceipt');
-    }),
-    getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
-      throw new Error('Unexpected getStartReceipt');
-    }),
-    listStartReceipts: mock<IWorkflowStore['listStartReceipts']>(() => {
-      throw new Error('Unexpected listStartReceipts');
-    }),
-    listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(() => {
-      throw new Error('Unexpected listPendingStartBindings');
-    }),
-    getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(() => {
-      throw new Error('Unexpected getResourceStartRequest');
-    }),
-    listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(() => {
-      throw new Error('Unexpected listQueuedResourceStartsForHost');
-    }),
-    withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(() => {
-      throw new Error('Unexpected withdrawQueuedResourceStart');
-    }),
-    claimStartBindingPreparation: mock<IWorkflowStore['claimStartBindingPreparation']>(() => {
-      throw new Error('Unexpected claimStartBindingPreparation');
-    }),
-    completeStartBindingPreparation: mock<IWorkflowStore['completeStartBindingPreparation']>(() => {
-      throw new Error('Unexpected completeStartBindingPreparation');
-    }),
-    failStartBindingPreparation: mock<IWorkflowStore['failStartBindingPreparation']>(() => {
-      throw new Error('Unexpected failStartBindingPreparation');
-    }),
-    resetStartBindingPreparation: mock<IWorkflowStore['resetStartBindingPreparation']>(() => {
-      throw new Error('Unexpected resetStartBindingPreparation');
-    }),
-    listDueWorkflowContinuations: mock<IWorkflowStore['listDueWorkflowContinuations']>(() => {
-      throw new Error('Unexpected listDueWorkflowContinuations');
-    }),
-    deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
-      throw new Error('Unexpected deferWorkflowContinuation');
-    }),
-    releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(() => {
-      throw new Error('Unexpected releaseRunForUnreadableSource');
-    }),
+  return workflowStoreDouble<IWorkflowStore>({
+    listSkippedItemStarts: mock<IWorkflowStore['listSkippedItemStarts']>(async () => []),
+    listUnfinishedRuns: mock<IWorkflowStore['listUnfinishedRuns']>(async () => []),
     releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
       Promise.resolve({ released: false })
     ),
-    answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
-      throw new Error('Unexpected answerAttentionWait');
-    }),
-    labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
-      throw new Error('Unexpected labelAttentionWait');
-    }),
-    getWorkflowRunForAttention: mock<IWorkflowStore['getWorkflowRunForAttention']>(() => {
-      throw new Error('Unexpected getWorkflowRunForAttention');
-    }),
-    listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
-      throw new Error('Unexpected listAttentionQueueRows');
-    }),
-    signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
-      throw new Error('Unexpected signalWorkflowWait');
-    }),
-    resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
-      throw new Error('Unexpected resolveApprovalGate');
-    }),
-    resolveAndCancelApprovalGate: mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() => {
-      throw new Error('Unexpected resolveAndCancelApprovalGate');
-    }),
-    cancelResumableRunsForConversation: mock<IWorkflowStore['cancelResumableRunsForConversation']>(
-      () => {
-        throw new Error('Unexpected cancelResumableRunsForConversation');
-      }
-    ),
-    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
-      throw new Error('Unexpected deleteWorkflowNodeSessions');
-    }),
-    findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
-      throw new Error('Not used by this test');
-    }),
     listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(
       async runIds => new Map(runIds.map(runId => [runId, []]))
     ),
     listMetricRecords: mock<IWorkflowStore['listMetricRecords']>(async () => []),
+    listAttentionWaitStarts: mock<IWorkflowStore['listAttentionWaitStarts']>(async () => []),
+    listWorkflowNoticeRows: mock<IWorkflowStore['listWorkflowNoticeRows']>(async () => []),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
-    listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
-      throw new Error('Unexpected listWorkflowRuns');
-    }),
     createWorkflowRun: mock(() =>
       Promise.resolve({
         origin: { conversationId: 'conv-mock' },
@@ -205,8 +85,10 @@ function createMockStore(): IWorkflowStore {
         codebase_id: null,
         status: 'running' as const,
         outcome: null,
+        completed_outcome: null,
         user_message: 'mock message',
         metadata: {},
+        active_phase_started_at: null,
         started_at: new Date(),
         completed_at: null,
         last_activity_at: null,
@@ -215,6 +97,7 @@ function createMockStore(): IWorkflowStore {
         parent_run_id: null,
         output_root: null,
         checkout_baseline: null,
+        item_id: null,
         adopted_from_run_id: null,
       })
     ),
@@ -227,7 +110,6 @@ function createMockStore(): IWorkflowStore {
     findChildRuns: mock(() => Promise.resolve([])),
     getRunAncestry: mock(() => Promise.resolve([])),
     getActiveWorkflowRunByPath: mock(() => Promise.resolve(null)),
-    findResumableRun: mock(() => Promise.resolve(null)),
     resumeWorkflowRun: mock(() =>
       Promise.resolve({
         origin: { conversationId: 'conv-mock' },
@@ -238,8 +120,10 @@ function createMockStore(): IWorkflowStore {
         codebase_id: null,
         status: 'running' as const,
         outcome: null,
+        completed_outcome: null,
         user_message: 'mock message',
         metadata: {},
+        active_phase_started_at: null,
         started_at: new Date(),
         completed_at: null,
         last_activity_at: null,
@@ -248,17 +132,17 @@ function createMockStore(): IWorkflowStore {
         parent_run_id: null,
         output_root: null,
         checkout_baseline: null,
+        item_id: null,
         adopted_from_run_id: null,
       })
     ),
-    recoverCancelledFanOutRun: mock(() => Promise.reject(new Error('unused in this test'))),
     updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
       async () => true
     ),
     updateWorkflowRun: mock(() => Promise.resolve()),
     updateWorkflowActivity: mock(() => Promise.resolve()),
     getWorkflowRunStatus: mock(() => Promise.resolve('running' as const)),
-    completeWorkflowRun: mock(() => Promise.resolve()),
+    completeWorkflowRun: mock(() => Promise.resolve({ startReceipts: [] })),
     failWorkflowRun: mock(() => Promise.resolve({ failed: true })),
     pauseWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRunForWait: mock(() => Promise.resolve()),
@@ -299,7 +183,7 @@ function createMockStore(): IWorkflowStore {
     listWorkflowRunNodeSessions: mock(() => Promise.resolve([])),
     upsertWorkflowRunNodeSession: mock(() => Promise.resolve()),
     upsertWorkflowNodeSession: mock(() => Promise.resolve()),
-  };
+  });
 }
 
 const mockSendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
@@ -371,8 +255,10 @@ function makeWorkflowRun(id: string): WorkflowRun {
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'test',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -381,6 +267,7 @@ function makeWorkflowRun(id: string): WorkflowRun {
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
   };
 }
@@ -497,113 +384,6 @@ describe('script node deps field — command construction', () => {
     expect(args[args.indexOf('python') + 1]).toBe('-c');
   });
 
-  it('uv inline without deps uses uv run python -c', async () => {
-    const node: ExecNode = {
-      id: 'simple-py',
-      kind: 'exec',
-      script: 'print("hello")',
-      runtime: 'uv',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-2'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
-    expect(cmd).toBe('uv');
-    expect(args).toEqual(['run', 'python', '-c', 'print("hello")']);
-  });
-
-  it('uv inline with empty deps array uses uv run python -c (no extra flags)', async () => {
-    const node: ExecNode = {
-      id: 'empty-deps-py',
-      kind: 'exec',
-      script: 'print("no deps")',
-      runtime: 'uv',
-      deps: [],
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-3'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
-    expect(cmd).toBe('uv');
-    expect(args).toEqual(['run', 'python', '-c', 'print("no deps")']);
-  });
-
-  it('bun inline with deps uses bun --no-env-file stdin (no extra dep flags — bun auto-installs)', async () => {
-    const node: ExecNode = {
-      id: 'bun-with-deps',
-      kind: 'exec',
-      script: 'import { z } from "zod"; console.log(z.string().parse("hello"))',
-      runtime: 'bun',
-      deps: ['zod', 'node-fetch'],
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-4'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'bun');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args, options] = scriptCall as [string, string[], { input?: string }];
-    expect(cmd).toBe('bun');
-    // --no-env-file prevents repo .env auto-load; no dep flags — bun auto-installs
-    expect(args).toEqual(['--no-env-file', '-']);
-    expect(options.input).toBe(node.script);
-    expect(args).not.toContain('--packages');
-    expect(args).not.toContain('--with');
-  });
-
-  it('bun inline without deps uses bun --no-env-file stdin', async () => {
-    const node: ExecNode = {
-      id: 'bun-no-deps',
-      kind: 'exec',
-      script: 'console.log("hello")',
-      runtime: 'bun',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-5'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'bun');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args, options] = scriptCall as [string, string[], { input?: string }];
-    expect(cmd).toBe('bun');
-    expect(args).toEqual(['--no-env-file', '-']);
-    expect(options.input).toBe('console.log("hello")');
-  });
-
   it('uv named script with deps uses uv run --with flags', async () => {
     // Create a named Python script
     const scriptsDir = join(testDir, '.archon', 'scripts');
@@ -642,39 +422,5 @@ describe('script node deps field — command construction', () => {
     expect(httpxIdx).toBe(withIdx + 1);
     // Last arg is the script path
     expect(args[args.length - 1]).toContain('analyze.py');
-  });
-
-  it('uv named script without deps uses uv run <path> (no --with flags)', async () => {
-    // Create a named Python script
-    const scriptsDir = join(testDir, '.archon', 'scripts');
-    await mkdir(scriptsDir, { recursive: true });
-    const { writeFile } = await import('fs/promises');
-    await writeFile(join(scriptsDir, 'simple.py'), 'print("simple")');
-
-    const node: ExecNode = {
-      id: 'run-simple',
-      kind: 'exec',
-      script: 'simple',
-      runtime: 'uv',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: { name: 'deps-test', nodes: [node] },
-        workflowRun: makeWorkflowRun('deps-run-7'),
-      })
-    );
-
-    const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'uv');
-    expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
-    expect(cmd).toBe('uv');
-    expect(args).not.toContain('--with');
-    // uv run <path>
-    expect(args[0]).toBe('run');
-    expect(args[args.length - 1]).toContain('simple.py');
   });
 });

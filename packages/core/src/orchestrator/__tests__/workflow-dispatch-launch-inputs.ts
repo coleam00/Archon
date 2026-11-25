@@ -1,22 +1,17 @@
 import { expect, mock, spyOn, test } from 'bun:test';
-import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import {
-  CAPTURED_SOURCE_ROOTS,
   capturedSourceOwnerCalls,
   makeCodebase,
   makeDispatchConversation,
   makeForegroundPlatform,
   makePlatform,
   makeResumableRun,
-  mockDiscoverWorkflowsWithConfig,
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockGetCodebase,
   mockGetOrCreateConversation,
   mockHandleCommand,
-  mockHydrateResumableRun,
-  mockInspectResumableRun,
   mockParseCommand,
   mockStartWorkflow,
   mockValidateAndResolveIsolation,
@@ -25,241 +20,6 @@ import {
 import { handleMessage } from '../orchestrator-agent';
 import type { setupRoutingTests } from './workflow-dispatch-adoption';
 export function registerLaunchInputTests(fixture: ReturnType<typeof setupRoutingTests>) {
-  test('foreground_resume_detected: falls through to fresh run when hydration returns null', async () => {
-    // When findResumableRunByParentConversation returns a run but
-    // hydrateResumableRun finds nothing worth resuming (zero completed nodes,
-    // no interactive-loop state), the orchestrator must NOT throw — it sends
-    // a user-visible notice and starts a fresh run on the same worktree.
-    // (#2686) The fresh run row must freeze its OWN workflow source — not
-    // inherit the prior run's frozen graph against live commands/scripts.
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(
-      Promise.resolve(makeCodebase({ default_branch: 'develop' }))
-    );
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
-        makeResumableRun({
-          id: 'empty-prior-run',
-          status: 'paused',
-        })
-      )
-    );
-    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
-
-    const platform = makeForegroundPlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-
-    expect(mockHydrateResumableRun).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).toHaveBeenCalled();
-    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    // cwd still points at the prior run's worktree.
-    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
-    // Opts bag carries no resume payload — fresh run.
-    const opts = callArgs[callArgs.length - 1] as {
-      baseBranch?: string;
-      preCreatedRun?: unknown;
-      priorCompletedNodes?: unknown;
-      preparedSource?: { anchor?: { root?: string }; manifest?: { captured_at?: string } };
-    };
-    expect(callArgs[6]).toMatchObject({
-      conversationId: 'conv-1-db',
-      parentConversationId: 'conv-1-db',
-    });
-    // The fresh-run-in-same-worktree branch still threads the codebase default.
-    expect(opts.baseBranch).toBe('develop');
-    expect(opts.preCreatedRun).toBeUndefined();
-    expect(opts.priorCompletedNodes).toBeUndefined();
-    // (#2686) This is the key regression assertion: the fresh run row carries
-    // the captured source so its run row records `workflow_source` from this
-    // moment, not the prior run's frozen bytes. Before the fix, `preparedSource`
-    // was undefined here because the outer `if (!willContinueExistingRun)` block
-    // was skipped.
-    expect(opts.preparedSource).toBeDefined();
-    expect(opts.preparedSource?.anchor?.root).toBe('/capture');
-    expect(opts.preparedSource?.manifest?.captured_at).toBe('2026-08-21T00:00:00.000Z');
-  });
-
-  test('applies a run config when a resume candidate hydrates to a fresh run', async () => {
-    const runConfig = {
-      source: { kind: 'http' as const, label: 'inline' },
-      layer: { docsPath: 'handbook' },
-    };
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun({ id: 'empty-config-run', status: 'paused' }))
-    );
-    mockInspectResumableRun.mockReturnValueOnce(Promise.resolve(null));
-
-    const platform = makeForegroundPlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
-      actor: operator,
-      workflowRunConfig: runConfig,
-    });
-
-    expect(mockInspectResumableRun).toHaveBeenCalled();
-    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
-    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.runConfig).toEqual(runConfig);
-    expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).not.toContain(
-      'a new run config cannot be applied'
-    );
-  });
-
-  test('foreground_resume_detected: fresh-run-in-same-worktree refuses with the capture-failure message when prepareWorkflowSource rejects (#2686)', async () => {
-    // The new capture call inside the resume-null fallback introduces a SECOND call site
-    // of `captureFreshSource(...)` whose failure path is unexercised by the success-only
-    // test above. A regression that drops `if (!captured) return;` or reorders the
-    // user-visible notice would land uncaught without this test — `executeWorkflow`
-    // would be called against an undefined capture and the user would see the generic
-    // "starting fresh in the same worktree" notice instead of the capture-failure one.
-    //
-    // Note on the lifecycle: `captureFreshSource` calls `owner.hold` AFTER
-    // `prepareWorkflowSource` returns, so a `prepareWorkflowSource` rejection skips
-    // the hold entirely (no reclaim because nothing was held). The
-    // `['hold:/capture', 'reclaim:/capture']` shape is exercised separately by the
-    // "keeps holding the capture when the dispatch refuses after taking it" test
-    // above — that one runs `prepareWorkflowSource` cleanly and trips a gate AFTER
-    // the hold.
-    const { prepareWorkflowSource } = await import('@archon/workflows/run-source');
-    (prepareWorkflowSource as ReturnType<typeof mock>).mockImplementationOnce(() =>
-      Promise.reject(new Error('disk full'))
-    );
-
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
-        makeResumableRun({
-          id: 'empty-prior-run',
-          status: 'paused',
-        })
-      )
-    );
-    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
-
-    const platform = makeForegroundPlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-
-    // No run started against an undefined capture.
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-    // The user-visible failure notice names the workflow and the underlying error.
-    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
-    expect(sent).toContain(
-      'Could not capture the workflow source for **test-workflow**: disk full'
-    );
-    // The generic "starting fresh in the same worktree" notice must NOT fire — that
-    // would mislead the user into thinking a fresh run started when none did.
-    expect(sent).not.toContain('starting fresh in the same worktree');
-    // The capture was never held (rejection landed BEFORE `owner.hold`), so the
-    // owner has nothing to reclaim.
-    expect(capturedSourceOwnerCalls).toEqual([]);
-  });
-
-  test('foreground_resume_detected: fresh-run-in-same-worktree captures and executes the FRESHLY captured graph (#2686)', async () => {
-    // (#2686) Regression for the mixed-vintage shape: when a paused run had nothing to
-    // resume, the orchestrator must capture source here and execute the freshly resolved
-    // graph — not the prior run's frozen definition against live command/script bytes.
-    // Before the fix, the outer `if (!willContinueExistingRun)` block was skipped because
-    // `willContinueExistingRun` was true, leaving `preparedSource` undefined and the
-    // executor in `source_unprepared_live` mode against the prior run's frozen graph.
-    const { prepareWorkflowSource } = await import('@archon/workflows/run-source');
-    const freshWorkflow = makeTestResolvedWorkflow({
-      name: 'test-workflow',
-      description: 'freshly captured from disk',
-    });
-    // Capture returns a non-empty scope so the helper actually re-resolves the workflow.
-    (prepareWorkflowSource as ReturnType<typeof mock>).mockImplementationOnce(() =>
-      Promise.resolve({
-        runId: 'prepared-run-id',
-        origin: '/origin',
-        manifest: {
-          version: 1,
-          engine_version: 'test',
-          origin: '/origin',
-          captured_at: '2026-08-21T00:00:00.000Z',
-          digest: 'test-digest',
-          file_count: 1,
-          byte_count: 1,
-          scopes: ['project'],
-        },
-        anchor: CAPTURED_SOURCE_ROOTS.anchor,
-        roots: {
-          project: '/capture/project',
-          globalWorkflows: '/capture/global/workflows',
-          globalCommands: '/capture/global/commands',
-          globalScripts: '/capture/global/scripts',
-          bundledWorkflows: '/capture/bundled/workflows',
-          bundledCommands: '/capture/bundled/commands/defaults',
-          kind: 'captured',
-          anchor: CAPTURED_SOURCE_ROOTS.anchor,
-        },
-      })
-    );
-    // Discovery off the FRESH capture returns a workflow distinct from the one the
-    // resume-input would otherwise feed executeWorkflow. If the orchestrator handed
-    // `executeWorkflow` the wrong graph, the description below would mismatch.
-    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
-      Promise.resolve({
-        workflows: [makeTestWorkflowWithSource({ name: 'test-workflow' })],
-        errors: [],
-      })
-    );
-    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
-      Promise.resolve({
-        workflows: [{ workflow: freshWorkflow, source: 'project' }],
-        errors: [],
-      })
-    );
-
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
-        makeResumableRun({
-          id: 'empty-prior-run',
-          status: 'paused',
-        })
-      )
-    );
-    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
-
-    const platform = makeForegroundPlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-
-    expect(prepareWorkflowSource).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).toHaveBeenCalled();
-    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    // The workflow argument (position 4) is the freshly resolved graph, NOT the
-    // resume-input graph. Before the fix this was the prior run's frozen graph.
-    expect(callArgs[4]).toBe(freshWorkflow);
-    // A fresh run records launch AI config prepared here, not in the prior run's worktree.
-    expect(
-      (callArgs[7] as { preparedAiConfiguration?: unknown }).preparedAiConfiguration
-    ).toBeDefined();
-    // Capture lifecycle: hold then adopt — the prior branch's `if (preparedSource)
-    // owner.adopt()` is now a live guard, not inert.
-    expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'adopt']);
-    // The user-visible notice still fires.
-    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
-    expect(sent).toContain('starting fresh in the same worktree');
-  });
-
-  test('calls dispatchBackgroundWorkflow for a fresh run on web', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-
-    const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-
-    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-  });
-
   test('calls dispatchBackgroundWorkflow for a fresh run on a background-default adapter', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
@@ -411,6 +171,54 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     }
   });
 
+  test('foreground forge refusal stops before isolation or execution, reading the registered checkout', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const refusal = new forgeAccess.ForgeRequirementError('test-workflow', 'factory', [
+      { reason: 'no_forge_remote', message: 'the checkout has no git remote' },
+    ]);
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockRejectedValue(refusal);
+    const platform = makeForegroundPlatform();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeDispatchConversation({ cwd: '/worktrees/conv' }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    try {
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+      expect(assertForge.mock.calls[0]?.[3]).toMatchObject({
+        cwd: '/repos/test-repo',
+        settingsCwd: '/repos/test-repo',
+      });
+      expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).toContain(
+        '(no_forge_remote)'
+      );
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
+  test('a fresh foreground run starts with the inputs naming the repository the forge check judged', async () => {
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
+    try {
+      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+      });
+      const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as { inputs?: unknown };
+      expect(opts.inputs).toEqual({ repo_host: 'github.com', repo_path: 'o/project' });
+    } finally {
+      assertForge.mockRestore();
+    }
+  });
+
   test('threads context.workflowModelOverrides into a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
@@ -486,6 +294,26 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     expect(sent).not.toContain('reusable block');
   });
 
+  // The run route's start: a workflow name and an empty message. The route has no rule of
+  // its own, so this gate is what refuses it, with the text CLI admission also prints.
+  test('refuses a run-route start with an empty message that misses a required input', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockStartWorkflow.mockReturnValueOnce(
+      Promise.resolve(
+        fixture.makeWorkflowResult({ args: '', inputs: { issue: { required: true } } })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '', { actor: operator, workflowName: 'test-workflow' });
+
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain("requires input 'issue'");
+  });
+
   test('hands the capture to a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
@@ -524,8 +352,8 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun({ id: 'paused-run', status: 'paused' }))
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ id: 'paused-run', status: 'paused' })])
     );
 
     await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {

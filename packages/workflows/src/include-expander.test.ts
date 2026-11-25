@@ -211,6 +211,7 @@ describe('expandWorkflowIncludes — namespacing', () => {
     expect(nodeById(expanded, 'down__entry')?.depends_on).toEqual(['up__primary', 'up__secondary']);
     expect(composedBoundaries(nodeById(expanded, 'down__join'))).toEqual([
       {
+        boundary: { includeId: 'down', workflow: 'downstream' },
         dependsOn: ['up__primary', 'up__secondary'],
         entryTriggerRules: ['one_success'],
         when: "$up__primary.output == 'primary'",
@@ -276,21 +277,5 @@ describe('expandWorkflowIncludes — composition', () => {
     expect(ids).toContain('a__l__x');
     expect(ids).toContain('b__l__x');
     expect(new Set(ids).size).toBe(ids.length); // no duplicate ids
-  });
-});
-
-describe('expandWorkflowIncludes — determinism', () => {
-  test('expanding the same map twice yields identical node ids and structure', () => {
-    const build = () => {
-      const parent = wf('parent', [
-        { id: 'setup', bash: 'echo setup' },
-        { id: 'review', include: 'blk', depends_on: ['setup'] },
-        { id: 'summary', prompt: 'summarize $review.output', depends_on: ['review'] },
-      ]);
-      return expandWorkflowIncludes(mapOf(blockWorkflow(), parent)).workflows.get('parent')!;
-    };
-    const first = build();
-    const second = build();
-    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
   });
 });

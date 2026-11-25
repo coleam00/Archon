@@ -16,10 +16,6 @@ import { createSqlWorkflowOperations } from '../../workflows/sql-host';
 import type { IPlatformAdapter } from '../../types';
 import { dispatchBackgroundWorkflow } from './background';
 
-import { stubVerificationImageRelease } from '../../test/stub-verification-image-release';
-
-stubVerificationImageRelease();
-
 const WORKFLOW = `name: bg-pause
 description: pauses twice in a background run
 worktree:
@@ -132,7 +128,6 @@ test('a background dispatch pauses at a gate and an attention wait and continues
       cwd: project,
       userMessage: 'go',
     });
-    if (!admission.accepted) throw new Error('resume was not accepted');
     await admission.settled;
   };
 

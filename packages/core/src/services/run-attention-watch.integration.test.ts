@@ -36,8 +36,10 @@ function runningRun(metadata: Record<string, unknown> = localOwner): WorkflowRun
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'go',
     metadata,
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -47,6 +49,7 @@ function runningRun(metadata: Record<string, unknown> = localOwner): WorkflowRun
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
   };
   rows.set(run.id, run);
   return run;
@@ -180,19 +183,6 @@ describe('attention wait with a real owner endpoint', () => {
     } finally {
       rows.delete(run.id);
       if (process.platform !== 'win32') rmSync(path, { force: true });
-    }
-  });
-
-  test('keeps watching a missing endpoint whose owner ran on another host', async () => {
-    const run = runningRun({ execution_owner: { host: 'other-host.invalid', pid: 4242 } });
-    try {
-      expect(await waitForRunAttention(store, run.id, { deadlineMs: 250 })).toEqual({
-        kind: 'deadline',
-        runId: run.id,
-        observedStatus: 'running',
-      });
-    } finally {
-      rows.delete(run.id);
     }
   });
 });

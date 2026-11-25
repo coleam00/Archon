@@ -70,13 +70,13 @@ export function ApprovalContext({ run }: ApprovalContextProps): ReactElement | n
   return (
     <div className="mt-2 rounded border border-border bg-surface-inset/60 p-3">
       <div className="mb-1 flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-text-tertiary">
+        <span className="text-console-10 font-semibold uppercase tracking-console-label-wide text-text-tertiary">
           What the agent is asking
         </span>
         {run.projectId !== null && !isDemo ? (
           <Link
             to={`/console/p/${run.projectId}/r/${run.id}`}
-            className="text-[11px] text-text-tertiary transition-colors hover:text-text-primary"
+            className="text-console-11 text-text-tertiary transition-colors hover:text-text-primary"
             onClick={e => {
               e.stopPropagation();
             }}
@@ -85,7 +85,7 @@ export function ApprovalContext({ run }: ApprovalContextProps): ReactElement | n
           </Link>
         ) : null}
       </div>
-      <div className="markdown-preview whitespace-pre-wrap break-words text-[13px] leading-relaxed text-text-primary">
+      <div className="markdown-preview whitespace-pre-wrap break-words text-console-13 leading-relaxed text-text-primary">
         {showFull}
       </div>
       {truncated ? (
@@ -95,7 +95,7 @@ export function ApprovalContext({ run }: ApprovalContextProps): ReactElement | n
             e.stopPropagation();
             setExpanded(v => !v);
           }}
-          className="mt-1 font-mono text-[11px] text-text-tertiary transition-colors hover:text-text-primary"
+          className="mt-1 font-mono text-console-11 text-text-tertiary transition-colors hover:text-text-primary"
         >
           {expanded ? '← Collapse' : 'Show full message →'}
         </button>

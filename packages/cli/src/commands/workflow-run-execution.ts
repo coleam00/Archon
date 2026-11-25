@@ -3,11 +3,17 @@ import { disposeWorkflowSource } from '@archon/workflows/run-source';
 import {
   WorkflowExecutionHandoffError,
   type IWorkflowEngine,
+  type WorkflowResumeAdmission,
   type WorkflowRunSubscription,
 } from '@archon/workflows/engine-port';
-import { WorkflowResourceBusyError } from '@archon/workflows/store';
+import {
+  leasedResumeCursor,
+  RunLimitError,
+  WorkflowItemHeldError,
+  WorkflowResourceBusyError,
+} from '@archon/workflows/store';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
-import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import {
   registerOwnedRunTermination,
@@ -86,6 +92,7 @@ export async function executeOwnedRun(
       store: host.deps.store,
       runId: ownedRunId,
       getExecutionClaim: () => ownedExecutionClaim,
+      ownsPendingRun: launch.resumable === null,
       isExecutionSettled: () => execution.result !== undefined,
       logModule: 'cli.workflow',
       liveOwner: {
@@ -268,7 +275,7 @@ async function driveRun(
 ): Promise<RunResult> {
   const { resumable } = launch;
   if (launch.request.options.resume && resumable) {
-    return resumeRun(launch, resumable, onExecutionClaimed, prepareExecution);
+    return resumeRun(launch, lease, resumable, onExecutionClaimed, prepareExecution);
   }
   return submitRun(launch, lease, commonRunOptions(launch, onExecutionClaimed));
 }
@@ -308,16 +315,18 @@ function commonRunOptions(
     source: admission.workflowEntry?.source,
     parseWarnings: admission.workflowEntry?.parseWarnings,
     baseBranch: codebaseDefaultBranch,
-    baseOverride: admission.flagBase,
+    baseOverride: launch.base?.branch,
     execContext: workspace.execContext,
     container: containerRunCtx,
     resolveChildIsolation,
     onExecutionClaimed,
+    noWait: request.options.noWait,
   };
 }
 
 async function resumeRun(
   launch: ForegroundLaunch,
+  lease: OwnedRunLease,
   resumable: WorkflowRun,
   onExecutionClaimed: OnExecutionClaimed,
   prepareExecution: Parameters<IWorkflowEngine['resume']>[0]['prepareExecution']
@@ -333,7 +342,7 @@ async function resumeRun(
       admitted = true;
       return prepareExecution(run);
     });
-  let resumeAdmission: Awaited<ReturnType<IWorkflowEngine['resume']>>;
+  let resumeAdmission: WorkflowResumeAdmission;
   try {
     resumeAdmission = await request.host.engine.resume({
       platform: launch.adapter,
@@ -342,13 +351,18 @@ async function resumeRun(
       legacyWorkflow: admission.workflow,
       userMessage: request.userMessage,
       run: resumable,
-      cursor: request.options.continuationCursor,
+      cursor: leasedResumeCursor(request.options.continuationCursor, lease.ownerLease()),
       options: prepareAdmitted ? undefined : commonRunOptions(launch, onExecutionClaimed),
       ...(prepareAdmitted ? { prepareExecution: prepareAdmitted } : {}),
     });
   } catch (error) {
-    // The run is intact; only its resource is busy, so say that and nothing else.
-    if (error instanceof WorkflowResourceBusyError)
+    // The run is intact; only its resource, its item or the run limit is busy, so say that
+    // and nothing else.
+    if (
+      error instanceof WorkflowResourceBusyError ||
+      error instanceof WorkflowItemHeldError ||
+      error instanceof RunLimitError
+    )
       throw new Error(`Cannot resume workflow '${workflowName}' now: ${error.message}`, {
         cause: error,
       });
@@ -369,7 +383,6 @@ async function resumeRun(
       { cause: err }
     );
   }
-  if (!resumeAdmission.accepted) throw nothingToResumeError(launch, resumable);
   request.notifyResumeAccepted?.(resumeAdmission.runId);
   return resumeAdmission.settled;
 }
@@ -390,34 +403,6 @@ function preparationFailedError(workflowName: string, runId: string, err: Error)
     `Workflow '${workflowName}' failed while preparing its resumed run — ${err.message}\n` +
       `The run is marked failed; resume it with: archon workflow resume ${runId}`,
     { cause: err }
-  );
-}
-
-function nothingToResumeError(launch: ForegroundLaunch, resumable: WorkflowRun): Error {
-  const { workflowName } = launch.request;
-  // `--branch` is only runnable when the prior run used worktree isolation:
-  // folder projects reject worktree options outright, and an in-place repo run
-  // cannot be relaunched onto the branch its own checkout holds. A stale-running
-  // orphan cannot be superseded until it is released, so name that step first.
-  const worktreeBranch = launch.isFolderCodebase ? undefined : launch.resumeBranch;
-  const unblock = isTerminalRunStatus(resumable.status)
-    ? ''
-    : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
-      `  archon workflow abandon ${resumable.id}\n`;
-  const relaunch = [
-    'archon workflow run',
-    workflowName,
-    ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
-    '--supersedes',
-    resumable.id,
-  ].join(' ');
-  return new Error(
-    `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
-      unblock +
-      (worktreeBranch
-        ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
-        : 'Nothing can be skipped, so start a fresh run instead:\n') +
-      `  ${relaunch}`
   );
 }
 
@@ -447,7 +432,9 @@ function submitRun(
       ? { adoptedFromRunId: declaration.runId, continuationMode: declaration.stamp.mode }
       : {}),
     ...(preCreatedRun ? { preCreatedRun } : {}),
-    ...(workspace.cutFromCommit !== undefined ? { cutFromCommit: workspace.cutFromCommit } : {}),
+    ...(request.options.item === undefined ? {} : { item: request.options.item }),
+    cutFromCommit: workspace.cut.cutFromCommit,
+    resolvedBaseBranch: workspace.cut.resolvedBaseBranch,
     ownedWorktree: workspace.ownedWorktree,
   };
   lease.executionSubmitted = true;

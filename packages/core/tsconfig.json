@@ -1,8 +1,15 @@
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "noEmit": true
-  },
   "include": ["src/**/*", "../workflows/src/defaults/text-imports.d.ts"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist"],
+  "references": [
+    { "path": "../chat-contract" },
+    { "path": "../git" },
+    { "path": "../isolation" },
+    { "path": "../paths" },
+    { "path": "../plugin-manifest" },
+    { "path": "../provider-contract" },
+    { "path": "../providers" },
+    { "path": "../workflows" }
+  ]
 }

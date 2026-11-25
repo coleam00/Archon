@@ -47,6 +47,10 @@ function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });
 }
 
+const failingFetch = async (): Promise<never> => {
+  throw new Error('Resolution must not fetch');
+};
+
 describe('GitHub outbound producer', () => {
   test('publishes bounded metadata without naming the child credential', () => {
     expect(githubPluginMetadata).toEqual({
@@ -57,8 +61,10 @@ describe('GitHub outbound producer', () => {
       hosts: ['github.com'],
       capabilities: [
         'resolve',
+        'resolve:subject',
         'checks.state',
         'checks.commit',
+        'checks.logs',
         'workitem.view',
         'workitem.comments',
         'workitem.create',
@@ -69,6 +75,9 @@ describe('GitHub outbound producer', () => {
         'workitem.close',
         'workitem.edit-body',
         'workitem.list',
+        'workitem.label.added',
+        'workitem.opened',
+        'workitem.search',
         'repo.labels.list',
         'repo.label.ensure',
         'pr.view',
@@ -77,6 +86,7 @@ describe('GitHub outbound producer', () => {
         'pr.edit-body',
         'pr.ready',
         'pr.draft',
+        'pr.close',
         'comment.upsert',
         'pr.merge',
         'checks.rerun',
@@ -87,9 +97,15 @@ describe('GitHub outbound producer', () => {
         'repo.file',
         'pr.thread.reply',
         'pr.thread.resolve',
+        'pr.review.submit',
+        'attachment.put',
       ],
       mutationConditions: { 'pr.merge': ['head'] },
       token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
+      remedies: {
+        unsupported_op: expect.stringContaining('archon plugin update'),
+        no_credential: expect.stringContaining('archon auth github'),
+      },
     });
   });
 
@@ -154,6 +170,41 @@ describe('GitHub outbound producer', () => {
       ok: true,
       result: { op: 'resolve', value: { kind: 'resolved', repo: { host, path } } },
     });
+  });
+
+  test.each([
+    ['a pull request', 'https://github.com/Archon/Repo/pull/42', { kind: 'pr', number: 42 }],
+    ['an issue', 'https://github.com/Archon/Repo/issues/7', { kind: 'issue', number: 7 }],
+    [
+      'a link to one comment',
+      'https://github.com/Archon/Repo/pull/42#issuecomment-9',
+      { kind: 'pr', number: 42 },
+    ],
+  ])('resolves the web URL of %s to its repository and number', async (_label, remote, subject) => {
+    const response = await handleGithubOperation(
+      { operationId: 'resolve-web', op: 'resolve', remote, web: true },
+      { token: undefined, fetch: failingFetch }
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        op: 'resolve',
+        value: { kind: 'resolved', repo: { host: 'github.com', path: 'Archon/Repo' }, subject },
+      },
+    });
+  });
+
+  test.each([
+    'https://github.com/Archon/Repo',
+    'https://github.com/Archon/Repo/pull/0',
+    'https://github.com/Archon/Repo/tree/main',
+    'git@github.com:Archon/Repo.git',
+  ])('answers none for %s, which names no issue or pull request', async remote => {
+    const response = await handleGithubOperation(
+      { operationId: 'resolve-web', op: 'resolve', remote, web: true },
+      { token: undefined, fetch: failingFetch }
+    );
+    expect(response).toMatchObject({ ok: true, result: { value: { kind: 'none' } } });
   });
 
   test.each([
@@ -416,6 +467,7 @@ test.each([
                 id: 100,
                 head_sha: head,
                 check_suite_id: 10,
+                workflow_id: 1,
                 run_attempt: 1,
                 status: conclusion === null ? 'waiting' : 'completed',
                 conclusion,
@@ -463,6 +515,7 @@ test('check suites resolve opaque rerun groups, preserving distinct same-name ch
               id: 900,
               head_sha: 'head',
               check_suite_id: 10,
+              workflow_id: 1,
               run_attempt: 3,
               status: 'completed',
               conclusion: 'failure',
@@ -492,6 +545,137 @@ test('check suites resolve opaque rerun groups, preserving distinct same-name ch
   ]);
 });
 
+describe('a check is its newest run across suites of one workflow', () => {
+  type Run = { id: number; suite: number; name: string; conclusion: string; slug?: string };
+  async function unitsFor(
+    runs: Run[],
+    workflows: { id: number; suite: number; workflow: number }[]
+  ) {
+    const response = await handleGithubOperation(checksRequest, {
+      token: 'token',
+      fetch: async input => {
+        const url = String(input);
+        if (url.includes('/pulls/')) return json({ head: { sha: 'head' } });
+        if (url.includes('/actions/runs'))
+          return json({
+            total_count: workflows.length,
+            workflow_runs: workflows.map(run => ({
+              id: run.id,
+              head_sha: 'head',
+              check_suite_id: run.suite,
+              workflow_id: run.workflow,
+              run_attempt: 1,
+              status: 'completed',
+              conclusion: 'success',
+            })),
+          });
+        if (url.includes('/check-runs'))
+          return json({
+            check_runs: runs.map(run => ({
+              id: run.id,
+              name: run.name,
+              head_sha: 'head',
+              app: { slug: run.slug ?? 'github-actions' },
+              check_suite: { id: run.suite },
+              status: 'completed',
+              conclusion: run.conclusion,
+            })),
+          });
+        return json([]);
+      },
+    });
+    if (!response.ok || response.result.op !== 'checks.state') throw new Error('expected checks');
+    return response.result.value;
+  }
+
+  test('a cancelled older run is superseded by a green newer run', async () => {
+    const value = await unitsFor(
+      [
+        { id: 1, suite: 10, name: 'test', conclusion: 'cancelled' },
+        { id: 2, suite: 10, name: 'static', conclusion: 'cancelled' },
+        { id: 3, suite: 20, name: 'test', conclusion: 'success' },
+        { id: 4, suite: 20, name: 'static', conclusion: 'success' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 7 },
+      ]
+    );
+    expect(value.summary.state).toBe('green');
+    expect(value.units.map(unit => [unit.unit.id, unit.rerun])).toEqual([
+      ['3', { id: '200', attempt: 1 }],
+      ['4', { id: '200', attempt: 1 }],
+    ]);
+  });
+
+  test('a failed newer run stays red after an older run passed', async () => {
+    const value = await unitsFor(
+      [
+        { id: 1, suite: 10, name: 'test', conclusion: 'success' },
+        { id: 3, suite: 20, name: 'test', conclusion: 'failure' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 7 },
+      ]
+    );
+    expect(value.summary.state).toBe('red');
+    expect(value.units.map(unit => [unit.unit.id, unit.rerun])).toEqual([
+      ['3', { id: '200', attempt: 1 }],
+    ]);
+  });
+
+  test('a failed check present only in the older suite keeps the commit red', async () => {
+    const value = await unitsFor(
+      [
+        { id: 1, suite: 10, name: 'deploy', conclusion: 'failure' },
+        { id: 2, suite: 10, name: 'test', conclusion: 'cancelled' },
+        { id: 3, suite: 20, name: 'test', conclusion: 'success' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 7 },
+      ]
+    );
+    expect(value.summary.state).toBe('red');
+    expect(value.units.map(unit => [unit.unit.id, unit.rerun])).toEqual([
+      ['1', { id: '100', attempt: 1 }],
+      ['3', { id: '200', attempt: 1 }],
+    ]);
+  });
+
+  test('a rerun in the older suite is the newest run of its check', async () => {
+    const value = await unitsFor(
+      [
+        { id: 5, suite: 10, name: 'test', conclusion: 'success' },
+        { id: 3, suite: 20, name: 'test', conclusion: 'failure' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 7 },
+      ]
+    );
+    expect(value.units.map(unit => unit.unit.id)).toEqual(['5']);
+  });
+
+  test('same-name checks of different workflows, apps or unknown workflows each count', async () => {
+    const value = await unitsFor(
+      [
+        { id: 1, suite: 10, name: 'test', conclusion: 'failure' },
+        { id: 2, suite: 20, name: 'test', conclusion: 'success' },
+        { id: 3, suite: 30, name: 'test', conclusion: 'failure' },
+        { id: 4, suite: 40, name: 'test', conclusion: 'success', slug: 'other-app' },
+      ],
+      [
+        { id: 100, suite: 10, workflow: 7 },
+        { id: 200, suite: 20, workflow: 8 },
+      ]
+    );
+    expect(value.summary.state).toBe('red');
+    expect(value.units.map(unit => unit.unit.id)).toEqual(['1', '2', '3', '4']);
+  });
+});
+
 test('workflow-run approval enumeration includes later enterprise pages', async () => {
   const seen: string[] = [];
   const response = await handleGithubOperation(
@@ -511,6 +695,7 @@ test('workflow-run approval enumeration includes later enterprise pages', async 
           id: 100,
           head_sha: 'head',
           check_suite_id: 10,
+          workflow_id: 1,
           run_attempt: 1,
           status: 'completed',
           conclusion: 'success',
@@ -925,4 +1110,84 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
       result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
     });
   }
+});
+
+describe('temporary failures are told apart by status, header or error type', () => {
+  const repo = { host: 'github.com', path: 'archon/test' };
+  const view = {
+    operationId: 'view',
+    op: 'pr.view',
+    selector: { kind: 'number', ref: { repo, number: 42 } },
+  } satisfies ForgeRequest;
+  const search = {
+    operationId: 'search',
+    op: 'workitem.search',
+    repo,
+    text: 'retry backoff',
+  } satisfies ForgeRequest;
+  const answer = (status: number, headers: Record<string, string> = {}): Response =>
+    Response.json({ message: 'You have exceeded a secondary rate limit.' }, { status, headers });
+
+  test.each([
+    ['a 503', view, () => answer(503), 'unavailable'],
+    ['a 429', view, () => answer(429), 'rate_limited'],
+    [
+      'a search 403 with retry-after',
+      search,
+      () => answer(403, { 'retry-after': '60' }),
+      'rate_limited',
+    ],
+    [
+      'a search 403 with an exhausted limit',
+      search,
+      () => answer(403, { 'x-ratelimit-remaining': '0' }),
+      'rate_limited',
+    ],
+    // Without a header only the message says "rate limit", and prose is not read.
+    ['a 403 with neither header', search, () => answer(403), 'authorization'],
+    [
+      'a 403 with quota left',
+      view,
+      () => answer(403, { 'x-ratelimit-remaining': '4999' }),
+      'authorization',
+    ],
+  ] as const)('%s is %s, asked once', async (_name, request, reply, kind) => {
+    let calls = 0;
+    const response = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async () => {
+        calls++;
+        return reply();
+      },
+    });
+    expect(response).toMatchObject({ ok: false, error: { kind, status: reply().status } });
+    // The host owns the retry, so the plugin asks GitHub once per request it makes.
+    expect(calls).toBe(request.op === 'workitem.search' ? 2 : 1);
+  });
+
+  test('no answer at all is unavailable', async () => {
+    const response = await handleGithubOperation(view, {
+      token: 'token',
+      fetch: async () => {
+        throw new TypeError('connection lost');
+      },
+    });
+    expect(response).toEqual({
+      operationId: 'view',
+      ok: false,
+      error: { kind: 'unavailable', message: 'GitHub API request failed' },
+    });
+  });
+
+  test('a GraphQL RATE_LIMITED error is rate limited', async () => {
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref: { repo, number: 42 } },
+      {
+        token: 'token',
+        fetch: async () =>
+          Response.json({ errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }] }),
+      }
+    );
+    expect(response).toMatchObject({ ok: false, error: { kind: 'rate_limited' } });
+  });
 });

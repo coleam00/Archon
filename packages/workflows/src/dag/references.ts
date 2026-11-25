@@ -9,6 +9,8 @@ import {
   inputEnvKey,
   isExecNode,
   isBindingDirective,
+  isBindingDirectiveShape,
+  isTypedOutputsDirective,
 } from '../schemas';
 import {
   type JsonValue,
@@ -27,6 +29,7 @@ import {
   assertSupportedOutputRefs,
   substituteTemplate,
   inputRefToken,
+  isAbsentInputForward,
   resolveInputValue,
 } from '../output-ref';
 import { readComposedMeta } from '../compiled-command';
@@ -35,6 +38,7 @@ import { substituteWorkflowVariables, type TemplateReferences } from '../workflo
 import {
   type AttentionOption,
   type AttentionRecommendation,
+  OTHER_ATTENTION_OPTION,
   attentionDeclarationProblem,
   attentionOptionsSchema,
   attentionRecommendationSchema,
@@ -86,7 +90,7 @@ export interface ShellInputContext {
  *     this node was authored in, stamped at expansion when it arrived through `include:`.
  *     These win: a node's own file is the nearer contract. This bag is their only channel
  *     into a shell or script: the include `$INPUTS` macro rewrites a bash body to a quoted
- *     reference to it and refuses an inline script body (#2115).
+ *     reference to it and refuses an inline script body (#2115). A directive (#5760) resolves.
  *   - node-local `with:` bindings on script nodes (#2637), the nearest contract.
  *
  * A composed value resolves like a `workflow:` node's `with:` template — workflow variables
@@ -111,25 +115,41 @@ export function inputEnvVars(
     // deterministic representation (strings raw, everything else JSON text).
     env[inputEnvKey(name)] = canonicalValueText(value);
   }
-  for (const [name, value] of Object.entries(readComposedMeta(node)?.inputs ?? {})) {
-    // Only strings can carry templates/refs; a typed composed value passes as-is.
-    env[inputEnvKey(name)] =
-      typeof value === 'string'
-        ? resolveValueTemplate(value, ctx, runInputs)
-        : canonicalValueText(value);
+  const ownWith =
+    isExecNode(node) && node.runtime !== 'sh' && node.with !== undefined ? node.with : undefined;
+  const composed = readComposedMeta(node);
+  for (const [name, value] of Object.entries(composed?.inputs ?? {})) {
+    // Overridden by the node's own binding below, so never resolved (it could fail the node).
+    if (
+      !Object.hasOwn(ownWith ?? {}, name) &&
+      !isAbsentInputForward(name, value, runInputs, composed?.forwarded ?? [])
+    )
+      env[inputEnvKey(name)] = composedInputText(node.id, name, value, ctx, runInputs);
   }
-  // Node-local bindings (#2637) — a script node's own `with:` map, resolved against
-  // upstream outputs. Third and NEAREST source: the node's own file is the nearest
-  // contract, so it wins over composed and run inputs (extends the documented order
-  // above). Resolution failures throw and fail the node — never a silent ''.
-  if (isExecNode(node) && node.runtime !== 'sh' && node.with !== undefined) {
+  // Node-local bindings (#2637): a script node's own `with:` map, the NEAREST source, so it
+  // wins over composed and run inputs. Resolution failures throw and fail the node.
+  if (ownWith !== undefined) {
     for (const [name, value] of Object.entries(
-      resolveNodeBindings(node.id, node.with, ctx, runInputs)
+      resolveNodeBindings(node.id, ownWith, ctx, runInputs)
     )) {
       env[inputEnvKey(name)] = canonicalValueText(value);
     }
   }
   return env;
+}
+
+/** Only strings carry templates/refs; a directive resolves; other typed values pass as-is. */
+function composedInputText(
+  nodeId: string,
+  name: string,
+  value: JsonValue,
+  ctx: ShellInputContext,
+  runInputs: Record<string, JsonValue> | undefined
+): string {
+  if (typeof value === 'string') return resolveValueTemplate(value, ctx, runInputs);
+  if (isBindingDirectiveShape(value))
+    return canonicalValueText(resolveBindingDirective(nodeId, name, value, ctx));
+  return canonicalValueText(value);
 }
 
 /** Project env cannot shadow inputs or engine-owned delivery keys (#2115). */
@@ -275,6 +295,8 @@ export function resolveValueTemplate(
  * `from` reads one whole upstream ref; a producer that did not run (skipped or
  * pending — reachable under `trigger_rule: all_done` across a skipped branch)
  * takes `if_skipped` instead, and without one the node fails with the fix named.
+ * A typed-outputs directive `{ outputs }` never reaches here unresolved: `bindTypedOutputs`
+ * has already replaced it with its array, which passes through as a literal.
  * Everything else resolves through {@link resolveWorkflowValue} in strict mode.
  * The loader guarantees bound producers are upstream `depends_on`, so resolution
  * here is a per-node pre-step with no new scheduling.
@@ -295,6 +317,14 @@ export function resolveNodeBindings(
     if (isBindingDirective(rawValue)) {
       resolved[name] = resolveBindingDirective(consumerId, name, rawValue, ctx);
       continue;
+    }
+    if (isTypedOutputsDirective(rawValue)) {
+      // Reading the run's records is asynchronous, so `bindTypedOutputs` replaces the
+      // directive before a script node's bindings reach this resolver. Any other path
+      // here has no array to give, and must not deliver the directive as a literal.
+      throw new Error(
+        `Node '${consumerId}' binding '${name}': '{ outputs: ${String(rawValue.outputs)} }' is only resolved for a script node's own 'with:' map`
+      );
     }
     if (typeof rawValue === 'object' && rawValue !== null && !Array.isArray(rawValue)) {
       // The loader rejects this shape at load time; programmatic definitions can
@@ -690,7 +720,7 @@ export function resolveAttentionDeclaration(
   condition: Extract<WaitCondition, { kind: 'attention' }>,
   nodeOutputs: ReadonlyMap<string, NodeOutput>
 ): { options?: AttentionOption[]; recommendation?: AttentionRecommendation } {
-  const options = resolveAttentionOptions(nodeId, condition.options, nodeOutputs);
+  const declared = resolveAttentionOptions(nodeId, condition.options, nodeOutputs);
   const recommendation =
     typeof condition.recommendation === 'string'
       ? resolveAttentionField(
@@ -704,10 +734,13 @@ export function resolveAttentionDeclaration(
       : condition.recommendation;
   const problem = attentionDeclarationProblem({
     form: condition.form,
-    ...(options !== undefined ? { options } : {}),
+    ...(declared !== undefined ? { options: declared } : {}),
     ...(recommendation !== undefined ? { recommendation } : {}),
+    ...(condition.other === true ? { other: true } : {}),
   });
   if (problem !== undefined) throw new Error(`Wait node '${nodeId}': ${problem}`);
+  const options =
+    condition.other === true ? [...(declared ?? []), OTHER_ATTENTION_OPTION] : declared;
   return {
     ...(options !== undefined ? { options } : {}),
     ...(recommendation !== undefined ? { recommendation } : {}),

@@ -263,9 +263,9 @@ with an instruction to rename the server in the `mcp:` file.
 
 ## MCP-Only Nodes
 
-For providers that support tool restrictions, combine `mcp` with
-`allowed_tools: []` to create nodes that can only use MCP tools and have no
-access to built-in tools (Bash, Read, Write, etc.):
+On Claude, combine `mcp` with `allowed_tools: []` and leave `skills` unset
+to create a node with only MCP tools. Declaring `skills` retains the `Skill`
+tool even with an empty allow list.
 
 ```yaml
 nodes:
@@ -275,10 +275,12 @@ nodes:
     allowed_tools: []
 ```
 
-This is useful for sandboxing — the AI can only interact through the MCP server
-and cannot touch the filesystem or run shell commands. Codex currently does not
-support Archon's `allowed_tools` / `denied_tools` restrictions, so this pattern
-is enforced for Claude nodes but not Codex nodes.
+This restricts which tools the node can call, not what those tools can do.
+An MCP server that exposes file or shell tools can still provide filesystem
+access or command execution. Codex does not support Archon's `allowed_tools` /
+`denied_tools` restrictions, so this pattern is not enforced on Codex. On Copilot,
+`allowed_tools: []` also removes the MCP tools; use `allowed_tools: ["mcp:*"]`
+there instead.
 
 ## Connection Failure Handling
 
@@ -489,7 +491,7 @@ bun run cli workflow run my-workflow "Review PR #123"
 | Remove built-in tools | No | Yes | Yes |
 | Inject context | No | No | Yes |
 | Modify tool input | No | No | Yes |
-| Sandbox to MCP only | `mcp` + `allowed_tools: []` | — | — |
+| Restrict to MCP tools | See [MCP-only nodes](#mcp-only-nodes) for provider-specific tool lists and the Claude skills exception | — | — |
 
 ## Limitations
 
@@ -513,7 +515,7 @@ bun run cli workflow run my-workflow "Review PR #123"
 | `undefined env vars: VAR_NAME` | Environment variable not set | Export the variable or add it to your `.env` |
 | `MCP server connection failed` / `Required MCP server ... could not connect` | Server process crashed, URL unreachable, or authentication needed | Check command/URL, test the server standalone |
 | Plugin MCP missing from workflow output | User-level plugin MCPs are filtered out of workflow warnings | Run with `--verbose` and look for provider MCP debug logs |
-| `allowed_tools` ignored with Codex | Codex provider does not support Archon's tool restrictions yet | Do not rely on `allowed_tools: []` for Codex sandboxing |
+| `allowed_tools` ignored with Codex | Codex provider does not support Archon's tool restrictions yet | Do not rely on `allowed_tools: []` to restrict Codex tools |
 | `Haiku model with MCP servers` | Haiku doesn't support tool search | Use `model: sonnet` or `model: opus` instead |
 
 ## Finding MCP Servers

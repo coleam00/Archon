@@ -27,7 +27,20 @@ describe('resolveGithubTokenOverrides', () => {
       GH_ENTERPRISE_TOKEN: '',
       GITHUB_ENTERPRISE_TOKEN: '',
       COPILOT_GITHUB_TOKEN: '',
+      GIT_CONFIG_PARAMETERS: expect.stringContaining("'credential.https://github.com.helper='"),
     });
+  });
+
+  test("gives a connected user's git a github.com helper after an inherited scrub, without the token", () => {
+    const env = resolveGithubTokenOverrides(true, 'user-1', 'ghu_user', {
+      GIT_CONFIG_PARAMETERS: "'core.autocrlf=false' 'credential.helper='",
+    } as NodeJS.ProcessEnv);
+    expect(env.GIT_CONFIG_PARAMETERS).toStartWith(
+      "'core.autocrlf=false' 'credential.helper=' 'credential.https://github.com.helper=' " +
+        "'credential.https://github.com.helper=!f() {"
+    );
+    // The helper reads GH_TOKEN when git runs; the token itself never enters git config.
+    expect(env.GIT_CONFIG_PARAMETERS).not.toContain('ghu_user');
   });
 
   test('scrubs every token and hides stored logins when the user is not connected', () => {
@@ -133,6 +146,54 @@ describe('a scrubbed run against stored logins', () => {
     });
     expect(result.status).not.toBe(0);
     expect(result.stdout.trim()).toBe('');
+  });
+
+  /** `git credential fill` for github.com, or for another host, with a repo-local bot helper. */
+  function fill(env: NodeJS.ProcessEnv, host = 'github.com'): string {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-scrub-repo-')));
+    spawnSync('git', ['init', '-q', repo], { env });
+    // Set the way the App installs git-credential-archon in a registered repository.
+    spawnSync(
+      'git',
+      [
+        '-C',
+        repo,
+        'config',
+        'credential.https://github.com.helper',
+        '!f() { echo username=archon-bot; echo password=botsecret; }; f',
+      ],
+      { env }
+    );
+    return spawnSync('git', ['-C', repo, 'credential', 'fill'], {
+      env,
+      input: `protocol=https\nhost=${host}\n\n`,
+      encoding: 'utf8',
+    }).stdout;
+  }
+
+  const connected = (host: NodeJS.ProcessEnv, token: string): NodeJS.ProcessEnv => ({
+    ...host,
+    ...resolveGithubTokenOverrides(true, 'user-1', token, host),
+  });
+
+  test("git presents a connected user's token, not the host's or the bot's, even after a scrub", () => {
+    const host = hostWithStoredLogins();
+    for (const inherited of [host, scrubbed(host)]) {
+      const filled = fill(connected(inherited, 'ghu_user'));
+      expect(filled).toContain('username=x-access-token');
+      expect(filled).toContain('password=ghu_user');
+      expect(filled).not.toContain('host-operator');
+      expect(filled).not.toContain('archon-bot');
+    }
+    // Other hosts keep their helpers.
+    expect(fill(connected(host, 'ghu_user'), 'gitlab.com')).toContain('password=hostsecret');
+  });
+
+  test("a connected user's helper with no token falls back to nothing", () => {
+    const host = hostWithStoredLogins();
+    const env = { ...connected(host, 'ghu_user'), GH_TOKEN: '' };
+    const filled = fill(env);
+    expect(filled).not.toContain('password=');
   });
 
   test('git credential helpers return no password', () => {

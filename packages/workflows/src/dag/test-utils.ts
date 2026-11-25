@@ -1,4 +1,4 @@
-import { inMemoryEventRows } from '../test-utils';
+import { inMemoryEventRows, workflowStoreDouble } from '../test-utils';
 import { afterEach, expect, mock, spyOn, type Mock } from 'bun:test';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -138,8 +138,10 @@ export function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'mock message',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -148,6 +150,7 @@ export function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
   };
 }
@@ -161,233 +164,134 @@ export function createMockStore(): MockWorkflowStore {
     inMemoryEventRows(createWorkflowEvent.mock.calls.map(([event]) => event)).filter(
       e => e.workflow_run_id === runId && (types?.includes(e.event_type) ?? true)
     );
-  return {
-    getWorkflowEventHead: mock<IWorkflowStore['getWorkflowEventHead']>(() => {
-      throw new Error('Unexpected event feed read');
-    }),
-    readWorkflowEventsAfter: mock<IWorkflowStore['readWorkflowEventsAfter']>(() => {
-      throw new Error('Unexpected event feed read');
-    }),
-    getStateDocument: mock<IWorkflowStore['getStateDocument']>(() => {
-      throw new Error('Unexpected getStateDocument');
-    }),
-    putStateDocument: mock<IWorkflowStore['putStateDocument']>(() => {
-      throw new Error('Unexpected putStateDocument');
-    }),
-    patchStateDocument: mock<IWorkflowStore['patchStateDocument']>(() => {
-      throw new Error('Unexpected patchStateDocument');
-    }),
-    deleteStateDocument: mock<IWorkflowStore['deleteStateDocument']>(() => {
-      throw new Error('Unexpected deleteStateDocument');
-    }),
-    listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
-      throw new Error('Unexpected listStateRevisions');
-    }),
-    listStateDocuments: mock<IWorkflowStore['listStateDocuments']>(() => {
-      throw new Error('Unexpected listStateDocuments');
-    }),
-    getStateDocuments: mock<IWorkflowStore['getStateDocuments']>(() => {
-      throw new Error('Unexpected getStateDocuments');
-    }),
-    pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
-      throw new Error('Unexpected pruneStateRevisions');
-    }),
-    setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
-    admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
-      throw new Error('Unexpected admitResourceStart');
-    }),
-    drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
-      throw new Error('Unexpected drainResourceStarts');
-    }),
-    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
-      throw new Error('Unexpected hasStartReceiptForDelivery');
-    }),
-    acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
-      throw new Error('Unexpected acceptStartReceipt');
-    }),
-    getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
-      throw new Error('Unexpected getStartReceipt');
-    }),
-    listStartReceipts: mock<IWorkflowStore['listStartReceipts']>(() => {
-      throw new Error('Unexpected listStartReceipts');
-    }),
-    listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(() => {
-      throw new Error('Unexpected listPendingStartBindings');
-    }),
-    getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(() => {
-      throw new Error('Unexpected getResourceStartRequest');
-    }),
-    listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(() => {
-      throw new Error('Unexpected listQueuedResourceStartsForHost');
-    }),
-    withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(() => {
-      throw new Error('Unexpected withdrawQueuedResourceStart');
-    }),
-    claimStartBindingPreparation: mock<IWorkflowStore['claimStartBindingPreparation']>(() => {
-      throw new Error('Unexpected claimStartBindingPreparation');
-    }),
-    completeStartBindingPreparation: mock<IWorkflowStore['completeStartBindingPreparation']>(() => {
-      throw new Error('Unexpected completeStartBindingPreparation');
-    }),
-    failStartBindingPreparation: mock<IWorkflowStore['failStartBindingPreparation']>(() => {
-      throw new Error('Unexpected failStartBindingPreparation');
-    }),
-    resetStartBindingPreparation: mock<IWorkflowStore['resetStartBindingPreparation']>(() => {
-      throw new Error('Unexpected resetStartBindingPreparation');
-    }),
-    listDueWorkflowContinuations: mock<IWorkflowStore['listDueWorkflowContinuations']>(() => {
-      throw new Error('Unexpected listDueWorkflowContinuations');
-    }),
-    deferWorkflowContinuation: mock<IWorkflowStore['deferWorkflowContinuation']>(() => {
-      throw new Error('Unexpected deferWorkflowContinuation');
-    }),
-    releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(
-      async (_id, _release, beforePublish) => {
-        await beforePublish?.();
-        getWorkflowRunStatus.mockImplementation(async () => 'paused');
-        return { released: true };
-      }
-    ),
-    releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
-      Promise.resolve({ released: false })
-    ),
-    answerAttentionWait: mock<IWorkflowStore['answerAttentionWait']>(() => {
-      throw new Error('Unexpected answerAttentionWait');
-    }),
-    labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
-      throw new Error('Unexpected labelAttentionWait');
-    }),
-    getWorkflowRunForAttention: mock<IWorkflowStore['getWorkflowRunForAttention']>(() => {
-      throw new Error('Unexpected getWorkflowRunForAttention');
-    }),
-    listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
-      throw new Error('Unexpected listAttentionQueueRows');
-    }),
-    signalWorkflowWait: mock<IWorkflowStore['signalWorkflowWait']>(() => {
-      throw new Error('Unexpected signalWorkflowWait');
-    }),
-    resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
-      throw new Error('Unexpected resolveApprovalGate');
-    }),
-    resolveAndCancelApprovalGate: mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() => {
-      throw new Error('Unexpected resolveAndCancelApprovalGate');
-    }),
-    cancelResumableRunsForConversation: mock<IWorkflowStore['cancelResumableRunsForConversation']>(
-      () => {
-        throw new Error('Unexpected cancelResumableRunsForConversation');
-      }
-    ),
-    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
-      throw new Error('Unexpected deleteWorkflowNodeSessions');
-    }),
-    findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
-    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId => runEvents(runId)),
-    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(
-      async (ids, types) => new Map(ids.map(id => [id, runEvents(id, types)]))
-    ),
-    listMetricRecords: mock<IWorkflowStore['listMetricRecords']>(async () => []),
-    findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
-    listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
-      throw new Error('Unexpected listWorkflowRuns');
-    }),
-    createWorkflowRun: mock<IWorkflowStore['createWorkflowRun']>(async _data => mockWorkflowRun()),
-    claimPendingWorkflowRun: mock<IWorkflowStore['claimPendingWorkflowRun']>(async _id =>
-      mockWorkflowRun()
-    ),
-    recordWorkflowRunCheckoutBaseline: mock<IWorkflowStore['recordWorkflowRunCheckoutBaseline']>(
-      async (_id, baseline) => baseline
-    ),
-    getWorkflowRun: mock<IWorkflowStore['getWorkflowRun']>(async _id => null),
-    getWorkflowRunsByIds: mock<IWorkflowStore['getWorkflowRunsByIds']>(async _ids => []),
-    findChildRuns: mock<IWorkflowStore['findChildRuns']>(async _parentRunId => []),
-    getRunAncestry: mock<IWorkflowStore['getRunAncestry']>(async _runId => []),
-    getActiveWorkflowRunByPath: mock<IWorkflowStore['getActiveWorkflowRunByPath']>(
-      async (_workingPath, _self) => null
-    ),
-    findResumableRun: mock<IWorkflowStore['findResumableRun']>(
-      async (_workflowName, _workingPath) => null
-    ),
-    resumeWorkflowRun: mock<IWorkflowStore['resumeWorkflowRun']>(async _id => mockWorkflowRun()),
-    recoverCancelledFanOutRun: mock<IWorkflowStore['recoverCancelledFanOutRun']>(async _id =>
-      mockWorkflowRun()
-    ),
-    updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
-      async () => true
-    ),
-    updateWorkflowRun: mock<IWorkflowStore['updateWorkflowRun']>(
-      async (_id, _updates) => undefined
-    ),
-    updateWorkflowActivity: mock<IWorkflowStore['updateWorkflowActivity']>(async _id => undefined),
-    getWorkflowRunStatus,
-    completeWorkflowRun: mock<IWorkflowStore['completeWorkflowRun']>(
-      async (_id, _completion, _metadata) => undefined
-    ),
-    failWorkflowRun: mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true })),
-    pauseWorkflowRun: mock<IWorkflowStore['pauseWorkflowRun']>(
-      async (_id, _approvalContext, _extraMetadata, event) => {
-        if (event) await createWorkflowEvent(event);
-      }
-    ),
-    pauseWorkflowRunForWait: mock<NonNullable<IWorkflowStore['pauseWorkflowRunForWait']>>(
-      async (_id, _waitContext) => undefined
-    ),
-    clearWorkflowWaitContext: mock<IWorkflowStore['clearWorkflowWaitContext']>(
-      async (id, _waitContext, completion) => ({
-        cleared: true,
-        nodeEvent: waitCompletionEvents(id, completion).node,
-      })
-    ),
-    claimWriteback: mock<IWorkflowStore['claimWriteback']>(async _id => ({ claimed: true })),
-    releaseWritebackClaim: mock<IWorkflowStore['releaseWritebackClaim']>(async _id => undefined),
-    cancelWorkflowRun: mock<IWorkflowStore['cancelWorkflowRun']>(async _id => ({
-      cancelled: false,
-    })),
-    cancelFanOutRun: mock<IWorkflowStore['cancelFanOutRun']>(async (_id, _reason) => ({
-      cancelled: false,
-    })),
-    createWorkflowEvent,
-    persistWorkflowEvent: mock<IWorkflowStore['persistWorkflowEvent']>(async data => {
-      await createWorkflowEvent(data);
-    }),
-    persistWorkflowEventIfRunning: mock<IWorkflowStore['persistWorkflowEventIfRunning']>(
-      async data => {
+  return workflowStoreDouble<MockWorkflowStore>(
+    {
+      setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
+      listSkippedItemStarts: mock<IWorkflowStore['listSkippedItemStarts']>(async () => []),
+      listUnfinishedRuns: mock<IWorkflowStore['listUnfinishedRuns']>(async () => []),
+      releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(
+        async (_id, _release, beforePublish) => {
+          await beforePublish?.();
+          getWorkflowRunStatus.mockImplementation(async () => 'paused');
+          return { released: true };
+        }
+      ),
+      releasePausedRunSlot: mock<IWorkflowStore['releasePausedRunSlot']>(() =>
+        Promise.resolve({ released: false })
+      ),
+      listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId =>
+        runEvents(runId)
+      ),
+      listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(
+        async (ids, types) => new Map(ids.map(id => [id, runEvents(id, types)]))
+      ),
+      listMetricRecords: mock<IWorkflowStore['listMetricRecords']>(async () => []),
+      listAttentionWaitStarts: mock<IWorkflowStore['listAttentionWaitStarts']>(async () => []),
+      listWorkflowNoticeRows: mock<IWorkflowStore['listWorkflowNoticeRows']>(async () => []),
+      findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(
+        async () => []
+      ),
+      createWorkflowRun: mock<IWorkflowStore['createWorkflowRun']>(async _data =>
+        mockWorkflowRun()
+      ),
+      claimPendingWorkflowRun: mock<IWorkflowStore['claimPendingWorkflowRun']>(async _id =>
+        mockWorkflowRun()
+      ),
+      recordWorkflowRunCheckoutBaseline: mock<IWorkflowStore['recordWorkflowRunCheckoutBaseline']>(
+        async (_id, baseline) => baseline
+      ),
+      getWorkflowRun: mock<IWorkflowStore['getWorkflowRun']>(async _id => null),
+      getWorkflowRunsByIds: mock<IWorkflowStore['getWorkflowRunsByIds']>(async _ids => []),
+      findChildRuns: mock<IWorkflowStore['findChildRuns']>(async _parentRunId => []),
+      getRunAncestry: mock<IWorkflowStore['getRunAncestry']>(async _runId => []),
+      getActiveWorkflowRunByPath: mock<IWorkflowStore['getActiveWorkflowRunByPath']>(
+        async (_workingPath, _self) => null
+      ),
+      resumeWorkflowRun: mock<IWorkflowStore['resumeWorkflowRun']>(async _id => mockWorkflowRun()),
+      recoverCancelledFanOutRun: mock<IWorkflowStore['recoverCancelledFanOutRun']>(async _id =>
+        mockWorkflowRun()
+      ),
+      updateWorkflowRunMetadataIfRunning: mock<
+        IWorkflowStore['updateWorkflowRunMetadataIfRunning']
+      >(async () => true),
+      updateWorkflowRunMetadataIfPending: mock<
+        IWorkflowStore['updateWorkflowRunMetadataIfPending']
+      >(async () => true),
+      updateWorkflowRun: mock<IWorkflowStore['updateWorkflowRun']>(
+        async (_id, _updates) => undefined
+      ),
+      updateWorkflowActivity: mock<IWorkflowStore['updateWorkflowActivity']>(
+        async _id => undefined
+      ),
+      getWorkflowRunStatus,
+      completeWorkflowRun: mock<IWorkflowStore['completeWorkflowRun']>(
+        async (_id, _completion, _metadata) => ({ startReceipts: [] })
+      ),
+      failWorkflowRun: mock<IWorkflowStore['failWorkflowRun']>(async () => ({ failed: true })),
+      pauseWorkflowRun: mock<IWorkflowStore['pauseWorkflowRun']>(
+        async (_id, _approvalContext, _extraMetadata, event) => {
+          if (event) await createWorkflowEvent(event);
+        }
+      ),
+      pauseWorkflowRunForWait: mock<NonNullable<IWorkflowStore['pauseWorkflowRunForWait']>>(
+        async (_id, _waitContext) => undefined
+      ),
+      clearWorkflowWaitContext: mock<IWorkflowStore['clearWorkflowWaitContext']>(
+        async (id, _waitContext, completion) => ({
+          cleared: true,
+          nodeEvent: waitCompletionEvents(id, completion).node,
+        })
+      ),
+      claimWriteback: mock<IWorkflowStore['claimWriteback']>(async _id => ({ claimed: true })),
+      releaseWritebackClaim: mock<IWorkflowStore['releaseWritebackClaim']>(async _id => undefined),
+      cancelWorkflowRun: mock<IWorkflowStore['cancelWorkflowRun']>(async _id => ({
+        cancelled: false,
+      })),
+      cancelFanOutRun: mock<IWorkflowStore['cancelFanOutRun']>(async (_id, _reason) => ({
+        cancelled: false,
+      })),
+      createWorkflowEvent,
+      persistWorkflowEvent: mock<IWorkflowStore['persistWorkflowEvent']>(async data => {
         await createWorkflowEvent(data);
-        return { persisted: true };
-      }
-    ),
-    listProviderEvents: mock<IWorkflowStore['listProviderEvents']>(async () => []),
-    getDagResumeSnapshot: mock<IWorkflowStore['getDagResumeSnapshot']>(async _workflowRunId =>
-      Promise.resolve({
-        completedNodeOutputs: new Map<string, { output: string }>(),
-        fanOutSnapshots: new Map(),
-        failedNodes: new Map(),
-        unresolvedNodeStarts: new Set(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 0, output: 0 },
-        costUsd: 0,
+      }),
+      persistWorkflowEventIfRunning: mock<IWorkflowStore['persistWorkflowEventIfRunning']>(
+        async data => {
+          await createWorkflowEvent(data);
+          return { persisted: true };
+        }
+      ),
+      listProviderEvents: mock<IWorkflowStore['listProviderEvents']>(async () => []),
+      getDagResumeSnapshot: mock<IWorkflowStore['getDagResumeSnapshot']>(async _workflowRunId =>
+        Promise.resolve({
+          completedNodeOutputs: new Map<string, { output: string }>(),
+          fanOutSnapshots: new Map(),
+          failedNodes: new Map(),
+          unresolvedNodeStarts: new Set(),
+          budget: { workUnits: 0, spendUsd: 0 },
+          tokens: { input: 0, output: 0 },
+          costUsd: 0,
+        })
+      ),
+      getCodebase: mock<IWorkflowStore['getCodebase']>(async _id => null),
+      getCodebaseEnvVars: mock<IWorkflowStore['getCodebaseEnvVars']>(async _codebaseId => ({})),
+      listWorkflowNodeSessions: mock<IWorkflowStore['listWorkflowNodeSessions']>(
+        async _scope => []
+      ),
+      listWorkflowRunNodeSessions: mock<IWorkflowStore['listWorkflowRunNodeSessions']>(
+        async _workflowRunId => []
+      ),
+      upsertWorkflowRunNodeSession: mock<IWorkflowStore['upsertWorkflowRunNodeSession']>(
+        async _params => undefined
+      ),
+      upsertWorkflowNodeSession: mock<IWorkflowStore['upsertWorkflowNodeSession']>(
+        async _params => undefined
+      ),
+    },
+    method =>
+      mock(() => {
+        throw new Error(`Unexpected ${method}`);
       })
-    ),
-    getCodebase: mock<IWorkflowStore['getCodebase']>(async _id => null),
-    getCodebaseEnvVars: mock<IWorkflowStore['getCodebaseEnvVars']>(async _codebaseId => ({})),
-    listWorkflowNodeSessions: mock<IWorkflowStore['listWorkflowNodeSessions']>(async _scope => []),
-    listWorkflowRunNodeSessions: mock<IWorkflowStore['listWorkflowRunNodeSessions']>(
-      async _workflowRunId => []
-    ),
-    upsertWorkflowRunNodeSession: mock<IWorkflowStore['upsertWorkflowRunNodeSession']>(
-      async _params => undefined
-    ),
-    upsertWorkflowNodeSession: mock<IWorkflowStore['upsertWorkflowNodeSession']>(
-      async _params => undefined
-    ),
-  };
+  );
 }
 
 /**
@@ -395,7 +299,7 @@ export function createMockStore(): MockWorkflowStore {
  * written through `updateWorkflowRun` at the run tail on EVERY disposition, so this is
  * the single surface a usage assertion should read — regardless of whether the run then
  * completed, failed, was cancelled, or paused. Other `updateWorkflowRun` writes
- * (output_root, evidence_validation, …) are filtered out by key.
+ * (output_root, …) are filtered out by key.
  */
 export function runUsageWrites(
   store: ReturnType<typeof createMockStore>
@@ -409,15 +313,6 @@ export function runUsageWrites(
           'total_tokens_in' in metadata ||
           'total_tokens_out' in metadata)
     );
-}
-
-/** Authored-outcome writes, excluding lifecycle/metadata/root updates. */
-export function authoredOutcomeWrites(
-  store: ReturnType<typeof createMockStore>
-): Array<'succeeded' | 'failed'> {
-  return (store.updateWorkflowRun as ReturnType<typeof mock>).mock.calls
-    .map((call: unknown[]) => (call[1] as { outcome?: 'succeeded' | 'failed' }).outcome)
-    .filter((outcome): outcome is 'succeeded' | 'failed' => outcome !== undefined);
 }
 
 export function withProviderCapabilities(
@@ -616,13 +511,28 @@ afterEach(() => {
   ownedGroupSpy = undefined;
 });
 
-/** The `docker` calls that dispatch node work, leaving out the checkout observation's probe. */
-export function nodeDockerCalls(
-  calls: Parameters<typeof git.execFileAsync>[]
-): Parameters<typeof git.execFileAsync>[] {
-  return calls.filter(
-    ([command, args]) => command === 'docker' && args.at(-1) !== CONTAINER_MARKER_PROBE
-  );
+type ExecCall = Parameters<typeof git.execFileAsync>;
+
+/**
+ * Whether a call is engine housekeeping around a node, not its work: the checkout
+ * observation's container probe, or node scratch release's `git -C <repo> worktree`
+ * (on the host, or in the container through `docker exec`).
+ */
+export function isEngineHousekeepingCall([command, args]: ExecCall): boolean {
+  if (command === 'docker' && args.at(-1) === CONTAINER_MARKER_PROBE) return true;
+  const gitArgs =
+    command === 'git' ? args : command === 'docker' ? args.slice(args.indexOf('git') + 1) : [];
+  return gitArgs[0] === '-C' && gitArgs[2] === 'worktree';
+}
+
+/** The subprocess calls that dispatch node work, leaving out engine housekeeping. */
+export function nodeExecCalls(calls: ExecCall[]): ExecCall[] {
+  return calls.filter(call => !isEngineHousekeepingCall(call));
+}
+
+/** The `docker` calls that dispatch node work, leaving out engine housekeeping. */
+export function nodeDockerCalls(calls: ExecCall[]): ExecCall[] {
+  return nodeExecCalls(calls).filter(([command]) => command === 'docker');
 }
 
 /**
@@ -728,25 +638,11 @@ export function makeWorkflowRun(
   overrides?: Partial<WorkflowRun>
 ): WorkflowRun {
   return {
+    ...mockWorkflowRun(id),
     origin: { conversationId: 'conv-dag' },
-    id,
     workflow_name: 'dag-test',
     conversation_id: 'conv-dag',
-    parent_conversation_id: null,
-    codebase_id: null,
-    status: 'running',
-    outcome: null,
     user_message: 'dag test message',
-    metadata: {},
-    started_at: new Date(),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: null,
-    user_id: null,
-    parent_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-    adopted_from_run_id: null,
     ...overrides,
   };
 }

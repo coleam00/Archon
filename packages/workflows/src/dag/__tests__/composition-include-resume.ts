@@ -292,7 +292,11 @@ export function setupIncludeExpansionTests() {
         expect(
           run.events.find(event => event.step_name === id && event.event_type === 'node_skipped')
             ?.data?.cause
-        ).toEqual(cause);
+        ).toEqual(
+          id.startsWith('action__')
+            ? { ...cause, boundary: { includeId: 'action', workflow: 'action-block' } }
+            : cause
+        );
         expect(
           run.events.some(event => event.step_name === id && event.event_type === 'node_started')
         ).toBe(false);
@@ -440,8 +444,9 @@ export function registerIncludeResumeTests(fixture: ReturnType<typeof setupInclu
     expect(entryEvents).toHaveLength(1);
     expect(entryEvents[0]?.event_type).toBe('node_failed');
     expect(entryEvents[0]?.data?.error).toContain(
-      "Condition reference '$gate.output.route' resolved to an object"
+      "Include 'review' (workflow 'structured-gate-block')"
     );
+    expect(entryEvents[0]?.data?.error).toContain('resolved to an object');
     expect(
       events.some(
         event =>

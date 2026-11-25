@@ -99,11 +99,13 @@ type ResumePayload =
  * so call sites stay readable as new options accrue.
  *
  * To resume a prior run, obtain the run, prior outputs, and prior usage from
- * `hydrateResumableRun` from `./run-resume` (or look up via `findResumableRun` and hydrate)
+ * `hydrateResumableRun` from `./run-resume`
  * and spread them in. The executor never queries the store for a prior run on
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  /** Refuse a fresh run whose workflow's `resource:` is full instead of waiting for a slot. */
+  noWait?: boolean;
   /** Binds host termination handling to the admitted execution, before any node can publish a pause. */
   onExecutionClaimed?: (claim: string | null) => void;
   /** Transfers scratch cleanup to a host that must drain it after reporting the outcome. */
@@ -122,9 +124,9 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   /** Already resolved checkout base, including unresolved empty; recorded resumes take priority. */
   resolvedBaseBranch?: string;
   /**
-   * Per-dispatch base-branch override (CLI `--base <branch>`), the top
-   * precedence level for `$BASE_BRANCH` — above repo config and the codebase
-   * default. Mirrors `IsolationRequest.baseOverride`, which does the same for
+   * Per-dispatch base-branch override (CLI `--base <branch>`, else the landing branch of
+   * the item the fresh run is on), the top precedence level for `$BASE_BRANCH` — above
+   * repo config and the codebase default. Mirrors `IsolationRequest.baseOverride`, which does the same for
    * the worktree cut-from, so one flag drives both halves of "base". Passing
    * the override through `baseBranch` instead would rank it BELOW
    * `worktree.baseBranch`, so a repo with that config set would cut its
@@ -215,6 +217,8 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * dispatch; the executor only records provenance.
    */
   adoptedFromRunId?: string;
+  /** The item a fresh run belongs to, written once on the row this call creates. */
+  item?: string;
   /** How `adoptedFromRunId` continues: estate adoption or fresh-lane supersession. */
   continuationMode?: ContinuationMode;
   /** One model-binding phase: raw at invocation boundaries, resolved for child runs. */

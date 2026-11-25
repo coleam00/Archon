@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import { captureLogLines } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
-import { WorkflowNotResumableError, WorkflowResourceBusyError } from '@archon/workflows/store';
+import {
+  RunLimitError,
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+} from '@archon/workflows/store';
 import type { getConversationById } from '@archon/core/db/conversations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import {
@@ -42,7 +47,9 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
 }));
 const mockHydrateResumableRun = mock<
   typeof import('@archon/workflows/run-resume')['hydrateResumableRun']
->(async () => null);
+>(async () => {
+  throw new Error('unused');
+});
 const mockExecuteWorkflow = mock<typeof import('@archon/workflows/executor')['executeWorkflow']>(
   async () => ({
     success: true,
@@ -59,6 +66,7 @@ const mockStartRunLiveOwner = mock<
 >(async runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
   return {
+    lease: testRunOwnerLease(runId),
     close: mockCloseRunLiveOwner,
     isStopRequested: () => false,
     registerTerminationPreparation: () => () => undefined,
@@ -143,8 +151,10 @@ function run(
     codebase_id: null,
     status,
     outcome: null,
+    completed_outcome: null,
     user_message: 'deliver',
     metadata,
+    active_phase_started_at: null,
     started_at: new Date('2026-08-24T10:00:00.000Z'),
     completed_at: status === 'failed' ? new Date('2026-08-24T10:01:00.000Z') : null,
     last_activity_at: null,
@@ -154,6 +164,7 @@ function run(
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
   };
 }
 
@@ -175,7 +186,9 @@ describe('workflow continuation scanner', () => {
     mockResolveRunWorkflow.mockReset();
     mockResolveRunWorkflow.mockResolvedValue({ ok: false, message: 'unused' });
     mockHydrateResumableRun.mockReset();
-    mockHydrateResumableRun.mockResolvedValue(null);
+    mockHydrateResumableRun.mockImplementation(async () => {
+      throw new Error('unused');
+    });
     mockExecuteWorkflow.mockReset();
     mockExecuteWorkflow.mockResolvedValue({
       success: true,
@@ -590,9 +603,11 @@ describe('workflow continuation scanner', () => {
       sourceError,
     });
     mockListDueWorkflowContinuations.mockResolvedValue([paused]);
+    const updateWorkflowRun = mock(async () => undefined);
     const store = {
       listDueWorkflowContinuations: mockListDueWorkflowContinuations,
       deferWorkflowContinuation: mockDeferWorkflowContinuation,
+      updateWorkflowRun,
     };
     for (let attempt = 0; attempt < 4; attempt++) {
       await wakeDueWorkflowContinuations(
@@ -613,6 +628,18 @@ describe('workflow continuation scanner', () => {
     }
     expect(mockResolveRunWorkflow).toHaveBeenCalledTimes(3);
     expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
+    // The give-up is recorded on the run once, naming the continuation it gave up on.
+    expect(updateWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(updateWorkflowRun).toHaveBeenCalledWith(paused.id, {
+      metadata: {
+        continuation_given_up: {
+          at: expect.any(String),
+          attempts: 3,
+          path: '/foreign/source/manifest.json',
+          cursor: expect.objectContaining({ kind: 'wait', nodeId: 'delay' }),
+        },
+      },
+    });
     expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
@@ -770,6 +797,22 @@ describe('workflow continuation scanner', () => {
     });
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('a full run limit reports run_limit_full with its message', async () => {
+    const paused = run('limit-full', 'paused', {});
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
+      ok: true,
+      workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
+    });
+    const full = new RunLimitError({ limit: 1, live: 1 });
+    mockHydrateResumableRun.mockRejectedValueOnce(full);
+
+    await expect(resumeWorkflowRunFromServer(host, paused)).resolves.toEqual({
+      kind: 'run_limit_full',
+      message: full.message,
+    });
   });
 
   test.each(['running', 'completed', 'failed', 'cancelled'] as const)(

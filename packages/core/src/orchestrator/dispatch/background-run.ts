@@ -26,6 +26,7 @@ type SubmitResult = Awaited<ReturnType<InProcessWorkflowEngine['submit']>>;
 export interface WorkerCheckout {
   cwd: string;
   cutFromCommit?: string;
+  resolvedBaseBranch?: string;
   ownedWorktree?: OwnedWorktree;
   baseBranch?: string;
   resolveChildIsolation?: ReturnType<typeof createCodebaseChildResolver>;
@@ -101,6 +102,7 @@ function submitRun(run: BackgroundRun): Promise<SubmitResult> {
       preparedSource: run.preparedSource,
       preparedAiConfiguration: run.preparedAiConfiguration,
       ...(checkout.cutFromCommit !== undefined ? { cutFromCommit: checkout.cutFromCommit } : {}),
+      resolvedBaseBranch: checkout.resolvedBaseBranch,
       ownedWorktree: checkout.ownedWorktree,
       inputs: ctx.inputs,
       ...(ctx.declaredContinuation

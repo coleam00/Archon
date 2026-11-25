@@ -1,20 +1,14 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
+import { useRunDetailSelection } from '../lib/use-run-detail-selection';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { RunStream, runToolCalls } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
+import { AttentionAnswerPanel } from '../components/AttentionAnswerPanel';
 import { RunGraphPanel } from '../components/RunGraphPanel';
 import { ArtifactPanel } from '../components/ArtifactPanel';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
@@ -51,8 +45,6 @@ type RunDetailView = Awaited<ReturnType<typeof skill.getRun>>;
 const TOGGLE_KEYS = {
   toolCalls: 'archon.console.showToolCalls',
   system: 'archon.console.showSystem',
-  view: 'archon.console.detailView',
-  node: 'archon.console.runNodeFilter',
 } as const;
 
 const NEAR_BOTTOM_PX = 120;
@@ -70,39 +62,6 @@ function readToggle(key: string, defaultOn: boolean): boolean {
 function writeToggle(key: string, value: boolean): void {
   try {
     localStorage.setItem(key, value ? '1' : '0');
-  } catch {
-    /* ignore */
-  }
-}
-
-function readView(): DetailView {
-  try {
-    const stored = localStorage.getItem(TOGGLE_KEYS.view);
-    return stored === 'graph' ? 'graph' : 'log';
-  } catch {
-    return 'log';
-  }
-}
-
-function writeView(v: DetailView): void {
-  try {
-    localStorage.setItem(TOGGLE_KEYS.view, v);
-  } catch {
-    /* ignore */
-  }
-}
-
-function readNodeFilter(): string {
-  try {
-    return localStorage.getItem(TOGGLE_KEYS.node) ?? 'all';
-  } catch {
-    return 'all';
-  }
-}
-
-function writeNodeFilter(v: string): void {
-  try {
-    localStorage.setItem(TOGGLE_KEYS.node, v);
   } catch {
     /* ignore */
   }
@@ -127,7 +86,7 @@ function clickReject(): void {
 interface RunDetailKeymap {
   isPaused: boolean;
   goBack: () => void;
-  setViewPersist: (next: DetailView) => void;
+  selectView: (next: DetailView) => void;
   toggleToolCalls: () => void;
   toggleSystem: () => void;
 }
@@ -135,7 +94,7 @@ interface RunDetailKeymap {
 function useRunDetailKeymap({
   isPaused,
   goBack,
-  setViewPersist,
+  selectView,
   toggleToolCalls,
   toggleSystem,
 }: RunDetailKeymap): void {
@@ -145,21 +104,21 @@ function useRunDetailKeymap({
         keys: ['1'],
         label: 'Log tab',
         run: (): void => {
-          setViewPersist('log');
+          selectView('log');
         },
       },
       {
         keys: ['2'],
         label: 'Graph tab',
         run: (): void => {
-          setViewPersist('graph');
+          selectView('graph');
         },
       },
       {
         keys: ['3'],
         label: 'Artifacts tab',
         run: (): void => {
-          setViewPersist('artifacts');
+          selectView('artifacts');
         },
       },
       { keys: ['t'], label: 'Toggle tool calls', run: toggleToolCalls },
@@ -179,7 +138,7 @@ function useRunDetailKeymap({
       { keys: ['Escape'], label: 'Back to runs', run: goBack },
       { keys: ['h'], label: 'Back to runs', run: goBack },
     ],
-    [isPaused, goBack, setViewPersist, toggleToolCalls, toggleSystem]
+    [isPaused, goBack, selectView, toggleToolCalls, toggleSystem]
   );
   useKeymap({ bindings });
 }
@@ -271,7 +230,7 @@ function JumpToBottom({
       type="button"
       onClick={onClick}
       aria-label="Jump to bottom"
-      className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+      className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-console-11 text-text-secondary shadow-md transition-colors hover:text-text-primary"
     >
       <span aria-hidden>↓</span>
       Jump to bottom
@@ -286,7 +245,7 @@ function ApprovalGate({ run }: { run: RunDetailView['run'] }): ReactElement | nu
     <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
       <div className="mb-2 flex items-center gap-2">
         <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-warning" />
-        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
+        <span className="text-console-11 font-semibold uppercase tracking-console-label text-warning">
           Waiting for approval
         </span>
       </div>
@@ -298,12 +257,34 @@ function ApprovalGate({ run }: { run: RunDetailView['run'] }): ReactElement | nu
   );
 }
 
+/**
+ * The attention wait answered in place, with the same panel and API call as the
+ * runs page's banner, so a person who opened the run does not have to go back.
+ */
+function AttentionGate({ run }: { run: RunDetailView['run'] }): ReactElement | null {
+  const attention = run.attention;
+  if (run.status !== 'paused' || attention?.kind !== 'attention') return null;
+  return (
+    <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-warning" />
+        <span className="text-console-11 font-semibold uppercase tracking-console-label text-warning">
+          Waiting for your answer
+        </span>
+      </div>
+      <p className="whitespace-pre-wrap text-sm text-text-primary">{attention.message}</p>
+      <AttentionAnswerPanel run={run} attention={attention} />
+    </div>
+  );
+}
+
 interface RunGraphViewProps {
   run: RunDetailView['run'];
   nodes: RunDetailView['nodes'];
   projectId: string | undefined;
   project: Project | null | undefined;
   projectError: Error | undefined;
+  selectedNodeId: string | null;
   onNodeSelect: (nodeId: string) => void;
 }
 
@@ -314,6 +295,7 @@ function RunGraphView({
   projectId,
   project,
   projectError,
+  selectedNodeId,
   onNodeSelect,
 }: RunGraphViewProps): ReactElement {
   if (project !== undefined && project !== null) {
@@ -323,12 +305,13 @@ function RunGraphView({
         projectCwd={project.path}
         nodes={nodes}
         live={isRunLive(run)}
+        selectedNodeId={selectedNodeId}
         onNodeSelect={onNodeSelect}
       />
     );
   }
   return (
-    <div className="p-6 text-[12px] text-text-tertiary">
+    <div className="p-6 text-console-12 text-text-tertiary">
       {projectId === undefined
         ? 'This run has no project. Its logs and artifacts are available in the other views.'
         : projectError
@@ -348,8 +331,6 @@ export function RunDetailPage(): ReactElement {
   const [showSystem, setShowSystem] = useState<boolean>(() =>
     readToggle(TOGGLE_KEYS.system, false)
   );
-  const [view, setView] = useState<DetailView>(() => readView());
-  const [selectedNodeId, setSelectedNodeId] = useState<string>(() => readNodeFilter());
 
   // Hoisted above any early returns so the hook order stays stable.
   const scrollToNode = useCallback((nodeId: string): boolean => {
@@ -396,18 +377,10 @@ export function RunDetailPage(): ReactElement {
     for (const node of nodeOptions) providerEventStore.load(runId, node.id);
   }, [runId, nodeOptions]);
 
-  // Drop a persisted node selection that doesn't apply to this run (e.g. after
-  // navigating to a different workflow). Guarded on the run being loaded so the
-  // empty list during loading can't clobber a still-valid stored selection.
-  // useLayoutEffect (not useEffect) so the reset lands before paint — navigating
-  // to a cached run whose node set lacks the selection never flashes an empty
-  // "Waiting for first event…" frame.
-  useLayoutEffect(() => {
-    if (detail === undefined || detail === null) return;
-    if (selectedNodeId !== 'all' && !nodeOptions.some(o => o.id === selectedNodeId)) {
-      setSelectedNodeId('all');
-    }
-  }, [detail, nodeOptions, selectedNodeId]);
+  const { view, selectedNodeId, select } = useRunDetailSelection(
+    nodeOptions,
+    detail !== undefined && detail !== null
+  );
 
   // Follow intent belongs to user navigation, not post-render geometry. Content
   // growth can make a pinned viewport look detached before an effect measures it.
@@ -486,10 +459,10 @@ export function RunDetailPage(): ReactElement {
     if (projectId !== undefined) navigate(`/console/p/${projectId}`);
     else navigate('/console');
   }, [navigate, projectId]);
-  const setViewPersist = useCallback((next: DetailView): void => {
-    setView(next);
-    writeView(next);
-  }, []);
+  const selectView = useCallback(
+    (next: DetailView): void => select(next, selectedNodeId),
+    [select, selectedNodeId]
+  );
   const toggleToolCalls = useCallback((): void => {
     setShowToolCalls(v => {
       const next = !v;
@@ -507,7 +480,7 @@ export function RunDetailPage(): ReactElement {
   useRunDetailKeymap({
     isPaused,
     goBack,
-    setViewPersist,
+    selectView,
     toggleToolCalls,
     toggleSystem,
   });
@@ -524,7 +497,7 @@ export function RunDetailPage(): ReactElement {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
         <p className="text-sm text-text-primary">Could not load run.</p>
-        <p className="font-mono text-[11px] text-text-tertiary">{detailError.message}</p>
+        <p className="font-mono text-console-11 text-text-tertiary">{detailError.message}</p>
       </div>
     );
   }
@@ -544,7 +517,7 @@ export function RunDetailPage(): ReactElement {
   const toolbar = (
     <StreamToolbar
       view={view}
-      onChangeView={setViewPersist}
+      onChangeView={selectView}
       showToolCalls={showToolCalls}
       onToggleToolCalls={next => {
         setShowToolCalls(next);
@@ -560,12 +533,73 @@ export function RunDetailPage(): ReactElement {
       artifactCount={artifactFiles?.length ?? null}
       nodeOptions={nodeOptions}
       selectedNodeId={selectedNodeId}
-      onSelectNode={next => {
-        setSelectedNodeId(next);
-        writeNodeFilter(next);
-      }}
+      onSelectNode={next => select(view, next)}
     />
   );
+
+  const content = {
+    log: (
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          onScrollEnd={handleScrollEnd}
+          className="h-full overflow-y-auto"
+        >
+          <div ref={contentRef} className="w-full px-6">
+            <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
+
+            <div className="py-4">
+              <RunStartedLine run={run} />
+
+              <div className="mt-2">
+                <RunStream
+                  messages={messageList}
+                  events={events}
+                  nodes={nodes}
+                  providerEvents={providerEvents}
+                  showToolCalls={showToolCalls}
+                  showSystem={showSystem}
+                  selectedNodeId={selectedNodeId}
+                  live={run.status === 'running' || run.status === 'paused'}
+                  waitingNodeId={run.status === 'paused' ? (run.wait?.nodeId ?? null) : null}
+                />
+              </div>
+
+              <RunFinishedLine run={run} />
+
+              <ApprovalGate run={run} />
+              <AttentionGate run={run} />
+            </div>
+          </div>
+        </div>
+        <JumpToBottom visible={!atBottom} onClick={scrollToBottom} />
+      </div>
+    ),
+    graph: (
+      <>
+        <div className="px-6">{toolbar}</div>
+        <RunGraphView
+          run={run}
+          nodes={nodes}
+          projectId={projectId}
+          project={project}
+          projectError={projectError}
+          selectedNodeId={selectedNodeId}
+          onNodeSelect={(nodeId): void => {
+            pendingNodeIdRef.current = nodeId;
+            select('log', nodeId);
+          }}
+        />
+      </>
+    ),
+    artifacts: (
+      <>
+        <div className="px-6">{toolbar}</div>
+        <ArtifactPanel runId={runId} />
+      </>
+    ),
+  } satisfies Record<DetailView, ReactElement>;
 
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
@@ -576,63 +610,7 @@ export function RunDetailPage(): ReactElement {
           projectName={project?.name ?? detail.run.projectName ?? 'All runs'}
         />
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {view === 'log' ? (
-            <div className="relative min-h-0 flex-1">
-              <div
-                ref={scrollRef}
-                onScroll={handleScroll}
-                onScrollEnd={handleScrollEnd}
-                className="h-full overflow-y-auto"
-              >
-                <div ref={contentRef} className="w-full px-6">
-                  <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
-
-                  <div className="py-4">
-                    <RunStartedLine run={run} />
-
-                    <div className="mt-2">
-                      <RunStream
-                        messages={messageList}
-                        events={events}
-                        nodes={nodes}
-                        providerEvents={providerEvents}
-                        showToolCalls={showToolCalls}
-                        showSystem={showSystem}
-                        selectedNodeId={selectedNodeId}
-                      />
-                    </div>
-
-                    <RunFinishedLine run={run} />
-
-                    <ApprovalGate run={run} />
-                  </div>
-                </div>
-              </div>
-              <JumpToBottom visible={!atBottom} onClick={scrollToBottom} />
-            </div>
-          ) : view === 'graph' ? (
-            <>
-              <div className="px-6">{toolbar}</div>
-              <RunGraphView
-                run={run}
-                nodes={nodes}
-                projectId={projectId}
-                project={project}
-                projectError={projectError}
-                onNodeSelect={(nodeId): void => {
-                  pendingNodeIdRef.current = nodeId;
-                  setViewPersist('log');
-                }}
-              />
-            </>
-          ) : (
-            <>
-              <div className="px-6">{toolbar}</div>
-              <ArtifactPanel runId={runId} />
-            </>
-          )}
-        </div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{content[view]}</div>
 
         <RunActionBar run={run} />
       </section>

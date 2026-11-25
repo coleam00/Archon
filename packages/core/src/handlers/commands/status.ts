@@ -247,7 +247,7 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
     }
     if (breakdown.merged > 0 || breakdown.stale > 0 || breakdown.inspectionFailedEnvs.length > 0) {
       if (breakdown.merged > 0) {
-        msg += `\n  • ${String(breakdown.merged)} merged (can auto-remove)`;
+        msg += `\n  • ${String(breakdown.merged)} integrated into base (cleanup checks PR coverage and blockers)`;
       }
       if (breakdown.stale > 0) {
         msg += `\n  • ${String(breakdown.stale)} stale (14+ days inactive)`;

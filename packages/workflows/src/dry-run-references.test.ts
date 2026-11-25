@@ -250,7 +250,7 @@ describe('dryRunWorkflow — declared inputs (#2610)', () => {
     });
     expect(defaultOnly.trace[0]).toMatchObject({
       state: 'skipped',
-      reason: 'when_condition_false',
+      reason: 'when_condition',
     });
   });
 

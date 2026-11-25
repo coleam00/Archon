@@ -26,6 +26,7 @@ Route by intent:
 |---|---|
 | Run a workflow on real work | `operate/running.md` |
 | Inspect, answer, cancel or resume runs | `operate/managing-runs.md` |
+| Set up the SDLC pack on a project | the pack README's setup guide (see `operate/queues.md`, "Setting up the pack"), then `operate/queues.md` |
 | Drive the SDLC pack's queues | `operate/queues.md` |
 | Find out why a run failed or hangs | `operate/troubleshooting.md` |
 | Set up Archon or change config | `setup/setup-and-config.md` |
@@ -62,11 +63,17 @@ Route by intent:
    archon workflow attention --watch --json        # this project; add --all for the install
    ```
 
-   Each line is JSON. `attention` means a run needs a decision, `resolved` means it no
-   longer does, and `terminal` means a run ended. Act on the line, then keep reading.
+   Its `needs` field says what a line asks of you: `answer` for an `attention` line that
+   wants a decision, `look` for a `terminal` line (a run failed or completed with
+   `outcome: "failed"`), and `nothing` for a `resolved` line, which only tells you an
+   ask you were shown has closed, so stop working on it. A run that completes otherwise writes no line unless you add
+   `--notices`, which also writes the `needs: "nothing"` lines for runs that completed,
+   were cancelled or resumed. Or check `archon workflow runs --json`, or block on one run
+   with `archon workflow wait <run-id> --json`. Act on the line, then keep reading.
 5. **Answer deliberately.** Read the item's question, its recommendation and the
    evidence it links. Answer with a reason, detached:
    `archon workflow respond <run-id> <decision> "<reason>" --detach`.
+   Add `--as <name>` on an attention wait so the record says which agent answered.
    `operate/managing-runs.md` covers every form.
 6. **Read the result.** A completed run is not a verdict. `archon workflow get
    <run-id> --json` gives the normalized `outcome` and `leave_behind.artifactFiles`.
@@ -79,6 +86,7 @@ Route by intent:
 - **Launch and answer with `--detach`.** A detached run starts its own session and
   survives your shell. A foreground `respond` or `resume` continues the run inside
   your shell, and closing the shell stops it.
+- **Never put a shell `timeout` on a run.** A full pipeline outlasts any wrapper you would pick, and the wrapper kills it mid-node. The task's exit status is then the wrapper's, not the run's, so a killed run can read as success. Launch with `--detach` or as a background task with no timeout, and read `archon workflow get <run-id>` for the real status. A `failed` or `paused` run is resumable: `archon workflow resume <run-id> --detach` skips completed nodes, so resume it instead of relaunching. A killed run can still show `running`; `archon workflow resume <run-id>` continues it too. Resume checks for a live owner first: if one still answers it refuses and names its host and pid, and if the recorded owner is on another host or user it refuses because it cannot ask. To keep a run with a live owner resumable, wait for that process to exit or stop that process yourself, then resume. Do not `archon workflow cancel` it first: cancel ends the run as `cancelled`, and resume refuses a cancelled run. Resume never picks a run for you; find the id with `archon workflow runs` (`--item <key>` narrows it to one item).
 - **One watcher, not one per run.** One `workflow attention --watch` stream covers
   every run in scope, including runs that triggers or other sessions start. A
   `workflow wait <run-id>` per run is fine for one or two runs; with dozens it

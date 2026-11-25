@@ -151,8 +151,32 @@ const sqliteMigrations: readonly Migration[] = [
   {
     kind: 'tolerated',
     scope: 'schema',
+    failureEvent: 'db.sqlite_migration_item_columns_failed',
+    apply: addItemColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_start_limit_columns_failed',
+    apply: addStartLimitColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_completed_outcome_column_failed',
+    apply: addCompletedOutcomeColumn,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
     failureEvent: 'db.sqlite_migration_state_revisions_columns_failed',
     apply: addStateRevisionColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_node_session_model_column_failed',
+    apply: addNodeSessionModelColumn,
   },
   { kind: 'required', scope: 'schema', apply: alignEventArchiveColumns },
 ];
@@ -260,6 +284,9 @@ function addWorkflowRunColumns(db: Database): void {
   // run wins its execution claim. NULL means not recorded.
   if (!wfColNames.has('checkout_baseline')) {
     db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN checkout_baseline TEXT');
+  }
+  if (!wfColNames.has('active_phase_started_at')) {
+    db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN active_phase_started_at TEXT');
   }
   if (!wfColNames.has('outcome')) {
     db.run(
@@ -436,11 +463,83 @@ function widenResourceSlotHolders(
   }).immediate();
 }
 
-// Names of event-derived inputs live beside the binding intent, not in it: older
-// binaries parse `intent` strictly and would refuse an extra key.
+// Names of event-derived inputs, a checkout hand-off and a binding's own item key live
+// beside the binding intent, not in it: older binaries parse `intent` strictly and would
+// refuse an extra key. A forge refusal lives beside `preparation_error`, whose stored
+// values keep their meaning.
 function addReceiptBindingColumns(db: Database): void {
-  if (!columnNames(db, 'remote_agent_start_receipt_bindings').has('event_input_names')) {
+  const columns = columnNames(db, 'remote_agent_start_receipt_bindings');
+  if (!columns.has('event_input_names')) {
     db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN event_input_names TEXT');
+  }
+  if (!columns.has('checkout_from')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN checkout_from TEXT');
+  }
+  if (!columns.has('item_key')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN item_key TEXT');
+  }
+  if (!columns.has('forge_refusal')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN forge_refusal TEXT');
+  }
+  if (!columns.has('preparation_process')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN preparation_process TEXT');
+  }
+  if (!columns.has('refusal')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN refusal TEXT');
+  }
+}
+
+// A binding's start limit and the limit it grants, beside the intent for the same reason,
+// and what each start request counted under or granted; see migrations/000_combined.sql.
+function addStartLimitColumns(db: Database): void {
+  const bindings = columnNames(db, 'remote_agent_start_receipt_bindings');
+  for (const column of ['start_limit', 'grants_limit'])
+    if (!bindings.has(column))
+      db.run(`ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN ${column} TEXT`);
+  const requests = columnNames(db, 'remote_agent_resource_start_requests');
+  for (const column of ['start_limit', 'grants_limit'])
+    if (!requests.has(column))
+      db.run(`ALTER TABLE remote_agent_resource_start_requests ADD COLUMN ${column} TEXT`);
+}
+
+// A receipt records the key a start named; its start request and the run point at the item.
+function addItemColumns(db: Database): void {
+  if (!columnNames(db, 'remote_agent_start_receipts').has('item_key')) {
+    db.run('ALTER TABLE remote_agent_start_receipts ADD COLUMN item_key TEXT');
+  }
+  if (!columnNames(db, 'remote_agent_resource_start_requests').has('item_id')) {
+    db.run(
+      'ALTER TABLE remote_agent_resource_start_requests ADD COLUMN item_id TEXT REFERENCES remote_agent_items(id)'
+    );
+  }
+  if (!columnNames(db, 'remote_agent_workflow_runs').has('item_id')) {
+    db.run(
+      'ALTER TABLE remote_agent_workflow_runs ADD COLUMN item_id TEXT REFERENCES remote_agent_items(id)'
+    );
+  }
+  // The run order's tie-break on SQLite is the rowid; see migrations/000_combined.sql.
+  if (!columnNames(db, 'remote_agent_items').has('moved_on_at')) {
+    db.run('ALTER TABLE remote_agent_items ADD COLUMN moved_on_at TEXT');
+  }
+  if (!columnNames(db, 'remote_agent_items').has('moved_on_tie')) {
+    db.run('ALTER TABLE remote_agent_items ADD COLUMN moved_on_tie INTEGER');
+  }
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_workflow_runs_item ON remote_agent_workflow_runs(item_id) WHERE item_id IS NOT NULL'
+  );
+  // The item read finds an item's starts by status and a receipt binding's start.
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_resource_start_item ON remote_agent_resource_start_requests(item_id, status)'
+  );
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_resource_start_receipt ON remote_agent_resource_start_requests(receipt_id, binding_id)'
+  );
+}
+
+// The outcome a run completed with (#5660); see migrations/000_combined.sql.
+function addCompletedOutcomeColumn(db: Database): void {
+  if (!columnNames(db, 'remote_agent_workflow_runs').has('completed_outcome')) {
+    db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN completed_outcome TEXT');
   }
 }
 
@@ -452,6 +551,13 @@ function addStateRevisionColumns(db: Database): void {
   for (const column of ['writer_via', 'lease_run_id', 'lease_node_path', 'lease_taken_at'])
     if (!cols.has(column))
       db.run(`ALTER TABLE remote_agent_state_revisions ADD COLUMN ${column} TEXT`);
+}
+
+// The model a persisted node session ran on (#5711); see migrations/000_combined.sql.
+function addNodeSessionModelColumn(db: Database): void {
+  if (!columnNames(db, 'remote_agent_workflow_node_sessions').has('model')) {
+    db.run('ALTER TABLE remote_agent_workflow_node_sessions ADD COLUMN model TEXT');
+  }
 }
 
 // The archive trigger copies an event row by position, and CREATE TABLE AS ran

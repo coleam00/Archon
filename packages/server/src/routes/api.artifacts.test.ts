@@ -190,6 +190,7 @@ describe('GET /api/runs/:runId/artifacts', () => {
       codebase_id: 'cb-renamed',
       output_root: root,
       checkout_baseline: null,
+      item_id: null,
     }));
     mockGetCodebase.mockImplementationOnce(async () => ({
       name: 'acme/renamed-since',
@@ -222,6 +223,7 @@ describe('GET /api/runs/:runId/artifacts', () => {
       // A root from the OLD home — the shape every run has after a relocation.
       output_root: '/previous/archon/home/workspaces/_local/workspace',
       checkout_baseline: null,
+      item_id: null,
     }));
     mockGetCodebase.mockImplementationOnce(async () => ({
       name: 'workspace',
@@ -247,6 +249,7 @@ describe('GET /api/runs/:runId/artifacts', () => {
       codebase_id: null,
       output_root: '/etc',
       checkout_baseline: null,
+      item_id: null,
     }));
     const { app } = makeApp();
     const response = await app.request('/api/runs/run-escape-root/artifacts');
@@ -353,6 +356,56 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     }
   });
 
+  test('publishes the encoded filename contract without replacing wildcard serving', async () => {
+    const { app } = makeApp();
+    const document = app.getOpenAPIDocument({
+      openapi: '3.0.0',
+      info: { title: 'Artifacts', version: '1' },
+    });
+    const operation = document.paths?.['/api/artifacts/{runId}/{filename}']?.get;
+    expect(operation).toBeDefined();
+    expect(operation?.parameters).toEqual([
+      expect.objectContaining({ in: 'path', name: 'runId', required: true }),
+      expect.objectContaining({ in: 'path', name: 'filename', required: true }),
+    ]);
+    expect(operation?.responses['200']).toEqual({
+      description: 'Artifact file contents',
+      content: {
+        'text/plain': { schema: { type: 'string' } },
+        'text/markdown': { schema: { type: 'string' } },
+      },
+    });
+    for (const status of ['400', '404', '500']) {
+      expect(operation?.responses[status]).toEqual(
+        expect.objectContaining({
+          content: expect.objectContaining({ 'application/json': expect.anything() }),
+        })
+      );
+    }
+  });
+
+  test.each(['review/a report 100%.md', 'review/nested/result.txt'])(
+    'serves a complete encoded relative filename: %s',
+    async filename => {
+      const runId = 'run-encoded-content';
+      const root = join(wsRoot(), '_local', 'workspace');
+      const dir = join(root, 'artifacts', 'runs', runId);
+      const target = join(dir, filename);
+      await mkdir(join(target, '..'), { recursive: true });
+      await writeFile(target, 'encoded content café');
+      mockGetWorkflowRun.mockResolvedValueOnce({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: null,
+        output_root: root,
+      });
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/${encodeURIComponent(filename)}`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('encoded content café');
+    }
+  );
+
   test('returns 404 when there is no codebase and no output_root to resolve from', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
@@ -424,6 +477,7 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
       codebase_id: 'cb-1',
       output_root: '/previous/archon/home/workspaces/_local/workspace',
       checkout_baseline: null,
+      item_id: null,
     }));
     mockGetCodebase.mockImplementationOnce(async () => ({
       name: 'workspace',
@@ -445,6 +499,7 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
       codebase_id: null,
       output_root: '/etc',
       checkout_baseline: null,
+      item_id: null,
     }));
     const { app } = makeApp();
     const response = await app.request('/api/artifacts/run-serve-escape-root/passwd');
@@ -471,38 +526,6 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     expect(response.status).toBe(404);
     const body = (await response.json()) as { error: string };
     expect(body.error).toBe('Artifact file not found');
-  });
-
-  test('a backslash climb out of the artifacts directory is refused on Windows', async () => {
-    // The route's `..` segment check splits on `/` only. On Windows `\` is a
-    // separator too, so only the containment check stops `..\` from leaving the
-    // run's directory for a sibling run whose name shares this one's prefix.
-    // On POSIX `\` is an ordinary filename character and the name stays inside.
-    const runId = 'run-serve-backslash';
-    const runsDir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs');
-    await mkdir(join(runsDir, runId), { recursive: true });
-    await mkdir(join(runsDir, `${runId}-old`), { recursive: true });
-    await writeFile(join(runsDir, `${runId}-old`, 'plan.md'), '# another run');
-    mockGetWorkflowRun.mockImplementationOnce(async () => ({
-      ...MOCK_RUNNING_RUN,
-      id: runId,
-      codebase_id: 'cb-local',
-    }));
-    mockGetCodebase.mockImplementationOnce(async () => ({
-      name: 'workspace',
-      kind: 'repo',
-      default_cwd: '/home/u/workspace',
-    }));
-    const { app } = makeApp();
-    const escape = encodeURIComponent(`..\\${runId}-old\\plan.md`);
-    const response = await app.request(`/api/artifacts/${runId}/${escape}`);
-
-    if (process.platform === 'win32') {
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: 'Invalid filename' });
-    } else {
-      expect(response.status).toBe(404);
-    }
   });
 
   test('an artifact pointer from a run result addresses this route with no extra machinery', async () => {

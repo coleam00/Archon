@@ -1,0 +1,155 @@
+/**
+ * What a run's row and its events say about an attention item that closed and a run that
+ * ended, for the attention stream (`attention-watch.ts`).
+ */
+import { askIdOfRef } from './attention-item-refs';
+import { createLogger } from '@archon/paths';
+import { recordSurfaceSchema } from './schemas/record-surface';
+import type { WorkflowEventRow } from './schemas/workflow-event';
+import {
+  attentionAnswererSchema,
+  attentionOccurrence,
+  displayedRunOutcome,
+  gateOccurrence,
+  isApprovalContext,
+  isGateResolved,
+  isWorkflowWaitContext,
+  type AttentionAnswerer,
+  type AttentionAnsweringRun,
+  type RunTerminalStatus,
+  type WorkflowRun,
+} from './schemas/workflow-run';
+import type { IWorkflowStore, WorkflowEventPage } from './store';
+import type { StoredItemAsk } from './schemas/item-ask';
+import { failedOutcomeReason, getTerminalRecord } from './terminal-record';
+
+function getLog(): ReturnType<typeof createLogger> {
+  return createLogger('workflow.attention_watch');
+}
+
+export type Resolution =
+  | {
+      reason: 'answered';
+      answeredVia: string | null;
+      answeredBy: AttentionAnswerer | null;
+      answeredFromRun: AttentionAnsweringRun | null;
+      answeredAt: string | null;
+    }
+  | { reason: 'withdrawn' };
+
+export type Answered = Omit<Extract<Resolution, { reason: 'answered' }>, 'answeredFromRun'>;
+
+/** How `occurrence` closed, from the row when it still records the answer. */
+export function rowResolution(run: WorkflowRun, occurrence: string | null): Answered | undefined {
+  if (occurrence === null) return undefined;
+  const { approval, wait } = run.metadata;
+  if (isApprovalContext(approval) && gateOccurrence(approval) === occurrence)
+    return isGateResolved(approval)
+      ? {
+          reason: 'answered',
+          answeredVia: approval.answeredVia ?? null,
+          answeredBy: null,
+          answeredAt: approval.answeredAt ?? null,
+        }
+      : undefined;
+  if (
+    isWorkflowWaitContext(wait) &&
+    wait.kind === 'attention' &&
+    attentionOccurrence(wait) === occurrence &&
+    wait.answer !== undefined
+  )
+    return {
+      reason: 'answered',
+      answeredVia: wait.answeredVia ?? null,
+      answeredBy: wait.answeredBy ?? null,
+      answeredAt: wait.answeredAt ?? null,
+    };
+  return undefined;
+}
+
+export const answerKey = (runId: string, occurrence: string): string =>
+  `${runId}\u0000${occurrence}`;
+
+export type AnswerOrigin = Pick<Answered, 'answeredVia' | 'answeredBy'>;
+
+/** The surface and answerer of each answer event in a page, by run and occurrence. */
+export function indexAnswers(page: WorkflowEventPage): Map<string, AnswerOrigin> {
+  const answers = new Map<string, AnswerOrigin>();
+  for (const { event } of page.events) {
+    if (event.event_type !== 'approval_received' && event.event_type !== 'wait_answered') continue;
+    const { occurrence, via, by } = event.data;
+    if (typeof occurrence !== 'string') continue;
+    const surface = recordSurfaceSchema.safeParse(via);
+    const answerer = attentionAnswererSchema.safeParse(by);
+    answers.set(answerKey(event.workflow_run_id, occurrence), {
+      answeredVia: surface.success ? surface.data : null,
+      answeredBy: answerer.success ? answerer.data : null,
+    });
+  }
+  return answers;
+}
+
+/** What the terminal record riding on `event` says, or nulls when it cannot be read. */
+export function terminalFacts(
+  event: WorkflowEventRow,
+  status: RunTerminalStatus
+): { outcome: string | null; firstFailedNode: string | null; reason: string[] } {
+  try {
+    const record = getTerminalRecord(status, [event]);
+    return {
+      // From the record on this event, not the run row: a replayed earlier terminal event
+      // of a run that later resumed and completed must not show the later outcome.
+      outcome: record
+        ? displayedRunOutcome({
+            status: record.status,
+            outcome: record.outcome,
+            completed_outcome: record.completed_outcome ?? null,
+          })
+        : null,
+      firstFailedNode: record?.first_failed_node ?? null,
+      reason:
+        status === 'failed' && event.data.exit_reason === 'launch_failed'
+          ? ['launch failed before the first node']
+          : failedOutcomeReason(record),
+    };
+  } catch (error) {
+    // A malformed record must not stall the stream on one row; the line still reports
+    // the status, and `workflow get` remains the full read.
+    getLog().warn(
+      { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
+      'workflow.attention_watch_terminal_record_unreadable'
+    );
+    return { outcome: null, firstFailedNode: null, reason: [] };
+  }
+}
+
+/**
+ * Why an item no run holds left the list, from what the store holds for it: an ask's row
+ * says whether it was answered, withdrawn or replaced. Anything else, or a row that cannot
+ * be read, is `no_longer_listed`: the stream saw it go, and nothing says why.
+ */
+export async function closedWithoutRun(store: Pick<IWorkflowStore, 'getItemAsk'>, ref: string) {
+  const askId = askIdOfRef(ref);
+  let closed: StoredItemAsk['closed'] = null;
+  try {
+    closed = askId === undefined ? null : ((await store.getItemAsk(askId))?.closed ?? null);
+  } catch (error) {
+    getLog().warn({ err: error as Error, ref }, 'workflow.attention_watch_ask_unreadable');
+  }
+  switch (closed?.as) {
+    case 'answered':
+      return {
+        reason: 'answered',
+        answeredVia: closed.act.via,
+        answeredBy: closed.act.by,
+        answeredFromRun: closed.act.fromRun,
+        answeredAt: closed.act.at,
+      } as const;
+    case 'withdrawn':
+      return { reason: 'withdrawn' } as const;
+    case 'replaced':
+      return { reason: 'replaced', replacedByRunId: closed.byRunId } as const;
+    case undefined:
+      return { reason: 'no_longer_listed' } as const;
+  }
+}

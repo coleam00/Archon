@@ -21,8 +21,12 @@ import {
 const log = createLogger('file-store');
 export const persistedRunSchema = workflowRunSchema.extend({
   started_at: z.coerce.date(),
+  active_phase_started_at: z.coerce.date().nullable().default(null),
   last_activity_at: z.coerce.date().nullable(),
   completed_at: z.coerce.date().nullable(),
+  item_id: z.null().default(null),
+  // Absent from runs a binary before #5660 wrote.
+  completed_outcome: z.string().nullable().default(null),
 });
 const lineSchema = z.object({
   seq: z.number().int().positive(),

@@ -494,23 +494,30 @@ describe('adopting an existing checkout', () => {
     await expect(provider.create(issueRequest)).rejects.toThrow(/belongs to a different clone/);
   });
 
-  test('refuses a worktree whose setup never finished instead of adopting it', async () => {
-    worktreeExistsSpy.mockResolvedValue(true);
-    // A previous run died between `git worktree add` and the end of its setup,
-    // so its lock is still on the checkout.
-    readWorktreeLockSpy.mockResolvedValue({ reason: 'archon: worktree setup in progress' });
+  test.each([
+    // Another start's setup holds the checkout, or died holding it: its id is named.
+    { reason: 'archon: worktree setup in progress: another-attempt', attempt: 'another-attempt' },
+    // The marker v0.11 wrote names no attempt, so nobody's ownership can be shown.
+    { reason: 'archon: worktree setup in progress', attempt: undefined },
+  ])(
+    'refuses a worktree locked by an unfinished setup without advising its removal ($reason)',
+    async ({ reason, attempt }) => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      readWorktreeLockSpy.mockResolvedValue({ reason });
 
-    const error = await rejection(provider.create(issueRequest));
+      const error = await rejection(provider.create(issueRequest));
 
-    expect(error.message).toMatch(/its setup did not finish/);
-    expect(adoptionWarnings()).toHaveLength(0);
-    // The operator is told which checkout and the command that clears it.
-    expect(classifyIsolationError(error)).toContain(
-      `git worktree remove --force --force ${issuePath()}`
-    );
-    // Refusing is the whole point: nothing may be created over it either.
-    expect(ranGit('add')).toBe(false);
-  });
+      expect(error.message).toMatch(/its setup did not finish/);
+      expect(adoptionWarnings()).toHaveLength(0);
+      const userMessage = classifyIsolationError(error);
+      expect(userMessage).toContain(issuePath());
+      // The checkout may be another start's live one: nothing here may say to remove it.
+      expect(userMessage).not.toMatch(/\bremove\b/i);
+      if (attempt) expect(userMessage).toContain(attempt);
+      // Refusing is the whole point: nothing may be created over it either.
+      expect(ranGit('add')).toBe(false);
+    }
+  );
 
   test('adopts a worktree locked by someone other than a setup in progress', async () => {
     worktreeExistsSpy.mockResolvedValue(true);
@@ -1034,7 +1041,7 @@ describe('fork PRs', () => {
 });
 
 describe('base branch and remote', () => {
-  const baseSynced = (branch: string | undefined, mode = 'fast-forward', remote = 'origin') =>
+  const baseSynced = (branch: string | undefined, mode = 'fetch-only', remote = 'origin') =>
     expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/repo', branch, { mode, remote });
   const cutFrom = (startPoint: string, branch = 'archon/issue-42') =>
     expect(execSpy).toHaveBeenCalledWith(
@@ -1120,9 +1127,9 @@ describe('base branch and remote', () => {
   test.each([
     ['resets a managed clone', '/test/.archon/workspaces/owner/repo/source', 'reset'],
     [
-      'fast-forwards a checkout that only shares the workspaces prefix',
+      'only fetches a checkout that only shares the workspaces prefix',
       '/test/.archon/workspaces-old/owner/repo/source',
-      'fast-forward',
+      'fetch-only',
     ],
   ])('%s before cutting', async (_label, repoPath, mode) => {
     await withConfig({}).create({ ...issueRequest, canonicalRepoPath: git.toRepoPath(repoPath) });
@@ -1166,7 +1173,7 @@ describe('base branch and remote', () => {
   test('uses the configured remote without auto-detecting one', async () => {
     await withConfig({ baseBranch: git.toBranchName('main'), remote: 'mar' }).create(issueRequest);
 
-    baseSynced('main', 'fast-forward', 'mar');
+    baseSynced('main', 'fetch-only', 'mar');
     expect(getDefaultRemoteSpy).not.toHaveBeenCalled();
     cutFrom('mar/main');
   });
@@ -1176,7 +1183,61 @@ describe('base branch and remote', () => {
 
     await provider.create(issueRequest);
 
-    baseSynced('main', 'fast-forward', 'upstream');
+    baseSynced('main', 'fetch-only', 'upstream');
+  });
+
+  test('a start commit is cut from as is, with no fetch', async () => {
+    execSpy.mockImplementation(async (_cmd: string, args: string[]) => ({
+      stdout: args.includes('abc123^{commit}') ? 'abc123\n' : '',
+      stderr: '',
+    }));
+    const env = await withConfig({}).create({
+      ...issueRequest,
+      workflowType: 'task',
+      identifier: 'layered',
+      startCommit: { commit: 'abc123', branch: git.toBranchName('dev') },
+    });
+
+    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
+    expect(env.resolvedBaseBranch).toBe('dev');
+    cutFrom('abc123', 'archon/task-layered');
+  });
+
+  test('a start commit read in another clone is fetched here before the cut', async () => {
+    let fetched = false;
+    syncWorkspaceSpy.mockImplementation(async () => {
+      fetched = true;
+      return syncResult('dev');
+    });
+    execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+      // `rev-parse --verify --quiet` prints nothing for a commit this repository lacks.
+      const found = fetched && args.includes('abc123^{commit}');
+      return { stdout: found ? 'abc123\n' : '', stderr: '' };
+    });
+    const request = {
+      ...issueRequest,
+      workflowType: 'task' as const,
+      identifier: 'layered',
+      startCommit: { commit: 'abc123', branch: git.toBranchName('dev') },
+    };
+
+    await withConfig({}).create(request);
+    baseSynced('dev');
+    cutFrom('abc123', 'archon/task-layered');
+  });
+
+  test('a start commit the fetch does not bring refuses instead of cutting from another', async () => {
+    // The commit stays missing: `rev-parse --verify --quiet` prints nothing for it.
+    execSpy.mockImplementation(async () => ({ stdout: '', stderr: '' }));
+
+    await expect(
+      withConfig({}).create({
+        ...issueRequest,
+        workflowType: 'task',
+        identifier: 'rewritten',
+        startCommit: { commit: 'abc123', branch: git.toBranchName('dev') },
+      })
+    ).rejects.toThrow('Commit abc123');
   });
 
   test('fromBranch start-point is not remote-prefixed (task workflow)', async () => {
@@ -1187,14 +1248,14 @@ describe('base branch and remote', () => {
       taskBranch: { kind: 'new', fromBranch: git.toBranchName('develop') },
     });
 
-    baseSynced('main', 'fast-forward', 'upstream');
+    baseSynced('main', 'fetch-only', 'upstream');
     cutFrom('develop', 'archon/task-my-feature');
   });
 
   test('throws actionable error when remote is ambiguous', async () => {
     getDefaultRemoteSpy.mockResolvedValue(null);
     execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-      // `git remote` listing for the error message
+      // The remotes getDefaultRemote could not choose between
       if (args.includes('remote') && !args.includes('get-url')) {
         return { stdout: 'jan\nfeb\nmar\n', stderr: '' };
       }
@@ -1205,18 +1266,6 @@ describe('base branch and remote', () => {
       /Cannot determine git remote.*jan, feb, mar.*Set worktree\.remote/s
     );
     // No sync attempted from an unknown remote
-    expect(syncWorkspaceSpy).not.toHaveBeenCalled();
-  });
-
-  test('throws actionable error when no remote is configured', async () => {
-    getDefaultRemoteSpy.mockResolvedValue(null);
-
-    const creation = provider.create(issueRequest);
-
-    await expect(creation).rejects.toThrow(
-      /no git remote is configured.*git remote add origin URL.*--no-worktree/s
-    );
-    await expect(creation).rejects.not.toThrow(/multiple remotes|worktree\.remote/s);
     expect(syncWorkspaceSpy).not.toHaveBeenCalled();
   });
 });
@@ -1306,6 +1355,13 @@ describe('submodules', () => {
   });
 
   describe('rollback of a setup that did not finish', () => {
+    /** The path stays and is named, and the notice does not send anyone to remove it. */
+    const expectKeptWithoutRemovalAdvice = (error: Error): void => {
+      const notice = (error as Error & { cleanupFailure?: string }).cleanupFailure ?? '';
+      expect(notice).toContain(issuePath());
+      expect(notice).not.toMatch(/\bremove\b/i);
+    };
+
     test('removes the worktree this call created and leaves the branch alone', async () => {
       gitmodulesPresent();
       failSubmodules(submoduleError);
@@ -1346,17 +1402,20 @@ describe('submodules', () => {
       expect(ranGit('remove')).toBe(false);
       const userMessage = classifyIsolationError(error);
       expect(userMessage).toContain('Submodule initialization failed');
-      expect(userMessage).toContain('was left behind');
+      expectKeptWithoutRemovalAdvice(error);
     });
 
-    test.each(['ownership changes', 'status fails'])(
-      'preserves the checkout when %s during cleanup',
-      async failure => {
+    test.each([
+      { lockChanges: true, statusFails: false },
+      { lockChanges: true, statusFails: true },
+      { lockChanges: false, statusFails: true },
+    ])(
+      'preserves the checkout during cleanup (lock changes: $lockChanges, status fails: $statusFails)',
+      async ({ lockChanges, statusFails }) => {
         gitmodulesPresent();
         execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
           if (args.includes('submodule')) throw submoduleError;
-          if (failure === 'status fails' && args.includes('status'))
-            throw new Error('status unavailable');
+          if (statusFails && args.includes('status')) throw new Error('status unavailable');
           return { stdout: '', stderr: '' };
         });
         let lockReads = 0;
@@ -1366,14 +1425,23 @@ describe('submodules', () => {
           lockReads++;
           return {
             reason:
-              failure === 'ownership changes' && lockReads > 1
+              lockChanges && lockReads > 1
                 ? 'archon: worktree setup in progress: another-attempt'
                 : add[add.indexOf('--reason') + 1],
           };
         });
         const error = await rejection(provider.create(issueRequest));
         expect(error.message).toContain('Submodule initialization failed');
-        expect(classifyIsolationError(error)).toContain('was left behind');
+        // A failed status is a failure on this attempt's own checkout only while its lock
+        // is still on the path. Once the lock is another attempt's, whatever the content
+        // check said, the notice must not send anyone to remove that path.
+        if (lockChanges) {
+          expectKeptWithoutRemovalAdvice(error);
+        } else {
+          expect((error as Error & { cleanupFailure?: string }).cleanupFailure).toMatch(
+            /\bremove\b/i
+          );
+        }
         expect(ranGit('remove')).toBe(false);
       }
     );

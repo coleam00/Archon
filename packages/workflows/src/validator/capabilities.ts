@@ -25,6 +25,7 @@ export function validateProviderCapabilities(
     });
   }
   if (!capabilities) return;
+  issues.push(...declaredToolsIssue(node, provider, capabilities));
 
   if ('hooks' in node && node.hooks && !capabilities.hooks) {
     issues.push({
@@ -130,4 +131,22 @@ function toolNameIssue(
     issue.suggestions = similar;
   }
   return issue;
+}
+
+/** `tools:` is an error like plugins: the engine refuses the run. */
+function declaredToolsIssue(
+  node: DagNode,
+  provider: NodeValidation['provider'],
+  capabilities: ProviderCapabilities
+): ValidationIssue[] {
+  if (node.kind !== 'agent' || !node.tools || capabilities.nativeTools) return [];
+  return [
+    {
+      level: 'error',
+      nodeId: node.id,
+      field: 'tools',
+      message: `Provider '${provider}' cannot offer declared tools — the run would fail before any node starts`,
+      hint: 'Remove the tools field or switch to a provider whose nativeTools capability is true',
+    },
+  ];
 }

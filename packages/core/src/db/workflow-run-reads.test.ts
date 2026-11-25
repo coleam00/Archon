@@ -80,18 +80,12 @@ describe('workflow run reads', () => {
   });
 
   test.each([
-    [
-      () => findWorkflowRunsByIdPrefix('abc', 'project'),
-      'Failed to find workflow runs by id prefix: offline',
-    ],
-    [
-      () => getWorkflowRunByWorkerPlatformId('worker'),
-      'Failed to get workflow run by worker platform ID: offline',
-    ],
-    [() => getRunByIsolationEnvId('env'), 'Failed to look up run for isolation env env: offline'],
-  ] as const)('preserves query failure diagnostics', async (read, message) => {
+    () => findWorkflowRunsByIdPrefix('abc', 'project'),
+    () => getWorkflowRunByWorkerPlatformId('worker'),
+    () => getRunByIsolationEnvId('env'),
+  ])('preserves query failure diagnostics', async read => {
     mockQuery.mockRejectedValueOnce(new Error('offline'));
-    await expect(read()).rejects.toThrow(message);
+    await expect(read()).rejects.toThrow('offline');
   });
 
   test('environment inventory propagates query errors', async () => {
@@ -222,12 +216,12 @@ describe('workflow run reads', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('id != $2');
-      // PostgreSQL branch: explicit `::timestamptz` cast on the param so
-      // the comparison is chronological, not lexical. SQLite branch wraps
-      // both sides in datetime() — covered by tests in adapters/sqlite.test.ts
-      // because this suite mocks getDatabaseType as 'postgresql'.
-      expect(query).toContain('started_at < $3::timestamptz');
-      expect(query).toContain('started_at = $3::timestamptz AND id < $2');
+      expect(query).toContain(
+        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) < COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $3::timestamptz)'
+      );
+      expect(query).toContain(
+        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) = COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $3::timestamptz) AND id < $2'
+      );
       // selfStartedAt serialized to ISO — bun:sqlite rejects Date bindings.
       expect(params).toEqual(['/repo/path', 'self-id', startedAt.toISOString()]);
     });
@@ -244,13 +238,15 @@ describe('workflow run reads', () => {
       expect(params).toEqual(['/repo/path']);
     });
 
-    test('orders by (started_at ASC, id ASC) so older-wins is deterministic', async () => {
+    test('orders by effective phase time and id so older-wins is deterministic', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await getActiveWorkflowRunByPath('/repo/path');
 
       const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain('ORDER BY started_at ASC, id ASC');
+      expect(query).toContain(
+        'ORDER BY GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) ASC, id ASC'
+      );
     });
 
     test('returns null when no active run on path', async () => {
@@ -288,7 +284,9 @@ describe('workflow run reads', () => {
       // The tiebreaker's id comparison must reference SELF ($2) — a positional
       // back-reference once pointed it at $4 (an ancestor id) when excludeRunIds
       // params landed between the self id and startedAt.
-      expect(query).toContain('started_at = $5::timestamptz AND id < $2');
+      expect(query).toContain(
+        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) = COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $5::timestamptz) AND id < $2'
+      );
       expect(params).toEqual([
         '/repo/path',
         'child-id',

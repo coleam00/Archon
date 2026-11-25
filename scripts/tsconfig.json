@@ -1,10 +1,15 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "noEmit": true,
+    // Root scripts are never imported by a package, so they need no declarations and are
+    // not composite; `incremental` still lets `tsc -b` skip them when nothing changed.
+    "composite": false,
     "declaration": false,
-    "declarationMap": false,
-    "sourceMap": false,
+    "emitDeclarationOnly": false,
+    "noEmit": true,
+    "incremental": true,
+    // The scripts import package and pack sources by relative path.
+    "rootDir": "..",
     "types": ["bun-types"],
     // Cross-package tests import web modules that touch browser globals through
     // transitive imports, so this project needs DOM in `lib`.
@@ -22,7 +27,14 @@
   "include": [
     "*.ts",
     "fixtures/*.ts",
+    "../packages/script-api/src/archon-script.d.ts",
     "../packages/workflows/src/defaults/text-imports.d.ts",
     "../packages/core/src/sql-text-imports.d.ts"
+  ],
+  "references": [
+    { "path": "../packages/core" },
+    { "path": "../packages/git" },
+    { "path": "../packages/paths" },
+    { "path": "../packages/providers" }
   ]
 }

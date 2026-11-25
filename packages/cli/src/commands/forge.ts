@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
 import { getPluginsPath } from '@archon/paths';
-import { discoverPlugins } from '@archon/forge/discovery';
-import { dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
+import { discoverPlugins, type PluginDiscovery, type SourcePlugin } from '@archon/forge/discovery';
+import { readForgeConfig, sourceForgePlugins } from '@archon/forge/host-plugins';
+import { checkForgeAccess, dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { type ForgePluginConfig, forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import {
   forgeRequestSchema,
@@ -11,28 +12,18 @@ import {
   mutationTarget,
   mutationAttempt,
   type ForgeRequest,
+  type ForgeResponse,
 } from '@archon/forge/operations';
 import {
+  cliForgeCheckRequestSchema,
   cliForgeMetadataRequestSchema,
   cliForgeResponseSchema,
+  type CliForgeItemRecord,
   type CliForgeResponse,
 } from '@archon/forge';
+import { z } from '@hono/zod-openapi';
 import { writeJsonLine } from '../utils/stdout';
-
-async function readForgeConfig(configPath: string): Promise<unknown> {
-  let source: string;
-  try {
-    source = await readFile(configPath, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw error;
-  }
-  const config: unknown = Bun.YAML.parse(source);
-  if (config === null) return {};
-  if (typeof config !== 'object' || Array.isArray(config))
-    throw new Error('Archon config must be an object');
-  return 'forge' in config ? config.forge : {};
-}
+import type { recordRunMerge, RunMergeFacts } from './forge-merge-record';
 
 async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<void> {
   const { persistWorkflowEvent } = await import('@archon/core/db/workflow-events');
@@ -58,7 +49,9 @@ interface ForgeCommandOptions {
 interface ForgeCommandDependencies {
   dispatch?: typeof dispatchForge;
   readConfig?: () => Promise<unknown>;
+  sourcePlugins?: readonly SourcePlugin[];
   audit?: typeof persistAudit;
+  recordMerge?: typeof recordRunMerge;
   write?: typeof writeJsonLine;
   env?: NodeJS.ProcessEnv;
 }
@@ -107,10 +100,21 @@ export async function forgeCommand(
   try {
     const input = await readForgeInput(subcommand, options, context);
     if (input.op === 'metadata') return await answerMetadata(input, context);
+    if (input.op === 'check') return await answerCheck(input, context);
     const result = await dispatchRequest(input, context);
     response = result.response;
-    const auditFailure = await auditOperation(result.audit, response, context);
-    if (auditFailure !== undefined) return auditFailure;
+    const runId = env.WORKFLOW_ID;
+    if (runId) {
+      const recorded = await recordRunFacts(runId, result, context);
+      if (recorded.itemRecord) response = { ...response, itemRecord: recorded.itemRecord };
+      for (const line of recorded.stderr) process.stderr.write(`${line}\n`);
+      if (recorded.failed) {
+        // Retain the actual operation outcome on stdout. A failure to record it is a
+        // separate failure and never rewrites an observed result as a refusal.
+        await writeResponse(response, context);
+        return 2;
+      }
+    }
   } catch (error) {
     response = failureResponse(error, context);
   }
@@ -148,19 +152,56 @@ async function readForgeInput(
 }
 
 /**
+ * Where metadata, check, dispatch and `validate workflows` all find plugins, so a
+ * preflight never answers for a different plugin than the one dispatch runs.
+ */
+function discoveryOptions(
+  archonHome: string,
+  config: ForgePluginConfig,
+  trustedEnv: NodeJS.ProcessEnv,
+  sourcePlugins: readonly SourcePlugin[] = sourceForgePlugins()
+): {
+  config: ForgePluginConfig;
+  env: NodeJS.ProcessEnv;
+  pluginsDir: string;
+  sourcePlugins: readonly SourcePlugin[];
+} {
+  return {
+    config,
+    env: trustedEnv,
+    // The trusted directory `archon plugin add` writes; repo env cannot move it.
+    pluginsDir: getPluginsPath(archonHome),
+    sourcePlugins,
+  };
+}
+
+function trustedDiscovery(
+  { archonHome, config }: ForgeInput,
+  { trustedEnv, dependencies }: ForgeCommandContext
+): ReturnType<typeof discoveryOptions> {
+  return discoveryOptions(archonHome, config, trustedEnv, dependencies.sourcePlugins);
+}
+
+/** The forge plugins this install loads, discovered as every `archon forge` command does. */
+export async function discoverInstalledForgePlugins(
+  trustedEnv: NodeJS.ProcessEnv
+): Promise<PluginDiscovery> {
+  const archonHome = getArchonHome(trustedEnv);
+  const config = forgePluginConfigSchema.parse(
+    await readForgeConfig(getArchonConfigPath(archonHome))
+  );
+  return discoverPlugins(discoveryOptions(archonHome, config, trustedEnv));
+}
+
+/**
  * Host introspection reads the same trusted discovery metadata as dispatch;
  * it is not a plugin operation and never resolves a credential.
  */
-async function answerMetadata(
-  { archonHome, op, supplied, config }: ForgeInput,
-  { operationId, trustedEnv, write }: ForgeCommandContext
-): Promise<number> {
+async function answerMetadata(input: ForgeInput, context: ForgeCommandContext): Promise<number> {
+  const { op, supplied } = input;
+  const { operationId, write } = context;
   const { host } = cliForgeMetadataRequestSchema.parse({ ...supplied, op, operationId });
-  const discovery = await discoverPlugins({
-    config,
-    env: trustedEnv,
-    pluginsDir: getPluginsPath(archonHome),
-  });
+  const discovery = await discoverPlugins(trustedDiscovery(input, context));
   const plugin = discovery.byHost.get(host.toLowerCase());
   if (plugin) {
     await write({ operationId, ok: true, result: { op: 'metadata', value: plugin.metadata } });
@@ -180,18 +221,58 @@ async function answerMetadata(
   return 1;
 }
 
+/**
+ * A preflight for a workflow about to spend: the plugin, its capabilities and the
+ * credential source, read the way dispatch reads them, and for a remote or repository
+ * whose plugin advertises `pr.view` one read with that credential. The read is not audited: a check runs before the run it
+ * guards exists.
+ */
+async function answerCheck(input: ForgeInput, context: ForgeCommandContext): Promise<number> {
+  const { op, supplied } = input;
+  const { operationId, env, write } = context;
+  const request = cliForgeCheckRequestSchema.parse({ ...supplied, op, operationId });
+  const check = await checkForgeAccess(request, {
+    ...trustedDiscovery(input, context),
+    credentialEnv: env,
+  });
+  if (!check.ok) {
+    const { error, unsupported, remedy } = check;
+    await write({
+      operationId,
+      ok: false,
+      error,
+      ...(unsupported ? { unsupported } : {}),
+      ...(remedy ? { remedy } : {}),
+    });
+    return 1;
+  }
+  const { host, plugin, credentialSource } = check;
+  await write({
+    operationId,
+    ok: true,
+    result: {
+      op: 'check',
+      value: {
+        host,
+        plugin,
+        operations: request.operations,
+        ...(credentialSource ? { credentialSource } : {}),
+      },
+    },
+  });
+  return 0;
+}
+
 async function dispatchRequest(
-  { archonHome, op, supplied, config }: ForgeInput,
+  input: ForgeInput,
   context: ForgeCommandContext
 ): Promise<ForgeDispatchResult> {
+  const { op, supplied } = input;
   const { attempt, operationId } = context;
   attempt.request = forgeRequestSchema.parse({ ...supplied, operationId, op });
   attempt.dispatched = true;
   const result = await (context.dependencies.dispatch ?? dispatchForge)(attempt.request, {
-    config,
-    env: context.trustedEnv,
-    // The trusted directory `archon plugin add` writes; repo env cannot move it.
-    pluginsDir: getPluginsPath(archonHome),
+    ...trustedDiscovery(input, context),
     // Repo scope may supply the credential named by trusted user config. It
     // cannot replace executable discovery or the plugin's runtime identity.
     credentialEnv: context.env,
@@ -200,26 +281,99 @@ async function dispatchRequest(
   return result;
 }
 
-/** Returns the exit code when the run audit could not be persisted. */
-async function auditOperation(
-  audit: ForgeOperationAudit,
-  response: CliForgeResponse,
+/** What a run-owned operation left on the run, and what the caller is told about it. */
+interface RunRecord {
+  /** One line per record that could not be written, or that the result could not supply. */
+  stderr: string[];
+  /** A record could not be written: the command exits 2. */
+  failed: boolean;
+  itemRecord?: CliForgeItemRecord;
+}
+
+/**
+ * What a run-owned operation leaves on the run: its audit, and for a `pr.merge` on a run
+ * with an item, the merge and landing branch on that item, from the forge's answer: the
+ * applied merge's result, or a refusal's evidence of an earlier merge.
+ * Nothing here throws, because the operation has already reached the forge.
+ */
+async function recordRunFacts(
+  runId: string,
+  { response, audit }: ForgeDispatchResult,
   context: ForgeCommandContext
-): Promise<number | undefined> {
-  const runId = context.env.WORKFLOW_ID;
-  if (!runId) return undefined;
+): Promise<RunRecord> {
+  const record: RunRecord = { stderr: [], failed: false };
   try {
     await (context.dependencies.audit ?? persistAudit)(audit, runId);
-    return undefined;
   } catch {
-    // Retain the actual operation outcome on stdout. Audit failure is a
-    // separate failure and never rewrites an observed result as a refusal.
-    await writeResponse(response, context);
-    process.stderr.write(
-      `Forge operation ${context.operationId} completed but its run audit could not be persisted.\n`
+    record.failed = true;
+    record.stderr.push(
+      `Forge operation ${context.operationId} completed but its run audit could not be persisted.`
     );
-    return 2;
   }
+  const merge = runMergeFacts(response);
+  if (!merge) return record;
+  const { facts, merged } = merge;
+  try {
+    const recordMerge =
+      context.dependencies.recordMerge ?? (await import('./forge-merge-record')).recordRunMerge;
+    const outcome = await recordMerge(runId, facts, context.env);
+    if (outcome === 'recorded') record.itemRecord = { recorded: true, landing: 'recorded' };
+    if (outcome === 'landing_kept') record.itemRecord = { recorded: true, landing: 'kept' };
+    if (outcome === 'already_recorded')
+      record.itemRecord = { recorded: false, reason: 'already_recorded' };
+    if (outcome === 'no_merge_time') {
+      // The merge happened, so this is no failure: the caller is told, and the exit is unchanged.
+      record.itemRecord = { recorded: false, reason: 'no_merge_time' };
+      record.stderr.push(
+        `Forge operation ${context.operationId} ${merged} ${facts.change}, but the forge plugin reported no merge time, so the merge and its landing branch were not recorded on the run's item. Update the forge plugin: find its id with \`archon plugin list\`, then run \`archon plugin update <id>\`.`
+      );
+    }
+  } catch (error) {
+    record.failed = true;
+    record.itemRecord = { recorded: false, reason: 'write_failed' };
+    const reason = error instanceof Error ? error.message : String(error);
+    record.stderr.push(
+      `Forge operation ${context.operationId} ${merged} ${facts.change} but the item record could not be written: ${reason}`
+    );
+  }
+  return record;
+}
+
+/**
+ * The merge a `pr.merge` answer reports, if any: the applied merge, or the earlier merge a
+ * refusal observed (by hand, or by a run that died after merging). Any other refusal,
+ * including one of a closed and unmerged pull request, reports none.
+ */
+function runMergeFacts(
+  response: ForgeResponse
+): { facts: RunMergeFacts; merged: 'merged' | 'found already merged' } | undefined {
+  if (response.ok) {
+    if (response.result.op !== 'pr.merge') return undefined;
+    const { pr, landed, merged_at } = response.result.value;
+    return {
+      merged: 'merged',
+      facts: { change: pr.url, commit: landed.commit, at: merged_at, branch: pr.base },
+    };
+  }
+  const { mutation } = response;
+  if (
+    mutation?.op !== 'pr.merge' ||
+    mutation.outcome !== 'refused' ||
+    mutation.observed?.state !== 'merged'
+  )
+    return undefined;
+  // Dispatch has checked that `observed` is the requested pull request. A plugin released
+  // before `merge.merged_at` reports no time, and nothing is recorded.
+  const { url, base } = mutation.observed;
+  return {
+    merged: 'found already merged',
+    facts: {
+      change: url,
+      commit: mutation.merge?.landed?.commit ?? null,
+      at: mutation.merge?.merged_at,
+      branch: base,
+    },
+  };
 }
 
 /**
@@ -252,9 +406,39 @@ function failureResponse(
 
 function failureMessage(error: unknown, dispatched: boolean): string {
   if (dispatched) return 'Forge dispatch failed; reconcile the operation before retrying it';
-  return error instanceof SyntaxError
-    ? 'Invalid JSON input or configuration'
-    : 'Invalid forge request or configuration; see archon forge --help';
+  if (error instanceof SyntaxError) return 'Invalid JSON input or configuration';
+  const fields = error instanceof z.ZodError ? `: ${invalidFields(error)}` : '';
+  return `Invalid forge request or configuration${fields}; see archon forge --help`;
+}
+
+/** How many refused fields a message names before it only counts the rest. */
+const NAMED_FIELDS = 6;
+
+/**
+ * Names each refused field and what the schema expected there, so the caller can correct
+ * the request. Schema messages describe the expected type, never the supplied value.
+ */
+function invalidFields(error: z.ZodError): string {
+  const issues = refusedIssues(error.issues);
+  const named = issues
+    .slice(0, NAMED_FIELDS)
+    .map(issue => `${issue.path.join('.') || '(request)'}: ${issue.message}`);
+  const rest = issues.length - named.length;
+  return [...named, ...(rest > 0 ? [`and ${rest} more`] : [])].join('; ');
+}
+
+/** A request no alternative admits is named by the alternative it came closest to. */
+function refusedIssues(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[] {
+  return issues.flatMap(issue => {
+    if (issue.code !== 'invalid_union' || issue.errors.length === 0) return [issue];
+    const closest = issue.errors.reduce((best, errors) =>
+      errors.length < best.length ? errors : best
+    );
+    return refusedIssues(closest).map(nested => ({
+      ...nested,
+      path: [...issue.path, ...nested.path],
+    }));
+  });
 }
 
 function writeResponse(

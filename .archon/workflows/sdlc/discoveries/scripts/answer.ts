@@ -12,19 +12,19 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseRunDocument, type Queue, runName } from '../../.shared/discoveries.ts';
-import { artifactsDir, emit, nullableJson, refuse, text } from '../../.shared/io.ts';
-import { stateGet, statePut } from '../../.shared/state.ts';
+import { artifactsDir, emit, input, refuse, state } from 'archon:script';
+import { nullableJson } from '../../.shared/inputs.ts';
 
 try {
-  const keys = nullableJson(process.env.INPUTS_KEYS);
+  const keys = nullableJson(input('keys'));
   if (!Array.isArray(keys) || !keys.every(key => typeof key === 'string')) {
     throw new Error('keys must be the JSON array of asked keys');
   }
-  const answer = { text: text(process.env.INPUTS_TEXT), at: new Date().toISOString() };
+  const answer = { text: input('text'), at: new Date().toISOString() };
   const queue = JSON.parse(readFileSync(join(artifactsDir(), 'drain', 'queue.json'), 'utf8')) as Queue;
   for (const run of queue.runs) {
     const name = runName(run.id);
-    const read = stateGet(name);
+    const read = state.get(name);
     const document = parseRunDocument(name, read.value);
     if (document === null) continue;
     let changed = false;
@@ -35,7 +35,7 @@ try {
     });
     // A run with no question answered here is not this pass's to write: another pass may hold it.
     if (!changed) continue;
-    if (statePut(name, { ...document, questions }, read.revision) === 'conflict') {
+    if (!state.put(name, { ...document, questions }, { ifRevision: read.revision }).ok) {
       throw new Error(`${name} changed while this run held its claim`);
     }
   }

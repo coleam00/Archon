@@ -2,7 +2,12 @@ import { unlink } from 'fs/promises';
 import { type OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import type { AttachedFile, Conversation, HandleMessageContext } from '@archon/core';
+import type {
+  AttachedFile,
+  Conversation,
+  ConversationLockManager,
+  HandleMessageContext,
+} from '@archon/core';
 import * as messageDb from '@archon/core/db/messages';
 import type { WebAdapter } from '../adapters/web';
 import { checkedSSEWriter } from '../adapters/web/sse-writer';
@@ -10,9 +15,17 @@ import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { isConversationOwnershipEnforced } from '../auth';
 import { type OrchestratorDispatch, persistUploadedFiles } from './api-message-dispatch';
 import { authorizeConversation, authorizeDispatchConversation } from './api-request-auth';
-import { apiError, getLog, jsonError, openApiRouteRegistrar } from './api-route-kit';
+import {
+  apiError,
+  getLog,
+  getValidatedBody,
+  jsonError,
+  openApiRouteRegistrar,
+} from './api-route-kit';
 import { toApiMessage } from './api-serializers';
 import {
+  cancelConversationBodySchema,
+  cancelConversationResponseSchema,
   conversationIdParamsSchema,
   dispatchResponseSchema,
   listMessagesQuerySchema,
@@ -73,12 +86,48 @@ const sendMessageRoute = createRoute({
   },
 });
 
+const cancelConversationRoute = createRoute({
+  method: 'post',
+  path: '/api/conversations/{id}/cancel',
+  tags: ['Conversations'],
+  summary: 'Stop the in-flight chat reply',
+  description:
+    'Aborts the provider call of the reply `turnId` names, the id its dispatch returned, ' +
+    'while that reply is in progress. The partial reply stays in the conversation, followed ' +
+    'by a `chat_interrupted` marker message. Queued messages still run. `cancelled` is false ' +
+    'when that reply is not in progress (it ended or has not started) or was already stopped; ' +
+    "the conversation's current reply then keeps running.",
+  request: {
+    params: conversationIdParamsSchema,
+    body: {
+      required: true,
+      content: { 'application/json': { schema: cancelConversationBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: cancelConversationResponseSchema } },
+      description: 'Whether a reply was stopped',
+    },
+    400: jsonError('Bad request'),
+    401: jsonError('Authentication required'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+    503: jsonError('Identity backend unavailable'),
+  },
+});
+
 export function registerMessageRoutes(
   app: OpenAPIHono,
   {
     webAdapter,
     dispatchToOrchestrator,
-  }: { webAdapter: WebAdapter; dispatchToOrchestrator: OrchestratorDispatch }
+    lockManager,
+  }: {
+    webAdapter: WebAdapter;
+    dispatchToOrchestrator: OrchestratorDispatch;
+    lockManager: Pick<ConversationLockManager, 'cancel'>;
+  }
 ): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
 
@@ -147,6 +196,19 @@ export function registerMessageRoutes(
     return c.json(result);
   });
 
+  // POST /api/conversations/:id/cancel - Stop the in-flight reply. Same id check and
+  // authority as sending a message: whoever may send to the chat may stop its reply.
+  registerOpenApiRoute(cancelConversationRoute, async c => {
+    const conversationId = c.req.param('id') ?? '';
+    if (!/^[\w-]+$/.test(conversationId)) {
+      return c.json({ error: 'Invalid conversation ID' }, 400);
+    }
+    const access = await authorizeDispatchConversation(c, conversationId);
+    if ('error' in access) return access.error;
+    const { turnId } = getValidatedBody(c, cancelConversationBodySchema);
+    return c.json({ cancelled: lockManager.cancel(conversationId, turnId) });
+  });
+
   // GET /api/stream/__dashboard__ — dashboard SSE (workflow lifecycle events)
   // IMPORTANT: Must be registered before /api/stream/:conversationId to avoid param capture.
   app.get(`/api/stream/${DASHBOARD_STREAM}`, async c => {
@@ -210,10 +272,20 @@ export function registerMessageRoutes(
       await stream.writeSSE({
         data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
       });
+      // The lock state a reconnecting client resumes from. Written before the stream
+      // registers, so buffered events replay after it.
+      const lockedAtOpen = webAdapter.isConversationLocked(conversationId);
+      await stream.writeSSE({ data: webAdapter.lockSnapshotEvent(conversationId) });
 
       const writer = checkedSSEWriter(stream);
       webAdapter.registerStream(conversationId, writer);
       getLog().debug({ conversationId }, 'sse_stream_opened');
+      // A lock event emitted during that write may have gone to the stream this one
+      // replaces. From registration on, events reach this stream, so re-send the state
+      // through the ordered transport when it moved meanwhile.
+      if (webAdapter.isConversationLocked(conversationId) !== lockedAtOpen) {
+        await webAdapter.emitSSE(conversationId, webAdapter.lockSnapshotEvent(conversationId));
+      }
 
       stream.onAbort(() => {
         getLog().debug({ conversationId }, 'sse_client_disconnected');

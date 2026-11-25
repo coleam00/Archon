@@ -42,6 +42,7 @@ nodes:
     bash: |
       printf '%s' "$INPUTS_BASH_BARE"
       printf '%s' "\${INPUTS_BASH_BRACED}"
+      printf '%s' "\${INPUTS_BASH_DEFAULTED:-fallback}"
 `,
       'supported-forms.yaml',
       providerRegistry
@@ -57,6 +58,7 @@ nodes:
       'INPUTS_JS_DOUBLE',
       'INPUTS_BASH_BARE',
       'INPUTS_BASH_BRACED',
+      'INPUTS_BASH_DEFAULTED',
     ]) {
       expect(result.error?.error).toContain(name);
     }
@@ -104,6 +106,35 @@ nodes:
 
     expect(result.workflow).not.toBeNull();
     expect(result.warnings).toEqual([]);
+  });
+
+  test("checks a literal input('<name>') of archon:script like its INPUTS_* read", () => {
+    const script = (read: string): ReturnType<typeof parseWorkflow> =>
+      parseWorkflow(
+        `name: script-api-input
+description: The host helper reads the same variables
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: |
+      import { input } from 'archon:script';
+      console.log(input('pr-number'), ${read});
+    runtime: bun
+    with:
+      pr-number: 7
+`,
+        'script-api-input.yaml',
+        providerRegistry
+      );
+
+    expect(script("input('declared')").workflow).not.toBeNull();
+    const unbound = script('input("review-round")');
+    expect(unbound.workflow).toBeNull();
+    expect(unbound.error?.error).toContain("'INPUTS_REVIEW_ROUND'");
+    expect(unbound.error?.error).toContain('script line 2');
+    // A computed name is the script's own lookup, as `process.env[key]` is.
+    expect(script('input(name)').workflow).not.toBeNull();
   });
 
   test('bash reads can use declared inputs, and an undeclared read names the fix', () => {

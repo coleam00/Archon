@@ -59,8 +59,10 @@ describe('write command --json output', () => {
       codebase_id: null,
       status: 'running',
       outcome: null,
+      completed_outcome: null,
       user_message: '',
       metadata: {},
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,
@@ -70,6 +72,7 @@ describe('write command --json output', () => {
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      item_id: null,
       origin: null,
     });
     mockCancelWorkflowRunCommand.mockResolvedValueOnce({ cancelled: false });
@@ -87,6 +90,7 @@ describe('write command --json output', () => {
       workflow_name: 'implement',
       status: 'running',
       last_activity_at: new Date('2026-09-20T10:00:00.000Z'),
+      parent_run_id: null,
       metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
     });
     (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -110,6 +114,7 @@ describe('write command --json output', () => {
         recordedUid: null,
         lastActivityAt: '2026-09-20T10:00:00.000Z',
       },
+      restartCommand: 'archon workflow run --supersedes run-ab',
     });
   });
 
@@ -119,6 +124,8 @@ describe('write command --json output', () => {
       id: 'run-ab',
       workflow_name: 'implement',
       status: 'running',
+      parent_run_id: null,
+      metadata: {},
     });
     (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
@@ -139,6 +146,7 @@ describe('write command --json output', () => {
       status: 'cancelled',
       workflowName: 'implement',
       owner: { outcome: 'stopped', pid: 42 },
+      restartCommand: 'archon workflow run --supersedes run-ab',
     });
   });
 
@@ -297,81 +305,75 @@ describe('workflowResumeCommand', () => {
     );
   });
 
-  it('should print resume info and delegate to workflowRunCommand', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-1',
-      workflow_name: 'implement',
-      status: 'failed',
-      user_message: 'add auth',
-      working_path: '/tmp/test-worktree',
-    });
-
-    // workflowResumeCommand calls workflowRunCommand internally which needs many
-    // mocks. The --resume execution flow is tested separately in workflowRunCommand tests.
-    // Here we only verify the initial output by catching the downstream error.
-    try {
-      await workflowResumeCommand(createTestWorkflowHost(), 'run-1');
-    } catch {
-      // workflowRunCommand will fail due to missing mocks — that's fine
-    }
-
-    // Printed resume message before delegating to workflowRunCommand
-    expect(consoleSpy).toHaveBeenCalledWith('Resuming workflow: implement');
-    expect(consoleSpy).toHaveBeenCalledWith('Path: /tmp/test-worktree');
-  });
-
-  it('should throw when run has no working path', async () => {
+  it('refuses a run with no working path, naming the command that starts it again', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-no-path',
       workflow_name: 'implement',
       status: 'failed',
       working_path: null,
+      parent_run_id: null,
+      metadata: {},
     });
 
     await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-no-path')).rejects.toThrow(
-      'has no working path recorded'
+      'Start it again with: archon workflow run --supersedes run-no-path'
     );
   });
 
-  it('should pass codebase_id from run record to workflowRunCommand', async () => {
+  it('refuses a cancelled run, naming the command that starts it again', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const cancelled = {
+      id: 'run-gone',
+      workflow_name: 'implement',
+      status: 'cancelled',
+      parent_run_id: null,
+      metadata: {},
+    };
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(cancelled);
+
+    await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-gone')).rejects.toThrow(
+      'with: archon workflow run --supersedes run-gone'
+    );
+
+    const stdoutSpy = spyOnJsonStdout();
+    try {
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(cancelled);
+      expect(await workflowResumeCommand(createTestWorkflowHost(), 'run-gone', true)).toBe(1);
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+        ok: false,
+        action: 'resume',
+        restartCommand: 'archon workflow run --supersedes run-gone',
+      });
+    } finally {
+      stdoutSpy.mockRestore();
+    }
+  });
+
+  it('forwards the codebase recorded on the run to the resumed run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
-
+    const runOwned = await import('./workflow-run-owned');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-1',
       workflow_name: 'implement',
       status: 'failed',
       user_message: 'add auth',
-      working_path: trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-codebase-'))),
+      working_path: '/tmp/test-worktree',
       codebase_id: 'cb-existing',
     });
-
-    // Return a matching workflow so workflowRunCommand doesn't throw before codebase lookup
-    (
-      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
-      errors: [],
-    });
-
-    // Simulate getCodebase returning the codebase found by ID
     (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'cb-existing',
       name: 'owner/repo',
-      default_cwd: '/path/to/main-checkout', // different from working_path
+      default_cwd: '/path/to/main-checkout',
     });
-
+    const runSpy = spyOn(runOwned, 'workflowRunCommand').mockResolvedValueOnce(undefined);
     try {
       await workflowResumeCommand(createTestWorkflowHost(), 'run-1');
-    } catch {
-      // workflowRunCommand may fail on other mocks — that's fine
+      expect(runSpy.mock.calls[0]?.[4]).toMatchObject({ resume: true, codebaseId: 'cb-existing' });
+    } finally {
+      runSpy.mockRestore();
     }
-
-    // getCodebase SHOULD have been called with the stored codebase_id
-    expect(codebaseDb.getCodebase).toHaveBeenCalledWith('cb-existing');
   });
 
   it('fails loudly when getCodebase throws during resume', async () => {
@@ -636,12 +638,11 @@ describe('workflowApproveCommand', () => {
     }
   });
 
-  it('should pass codebase_id from run record to workflowRunCommand', async () => {
+  it('auto-resume forwards the codebase recorded on the run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
     const core = await import('@archon/core');
-
+    const runOwned = await import('./workflow-run-owned');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-approve-1',
       workflow_name: 'implement',
@@ -649,33 +650,23 @@ describe('workflowApproveCommand', () => {
       user_message: 'add auth',
       working_path: '/tmp/test-worktree',
       codebase_id: 'cb-existing',
-      metadata: { approval: { nodeId: 'review-node' } },
+      metadata: { approval: { nodeId: 'review-node', message: 'Approve?' } },
     });
-
     (core.createWorkflowStore as ReturnType<typeof mock>).mockReturnValueOnce({
       createWorkflowEvent: mock(() => Promise.resolve()),
     });
-
-    (
-      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
-      errors: [],
-    });
-
     (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'cb-existing',
       name: 'owner/repo',
       default_cwd: '/path/to/main-checkout',
     });
-
+    const runSpy = spyOn(runOwned, 'workflowRunCommand').mockResolvedValueOnce(undefined);
     try {
       await workflowApproveCommand(createTestWorkflowHost(), 'run-approve-1');
-    } catch {
-      // downstream failure is acceptable
+      expect(runSpy.mock.calls[0]?.[4]).toMatchObject({ resume: true, codebaseId: 'cb-existing' });
+    } finally {
+      runSpy.mockRestore();
     }
-
-    expect(codebaseDb.getCodebase).toHaveBeenCalledWith('cb-existing');
   });
 
   it('fails loudly when codebase row is missing during approve auto-resume', async () => {

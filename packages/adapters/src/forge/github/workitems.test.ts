@@ -34,15 +34,14 @@ function fixture(mode = 'ok') {
   const labels = [{ name: 'other', color: 'abcdef', description: 'operator' }];
   const calls: string[] = [];
   let writes = 0;
-  const issueList = (url: URL, method: string, init?: RequestInit) => {
+  const issueList = (method: string, init?: RequestInit) => {
     if (method === 'POST') {
       const payload = JSON.parse(String(init?.body)) as { title: string; body: string };
       if (mode !== 'unverified') issues.push({ ...issue, ...payload });
       if (mode === 'lost-create') throw new Error('committed but response lost');
       return Response.json(issue, { status: 201 });
     }
-    const page = Number(url.searchParams.get('page'));
-    return Response.json(page === 1 ? issues : []);
+    return Response.json(issues);
   };
   const setLabels = (init?: RequestInit) => {
     if (mode !== 'unverified')
@@ -77,8 +76,15 @@ function fixture(mode = 'ok') {
       if (mode === 'unknown') throw new Error('lost before response');
     }
     if (mode === 'lookup-failed' && method === 'GET') return Response.json({}, { status: 500 });
+    if (path === 'https://api.github.com/search/issues') {
+      return Response.json({
+        total_count: issues.length,
+        incomplete_results: false,
+        items: issues,
+      });
+    }
     if (path === `${root}/issues`) {
-      return issueList(url, method, init);
+      return issueList(method, init);
     }
     if (path === `${root}/issues/1`) {
       return readIssue();
@@ -139,30 +145,81 @@ test('closed recovery preserves edited content, ambiguous and failed lookups nev
   expect(failed.writes()).toBe(0);
 });
 
-test('marker lookup includes later pages and excludes PRs', async () => {
+test('marker lookup finds an old issue by search and a new one search has not indexed, never a PR', async () => {
   const fake = fixture();
-  const page = Array.from({ length: 100 }, (_, index) => ({
-    ...fake.issue,
-    number: index + 2,
-    body: 'unmarked',
-  }));
   const baseFetch = fake.fetch;
-  fake.seed();
-  fake.fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith('/issues') && (init?.method ?? 'GET') === 'GET')
-      return Response.json(
-        url.searchParams.get('page') === '1'
-          ? [...page.slice(1), { ...fake.issue, pull_request: {} }]
-          : [fake.issue]
-      );
-    return baseFetch(input, init);
+  const lookup = async (
+    searched: unknown[],
+    newest: unknown[],
+    incomplete = false,
+    total = searched.length
+  ) => {
+    fake.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if ((init?.method ?? 'GET') === 'GET' && url.pathname === '/search/issues') {
+        // Only a search for the marker's words in issue bodies of this repository finds it.
+        const asked = url.searchParams.get('q') === 'repo:owner/repo is:issue in:body "canonical"';
+        return Response.json({
+          total_count: total,
+          incomplete_results: incomplete,
+          items: asked ? searched : [],
+        });
+      }
+      if ((init?.method ?? 'GET') === 'GET' && url.pathname.endsWith('/issues')) {
+        // Only the newest-first page holds a just-created issue.
+        const newestFirst =
+          url.searchParams.get('sort') === 'created' &&
+          url.searchParams.get('direction') === 'desc';
+        return Response.json(newestFirst ? newest : []);
+      }
+      return baseFetch(input, init);
+    };
+    return run(create, fake);
   };
-  expect(await run(create, fake)).toMatchObject({
-    ok: true,
-    result: { value: { changed: false } },
+  fake.seed();
+  const unmarked = { ...fake.issue, number: 2, body: 'unmarked' };
+  const found = { ok: true, result: { value: { changed: false } } };
+  // Older than the newest hundred: only search sees it.
+  expect(await lookup([fake.issue], [unmarked])).toMatchObject(found);
+  // Created moments ago, before search indexed it.
+  expect(await lookup([], [fake.issue])).toMatchObject(found);
+  // Found by both: one issue, not a conflict.
+  expect(await lookup([fake.issue], [fake.issue])).toMatchObject(found);
+  // A partial search cannot show the marker is absent, so nothing is created.
+  expect(await lookup([unmarked], [], true)).toMatchObject({
+    ok: false,
+    mutation: { outcome: 'refused' },
+  });
+  // A full page with more matches beyond it cannot show the marker is absent either.
+  expect(await lookup([unmarked], [], false, 101)).toMatchObject({
+    ok: false,
+    mutation: { outcome: 'refused' },
   });
   expect(fake.writes()).toBe(0);
+  // A pull request carrying the marker is not the issue.
+  expect(await lookup([{ ...fake.issue, pull_request: {} }], [])).toMatchObject({
+    ok: true,
+    result: { value: { changed: true } },
+  });
+});
+
+test('a marker cannot add search qualifiers or outgrow the query limit', async () => {
+  const fake = fixture();
+  const long = `<!-- a" is:closed "b ${'word '.repeat(60)}-->`;
+  const queries: string[] = [];
+  const baseFetch = fake.fetch;
+  fake.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/search/issues') queries.push(url.searchParams.get('q') ?? '');
+    return baseFetch(input, init);
+  };
+  await run(forgeRequestSchema.parse({ ...create, marker: long, body: `${long}\nBody` }), fake);
+  const phrase = queries[0]?.match(/"(.*)"$/)?.[1] ?? '';
+  expect(phrase).not.toContain('"');
+  expect(phrase.length).toBeLessThanOrEqual(200);
+  // Quotes gone, so `is:closed` stays inside the phrase; cut after a whole word.
+  expect(phrase.startsWith('a is:closed b word')).toBe(true);
+  expect(phrase.endsWith(' word')).toBe(true);
 });
 
 test('label set clears, verifies exact sets, no-ops, and never creates missing names', async () => {
@@ -478,6 +535,7 @@ test('listing by label returns open issues and pull requests across pages', asyn
     body: null,
     state: 'open',
     labels: labels.map(name => ({ name })),
+    updated_at: `2026-01-01T00:00:${String(number % 60).padStart(2, '0')}Z`,
     ...extra,
   });
   const pageOne = Array.from({ length: 100 }, (_, index) => row(index + 1, ['queued']));
@@ -506,6 +564,7 @@ test('listing by label returns open issues and pull requests across pages', asyn
     kind: 'pr',
     url: 'https://github.com/owner/repo/issues/101',
     state: 'open',
+    updatedAt: '2026-01-01T00:00:41Z',
   });
   expect(items.filter(item => item.kind === 'issue')).toHaveLength(100);
   expect(urls.map(url => url.searchParams.get('page'))).toEqual(['1', '2']);
@@ -518,6 +577,109 @@ test('listing by label returns open issues and pull requests across pages', asyn
     await runOn({ operationId: 'list', op: 'workitem.list', repo, label: 'a,b' }, fake)
   ).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
   expect(urls).toHaveLength(2);
+});
+
+test('the latest add of the exact label is read across pages; a label never added reads none', async () => {
+  const event = (id: number, name: string, at: string, kind = 'labeled') => ({
+    id,
+    event: kind,
+    created_at: at,
+    actor: { id: 7, login: 'maintainer', type: 'User' },
+    label: { name, color: 'abcdef' },
+  });
+  const pageOne = [
+    event(1, 'factory', '2026-11-20T10:00:00Z'),
+    event(2, 'factory', '2026-11-21T10:00:00Z', 'unlabeled'),
+    ...Array.from({ length: 98 }, (_, index) =>
+      event(100 + index, 'other', '2026-11-21T11:00:00Z')
+    ),
+  ];
+  const urls: URL[] = [];
+  const fake = {
+    fetch: async (input: string | URL | Request): Promise<Response> => {
+      const url = new URL(String(input));
+      urls.push(url);
+      return Response.json(
+        url.searchParams.get('page') === '1'
+          ? pageOne
+          : [
+              event(3, 'factory', '2026-11-22T10:00:00Z'),
+              event(4, 'Factory', '2026-11-23T10:00:00Z'),
+            ]
+      );
+    },
+  };
+  const subject = { kind: 'issue' as const, ref };
+  const read = (name: string) =>
+    runOn({ operationId: 'added', op: 'workitem.label.added', subject, name }, fake);
+  expect(await read('factory')).toMatchObject({
+    ok: true,
+    result: {
+      op: 'workitem.label.added',
+      value: {
+        subject,
+        name: 'factory',
+        added: {
+          id: '3',
+          at: '2026-11-22T10:00:00Z',
+          actor: { host: 'github.com', id: '7', login: 'maintainer', type: 'user' },
+        },
+      },
+    },
+  });
+  expect(urls[0]?.pathname).toBe('/repos/owner/repo/issues/1/events');
+  expect(await read('missing')).toMatchObject({ ok: true, result: { value: { added: null } } });
+});
+
+test('opened issues are read newest first down to the cutoff, without pull requests', async () => {
+  const row = (number: number, createdAt: string, pr = false) => ({
+    number,
+    repository_url: 'https://api.github.com/repos/owner/repo',
+    labels: [],
+    html_url: `https://github.com/owner/repo/issues/${String(number)}`,
+    title: 'new',
+    body: null,
+    state: 'open',
+    created_at: createdAt,
+    user: { id: 7, login: 'reporter', type: 'User' },
+    ...(pr ? { pull_request: {} } : {}),
+  });
+  // A full first page, all at or after the cutoff and one a pull request; the second page
+  // reaches an issue created before it, so no third page is read.
+  const pageOne = Array.from({ length: 100 }, (_, index) =>
+    row(300 - index, '2026-11-23T12:00:00Z', index === 1)
+  );
+  const pageTwo = [row(200, '2026-11-23T10:00:00Z'), row(199, '2026-11-23T09:00:00Z')];
+  const urls: URL[] = [];
+  const fake = {
+    fetch: async (input: string | URL | Request): Promise<Response> => {
+      const url = new URL(String(input));
+      urls.push(url);
+      return Response.json(url.searchParams.get('page') === '1' ? pageOne : pageTwo);
+    },
+  };
+  const since = '2026-11-23T10:00:00Z';
+  const response = await runOn({ operationId: 'opened', op: 'workitem.opened', repo, since }, fake);
+  if (!response.ok || response.result.op !== 'workitem.opened') throw new Error('read failed');
+  const { items } = response.result.value;
+  expect(items.map(item => item.ref.number)).not.toContain(299);
+  expect(items).toHaveLength(100);
+  expect(items.at(-1)).toEqual({
+    ref: { repo, number: 200 },
+    kind: 'issue',
+    url: 'https://github.com/owner/repo/issues/200',
+    state: 'open',
+    createdAt: since,
+    author: { host: 'github.com', id: '7', login: 'reporter', type: 'user' },
+  });
+  expect(urls.map(url => url.searchParams.get('page'))).toEqual(['1', '2']);
+  for (const url of urls) {
+    expect(url.pathname).toBe('/repos/owner/repo/issues');
+    expect(url.searchParams.get('state')).toBe('open');
+    expect(url.searchParams.get('sort')).toBe('created');
+    expect(url.searchParams.get('direction')).toBe('desc');
+    expect(url.searchParams.get('since')).toBe(since);
+  }
 });
 
 test('an item view returns its author, and a response without one reports none', async () => {

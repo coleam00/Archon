@@ -16,7 +16,7 @@
  * is theirs and the close throws.
  */
 
-import { samePr, type QualifiedPr } from './forge.ts';
+import { type QualifiedPr, samePr } from './identity.ts';
 import { closeIssue, type IssueView, NotAnIssueError, viewIssue } from './issue.ts';
 import { upsertComment } from './pr.ts';
 

@@ -103,14 +103,14 @@ function RowStatusMarker({
   return (
     <span
       aria-hidden
-      className="brand-bar pointer-events-none absolute -left-px bottom-[9px] top-[9px] w-[3px] rounded-r-[3px]"
+      className="brand-bar pointer-events-none absolute -left-px bottom-2.25 top-2.25 w-0.75 rounded-r"
     />
   );
 }
 
 function BusyLabel({ text }: { text: string }): ReactElement {
   return (
-    <span className="shrink-0 font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-text-tertiary">
+    <span className="shrink-0 font-mono text-console-10 font-semibold uppercase tracking-wider text-text-tertiary">
       {text}
     </span>
   );
@@ -126,7 +126,7 @@ function MonogramTile({ label, selected }: { label: string; selected: boolean })
   return (
     <span
       aria-hidden
-      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-[13px] font-bold transition-colors ${
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-console-13 font-bold transition-colors ${
         selected
           ? 'brand-bar text-white'
           : 'border border-border bg-surface-elevated text-text-secondary group-hover:text-text-primary'
@@ -154,7 +154,7 @@ function RowLabel({
         e.stopPropagation();
         onStartRename();
       }}
-      className={`truncate text-[13px] font-semibold tracking-[-0.1px] ${
+      className={`truncate text-console-13 font-semibold tracking-normal ${
         selected ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
       }`}
     >
@@ -208,7 +208,7 @@ function RenameInput({
       onDoubleClick={e => {
         e.stopPropagation();
       }}
-      className="w-full rounded border border-border-bright bg-surface px-1 py-0.5 text-[13px] font-medium text-text-primary focus:outline-none"
+      className="w-full rounded border border-border-bright bg-surface px-1 py-0.5 text-console-13 font-medium text-text-primary focus:outline-none"
     />
   );
 }
@@ -217,7 +217,7 @@ function LivePulse(): ReactElement {
   return (
     <span
       title="Active project"
-      className="inline-flex shrink-0 items-center gap-[5px] font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-success group-hover:hidden"
+      className="inline-flex shrink-0 items-center gap-1.25 font-mono text-console-10 font-semibold uppercase tracking-wider text-success group-hover:hidden"
     >
       <i
         aria-hidden
@@ -271,7 +271,7 @@ function RowActions({
           }}
           title="Environment variables"
           aria-label="Environment variables"
-          className="flex h-[29px] w-[29px] items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          className="flex h-7.25 w-7.25 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
         >
           <KeyIcon />
         </button>
@@ -288,7 +288,7 @@ function RowActions({
             title="More actions"
             aria-label="More actions"
             aria-expanded={menuOpen}
-            className={`flex h-[29px] w-[29px] items-center justify-center rounded-lg transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-wait disabled:opacity-50 ${
+            className={`flex h-7.25 w-7.25 items-center justify-center rounded-lg transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-wait disabled:opacity-50 ${
               menuOpen ? 'bg-surface-hover text-text-primary' : 'text-text-tertiary'
             }`}
           >
@@ -327,7 +327,7 @@ function RowMenu({
       onClick={e => {
         e.stopPropagation();
       }}
-      className="absolute right-0 top-full z-30 mt-1 min-w-[178px] rounded-[11px] border bg-surface-hover p-[5px] shadow-[0_18px_44px_-18px_rgba(0,0,0,0.85)]"
+      className="absolute right-0 top-full z-30 mt-1 min-w-44.5 rounded-console-12 border bg-surface-hover p-1.25 shadow-[0_18px_44px_-18px_rgba(0,0,0,0.85)]"
       // Inline because the console scope's wildcard border-color
       // rule repaints Tailwind border utilities (see theme.css).
       style={{ borderColor: 'var(--border-bright)' }}
@@ -341,7 +341,7 @@ function RowMenu({
             onClose();
             onStartRename();
           }}
-          className="flex w-full items-center gap-2.5 rounded-lg px-[11px] py-[9px] text-left text-[13px] font-semibold text-text-primary transition-colors hover:bg-surface-elevated"
+          className="flex w-full items-center gap-2.5 rounded-lg px-2.75 py-2.25 text-left text-console-13 font-semibold text-text-primary transition-colors hover:bg-surface-elevated"
         >
           <PencilIcon />
           Rename project
@@ -359,7 +359,7 @@ function RowMenu({
             );
             if (confirmed) onRemove();
           }}
-          className="flex w-full items-center gap-2.5 rounded-lg px-[11px] py-[9px] text-left text-[13px] font-semibold text-error transition-colors hover:bg-error/10"
+          className="flex w-full items-center gap-2.5 rounded-lg px-2.75 py-2.25 text-left text-console-13 font-semibold text-error transition-colors hover:bg-error/10"
         >
           <TrashIcon />
           Remove project
@@ -387,7 +387,7 @@ function RowAlert({
       onKeyDown={event => {
         event.stopPropagation();
       }}
-      className="basis-full rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-[10px] text-error [overflow-wrap:anywhere]"
+      className="basis-full rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-console-10 text-error [overflow-wrap:anywhere]"
     >
       <p>{message}</p>
       {children}
@@ -506,7 +506,7 @@ export function ProjectRow({
       aria-busy={busy}
       aria-pressed={selected}
       title={onRename === undefined ? project.name : `${project.name} · double-click to rename`}
-      className={`group relative flex w-full cursor-pointer flex-wrap items-center gap-x-[11px] gap-y-2 rounded-[10px] border px-2.5 py-2 text-left transition-colors ${
+      className={`group relative flex w-full cursor-pointer flex-wrap items-center gap-x-2.75 gap-y-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${
         selected ? 'bg-surface-elevated' : 'bg-transparent hover:bg-surface-hover'
       }`}
       // Inline because the console scope's wildcard `border-color: var(--border)`
@@ -535,7 +535,7 @@ export function ProjectRow({
             onStartRename={busy ? undefined : startRename}
           />
         )}
-        <span className="truncate font-mono text-[10.5px] text-text-tertiary">
+        <span className="truncate font-mono text-console-11 text-text-tertiary">
           {formatProjectLocator(project)}
         </span>
       </div>

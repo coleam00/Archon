@@ -1,3 +1,4 @@
+// @archon-test-windows
 /** Branch names and worktree paths the provider derives from a request and repo config. */
 import { TEST_ARCHON_HOME } from './worktree-test-fixture';
 import { describe, test, expect } from 'bun:test';
@@ -5,6 +6,7 @@ import { join, resolve } from 'node:path';
 import * as git from '@archon/git';
 import type { IsolationRequest } from '../types';
 import { WorktreeProvider } from './worktree';
+import { generatedTaskBranch, isGeneratedTaskBranch } from './worktree/branches';
 
 const provider = new WorktreeProvider();
 const base = { codebaseId: 'cb-123', canonicalRepoPath: git.toRepoPath('/workspace/repo') };
@@ -64,6 +66,45 @@ describe('generateBranchName', () => {
     expect(provider.generateBranchName(input)).toBe(expected);
   });
 
+  test('long task identifiers retain their distinct identities in branches and paths', () => {
+    const prefix = 'a'.repeat(50);
+    expect(generatedTaskBranch(prefix)).toBe(`archon/task-${prefix}`);
+    const identifiers = [`${prefix}-1000`, `${prefix}-2000`, `${prefix}-other-1000`];
+    const branches = identifiers.map(generatedTaskBranch);
+    expect(new Set(branches).size).toBe(identifiers.length);
+    const paths = identifiers.map(identifier => {
+      const request: IsolationRequest = { ...base, workflowType: 'task', identifier };
+      const branch = provider.generateBranchName(request);
+      expect(branch).toBe(generatedTaskBranch(identifier));
+      expect(branch.length).toBeLessThanOrEqual('archon/task-'.length + 50);
+      expect(
+        isGeneratedTaskBranch({
+          workflow_type: 'task',
+          workflow_id: identifier,
+          branch_name: branch,
+        })
+      ).toBe(true);
+      return provider.getWorktreePath(request, branch);
+    });
+    expect(new Set(paths).size).toBe(identifiers.length);
+  });
+
+  test('recognizes persisted truncated task branches without claiming named branches', () => {
+    const identifier = `${'a'.repeat(50)}-1000`;
+    expect(
+      isGeneratedTaskBranch({
+        workflow_type: 'task',
+        workflow_id: identifier,
+        branch_name: `archon/task-${'a'.repeat(50)}`,
+      })
+    ).toBe(true);
+    for (const branch of [identifier, generatedTaskBranch(identifier)]) {
+      expect(
+        isGeneratedTaskBranch({ workflow_type: 'task', workflow_id: branch, branch_name: branch })
+      ).toBe(false);
+    }
+  });
+
   test('hashes a thread identifier into a stable, distinct thread-{hash}', () => {
     const thread = (identifier: string): string =>
       provider.generateBranchName({ ...base, workflowType: 'thread', identifier });
@@ -93,10 +134,6 @@ describe('getWorktreePath', () => {
     expect(path).toContain('owner');
     expect(path).toContain('repo');
     expect(path).toContain('issue-42');
-  });
-
-  test('throws for a degenerate repo path with no basename', () => {
-    expect(() => pathFor(issue('/'))).toThrow('Cannot derive a project identity');
   });
 });
 

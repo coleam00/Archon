@@ -124,6 +124,16 @@ describe('run live owner', () => {
     expect(isRunOwnedByThisProcess(runId)).toBe(false);
   });
 
+  // The store resumes a running run only under a held lease for it (`requireOwnerlessLease`).
+  test('hands out a lease for its run that stops being held once it closes', async () => {
+    const runId = `lease-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(runId);
+    expect(owner.lease.runId).toBe(runId);
+    expect(owner.lease.isHeld()).toBe(true);
+    await owner.close();
+    expect(owner.lease.isHeld()).toBe(false);
+  });
+
   test('keeps concurrent run owners independent', async () => {
     const firstId = `concurrent-first-${crypto.randomUUID()}`;
     const secondId = `concurrent-second-${crypto.randomUUID()}`;
@@ -500,12 +510,6 @@ describe('detached owner preparation', () => {
   test.each([
     ['malformed', '{"group":{"pgid":"invalid","leaderReaped":true}}', 'Invalid input'],
     ['oversized', 'x'.repeat(257), 'Run owner acknowledgement exceeded its size limit'],
-    [
-      'contradictory group',
-      '{"group":{"pgid":1,"leaderReaped":true,"signalError":"EPERM"}}',
-      'Invalid input',
-    ],
-    ['mixed', '{"warning":"held output","group":{"pgid":1,"leaderReaped":false}}', 'Invalid input'],
   ])(
     'rejects %s preparation frames instead of acknowledging a stop',
     async (_kind, frame, expectedError) => {

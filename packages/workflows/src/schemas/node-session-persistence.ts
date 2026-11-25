@@ -17,14 +17,15 @@ export function isPersistableNode(node: DagNode): boolean {
 
 /**
  * True when a node participates in cross-run session persistence: a persistable node
- * that hasn't opted out via `context: 'fresh'`, with `persist_session: true` set
+ * whose context is neither `'fresh'` nor `'same'`, with `persist_session: true` set
  * directly or inherited from the workflow-level `persist_sessions` default. The
  * loader's capability check, the executor's session lookup and upsert, the #1846
  * scope-artifact mirror, and `runMayPersistSessions` all gate on this one predicate.
  */
 export function nodeUsesPersistedScope(node: DagNode, workflowPersistSessions: boolean): boolean {
   if (!isPersistableNode(node)) return false;
-  if (node.context === 'fresh') return false;
+  // `fresh` opts out of cross-run memory; `same` carries its own, scoped to the run's item.
+  if (node.context === 'fresh' || node.context === 'same') return false;
   const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
   return nodePersist ?? workflowPersistSessions;
 }

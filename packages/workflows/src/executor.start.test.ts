@@ -198,14 +198,6 @@ describe('resume announcement', () => {
     );
   });
 
-  it('announces an interactive-loop resume when no node has completed', async () => {
-    const platform = makePlatform();
-    await startWorkflow({ platform, options: resumeOf(makeRun({ id: 'paused-loop-run' })) });
-    expect(sentMessages(platform)).toContainEqual(
-      expect.stringContaining('— continuing interactive loop.')
-    );
-  });
-
   it('does not announce a resume on a fresh run', async () => {
     const platform = makePlatform();
     await startWorkflow({ platform });

@@ -37,6 +37,30 @@ export const workflowRunOriginSchema = z
 
 export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
 
+export const ITEM_KEY_MAX_LENGTH = 200;
+/** An item's key within its project. The engine gives it no meaning and never parses it. */
+export const itemKeySchema = z.string().min(1).max(ITEM_KEY_MAX_LENGTH);
+
+/** The durable thing runs are about: a key within a project (`ProjectRef.key`). */
+export const workflowItemSchema = z.object({
+  id: z.string(),
+  projectKey: z.string(),
+  key: itemKeySchema,
+});
+export type WorkflowItem = z.infer<typeof workflowItemSchema>;
+
+/** Refuse a key the store cannot hold, in words the operator who named it can act on. */
+export function assertItemKey(key: string): void {
+  if (!itemKeySchema.safeParse(key).success)
+    throw new Error(`An item key must be 1 to ${String(ITEM_KEY_MAX_LENGTH)} characters.`);
+}
+
+/**
+ * A continuation cannot stay on the continued run's item because it runs in another
+ * project. Chat and the API reach it as well as the CLI, so the message names no flag.
+ */
+export class ContinuedItemProjectError extends Error {}
+
 export const workflowRunSchema = z.object({
   origin: workflowRunOriginSchema.nullable(),
   id: z.string(),
@@ -45,10 +69,22 @@ export const workflowRunSchema = z.object({
   parent_conversation_id: z.string().nullable(),
   codebase_id: z.string().nullable(),
   status: workflowRunStatusSchema,
+  /**
+   * The authored verdict of a workflow whose `returns.outcome` is a boolean. Kept for
+   * readers that predate `completed_outcome`; written at completion, as that is.
+   */
   outcome: workflowRunOutcomeSchema.nullable(),
+  /**
+   * The outcome this run completed with, from `returns.outcome`: an enum value as it is,
+   * a boolean as `succeeded` or `failed`. Written only in the write that completes the
+   * run, so a reader that sees one can rely on the run being over. Null for any run that
+   * did not complete, or whose workflow declares no outcome.
+   */
+  completed_outcome: z.string().nullable(),
   user_message: z.string(),
   metadata: z.record(z.string(), z.unknown()),
   started_at: z.date(),
+  active_phase_started_at: z.date().nullable(),
   completed_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),
   working_path: z.string().nullable(),
@@ -88,9 +124,26 @@ export const workflowRunSchema = z.object({
    * started — which is different from a recorded `not_git` or `unavailable` observation.
    */
   checkout_baseline: checkoutObservationSchema.nullable(),
+  /**
+   * The item this run belongs to. Written once at creation and the only place a run's
+   * item is read from. Null for a run started with no item, and for a `workflow:`
+   * sub-run, which belongs to its item through `parent_run_id`.
+   */
+  item_id: z.string().nullable(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
+
+/**
+ * The outcome to show for a run. A run completed by a binary from before
+ * `completed_outcome` has only `outcome`; a run that did not complete shows none, though
+ * an older binary may have written `outcome` on it while it ran.
+ */
+export function displayedRunOutcome(
+  run: Pick<WorkflowRun, 'status' | 'outcome' | 'completed_outcome'>
+): string | null {
+  return run.completed_outcome ?? (run.status === 'completed' ? run.outcome : null);
+}
 
 // ---------------------------------------------------------------------------
 // ArtifactType

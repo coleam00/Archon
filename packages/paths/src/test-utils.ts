@@ -41,14 +41,12 @@ const RETRY_DELAY_MS = 50;
  * Codes meaning "something still holds this tree", not "this can never be removed".
  *
  * The first five are the set Node documents for `rm`'s own `maxRetries`. `EFAULT` is the
- * odd one, and it is not defensive padding — under Bun it is the only entry that does any
- * work. Bun's `rm` maps any underlying OS error it cannot classify onto `EFAULT`, so an
- * ordinary lock arrives wearing a code that reads as a bad pointer. Measured against the
- * probe described below, which induces a genuine `EPERM` with the macOS `uchg` flag and
- * releases it after 300 ms: with `EFAULT` listed the tree is removed after ~310 ms of
- * retrying; with it dropped the same call gives up in 0 ms and leaves the tree on disk,
- * because the `EPERM` never arrives under that name. This is the signature these cleanups
- * fail with on Windows CI (#2306).
+ * odd one: Bun's `rm` has mapped OS errors it cannot classify onto `EFAULT`, so an
+ * ordinary lock arrived wearing a code that reads as a bad pointer. On Bun 1.3.11 the
+ * macOS probe described below (a genuine `EPERM` from the `uchg` flag, released after
+ * 300 ms) surfaced as `EFAULT`, and only this entry made the retry work. On Bun 1.4.2 and
+ * 1.4.5 the same probe reports `EPERM`. `EFAULT` stays listed because it is the signature
+ * these cleanups failed with on Windows CI (#2306), which has not been re-measured.
  *
  * Because Bun collapses unmapped errors onto `EFAULT`, this set cannot be exhaustive in
  * either direction; a permanently unremovable tree may also arrive as `EFAULT` and simply
@@ -66,15 +64,13 @@ const TRANSIENT_CODES = new Set(['EBUSY', 'EMFILE', 'ENFILE', 'ENOTEMPTY', 'EPER
  * (#2306).
  *
  * The retry is written out rather than delegated to `rm`'s own `maxRetries`/`retryDelay`
- * because **Bun accepts those options and ignores them**. Measured on Bun 1.3.11: against
- * a tree holding one file locked with the macOS `uchg` flag (unlink returns EPERM, which
- * is in the retry set Node documents), `rm(..., { maxRetries: 10, retryDelay: 50 })`
- * rejects in 0 ms, while the same call on node v25.6.1 retries for ~300 ms and succeeds
- * once the flag clears. `rmSync` behaves the same way. Bun also reports errors it cannot
- * map as `EFAULT` — that same locked-file probe surfaces EPERM as
- * `EFAULT: bad address in system call argument`, which is why cleanup failures on Windows
- * CI carry a code that looks nothing like a lock. Switching back to the built-in options
- * is safe only once Bun actually honors them.
+ * because **Bun accepts those options and ignores them**. Measured on Bun 1.3.11 and again
+ * on 1.4.5: against a tree holding one file locked with the macOS `uchg` flag (unlink
+ * returns EPERM, which is in the retry set Node documents),
+ * `rm(..., { maxRetries: 10, retryDelay: 50 })` rejects in 0 to 2 ms, while the same call
+ * on node v25.6.1 retries for ~300 ms and succeeds once the flag clears. `rmSync` behaves
+ * the same way. Switching back to the built-in options is safe only once Bun actually
+ * honors them.
  *
  * Failing to delete a scratch directory is not a test failure, so a tree that never comes
  * free warns instead of throwing — but it does warn, so a genuine leak stays visible. An

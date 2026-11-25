@@ -119,6 +119,13 @@ export interface TaskIsolationRequest extends IsolationRequestBase {
   identifier: string;
   /** Whether this task creates a branch or continues an exact existing branch. */
   taskBranch?: TaskBranchSelection;
+  /**
+   * The base commit the run's definitions were captured at, already fetched. A branch cut
+   * here starts at this commit and the provider fetches nothing, so the run's code and its
+   * definitions come from one commit. Ignored when the task continues an existing branch,
+   * names a `fromBranch`, or names a branch that already exists.
+   */
+  startCommit?: { commit: string; branch: BranchName };
 }
 
 export type IsolationRequest =
@@ -153,15 +160,7 @@ export interface CreatedWorktreeMetadata {
   cutFromCommit?: string;
 }
 
-export interface ObservedWorktreeMetadata {
-  provenance: 'observed';
-  adopted: false;
-}
-
-export type WorktreeMetadata =
-  | AdoptedWorktreeMetadata
-  | CreatedWorktreeMetadata
-  | ObservedWorktreeMetadata;
+export type WorktreeMetadata = AdoptedWorktreeMetadata | CreatedWorktreeMetadata;
 
 interface IsolatedEnvironmentBase {
   /** For worktrees, this is the filesystem path */
@@ -184,7 +183,6 @@ export interface WorktreeEnvironment<Metadata extends WorktreeMetadata = Worktre
   metadata: Metadata;
 }
 
-export type IsolatedEnvironment = WorktreeEnvironment;
 export type WorktreeCreationEnvironment = WorktreeEnvironment<
   CreatedWorktreeMetadata | AdoptedWorktreeMetadata
 > & {
@@ -213,6 +211,18 @@ export function worktreeRegistrationMetadata(
         worktree_branch_created: metadata.branchCreated,
       }
     : { adopted: metadata.adopted, worktree_creation_id: null, worktree_branch_created: false };
+}
+
+/**
+ * Metadata key for the base a created worktree was cut from, so a run that reuses the
+ * worktree reports the same `$BASE_BRANCH` without a remote to detect it from.
+ */
+export const WORKTREE_BASE_BRANCH = 'worktree_base_branch';
+
+/** The base a reused worktree was cut from; undefined for records written before it was kept. */
+export function readWorktreeBaseBranch(metadata: Record<string, unknown>): string | undefined {
+  const base = metadata[WORKTREE_BASE_BRANCH];
+  return typeof base === 'string' && base ? base : undefined;
 }
 
 /** Read the creation proof that worktreeRegistrationMetadata persisted. */
@@ -284,7 +294,6 @@ export interface DestroyResult {
  * Error contract:
  * - `create` throws on failure (caller should surface to user)
  * - `destroy` returns a `DestroyResult` with partial-failure details
- * - `get` returns null if not found, throws on unexpected I/O errors
  * - `healthCheck` returns false if missing, throws on permission errors
  */
 export interface IIsolationProvider {
@@ -299,14 +308,6 @@ export interface IIsolationProvider {
    * Best-effort cleanup. Throws only for unexpected errors (permissions, git failures).
    */
   destroy(envId: string, options?: DestroyOptions | WorktreeDestroyOptions): Promise<DestroyResult>;
-
-  get(envId: string): Promise<IsolatedEnvironment | null>;
-
-  /** For worktrees, codebaseId is the canonical repo path */
-  list(codebaseId: string): Promise<IsolatedEnvironment[]>;
-
-  /** Take ownership of externally-created environments (optional, for skill-app symbiosis) */
-  adopt?(path: string): Promise<IsolatedEnvironment | null>;
 
   healthCheck(envId: string): Promise<boolean>;
 }
@@ -428,6 +429,13 @@ export interface WorktreeCreateConfig {
   postCreateTimeout?: number;
   baseBranch?: string;
   copyFiles?: string[];
+  /**
+   * Repo-relative git-ignored paths that each new worktree gets as a symlink to
+   * the same path in the canonical repo, instead of a copy. Every worktree and
+   * the canonical checkout share the linked content. A missing entry is created
+   * in the canonical repo as an empty directory first.
+   */
+  linkFiles?: string[];
   /**
    * Initialize git submodules in the worktree. Defaults to enabled — a worktree
    * with uninitialized submodules is a silent broken state for monorepos.

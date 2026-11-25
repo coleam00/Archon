@@ -1,7 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import {
-  CAPTURED_SOURCE_ROOTS,
   makeCodebase,
   makeDispatchConversation,
   makeForegroundPlatform,
@@ -10,18 +8,18 @@ import {
   mockCloseRunLiveOwner,
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockGetCodebase,
   mockGetOrCreateConversation,
   mockHandleCommand,
   mockHydrateResumableRun,
-  mockInspectResumableRun,
   mockLogger,
-  mockResolveContinuationWorkflow,
+  mockResolveWorkflowSourceRoot,
   mockStartRunLiveOwner,
-  mockWithRunLiveOwner,
+  mockStartWorkflow,
   operator,
 } from '../../test/orchestrator-agent-harness';
+import { workflowStartRefusal } from '../../operations/workflow-start-admission';
 import { handleMessage } from '../orchestrator-agent';
 import type { setupRoutingTests } from './workflow-dispatch-adoption';
 export function registerResumeInputTests(fixture: ReturnType<typeof setupRoutingTests>) {
@@ -37,14 +35,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'implicit-resume-1',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -58,6 +56,62 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     expect(mockExecuteWorkflow.mock.calls[0][3]).toBe('/repos/test-repo/worktrees/paused');
   });
 
+  // The run route asks before it dispatches. Its answer has to be the dispatch's own: the
+  // same refusal for a fresh start, and none for the continuation the test above accepts.
+  test('run-route admission refuses a fresh start and admits the continuation the dispatch accepts', async () => {
+    const start = {
+      conversationId: 'conv-1',
+      conversation: makeDispatchConversation(),
+      workflowName: 'test-workflow',
+      inputs: undefined,
+      adoptRunId: undefined,
+      actor: operator,
+    };
+    const prepare = (): void => {
+      mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+      mockStartWorkflow.mockReturnValueOnce(
+        Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
+      );
+    };
+
+    prepare();
+    expect(await workflowStartRefusal(start)).toContain("requires input 'diff'");
+
+    prepare();
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
+        makeResumableRun({
+          id: 'implicit-resume-1',
+          working_path: '/repos/test-repo/worktrees/paused',
+          status: 'paused',
+        }),
+      ])
+    );
+    expect(await workflowStartRefusal(start)).toBeUndefined();
+
+    // With several open runs the dispatch lists them, so admission must not refuse first.
+    prepare();
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
+        makeResumableRun({ id: 'open-run-a', status: 'paused' }),
+        makeResumableRun({ id: 'open-run-b', status: 'failed' }),
+      ])
+    );
+    expect(await workflowStartRefusal(start)).toBeUndefined();
+
+    prepare();
+    expect(await workflowStartRefusal({ ...start, inputs: { diff: 'D1' } })).toBeUndefined();
+    // A conversation in a worktree runs the canonical repository's workflow, not this one.
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockResolveWorkflowSourceRoot.mockResolvedValueOnce('/repos/test-repo');
+    expect(await workflowStartRefusal(start)).toBeUndefined();
+    // An adopting start is the dispatch's to judge: its branch can carry its own workflow.
+    expect(await workflowStartRefusal({ ...start, adoptRunId: 'run-to-adopt' })).toBeUndefined();
+    // Asking changes nothing: no run is resumed, started or queued.
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+  });
+
   test('tells the caller when supplied inputs could not be applied to an auto-resumed run', async () => {
     // The resume replays its own row's inputs; values supplied on this call cannot
     // reach it. Accepting them and silently running something else is the failure this
@@ -67,14 +121,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'implicit-resume-2',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -97,14 +151,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'implicit-model-resume',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -129,14 +183,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'implicit-config-resume',
           working_path: '/repos/test-repo/worktrees/paused',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -151,7 +205,6 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).toContain('a new run config cannot be applied');
     expect(sent).toContain('force a fresh run');
-    expect(mockInspectResumableRun).toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
@@ -178,52 +231,6 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     expect(sent).toContain('Resuming the failed run');
     expect(sent).not.toContain('Resuming the paused run');
     expect(mockExecuteWorkflow).toHaveBeenCalled();
-  });
-
-  test('re-raises the deferred input error when hydration finds nothing to resume', async () => {
-    // The gate defers a contract violation while a continuation looks possible. This is
-    // the ONE branch where that prediction turns out wrong — hydration returns null, so
-    // a FRESH run row gets created after all — and the deferred error has to come back.
-    // Without the re-raise, a required-input workflow would silently start with the
-    // input never supplied and never validated: neither a safe refusal nor a real resume.
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
-    );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
-        makeResumableRun({
-          id: 'nothing-to-resume-1',
-          working_path: '/repos/test-repo/worktrees/paused',
-          status: 'paused',
-        })
-      )
-    );
-    // Nothing worth resuming → the fresh-run fallthrough.
-    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
-    const capturedWorkflow = makeTestResolvedWorkflow({
-      name: 'test-workflow',
-      inputs: { diff: { required: true } },
-    });
-    mockResolveContinuationWorkflow.mockResolvedValueOnce({
-      workflow: capturedWorkflow,
-      roots: CAPTURED_SOURCE_ROOTS,
-      workflows: [{ workflow: capturedWorkflow, source: 'project' }],
-      errors: [],
-    });
-
-    const platform = makeForegroundPlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-
-    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
-    expect(sent).toContain("requires input 'diff'");
-    // Must NOT reach the generic "starting fresh in the same worktree" dispatch.
-    expect(sent).not.toContain('starting fresh in the same worktree');
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('nothing-to-resume-1');
-    expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
-    expect(mockWithRunLiveOwner).not.toHaveBeenCalled();
   });
 
   test('reports a deferred input error on a lost resume race when values were supplied', async () => {
@@ -284,14 +291,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'failed-prior-1',
           working_path: '/repos/test-repo/worktrees/failed',
           status: 'failed',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -327,46 +334,21 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     expect(mockExecuteWorkflow).toHaveBeenCalled();
   });
 
-  test('web workflow with resumable run resumes foreground (not background)', async () => {
-    // Pins the priority order: resume detection comes before the background-dispatch
-    // gate. If a resumable run exists, web workflows must resume foreground rather
-    // than dispatching a fresh background run, or they would lose the paused run's
-    // worktree state.
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
-        makeResumableRun({
-          id: 'web-noninteractive-resume-1',
-          working_path: '/repos/test-repo/worktrees/web-feature',
-          status: 'paused',
-        })
-      )
-    );
-
-    const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-
-    expect(mockHydrateResumableRun).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).toHaveBeenCalled();
-    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
-    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/web-feature');
-  });
-
   test('a background-default adapter workflow with resumable run resumes foreground (not background)', async () => {
+    // Pins the priority order: resume detection comes before the background-dispatch
+    // gate. A resumable run must resume foreground rather than dispatching a fresh
+    // background run, or it would lose the paused run's worktree state.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'web-noninteractive-resume-1',
           working_path: '/repos/test-repo/worktrees/web-feature',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = { ...makePlatform(), getPlatformType: mock(() => 'matrix-chat') };
@@ -405,14 +387,14 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'chat-resume-run-1',
           working_path: '/repos/test-repo/worktrees/chat-feature',
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = {
@@ -451,7 +433,7 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     };
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
-    expect(mockFindResumableRunByParentConversation).toHaveBeenCalledWith(
+    expect(mockListResumableRunsByParentConversation).toHaveBeenCalledWith(
       'test-workflow',
       'conv-1-db',
       'codebase-1'

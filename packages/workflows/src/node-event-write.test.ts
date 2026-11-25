@@ -16,6 +16,8 @@ import {
 import { serializeDeferredNodeUsage } from './node-record-serialization';
 import type { NodeExecutionRecord } from './schemas/node-execution';
 import type { NodeStateEventInput } from './store';
+import { expandWorkflowIncludes } from './include-expander';
+import { mapOf, nodeById, wf } from './include-expander.fixtures';
 
 const completedRecord = (): NodeExecutionRecord => ({
   runId: 'run-1',
@@ -176,5 +178,26 @@ describe('node-event-write', () => {
     );
     expect(emitted[0]).not.toHaveProperty('execution');
     expect(emitted[0]).not.toHaveProperty('duration');
+  });
+
+  it('names where an included wait was written when its event has no execution metadata', () => {
+    const block = wf('ci-block', [{ id: 'wait-for-ci', wait: { duration_ms: 1 } }]);
+    const parent = wf('parent', [{ id: 'ci', include: 'ci-block' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const waitNode = nodeById(workflows.get('parent')!, 'ci__wait-for-ci')!;
+    const event: NodeStateEventInput = {
+      workflow_run_id: 'run-1',
+      step_name: 'ci__wait-for-ci',
+      event_type: 'node_completed',
+      data: { node_output: '{"status":"satisfied"}', type: 'wait' },
+    };
+    expect(deriveEmitterEvent(waitNode, event)).toEqual({
+      type: 'node_completed',
+      runId: 'run-1',
+      nodeId: 'ci__wait-for-ci',
+      nodeName: 'ci__wait-for-ci',
+      composed: { nodeId: 'wait-for-ci', workflow: 'ci-block', includes: ['ci'] },
+    });
   });
 });

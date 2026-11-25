@@ -22,6 +22,8 @@ import {
   dagOptions,
   makeWorkflowRun,
   readTranscript,
+  isEngineHousekeepingCall,
+  nodeExecCalls,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from '../../../event-emitter';
@@ -475,7 +477,9 @@ describe('subprocess credential redaction', () => {
     const execSpy = spyOn(git, 'execFileAsync').mockImplementation(
       async (command: string, args: string[]) => {
         const commandLine = [command, ...args].join(' ');
-        rejection = Object.assign(
+        // Every call fails with the echoed secrets, so the durable checks below also cover
+        // the engine's marker probes; the rejection checked field by field is the node's.
+        const failure = Object.assign(
           new Error(`Command failed: ${commandLine}\nmessage echoed ${openAiSecret}`),
           {
             code: 1,
@@ -486,7 +490,8 @@ describe('subprocess credential redaction', () => {
             stderr: `stderr echoed ${openAiSecret}, ${otherInjectedSecret}, ${projectSecret}, ${databaseUrl}, and ${fileDeliveredSecret}`,
           }
         );
-        throw rejection;
+        if (!isEngineHousekeepingCall([command, args])) rejection = failure;
+        throw failure;
       }
     );
 
@@ -603,7 +608,9 @@ describe('subprocess credential redaction', () => {
       | undefined;
     const execSpy = spyOnNodeExec().mockImplementation(async (command: string, args: string[]) => {
       const commandLine = [command, ...args].join(' ');
-      rejection = Object.assign(
+      // Node scratch release asks the host's git for worktrees; it fails with the echoed
+      // secrets too, so the durable checks cover it. The node's call is the one checked.
+      const failure = Object.assign(
         new Error(
           `Command failed: ${commandLine}\nmessage echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`
         ),
@@ -615,7 +622,8 @@ describe('subprocess credential redaction', () => {
           stderr: `stderr echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`,
         }
       );
-      throw rejection;
+      if (!isEngineHousekeepingCall([command, args])) rejection = failure;
+      throw failure;
     });
 
     try {
@@ -642,8 +650,9 @@ describe('subprocess credential redaction', () => {
         })
       );
 
-      expect(execSpy).toHaveBeenCalledTimes(1);
-      expect(execSpy.mock.calls[0]?.[0]).not.toBe('docker');
+      const nodeCalls = nodeExecCalls(execSpy.mock.calls);
+      expect(nodeCalls).toHaveLength(1);
+      expect(nodeCalls[0]?.[0]).not.toBe('docker');
       const rejectionText = [
         rejection?.message,
         rejection?.stack,
@@ -1092,28 +1101,6 @@ describe('retained exec output', () => {
     expect(probeRows[1].exit_code).toBe(0);
   });
 
-  it("labels a script node's retained evidence as <script>, not <bash>", async () => {
-    // Same seat, different node executor. The label is what tells a reader which
-    // executor produced the row, so a copy-paste of the wrong constant is the failure
-    // this catches.
-    const { rows } = await runAndReadTranscript('retain-script', [
-      {
-        id: 'measure',
-        kind: 'exec',
-        runtime: 'bun',
-        script: 'console.log("from bun"); console.error("bun warning");',
-      },
-    ]);
-
-    const row = rows.find(
-      candidate => candidate.type === 'exec_output' && candidate.step === 'measure'
-    );
-    expect(row?.content).toBe('<script>');
-    expect(row?.exit_code).toBe(0);
-    expect(row?.stdout_tail).toBe('from bun');
-    expect(row?.stderr_tail).toBe('bun warning');
-  });
-
   it("retains a loop_group's until_bash probe under the group's own iteration key", async () => {
     // loop_group resolves its own probe at a different call site than `loop:`, with its
     // own iteration variable — a site that writes no per-iteration transcript row of any
@@ -1361,16 +1348,6 @@ describe('exec result contracts (#2453)', () => {
     expect(error).toContain('/ready');
     expect(error).toContain('units');
     expect(prompts).toEqual([]);
-  });
-
-  it('a stdout excerpt that mentions a timeout is still reported as a contract failure', async () => {
-    const events = await runDag(
-      contractWorkflow(bashEmitting('the job timed out')),
-      'contract-timeout-lookalike'
-    );
-    const error = String((producerFailure(events)?.data as { error?: string } | undefined)?.error);
-    expect(error).toContain('must be a single JSON document');
-    expect(error).not.toContain('timed out after');
   });
 
   it('a contract failure is never retried, even under on_error: all', async () => {

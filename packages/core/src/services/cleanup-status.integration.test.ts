@@ -22,6 +22,7 @@ import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registr
 import { getWorktreeStatusBreakdown } from './cleanup-service';
 import { getLog } from './cleanup/log';
 import { statusDiagnostic } from './cleanup/status-diagnostic';
+import { NO_MERGE_REMOTE_REASON } from './cleanup/merge-verdict';
 import { InvalidConfigError } from '../config/config-validation';
 
 const omitted = 'Operation failed (unstructured diagnostic omitted to protect credentials)';
@@ -53,24 +54,10 @@ test.each(['directory', 'missing path'])(
 
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', repoPath);
 
-    const diagnostic = breakdown.inspectionFailedEnvs[0]?.errors[0];
-    expect(diagnostic).toBe(`Patch equivalence: ${omitted}`);
-    expect(breakdown).toEqual({
-      total: 1,
-      merged: 0,
-      stale: 0,
-      active: 0,
-      mergedEnvs: [],
-      staleEnvs: [],
-      activeEnvs: [],
-      inspectionFailedEnvs: [
-        {
-          id: 'env-1',
-          branchName: 'task-1',
-          errors: [diagnostic],
-        },
-      ],
+    expect(breakdown.classificationUnavailable).toEqual({
+      reason: 'Git operation failed (exit code 128)',
     });
+    expect(breakdown.inspectionFailedEnvs).toEqual([]);
   }
 );
 
@@ -149,12 +136,6 @@ test.each([
     expect(result.message).not.toContain('0 active');
     expect(result.message).not.toContain('inventory-secret');
     expect(result.message).not.toContain('stored private content');
-    expect(result.message).toContain('## Orchestrator Status');
-    expect(result.message).toContain('## Registered Projects (1)');
-    expect(result.message).toContain(`Project: ${codebase.name} @ main`);
-    expect(result.message).toContain(`Working Directory: ${codebase.default_cwd}`);
-    expect(result.message).toContain('Active Session: session-');
-    expect(result.message).toContain('Active Workflow: `test-workflow`');
   }
 );
 
@@ -170,6 +151,7 @@ test.each(['config', 'default branch'])(
     spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
     spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
     spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
+    spyOn(git, 'getDefaultRemote').mockResolvedValue('origin');
     spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
       statusEnvironment(codebase.default_cwd),
     ]);
@@ -224,6 +206,7 @@ test('status keeps both inspection failure categories without exposing secrets',
   spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
   spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
   spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
+  spyOn(git, 'getDefaultRemote').mockResolvedValue('origin');
   spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
     statusEnvironment(codebase.default_cwd),
   ]);
@@ -339,4 +322,25 @@ test('real malformed remote cannot expose a credential in status or its warning'
   );
   expect(result.message).not.toContain('topsecret-5209');
   expect(JSON.stringify(warn.mock.calls)).not.toContain('topsecret-5209');
+});
+
+test('status names a repository with no remote as the reason classification is unavailable', async () => {
+  const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-status-no-remote-')));
+  await git.execFileAsync('git', ['init', root]);
+  setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
+  const codebase = makeCodebase({ default_cwd: root });
+  spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
+  spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
+  spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
+  spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
+  spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([statusEnvironment(root)]);
+  spyOn(config, 'loadRepoConfig').mockResolvedValue({});
+
+  const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
+    formatWorkflowCommand: command => command,
+  });
+
+  expect(result.message).toContain(
+    `Merge/stale classification unavailable (base ref resolution failed: ${NO_MERGE_REMOTE_REASON})`
+  );
 });

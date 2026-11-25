@@ -36,9 +36,16 @@ export type Comparison${index} = AssertNever<${drift}>;
 `,
     ];
   }).join('\n');
+  // Core's subscription credentials must stay assignable to Pi's OAuth credentials. Core cannot
+  // import the Pi SDK and providers cannot import core, so this proof is where they meet.
   const proof = `
 import type { AssertNever } from '@archon/provider-contract';
+import type { OAuthCredentials as PiOAuthCredentials } from '@earendil-works/pi-ai/oauth';
+import type { SubscriptionOAuthCredentials } from '../../core/src/credentials/subscription-oauth';
 import type { FieldDrift } from './sdk-type-conformance.type-test';
+export type SubscriptionTokenConformance = AssertNever<
+  SubscriptionOAuthCredentials extends PiOAuthCredentials ? never : 'incompatible subscription tokens'
+>;
 ${comparisons}
 ${extra}
 `;
@@ -52,7 +59,10 @@ ${extra}
     join(ROOT, 'packages/providers')
   );
   if (parsed.errors.length) throw new Error('Invalid providers tsconfig');
-  const host = ts.createCompilerHost(parsed.options);
+  // The proof reads core and workflows sources, which are outside the providers project, so it
+  // is checked as a plain program rather than as the composite project.
+  const options = { ...parsed.options, composite: false };
+  const host = ts.createCompilerHost(options);
   const readFile = host.readFile;
   const virtualSources = new Map(
     [...replacements, [proofFile, proof] as const].map(([file, text]) => [
@@ -61,7 +71,7 @@ ${extra}
     ])
   );
   host.readFile = file => virtualSources.get(file.replaceAll('\\', '/')) ?? readFile(file);
-  const program = ts.createProgram([proofFile, HELPERS], parsed.options, host);
+  const program = ts.createProgram([proofFile, HELPERS], options, host);
   return ts
     .getPreEmitDiagnostics(program)
     .map(diagnostic => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));

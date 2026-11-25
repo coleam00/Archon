@@ -100,9 +100,13 @@ Work through these questions in order, with the user where marked:
 8. **Wiring** into YAML (below), then **fixtures**: every authored workflow ships
    a dry-run fixture under `<pack>/<workflow>/fixtures/*.stubs.yaml` declaring its
    expected outcome. Prove red paths red before trusting them. Fixtures prove the
-   paths that dry-run can execute. A reachable `workflow:` or `include:` +
-   `fan_out:` node fails dry-run by design, so prove that path with a small real
-   acceptance run while keeping fixtures for the surrounding wiring.
+   paths that dry-run can execute. A reachable `workflow:` child uses an authored
+   stub instead of launching a run. For `workflow:` + `fan_out:`, supply an array
+   with one result per item, in item order; a count mismatch fails. Empty items
+   complete with `[]` without a stub. Composed `include:` + `fan_out:` remains
+   unsupported even with a stub, so prove that path with a small real acceptance run. See
+   [Deterministic dry-run](https://archon.diy/reference/cli/#deterministic-dry-run)
+   for stub formats and limits.
 9. **Validate** before any real run. None of these steps spends on a model:
 
    ```bash
@@ -112,7 +116,9 @@ Work through these questions in order, with the user where marked:
    archon workflow test <name>                         # every declared fixture
    ```
 
-   `--stubs-init` writes a block-style YAML stub scaffold to fill in. Keep it outside
+   `--stubs-init` writes a block-style YAML stub scaffold to fill in. It omits
+   `workflow:` children: add their stubs manually using the expanded node ids
+   described in the reference above; `--default-stubs` cannot supply them. Keep it outside
    `fixtures/`: a dry-run stub file is not a fixture. A fixture file declares a `fixture:` block, and
    `--stubs` refuses it ("this is a fixture file; run it with 'workflow test'"). Copy
    the stub values you need into a fixture and run it with `workflow test`. A dry run

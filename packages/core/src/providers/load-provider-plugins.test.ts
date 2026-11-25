@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { readReceipts, receiptPath } from '@archon/plugin-manifest/store';
 import { parseProviderRunModel } from '@archon/provider-contract';
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import { descriptor } from './fixtures/process-provider-data';
 import { loadProviderPlugins } from './load-provider-plugins';
 
@@ -147,7 +148,7 @@ test('stale first-party providers are unavailable with the versioned install com
   );
 });
 
-test('source registration skips maintained receipts and warns with the receipt path', async () => {
+test('source registration skips maintained receipts without warning', async () => {
   const dir = tempRoot(await mkdtemp(join(tmpdir(), 'provider-source-')));
   const file = receiptPath(dir, id);
   await mkdir(dirname(file), { recursive: true });
@@ -164,7 +165,7 @@ test('source registration skips maintained receipts and warns with the receipt p
   const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
   try {
     expect(await loadProviderPlugins(dir, { maintained: 'source' })).toEqual([]);
-    expect(warning).toHaveBeenCalledWith({ receipt: file }, 'provider.receipt_skipped_source');
+    expect(warning).not.toHaveBeenCalled();
   } finally {
     loggerFactory.mockRestore();
     warning.mockRestore();
@@ -193,7 +194,7 @@ test('incompatible receipts are reported and retained while valid providers stil
     ]);
     expect(warning.mock.calls.flat().join(' ')).toContain('archon plugin update owner/stale');
     expect(warning.mock.calls[0][1]).toBe(
-      `Plugin unavailable: owner/stale (provider 'process-fixture') uses protocol 2, but this Archon requires protocol 3. If ${join(dir, receipt.manifest.executable + (process.platform === 'win32' ? '.exe' : ''))} exists, move it aside before retrying. Run: archon plugin update owner/stale`
+      `Plugin unavailable: owner/stale (provider 'process-fixture') uses protocol 2, but this Archon requires protocol ${String(PROVIDER_PLUGIN_PROTOCOL)}. If ${join(dir, receipt.manifest.executable + (process.platform === 'win32' ? '.exe' : ''))} exists, move it aside before retrying. Run: archon plugin update owner/stale`
     );
     expect(warning.mock.calls[0][0]).toMatchObject({ receipt: stale });
     expect(await readFile(stale, 'utf8')).toBe(contents);

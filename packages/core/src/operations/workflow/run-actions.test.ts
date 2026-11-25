@@ -1,14 +1,17 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeEach } from 'bun:test';
+import { hostname } from 'node:os';
+import { startRunLiveOwner } from '../../services/run-live-owner';
 import {
   operator,
   mockGetWorkflowRun,
   EMPTY_COUNTS,
   mockListWorkflowRuns,
   mockDeleteWorkflowNodeSessions,
-  mockLogger,
   makePausedRun,
   makeDashboardRun,
+  mockGetRunAncestry,
+  ResumeRefusedError,
   getWorkflowStatus,
   resumeWorkflow,
   resetWorkflowNodeSessions,
@@ -77,17 +80,146 @@ describe('resumeWorkflow', () => {
     );
   });
 
-  test('throws wrapped message and logs when DB throws', async () => {
+  test('a run that failed before its checkout was prepared is refused with the line that restarts it', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'failed',
+        working_path: null,
+        workflow_name: "@it's $pack",
+        metadata: { inputs: { item: 'secret-value' } },
+      })
+    );
+
+    const error = await resumeWorkflow('run-1', operator).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ResumeRefusedError);
+    const refusal = error as InstanceType<typeof ResumeRefusedError>;
+    expect(refusal.reason).toBe('not_resumable');
+    // Only the run id: nothing in the line needs quoting in any shell.
+    expect(refusal.message).toEndWith(
+      'Start it again with: archon workflow run --supersedes run-1'
+    );
+    expect(refusal.message).not.toContain('secret-value');
+  });
+
+  test('a cancelled run is refused with the line that restarts it, but a child whose parent was deleted gets none', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'cancelled' }));
+    const top = (await resumeWorkflow('run-1', operator).catch((e: unknown) => e)) as InstanceType<
+      typeof ResumeRefusedError
+    >;
+    expect(top.restartCommand).toBe('archon workflow run --supersedes run-1');
+    expect(top.message).toEndWith('with: archon workflow run --supersedes run-1');
+
+    // Deleting the parent clears parent_run_id; the spawning node's id stays.
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'cancelled',
+        parent_run_id: null,
+        metadata: { parent_node_id: 'child-node' },
+      })
+    );
+    const orphan = (await resumeWorkflow('run-1', operator).catch(
+      (e: unknown) => e
+    )) as InstanceType<typeof ResumeRefusedError>;
+    expect(orphan).toBeInstanceOf(ResumeRefusedError);
+    expect(orphan.restartCommand).toBeUndefined();
+    expect(orphan.message).not.toContain('--supersedes');
+  });
+
+  test('throws wrapped message when DB throws', async () => {
     mockGetWorkflowRun.mockRejectedValueOnce(new Error('connection reset'));
 
     await expect(resumeWorkflow('run-1', operator)).rejects.toThrow(
       'Failed to look up workflow run run-1: connection reset'
     );
-    expect(mockLogger.error).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: 'run-1' }),
-      'operations.workflow_resume_lookup_failed'
-    );
   });
+});
+
+describe('resumeWorkflow on a running run', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockClear();
+    mockGetRunAncestry.mockReset();
+    mockGetRunAncestry.mockImplementation(() => Promise.resolve([]));
+  });
+
+  const thisOwner = { host: hostname(), pid: 4242, uid: process.getuid?.() };
+  const runningRun = (overrides: Parameters<typeof makePausedRun>[0] = {}) =>
+    makePausedRun({
+      id: `resume-running-${crypto.randomUUID()}`,
+      status: 'running',
+      metadata: { execution_owner: thisOwner },
+      ...overrides,
+    });
+
+  async function refusal(id: string): Promise<InstanceType<typeof ResumeRefusedError>> {
+    const error = await resumeWorkflow(id, operator).then(
+      () => undefined,
+      (rejection: unknown) => rejection
+    );
+    expect(error).toBeInstanceOf(ResumeRefusedError);
+    return error as InstanceType<typeof ResumeRefusedError>;
+  }
+
+  test('returns a running run when no owner answers for it', async () => {
+    const run = runningRun();
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+    expect(await resumeWorkflow(run.id, operator)).toBe(run);
+  });
+
+  test('refuses a running run whose owner answers, naming that owner', async () => {
+    const run = runningRun();
+    const owner = await startRunLiveOwner(run.id);
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce(run);
+      const error = await refusal(run.id);
+      expect(error.reason).toBe('live_owner');
+      expect(error.message).toContain(`host ${thisOwner.host}, pid 4242`);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  // A sub-run runs in the process driving any of its ancestors: the root, or an
+  // intermediate sub-run resumed on its own after the root's process died.
+  for (const live of ['parent', 'root'] as const) {
+    test(`refuses a sub-run whose ${live} run's owner answers`, async () => {
+      const parentRunId = `resume-parent-${crypto.randomUUID()}`;
+      const rootRunId = `resume-root-${crypto.randomUUID()}`;
+      const liveRunId = live === 'parent' ? parentRunId : rootRunId;
+      const liveOwner = await startRunLiveOwner(liveRunId);
+      try {
+        const run = runningRun({ parent_run_id: parentRunId });
+        mockGetRunAncestry.mockResolvedValueOnce([
+          makePausedRun({ id: parentRunId, status: 'running', parent_run_id: rootRunId }),
+          makePausedRun({ id: rootRunId, status: 'running' }),
+        ]);
+        mockGetWorkflowRun.mockResolvedValueOnce(run);
+        const error = await refusal(run.id);
+        expect(error.reason).toBe('live_owner');
+        expect(error.message).toContain(liveRunId);
+      } finally {
+        await liveOwner.close();
+      }
+    });
+  }
+
+  test('refuses a running run whose recorded owner is on another host', async () => {
+    const run = runningRun({ metadata: { execution_owner: { host: 'build-box', pid: 7 } } });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+    const error = await refusal(run.id);
+    expect(error.reason).toBe('owner_unreachable');
+    expect(error.message).toContain('build-box');
+  });
+
+  test.skipIf(process.getuid === undefined)(
+    'refuses a running run whose recorded owner ran as another user',
+    async () => {
+      const uid = (process.getuid?.() ?? 0) + 1;
+      const run = runningRun({ metadata: { execution_owner: { ...thisOwner, uid } } });
+      mockGetWorkflowRun.mockResolvedValueOnce(run);
+      expect((await refusal(run.id)).reason).toBe('owner_unreachable');
+    }
+  );
 });
 
 describe('resetWorkflowNodeSessions', () => {

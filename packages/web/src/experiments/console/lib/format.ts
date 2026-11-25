@@ -68,6 +68,19 @@ export function formatRelativeToBaseline(eventIso: string, baselineIso: string |
   return h > 0 ? `+${pad(h)}:${pad(m)}:${pad(s)}` : `+${pad(m)}:${pad(s)}`;
 }
 
+export function formatDateTime(iso: string): string {
+  return new Date(ensureUtc(iso)).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+    timeZoneName: 'short',
+  });
+}
+
 export function formatClock(iso: string): string {
   const d = new Date(ensureUtc(iso));
   const hh = d.getHours().toString().padStart(2, '0');

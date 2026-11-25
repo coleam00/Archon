@@ -18,6 +18,7 @@ import {
 import { collectCredentialValues } from '@archon/paths/credential-redaction';
 import { assertWorkflowSourceIntegrity } from '../../workflow-source';
 import { buildExecNodeEnvironment } from '../../exec-environment';
+import { currentNodeScratchDir } from '../../workflow-variables';
 import type { NodeExecutionMetadata } from '../../schemas/node-execution';
 import type { ExecNode } from '../../schemas';
 import type { DryRunContext } from '../context';
@@ -37,6 +38,8 @@ export async function executeCodeNode(
     // a pure-stub dry run creates no directory.
     await mkdir(ctx.artifactsDir, { recursive: true });
     await mkdir(ctx.stateDir, { recursive: true });
+    const nodeScratchDir = currentNodeScratchDir();
+    if (nodeScratchDir !== undefined) await mkdir(nodeScratchDir, { recursive: true });
     const env = {
       ...process.env,
       ...ctx.envVars,
@@ -107,10 +110,15 @@ async function resolveCodeInvocation(
     return { command: resolveBashPath(), ...bashInvocation(code) };
   }
   if (isInlineScript(code)) {
-    return scriptInvocation(node.runtime, { kind: 'inline', code }, node.deps);
+    return scriptInvocation(node.runtime, { kind: 'inline', code }, node.deps, ctx.artifactsDir);
   }
   await assertWorkflowSourceIntegrity(ctx.sourceRoots);
   const script = (await discoverScriptsForCwd(ctx.cwd, ctx.sourceRoots)).get(code);
   if (!script) throw new Error(`Named script '${code}' was not found`);
-  return scriptInvocation(script.runtime, { kind: 'file', path: script.path }, node.deps);
+  return scriptInvocation(
+    script.runtime,
+    { kind: 'file', path: script.path },
+    node.deps,
+    ctx.artifactsDir
+  );
 }

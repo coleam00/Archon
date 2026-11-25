@@ -16,11 +16,6 @@ describe('resolvePiThinkingLevel', () => {
     expect(resolvePiThinkingLevel({})).toEqual({ level: undefined });
   });
 
-  test('maps valid effort string directly', () => {
-    expect(resolvePiThinkingLevel({ effort: 'medium' })).toEqual({ level: 'medium' });
-    expect(resolvePiThinkingLevel({ effort: 'low' })).toEqual({ level: 'low' });
-  });
-
   // Pi's native `ThinkingLevel` matches Archon's ladder through `max`
   // (@earendil-works/pi-ai types.d.ts); Codex-only `ultra` clamps separately.
   // This previously asserted a downgrade to
@@ -60,7 +55,7 @@ describe('resolvePiTools', () => {
     expect(resolvePiTools(cwd, {})).toEqual({ tools: undefined, unknownTools: [] });
   });
 
-  test('allowed_tools: [] returns empty tools array (no-tools idiom)', () => {
+  test('allowed_tools: [] returns empty tools array (no built-in tools)', () => {
     const result = resolvePiTools(cwd, { allowed_tools: [] });
     expect(result.tools).toEqual([]);
     expect(result.unknownTools).toEqual([]);
@@ -148,8 +143,9 @@ describe('resolvePiTools', () => {
 
 // ─── resolvePiSkills ───────────────────────────────────────────────────────
 //
-// Uses a temp directory to stage synthetic skill layouts — avoids relying on
-// whatever the developer has in ~/.claude/skills/ or ~/.agents/skills/.
+// `resolvePiSkills` re-exports `resolveSkillDirectories`, whose own cases live in
+// packages/paths/src/skills.test.ts. These cover what those do not: the
+// ~/.claude/skills root and a mixed resolvable + missing list.
 
 describe('resolvePiSkills', () => {
   let tmpRoot: string;
@@ -167,26 +163,14 @@ describe('resolvePiSkills', () => {
     originalHome = process.env.HOME;
     process.env.HOME = home;
 
-    // Staging:
-    //   <cwd>/.agents/skills/alpha/SKILL.md
-    //   <cwd>/.claude/skills/bravo/SKILL.md
-    //   <home>/.agents/skills/charlie/SKILL.md
-    //   <home>/.claude/skills/delta/SKILL.md
-    //   <home>/.claude/skills/shared/SKILL.md  (also in <cwd>/.claude/skills/shared/)
-    //   <cwd>/.claude/skills/shared/SKILL.md
     const stage = [
-      [join(cwd, '.agents', 'skills', 'alpha'), 'SKILL.md'],
-      [join(cwd, '.claude', 'skills', 'bravo'), 'SKILL.md'],
-      [join(home, '.agents', 'skills', 'charlie'), 'SKILL.md'],
-      [join(home, '.claude', 'skills', 'delta'), 'SKILL.md'],
-      [join(cwd, '.claude', 'skills', 'shared'), 'SKILL.md'],
-      [join(home, '.claude', 'skills', 'shared'), 'SKILL.md'],
-      // A dir without SKILL.md — must not resolve
-      [join(cwd, '.claude', 'skills', 'no-skill-md'), '.keep'],
+      join(cwd, '.agents', 'skills', 'alpha'),
+      join(cwd, '.claude', 'skills', 'bravo'),
+      join(home, '.claude', 'skills', 'delta'),
     ];
-    for (const [dir, file] of stage) {
+    for (const dir of stage) {
       mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, file), '# skill content\n');
+      writeFileSync(join(dir, 'SKILL.md'), '# skill content\n');
     }
   });
 
@@ -199,67 +183,15 @@ describe('resolvePiSkills', () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  test('returns empty for undefined/empty input', () => {
-    expect(resolvePiSkills(cwd, undefined)).toEqual({ paths: [], missing: [] });
-    expect(resolvePiSkills(cwd, [])).toEqual({ paths: [], missing: [] });
-  });
-
-  test('resolves project-local .agents/skills', () => {
-    const result = resolvePiSkills(cwd, ['alpha']);
-    expect(result.missing).toEqual([]);
-    expect(result.paths).toHaveLength(1);
-    expect(result.paths[0]).toContain(join('.agents', 'skills', 'alpha'));
-  });
-
-  test('resolves project-local .claude/skills', () => {
-    const result = resolvePiSkills(cwd, ['bravo']);
-    expect(result.missing).toEqual([]);
-    expect(result.paths[0]).toContain(join('.claude', 'skills', 'bravo'));
-  });
-
-  test('resolves user-global .agents/skills', () => {
-    const result = resolvePiSkills(cwd, ['charlie']);
-    expect(result.missing).toEqual([]);
-    expect(result.paths[0]).toContain(join('.agents', 'skills', 'charlie'));
-  });
-
   test('resolves user-global .claude/skills', () => {
     const result = resolvePiSkills(cwd, ['delta']);
     expect(result.missing).toEqual([]);
     expect(result.paths[0]).toContain(join('.claude', 'skills', 'delta'));
   });
 
-  test('project-local wins over user-global when both present', () => {
-    const result = resolvePiSkills(cwd, ['shared']);
-    expect(result.missing).toEqual([]);
-    expect(result.paths[0]).toContain(join(cwd, '.claude', 'skills', 'shared'));
-  });
-
-  test('dir without SKILL.md does not resolve', () => {
-    const result = resolvePiSkills(cwd, ['no-skill-md']);
-    expect(result.paths).toEqual([]);
-    expect(result.missing).toEqual(['no-skill-md']);
-  });
-
-  test('unknown skill name is reported in missing', () => {
-    const result = resolvePiSkills(cwd, ['does-not-exist']);
-    expect(result.paths).toEqual([]);
-    expect(result.missing).toEqual(['does-not-exist']);
-  });
-
   test('mixed resolvable + unresolvable returns both', () => {
     const result = resolvePiSkills(cwd, ['alpha', 'does-not-exist', 'bravo']);
     expect(result.paths).toHaveLength(2);
     expect(result.missing).toEqual(['does-not-exist']);
-  });
-
-  test('dedupes duplicate names', () => {
-    const result = resolvePiSkills(cwd, ['alpha', 'alpha']);
-    expect(result.paths).toHaveLength(1);
-  });
-
-  test('ignores empty-string and non-string names', () => {
-    const result = resolvePiSkills(cwd, ['', 'alpha']);
-    expect(result.paths).toHaveLength(1);
   });
 });

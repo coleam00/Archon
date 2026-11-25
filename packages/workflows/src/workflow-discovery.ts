@@ -2,9 +2,10 @@
  * Workflow discovery - finds and loads workflow YAML files from disk.
  *
  * This module is the discoverWorkflows entry point. Each scope's loading lives in
- * `workflow-discovery/`: directory traversal in `load-dir.ts`, the scopes below in
- * `scopes.ts`, installed packs in `installed.ts`, and include expansion of a scope in
- * `expand-scope.ts`. Parsing one file stays in loader.ts.
+ * `workflow-discovery/`: the packaged-workflow layout in `pack-layout.ts`, directory
+ * loading in `load-dir.ts`, the scopes below in `scopes.ts`, installed packs in
+ * `installed.ts`, and include expansion of a scope in `expand-scope.ts`. Parsing one
+ * file stays in loader.ts.
  *
  * Scopes (precedence lowest → highest):
  *   1. `bundled` — embedded in the Archon binary (or read from the packs

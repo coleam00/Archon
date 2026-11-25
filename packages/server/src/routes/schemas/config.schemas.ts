@@ -19,6 +19,9 @@ const providerDefaultsSchema = z.record(z.string(), z.unknown()).openapi('Provid
 /** A single model-tier preset ({ provider, model, effort? }), owned by the engine. */
 export const tierEntrySchema = modelAliasPresetSchema.meta({ id: 'TierEntry' });
 
+// A nullable named component becomes a bare $ref in OpenAPI 3.0, losing nullability.
+export const nullableTierEntrySchema = tierEntrySchema.meta({ id: undefined }).nullable();
+
 /**
  * One field per engine tier name. Every tier-shaped body builds its fields here,
  * so a tier added to `TIER_NAMES` reaches the config, user-prefs and update
@@ -35,7 +38,7 @@ export const tiersConfigSchema = z
 
 /** PATCH /api/config/tiers body — each tier optional; `null` unsets that tier. */
 export const updateTiersBodySchema = z
-  .object({ tiers: z.object(tierFields(tierEntrySchema.nullable().optional())) })
+  .object({ tiers: z.object(tierFields(nullableTierEntrySchema.optional())) })
   .openapi('UpdateTiersBody');
 
 export const safeConfigSchema = z
@@ -65,7 +68,7 @@ export const safeConfigSchema = z
 /** PATCH /api/config/aliases body — per-key merge; `null` unsets that alias. */
 export const updateAliasesBodySchema = z
   .object({
-    aliases: z.record(z.string(), tierEntrySchema.nullable()),
+    aliases: z.record(z.string(), nullableTierEntrySchema),
   })
   .openapi('UpdateAliasesBody');
 

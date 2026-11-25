@@ -1,6 +1,7 @@
 import type { BindingDirective, DagNode, IncludeDirective, TriggerRule } from './schemas';
 import { isIncludeDirective, isLoopGroupNode, isLoopNode } from './schemas';
-import { OUTPUT_REF_SOURCE, type JsonValue } from './output-ref';
+import { LOOP_PREV_OUTPUT_REF_SOURCE, OUTPUT_REF_SOURCE, type JsonValue } from './output-ref';
+import type { BoundaryProvenance } from './schemas/node-state';
 import type { WorkflowPack } from './schemas/pack-settings';
 
 /** Engine-private per-node metadata attached during load-time include expansion.
@@ -84,13 +85,20 @@ export function setIncludeOutputAliases(
   else (node as NodeWithIncludeOutputAliases)[INCLUDE_OUTPUT_ALIASES] = aliases;
 }
 
-/** Rename a command body's `$<include>.output` refs to the include's primary sink. */
+/**
+ * Rename a command body's `$<include>.output` and `$LOOP_PREV.<include>.output` refs to
+ * the include's primary sink.
+ */
 export function resolveIncludeOutputAliases(node: object, body: string): string {
   const aliases = readIncludeOutputAliases(node);
   if (aliases === undefined) return body;
-  return body.replace(new RegExp(OUTPUT_REF_SOURCE, 'g'), (match, id: string) =>
-    Object.hasOwn(aliases, id) ? `$${aliases[id]}.output` : match
-  );
+  return body
+    .replace(new RegExp(LOOP_PREV_OUTPUT_REF_SOURCE, 'g'), (match, id: string) =>
+      Object.hasOwn(aliases, id) ? `$LOOP_PREV.${aliases[id]}.output` : match
+    )
+    .replace(new RegExp(OUTPUT_REF_SOURCE, 'g'), (match, id: string) =>
+      Object.hasOwn(aliases, id) ? `$${aliases[id]}.output` : match
+    );
 }
 
 // A composed node keeps the directory of its declaring home YAML, not its includer's.
@@ -108,6 +116,24 @@ export function attachHomeMcpDirectory(node: object, directory: string): void {
   (node as NodeWithHomeMcpDirectory)[HOME_MCP_DIRECTORY] = directory;
 }
 
+// A composed fan-out node's `with:` names that a same-pack include forwarded implicitly
+// as the run's own pack setting (`<name>: $INPUTS.<name>`). See ComposedNodeMeta.forwarded.
+const FORWARDED_FAN_OUT_WITH = Symbol('archon.forwarded-fan-out-with');
+
+interface NodeWithForwardedFanOutWith {
+  [FORWARDED_FAN_OUT_WITH]?: string[];
+}
+
+export function readForwardedFanOutWith(node: object): readonly string[] {
+  return (node as NodeWithForwardedFanOutWith)[FORWARDED_FAN_OUT_WITH] ?? [];
+}
+
+export function attachForwardedFanOutWith(node: object, names: readonly string[]): void {
+  const target = node as NodeWithForwardedFanOutWith;
+  if (names.length > 0) target[FORWARDED_FAN_OUT_WITH] = [...names];
+  else delete target[FORWARDED_FAN_OUT_WITH];
+}
+
 /** @see ComposedNodeMeta */
 export const COMPOSED_NODE = Symbol('archon.composed-node');
 
@@ -116,6 +142,7 @@ export const COMPOSED_NODE = Symbol('archon.composed-node');
  * Every descendant carries a copy because load-time expansion removes the include node.
  */
 interface ComposedBlockBoundaryBase {
+  boundary: BoundaryProvenance;
   /** Number of loop bodies crossed since this include was authored. */
   loopDepth?: number;
   dependsOn: string[];
@@ -144,25 +171,40 @@ export type ComposedBlockBoundary = ComposedBlockBoundaryBase &
  *
  *  - `origin` — the authoring workflow's name. Write-once (innermost wins), so a
  *    node nested three files deep still names the file that declared it.
+ *  - `nodeId` — the node's id as written in `origin`, before any include prefixed it.
+ *    Write-once like `origin`. A loop_group body node records its own id.
+ *  - `includes` — the include node ids that brought this node in, as each includer
+ *    wrote them, outermost first. Cumulative like `boundaries`: each outer level
+ *    prepends its own.
  *  - `inputs` — that workflow's contract-resolved `inputs:` (defaults applied),
  *    delivered to its `bash:`/`script:` nodes as `INPUTS_<UPPER_SNAKE>` env vars.
  *    Write-once for the same reason, and because input names carry no namespace:
  *    two levels both declaring `plan` have no disambiguator, so the inner one wins.
- *  - `blockEntry` — this node starts its block. The executor clears the sequential
- *    session cursor there so a composed workflow begins as coldly as it would
- *    standalone.
+ *  - `blockSessionStart` — no session-starting node runs before this one inside its
+ *    block. The executor clears the sequential session cursor at it, so the block's
+ *    first AI node begins as coldly as it would standalone, even when the block starts
+ *    with a `bash:` or `script:` node.
  *  - `boundaries` — caller-level activation predicates for enclosing include instances,
  *    outermost first. Non-entry descendants enforce them before their local trigger rule.
  *  - `pack` — the pack the authoring workflow was loaded from, which `$PACK_DIR` names.
  *    Write-once like `origin`, and absent when that workflow is not in a pack: the
  *    includer's pack is never this node's.
+ *  - `forwarded` — names in `inputs` whose `$INPUTS.<name>` value is the run's own pack
+ *    setting, forwarded implicitly by same-pack includes all the way out. Each outer
+ *    level keeps a name only when it forwards it too; one it passes explicitly is no
+ *    longer the run's setting. A forwarded setting the run has no value for is left
+ *    unset, as it is for a node of the run reading it directly. An explicit binding of
+ *    an absent input still fails.
  */
 export interface ComposedNodeMeta {
   origin: string;
+  nodeId: string;
+  includes: string[];
   pack?: Pick<WorkflowPack, 'source' | 'key'>;
   inputs?: Record<string, JsonValue>;
-  blockEntry?: true;
+  blockSessionStart?: true;
   boundaries?: ComposedBlockBoundary[];
+  forwarded?: string[];
 }
 
 export interface NodeWithComposedMeta {
@@ -211,6 +253,7 @@ function preserveEngineMetadata(
   const bindings = readComposedBindings(source);
   if (bindings !== undefined) attachComposedBindings(target, structuredClone(bindings));
   setIncludeOutputAliases(target, readIncludeOutputAliases(source));
+  attachForwardedFanOutWith(target, readForwardedFanOutWith(source));
   preserveCompiledLoopCommand(source, target);
   if (isLoopGroupNode(source) && isLoopGroupNode(target)) {
     for (const [index, sourceChild] of source.loop_group.nodes.entries()) {

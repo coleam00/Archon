@@ -10,10 +10,6 @@ import { toBranchName, toRepoPath } from '@archon/git';
 import { configureIsolation, WorktreeProvider } from '@archon/isolation';
 import { setPlatformPolicies } from '../platforms/registry';
 
-import { stubVerificationImageRelease } from '../test/stub-verification-image-release';
-
-const releaseImages = stubVerificationImageRelease();
-
 setLogLevel('silent');
 const sqlOpen = mock(() => {
   throw new Error('SQL open trap');
@@ -38,7 +34,6 @@ afterEach(() => {
     else process.env[key] = value;
   }
   sqlOpen.mockClear();
-  releaseImages.mockClear();
 });
 async function git(cwd: string, ...args: string[]): Promise<void> {
   const child = Bun.spawn(['git', '-C', cwd, ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -110,6 +105,24 @@ async function createClaimant(
   proof: { envId: string; creationId: string }
 ): Promise<string | undefined> {
   if (claimant === 'none') return undefined;
+  if (claimant === 'handoff') {
+    // Admitted on a hand-off from a run that owns the checkout, before its lane is laid out.
+    const from = await createClaimant({ host, codebase, created, env }, 'completed', proof);
+    const admitted = await host.deps.store.createWorkflowRun({
+      workflow_name: 'next-stage',
+      user_message: '',
+      codebase_id: codebase.id,
+      metadata: {
+        checkout_handoff: {
+          runId: from,
+          branch: created.branchName,
+          commit: 'a'.repeat(40),
+          lane: 'continue',
+        },
+      },
+    });
+    return admitted.id;
+  }
   const row = await host.deps.store.createWorkflowRun({
     workflow_name: 'other',
     user_message: '',
@@ -132,7 +145,7 @@ async function createClaimant(
   return row.id;
 }
 
-test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed'] as const)(
+test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed', 'handoff'] as const)(
   'file abandonment reclaims its own checkout and respects a %s claimant without SQL',
   async claimant => {
     const { home, repo, host, codebase, created, creationId, env } = await fileHostWithWorktree();
@@ -155,7 +168,6 @@ test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed'] as cons
     });
     const other = await createClaimant({ host, codebase, created, env }, claimant, proof);
     const result = await host.operations.abandonWorkflow(run.id, { kind: 'operator' });
-    expect(releaseImages).toHaveBeenCalledWith(run.id, undefined);
     if (claimant === 'none' || claimant === 'completed') {
       expect(result.releasedWorktrees, JSON.stringify(result)).toHaveLength(1);
       expect(result.cleanupWarnings ?? []).toEqual([]);

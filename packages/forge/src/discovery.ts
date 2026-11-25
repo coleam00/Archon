@@ -1,6 +1,7 @@
 import { access, readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { delimiter, extname, resolve } from 'node:path';
+import { envPath } from '@archon/paths/env-path';
 import type { PluginMetadata } from './operations';
 import { pluginMetadataSchema } from './operations';
 import {
@@ -11,10 +12,22 @@ import {
 } from './plugin-config';
 import { runPluginProcess, type PluginArgv } from './plugin-process';
 
+/**
+ * What launches a plugin, which decides how the operator replaces it: `scanned` is an
+ * executable file found in a plugin directory or on PATH, `configured` is a `forge`
+ * entry in Archon's config, and `source` runs from this Archon checkout.
+ */
+export type PluginOrigin = 'scanned' | 'configured' | 'source';
+
 export interface PluginCandidate extends PluginArgv {
   source: string;
-  configured: boolean;
+  origin: PluginOrigin;
   expectedName?: string;
+}
+
+/** A plugin the host runs from its own source tree instead of an installed executable. */
+export interface SourcePlugin extends PluginArgv {
+  name: string;
 }
 
 export interface DiscoveredPlugin extends PluginCandidate {
@@ -71,7 +84,21 @@ async function scanDirectory(directory: string, source: string): Promise<Candida
   try {
     entries = await readdir(directory);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return [];
+    const unreadable = code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM';
+    // A PATH entry nobody chose as a plugin source may be a file or unreadable. It holds
+    // no plugins, and one such entry must not fail every forge operation.
+    if (unreadable && source !== 'plugin-dir') return [];
+    // A plugin directory the operator configured is their choice: say which one cannot
+    // be read rather than find no plugins in it.
+    if (unreadable) {
+      throw new PluginDiscoveryError(
+        'process_failed',
+        `forge plugin directory ${directory} cannot be read (${code})`,
+        { cause: error }
+      );
+    }
     throw error;
   }
   const candidates: CandidateInspection[] = [];
@@ -97,7 +124,7 @@ async function scannedCandidate(
   const command = resolve(directory, entry);
   const candidate: PluginCandidate = {
     source: `${source}:${name}`,
-    configured: false,
+    origin: 'scanned',
     command,
     args: [],
     expectedName: name,
@@ -138,7 +165,7 @@ function configuredCandidates(
 ): PluginCandidate[] {
   const candidates: PluginCandidate[] = config.plugins.map(plugin => ({
     source: `config:${plugin.plugin}`,
-    configured: true,
+    origin: 'configured',
     command: plugin.command,
     args: plugin.args,
     expectedName: plugin.plugin,
@@ -147,7 +174,7 @@ function configuredCandidates(
     if (typeof value !== 'string' && value.command) {
       candidates.push({
         source: `config:${host}`,
-        configured: true,
+        origin: 'configured',
         command: value.command,
         args: value.args,
         expectedName: value.plugin,
@@ -210,6 +237,12 @@ export async function discoverPlugins(
      * Omitted, only configured plugins, `pluginDirs` and PATH are scanned.
      */
     pluginsDir?: string;
+    /**
+     * Plugins a source checkout runs from its own tree. Each one replaces every scanned
+     * executable of the same name, so an installed copy older than the host never runs.
+     * A release binary passes none.
+     */
+    sourcePlugins?: readonly SourcePlugin[];
   } = {}
 ): Promise<PluginDiscovery> {
   const config = forgePluginConfigSchema.parse(options.config ?? {});
@@ -241,7 +274,7 @@ async function discoverCandidates(
   const dirs = [
     ...(options.pluginsDir !== undefined ? [options.pluginsDir] : []),
     ...config.pluginDirs,
-    ...(config.scanPath ? (env.PATH ?? env.Path ?? '').split(delimiter).filter(Boolean) : []),
+    ...(config.scanPath ? (envPath(env) ?? '').split(delimiter).filter(Boolean) : []),
   ];
   const configuredDirs = new Set(config.pluginDirs.map(dir => resolve(dir)));
   const scanned = (
@@ -255,7 +288,41 @@ async function discoverCandidates(
     kind: 'ready',
     candidate,
   }));
-  return mergeCandidates([...configured, ...scanned]);
+  return mergeCandidates([...configured, ...withSourcePlugins(options, configured, scanned)]);
+}
+
+function withSourcePlugins(
+  options: DiscoveryOptions,
+  configured: readonly CandidateInspection[],
+  scanned: readonly CandidateInspection[]
+): CandidateInspection[] {
+  // A plugin the operator configured by name is their explicit choice of executable, so
+  // it runs instead of the source plugin. A scanned one was only found by its file name.
+  const configuredNames = new Set(configured.map(({ candidate }) => candidate.expectedName));
+  const source = (options.sourcePlugins ?? []).filter(plugin => !configuredNames.has(plugin.name));
+  const sourceNames = new Set(source.map(plugin => plugin.name));
+  const kept = scanned.filter(({ candidate }) => {
+    if (!sourceNames.has(candidate.expectedName ?? '')) return true;
+    process.stderr.write(
+      `Skipping forge plugin ${candidate.command}: this checkout runs ${candidate.expectedName} from source\n`
+    );
+    return false;
+  });
+  return [
+    ...source.map(
+      (plugin): CandidateInspection => ({
+        kind: 'ready',
+        candidate: {
+          source: `source:${plugin.name}`,
+          origin: 'source',
+          command: plugin.command,
+          args: plugin.args,
+          expectedName: plugin.name,
+        },
+      })
+    ),
+    ...kept,
+  ];
 }
 
 function mergeCandidates(inspections: readonly CandidateInspection[]): CandidateInspection[] {
@@ -293,7 +360,9 @@ async function discoverCandidateMetadata(
     } catch (error) {
       if (
         !(error instanceof PluginDiscoveryError) ||
-        candidate.configured ||
+        // A plugin the operator or this checkout named fails discovery when its handshake
+        // fails; only an opportunistically scanned file is skipped.
+        candidate.origin !== 'scanned' ||
         (candidate.expectedName && selectedNames.has(candidate.expectedName))
       )
         throw error;

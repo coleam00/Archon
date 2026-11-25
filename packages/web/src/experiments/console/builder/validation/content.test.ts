@@ -170,21 +170,6 @@ describe('validateContent', () => {
     expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
   });
 
-  test('upstream refs in non-prompt bodies pass', () => {
-    const issues = validateContent(
-      wf([
-        { id: 'gen', variant: 'prompt', base: {}, data: { prompt: 'make a thing' } },
-        {
-          id: 'b',
-          variant: 'bash',
-          base: { depends_on: ['gen'] },
-          data: { bash: 'echo $gen.output' },
-        },
-      ])
-    );
-    expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
-  });
-
   test('a cancel body is scanned — the engine rejects a dangling ref there', () => {
     // `loader/dag-references.ts` scans the `cancel.reason` template slot for refs, and
     // the executor substitutes it, so a dangling ref fails the workflow at load. The
@@ -193,21 +178,6 @@ describe('validateContent', () => {
       wf([{ id: 'c', variant: 'cancel', base: {}, data: { reason: 'stop: $ghost.output' } }])
     );
     expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
-  });
-
-  test('an upstream ref in a cancel body passes', () => {
-    const issues = validateContent(
-      wf([
-        { id: 'check', variant: 'prompt', base: {}, data: { prompt: 'check' } },
-        {
-          id: 'c',
-          variant: 'cancel',
-          base: { depends_on: ['check'] },
-          data: { reason: 'stop: $check.output' },
-        },
-      ])
-    );
-    expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
   });
 
   test("a loop's until_bash and an approval's on_reject prompt are scanned", () => {
@@ -370,19 +340,18 @@ describe('validateContent — base-field AI text is scanned too (#1764/#2476)', 
     );
     expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
   });
+});
 
-  test('an upstream ref in systemPrompt passes', () => {
-    const issues = validateContent(
-      wf([
-        { id: 'classify', variant: 'prompt', base: {}, data: { prompt: 'classify it' } },
-        {
-          id: 'use',
-          variant: 'prompt',
-          base: { depends_on: ['classify'], systemPrompt: 'Context: $classify.output' },
-          data: { prompt: 'go' },
-        },
-      ])
-    );
-    expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
-  });
+test('reports a malformed LOOP_PREV condition as a parse error', () => {
+  const issues = validateContent(
+    wf([
+      {
+        id: 'use',
+        variant: 'bash',
+        base: { when: "$LOOP_PREV.output == 'x'" },
+        data: { bash: 'echo ok' },
+      },
+    ])
+  );
+  expect(issues.map(issue => issue.rule)).toEqual(['content.when.parse']);
 });

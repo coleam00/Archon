@@ -1,9 +1,11 @@
+// @archon-test-isolated
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
+import { VERIFICATION_IMAGE_RECORD_DIR } from '@archon/core/services/cleanup/run-verification-images';
 import { isRunOwnedByThisProcess, startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { registerHostProviders } from '@archon/core/providers/register-host-providers';
 import { clearRegistry } from '@archon/providers';
@@ -97,10 +99,22 @@ async function prepare(root: string) {
   // missing container would instead of spawning a real docker for the made-up container id.
   watch(spyOn(git, 'execFileAsync')).mockRejectedValue(new Error('No such container'));
   const auth = watch(spyOn(credentials, 'assertRunCredentials')).mockResolvedValue([]);
-  const execute = watch(spyOn(subprocess, 'runSubprocess')).mockImplementation(async context => {
-    expect(context).toEqual({ kind: 'container', containerId: 'restarted' });
-    return { stdout: 'second', stderr: '', credentialValues: [] };
-  });
+  // Set by a test whose resumed node builds a verification image. The container mounts
+  // `$ARTIFACTS_DIR` at the same host path, so the node's `docker build --iidfile` record
+  // lands where cleanup looks for it.
+  const node = { buildsImage: false };
+  const execute = watch(spyOn(subprocess, 'runSubprocess')).mockImplementation(
+    async (context, _cmd, _args, options) => {
+      expect(context).toEqual({ kind: 'container', containerId: 'restarted' });
+      if (node.buildsImage) {
+        const artifacts = options.env.ARTIFACTS_DIR;
+        if (!artifacts) throw new Error('Missing $ARTIFACTS_DIR');
+        await mkdir(join(artifacts, VERIFICATION_IMAGE_RECORD_DIR), { recursive: true });
+        await writeFile(join(artifacts, VERIFICATION_IMAGE_RECORD_DIR, 'check'), 'sha256:built');
+      }
+      return { stdout: 'second', stderr: '', credentialValues: [] };
+    }
+  );
   async function paused(decision?: 'approved' | 'rejected') {
     const run = await store.createWorkflowRun({
       workflow_name: 'resume',
@@ -162,6 +176,7 @@ async function prepare(root: string) {
     discard,
     auth,
     execute,
+    node,
     paused,
     command,
   };
@@ -697,7 +712,6 @@ test.each(['execContext', 'container', 'both'] as const)(
       });
       if (field === 'both') {
         const admission = await pending;
-        if (!admission.accepted) throw new Error('Expected admission');
         expect(await admission.settled).toMatchObject({ success: true });
         expect(f.execute).not.toHaveBeenCalled();
         expect(f.apply).toHaveBeenCalledTimes(1);
@@ -708,7 +722,7 @@ test.each(['execContext', 'container', 'both'] as const)(
       } else {
         await expect(
           pending.then(async admission => {
-            if (admission.accepted) await admission.settled;
+            await admission.settled;
             return admission;
           })
         ).rejects.toThrow(
@@ -775,6 +789,7 @@ for (const stage of ['notice', 'announcement', 'subscription', 'lease'] as const
 test('resumed backend owns both executor and foreground image release', async () => {
   await fixture(async f => {
     const run = await f.paused();
+    f.node.buildsImage = true;
     await f.command(run);
     expect(f.releaseImages.mock.calls).toEqual([
       [run.id, f.envId],
@@ -789,6 +804,7 @@ test('backend image cleanup failure still fails a successful foreground resume',
   const failure = new Error('owner cleanup failed');
   await fixture(async f => {
     const run = await f.paused();
+    f.node.buildsImage = true;
     f.releaseImages.mockRejectedValue(failure);
     const error = await f.command(run).catch((err: unknown) => err);
     expect(error).toBeInstanceOf(Error);

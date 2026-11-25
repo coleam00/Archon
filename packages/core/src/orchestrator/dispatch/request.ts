@@ -5,6 +5,7 @@ import {
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as sqlWorkflow from '@archon/core/db/workflows';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
+import { isOperatorPaused } from '@archon/workflows/schemas/pause-cause';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../../db/workflows';
@@ -15,6 +16,7 @@ import { resolveRunWorkflow } from '../../workflows/resolve-run-workflow';
 import { createSqlWorkflowOperations } from '../../workflows/sql-host';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
 import { getLog } from '../agent-log';
+import { buildAmbiguousContinuationPrompt } from './resume-prompt';
 import type { DispatchAdoption, DispatchScope } from './scope';
 
 /** The workflow the request names; `undefined` after telling the user it cannot run. */
@@ -93,6 +95,10 @@ export interface Continuation {
   willContinueExistingRun: boolean;
 }
 
+export type ContinuationRead =
+  | ({ kind: 'single' } & Continuation)
+  | { kind: 'ambiguous'; candidates: readonly WorkflowRun[] };
+
 /** Which existing run this dispatch continues, if any; `undefined` after a refusal was sent. */
 export async function detectContinuation(
   scope: DispatchScope,
@@ -107,8 +113,9 @@ export async function detectContinuation(
   // IMPLICIT auto-detection that fires for a plain `/workflow run <name>` on every
   // platform — the lookup that used to live further down, next to the dispatch. An
   // attention wait is excluded from that implicit path: only the explicit form
-  // may consume it. The signature gate (`runSignatureGates`) still has to know about
-  // both continuation forms:
+  // may consume it. With two or more candidates the implicit path continues none: it
+  // lists them, the operator names one by id, and the dispatch stops. The signature
+  // gate (`runSignatureGates`) still has to know about both continuation forms:
   // gating only against the explicit form wrongly refused a required-input workflow
   // that was merely being continued (the run row already holds its validated inputs,
   // and the caller supplies nothing when they just say "run it" again).
@@ -118,22 +125,29 @@ export async function detectContinuation(
   // would forfeit the pre-cost refusal. This lookup is a single indexed DB read — no
   // worktree, no clone, no AI — so it is safe to do before gating. Its inputs
   // (`conversation.id`, `codebase.id`) are parameters and nothing in the dispatch mutates them.
-  const explicitResumeRequested = request.kind === 'resume';
-  const resumableRun = await findResumableRun(scope, request, workflow);
-  // Whether this dispatch will CONTINUE existing work rather than create a fresh run
-  // row. Deliberately the exact negation of the resume/abandon/force menu's condition
-  // (`offerResumeChoice`): a candidate that is neither paused nor the explicitly-targeted run does not
-  // continue — it shows that menu and returns. Only a genuine continuation may defer the
-  // signature gate, so an invocation that was never going to continue is still refused
-  // immediately, with the specific input error rather than a generic menu, and before
-  // isolation resolution can create a worktree.
-  const willContinueExistingRun =
-    Boolean(resumableRun?.working_path) &&
-    (resumableRun?.status === 'paused' || explicitResumeRequested);
+  const read = await readContinuation(scope, request, workflow);
+  if (read.kind === 'ambiguous') {
+    getLog().info(
+      {
+        workflowName: workflow.name,
+        candidateRunIds: read.candidates.map(run => run.id),
+        platformType: platform.getPlatformType(),
+      },
+      'orchestrator.continuation_ambiguous'
+    );
+    await platform.sendMessage(
+      conversationId,
+      buildAmbiguousContinuationPrompt(platform, workflow.name, read.candidates, scope.userMessage)
+    );
+    return undefined;
+  }
+  const { explicitResumeRequested, willContinueExistingRun } = read;
+  let resumableRun = read.resumableRun;
 
   if (willContinueExistingRun && resumableRun) {
     try {
-      await createSqlWorkflowOperations().resumeWorkflow(resumableRun.id, actor);
+      // Continue the row this check read: a running run's resume is pinned to its claim.
+      resumableRun = await createSqlWorkflowOperations().resumeWorkflow(resumableRun.id, actor);
     } catch (error) {
       if (!(error instanceof RunActionForbiddenError)) throw error;
       await platform.sendMessage(conversationId, error.message);
@@ -171,25 +185,68 @@ export async function detectContinuation(
 }
 
 /**
- * The run this request continues: the one an explicit resume carries, or the
- * conversation's resumable run for this workflow unless the request forces a fresh
- * one. An attention wait is only ever continued explicitly.
+ * What a dispatch of this request would continue, read without acting on it: the single
+ * candidate run (or none), or every candidate when there is more than one. The engine never
+ * chooses between candidates; the operator names one by id. The run route's admission asks
+ * the same question before it dispatches, and leaves a start that continues a run, or has
+ * several to choose from, to the dispatch.
  */
-async function findResumableRun(
-  { conversation, codebase }: DispatchScope,
+export async function readContinuation(
+  scope: Pick<DispatchScope, 'conversation' | 'codebase'>,
   request: WorkflowRequest,
   workflow: ResolvedWorkflow
-): Promise<WorkflowRun | null> {
-  if (request.kind === 'resume') return request.run;
-  if (request.force) return null;
-  const candidate = await workflowDb.findResumableRunByParentConversation(
+): Promise<ContinuationRead> {
+  const explicitResumeRequested = request.kind === 'resume';
+  const candidates = await findResumableRuns(scope, request, workflow);
+  if (candidates.length > 1) return { kind: 'ambiguous', candidates };
+  const resumableRun = candidates[0] ?? null;
+  // Whether this dispatch will CONTINUE existing work rather than create a fresh run
+  // row. Deliberately the exact negation of the resume/abandon/force menu's condition
+  // (`offerResumeChoice`): a candidate that neither `continuesImplicitly` nor is the explicitly-targeted run does not
+  // continue — it shows that menu and returns. Only a genuine continuation may defer the
+  // signature gate, so an invocation that was never going to continue is still refused
+  // immediately, with the specific input error rather than a generic menu, and before
+  // isolation resolution can create a worktree.
+  const willContinueExistingRun =
+    Boolean(resumableRun?.working_path) &&
+    ((resumableRun !== null && continuesImplicitly(resumableRun)) || explicitResumeRequested);
+  return { kind: 'single', resumableRun, explicitResumeRequested, willContinueExistingRun };
+}
+
+/**
+ * A paused run a new request for its workflow continues without asking. An operator
+ * pause ends only on an explicit resume, so that run is offered, not continued.
+ */
+export function continuesImplicitly(run: WorkflowRun): boolean {
+  return run.status === 'paused' && !isOperatorPaused(run);
+}
+
+/** Whether the dispatch answers this start itself: it continues a run, or lists the candidates. */
+export function dispatchAnswersContinuation(read: ContinuationRead): boolean {
+  return read.kind === 'ambiguous' || read.willContinueExistingRun;
+}
+
+/**
+ * The runs this request could continue: the one an explicit resume carries, or the
+ * conversation's resumable runs of this workflow unless the request forces a fresh one.
+ * An attention wait is only ever continued explicitly, and a run with no working path is
+ * never continued, so neither is a candidate for an implicit continuation.
+ */
+async function findResumableRuns(
+  { conversation, codebase }: Pick<DispatchScope, 'conversation' | 'codebase'>,
+  request: WorkflowRequest,
+  workflow: ResolvedWorkflow
+): Promise<readonly WorkflowRun[]> {
+  if (request.kind === 'resume') return [request.run];
+  if (request.force) return [];
+  const runs = await workflowDb.listResumableRunsByParentConversation(
     workflow.name,
     conversation.id,
     codebase.id
   );
-  return candidate !== null &&
-    isWorkflowWaitContext(candidate.metadata.wait) &&
-    candidate.metadata.wait.kind === 'attention'
-    ? null
-    : candidate;
+  return runs.filter(
+    run =>
+      Boolean(run.working_path) &&
+      !(isWorkflowWaitContext(run.metadata.wait) && run.metadata.wait.kind === 'attention')
+  );
 }

@@ -21,18 +21,28 @@ import {
   isNodeContextResume,
 } from '../schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from '../fan-out-identity';
-import { isBindingDirective } from '../schemas/node-bindings';
-import { WHEN_INPUTS_SCOPE } from '../when-atom';
+import { isBindingDirective, isBindingDirectiveShape } from '../schemas/node-bindings';
+import { INPUTS_SCOPE } from '../reference-scopes';
 import {
   EXECUTION_CHECKOUT_REF_SOURCE,
   OUTPUT_REF_SOURCE,
   parseWholeExecutionCheckoutRef,
   parseWholeOutputRef,
 } from '../output-ref';
-import { readComposedBindings } from '../compiled-command';
+import { readComposedBindings, readComposedMeta } from '../compiled-command';
 import { transitiveDepsLookup } from '../depends-on';
 import { indexDependencies } from '../graph-plan';
-import { checkNodeReferences, type DagScope } from './dag-references';
+import type { IncludeCommandContent } from '../compiled-command';
+import { checkNodeReferences, priorRefIds, type DagScope } from './dag-references';
+
+/** What a nested `validateDagStructure` call inherits from the scopes around it. */
+export interface DagContext {
+  readonly enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>;
+  readonly includeAliases?: ReadonlyMap<string, string>;
+  readonly eligibleResumeSources?: ReadonlyMap<string, DagNode | IncludeDirective>;
+  readonly loopBodyIds?: ReadonlySet<string>;
+  readonly commandContents?: ReadonlyMap<string, IncludeCommandContent>;
+}
 
 type NodeCheck = (node: DagNode | IncludeDirective, scope: DagScope) => string | null;
 
@@ -59,15 +69,22 @@ interface BindingRead {
  * `includeAliases` maps a flattened producer id back to the include alias the author
  * referenced, so an output-contract error names `$alias.output.x` as written.
  *
+ * `loopBodyIds` is every id a `$LOOP_PREV.<id>` ref in this list may name (see
+ * `priorRefIds`). Undefined outside any body, or while an id set is not yet known.
+ *
+ * `commandContents` maps a command name to the body discovery read for it. A command
+ * node's body is checked for output references like an inline prompt, in the node's own
+ * scope. Without the map (a single-file parse), command bodies are not checked.
+ *
  * The checks run in a fixed order and the first error wins, so a graph with two problems
  * always reports the same one.
  */
 export function validateDagStructure(
   nodes: readonly (DagNode | IncludeDirective)[],
-  enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>,
-  includeAliases?: ReadonlyMap<string, string>,
-  eligibleResumeSources?: ReadonlyMap<string, DagNode | IncludeDirective>
+  context: DagContext = {}
 ): string | null {
+  const { enclosingNodes, includeAliases, eligibleResumeSources, loopBodyIds, commandContents } =
+    context;
   const nodesById = indexNodeIds(nodes, enclosingNodes);
   if (typeof nodesById === 'string') return nodesById;
   const dependsOnError = checkDependsOn(nodes, nodesById);
@@ -80,6 +97,8 @@ export function validateDagStructure(
     enclosingNodes,
     includeAliases,
     eligibleResumeSources,
+    loopBodyIds,
+    commandContents,
     transitiveDepsOf: transitiveDepsLookup(nodes),
   };
   return (
@@ -240,8 +259,14 @@ function checkResumeAncestry(node: DagNode | IncludeDirective, scope: DagScope):
   if (source === undefined) {
     return `Node '${node.id}' context.resume references unknown node '${sourceId}'`;
   }
-  if (isIncludeDirective(source) || !(isAgentNode(source) || isLoopNode(source))) {
-    return `Node '${node.id}' context.resume source '${sourceId}' is not a session-producing command, prompt, or loop node`;
+  // An include names the session of the node its workflow returns. Expansion rebinds the
+  // reference to that node and validates the flattened graph again, so the node it
+  // resolves to is judged below on that second pass.
+  if (!isIncludeDirective(source) && !(isAgentNode(source) || isLoopNode(source))) {
+    const alias = scope.includeAliases?.get(sourceId);
+    const found =
+      alias === undefined ? `'${sourceId}'` : `'${alias}' (include returns '${sourceId}')`;
+    return `Node '${node.id}' context.resume source ${found} is not a session-producing command, prompt, or loop node`;
   }
   if (nodesById.has(sourceId) && !scope.transitiveDepsOf(node.id).has(sourceId)) {
     return `Node '${node.id}' context.resume source '${sourceId}' is not an upstream dependency`;
@@ -285,12 +310,19 @@ function checkFanOutItems(node: DagNode | IncludeDirective, scope: DagScope): st
  * one that can see a caller ref forwarded into a binding through `with:` — the child
  * was proven before that value was inserted, so a ref naming a parent node outside the
  * block's dependencies would otherwise reach the executor and fail the node mid-run.
+ *
+ * An include's binding directive (#5760) lands in the same places, plus a `workflow:`
+ * node's `with:` and the composed inputs a bash or script node reads from its env; those
+ * two carry only the directive here, since their plain values keep the lenient template
+ * path.
  */
 function checkBindings(node: DagNode | IncludeDirective, scope: DagScope): string | null {
   // Capture before narrowing: the include guard below would otherwise filter a
   // compose_fan_out node out of the binding check entirely.
   const composeFanOut = isComposeFanOutNode(node) ? node : undefined;
   if (isIncludeDirective(node)) return null;
+  const directiveError = composedDirectiveOrderError(node, scope);
+  if (directiveError !== null) return directiveError;
   if (isWorkflowNode(node)) return workflowNodeBindingError(node);
   const nodeWith = isExecNode(node)
     ? node.with
@@ -301,6 +333,18 @@ function checkBindings(node: DagNode | IncludeDirective, scope: DagScope): strin
   for (const [name, value] of Object.entries(nodeWith)) {
     const error = bindingOrderError(node, name, value, scope);
     if (error !== null) return error;
+  }
+  return null;
+}
+
+function composedDirectiveOrderError(node: DagNode, scope: DagScope): string | null {
+  const sources = [readComposedMeta(node)?.inputs, isWorkflowNode(node) ? node.with : undefined];
+  for (const source of sources) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      if (!isBindingDirectiveShape(value)) continue;
+      const error = bindingOrderError(node, name, value, scope);
+      if (error !== null) return error;
+    }
   }
   return null;
 }
@@ -356,7 +400,7 @@ function bindingProducerIds(
     const refPattern = new RegExp(OUTPUT_REF_SOURCE, 'g');
     let refMatch: RegExpExecArray | null;
     while ((refMatch = refPattern.exec(value)) !== null) {
-      if (refMatch[1] !== WHEN_INPUTS_SCOPE) producerIds.push(refMatch[1]);
+      if (refMatch[1] !== INPUTS_SCOPE) producerIds.push(refMatch[1]);
     }
   } else if (isBindingDirective(value)) {
     const ref = parseWholeOutputRef(value.from);
@@ -445,12 +489,13 @@ function checkLoopGroupBody(node: DagNode | IncludeDirective, scope: DagScope): 
     const ancestor = nodesById.get(id);
     if (ancestor !== undefined) eligible.set(id, ancestor);
   }
-  const bodyError = validateDagStructure(
-    node.loop_group.nodes,
-    scopeNodes,
-    scope.includeAliases,
-    eligible
-  );
+  const bodyError = validateDagStructure(node.loop_group.nodes, {
+    enclosingNodes: scopeNodes,
+    includeAliases: scope.includeAliases,
+    eligibleResumeSources: eligible,
+    loopBodyIds: priorRefIds(node.loop_group.nodes, scope),
+    commandContents: scope.commandContents,
+  });
   if (bodyError) {
     return `loop_group '${node.id}' body: ${bodyError}`;
   }

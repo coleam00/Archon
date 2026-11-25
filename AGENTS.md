@@ -1,6 +1,8 @@
 # Working on Archon
 
-Archon is a self-hostable, governed agentic automation engine. It runs workflows that mix deterministic steps, AI agents, human gates, and audit trails. Coding automation is its most mature surface, but the engine is intended for general business operations too.
+Archon is a self-hostable, governed agentic automation engine. It runs workflows that mix deterministic steps, AI agents, approval gates, and audit trails. Coding automation is its most mature surface, but the engine is intended for general business operations too.
+
+An **operator** is whoever uses Archon: a person, or more often that person's agent. Write for both; do not assume a person is reading or answering.
 
 This file is the canonical project guidance for coding agents. Keep it short, durable, and about judgment. Put changing product direction in [`.archon/direction.md`](.archon/direction.md), workflow-language design in [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md), aspirational engineering craft and review values in [`.archon/engineering.md`](.archon/engineering.md), user documentation in the docs site, and machine-checkable rules in code, types, tests, lint, or CI.
 
@@ -112,7 +114,7 @@ The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [
 - Workflow execution depends on injected contracts, not on core database or adapter implementations.
 - Platform-specific parsing and authorization belong inside the owning adapter. Core receives normalized intent and identity.
 - The Web client consumes generated API types through its local API layer; it does not import server or workflow runtime packages.
-- The engine (`packages/`) and the bundled SDLC pack (`.archon/workflows`, `.archon/scripts`) don't import each other's code, in source or in tests. They meet through the workflow language, the CLI and the provider and forge contracts.
+- The engine (`packages/`) and the bundled SDLC pack (`.archon/workflows`, `.archon/scripts`) don't import each other's code, in source or in tests. They meet through the workflow language, the CLI, the `archon:script` module a workflow script imports, and the provider and forge contracts.
 - Shared schemas are the source of truth for persisted and API shapes. Keep OpenAPI generation and runtime validation on the same schema path.
 - Use the type system, schema validation, and package boundaries to enforce architecture before adding prose rules.
 
@@ -120,6 +122,7 @@ The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [
 
 - Database schema evolution is additive-only. There is no migration ledger or version gate, and older binaries may open the same database.
 - Never rename, retype, or drop a shipped table or column. A new `NOT NULL` column needs a default that remains valid for older writers.
+- A JSON document stored in a column is a persisted shape too. One that more than one binary version reads must be able to gain a field: a reader that rejects a key it does not know breaks the older binary the moment a newer one writes.
 - Keep SQLite and PostgreSQL schemas aligned unless a narrow, documented exception is already enforced.
 - Test upgrades from shipped schema shapes, not only fresh database creation.
 - Keep generated or mirrored artifacts synchronized through their owning scripts. Find those scripts in `package.json` and adjacent tests instead of copying a list here.
@@ -169,8 +172,9 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Spawn a subprocess only when the subprocess is the subject under test. To suppress an inherited env key for a Bun child, pass it as `''`; deleting it allows `.env` loading to restore it.
 - Bun's module mocks pollute the process cache. Use the package test scripts that preserve isolation; do not run `bun test` from the repository root.
 - Run lint through `bun run lint`. Besides Biome, it runs the repository checks Biome cannot express, such as the workflow persistence boundary.
-- Check what you changed: run the tests that cover it, lint and type-check the packages you touched, and run `bun run check:ratchet` before you push. CI refuses a change the ratchet refuses, and it takes seconds locally against a fetched `origin/dev`.
-- CI is the full validation. Don't run `bun run validate` to finish a change. `scripts/validate.ts` owns the check list and CI selects from it; workflow fixtures run locally only through `--only`.
+- While building and before you push, run `bun run check:changed` against a fetched `origin/dev`. It type-checks and tests the packages your change touches plus every package that depends on them, runs lint and the ratchet, and prints what it checked and what it skipped. `--list` prints the scope without running it. For a single test file, `bun run test <path>` is enough. Do not run a repository-wide type-check or test suite yourself: when a change reaches everything, such as a lockfile or CI change, `check:changed` says so and runs it.
+- Before each commit, run `bun x biome check --write` on the files you stage and stage them again. `bun run lint` does not check formatting, and the pre-commit hook refuses a staged file Biome would change.
+- CI is the full validation. Don't run `bun run validate` to finish a change. `scripts/validate.ts` owns the check list and CI selects from it; workflow fixtures run locally only through `--only`. CI also covers what `check:changed` leaves out: generated files, package boundaries, format, the other platforms, and couplings the manifests do not declare.
 - Schema changes also need the PostgreSQL upgrade check. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists it with its command.
 - For visual or runtime behavior, add direct evidence when static tests cannot prove the outcome.
 - Destructive verification, including DDL, migrations, and data writes, runs only against a scratch database you create and drop. A configured live DSN is read-only at most; when only a live resource exists, stop and surface it to the operator.
@@ -181,6 +185,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Use [`.github/pull_request_template.md`](.github/pull_request_template.md). Keep its required sections, remove instructional comments and irrelevant conditional sections, and describe the problem before the implementation.
 - Review the complete diff against the actual base branch before opening the pull request.
 - Link the source issue as [`CONTRIBUTING.md`](CONTRIBUTING.md) says: a closing keyword, or `Refs` when the issue's dated ruling keeps it open after the pull request.
+- When a commit answers review findings, list each finding under the reviewer's own label, say what changed, and give a one-line reason for each deferral.
 - Keep titles concise and outcome-focused. Do not add AI attribution to commits or pull requests.
 
 ## Find current facts

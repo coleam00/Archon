@@ -14,14 +14,22 @@ import {
 } from '@archon/forge/operations';
 import type { PrRef, RepoRef, SourceActor } from '@archon/forge';
 import { GitHubError, githubGraphql, repositoryPath, type Fetch } from './api';
-import { applied, failure, refused, unverified } from './mutation-outcome';
+import { accountType } from './actor';
+import { applied, failure, refused, unreadable, unverified } from './mutation-outcome';
 
 const graphqlActorSchema = z
-  .object({ login: z.string().min(1), databaseId: z.number().int().nullable().optional() })
+  .object({
+    __typename: z.string().optional(),
+    login: z.string().min(1),
+    id: z.string().min(1),
+    databaseId: z.number().int().nullable().optional(),
+  })
   .nullable();
 const threadCommentNodeSchema = z.object({
   id: z.string().min(1),
   author: graphqlActorSchema,
+  createdAt: z.string(),
+  originalCommit: z.object({ oid: z.string().min(1) }).nullable(),
   body: z.string(),
   url: z.url(),
 });
@@ -38,14 +46,20 @@ const threadNodeSchema = z.object({
   line: z.number().int().nullable(),
   comments: commentConnectionSchema,
 });
-const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{login ... on User{databaseId} ... on Bot{databaseId}} body url}`;
+const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{__typename login ... on Node{id} ... on User{databaseId} ... on Bot{databaseId} ... on Organization{databaseId} ... on Mannequin{databaseId}} createdAt originalCommit{oid} body url}`;
 
+/**
+ * `id` is the account's database id, the number REST and webhooks report. An author kind
+ * GitHub gives no database id (an enterprise user account) keeps its GraphQL node id, which
+ * survives a rename as the login does not.
+ */
 function threadActor(host: string, author: z.infer<typeof graphqlActorSchema>): SourceActor | null {
   return author
     ? {
         host,
-        id: author.databaseId == null ? author.login : String(author.databaseId),
+        id: author.databaseId == null ? author.id : String(author.databaseId),
         login: author.login,
+        type: accountType(author.__typename),
       }
     : null;
 }
@@ -140,8 +154,16 @@ export async function handleGithubPrThreads(
             )),
           ]
         : node.comments.nodes;
+      const opening = comments[0];
+      if (!opening)
+        return failure(request.operationId, {
+          kind: 'invalid_response',
+          message: `GitHub returned review thread ${node.id} without its opening comment`,
+        });
       threads.push({
         id: node.id,
+        createdAt: opening.createdAt,
+        commit: opening.originalCommit?.oid ?? null,
         resolved: node.isResolved,
         outdated: node.isOutdated,
         path: node.path,
@@ -149,6 +171,8 @@ export async function handleGithubPrThreads(
         comments: comments.map(comment => ({
           id: comment.id,
           author: threadActor(request.ref.repo.host, comment.author),
+          createdAt: comment.createdAt,
+          commit: comment.originalCommit?.oid ?? null,
           body: comment.body,
           url: comment.url,
         })),
@@ -287,8 +311,8 @@ export async function resolveThread(
   let after: { resolved: boolean } | null;
   try {
     after = await readThread(fetchImpl, token, request.ref, request.thread);
-  } catch {
-    return unverified(request, 'Resolved thread could not be read back', leaveBehind);
+  } catch (cause) {
+    return unreadable(request, 'Resolved thread could not be read back', cause, leaveBehind);
   }
   return after?.resolved
     ? applied(request, { changed: true, thread: request.thread, resolved: true })

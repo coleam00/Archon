@@ -3,15 +3,22 @@ import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { EmptyState } from '../components/EmptyState';
 import { ActiveRunCard } from '../components/ActiveRunCard';
 import { RecentRunRow } from '../components/RecentRunRow';
-import { FilterChips, type Filter } from '../components/FilterChips';
+import { FilterChips, FILTER_ORDER, type Filter } from '../components/FilterChips';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { DraftRunCard } from '../components/DraftRunCard';
 import { PendingInputBanner } from '../components/PendingInputBanner';
+import {
+  askGroupKey,
+  NO_ITEM_ASKS,
+  type AnsweredAsk,
+  type ItemAsks,
+} from '../components/ItemAsksSection';
 import { useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
-import { runDetailPath, type Run } from '../primitives/run';
+import { runDetailPath, type ItemAsk, type OwnerLostHolder, type Run } from '../primitives/run';
+import { ensureUtc } from '../lib/format';
 import type { RunCounts } from '../skills/runs';
 import type { Project } from '../primitives/project';
 
@@ -174,10 +181,27 @@ function countsFromRuns(runs: Run[]): RunCounts {
   return out;
 }
 
-function filterRuns(runs: Run[], filter: Filter, query: string): Run[] {
+/**
+ * The runs a tab shows. The Running tab also keeps a run that finished after
+ * `watchingSince` (when this page opened), because a short run can finish before the
+ * feed first loads it: without that, starting one leaves the tab empty and the only
+ * sign of it is a counter on another tab.
+ */
+export function filterRuns(
+  runs: Run[],
+  filter: Filter,
+  query: string,
+  watchingSince: number
+): Run[] {
   const q = query.trim().toLowerCase();
   return runs.filter(r => {
-    if (filter !== 'all' && r.status !== filter) return false;
+    if (filter !== 'all' && r.status !== filter) {
+      const finishedWhileWatching =
+        filter === 'running' &&
+        r.finishedAt !== null &&
+        new Date(ensureUtc(r.finishedAt)).getTime() >= watchingSince;
+      if (!finishedWhileWatching) return false;
+    }
     if (q.length === 0) return true;
     return (
       r.workflow.toLowerCase().includes(q) ||
@@ -189,21 +213,23 @@ function filterRuns(runs: Run[], filter: Filter, query: string): Run[] {
 
 interface SectionHeaderProps {
   label: string;
-  count: number;
+  count: number | null;
 }
 
 function SectionHeader({ label, count }: SectionHeaderProps): ReactElement {
   return (
     <div className="mb-3 flex items-center gap-2.5 px-0.5">
-      <span className="font-mono text-[11px] font-bold uppercase tracking-[0.13em] text-text-tertiary">
+      <span className="font-mono text-console-11 font-bold uppercase tracking-console-label text-text-tertiary">
         {label}
       </span>
-      <span
-        className="rounded-full border bg-surface-elevated px-2 py-px font-mono text-[10.5px] tabular-nums text-text-secondary"
-        style={{ borderColor: 'var(--border)' }}
-      >
-        {count}
-      </span>
+      {count !== null ? (
+        <span
+          className="rounded-full border bg-surface-elevated px-2 py-px font-mono text-console-11 tabular-nums text-text-secondary"
+          style={{ borderColor: 'var(--border)' }}
+        >
+          {count}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -215,6 +241,10 @@ interface RunsFeedProps {
   selectedRunId: string | null;
   /** Run ids whose actions are currently shown in the pending-input banner. */
   promotedRunIds: ReadonlySet<string>;
+  /** Heading of the finished runs: on the Running tab they are the ones that just ended. */
+  recentLabel: string;
+  /** Shown in place of the runs while none are known (loading, or the load failed). */
+  notice: ReactElement | null;
 }
 
 /**
@@ -233,6 +263,8 @@ function RunsFeed({
   draftProject,
   selectedRunId,
   promotedRunIds,
+  recentLabel,
+  notice,
 }: RunsFeedProps): ReactElement {
   const active = runs.filter(r => r.status === 'running' || r.status === 'paused');
   const recent = runs.filter(
@@ -242,10 +274,10 @@ function RunsFeed({
   const showActiveSection = active.length > 0 || draftProject !== null;
 
   return (
-    <div className="flex flex-col gap-[26px]">
+    <div className="flex flex-col gap-6.5">
       {showActiveSection ? (
         <section>
-          <SectionHeader label="Active" count={active.length} />
+          <SectionHeader label="Active" count={notice !== null ? null : active.length} />
           <div className="flex flex-col gap-2">
             {draftProject !== null ? (
               <DraftRunCard projectId={draftProject.id} projectCwd={draftProject.path} />
@@ -263,10 +295,11 @@ function RunsFeed({
         </section>
       ) : null}
 
+      {notice}
       {recent.length > 0 ? (
         <section>
-          <SectionHeader label="Recent" count={recent.length} />
-          <div className="flex flex-col overflow-hidden rounded-[12px] border border-border bg-surface">
+          <SectionHeader label={recentLabel} count={recent.length} />
+          <div className="flex flex-col overflow-hidden rounded-console-12 border border-border bg-surface">
             {recent.map(run => (
               <RecentRunRow
                 key={run.id}
@@ -323,7 +356,18 @@ export function RunsPage(): ReactElement {
 
   const allRuns = [...demoRuns, ...realRuns];
   const counts = demoMode ? mergeCounts(realCounts, demoCounts) : realCounts;
-  const runs = useMemo(() => filterRuns(allRuns, filter, query), [allRuns, filter, query]);
+  // Whole seconds, because the server's finish times carry no finer resolution.
+  const [watchingSince] = useState(() => Math.floor(Date.now() / 1000) * 1000);
+  const runs = useMemo(
+    () => filterRuns(allRuns, filter, query, watchingSince),
+    [allRuns, filter, query, watchingSince]
+  );
+
+  // Runs the search matches in any tab, for the hint under an empty filtered result.
+  const elsewhere = useMemo(
+    () => filterRuns(allRuns, 'all', query, watchingSince).length,
+    [allRuns, query, watchingSince]
+  );
 
   const pending = usePendingInput(demoRuns, scope);
   const selectedRunId = useRunsKeymap(runs, setFilter, searchRef);
@@ -363,11 +407,22 @@ export function RunsPage(): ReactElement {
       ))}
       <PendingInputBanner
         runs={pending.visible}
+        ownerLost={pending.ownerLost}
         showProject={scope === 'all'}
         onDismiss={pending.dismiss}
+        itemAsks={pending.itemAsks}
       />
 
-      <div className="flex-1 overflow-y-auto px-[30px] pb-[30px] pt-[22px]">
+      <div className="min-h-0 flex-1 overflow-y-auto px-7.5 pb-7.5 pt-5.5">
+        <SearchElsewhereHint
+          query={query}
+          filter={filter}
+          shown={runs.length}
+          inAll={elsewhere}
+          onShowAll={() => {
+            setFilter('all');
+          }}
+        />
         <RunsFeedBody
           feedError={demoMode ? undefined : error}
           loading={loading && !demoMode}
@@ -383,13 +438,45 @@ export function RunsPage(): ReactElement {
   );
 }
 
+interface SearchElsewhereHintProps {
+  query: string;
+  filter: Filter;
+  /** Runs the search matches in the current tab. */
+  shown: number;
+  /** Runs the search matches across every tab. */
+  inAll: number;
+  onShowAll: () => void;
+}
+
+/** A search that finds nothing in the current tab says where its matches are. */
+function SearchElsewhereHint({
+  query,
+  filter,
+  shown,
+  inAll,
+  onShowAll,
+}: SearchElsewhereHintProps): ReactElement | null {
+  if (query.trim() === '' || filter === 'all' || shown > 0 || inAll === 0) return null;
+  return (
+    <p className="mb-4 text-console-12 text-text-secondary">
+      No {filter} run matches "{query.trim()}". {inAll} in other tabs.{' '}
+      <button type="button" onClick={onShowAll} className="underline hover:text-text-primary">
+        Show all
+      </button>
+    </p>
+  );
+}
+
 interface PendingInput {
   degraded: skill.RunsAttention['degraded'];
   /** Pending-input runs the banner shows: in scope and not dismissed. */
   visible: Run[];
+  /** In-scope runs holding their item while their owner is gone. */
+  ownerLost: OwnerLostHolder[];
   promotedRunIds: ReadonlySet<string>;
   error: Error | undefined;
   dismiss: (runId: string) => void;
+  itemAsks: ItemAsks;
 }
 
 /** Runs waiting on the user, for the pending-input banner, minus the ones dismissed this session. */
@@ -397,6 +484,8 @@ function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
   // Pending-input runs the user has dismissed from the banner this session.
   // Not persisted — the run is still paused, so it re-surfaces on reload.
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  // Not persisted either: after a reload the list alone says what is still open.
+  const [answered, setAnswered] = useState<AnsweredAsk[]>([]);
   const { data: attentionRuns, error } = useEntity<skill.RunsAttention>(
     K.runsAttention,
     skill.listRunsNeedingAttention
@@ -445,7 +534,34 @@ function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
   const degraded = (attentionRuns?.degraded ?? []).map(report =>
     scope === 'all' ? report : { type: report.type, reason: report.reason }
   );
-  return { visible, promotedRunIds, degraded, error, dismiss };
+  const inScope = (ask: ItemAsk): boolean => scope === 'all' || ask.project?.codebaseId === scope;
+  const ownerLost = useMemo(
+    () =>
+      (attentionRuns?.ownerLost ?? []).filter(
+        holder => scope === 'all' || holder.projectId === scope
+      ),
+    [attentionRuns, scope]
+  );
+  return {
+    visible,
+    ownerLost,
+    promotedRunIds,
+    degraded,
+    error,
+    dismiss,
+    itemAsks: {
+      asks: (attentionRuns?.asks ?? []).filter(inScope),
+      answered: answered.filter(record => inScope(record.ask)),
+      answerRefusals: attentionRuns?.answerRefusals ?? NO_ITEM_ASKS.answerRefusals,
+      itemIds: attentionRuns?.itemIds ?? NO_ITEM_ASKS.itemIds,
+      onAnswered: record => {
+        setAnswered(prev => [...prev.filter(r => r.ask.ref !== record.ask.ref), record]);
+      },
+      onDismissItem: groupKey => {
+        setAnswered(prev => prev.filter(record => askGroupKey(record.ask) !== groupKey));
+      },
+    },
+  };
 }
 
 /** j/k selection over the visible runs plus the page's other shortcuts; returns the selected run id. */
@@ -539,11 +655,13 @@ function useRunsKeymap(
           searchRef.current?.select();
         },
       },
-      { keys: ['1'], label: 'Filter: running', run: (): void => filterTo('running') },
-      { keys: ['2'], label: 'Filter: paused', run: (): void => filterTo('paused') },
-      { keys: ['3'], label: 'Filter: failed', run: (): void => filterTo('failed') },
-      { keys: ['4'], label: 'Filter: completed', run: (): void => filterTo('completed') },
-      { keys: ['5'], label: 'Filter: all', run: (): void => filterTo('all') },
+      ...FILTER_ORDER.map(
+        (filter, index): Binding => ({
+          keys: [(index + 1).toString()],
+          label: `Filter: ${filter}`,
+          run: (): void => filterTo(filter),
+        })
+      ),
     ];
   }, [navigate, runs, selectedIndex, selectedRun, setFilter, searchRef]);
   useKeymap({ bindings });
@@ -577,19 +695,19 @@ function RunsHeader({
           <p className="text-xs text-text-tertiary">
             {scope === 'all' ? 'Every run, across every project.' : (project?.path ?? 'Loading…')}
             {demoMode ? (
-              <span className="ml-2 rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-warning">
+              <span className="ml-2 rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-console-10 uppercase tracking-widest text-warning">
                 demo mocks on
               </span>
             ) : null}
           </p>
         </div>
         <div
-          className="flex h-[38px] w-[300px] max-w-[34vw] shrink-0 items-center gap-2 rounded-[10px] border bg-surface-elevated px-3 text-text-tertiary transition-colors focus-within:text-text-secondary"
+          className="flex h-9.5 w-75 max-w-[34vw] shrink-0 items-center gap-2 rounded-lg border bg-surface-elevated px-3 text-text-tertiary transition-colors focus-within:text-text-secondary"
           // Inline because the console scope's wildcard border-color rule
           // repaints Tailwind border utilities (see theme.css).
           style={{ borderColor: 'var(--border)' }}
         >
-          <span aria-hidden className="font-mono text-[13px] leading-none">
+          <span aria-hidden className="font-mono text-console-13 leading-none">
             ⌕
           </span>
           <input
@@ -610,13 +728,13 @@ function RunsHeader({
             aria-label="Search runs"
             placeholder="Search workflow, project, run id…"
             spellCheck={false}
-            className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] text-text-primary outline-none placeholder:text-text-tertiary"
+            className="min-w-0 flex-1 bg-transparent font-mono text-console-13 text-text-primary outline-none placeholder:text-text-tertiary"
           />
         </div>
       </div>
 
       {scope === 'all' ? (
-        <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-[12px] text-text-tertiary">
+        <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-console-12 text-text-tertiary">
           Choose a project to start a run.
         </div>
       ) : (
@@ -626,7 +744,7 @@ function RunsHeader({
   );
 }
 
-interface RunsFeedBodyProps extends Omit<RunsFeedProps, 'showProject'> {
+interface RunsFeedBodyProps extends Omit<RunsFeedProps, 'showProject' | 'recentLabel' | 'notice'> {
   /** The feed's load error; demo mode passes none, since its mocks render regardless. */
   feedError: Error | undefined;
   loading: boolean;
@@ -644,10 +762,15 @@ function RunsFeedBody({
   selectedRunId,
   promotedRunIds,
 }: RunsFeedBodyProps): ReactElement {
-  if (feedError !== undefined) {
-    return <EmptyState title="Could not load runs." hint={feedError.message} />;
-  }
-  if (loading) return <EmptyState title="Loading…" />;
+  const notice =
+    feedError !== undefined ? (
+      <EmptyState title="Could not load runs." hint={feedError.message} />
+    ) : loading ? (
+      <EmptyState title="Loading…" />
+    ) : null;
+  // A scoped project's draft card stays mounted beside the notice: unmounting it would
+  // drop a re-run it has already read from the URL and stripped.
+  if (notice !== null && draftProject === null) return notice;
   if (runs.length === 0 && draftProject === null) {
     return (
       <EmptyState
@@ -663,6 +786,8 @@ function RunsFeedBody({
       draftProject={draftProject}
       selectedRunId={selectedRunId}
       promotedRunIds={promotedRunIds}
+      recentLabel={filter === 'running' ? 'Just finished' : 'Recent'}
+      notice={notice}
     />
   );
 }

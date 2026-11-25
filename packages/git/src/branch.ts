@@ -13,8 +13,12 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /** Resolve the advertised remote default; never guess or use a stale cached HEAD. */
-export async function getDefaultBranch(repoPath: RepoPath, remote = 'origin'): Promise<BranchName> {
-  const result = await inspectRemoteBranches({ kind: 'local', repoPath, remote });
+export async function getDefaultBranch(
+  repoPath: RepoPath,
+  remote = 'origin',
+  env?: NodeJS.ProcessEnv
+): Promise<BranchName> {
+  const result = await inspectRemoteBranches({ kind: 'local', repoPath, remote, env });
   if (result.status === 'available' && result.defaultBranch) return result.defaultBranch;
   const reason = result.status === 'unavailable' ? result.evidence : `${remote}/HEAD is not known`;
   throw new GitFailure(
@@ -78,120 +82,6 @@ export async function getUniqueCommitCount(
 }
 
 /**
- * Checkout a branch (creating it if it doesn't exist)
- */
-export async function checkout(repoPath: RepoPath, branchName: BranchName): Promise<void> {
-  try {
-    await execFileAsync('git', ['-C', repoPath, 'checkout', branchName], {
-      timeout: 30000,
-    });
-  } catch (error) {
-    const err = error as Error & { stderr?: string };
-    const exists =
-      !isExitOne(error) ||
-      (await checkoutBranchExists(repoPath, branchName).catch((inspectionError: unknown) => {
-        getLog().debug(
-          { err: inspectionError, repoPath, branchName },
-          'checkout_ref_inspection_failed'
-        );
-        return true;
-      }));
-    if (!exists) {
-      await execFileAsync('git', ['-C', repoPath, 'checkout', '-b', branchName], {
-        timeout: 30000,
-      });
-      return;
-    }
-
-    getLog().error({ repoPath, branchName, err, stderr: err.stderr }, 'checkout_failed');
-    throw new Error(`Failed to checkout branch ${branchName}: ${err.message}`, { cause: error });
-  }
-}
-
-/** Whether `branchName` names a local commit or a remote-tracking ref a checkout could start from. */
-async function checkoutBranchExists(repoPath: RepoPath, branchName: BranchName): Promise<boolean> {
-  if (await localCommitExists(repoPath, branchName)) return true;
-  const sourceRef = `refs/heads/${branchName}`;
-  for (const remote of await listRemotes(repoPath)) {
-    for (const spec of await remoteFetchSpecs(repoPath, remote)) {
-      const destination = fetchDestination(spec, sourceRef);
-      if (destination !== undefined && (await refExists(repoPath, destination))) return true;
-    }
-  }
-  return false;
-}
-
-/** Git's plain exit 1: `rev-parse --verify --quiet` found no such ref, `config --get` no such key. */
-function isExitOne(error: unknown): boolean {
-  return error instanceof GitFailure && error.kind === 'unclassified' && error.code === 1;
-}
-
-async function localCommitExists(repoPath: RepoPath, branchName: BranchName): Promise<boolean> {
-  try {
-    await execFileAsync(
-      'git',
-      [
-        '-C',
-        repoPath,
-        'rev-parse',
-        '--verify',
-        '--quiet',
-        '--end-of-options',
-        `${branchName}^{commit}`,
-      ],
-      { timeout: 10000 }
-    );
-    return true;
-  } catch (error) {
-    if (!isExitOne(error)) throw error;
-    return false;
-  }
-}
-
-async function listRemotes(repoPath: RepoPath): Promise<string[]> {
-  const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote'], { timeout: 10000 });
-  return stdout.trim().split('\n').filter(Boolean);
-}
-
-async function remoteFetchSpecs(repoPath: RepoPath, remote: string): Promise<string[]> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', repoPath, 'config', '--get-all', `remote.${remote}.fetch`],
-      { timeout: 10000 }
-    );
-    return stdout.trim().split('\n');
-  } catch (error) {
-    // A remote without a fetch mapping cannot supply a checkout candidate.
-    if (isExitOne(error)) return [];
-    throw error;
-  }
-}
-
-/**
- * The local ref a fetch refspec maps `sourceRef` to, or undefined when the spec is
- * negative, malformed or does not match it. A `*` in the source matches any run of
- * characters, substituted into the destination's `*`.
- */
-function fetchDestination(spec: string, sourceRef: string): string | undefined {
-  if (spec.startsWith('^')) return undefined;
-  const [source, destination] = spec.replace(/^\+/, '').split(':');
-  if (!source || !destination) return undefined;
-  const star = source.indexOf('*');
-  if (star === -1) return source === sourceRef ? destination : undefined;
-  const prefix = source.slice(0, star);
-  const suffix = source.slice(star + 1);
-  if (
-    sourceRef.length < prefix.length + suffix.length ||
-    !sourceRef.startsWith(prefix) ||
-    !sourceRef.endsWith(suffix)
-  )
-    return undefined;
-  const matched = sourceRef.slice(prefix.length, sourceRef.length - suffix.length);
-  return destination.replace('*', matched);
-}
-
-/**
  * Removal must see untracked and submodule changes regardless of user status settings.
  * Unlike the legacy helper, command failures propagate instead of becoming dirty evidence.
  */
@@ -244,34 +134,6 @@ export async function hasUncommittedChanges(
 }
 
 /**
- * Commit all uncommitted changes (typically workflow-generated artifacts)
- * Only commits if there are actually changes to commit
- * Returns true if commit was made, false if nothing to commit
- */
-export async function commitAllChanges(
-  workingPath: RepoPath | WorktreePath,
-  message: string
-): Promise<boolean> {
-  try {
-    if (!(await hasUncommittedChangesStrict(workingPath))) return false;
-    await execFileAsync('git', ['-C', workingPath, 'add', '-A'], { timeout: 10000 });
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', workingPath, 'diff', '--cached', '--name-only', '-z'],
-      { timeout: 10000 }
-    );
-    if (!stdout) return false;
-    await execFileAsync('git', ['-C', workingPath, 'commit', '-m', message], { timeout: 10000 });
-  } catch (error) {
-    const err = error as Error & { stderr?: string; stdout?: string };
-    getLog().error({ workingPath, err, stderr: err.stderr }, 'commit_all_changes_failed');
-    throw new Error(`Failed to commit changes in ${workingPath}: ${err.message}`, { cause: error });
-  }
-
-  return true;
-}
-
-/**
  * Check if a branch has been merged into main.
  *
  * Returns false for a confirmed non-repository; other failures propagate.
@@ -311,8 +173,9 @@ export async function isBranchMerged(
  *   - `- <sha>` means the patch IS already in upstream (squash-merged / cherry-picked)
  *   - `+ <sha>` means the patch is NOT in upstream (genuinely unmerged)
  *
- * Returns true if every reported commit is patch-equivalent (or if there are no
- * commits to compare). Returns false if any commit is unmerged.
+ * Returns true if every reported commit is patch-equivalent and no merge commit
+ * lies outside the base history. `git cherry` omits merge commits, which can hold
+ * unpublished conflict resolutions even when every parent is already integrated.
  *
  * A confirmed non-repository returns false unless the caller requires errors
  * to surface. Other failures always propagate.
@@ -328,8 +191,13 @@ export async function isPatchEquivalent(
       timeout: 15000,
     });
     const lines = stdout.split('\n').filter(line => line.trim());
-    if (lines.length === 0) return true;
-    return lines.every(line => line.startsWith('-'));
+    if (lines.some(line => !line.startsWith('-'))) return false;
+    const { stdout: merges } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'rev-list', '--merges', '--max-count=1', branchName, `^${baseRef}`],
+      { timeout: 15000 }
+    );
+    return merges.trim().length === 0;
   } catch (error) {
     const err = error as Error & { code?: string; stderr?: string };
     if (
@@ -408,9 +276,10 @@ export async function isRevCoveredBy(
         timeout: 60000,
       });
     } catch (error) {
-      throw new Error(
+      throw new GitFailure(
+        'coverage_fetch',
         `Failed to fetch PR head ${headSha} from ${remote}: ${(error as Error).message}`,
-        { cause: error }
+        error
       );
     }
   }
@@ -454,9 +323,10 @@ async function isCommitAncestor(
   } catch (error) {
     const err = error as Error & { code?: number | string };
     if (err.code === 1 || err.code === '1') return false;
-    throw new Error(
+    throw new GitFailure(
+      'coverage_ancestry',
       `Failed to check whether ${ancestor} is an ancestor of ${descendant} at ${repoPath}: ${err.message}`,
-      { cause: error }
+      error
     );
   }
 }

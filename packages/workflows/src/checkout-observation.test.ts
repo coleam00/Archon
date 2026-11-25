@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as archonGit from '@archon/git';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { observeCheckout, sampleCheckout } from './checkout-observation';
+import { observeCheckout, recordCheckoutSample, sampleCheckout } from './checkout-observation';
 import {
   checkoutManifestSchema,
   type CheckoutManifest,
@@ -190,6 +190,116 @@ describe('checkout observation', () => {
       ]);
     }
   );
+
+  test('status changes during sampling make only the affected paths incomplete', async () => {
+    const { dir, artifacts } = repo();
+    for (const name of ['changed.txt', 'removed.txt', 'stable.txt']) {
+      writeFileSync(join(dir, name), `${name}\n`);
+    }
+    let reads = 0;
+    const sample = await sampleCheckout(dir, { kind: 'host' }, undefined, async (cwd, args) => {
+      if (++reads === 2) {
+        git(dir, 'add', 'changed.txt');
+        rmSync(join(dir, 'removed.txt'));
+        writeFileSync(join(dir, 'added.txt'), 'added\n');
+      }
+      const result = Bun.spawnSync(['git', '--no-optional-locks', ...args], {
+        cwd,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      return { code: result.exitCode, stdout: result.stdout };
+    });
+    const observation = await recordCheckoutSample(sample, {
+      runId: 'run-1',
+      artifactsDir: artifacts,
+    });
+    expect(reads).toBe(2);
+    expect(observation).toMatchObject({ worktree: { status: 'dirty', content: 'incomplete' } });
+    expect(readManifest(observation, artifacts)?.entries).toEqual([
+      { path: 'added.txt', kind: 'incomplete', reason: 'changed_while_observing' },
+      { path: 'changed.txt', kind: 'incomplete', reason: 'changed_while_observing' },
+      { path: 'removed.txt', kind: 'incomplete', reason: 'changed_while_observing' },
+      {
+        path: 'stable.txt',
+        kind: 'file',
+        mode: '100644',
+        blob: git(dir, 'hash-object', 'stable.txt'),
+      },
+    ]);
+  });
+
+  function replaceAfterStatus(dir: string, fifo: boolean): () => void {
+    const realGit = Bun.which('git');
+    if (realGit === null) throw new Error('git is not on PATH');
+    const bin = scratch();
+    writeFileSync(join(bin, 'content'), readFileSync(join(dir, 'changing')));
+    writeFileSync(
+      join(bin, 'git'),
+      [
+        '#!/bin/sh',
+        'for arg in "$@"; do',
+        // Fail a regression that hashes the FIFO instead of blocking until Git's timeout.
+        `  if [ "$arg" = hash-object ] && [ -p '${dir}/changing' ]; then exit 1; fi`,
+        '  if [ "$arg" = status ]; then',
+        `    if [ ! -e '${bin}/status' ]; then`,
+        `      '${realGit}' "$@" > '${bin}/status' || exit $?`,
+        `      rm '${dir}/changing'`,
+        ...(fifo ? [`      mkfifo '${dir}/changing' || exit $?`] : []),
+        `      cat '${bin}/status'`,
+        '      exit 0',
+        '    else',
+        `      rm -f '${dir}/changing'`,
+        `      cp '${bin}/content' '${dir}/changing'`,
+        '    fi',
+        '    break',
+        '  fi',
+        'done',
+        `exec '${realGit}' "$@"`,
+        '',
+      ].join('\n')
+    );
+    chmodSync(join(bin, 'git'), 0o755);
+    const previous = process.env.PATH;
+    process.env.PATH = `${bin}:${previous ?? ''}`;
+    return () => {
+      process.env.PATH = previous;
+    };
+  }
+
+  posixOnly('a file that vanishes before lstat makes the observation incomplete', async () => {
+    const { dir, artifacts } = repo();
+    writeFileSync(join(dir, 'changing'), 'content\n');
+    // Restore before the second status so its comparison cannot mask the ENOENT branch.
+    const restore = replaceAfterStatus(dir, false);
+    let observation: CheckoutObservation;
+    try {
+      observation = await observe(dir, artifacts);
+    } finally {
+      restore();
+    }
+    expect(observation).toMatchObject({ worktree: { status: 'dirty', content: 'incomplete' } });
+    expect(readManifest(observation, artifacts)?.entries).toEqual([
+      { path: 'changing', kind: 'incomplete', reason: 'changed_while_observing' },
+    ]);
+  });
+
+  posixOnly('a FIFO makes the observation incomplete without reading its content', async () => {
+    const { dir, artifacts } = repo();
+    writeFileSync(join(dir, 'changing'), 'content\n');
+    // Git omits untracked FIFOs, so replace a reported file after the first status.
+    const restore = replaceAfterStatus(dir, true);
+    let observation: CheckoutObservation;
+    try {
+      observation = await observe(dir, artifacts);
+    } finally {
+      restore();
+    }
+    expect(observation).toMatchObject({ worktree: { status: 'dirty', content: 'incomplete' } });
+    expect(readManifest(observation, artifacts)?.entries).toEqual([
+      { path: 'changing', kind: 'incomplete', reason: 'special_file' },
+    ]);
+  });
 
   test('worktree bytes hash under the repository clean conversion', async () => {
     const { dir, artifacts } = repo();

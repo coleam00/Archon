@@ -10,12 +10,19 @@ import {
   rawAliasesConfigSchema,
   rawTiersConfigSchema,
 } from '@archon/workflows/schemas/model-binding';
+import { validateWorktreeConfig } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import {
   attentionNoticeRoutesSchema,
+  itemTrackerConfigSchema,
   platformStreamingSchema,
   workflowContinuationConfigSchema,
 } from './config-types';
+import {
+  providerCapsOf,
+  providerConcurrencySchema,
+  unknownProvidersDetail,
+} from './provider-concurrency';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -175,6 +182,18 @@ export function validateAttentionNoticesConfig(parsed: unknown, configPath: stri
   parsed.attentionNotices = result.data;
 }
 
+export function validateItemTrackerConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.itemTracker === undefined) return;
+  const result = itemTrackerConfigSchema.safeParse(parsed.itemTracker);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `itemTracker.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid itemTracker config', configPath, issues);
+  }
+  parsed.itemTracker = result.data;
+}
+
 export function validateConversationConcurrencyConfig(parsed: unknown, configPath: string): void {
   if (!isConfigRecord(parsed) || parsed.concurrency == null) return;
   if (!isConfigRecord(parsed.concurrency)) {
@@ -196,6 +215,29 @@ export function validateConversationConcurrencyConfig(parsed: unknown, configPat
 }
 
 /**
+ * Provider caps by the rules provider admission reads them with. Only a settings write runs
+ * this: admission already refuses provider attempts over a bad cap, and refusing at load would
+ * break every config read (chat, CLI, server) over one cap typo.
+ */
+export function validateProviderConcurrencyConfig(parsed: unknown, configPath: string): void {
+  const result = providerConcurrencySchema.safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid concurrency config', configPath, issues);
+  }
+  const { unknownKeys } = providerCapsOf(result.data);
+  if (unknownKeys.length > 0) {
+    throw new InvalidConfigError(
+      'Invalid concurrency config',
+      configPath,
+      unknownProvidersDetail(unknownKeys)
+    );
+  }
+}
+
+/**
  * The blocks both the global config loader and a settings write validate. Assistant
  * defaults are validated separately, after them.
  */
@@ -204,5 +246,25 @@ export function validateGlobalConfigBlocks(parsed: unknown, configPath: string):
   validateModelBindingConfig(parsed, configPath);
   validateStreamingConfig(parsed, configPath);
   validateAttentionNoticesConfig(parsed, configPath);
+  validateItemTrackerConfig(parsed, configPath);
   validateConversationConcurrencyConfig(parsed, configPath);
+  validateGlobalWorktreeConfig(parsed, configPath);
+}
+
+/** The global `worktree` block carries `linkFiles` only; other keys stay repo-scoped. */
+function validateGlobalWorktreeConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.worktree == null) return;
+  if (!isConfigRecord(parsed.worktree)) {
+    throw new InvalidConfigError(
+      'Invalid worktree config',
+      configPath,
+      "'worktree' must be an object."
+    );
+  }
+  try {
+    validateWorktreeConfig({ linkFiles: parsed.worktree.linkFiles as string[] | undefined });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new InvalidConfigError('Invalid worktree config', configPath, detail, { cause: error });
+  }
 }

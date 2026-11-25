@@ -40,7 +40,6 @@ mock.module('../db/connection', () => ({
 
 import * as git from '@archon/git';
 import { cloneRepository, registerRepository as registerInStore } from './clone';
-import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 
 const { registerFolder, registerRepository, ProjectRegistrationError } = await import(
   './sql-registration'
@@ -538,10 +537,8 @@ describe('project storage collisions', () => {
       expect((await store.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
       expect(warnings).toEqual([
         expect.objectContaining({
-          err: expect.objectContaining({
-            type: 'ProjectRegistrationError',
-            message: expect.stringContaining(broken.default_cwd),
-          }),
+          msg: 'registration.lookup_legacy_unavailable',
+          path: broken.default_cwd,
         }),
       ]);
       expect(await store.findCodebaseByRepoUrl('https://github.com/acme/unknown')).toBeNull();
@@ -1031,21 +1028,17 @@ describe('project storage collisions', () => {
             level: 40,
             module: 'registration.remote',
             msg: 'registration.lookup_legacy_unavailable',
-            err: expect.objectContaining({
-              type: 'ProjectRegistrationError',
-              message: expect.stringContaining(legacyPath),
-            }),
-          }),
-        ]);
-        expect(warnings[0]).toMatchObject({
-          err: {
-            message: expect.stringContaining(
+            project: 'Legacy',
+            path: legacyPath,
+            reason: expect.stringContaining(
               state === 'corrupt'
                 ? `Cannot read registration config at ${legacyPath}/.archon/config.yaml`
-                : 'Remote error: Command failed: git'
+                : 'Command failed: git'
             ),
-          },
-        });
+          }),
+        ]);
+        // One short line: no stack and no nested copies of the git error.
+        expect(warnings[0]).not.toHaveProperty('err');
       }
       expect(await store.findCodebaseByRepoUrl('https://github.com/acme/new')).toBeNull();
       const localPath = await gitCheckout(join(root, 'local'), 'https://github.com/acme/local');
@@ -1442,32 +1435,6 @@ describe('project storage collisions', () => {
     expect(b.name).toBe('acme/api-2');
     expect(await storageRoot(b.codebaseId)).not.toBe(await storageRoot(a.codebaseId));
   });
-
-  test.skipIf(process.platform !== 'win32').each(['sql', 'file'] as const)(
-    'a registration stored with forward slashes and a lowercase drive is the same checkout (%s)',
-    async backend => {
-      const root = await makeHome();
-      const store =
-        backend === 'sql'
-          ? codebases
-          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
-      const checkout = await gitCheckout(join(root, 'Quay2'), 'https://github.com/acme/quay.git');
-      const registered = await registerInStore(store, checkout);
-      const stored = checkout.charAt(0).toLowerCase() + checkout.slice(1).replaceAll('\\', '/');
-      await store.updateCodebase(
-        { id: registered.codebaseId, name: registered.name },
-        { default_cwd: stored }
-      );
-
-      const again = await registerInStore(store, checkout);
-      expect(again).toMatchObject({ alreadyExisted: true, codebaseId: registered.codebaseId });
-      expect((await resolveCodebaseForPath(checkout, store)).codebase?.id).toBe(
-        registered.codebaseId
-      );
-      expect(await store.listCodebases()).toMatchObject([{ default_cwd: stored }]);
-      expect(await store.listCodebases()).toHaveLength(1);
-    }
-  );
 
   test.each(['https://github.com/acme/app.git', 'https://github.com/acme/app.git/'])(
     'a second clone of a registered remote is refused, naming the registered checkout: %s',

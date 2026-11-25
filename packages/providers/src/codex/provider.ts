@@ -404,8 +404,9 @@ export class CodexProvider implements IAgentProvider {
    * On a model listed in `toolFreeStructuredOutputModels`, a call with an output schema is
    * two turns on one thread: the tool turn without the schema, then, on a second process
    * that resumes the thread with Archon's and the model catalog's tools off, a turn with the
-   * schema. The tool turn's success result is held back; the final turn's result is the
-   * call's only one.
+   * schema. The tool turn's success result is held back and its usage goes on the final turn's
+   * first result. A later result, from subagents still running at that turn's end, carries only
+   * the usage they reported since.
    */
   async *sendQuery(
     prompt: string,
@@ -435,6 +436,13 @@ export class CodexProvider implements IAgentProvider {
       requestOptions?.env,
       requestOptions?.userCredentialEnvKeys
     );
+    const config = {
+      ...launch.config,
+      modelReasoningEffort: resolveModelReasoningEffort(
+        requestOptions?.nodeConfig,
+        launch.config.modelReasoningEffort
+      ),
+    };
     const model = requestOptions?.model ?? launch.config.model;
     const titleRequest = requestOptions?.purpose === 'title-generation';
     const nativeTools = titleRequest ? undefined : requestOptions?.nativeTools;
@@ -462,8 +470,8 @@ export class CodexProvider implements IAgentProvider {
         model,
         titleRequest,
         nodePlugins,
-        threadConfig: buildThreadConfig(launch.config, mcpServers, nodePlugins !== undefined),
-        modelReasoningEffort: launch.config.modelReasoningEffort,
+        threadConfig: buildThreadConfig(config, mcpServers, nodePlugins !== undefined),
+        modelReasoningEffort: config.modelReasoningEffort,
         splitsStructuredOutput: !titleRequest && splitsStructuredOutput(launch.config, model),
         run,
       });
@@ -486,13 +494,19 @@ export class CodexProvider implements IAgentProvider {
       // An abort while the setup above awaited found no process to stop.
       if (abortSignal?.aborted) throw new Error('Query aborted');
 
-      yield* reportedTurn(streamTurn({ ...request, connection: run.connection }), call, {
+      // Engine texts go to the tool turn only: a split call's tool-free final turn is short.
+      const toolTurn = {
+        ...request,
+        connection: run.connection,
+        turnMessages: requestOptions?.turnMessages,
+      };
+      yield* reportedTurn(streamTurn(toolTurn), call, {
         holdsSuccess: finalTurn !== undefined,
         catalogId,
         abortSignal,
       });
       if (call.toolTurnResult && finalTurn) {
-        const finalRequest = finalTurnRequestOf(request, finalTurn.turnParams, launch.config);
+        const finalRequest = finalTurnRequestOf(request, finalTurn.turnParams, config);
         yield* this.finalTurn(
           run,
           finalRequest,
@@ -645,10 +659,14 @@ async function* reportedTurn(
   for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
     if (chunk.type === 'result') {
       if (turn.holdsSuccess && !chunk.failure) {
-        call.toolTurnResult = chunk;
+        // A turn's later result adds the usage its subagents reported after its first.
+        call.toolTurnResult = withToolTurnOf(chunk, call.toolTurnResult);
         continue;
       }
       withToolTurnOf(chunk, call.toolTurnResult);
+      // The first result carries the tool turn's tokens; a later one, which a final turn whose
+      // subagents outlive its first result reports, carries only the usage reported since.
+      if (call.toolTurnResult) call.toolTurnResult = { ...call.toolTurnResult, tokens: undefined };
       reportResult(chunk, turn.abortSignal, turn.catalogId);
       call.resultReported = true;
     }
@@ -707,10 +725,7 @@ function turnRequestOf(
   finalTurn: { model: string; turnParams: TurnRequest['turnParams'] } | undefined;
 } {
   const { outputSchema, hasOutputFormat } = buildOutputSchema(requestOptions);
-  const effort = resolveModelReasoningEffort(
-    requestOptions?.nodeConfig,
-    inputs.modelReasoningEffort
-  );
+  const effort = inputs.modelReasoningEffort;
   const { model, run } = inputs;
   // `splitsStructuredOutput` implies a model; the check narrows it for the final turn.
   const split = inputs.splitsStructuredOutput && outputSchema !== undefined && model !== undefined;

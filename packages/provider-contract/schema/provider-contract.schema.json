@@ -15,6 +15,7 @@
             "rate_limited",
             "overloaded",
             "transient",
+            "schema_unmet",
             "unknown"
           ]
         },
@@ -62,6 +63,51 @@
         },
         "cost": {
           "type": "number"
+        },
+        "calls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "responseId": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "input": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "output": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cacheRead": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cacheWrite": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "input",
+              "output"
+            ]
+          }
+        },
+        "callsPartial": {
+          "type": "boolean",
+          "const": true
         }
       },
       "required": [
@@ -133,6 +179,23 @@
         }
       }
     },
+    "ProviderSession": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session"
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "sessionId"
+      ]
+    },
     "ProviderSettled": {
       "type": "object",
       "properties": {
@@ -160,6 +223,9 @@
           "type": "boolean"
         },
         "sessionFork": {
+          "type": "boolean"
+        },
+        "turnMessages": {
           "type": "boolean"
         },
         "mcp": {
@@ -211,6 +277,13 @@
               "type": "boolean",
               "const": false
             }
+          ]
+        },
+        "structuredOutputCorrection": {
+          "type": "string",
+          "enum": [
+            "fresh-session",
+            "same-session"
           ]
         },
         "requiresAllPropertiesRequired": {
@@ -625,6 +698,9 @@
           "$ref": "#/$defs/ProviderEvent"
         },
         {
+          "$ref": "#/$defs/ProviderSession"
+        },
+        {
           "type": "object",
           "properties": {
             "sessionId": {
@@ -991,7 +1067,7 @@
       "properties": {
         "protocol": {
           "type": "number",
-          "const": 3
+          "const": 4
         },
         "id": {
           "type": "string",
@@ -1278,88 +1354,109 @@
                 "type": "string"
               },
               "inputSchema": {
-                "type": "object",
-                "properties": {
-                  "properties": {
+                "anyOf": [
+                  {
                     "type": "object",
-                    "propertyNames": {
-                      "type": "string"
-                    },
-                    "additionalProperties": {
-                      "oneOf": [
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "const": "string"
-                            },
-                            "description": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "kind"
-                          ]
+                    "properties": {
+                      "properties": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
                         },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "const": "enum"
-                            },
-                            "values": {
-                              "readOnly": true,
-                              "type": "array",
-                              "prefixItems": [
-                                {
+                        "additionalProperties": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "string"
+                                },
+                                "description": {
                                   "type": "string"
                                 }
-                              ],
-                              "items": {
-                                "type": "string"
                               },
-                              "minItems": 1
+                              "required": [
+                                "kind"
+                              ]
                             },
-                            "description": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "values"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "const": "boolean"
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "enum"
+                                },
+                                "values": {
+                                  "readOnly": true,
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string"
+                                    }
+                                  ],
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "minItems": 1
+                                },
+                                "description": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "values"
+                              ]
                             },
-                            "description": {
-                              "type": "string"
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "boolean"
+                                },
+                                "description": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ]
                             }
-                          },
-                          "required": [
-                            "kind"
                           ]
                         }
-                      ]
-                    }
+                      },
+                      "required": {
+                        "readOnly": true,
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "properties",
+                      "required"
+                    ]
                   },
-                  "required": {
-                    "readOnly": true,
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
+                  {
+                    "type": "object",
+                    "properties": {
+                      "jsonSchema": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {
+                          "$ref": "#/$defs/schema10"
+                        }
+                      }
+                    },
+                    "required": [
+                      "jsonSchema"
+                    ]
                   }
-                },
-                "required": [
-                  "properties",
-                  "required"
                 ]
               }
             },
@@ -1425,7 +1522,7 @@
                   "properties": {
                     "protocol": {
                       "type": "number",
-                      "const": 3
+                      "const": 4
                     }
                   },
                   "required": [
@@ -1599,6 +1696,23 @@
         "sessionId"
       ]
     },
+    "ProviderTurnMessageNotification": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "text"
+      ]
+    },
     "ProviderChunkNotification": {
       "type": "object",
       "properties": {
@@ -1632,8 +1746,12 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema10"
+            "$ref": "#/$defs/schema11"
           }
+        },
+        "providerCallId": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
@@ -1676,7 +1794,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema11"
+            "$ref": "#/$defs/schema12"
           }
         }
       },
@@ -2400,6 +2518,37 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/schema11"
+          }
+        }
+      ]
+    },
+    "schema12": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema12"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema12"
           }
         }
       ]

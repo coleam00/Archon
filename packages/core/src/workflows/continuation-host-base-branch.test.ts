@@ -6,6 +6,7 @@ import type {
   WorkflowResumeOptions,
 } from '@archon/workflows/engine-port';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { WorkflowNotResumableError } from '@archon/workflows/store';
 import type { IIsolationProvider, IIsolationStore } from '@archon/isolation';
 import { toBranchName } from '@archon/git';
 import { HeadlessPlatform } from './headless-platform';
@@ -19,8 +20,10 @@ const run: WorkflowRun = {
   codebase_id: 'cb',
   status: 'paused',
   outcome: null,
+  completed_outcome: null,
   user_message: 'deliver',
   metadata: {},
+  active_phase_started_at: null,
   started_at: new Date(),
   completed_at: null,
   last_activity_at: null,
@@ -30,6 +33,7 @@ const run: WorkflowRun = {
   adopted_from_run_id: null,
   output_root: null,
   checkout_baseline: null,
+  item_id: null,
 };
 const providerCreate = mock<IIsolationProvider['create']>(async () => ({
   id: '/child',
@@ -89,7 +93,7 @@ async function resumeAndResolveChild(
     },
     async resume(input) {
       captured = input;
-      return { accepted: false, reason: 'nothing-to-resume' };
+      throw new WorkflowNotResumableError(input.run.id, 'running');
     },
     async subscribe() {
       throw new Error('not invoked');

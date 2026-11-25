@@ -38,6 +38,59 @@ export const attentionNoticeRoutesSchema = z
   });
 
 /**
+ * Item keys under `prefix` name a tracker subject of `kind`: the rest of the key is its
+ * number. `issue-` with kind `issue` maps item `issue-5688` to issue 5688.
+ */
+const trackerKeyRuleSchema = z.object({
+  prefix: z.string().min(1),
+  kind: z.enum(['issue', 'pr']),
+});
+const trackedProjectSchema = z.object({
+  /** The engine's project key, as `GET /api/items` shows it. */
+  project: z.string().min(1),
+  /** The repository on the forge; the forge plugin contract validates its form. */
+  repo: z.object({ host: z.string().min(1), path: z.string().min(1) }),
+  keys: z
+    .array(trackerKeyRuleSchema)
+    .min(1)
+    .superRefine((rules, ctx) => {
+      // A key must match at most one rule, so no prefix may start another.
+      for (const [index, rule] of rules.entries()) {
+        const other = rules.findIndex(
+          (candidate, at) => at !== index && rule.prefix.startsWith(candidate.prefix)
+        );
+        if (other !== -1)
+          ctx.addIssue({
+            code: 'custom',
+            path: [index, 'prefix'],
+            message: `prefix '${rule.prefix}' overlaps prefix '${rules[other]?.prefix ?? ''}'`,
+          });
+      }
+    }),
+});
+export type TrackedProject = z.infer<typeof trackedProjectSchema>;
+export const itemTrackerConfigSchema = z.object({
+  /** Cost and token counts on the status comment. Off unless true. */
+  includeUsage: z.boolean().default(false),
+  projects: z
+    .array(trackedProjectSchema)
+    .min(1)
+    .superRefine((projects, ctx) => {
+      const seen = new Set<string>();
+      for (const [index, project] of projects.entries()) {
+        if (seen.has(project.project))
+          ctx.addIssue({
+            code: 'custom',
+            path: [index, 'project'],
+            message: `duplicate project '${project.project}'`,
+          });
+        seen.add(project.project);
+      }
+    }),
+});
+export type ItemTrackerConfig = z.infer<typeof itemTrackerConfigSchema>;
+
+/**
  * Global configuration (non-secret user preferences)
  * Located at ~/.archon/config.yaml
  */
@@ -53,8 +106,8 @@ import type {
 } from '@archon/providers/types';
 import type { RawAliasesConfig, RawTiersConfig } from '@archon/workflows/model-validation';
 import {
-  workflowRunContinuationConfigSchema,
-  type WorkflowRunConfigLayer,
+  workflowInstallContinuationConfigSchema,
+  type WorkflowContinuationConfig,
 } from '@archon/workflows/schemas/run-config';
 
 export type {
@@ -184,6 +237,20 @@ export interface GlobalConfig {
   attentionNotices?: AttentionNoticeRoute[];
 
   /**
+   * Work items whose tracker shows a status comment, kept current by `archon serve`, by a
+   * CLI process that started, paused or ended a run before it exits, and by
+   * `archon tracker sync`. Global only: repository config never carries it. Absent means
+   * off.
+   */
+  itemTracker?: ItemTrackerConfig;
+
+  /**
+   * Install-wide worktree defaults. Only `linkFiles` is honoured here; it applies to
+   * every project whose `.archon/config.yaml` does not set its own `worktree.linkFiles`.
+   */
+  worktree?: Pick<WorktreeCreateConfig, 'linkFiles'>;
+
+  /**
    * Concurrency limits
    */
   concurrency?: {
@@ -195,7 +262,8 @@ export interface GlobalConfig {
     /**
      * Opt-in install-wide cap on simultaneous provider attempts, keyed by provider
      * registration ID (e.g. `claude: 4`). Pi also honors `assistants.pi.maxConcurrent`.
-     * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`.
+     * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`; a settings
+     * write refuses a value that read would refuse.
      */
     providers?: Record<string, number>;
   };
@@ -212,8 +280,8 @@ export interface GlobalConfig {
 
 // Ordinary global/repo config remains forward-compatible: unlike the explicitly
 // selected run layer, it strips extension keys it does not understand yet.
-export const workflowContinuationConfigSchema = workflowRunContinuationConfigSchema.strip();
-export type WorkflowContinuationConfig = NonNullable<WorkflowRunConfigLayer['workflows']>;
+export const workflowContinuationConfigSchema = workflowInstallContinuationConfigSchema.strip();
+export type { WorkflowContinuationConfig };
 
 /**
  * Repository configuration (project-specific settings)
@@ -334,6 +402,7 @@ export interface MergedConfig {
   tiers?: RawTiersConfig;
   streaming: PlatformStreaming;
   attentionNotices: AttentionNoticeRoute[];
+  itemTracker?: ItemTrackerConfig;
   concurrency: {
     maxConversations: number;
   };
@@ -358,8 +427,9 @@ export interface MergedConfig {
   baseBranch?: string;
   /**
    * Git remote name from repo config (worktree.remote).
-   * When undefined, callers auto-detect at runtime via getDefaultRemote()
-   * or fall back to 'origin'.
+   * When undefined, callers auto-detect at runtime via getDefaultRemote(); none
+   * falls back to an 'origin' that does not exist. Merge cleanup accepts only an
+   * existing origin and keeps the worktrees of a repository without one.
    */
   remote?: string;
   /**

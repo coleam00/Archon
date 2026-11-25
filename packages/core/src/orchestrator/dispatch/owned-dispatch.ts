@@ -1,13 +1,16 @@
 import { resolveRunContinuation } from '../../operations/workflow-continuation';
 import { assertRunCredentials } from '@archon/workflows/run-preflight';
+import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import * as db from '../../db/conversations';
+import { withBranchLaunchSource } from '../../workflows/branch-launch-source';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
 import { getLog } from '../agent-log';
 import { dispatchBackgroundWorkflow } from './background';
 import { dispatchForeground } from './foreground';
 import { runSignatureGates, sendRunStartNotices } from './gates';
 import {
+  continuesImplicitly,
   detectContinuation,
   resolveDispatchAdoption,
   resolveRequestedWorkflow,
@@ -115,6 +118,16 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     return;
   }
 
+  // The background path above checks its own start; this is the foreground's.
+  const launchInputs =
+    !willContinueExistingRun && preparedAiConfiguration
+      ? await checkForegroundForge(scope, workflow, preparedAiConfiguration, {
+          adoptionLane,
+          launchConfigCwd,
+          resolvedInputs,
+        })
+      : resolvedInputs;
+
   await dispatchForeground(scope, {
     workflow,
     continuation,
@@ -122,10 +135,40 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     adoptedEnvironment: executable.adoptedEnvironment,
     adoptionLane,
     preparedAiConfiguration,
-    resolvedInputs,
+    resolvedInputs: launchInputs,
     deferredInputError,
-    prepareLaunchAiConfiguration: prepareLaunch,
   });
+}
+
+/**
+ * Check a fresh foreground run's forge needs and return the inputs it starts with: the
+ * resolved inputs, plus those naming the repository the check judged. A branch lane's run
+ * executes that branch, so its pack settings come from a snapshot of it.
+ */
+async function checkForegroundForge(
+  { codebase }: DispatchScope,
+  workflow: ResolvedWorkflow,
+  prepared: Parameters<typeof assertRunForgeAccess>[2],
+  {
+    adoptionLane,
+    launchConfigCwd,
+    resolvedInputs,
+  }: {
+    adoptionLane: Parameters<typeof dispatchForeground>[1]['adoptionLane'];
+    launchConfigCwd: string;
+    resolvedInputs: Record<string, string> | undefined;
+  }
+): Promise<Record<string, string> | undefined> {
+  const checkForge = (settingsCwd: string) =>
+    assertRunForgeAccess(createWorkflowDeps(), workflow, prepared, {
+      cwd: codebase.default_cwd,
+      settingsCwd,
+      codebaseId: codebase.id,
+      supplied: resolvedInputs,
+    });
+  return adoptionLane?.kind === 'checkout-branch'
+    ? withBranchLaunchSource(codebase.default_cwd, adoptionLane.taskBranch.branch, checkForge)
+    : checkForge(launchConfigCwd);
 }
 
 /**
@@ -137,7 +180,7 @@ async function offerResumeChoice(
   workflow: ResolvedWorkflow,
   { resumableRun, explicitResumeRequested }: Continuation
 ): Promise<boolean> {
-  if (!resumableRun?.working_path || resumableRun.status === 'paused' || explicitResumeRequested)
+  if (!resumableRun?.working_path || continuesImplicitly(resumableRun) || explicitResumeRequested)
     return false;
   getLog().info(
     {

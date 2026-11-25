@@ -13,5 +13,5 @@ export function OwnerObservationHint({
   const hint = ownerObservationHint(run);
   if (hint === null) return null;
   const tone = run.ownerObservation === 'unreachable' ? 'text-warning' : 'text-text-secondary';
-  return <p className={`${className} text-[12px] ${tone}`}>{hint}</p>;
+  return <p className={`${className} text-console-12 ${tone}`}>{hint}</p>;
 }

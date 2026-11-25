@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
-import { dispatchForge } from './dispatch';
+import { checkForgeAccess, dispatchForge } from './dispatch';
 import { repoRefSchema, type RepoRef } from './identity';
 
 const fixture = join(import.meta.dir, 'fixtures', 'test-plugin.ts');
@@ -195,6 +198,21 @@ describe('forge plugin discovery and dispatch', () => {
     expect(result.response).toMatchObject({ ok: false, error: { kind: 'unsupported_op' } });
   });
 
+  test('does not ask a plugin that resolves remotes only to resolve an issue or pull request URL', async () => {
+    const discovery = await discoverPlugins({ config: config() });
+    const result = await dispatchForge(
+      { operationId: 'web', op: 'resolve', remote: 'https://forge.example/a/b/pull/1', web: true },
+      { discovery }
+    );
+    expect(result.response).toMatchObject({
+      ok: false,
+      error: {
+        kind: 'unsupported_op',
+        message: expect.stringContaining('issue or pull request URL'),
+      },
+    });
+  });
+
   test('rejects duplicate host claims', async () => {
     await expect(
       discoverPlugins({
@@ -299,7 +317,75 @@ test.each([
     expect(result.response).toEqual({
       operationId: 'origin',
       ok: false,
-      error: { kind: 'forge_error', message: expected },
+      error: { kind: 'forge_error', message: `${expected} (resolve)` },
     });
+  }
+);
+
+const trackTempRoot = trackTempRoots();
+
+/** A directory holding `archon-forge-test`, a script that runs the fixture without the operation. */
+function scannedFixtureDir(): string {
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-remedy-')));
+  const executable = join(dir, 'archon-forge-test');
+  writeFileSync(
+    executable,
+    `#!/bin/sh\nexec "${process.execPath}" --no-env-file "${fixture}" --mode unsupported "$@"\n`
+  );
+  chmodSync(executable, 0o755);
+  return dir;
+}
+
+// The generic unsupported_op remedy names what runs the plugin, never a configured entry's
+// args, and leaves who owns it to `archon plugin list`.
+test.skipIf(process.platform === 'win32').each([
+  [
+    'plugins-directory',
+    (dir: string) => ({ pluginsDir: dir }),
+    (dir: string) => [join(dir, 'archon-forge-test'), '`archon plugin update <id>`', 'replace it'],
+  ],
+  [
+    'plugin-dir',
+    (dir: string) => ({ config: { pluginDirs: [dir], scanPath: false } }),
+    (dir: string) => [join(dir, 'archon-forge-test'), '`archon plugin update <id>`', 'replace it'],
+  ],
+  [
+    'configured',
+    () => ({
+      config: {
+        plugins: [
+          {
+            plugin: 'test',
+            command: process.execPath,
+            args: [fixture, '--mode', 'unsupported', '--api-key=sentinel-secret'],
+          },
+        ],
+        scanPath: false,
+      },
+    }),
+    () => ['`forge` entry for plugin test', '`archon plugin update <id>`', 'replace it'],
+  ],
+  [
+    'source',
+    () => ({
+      config: { scanPath: false },
+      sourcePlugins: [
+        { name: 'test', command: process.execPath, args: [fixture, '--mode', 'unsupported'] },
+      ],
+    }),
+    () => ['Update Archon'],
+  ],
+] as const)(
+  'an unsupported_op remedy for a plugin from %s names what runs it',
+  async (_origin, options, says) => {
+    const dir = scannedFixtureDir();
+    const check = await checkForgeAccess(
+      { host: 'forge.example', operations: ['pr.merge'] },
+      { ...options(dir), env: {} }
+    );
+    if (check.ok) throw new Error('Expected a refusal');
+    expect(check.error.kind).toBe('unsupported_op');
+    for (const text of says(dir)) expect(check.remedy).toContain(text);
+    expect(check.remedy).not.toContain('sentinel-secret');
   }
 );

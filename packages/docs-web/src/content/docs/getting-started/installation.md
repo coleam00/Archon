@@ -80,7 +80,8 @@ pin one with `VERSION`, skip the provider step with an empty selection
 release does not have and exits with an error.
 
 Docker images and source checkouts run Claude, Codex and Pi from source and need
-no install step.
+no install step. They run the GitHub forge plugin from source as well; a release
+binary uses the one `archon plugin add coleam00/Archon/plugins/forge-github` installs.
 
 ## Using Archon from a GUI or service
 

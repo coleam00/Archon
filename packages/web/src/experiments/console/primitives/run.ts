@@ -1,8 +1,10 @@
+import type { QueryParams } from '../lib/api-types';
 import type { RunStatus } from '../lib/run-status';
 import type { components } from '@/lib/api.generated';
 
 export type RunOrigin = 'web' | 'cli' | 'slack' | 'telegram' | 'discord' | 'github' | 'unknown';
-export type RunOutcome = components['schemas']['WorkflowRunOutcome'];
+/** How a run completed: `succeeded` or `failed` for the boolean form, or a named outcome. */
+export type RunOutcome = components['schemas']['WorkflowRun']['completed_outcome'];
 type WorkflowRunMetadata = components['schemas']['WorkflowRunMetadata'];
 type WorkflowApproval = NonNullable<WorkflowRunMetadata['approval']>;
 type WorkflowWait = NonNullable<WorkflowRunMetadata['wait']>;
@@ -19,28 +21,28 @@ type NormalizedWorkflowWait<T extends WorkflowWait = WorkflowWait> = T extends W
   : never;
 
 export interface Run {
-  id: string;
-  projectId: string | null;
-  projectName: string | null;
+  id: WorkflowRun['id'];
+  projectId: WorkflowRun['codebase_id'];
+  projectName: components['schemas']['DashboardWorkflowRun']['codebase_name'];
   /** Total USD cost from the agent SDK. Populated for completed Claude runs;
    *  Pi/Codex runs may not report cost. Null when the run hasn't recorded any. */
   costUsd: number | null;
   /** DB id of the conversation this run belongs to. */
-  conversationId: string | null;
+  conversationId: WorkflowRun['conversation_id'];
   /**
    * Platform-level conversation id (e.g. `cli-1776237248436-9f86d081884c7d659a2feaa0c55ad015`). This is
    * the id the `/api/conversations/:id/messages` route accepts in its URL
    * path — the server looks conversations up by platform id, not DB id, on
    * that endpoint. Use this when fetching the run's messages.
    */
-  conversationPlatformId: string | null;
+  conversationPlatformId: DetailRun['conversation_platform_id'];
   /**
    * Platform id of the WORKER conversation for chat-dispatched (web) runs —
    * where a chat-dispatched run's messages actually live. See
    * runMessageConversationId() for how CLI vs. web runs are picked (#2048).
    */
-  workerPlatformId: string | null;
-  workflow: string;
+  workerPlatformId: components['schemas']['DashboardWorkflowRun']['worker_platform_id'];
+  workflow: WorkflowRun['workflow_name'];
   origin: RunOrigin;
   status: RunStatus;
   /**
@@ -49,14 +51,23 @@ export interface Run {
    */
   ownerObservation?: components['schemas']['DashboardWorkflowRun']['owner_observation'];
   attention: components['schemas']['WorkflowRun']['attention'];
+  /** An operator's pause, requested or in effect; null or absent otherwise. */
+  operatorPause?: components['schemas']['WorkflowRun']['operator_pause'];
   outcome: RunOutcome;
   terminalRecord: components['schemas']['WorkflowRunDetail']['run']['terminal_record'];
-  startedAt: string;
-  finishedAt: string | null;
+  startedAt: WorkflowRun['started_at'];
+  /**
+   * When the run's current execution phase began: set each time a resume or an answer
+   * continues the run, null for a run that has only its first phase.
+   */
+  activePhaseStartedAt?: WorkflowRun['active_phase_started_at'];
+  finishedAt: WorkflowRun['completed_at'];
   /** workflow_runs.working_path — used to join against worktrees. */
-  workingPath: string | null;
-  userMessage: string;
-  activeNodes: string[];
+  workingPath: WorkflowRun['working_path'];
+  userMessage: NonNullable<WorkflowRun['user_message']>;
+  /** The inputs the run was invoked with, by name; a re-run restores these. */
+  suppliedInputs?: Readonly<WorkflowRun['supplied_inputs']>;
+  activeNodes: NonNullable<components['schemas']['DashboardWorkflowRun']['active_nodes']>;
   lastTool?: string | null;
   toolCallAttention?: NonNullable<WorkflowRunMetadata['tool_call_attention']>;
   /**
@@ -86,7 +97,7 @@ export interface Run {
    * approval surfaces hide (approval is null) and the card shows a
    * "resuming" hint instead of stale approve/reject buttons.
    */
-  gateResolved?: 'approved' | 'rejected' | null;
+  gateResolved?: WorkflowApproval['resolved'];
   /**
    * Why the run stopped, as the owning process recorded it (#3479). Null when it
    * stopped without one, or has not stopped. The run's `status` is unaffected: a
@@ -98,7 +109,16 @@ export interface Run {
    * spawned by a parent run's node; null for top-level runs. Drives the "child of"
    * affordance in the console so a sub-run isn't mistaken for an orphan top-level run.
    */
-  parentRunId?: string | null;
+  parentRunId?: WorkflowRun['parent_run_id'];
+}
+
+/**
+ * When the run last began executing: its latest phase start, or its creation when it
+ * has had only one phase. A resumed run keeps its creation time as `startedAt`, so
+ * measuring a duration from there would count the time it sat failed or paused.
+ */
+export function runPhaseStart(run: Pick<Run, 'startedAt' | 'activePhaseStartedAt'>): string {
+  return run.activePhaseStartedAt ?? run.startedAt;
 }
 
 export function runDetailPath(run: Pick<Run, 'id' | 'projectId'>): string {
@@ -120,11 +140,15 @@ type RawWorkflowRun = Pick<
       WorkflowRun,
       | 'conversation_id'
       | 'outcome'
+      | 'completed_outcome'
       | 'completed_at'
+      | 'active_phase_started_at'
       | 'working_path'
       | 'user_message'
       | 'metadata'
+      | 'supplied_inputs'
       | 'attention'
+      | 'operator_pause'
       | 'parent_run_id'
     >
   > &
@@ -223,16 +247,36 @@ function readRunProvenance(raw: RawWorkflowRun) {
   };
 }
 
+/**
+ * The rule `displayedRunOutcome` in @archon/workflows owns: a run completed by a binary
+ * from before `completed_outcome` has only `outcome`, and a run that did not complete
+ * shows none, though an older binary may have written `outcome` while it ran. The console
+ * cannot import the engine; `scripts/run-outcome-parity.test.ts` holds the two equal.
+ */
+export function readOutcome(
+  raw: Pick<RawWorkflowRun, 'status' | 'outcome' | 'completed_outcome'>
+): RunOutcome {
+  return raw.completed_outcome ?? (raw.status === 'completed' ? (raw.outcome ?? null) : null);
+}
+
+/** The gate or wait the run is paused at; a gate or wait beside an operator pause is history. */
+function readCurrentPause(raw: RawWorkflowRun): Pick<Run, 'approval' | 'wait' | 'gateResolved'> {
+  if (raw.operator_pause?.state === 'paused')
+    return { approval: null, wait: null, gateResolved: null };
+  const wait = raw.metadata?.wait;
+  const parsedWait: NormalizedWorkflowWait | null =
+    wait === undefined ? null : normalizeWorkflowWait(wait);
+  return {
+    approval: parsedWait === null ? readApproval(raw.metadata?.approval) : null,
+    wait: parsedWait,
+    gateResolved: raw.metadata?.approval?.resolved ?? null,
+  };
+}
+
 export function toRun(raw: RawWorkflowRun): Run {
   const activeNodes = Array.isArray(raw.active_nodes)
     ? raw.active_nodes.filter(nodeId => typeof nodeId === 'string' && nodeId.length > 0)
     : [];
-  const approval = raw.metadata?.approval;
-  const gateResolved = approval?.resolved ?? null;
-  const parsedApproval = readApproval(approval);
-  const wait = raw.metadata?.wait;
-  const parsedWait: NormalizedWorkflowWait | null =
-    wait === undefined ? null : normalizeWorkflowWait(wait);
 
   return {
     ...readRunProvenance(raw),
@@ -242,18 +286,83 @@ export function toRun(raw: RawWorkflowRun): Run {
     status: normalizeStatus(raw.status),
     ownerObservation: raw.owner_observation,
     attention: raw.attention ?? null,
-    outcome: raw.outcome ?? null,
+    operatorPause: raw.operator_pause ?? null,
+    outcome: readOutcome(raw),
     terminalRecord: raw.terminal_record ?? null,
     startedAt: raw.started_at,
+    activePhaseStartedAt: raw.active_phase_started_at ?? null,
     finishedAt: raw.completed_at ?? null,
     workingPath: raw.working_path ?? null,
     userMessage: raw.user_message ?? '',
+    suppliedInputs: raw.supplied_inputs ?? {},
     activeNodes,
     lastTool: null,
     toolCallAttention: raw.status === 'running' ? (raw.metadata?.tool_call_attention ?? []) : [],
-    approval: parsedWait === null ? parsedApproval : null,
-    wait: parsedWait,
-    gateResolved,
+    ...readCurrentPause(raw),
     stopReason: raw.metadata?.stop_reason ?? null,
   };
+}
+
+export interface ListRunsOptions {
+  codebaseId?: QueryParams<'/api/dashboard/runs', 'get'>['codebaseId'];
+  status?: RunStatus;
+  limit?: number;
+  offset?: number;
+}
+
+type AttentionResponse = components['schemas']['RunsNeedingAttentionResponse'];
+type AttentionQueueItem = components['schemas']['AttentionQueueItem'];
+
+/** An ask a completed run left on its item: an attention item no run holds. */
+export type ItemAsk = Extract<AttentionQueueItem, { kind: 'attention' }> & { run?: undefined };
+
+export function isItemAsk(item: AttentionQueueItem): item is ItemAsk {
+  return item.kind === 'attention' && item.run === undefined;
+}
+
+/**
+ * A run whose owner is gone (the queue's `owner_lost` item). It keeps what it holds, its
+ * item and its resource slot among them, until the operator resumes or abandons it, or, for
+ * a pending start no process runs, starts it with `archon trigger execute`.
+ */
+export interface OwnerLostHolder {
+  runId: string;
+  workflow: string;
+  projectId: string | null;
+  projectName: string | null;
+  /** The item's key; null when the run is on no item or its item could not be read. */
+  itemKey: string | null;
+  /** Set for a pending admitted start no process runs: what starts it once. */
+  start: { requestId: string; hostId: string } | null;
+  /** The run's stored status, unchanged: the engine never ends it by itself. */
+  observedStatus: Extract<AttentionQueueItem, { kind: 'owner_lost' }>['observedStatus'];
+}
+
+export interface RunsAttention {
+  runs: Run[];
+  ownerLost: OwnerLostHolder[];
+  asks: ItemAsk[];
+  /** Each listed ref the caller may not answer, with the server's reason. */
+  answerRefusals: AttentionResponse['answerRefusals'];
+  /** The id of every item the list holds open, whether a run or an ask holds it. */
+  itemIds: ReadonlySet<string>;
+  degraded: NonNullable<AttentionResponse['degraded']>;
+}
+
+export function toOwnerLostHolders(items: AttentionQueueItem[]): OwnerLostHolder[] {
+  return items.flatMap(item =>
+    item.kind === 'owner_lost'
+      ? [
+          {
+            runId: item.run.id,
+            workflow: item.run.workflow,
+            projectId: item.project?.codebaseId ?? null,
+            projectName: item.project?.name ?? null,
+            itemKey: item.item?.key ?? null,
+            observedStatus: item.observedStatus,
+            start: item.start ?? null,
+          },
+        ]
+      : []
+  );
 }

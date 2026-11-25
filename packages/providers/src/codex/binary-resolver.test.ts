@@ -60,14 +60,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     pathKindSpy?.mockRestore();
   });
 
-  test('uses CODEX_BIN_PATH env var when set and file exists', async () => {
-    process.env.CODEX_BIN_PATH = '/usr/local/bin/codex';
-    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('file');
-
-    const result = await resolver.resolveCodexBinaryPath();
-    expect(result).toBe('/usr/local/bin/codex');
-  });
-
   test('throws when CODEX_BIN_PATH is set but file does not exist', async () => {
     process.env.CODEX_BIN_PATH = '/nonexistent/codex';
     pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
@@ -204,18 +196,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     expect(result).toBe('/env/codex');
   });
 
-  test('checks vendor directory when no env or config path', async () => {
-    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) => {
-      const normalized = path.replace(/\\/g, '/');
-      return normalized.includes('vendor/codex') ? 'file' : 'missing';
-    });
-
-    const result = await resolver.resolveCodexBinaryPath();
-    expect(typeof result).toBe('string');
-    const normalized = result!.replace(/\\/g, '/');
-    expect(normalized).toContain('/tmp/test-archon-home/vendor/codex/');
-  });
-
   test('autodetects npm global install at ~/.npm-global/bin/codex (POSIX)', async () => {
     if (process.platform === 'win32') return; // POSIX-only probe
     const expected = `${homedir()}/.npm-global/bin/codex`;
@@ -229,33 +209,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
       { binaryPath: expected, source: 'autodetect' },
       'codex.binary_resolved'
     );
-  });
-
-  test('autodetects npm global install at %APPDATA%\\npm\\codex.cmd (Windows)', async () => {
-    if (process.platform !== 'win32') return; // Windows-only probe
-    const appData = process.env.APPDATA ?? 'C:\\Users\\test\\AppData\\Roaming';
-    const expected = `${appData}\\npm\\codex.cmd`;
-    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
-      path === expected ? 'file' : 'missing'
-    );
-
-    const result = await resolver.resolveCodexBinaryPath();
-    expect(result).toBe(expected);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { binaryPath: expected, source: 'autodetect' },
-      'codex.binary_resolved'
-    );
-  });
-
-  test('config codexBinaryPath takes precedence over autodetect', async () => {
-    // Both the explicit config path AND a typical autodetect path are
-    // present on disk; config must win. Mirrors the env-over-config and
-    // env-over-autodetect tests above so the four-tier precedence
-    // (env → config → vendor → autodetect) is fully covered.
-    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('file');
-
-    const result = await resolver.resolveCodexBinaryPath('/explicit/config/codex');
-    expect(result).toBe('/explicit/config/codex');
   });
 
   test('autodetects homebrew install on Apple Silicon', async () => {

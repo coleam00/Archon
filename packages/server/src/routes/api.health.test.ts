@@ -158,6 +158,8 @@ const mockGetRunningWorkflows = mock<
 >(async () => []);
 
 mock.module('@archon/core/db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
@@ -186,6 +188,7 @@ mock.module('@archon/core/db/messages', () => ({
 }));
 
 import { registerApiRoutes } from './api';
+import type { AppCommit } from './schemas/system.schemas';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -193,7 +196,7 @@ import { registerApiRoutes } from './api';
 
 const T0 = '2026-01-01T00:00:00.000Z';
 
-function makeApp(): OpenAPIHono {
+function makeApp(commit?: AppCommit): OpenAPIHono {
   const app = new OpenAPIHono();
   const mockWebAdapter = {
     setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
@@ -207,7 +210,7 @@ function makeApp(): OpenAPIHono {
     }),
     getStats: mockGetStats,
   } as unknown as ConversationLockManager;
-  registerApiRoutes(app, mockWebAdapter, mockLockManager);
+  registerApiRoutes(app, mockWebAdapter, mockLockManager, undefined, undefined, {}, commit);
   return app;
 }
 
@@ -299,6 +302,19 @@ describe('GET /api/health', () => {
     };
     expect(body.schema).toBeDefined();
     expect(body.schema?.createdAppVersion).toBeNull();
+  });
+
+  test('reports the commit it was started with, and omits it when there is none', async () => {
+    mockGetStats.mockImplementation(makeIdleLockStats);
+    mockGetRunningWorkflows.mockImplementation(async () => []);
+    const commit = { sha: '3ca084a83', committedAt: '2026-11-12T14:03:21+01:00' };
+
+    const withCommit = await makeApp(commit).request('/api/health');
+    expect(((await withCommit.json()) as { commit?: AppCommit }).commit).toEqual(commit);
+
+    const without = await makeApp().request('/api/health');
+    expect(without.status).toBe(200);
+    expect(((await without.json()) as { commit?: AppCommit }).commit).toBeUndefined();
   });
 
   test("reports its home's store id, and omits it when the home has none", async () => {
@@ -432,15 +448,6 @@ describe('GET /api/health', () => {
     const response = await makeApp().request('/api/dashboard/conversations');
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(snapshot);
-  });
-
-  test('returns 200 without any auth requirements', async () => {
-    mockGetStats.mockImplementationOnce(makeIdleLockStats);
-    mockGetRunningWorkflows.mockImplementationOnce(async () => []);
-
-    const app = makeApp();
-    const response = await app.request('/api/health');
-    expect(response.status).toBe(200);
   });
 
   test('includes is_docker: false in non-Docker environment', async () => {

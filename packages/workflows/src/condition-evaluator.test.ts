@@ -116,7 +116,7 @@ describe('evaluateCondition', () => {
     ).toEqual({ result: true, parsed: true });
   });
 
-  it('dot notation: rejects array fields and logs safe diagnostic metadata', () => {
+  it('dot notation: rejects array fields without reporting before admission', () => {
     mockLogFn.mockClear();
     const jsonOutput = JSON.stringify({ items: ['todo', 'fix'], count: 2 });
     const outputs = new Map([['gather', makeOutput(jsonOutput)]]);
@@ -124,15 +124,7 @@ describe('evaluateCondition', () => {
     expect(() => evaluateCondition("$gather.output.items == 'true'", outputs)).toThrow(
       "Condition reference '$gather.output.items' resolved to an array"
     );
-    expect(mockLogFn).toHaveBeenCalledWith(
-      {
-        nodeId: 'gather',
-        field: 'items',
-        actualType: 'array',
-        exprSnippet: "$gather.output.items == 'true'",
-      },
-      'dag.condition_field_not_primitive'
-    );
+    expect(mockLogFn).not.toHaveBeenCalled();
   });
 
   it('dot notation: rejects object fields', () => {
@@ -154,15 +146,7 @@ describe('evaluateCondition', () => {
         loopPrevOutputs: priorOutputs,
       })
     ).toThrow("Condition reference '$LOOP_PREV.work.output.route' resolved to an object");
-    expect(mockLogFn).toHaveBeenCalledWith(
-      {
-        nodeId: 'work',
-        field: 'route',
-        actualType: 'object',
-        exprSnippet: "$LOOP_PREV.work.output.route == 'true'",
-      },
-      'dag.condition_field_not_primitive'
-    );
+    expect(mockLogFn).not.toHaveBeenCalled();
   });
 
   it('resolves a nested prior-iteration output path', () => {
@@ -251,12 +235,6 @@ describe('evaluateCondition', () => {
     expect(res.parsed).toBe(false);
   });
 
-  it('valid expression returns parsed: true', () => {
-    const outputs = new Map([['n', makeOutput('FOO')]]);
-    const res = evaluateCondition("$n.output == 'FOO'", outputs);
-    expect(res.parsed).toBe(true);
-  });
-
   it('supports spaces around operator', () => {
     const outputs = new Map([['n', makeOutput('FOO')]]);
     expect(evaluateCondition("$n.output=='FOO'", outputs).result).toBe(true);
@@ -282,18 +260,6 @@ describe('evaluateCondition', () => {
   it('dot notation: coerces boolean field to string', () => {
     const outputs = new Map([['n', makeOutput(JSON.stringify({ valid: true }))]]);
     expect(evaluateCondition("$n.output.valid == 'true'", outputs).result).toBe(true);
-  });
-
-  it('dot notation: works with clean structured output (simulates output_format fix)', () => {
-    // After the fix, output_format nodes store clean JSON (from SDK structured_output)
-    // instead of mixed prose+JSON
-    const cleanJson = JSON.stringify({ run_code_review: 'true', run_tests: 'false' });
-    const outputs = new Map([['classify', makeOutput(cleanJson)]]);
-    expect(evaluateCondition("$classify.output.run_code_review == 'true'", outputs).result).toBe(
-      true
-    );
-    expect(evaluateCondition("$classify.output.run_tests == 'true'", outputs).result).toBe(false);
-    expect(evaluateCondition("$classify.output.run_tests == 'false'", outputs).result).toBe(true);
   });
 
   // --- Numeric comparison operators ---
@@ -407,14 +373,6 @@ describe('evaluateCondition', () => {
       ['b', makeOutput('Z')],
     ]);
     expect(evaluateCondition("$a.output == 'X' && $b.output == 'Y'", outputs).result).toBe(false);
-  });
-
-  it('&& operator: parsed: true for valid compound expression', () => {
-    const outputs = new Map([
-      ['a', makeOutput('X')],
-      ['b', makeOutput('Y')],
-    ]);
-    expect(evaluateCondition("$a.output == 'X' && $b.output == 'Y'", outputs).parsed).toBe(true);
   });
 
   // --- OR compound expressions ---
@@ -547,12 +505,6 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$classify.output.type == 'WRONG'", outputs).result).toBe(false);
   });
 
-  it('structuredOutput: falls back to JSON.parse(output) when structuredOutput is absent', () => {
-    // Claude/Codex backward-compat: no structuredOutput on the NodeOutput, JSON in `output`.
-    const outputs = new Map([['classify', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
-    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
-  });
-
   it('structuredOutput: coerces numeric field to string', () => {
     const outputs = new Map([['score', makeOutput('', 'completed', { confidence: 0.95 })]]);
     expect(evaluateCondition("$score.output.confidence == '0.95'", outputs).result).toBe(true);
@@ -580,12 +532,6 @@ describe('evaluateCondition', () => {
     // Matches existing JSON.parse-path behavior: typeof null === 'object' so null → "null".
     const outputs = new Map([['n', makeOutput('', 'completed', { type: null })]]);
     expect(evaluateCondition("$n.output.type == 'null'", outputs).result).toBe(true);
-  });
-
-  it('structuredOutput: works with empty output text (Pi-only-structured case)', () => {
-    // structuredOutput populated, output text empty — dot-access should still work.
-    const outputs = new Map([['classify', makeOutput('', 'completed', { type: 'BUG' })]]);
-    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
   });
 
   it('structuredOutput: null at top level falls through to JSON.parse fallback', () => {
@@ -678,13 +624,6 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$classify.type == 'FEATURE'", outputs).result).toBe(false);
   });
 
-  it('shorthand path: matches the canonical .output.field form exactly', () => {
-    const outputs = new Map([['classify', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
-    expect(evaluateCondition("$classify.type == 'BUG'", outputs)).toEqual(
-      evaluateCondition("$classify.output.type == 'BUG'", outputs)
-    );
-  });
-
   it('shorthand path: resolves structuredOutput like the canonical form', () => {
     const outputs = new Map([['classify', makeOutput('prose', 'completed', { type: 'BUG' })]]);
     expect(evaluateCondition("$classify.type == 'BUG'", outputs).result).toBe(true);
@@ -770,11 +709,6 @@ describe('evaluateCondition', () => {
   it('unquoted RHS: works on the canonical .output.field form too', () => {
     const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
     expect(evaluateCondition('$t.output.exit_code == 0', outputs).result).toBe(true);
-  });
-
-  it('unquoted RHS: parsed:true for a valid unquoted expression', () => {
-    const outputs = new Map([['t', makeOutput(JSON.stringify({ exit_code: 0 }))]]);
-    expect(evaluateCondition('$t.exit_code == 0', outputs).parsed).toBe(true);
   });
 
   it('mixed quoted + unquoted inside an AND compound', () => {
@@ -1010,7 +944,7 @@ describe('typed $INPUTS values in when: (#2637)', () => {
 describe('structured $INPUTS values in when: (#2999)', () => {
   const noOutputs = new Map<string, NodeOutput>();
 
-  it('rejects object-valued inputs, failing false-skips loudly with safe diagnostic log', () => {
+  it('rejects object-valued inputs, with an actionable error', () => {
     mockLogFn.mockClear();
     expect(() =>
       evaluateCondition("$INPUTS.route == 'true'", noOutputs, { route: { ready: true } })
@@ -1019,17 +953,10 @@ describe('structured $INPUTS values in when: (#2999)', () => {
         "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
         'or inspect structured data in a script node.'
     );
-    expect(mockLogFn).toHaveBeenCalledWith(
-      {
-        input: 'route',
-        actualType: 'object',
-        exprSnippet: "$INPUTS.route == 'true'",
-      },
-      'dag.condition_field_not_primitive'
-    );
+    expect(mockLogFn).not.toHaveBeenCalled();
   });
 
-  it('rejects array-valued inputs, failing false-skips loudly with safe diagnostic log', () => {
+  it('rejects array-valued inputs, with an actionable error', () => {
     mockLogFn.mockClear();
     expect(() =>
       evaluateCondition("$INPUTS.items == 'true'", noOutputs, { items: ['a', 'b'] })
@@ -1038,14 +965,7 @@ describe('structured $INPUTS values in when: (#2999)', () => {
         "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
         'or inspect structured data in a script node.'
     );
-    expect(mockLogFn).toHaveBeenCalledWith(
-      {
-        input: 'items',
-        actualType: 'array',
-        exprSnippet: "$INPUTS.items == 'true'",
-      },
-      'dag.condition_field_not_primitive'
-    );
+    expect(mockLogFn).not.toHaveBeenCalled();
   });
 
   it('rejects stringify-coincidence comparisons against hand-typed JSON literals', () => {

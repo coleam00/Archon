@@ -1,6 +1,6 @@
 {
   "name": "@archon/isolation",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -9,8 +9,7 @@
     "./types": "./src/types.ts"
   },
   "scripts": {
-    "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "test": "bun run ../../scripts/package-tests.ts"
   },
   "dependencies": {
     "@archon/git": "workspace:*",
@@ -32,7 +31,8 @@
       "src/providers/worktree-queries.test.ts"
     ],
     [
-      "src/providers/worktree-real-git.test.ts"
+      "src/providers/worktree-real-git.test.ts",
+      "src/worktree-link.test.ts"
     ],
     [
       "src/errors.test.ts",

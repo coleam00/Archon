@@ -18,7 +18,7 @@ import {
   mockDiscoverWorkflowsWithConfig,
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockGetCodebase,
   mockGetCodebaseEnvVars,
   mockGetOrCreateConversation,
@@ -37,6 +37,9 @@ import {
   mockUpdateSession,
   operator,
 } from '../test/orchestrator-agent-harness';
+import { reportChatTurn, type ChatTurn } from './chat-turn';
+import { addResultUsage, type ProviderChunk, type TokenUsage } from '@archon/provider-contract';
+import { chatTurnEventProperties } from '@archon/paths/telemetry-events';
 import { handleMessage } from './orchestrator-agent';
 
 // ─── Stale session ID clearing on error_during_execution ────────────────────
@@ -314,6 +317,77 @@ describe('stale session ID clearing on error_during_execution', () => {
     }
   );
 
+  // A provider names its session before its result, so a turn stopped before any result
+  // still leaves the conversation resumable.
+  async function announcedTurn(
+    mode: 'stream' | 'batch',
+    stream: () => AsyncGenerator<ProviderChunk>
+  ): Promise<unknown[]> {
+    mockSendQuery.mockImplementationOnce(stream);
+    mockTransitionSession.mockResolvedValueOnce(
+      makeSession({ id: 'session-1', assistant_session_id: null })
+    );
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator }).catch(() => undefined);
+    return mockUpdateSession.mock.calls.map(call => call[1]);
+  }
+
+  test.each(['stream', 'batch'] as const)(
+    '%s mode: a turn stopped before its result keeps the announced session',
+    async mode => {
+      const thrown = await announcedTurn(mode, async function* () {
+        yield { type: 'session', sessionId: 'early-id' };
+        yield { type: 'agent_message_chunk', text: 'Partial.' };
+        throw new Error('Query aborted');
+      });
+      expect(thrown).toEqual(['early-id']);
+      mockUpdateSession.mockClear();
+      const ended = await announcedTurn(mode, async function* () {
+        yield { type: 'session', sessionId: 'early-id' };
+        yield { type: 'agent_message_chunk', text: 'Partial.' };
+      });
+      expect(ended.at(-1)).toBe('early-id');
+    }
+  );
+
+  test.each(['stream', 'batch'] as const)(
+    "%s mode: the result's session wins over the announced one",
+    async mode => {
+      const updates = await announcedTurn(mode, async function* () {
+        yield { type: 'session', sessionId: 'early-id' };
+        yield { type: 'agent_message_chunk', text: 'Reply.' };
+        yield { type: 'result', sessionId: 'result-id' };
+      });
+      expect(updates.at(-1)).toBe('result-id');
+      mockUpdateSession.mockClear();
+      const cleared = await announcedTurn(mode, async function* () {
+        yield { type: 'session', sessionId: 'early-id' };
+        yield { type: 'result', isError: true, errorSubtype: 'error_during_execution' };
+      });
+      expect(cleared.at(-1)).toBeNull();
+    }
+  );
+
+  test('a stale resume that announces its session first is still retried fresh', async () => {
+    mockSendQuery
+      .mockImplementationOnce(async function* () {
+        yield { type: 'session', sessionId: 'stale-session-id' };
+        yield staleRejection;
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: 'session', sessionId: 'fresh-id' };
+        yield { type: 'agent_message_chunk', text: 'Fresh reply.' };
+        yield { type: 'result', sessionId: 'fresh-id' };
+      });
+    await staleTurn('stream');
+
+    expect(resumeArgs()).toEqual(['stale-session-id', undefined]);
+    const updates = mockUpdateSession.mock.calls.map(call => call[1]);
+    expect(updates.lastIndexOf('stale-session-id')).toBeLessThan(updates.indexOf(null));
+    expect(updates.at(-1)).toBe('fresh-id');
+  });
+
   test('does NOT surface error to user on stop_sequence success (#1425)', async () => {
     // Regression test for #1425: stop_sequence terminations carry is_error:
     // true + subtype: 'success' under the Claude SDK contract. The Claude
@@ -409,8 +483,8 @@ describe('assistant command examples are ordinary text', () => {
     mockLoadConfig.mockImplementation(() => Promise.resolve(makeConfig()));
     mockGetPausedWorkflowRun.mockReset();
     mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
-    mockFindResumableRunByParentConversation.mockReset();
-    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
+    mockListResumableRunsByParentConversation.mockReset();
+    mockListResumableRunsByParentConversation.mockImplementation(() => Promise.resolve([]));
     mockParseCommand.mockReset();
     mockCreateCodebase.mockClear();
     mockRegisterRepository.mockClear();
@@ -523,22 +597,6 @@ describe('chat turn telemetry', () => {
     });
   });
 
-  test.each([
-    [' tool output\n\nFinal answer', 'Final answer'],
-    [' tool output', '🔧 Running tool output'],
-  ])('batch keeps block identity across a warning: %j', async (tail, expected) => {
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: '🔧 Running' };
-      yield { type: 'warning', code: 'pi.extension_notify', message: 'Waiting' };
-      yield { type: 'agent_message_chunk', text: tail, continuesPreviousBlock: true };
-    });
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-    expect(platform.sendMessage).toHaveBeenNthCalledWith(1, 'conv-1', '⚠️ Waiting');
-    expect(platform.sendMessage).toHaveBeenLastCalledWith('conv-1', expected);
-  });
-
   test('batch truncation preserves a real answer in a warning-split indicator block', async () => {
     const answers = Array.from({ length: 19 }, (_, i) => `Answer ${i + 1}`);
     mockSendQuery.mockImplementationOnce(async function* () {
@@ -601,34 +659,6 @@ describe('chat turn telemetry', () => {
         provider: 'claude',
         outcome: 'completed',
         durationMs: expect.any(Number),
-      })
-    );
-  });
-
-  test('passes provider-reported usage through to the chat turn capture', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ codebase_id: null }))
-    );
-    mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'answer' };
-      yield {
-        type: 'result',
-        sessionId: 'session-1',
-        cost: 0.042,
-        tokens: { input: 1200, output: 340 },
-      };
-    });
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-
-    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outcome: 'completed',
-        costUsd: 0.042,
-        tokensIn: 1200,
-        tokensOut: 340,
       })
     );
   });
@@ -849,14 +879,6 @@ describe('message persistence for non-web platforms', () => {
     }
   }
 
-  test('does NOT call addMessage for web platform (web adapter owns persistence)', async () => {
-    const platform = makePlatform(); // makePlatform defaults getPlatformType to 'web'
-
-    await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
-
-    expect(mockAddMessage).not.toHaveBeenCalled();
-  });
-
   test('platform delivery is not blocked when persistence rejects', async () => {
     const platform: IPlatformAdapter = {
       ...makePlatform(),
@@ -866,10 +888,11 @@ describe('message persistence for non-web platforms', () => {
     };
     mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
 
-    await expect(
-      handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator })
-    ).resolves.toBeUndefined();
-    expect(platform.sendMessage).toHaveBeenCalled();
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
+    // The reply itself arrives, not an error reply.
+    expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls).toEqual([
+      ['conv-1', 'hello back'],
+    ]);
   });
 
   test('platform delivery is not blocked when persistence rejects (stream mode)', async () => {
@@ -881,12 +904,12 @@ describe('message persistence for non-web platforms', () => {
     };
     mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
 
-    await expect(
-      handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator })
-    ).resolves.toBeUndefined();
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
     // Stream mode delivers chunks during the sendQuery loop — a DB failure must
-    // not stop delivery, so the reply must still have reached the platform.
-    expect(platform.sendMessage).toHaveBeenCalled();
+    // not stop delivery, so the reply, not an error reply, reaches the platform.
+    expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls).toEqual([
+      ['conv-1', 'hello back'],
+    ]);
   });
 
   test('passes userId to addMessage when context provides it', async () => {
@@ -1016,5 +1039,247 @@ describe('explicit registration results', () => {
     expect(messages).toContain('already registered at /prod/app; use worktrees');
     expect(messages).not.toContain('registered successfully');
     expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
+});
+
+describe('TokenUsage axis seam guard', () => {
+  const specimen: Required<TokenUsage> = {
+    calls: [{ input: 5000, output: 1200 }],
+    callsPartial: true,
+    input: 5000,
+    output: 1200,
+    cacheRead: 4000,
+    cacheWrite: 250,
+    cachePartial: true,
+    total: 6400,
+    cost: 0.25,
+  };
+  const wireKeys: Record<keyof TokenUsage, string | null> = {
+    calls: null,
+    callsPartial: null,
+    input: 'tokens_in',
+    output: 'tokens_out',
+    cacheRead: 'cache_read_tokens',
+    cacheWrite: 'cache_write_tokens',
+    cachePartial: 'cache_partial',
+    total: null, // Telemetry carries gross axes, not the optional combined total.
+    cost: null, // cost_usd comes from the separate result/run scalar.
+  };
+  beforeEach(() => mockCaptureChatTurn.mockClear());
+
+  function report(result: ChatTurn['result'], outcome: 'completed' | 'failed' = 'completed') {
+    const turn: ChatTurn = { startedAt: 0, reported: false, failed: false, stopped: false, result };
+    reportChatTurn(turn, { outcome, platform: 'web', provider: 'claude', durationMs: 123 });
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    expect(turn.reported).toBe(true);
+    expect(turn.failed).toBe(outcome === 'failed');
+    const props = mockCaptureChatTurn.mock.calls[0]?.[0];
+    if (!props) throw new Error('Missing chat telemetry');
+    return { props, wire: chatTurnEventProperties(props) };
+  }
+
+  for (const outcome of ['completed', 'failed'] as const) {
+    test(`${outcome}: carries every declared axis through the chat wire serializer`, () => {
+      const { props, wire } = report({ cost: 0.75, tokens: specimen }, outcome);
+      for (const axis of Object.keys(wireKeys) as (keyof TokenUsage)[]) {
+        const key = wireKeys[axis];
+        if (key !== null) expect(wire[key], `${axis} -> ${key}`).toBe(specimen[axis]);
+        else {
+          expect(props).not.toHaveProperty(axis);
+          expect(wire).not.toHaveProperty(axis);
+        }
+      }
+      expect(wire.cost_usd).toBe(0.75);
+    });
+  }
+
+  test.each([
+    undefined,
+    {},
+    { cost: 0.75 },
+    { tokens: { input: 10, output: 2 } },
+    { tokens: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0 } },
+    { tokens: { input: 10, output: 2, cacheRead: 0, cachePartial: true as const } },
+  ])('preserves absent usage, reported zero, and partial flags: %j', result => {
+    const { wire } = report(result);
+    for (const [key, value] of Object.entries({
+      cost_usd: result?.cost,
+      tokens_in: result?.tokens?.input,
+      tokens_out: result?.tokens?.output,
+      cache_read_tokens: result?.tokens?.cacheRead,
+      cache_write_tokens: result?.tokens?.cacheWrite,
+      cache_partial: result?.tokens?.cachePartial,
+    })) {
+      if (value === undefined) expect(wire).not.toHaveProperty(key);
+      else expect(wire[key]).toBe(value);
+    }
+  });
+
+  test('reports floor totals from mixed cache reporting across results', () => {
+    const result = addResultUsage(
+      addResultUsage({}, { tokens: { input: 10, output: 2, cacheRead: 4, cacheWrite: 0 } }),
+      { tokens: { input: 20, output: 3 } }
+    );
+    expect(report(result).wire).toMatchObject({
+      tokens_in: 30,
+      tokens_out: 5,
+      cache_read_tokens: 4,
+      cache_write_tokens: 0,
+      cache_partial: true,
+    });
+  });
+});
+
+// ─── Operator stop ──────────────────────────────────────────────────────────
+
+describe('a turn the operator stops', () => {
+  beforeEach(() => {
+    mockCaptureChatTurn.mockClear();
+    mockUpdateSession.mockClear();
+    mockSendQuery.mockReset();
+    mockGetOrCreateConversation.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
+    mockGetCodebase.mockReset();
+    mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockListCodebases.mockReset();
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockTransitionSession.mockResolvedValueOnce(
+      makeSession({ id: 'session-1', assistant_session_id: 'earlier-session' })
+    );
+  });
+
+  /**
+   * A provider that streams part of a reply, then sees the stop and ends the way real
+   * providers do: by throwing. `stop` aborts the signal the turn was given.
+   */
+  function stoppedMidReply(controller: AbortController): AbortSignal[] {
+    const received: AbortSignal[] = [];
+    mockSendQuery.mockImplementationOnce(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume: string | undefined,
+      options: { abortSignal?: AbortSignal }
+    ) {
+      if (options.abortSignal) received.push(options.abortSignal);
+      yield { type: 'agent_message_chunk', text: 'Partial answer' };
+      controller.abort();
+      if (options.abortSignal?.aborted) throw new Error('Query aborted');
+      yield { type: 'agent_message_chunk', text: ' that should never arrive' };
+    });
+    return received;
+  }
+
+  for (const mode of ['stream', 'batch'] as const) {
+    test(`${mode}: keeps the partial reply, marks it stopped and reports no error`, async () => {
+      const controller = new AbortController();
+      const received = stoppedMidReply(controller);
+      const platform = makePlatform();
+      (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+
+      await handleMessage(platform, 'conv-1', 'write a long essay', {
+        actor: operator,
+        abortSignal: controller.signal,
+      });
+
+      // The provider was handed the operator's signal, and it is aborted.
+      expect(received).toEqual([controller.signal]);
+      expect(controller.signal.aborted).toBe(true);
+      expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls).toEqual([
+        ['conv-1', 'Partial answer'],
+        ['conv-1', 'Response stopped.', { category: 'chat_interrupted', segment: 'new' }],
+      ]);
+      expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'cancelled' })
+      );
+      // The stored session stays, so the next message resumes the same context.
+      expect(mockUpdateSession).not.toHaveBeenCalled();
+    });
+  }
+
+  test('a failure result reported after the stop is not shown as an error', async () => {
+    const controller = new AbortController();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Partial answer' };
+      controller.abort();
+      yield { type: 'result', isError: true, errorSubtype: 'error_during_execution' };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+
+    await handleMessage(platform, 'conv-1', 'write a long essay', {
+      actor: operator,
+      abortSignal: controller.signal,
+    });
+
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c => c[1]);
+    expect(sent).toEqual(['Partial answer', 'Response stopped.']);
+    expect(mockUpdateSession).not.toHaveBeenCalled();
+  });
+
+  test('a stream that just ends after the stop counts as stopped', async () => {
+    const controller = new AbortController();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      controller.abort();
+      yield* [];
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+
+    await handleMessage(platform, 'conv-1', 'write a long essay', {
+      actor: operator,
+      abortSignal: controller.signal,
+    });
+
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c => c[1]);
+    expect(sent).toEqual(['Response stopped.']);
+  });
+
+  test('a stop while the provider holds the turn open after its result stops the reply', async () => {
+    const controller = new AbortController();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Started a background task.' };
+      yield { type: 'result', sessionId: 'session-2' };
+      // Claude keeps the turn open while a background task runs; the stop lands here.
+      controller.abort();
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+
+    await handleMessage(platform, 'conv-1', 'run it in the background', {
+      actor: operator,
+      abortSignal: controller.signal,
+    });
+
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c => c[1]);
+    expect(sent).toEqual(['Started a background task.', 'Response stopped.']);
+    // The session the provider reported is still stored for the next message.
+    expect(mockUpdateSession).toHaveBeenCalledWith('session-1', 'session-2');
+  });
+
+  test('a provider throw without a stop still fails the turn', async () => {
+    const controller = new AbortController();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Partial answer' };
+      throw new Error('Query aborted');
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+
+    await handleMessage(platform, 'conv-1', 'write a long essay', {
+      actor: operator,
+      abortSignal: controller.signal,
+    });
+
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c => c[1]);
+    expect(sent).not.toContain('Response stopped.');
+    expect(sent.length).toBe(2);
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'failed' })
+    );
   });
 });

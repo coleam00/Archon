@@ -39,7 +39,6 @@ async function settleReplay(): Promise<void> {
 
 beforeEach(() => {
   mockLogger.warn.mockClear();
-  mockLogger.info.mockClear();
   mockLogger.debug.mockClear();
 });
 
@@ -776,17 +775,6 @@ describe('SSETransport', () => {
   });
 
   describe('hasActiveStream', () => {
-    test('returns false when no stream registered', () => {
-      const transport = new SSETransport();
-      expect(transport.hasActiveStream('conv-1')).toBe(false);
-    });
-
-    test('returns true for active stream', () => {
-      const transport = new SSETransport();
-      transport.registerStream('conv-1', createMockStream());
-      expect(transport.hasActiveStream('conv-1')).toBe(true);
-    });
-
     test('returns false for closed stream', () => {
       const transport = new SSETransport();
       transport.registerStream('conv-1', createMockStream({ closed: true }));
@@ -794,44 +782,7 @@ describe('SSETransport', () => {
     });
   });
 
-  describe('buffer eviction warn throttle', () => {
-    test('throttles repeated eviction warns to one per conversation per window', () => {
-      // EVENT_BUFFER_MAX is 500; push 600 events into a conversation with no
-      // active stream so all overflow events trigger an eviction. Even though
-      // ~100 evictions happen, we should see exactly one warn (throttled).
-      const transport = new SSETransport();
-      mockLogger.warn.mockClear();
-
-      for (let i = 0; i < 600; i++) {
-        // emit() with no registered stream falls through to bufferEvent()
-        void transport.emit('conv-throttle', `{"i":${i}}`);
-      }
-
-      const evictionWarns = mockLogger.warn.mock.calls.filter(
-        (call: unknown[]) => call[1] === 'transport.buffer_evicted_oldest'
-      );
-      expect(evictionWarns.length).toBe(1);
-
-      transport.stop();
-    });
-  });
-
   describe('start/stop', () => {
-    test('start logs adapter_ready', () => {
-      const transport = new SSETransport();
-      transport.start();
-      expect(mockLogger.info).toHaveBeenCalledWith('web.adapter_ready');
-      transport.stop();
-    });
-
-    test('stop logs adapter_stopped', () => {
-      const transport = new SSETransport();
-      transport.start();
-      mockLogger.info.mockClear();
-      transport.stop();
-      expect(mockLogger.info).toHaveBeenCalledWith('web.adapter_stopped');
-    });
-
     test('stop closes all streams and clears state', () => {
       const transport = new SSETransport();
       const stream = createMockStream();

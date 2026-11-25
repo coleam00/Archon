@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
 import {
+  CHECKS_LOGS_DEFAULT_BYTES,
+  WORKITEM_SEARCH_DEFAULT_LIMIT,
   contentDigest,
   isMutationRequest,
   mergeConditionSchema,
@@ -91,8 +94,12 @@ function matchesResolvedHost(request: ForgeRequest, observed: string, host: stri
 /** The bare host an HTTPS remote on the default port names, or undefined for any other remote. */
 export function httpsDefaultPortHost(request: ForgeRequest): string | undefined {
   if (request.op !== 'resolve' || !request.remote) return undefined;
+  return httpsDefaultPortRemoteHost(request.remote);
+}
+
+export function httpsDefaultPortRemoteHost(remote: string): string | undefined {
   try {
-    const { url, host } = parseRemoteUrl(request.remote.trim());
+    const { url, host } = parseRemoteUrl(remote.trim());
     // HTTPS :443 used to select bare-host claims before explicit ports were preserved.
     if (url.protocol === 'https:' && host === `${url.hostname}:443`) {
       return normalizeHost(url.hostname);
@@ -111,7 +118,11 @@ function matchesMergeEvidence(
     evidence.merge?.method === request.method &&
     mergeConditionSchema.options.every(
       key => evidence.merge?.conditions[key] === request.conditions[key]
-    )
+    ) &&
+    // A merge time belongs only to a refusal that observed the pull request merged, so no
+    // other failure can have a run record a merge the forge does not report.
+    (evidence.merge.merged_at === undefined ||
+      (evidence.outcome === 'refused' && evidence.observed?.state === 'merged'))
   );
 }
 
@@ -241,6 +252,14 @@ function draftChange(
   );
 }
 
+function closeChange(request: OpRequest<'pr.close'>, value: OpValue<'pr.close'>): boolean {
+  return (
+    sameTarget(value.target, mutationTarget(request)) &&
+    sameRef(value.pr, request.ref) &&
+    value.pr.state === 'closed'
+  );
+}
+
 function matchesPrView(request: OpRequest<'pr.view'>, value: OpValue<'pr.view'>): boolean {
   const selector = request.selector;
   // Only a head selector may find nothing; an explicit number must resolve.
@@ -279,11 +298,40 @@ function matchesMerge(
   );
 }
 
+function matchesSearch(
+  request: OpRequest<'workitem.search'>,
+  value: OpValue<'workitem.search'>
+): boolean {
+  const state = request.state ?? 'open';
+  return (
+    sameRepo(value.repo, request.repo) &&
+    value.text === request.text &&
+    value.items.length <= (request.limit ?? WORKITEM_SEARCH_DEFAULT_LIMIT) &&
+    value.items.every(
+      item =>
+        sameRepo(item.ref.repo, request.repo) &&
+        (request.kind === undefined || item.kind === request.kind) &&
+        (state === 'any' || item.state === state)
+    )
+  );
+}
+
+function matchesLogs(request: OpRequest<'checks.logs'>, value: OpValue<'checks.logs'>): boolean {
+  return (
+    sameRepo(value.repo, request.repo) &&
+    sameCheck({ unit: value.unit, rerun: null }, { unit: request.unit, rerun: null }) &&
+    (value.log.kind === 'none' ||
+      Buffer.byteLength(value.log.text) <= (request.maxBytes ?? CHECKS_LOGS_DEFAULT_BYTES))
+  );
+}
+
 /** One matcher per operation: each checks a successful result against the request that asked for it. */
 const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
   resolve: (request, value, { metadata, host }) =>
     value.kind === 'none' ||
-    (matchesResolvedHost(request, value.repo.host, host) &&
+    // A resolved issue or pull request URL is only an answer when it names the subject.
+    ((request.web !== true || value.subject !== undefined) &&
+      matchesResolvedHost(request, value.repo.host, host) &&
       value.forge === metadata.forge &&
       value.plugin.name === metadata.name &&
       value.plugin.version === metadata.version),
@@ -295,6 +343,8 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     (request.at.kind === 'revision'
       ? value.revision === request.at.revision && value.branch === null
       : value.branch !== null),
+  'checks.logs': matchesLogs,
+  'workitem.search': matchesSearch,
   'pr.merge-state': byRef,
   'pr.files': byRef,
   'repo.file': (request, value) =>
@@ -309,6 +359,17 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     sameRepo(value.repo, request.repo) &&
     value.label === request.label &&
     value.items.every(item => item.state === 'open' && sameRepo(item.ref.repo, request.repo)),
+  'workitem.label.added': (request, value) =>
+    sameSubject(value.subject, request.subject) && value.name === request.name,
+  'workitem.opened': (request, value) =>
+    sameRepo(value.repo, request.repo) &&
+    value.since === request.since &&
+    value.items.every(
+      item =>
+        item.state === 'open' &&
+        sameRepo(item.ref.repo, request.repo) &&
+        Date.parse(item.createdAt) >= Date.parse(request.since)
+    ),
   'workitem.create': (request, value) =>
     sameTarget(value.target, request.repo) &&
     sameRepo(value.workitem.ref.repo, request.repo) &&
@@ -367,6 +428,7 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     value.bodyDigest === contentDigest(request.body),
   'pr.ready': draftChange,
   'pr.draft': draftChange,
+  'pr.close': closeChange,
   'pr.thread.reply': (request, value) =>
     sameTarget(value.target, request.ref) &&
     value.thread === request.thread &&
@@ -374,6 +436,25 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     value.comment.bodyDigest === contentDigest(request.body),
   'pr.thread.resolve': (request, value) =>
     sameTarget(value.target, request.ref) && value.thread === request.thread && value.resolved,
+  'pr.review.submit': (request, value) =>
+    sameTarget(value.target, request.ref) &&
+    sameRef(value.review.ref, request.ref) &&
+    value.review.commit === request.commit &&
+    value.review.key === request.key &&
+    value.comments.length === request.comments.length &&
+    request.comments.every(
+      (comment, index) =>
+        value.comments[index]?.path === comment.path && value.comments[index].line === comment.line
+    ),
+  'attachment.put': (request, value) => {
+    const bytes = Buffer.from(request.content, 'base64');
+    return (
+      sameTarget(value.target, request.repo) &&
+      value.attachment.contentType === request.contentType &&
+      value.attachment.bytes === bytes.byteLength &&
+      value.attachment.digest === createHash('sha256').update(bytes).digest('hex')
+    );
+  },
   'workitem.edit-body': (request, value) =>
     sameTarget(value.target, request.ref) &&
     sameRef(value.workitem.ref, request.ref) &&

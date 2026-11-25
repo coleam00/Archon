@@ -1,25 +1,26 @@
+import type { components } from '@/lib/api.generated';
+type RawEnvironment = Pick<
+  components['schemas']['IsolationEnvironment'],
+  | 'id'
+  | 'codebase_id'
+  | 'branch_name'
+  | 'working_path'
+  | 'status'
+  | 'created_at'
+  | 'updated_at'
+  | 'days_since_activity'
+>;
 export type WorktreeStatus = 'idle' | 'in_use' | 'stale';
 
 export interface Worktree {
-  id: string;
-  projectId: string;
-  branch: string;
-  path: string;
+  id: RawEnvironment['id'];
+  projectId: RawEnvironment['codebase_id'];
+  branch: RawEnvironment['branch_name'];
+  path: RawEnvironment['working_path'];
   status: WorktreeStatus;
-  daysSinceActivity: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface RawEnvironment {
-  id: string;
-  codebase_id: string;
-  branch_name: string;
-  working_path: string;
-  status: string;
-  created_at: string;
-  updated_at: string;
-  days_since_activity: number;
+  daysSinceActivity: RawEnvironment['days_since_activity'];
+  createdAt: RawEnvironment['created_at'];
+  updatedAt: RawEnvironment['updated_at'];
 }
 
 function normalizeStatus(s: string, days: number): WorktreeStatus {

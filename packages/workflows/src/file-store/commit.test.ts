@@ -8,7 +8,11 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from './store';
 import * as commitModule from './commit';
 import { readRunState } from './commit';
-import { WorkflowEventCursorError, type WorkflowEventCursor } from '../store';
+import {
+  WorkflowEventCursorError,
+  WorkflowRunDeleteRefusedError,
+  type WorkflowEventCursor,
+} from '../store';
 const roots = trackTempRoots();
 async function fixture() {
   const root = roots(await mkdtemp(join(tmpdir(), 'file-commit-')));
@@ -139,7 +143,9 @@ test('cleanup deletes old runs without reading any run event log under the lock'
   await Bun.sleep(2);
   const reads = spyOn(commitModule, 'readRunState');
   try {
-    expect(await store.deleteOldWorkflowRuns(0)).toEqual({ count: 1 });
+    expect((await store.deleteOldWorkflowRuns(0)).runs.map(deleted => deleted.id)).toEqual([
+      run.id,
+    ]);
     expect(reads).not.toHaveBeenCalled();
   } finally {
     reads.mockRestore();
@@ -227,6 +233,25 @@ test('feed rejects a syntactically valid cursor beyond the committed head', asyn
   await expect(
     store.readWorkflowEventsAfter('file:999.0' as WorkflowEventCursor, { limit: 1 })
   ).rejects.toBeInstanceOf(WorkflowEventCursorError);
+});
+
+test('a finished run with a sub-run that has not ended is not deleted until it ends', async () => {
+  const { store, run: parent } = await fixture();
+  const child = await store.createWorkflowRun({
+    workflow_name: 'child',
+    user_message: '',
+    parent_run_id: parent.id,
+  });
+  await store.claimPendingWorkflowRun(child.id);
+  await store.cancelWorkflowRun(parent.id);
+  const refused = await store.deleteWorkflowRun(parent.id).catch((error: unknown) => error);
+  expect(refused).toBeInstanceOf(WorkflowRunDeleteRefusedError);
+  expect((refused as Error).message).toContain(`${child.id} (running)`);
+  expect((await store.getWorkflowRun(child.id))?.parent_run_id).toBe(parent.id);
+  await store.completeWorkflowRun(child.id, { duration_ms: 1 });
+  await store.deleteWorkflowRun(parent.id);
+  expect(await store.getWorkflowRun(parent.id)).toBeNull();
+  expect((await store.getWorkflowRun(child.id))?.parent_run_id).toBeNull();
 });
 
 test('explicit deletion retains feed payloads across reopen and index rebuild', async () => {
@@ -431,4 +456,29 @@ test('cancellation retains structured cleanup warnings across reopen', async () 
     reason: warnings[0],
     warnings,
   });
+});
+
+test('legacy snapshots and log replay without phase time retain creation across resume', async () => {
+  const { root, store, run, dir } = await fixture();
+  await store.failWorkflowRun(run.id, 'legacy');
+  for (const name of ['run.json', 'log.jsonl']) {
+    const lines = (await readFile(join(dir, name), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => {
+        const record = JSON.parse(line);
+        delete record.run.active_phase_started_at;
+        record.run.started_at = '2020-01-01T00:00:00.000Z';
+        return JSON.stringify(record);
+      });
+    await writeFile(join(dir, name), lines.join('\n') + '\n');
+  }
+  expect((await store.getWorkflowRun(run.id))?.active_phase_started_at).toBeNull();
+  await unlink(join(dir, 'run.json'));
+  const reopened = await createFileWorkflowStore({ root });
+  expect((await reopened.getWorkflowRun(run.id))?.active_phase_started_at).toBeNull();
+  const resumed = await reopened.resumeWorkflowRun(run.id);
+  expect(resumed.started_at).toEqual(new Date('2020-01-01'));
+  expect(resumed.active_phase_started_at).toBeInstanceOf(Date);
+  expect(await (await createFileWorkflowStore({ root })).getWorkflowRun(run.id)).toEqual(resumed);
 });

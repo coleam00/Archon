@@ -44,6 +44,7 @@
  * policy at its substitution call sites because an empty fallback would decide loop
  * completion. See `similarNodeIds`.
  */
+import { INPUTS_SCOPE } from './reference-scopes';
 import { z } from 'zod';
 import type { NodeOutput } from './schemas';
 import { findSimilar } from './utils/fuzzy-match';
@@ -150,7 +151,7 @@ const UNSUPPORTED_PATH_CONTINUATION_SOURCE = String.raw`(?:\.(?=[\w.*\[])|\[|\?\
 
 /**
  * The canonical text of an output reference, for messages about a reference that was
- * parsed into parts (a `when:` atom, `outcome_field`). Template scanners already hold
+ * parsed into parts (a `when:` atom, `returns.outcome`). Template scanners already hold
  * the matched text and use that instead.
  */
 export function outputRefText(
@@ -167,7 +168,7 @@ export function assertSupportedOutputRefs(text: string): void {
   const refs = new RegExp(`${CURRENT_OUTPUT_PATH_SOURCE}|${PRIOR_OUTPUT_PATH_SOURCE}`, 'g');
   const continuation = new RegExp(`^${UNSUPPORTED_PATH_CONTINUATION_SOURCE}`);
   for (const match of text.matchAll(refs)) {
-    if (match[1] === 'INPUTS') continue;
+    if (match[1] === INPUTS_SCOPE) continue;
     // Groups 2 and 4 are the field path of the current and prior forms.
     if (match[2] === undefined && match[4] === undefined) continue;
     const end = match.index + match[0].length;
@@ -187,8 +188,16 @@ export function assertSupportedOutputRefs(text: string): void {
  */
 export const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
 
+/**
+ * Every `$INPUTS.<name>` reference in a text, the name in group 1. Global, so use it with
+ * `matchAll` or `replace`; `exec` and `test` would carry `lastIndex` between calls.
+ */
+export const INPUTS_REF = new RegExp(String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})`, 'g');
+
 /** Anchored whole-value form: the ENTIRE (trimmed) string is one `$INPUTS.<name>` ref. */
-const WHOLE_INPUTS_REF_PATTERN = new RegExp(String.raw`^\$INPUTS\.(${INPUT_NAME_SOURCE})$`);
+const WHOLE_INPUTS_REF_PATTERN = new RegExp(
+  String.raw`^\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})$`
+);
 
 /**
  * Parse a string that is exactly one whole `$INPUTS.<name>` reference (after
@@ -198,6 +207,26 @@ const WHOLE_INPUTS_REF_PATTERN = new RegExp(String.raw`^\$INPUTS\.(${INPUT_NAME_
  */
 export function parseWholeInputsRef(text: string): string | undefined {
   return WHOLE_INPUTS_REF_PATTERN.exec(text.trim())?.[1];
+}
+
+/**
+ * Whether one implicitly forwarded pack setting (see ComposedNodeMeta.forwarded) is
+ * absent from the run, so its receiver leaves it unset instead of failing as an unknown
+ * input. `forwarded` lists only those implicit forwards: an explicit binding of an
+ * absent input is not one of them and still fails.
+ */
+export function isAbsentInputForward(
+  name: string,
+  value: JsonValue,
+  runInputs: Record<string, JsonValue> | undefined,
+  forwarded: readonly string[]
+): boolean {
+  return (
+    forwarded.includes(name) &&
+    typeof value === 'string' &&
+    parseWholeInputsRef(value) === name &&
+    !Object.hasOwn(runInputs ?? {}, name)
+  );
 }
 
 /**
@@ -244,7 +273,7 @@ export function substituteTemplate(template: string, tokens: readonly TemplateTo
 
 /** The runtime `$INPUTS.<name>` reference. An unknown name throws with a did-you-mean. */
 export function inputRefToken(inputs: Record<string, JsonValue> | undefined): TemplateToken {
-  return templateToken(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, match =>
+  return templateToken(String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})`, match =>
     canonicalValueText(resolveInputValue(match[1], inputs))
   );
 }

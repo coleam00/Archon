@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { authorizeRunAction, type RunActor } from './run-authorization';
+import { answererOf, authorizeRunAction, type RunActor } from './run-authorization';
 import type { ChatActor } from '@archon/chat-contract';
 import type { UserRole } from '../schemas/user';
 
@@ -30,3 +30,16 @@ export type ChatMatchesRunActor = AssertNever<
   | Exclude<ChatActor, RunActor>
   | Exclude<Extract<RunActor, { kind: 'user' } | { kind: 'unidentified' }>, ChatActor>
 >;
+
+test('an answer is recorded as coming from the declared name or the chat user, else nobody', () => {
+  expect(answererOf({ kind: 'operator', declared: 'triage-agent' })).toEqual({
+    declared: 'triage-agent',
+  });
+  expect(answererOf({ kind: 'user', userId: 'u-1' })).toEqual({ userId: 'u-1' });
+  expect(answererOf({ kind: 'operator' })).toBeUndefined();
+  expect(answererOf({ kind: 'unidentified' })).toBeUndefined();
+  // The claim never authorizes: an operator is allowed with or without it.
+  expect(authorizeRunAction({ kind: 'operator', declared: 'anyone' }, 'starter', undefined)).toBe(
+    true
+  );
+});

@@ -14,13 +14,18 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   ChildRunRedirectError,
+  ResumeRefusedError,
   workflowOperationErrorMessage,
 } from '@archon/core/operations/workflow-operations';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
-import type { WorkflowResumeCursor } from '@archon/workflows/store';
+import type { ResumeRequestCursor } from '@archon/workflows/store';
+import type { CheckoutHandoffRunMetadata } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  ContinuedItemProjectError,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import { generateConversationId } from '../utils/conversation-id';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine } from '../utils/stdout';
@@ -38,12 +43,13 @@ export function getLog(): ReturnType<typeof createLogger> {
  * Default: creates worktree with auto-generated branch name (isolation by default).
  * --branch: explicit branch name for the worktree.
  * --no-worktree: opt out of isolation, run in live checkout.
- * --resume: reuse worktree from last failed run.
  * --from: override base branch (start-point for worktree).
  * --base: per-dispatch PR base + worktree cut-from override (wins over config).
  *
- * Mutually exclusive: --branch + --no-worktree, --resume + --branch,
- * --base + --no-worktree.
+ * Mutually exclusive: --branch + --no-worktree, --base + --no-worktree.
+ *
+ * `resume` with `continuationRun` is internal: `resume <id>`, approve, reject and answer
+ * continue the run they name through this command; no flag sets it.
  */
 export interface WorkflowRunOptions {
   branchName?: string;
@@ -69,6 +75,8 @@ export interface WorkflowRunOptions {
    */
   container?: boolean;
   resume?: boolean;
+  /** The item this run belongs to (`--item <key>`), written once on the run row. */
+  item?: string;
   codebaseId?: string; // Skips path-based codebase lookup when resume/approve/reject already resolved it
   /**
    * Override the directory used for workflow YAML discovery — and, for a fresh run,
@@ -89,12 +97,10 @@ export interface WorkflowRunOptions {
    * different graph. The whole run is passed, not just its capture path, because
    * `resolveContinuationWorkflow` needs the recorded digest to verify against.
    *
-   * Optional because `run <name> --resume` names the run indirectly; that form resolves the
-   * row itself, before discovery, and joins the same path. `resume` alone therefore never
-   * means live discovery.
+   * Every resume passes it; `resume` without it is refused, never live discovery.
    */
   continuationRun?: WorkflowRun;
-  continuationCursor?: WorkflowResumeCursor;
+  continuationCursor?: ResumeRequestCursor;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -105,6 +111,8 @@ export interface WorkflowRunOptions {
    * argv. The child executes that run and owns its source capture and worktree.
    */
   detach?: boolean;
+  /** Refuse instead of waiting when the workflow's `resource:` is full. */
+  noWait?: boolean;
   /**
    * Emit a machine-readable JSON ack for the spawned child instead of human
    * text. Only meaningful together with `detach`: without `detach` a foreground
@@ -116,11 +124,11 @@ export interface WorkflowRunOptions {
   dryRun?: boolean;
   /** YAML mapping of node ids to scalar or structured simulated outputs. */
   stubsPath?: string;
-  /** Write a complete YAML stub scaffold for the discovered workflow and exit. */
+  /** Write a YAML stub scaffold, omitting child-workflow nodes, and exit. */
   stubsInitPath?: string;
-  /** Fill reached nodes missing from the supplied stub map with validated placeholders. */
+  /** Fill reached AI/bash/script nodes missing stubs with validated placeholders, except code under execCode. */
   defaultStubs?: boolean;
-  /** Execute reachable bash/script nodes locally instead of requiring stubs. */
+  /** Execute reached unstubbed bash/script nodes locally, even with defaultStubs; explicit stubs win. */
   execCode?: boolean;
   /** Stop at the first approval gate instead of auto-approving it. */
   pauseAtGates?: boolean;
@@ -132,6 +140,13 @@ export interface WorkflowRunOptions {
    * (`parseInputAssignments` in `@archon/workflows`).
    */
   inputs?: string[];
+  /**
+   * `--input-file name=path`, parsed by the `--input` grammar into input name → absolute
+   * path. The route resolves each path from `--cwd`, as it does `--config`, before the
+   * run's cwd is normalized to the repository root. The value is the file's exact
+   * contents, read once at the invocation gate.
+   */
+  inputFiles?: Readonly<Record<string, string>>;
   /** Raw repeatable `--model name=spec` mappings; parsed once at the invocation gate. */
   modelAssignments?: string[];
   /** Local YAML file supplying a sparse configuration layer for this run. */
@@ -151,6 +166,8 @@ export interface WorkflowRunOptions {
    * exists. A continuation carries its own run and never sets it.
    */
   detachedRunId?: string;
+  /** @internal Generated worktree identity pinned by the detached parent. */
+  detachedWorktreeIdentifier?: string;
   /**
    * Between-run continuation (#2747): adopt a terminal run's estate — its
    * worktree/branch plus read access to its artifacts via `$ADOPTED_RUN_DIR`.
@@ -164,6 +181,13 @@ export interface WorkflowRunOptions {
    * no-adopter query. Provenance only — NO lane inheritance.
    */
   supersedesRunId?: string;
+  /**
+   * @internal The copy hand-off a nameless `--supersedes` restart keeps from the run it
+   * replaces, recorded on the new run's row as its first start recorded it. A run that
+   * ended on a copy hands on the checkout it was given (`ended-checkout.ts`), so without
+   * it a later hand-off would select the restart's throwaway worktree.
+   */
+  checkoutHandoff?: CheckoutHandoffRunMetadata;
 }
 
 export type RunDestination =
@@ -253,7 +277,7 @@ export async function resolveRunTranscriptPath(
  * spelling, so the command is written here, where `archon workflow …` is what the operator
  * can actually type.
  */
-function cliRefusalText(error: unknown): string {
+export function cliRefusalText(error: unknown): string {
   return workflowOperationErrorMessage(error, CLI_WORKFLOW_SURFACE);
 }
 
@@ -274,8 +298,40 @@ export async function spelledForCli<T>(op: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * How this surface names an item. The engine refuses a continuation that cannot stay on
+ * the continued run's item without naming a flag, because chat and the API reach the same
+ * refusal; the CLI adds its flag where it reports one.
+ */
+export const NAME_ITEM_HINT = 'Pass --item <key> to name the item of this run.';
+
+/** A failed run creation, with the hint added when it was that refusal; otherwise as thrown. */
+export function withItemHint(error: unknown): unknown {
+  for (let current = error; current instanceof Error; current = current.cause) {
+    if (current instanceof ContinuedItemProjectError)
+      return new Error(`${(error as Error).message} ${NAME_ITEM_HINT}`, { cause: error });
+  }
+  return error;
+}
+
 export function printJsonWriteError(runId: string, action: string, error: unknown): Promise<void> {
-  return writeJsonLine({ ok: false, runId, action, error: cliRefusalText(error) });
+  return writeJsonLine(jsonWriteError(runId, action, error));
+}
+
+/**
+ * The `{ ok: false }` value a write command reports for a run it could not act on. A resume
+ * refusal that names a restart command carries it as `restartCommand`, so an agent need
+ * not read it out of the error text.
+ */
+export function jsonWriteError(runId: string, action: string, error: unknown) {
+  const restartCommand = error instanceof ResumeRefusedError ? error.restartCommand : undefined;
+  return {
+    ok: false,
+    runId,
+    action,
+    error: cliRefusalText(error),
+    ...(restartCommand ? { restartCommand } : {}),
+  } as const;
 }
 
 export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {
@@ -299,6 +355,26 @@ export async function assertInheritedWorkflowCodebase(
   }
 }
 
+/** The refusal for a short run id prefix that has no project to resolve in. */
+export function shortRunIdNeedsProject(runId: string): string {
+  return (
+    `Short run id '${runId}' resolves only in the run's project.\n` +
+    'Run from the project directory, or pass the full run id.'
+  );
+}
+
+/** What `resolveRunIdArg` does with a prefix it cannot resolve; see there. */
+type PrefixMiss = 'pass-through' | 'require-match' | 'refuse-outside-project';
+
+/** A prefix from a cwd in no registered project: refused, or passed on to the exact lookup. */
+function prefixOutsideProject(runId: string, onPrefixMiss: PrefixMiss): string {
+  if (onPrefixMiss === 'require-match') {
+    throw new Error(`Cannot resolve run id prefix '${runId}' outside a registered project.`);
+  }
+  if (onPrefixMiss === 'refuse-outside-project') throw new Error(shortRunIdNeedsProject(runId));
+  return runId;
+}
+
 /**
  * Resolve a run-id argument that may be the 8-char short id printed by
  * `workflow runs` into the full run id. Mirrors the chat `manage_run` tool's
@@ -308,19 +384,25 @@ export async function assertInheritedWorkflowCodebase(
  * --chat-project-id requires a unique project-scoped match for every ID.
  * Without that explicit scope, full UUIDs skip resolution entirely: exact lookup
  * is global, so full ids keep working from any directory. A caller that already resolved a project can
- * provide its id; otherwise project lookup preserves an exact checkout
- * registration, then falls back to a linked worktree's canonical checkout. By
- * default, an omitted or unregistered cwd and an unmatched prefix pass through
- * unchanged so the downstream exact lookup keeps its existing error surface.
- * Callers without a downstream lookup can require a match instead.
+ * provide its id; otherwise `cwd` is the project gate's effective directory, and the
+ * project is looked up exactly as `findRunsCodebase` looks it up, so a prefix listed by
+ * `workflow runs` resolves to the same run.
+ *
+ * `onPrefixMiss` says what happens to a prefix that does not resolve. By default an
+ * omitted or unregistered cwd and an unmatched prefix pass through unchanged, so the
+ * downstream exact lookup keeps its existing error surface. `require-match` refuses
+ * both, for callers without a downstream lookup. `refuse-outside-project` refuses a
+ * prefix from a cwd in no registered project, naming the full id: the by-id reads,
+ * which run from any directory, use it so an existing run is not reported missing.
  */
 export async function resolveRunIdArg(
   host: WorkflowHost,
   runId: string,
   cwd?: string,
-  requirePrefixMatch = false,
+  onPrefixMiss: PrefixMiss = 'pass-through',
   codebaseId?: string
 ): Promise<string> {
+  const requirePrefixMatch = onPrefixMiss === 'require-match';
   const scope = readChatProjectScope();
   if (scope !== undefined) return resolveProjectScopedRunId(host, runId, scope);
   if (isFullRunId(runId)) return runId;
@@ -335,12 +417,7 @@ export async function resolveRunIdArg(
     (cwd === undefined
       ? undefined
       : (await findCodebaseForCheckoutPath(cwd, host.records.codebases))?.id);
-  if (!resolvedCodebaseId) {
-    if (requirePrefixMatch) {
-      throw new Error(`Cannot resolve run id prefix '${runId}' outside a registered project.`);
-    }
-    return runId;
-  }
+  if (!resolvedCodebaseId) return prefixOutsideProject(runId, onPrefixMiss);
   const matches = await findProjectRunsByReference(host.deps.store, runId, resolvedCodebaseId);
   if (matches.length > 1) {
     const candidates = matches.map(match => `  ${match.id}`).join('\n');
@@ -402,4 +479,13 @@ export async function resolveDiscoveryCwdForCodebase(
         'Fix the codebase lookup problem, then retry.'
     );
   }
+}
+
+/**
+ * The worktree identity of a start that names no branch. The run id is what makes it
+ * unique: any number of starts of one workflow at the same instant each get their own
+ * branch and worktree, which a clock value cannot promise at any resolution.
+ */
+export function generatedWorktreeIdentifier(workflowName: string, runId: string): string {
+  return `${workflowName}-${runId}`;
 }

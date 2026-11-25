@@ -1,0 +1,107 @@
+import { z } from 'zod';
+import { itemReadSchema } from '../item-read';
+import { itemWindowSchema } from '../item-window';
+import { itemLandingSchema } from '../schemas/item-landing';
+import { itemLinkSchema } from '../schemas/item-link';
+import { itemMergeRecordedSchema } from '../schemas/item-merge';
+import { nodeOutcomesListingSchema } from '../schemas/node-outcomes';
+import { resourceStartDispositionSchema } from '../schemas/resource-start';
+import {
+  stateClaimResultSchema,
+  stateConflictSchema,
+  stateDocumentSummarySchema,
+  stateLeaseViewSchema,
+  statePatchOpSchema,
+  stateRevisionSchema,
+} from '../state-document-store';
+
+/** One contract type of `archon:script`: its name there, what it is, and its JSON Schema. */
+export interface ScriptContractType {
+  readonly name: string;
+  readonly doc: string;
+  readonly schema: unknown;
+}
+
+const types: readonly (readonly [string, string, z.ZodType, 'input' | 'output'])[] = [
+  [
+    'StateLease',
+    "A document's lease; `live` says whether its run still owns it.",
+    stateLeaseViewSchema,
+    'output',
+  ],
+  ['StateRevision', 'One revision of a state document.', stateRevisionSchema, 'output'],
+  [
+    'StateDocumentSummary',
+    'A state document as a listing without values reports it.',
+    stateDocumentSummarySchema,
+    'output',
+  ],
+  [
+    'StatePatchOp',
+    'One operation of a state patch; `path` is a JSON Pointer.',
+    statePatchOpSchema,
+    'input',
+  ],
+  [
+    'StateConflict',
+    'Why the store refused a state write without making it.',
+    stateConflictSchema,
+    'output',
+  ],
+  [
+    'StateClaimResult',
+    'What `state claim` took, and why it passed over each earlier candidate.',
+    stateClaimResultSchema,
+    'output',
+  ],
+  [
+    'NodeOutcomesListing',
+    "The engine's listing of what each node of the run has recorded.",
+    nodeOutcomesListingSchema,
+    'output',
+  ],
+  [
+    'ItemRead',
+    'The item a run belongs to: its runs, open questions, answers with rulings, oldest first, and links.',
+    itemReadSchema,
+    'output',
+  ],
+  [
+    'ItemWindow',
+    "A page of the project's items with a run started in a window, each read whole.",
+    itemWindowSchema,
+    'output',
+  ],
+  [
+    'ItemLink',
+    'A link between two items, as the engine records it; `ended` is null while it is active.',
+    itemLinkSchema,
+    'output',
+  ],
+  [
+    'ItemMergeRecorded',
+    '`recorded` is false when the item already carried a merge; `merge` is then the first.',
+    itemMergeRecordedSchema,
+    'output',
+  ],
+  ['ItemLanding', "The branch an item's change lands on.", itemLandingSchema, 'output'],
+  [
+    'StartDisposition',
+    'The admission a fired trigger binding got.',
+    resourceStartDispositionSchema,
+    'output',
+  ],
+];
+
+/**
+ * The engine-owned shapes a script reads and writes through `archon:script`, as JSON
+ * Schema for the generator of its declaration file. The zod schemas stay the owner. A
+ * value zod cannot state (any JSON) is left open.
+ */
+export function scriptContractTypes(): ScriptContractType[] {
+  return types.map(([name, doc, schema, io]) => ({
+    name,
+    doc,
+    schema: z.toJSONSchema(schema, { io, unrepresentable: 'any' }),
+  }));
+}

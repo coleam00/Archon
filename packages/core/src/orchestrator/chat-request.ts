@@ -296,6 +296,11 @@ interface ChatTurnRequestInput {
   workflows: readonly ResolvedWorkflow[];
   config: MergedConfig;
   cwd: string;
+  /**
+   * The operator's stop for this turn (`ConversationLockManager.cancel`). It reaches the
+   * provider through its own contract, so every provider aborts the same way.
+   */
+  abortSignal: AbortSignal | undefined;
 }
 
 export interface ChatTurnRequest {
@@ -385,6 +390,7 @@ export async function prepareChatTurnRequest(
     userCredentialEnvKeys: Object.keys(userProviderEnv),
     model: chatRequest.model,
     appendSystemPrompt: systemAppend,
+    abortSignal: input.abortSignal,
   };
   if (chatRequest.preset) {
     applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);

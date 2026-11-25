@@ -67,6 +67,8 @@ mock.module('@archon/isolation', () => ({
 mock.module('@archon/core/db/conversations', () => ({}));
 mock.module('@archon/core/db/sessions', () => ({ SessionNotFoundError: class extends Error {} }));
 mock.module('@archon/core/db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
@@ -109,7 +111,7 @@ mock.module('@archon/core/db/codebases', () => ({
 }));
 mock.module('@archon/core/operations/isolation-operations', () => ({
   listEnvironments: mock(),
-  cleanupMergedEnvironments: mock(),
+  cleanupMergedWorktrees: mock(),
 }));
 mock.module('@archon/core', () => ({ loadRepoConfig: async () => ({}) }));
 mock.module('@archon/core/config/config-loader', () => ({ loadRepoConfig: async () => ({}) }));

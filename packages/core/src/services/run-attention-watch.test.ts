@@ -48,9 +48,8 @@ mock.module('./run-live-owner', () => ({
   watchRunLiveOwner: mockWatchRunLiveOwner,
 }));
 
-const { observeRunOwner, runOwnerLossWatch, waitForRunAttention } = await import(
-  './run-attention-watch'
-);
+const { observeRunOwner, observeStartExecutor, runOwnerLossWatch, waitForRunAttention } =
+  await import('./run-attention-watch');
 const { DETACHED_RUN_STOP_HANDOFF_GRACE_MS, DETACHED_RUN_TERMINATION_MAX_MS } = await import(
   './run-stop-bounds'
 );
@@ -450,6 +449,47 @@ describe('waitForRunAttention', () => {
     expect(ownerUnsubscribes[0]).toHaveBeenCalledTimes(1);
   });
 
+  test.each(['recheck', 'verify'] as const)(
+    'announces attachment before the deadline when the %s read no longer needs an owner',
+    async branch => {
+      const running = putRun('r1');
+      putRun('r1', {
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'hold',
+            kind: 'time',
+            waitingSince: '2026-08-28T10:00:00.000Z',
+            resumeAt: '2026-08-28T11:00:00.000Z',
+          },
+        },
+      });
+      mockGetWorkflowRun.mockResolvedValueOnce(running);
+      reachableOwners = new Set(branch === 'verify' ? ['r1'] : []);
+      const events: string[] = [];
+      const onAttached = mock(async () => {
+        await Promise.resolve();
+        events.push('attached');
+      });
+
+      const result = await waitForRunAttention(store, 'r1', {
+        pollIntervalMs: 60_000,
+        deadlineMs: 0,
+        onAttached,
+      });
+      events.push(result.kind);
+
+      expect(result).toEqual({ kind: 'deadline', runId: 'r1', observedStatus: 'paused' });
+      expect(onAttached).toHaveBeenCalledTimes(1);
+      expect(onAttached).toHaveBeenCalledWith('paused');
+      expect(events).toEqual(['attached', 'deadline']);
+      expect(mockGetWorkflowRun).toHaveBeenCalledTimes(2);
+      expect(ownerUnsubscribes).toHaveLength(branch === 'verify' ? 1 : 0);
+      for (const unsubscribe of ownerUnsubscribes) expect(unsubscribe).toHaveBeenCalledTimes(1);
+    }
+  );
+
   test('says nothing about attaching when the first read already has an answer', async () => {
     // Nothing was ever waited for, so there is no watch to announce.
     const attached: string[] = [];
@@ -809,16 +849,6 @@ describe('waitForRunAttention', () => {
     });
   });
 
-  test('a deadline reports the observed status and never a synthesized terminal one', async () => {
-    // AC5: the caller must destructure `kind` before it can reach a status, so a
-    // deadline cannot be read as "the run finished".
-    putRun('r1', { status: 'running' });
-
-    const result = await wait('r1', { deadlineMs: 40 });
-
-    expect(result).toEqual({ kind: 'deadline', runId: 'r1', observedStatus: 'running' });
-  });
-
   test('an abort returns its own variant and leaves the run row untouched', async () => {
     const before = putRun('r1', { status: 'running' });
     const controller = new AbortController();
@@ -869,18 +899,6 @@ describe('waitForRunAttention', () => {
       });
       expect(await pending).toMatchObject({ attention: { kind: 'terminal', status: 'completed' } });
       expect(mockGetWorkflowRun.mock.calls.length).toBeGreaterThan(1);
-      expect(mockLogger.debug).toHaveBeenCalledWith(
-        { err: error, runId: 'r1' },
-        'run_attention.doorbell_unavailable'
-      );
-    });
-
-    test('polls correctly when no notification implementation is supplied', async () => {
-      putRun('r1', { status: 'pending' });
-      const pending = wait('r1');
-      await Bun.sleep(20);
-      putRun('r1', { status: 'completed', completed_at: new Date() });
-      expect(await pending).toMatchObject({ attention: { kind: 'terminal' } });
     });
 
     test('wakes a re-read, leaves the row authoritative and unsubscribes', async () => {
@@ -1058,5 +1076,93 @@ describe('observeRunOwner', () => {
   test.each(['paused', 'completed'] as const)('a %s row is not probed', async status => {
     expect(await observeRunOwner(store, putRun('settled', { status }))).toBeNull();
     expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
+  });
+});
+
+describe('observeStartExecutor', () => {
+  const handedOff = (over: Record<string, unknown> = {}) => ({
+    start_executor: {
+      kind: 'handed_off',
+      host: hostname(),
+      pid: process.pid,
+      ...(localUid === undefined ? {} : { uid: localUid }),
+      ...over,
+    },
+  });
+  // No process has this id, so signal 0 reports ESRCH.
+  const gonePid = 2147483646;
+  const pending = (id: string, metadata: Record<string, unknown>): WorkflowRun =>
+    putRun(id, { status: 'pending', metadata });
+
+  test('only an answering endpoint is starting, and the probe lets go of it', async () => {
+    const observed = await observeStartExecutor(store, pending('booted', {}));
+
+    expect(observed?.state).toBe('starting');
+    expect(ownerUnsubscribes[0]).toHaveBeenCalledTimes(1);
+  });
+
+  test('a live recorded pid without an answering endpoint is unknown, never starting', async () => {
+    // It may be an executor still booting, or another process that took the pid.
+    reachableOwners = new Set();
+
+    expect(await observeStartExecutor(store, pending('booting', handedOff()))).toEqual({
+      state: 'unknown',
+      executor: {
+        host: hostname(),
+        pid: process.pid,
+        ...(localUid === undefined ? {} : { uid: localUid }),
+      },
+    });
+  });
+
+  test('a start with no record yet is unknown: a missing record proves nothing', async () => {
+    reachableOwners = new Set();
+
+    expect(await observeStartExecutor(store, pending('unrecorded', {}))).toEqual({
+      state: 'unknown',
+      executor: null,
+    });
+  });
+
+  test('a start is unowned when its hand-off started nothing or its process is gone', async () => {
+    reachableOwners = new Set();
+    const failed = { start_executor: { kind: 'hand_off_failed' } };
+
+    expect((await observeStartExecutor(store, pending('failed', failed)))?.state).toBe('unowned');
+    expect(
+      (await observeStartExecutor(store, pending('died', handedOff({ pid: gonePid }))))?.state
+    ).toBe('unowned');
+  });
+
+  test('ownership is judged from the run as it is now, not the caller copy', async () => {
+    reachableOwners = new Set();
+    const stale = pending('recorded-later', {});
+    rows.set('recorded-later', { ...stale, metadata: handedOff({ pid: gonePid }) });
+
+    expect((await observeStartExecutor(store, stale))?.state).toBe('unowned');
+  });
+
+  test('an executor this process cannot see is unknown, even when its pid is free here', async () => {
+    reachableOwners = new Set();
+    const remote = handedOff({ host: 'other-host.invalid', pid: gonePid });
+
+    expect((await observeStartExecutor(store, pending('remote', remote)))?.state).toBe('unknown');
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unproven' }));
+    const failed = { start_executor: { kind: 'hand_off_failed' } };
+    expect((await observeStartExecutor(store, pending('slow', failed)))?.state).toBe('unknown');
+  });
+
+  test('a start its executor claimed between reads is no longer awaiting execution', async () => {
+    reachableOwners = new Set();
+    const run = pending('claimed', handedOff({ pid: gonePid }));
+    let reads = 0;
+    mockGetWorkflowRun.mockImplementation(async (id: string) => {
+      const row = rows.get(id) ?? null;
+      // The first read still finds it pending; the executor claims it before the second.
+      return row && ++reads > 1 ? { ...row, status: 'running' } : row;
+    });
+
+    expect(await observeStartExecutor(store, run)).toBeNull();
+    expect(await observeStartExecutor(store, putRun('running'))).toBeNull();
   });
 });

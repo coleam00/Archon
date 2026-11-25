@@ -8,13 +8,13 @@
 import { createLogger } from '@archon/paths';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { MessageChunk, SendQueryOptions, SystemPromptInput } from '../../types';
+import { ClassifiedProviderError } from '../../shared/failure';
 import { resumedOutcome, withResumedOutcome } from '../../shared/resumed';
 import { authorizePiTurn, openTurnModelRuntime, piAuthEnv, resolvePiModel } from './auth';
 import { parsePiConfig, resolvePiExtensionSettings, type PiProviderDefaults } from './config';
 import { beginPiExtensionTurn } from './extension-error-broker';
 import type { PiModelRef } from './model-ref';
 import type { RequestModelRuntime } from './request-auth';
-import { Semaphore } from './semaphore';
 import {
   ensureBedrockProviderRegistered,
   ensurePiOAuthFlowsRegistered,
@@ -26,17 +26,6 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi');
   return cachedLog;
 }
-
-// ─── Concurrency throttle ────────────────────────────────────────────────────
-
-/**
- * Caps concurrent Pi `session.prompt()` calls. Pi/Minimax has no built-in
- * SDK-level throttling; without this, large parallel workflow batches (e.g. 10+
- * concurrent review PRs × 5 aspects each) hit rate limits and cascade-fail.
- * Module-level so it's shared across all PiProvider instances within a process —
- * Pi concurrency is global (one upstream backend).
- */
-let piSemaphore: Semaphore | undefined;
 
 /** The Pi SDK and the Pi-dependent sibling modules a turn loads on demand. */
 type PiTurnModules = Awaited<ReturnType<typeof loadPiTurnModules>>;
@@ -339,7 +328,6 @@ async function* streamSession(
     // bridgeSession owns dispose() and abort wiring. When `interactive`
     // is on, it also binds/unbinds the UI stub's emitter so extension
     // notifications land on the same queue as Pi events.
-    const sem = await acquirePromptSlot(turn.piConfig.maxConcurrent, session, requestOptions);
     try {
       yield* withResumedOutcome(
         modules.eventBridge.bridgeSession(
@@ -356,8 +344,6 @@ async function* streamSession(
     } catch (err) {
       getLog().error({ err, piProvider: parsed.provider }, 'pi.prompt_failed');
       throw err;
-    } finally {
-      sem?.release();
     }
   } finally {
     extensionTurn?.close();
@@ -395,8 +381,8 @@ async function* translateNodeOptions(
   }
 
   // tools: covers allowed_tools / denied_tools. `undefined` leaves Pi
-  // defaults; an explicit empty array means "no tools" (valid idiom
-  // matching e2e-claude-smoke's `allowed_tools: []`).
+  // defaults; an explicit empty array selects no built-in tools.
+  // Separately supplied tools and user extension tools are outside this filter.
   // requestOptions.env (codebase-scoped env vars from .archon/config.yaml)
   // is injected into bash subprocesses via a BashSpawnHook, mirroring
   // Claude's options.env and Codex's constructor env.
@@ -478,49 +464,29 @@ function piCustomTools(
   defaultToolNames: readonly string[] | undefined,
   structuredOutputTool: ToolDefinition | undefined
 ) {
-  const addedTools = [
-    ...(requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
+  const declaredTools =
+    requestOptions?.nativeTools && requestOptions.nativeTools.length > 0
       ? nativeTools.buildPiNativeToolDefinitions(requestOptions.nativeTools)
-      : []),
-    ...(structuredOutputTool ? [structuredOutputTool] : []),
-  ];
+      : [];
+  const addedTools = [...declaredTools, ...(structuredOutputTool ? [structuredOutputTool] : [])];
   const baseTools =
     filteredTools ??
     (addedTools.length > 0
       ? optionsTranslator.buildDefaultPiTools(cwd, requestOptions?.env, defaultToolNames)
       : undefined);
+  // Pi resolves a call by name alone, so a declared tool that shares a name with a
+  // built-in or the structured-output tool would silently run the wrong one.
+  const takenNames = new Set(
+    [...(baseTools ?? []), ...(structuredOutputTool ? [structuredOutputTool] : [])].map(
+      tool => tool.name
+    )
+  );
+  const clash = declaredTools.find(tool => takenNames.has(tool.name));
+  if (clash) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `Tool '${clash.name}' has the name of a tool Pi already offers this node. Rename the declared tool.`
+    );
+  }
   return baseTools && [...baseTools, ...addedTools];
-}
-
-/**
- * Wait for a prompt slot when `maxConcurrent` caps Pi. The module-level semaphore
- * is initialized lazily from the first config that sets maxConcurrent and reused
- * for the lifetime of the process — this is a known v1 tradeoff. Pi concurrency is
- * global (one upstream backend) so a process-wide cap is the right scope. Disposes
- * the session when the wait fails.
- */
-async function acquirePromptSlot(
-  maxConcurrent: number | undefined,
-  session: { dispose(): void },
-  requestOptions: SendQueryOptions | undefined
-): Promise<Semaphore | undefined> {
-  if (maxConcurrent !== undefined && piSemaphore === undefined) {
-    piSemaphore = new Semaphore(maxConcurrent);
-    getLog().info({ maxConcurrent }, 'pi.semaphore_initialized');
-  }
-
-  // Snapshot before the first await — if a concurrent call initializes the
-  // module-level piSemaphore after this point, sem stays undefined and the
-  // caller's finally correctly skips release (we never acquired).
-  const sem = piSemaphore;
-  if (sem === undefined) return undefined;
-  getLog().debug('pi.semaphore_acquiring');
-  try {
-    await sem.acquire(requestOptions?.abortSignal);
-  } catch (err) {
-    session.dispose();
-    throw err;
-  }
-  getLog().debug('pi.semaphore_acquired');
-  return sem;
 }

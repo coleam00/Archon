@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises';
 import * as archonPaths from '@archon/paths';
 import type { ParsedWorkflowLoadError, WorkflowDefinition } from '../schemas';
-import { parsePackagedResourceReference } from '../packaged-workflow';
+import { PACK_SHARED_SCRIPTS_PATH, parsePackagedResourceReference } from '../packaged-workflow';
 import { discoverScriptsForCwd } from '../script-discovery';
 import {
   collectExecInputValidationTargets,
@@ -156,11 +156,13 @@ async function readTargetSources(
   for (const target of targets) {
     const script = scripts.get(target.slot.value);
     if (script === undefined) {
-      if (parsePackagedResourceReference(target.slot.value) === null) continue;
+      const packaged = parsePackagedResourceReference(target.slot.value);
+      if (packaged === null) continue;
+      const { pack, workflow: folder } = packaged.owner;
       return {
         error: {
           workflowName: workflow.name,
-          error: `Named packaged script '${target.slot.value}' was not found in its workflow's scripts directory.`,
+          error: `Named script '${packaged.name}' was not found in ${pack}/${folder}/scripts/ or ${pack}/${PACK_SHARED_SCRIPTS_PATH}/.`,
           errorType: 'validation_error',
         },
       };

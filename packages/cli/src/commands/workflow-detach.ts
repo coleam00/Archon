@@ -1,3 +1,4 @@
+import { generatedTaskBranch } from '@archon/isolation';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
@@ -17,6 +18,8 @@ import { sealWorkflowRunConfig } from '@archon/core/config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
+import { resolveRunStartInputs } from '@archon/workflows/pack-settings';
+import { refusePendingStart } from '@archon/workflows/start-refusal';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
@@ -31,18 +34,16 @@ import { DETACHED_LAUNCH_TOKEN_ENV, DETACHED_RUN_OWNER_ENV } from '../utils/deta
 import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
 import {
   destinationCorrelationId,
+  generatedWorktreeIdentifier,
   getLog,
   printJsonWriteError,
   resolveRunTranscriptPath,
   spelledForCli,
+  withItemHint,
   type RunDestination,
   type WorkflowRunOptions,
 } from './workflow-shared';
-import {
-  buildNoResumableRunError,
-  buildResumeLookupFailureError,
-  type ContinuationDeclaration,
-} from './workflow-run-preflight';
+import { buildNoResumableRunError, type ContinuationDeclaration } from './workflow-run-preflight';
 import {
   DETACHED_RESUME_RECEIPT_ENV,
   DETACHED_RESUME_RECEIPT_FD,
@@ -119,12 +120,19 @@ async function waitForDetachedStartup(
   );
 }
 
+/** Flags the detached child never receives, each with its value (separate or `=`-joined). */
+const DROPPED_VALUE_FLAGS = ['--base-branch', '--input', '--input-file'];
+
 /**
  * Build the argv for the detached re-invoke. Pure (no spawn / no process reads)
  * so both the dev (bun + entry script) and compiled-binary (execPath only)
  * branches are unit-testable — the binary branch is otherwise unreachable in
  * tests because `BUNDLED_IS_BINARY` is a module-level const. Drops `--detach`
  * and `--json` and appends `--cwd <cwd>` (last-wins) plus any extra flags.
+ *
+ * Drops `--input` and `--input-file` with their values: the child gates on the inputs
+ * this process recorded on the pre-created row, so the files are read once, before the
+ * run starts, and a value never travels on the child's command line (#5678).
  */
 export function buildDetachedRunCmd(
   isBinary: boolean,
@@ -152,11 +160,16 @@ export function buildDetachedRunCmd(
     const arg = supplied[index];
     if (arg === '--')
       return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs, ...supplied.slice(index)];
-    if (arg === '--base-branch') {
+    if (DROPPED_VALUE_FLAGS.includes(arg)) {
       index++;
       continue;
     }
-    if (arg.startsWith('--base-branch=') || arg === '--detach' || arg === '--json') continue;
+    if (
+      DROPPED_VALUE_FLAGS.some(flag => arg.startsWith(`${flag}=`)) ||
+      arg === '--detach' ||
+      arg === '--json'
+    )
+      continue;
     userArgs.push(arg);
   }
   // --cwd is appended last (parseArgs last-wins) so the child resolves the same
@@ -441,7 +454,6 @@ export interface DetachedLaunch {
   workflow: ResolvedWorkflow;
   isContinuation: boolean;
   continuationRun: WorkflowRun | undefined;
-  resumeLookupError: Error | undefined;
   cliUserId: string | undefined;
   codebase: Codebase | null;
   isFolder: boolean;
@@ -471,7 +483,7 @@ interface DetachedRunClaim {
 export async function launchDetachedRun(launch: DetachedLaunch): Promise<void> {
   const { host, cwd, runConfig, destination: childDestination } = launch;
   const claim = await claimDetachedRun(launch);
-  const { extraArgs, pinnedBranch } = buildDetachedChildArgs(launch, claim.launchedRunId);
+  const { extraArgs, generatedIdentifier } = buildDetachedChildArgs(launch, claim);
   const transcriptPath = await resolveDetachedTranscriptPath(launch, claim.detachedRunId);
   const runConfigPayload = runConfig
     ? JSON.stringify(sealWorkflowRunConfig(runConfig.layer, runConfig.source))
@@ -507,7 +519,9 @@ export async function launchDetachedRun(launch: DetachedLaunch): Promise<void> {
   }
   await printDetachedLaunchAck(launch, {
     detachedRunId: claim.detachedRunId,
-    pinnedBranch,
+    branch: generatedIdentifier
+      ? generatedTaskBranch(generatedIdentifier)
+      : launch.options.branchName,
     transcriptPath,
     logPath,
   });
@@ -522,7 +536,6 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     userMessage,
     workflow,
     continuationRun,
-    resumeLookupError,
     cliUserId,
     codebase: detachCodebase,
     prepared: detachedPrepared,
@@ -530,7 +543,6 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     declaration: continuationDeclaration,
   } = launch;
   if (launch.isContinuation) {
-    if (resumeLookupError) throw buildResumeLookupFailureError(resumeLookupError);
     if (!continuationRun) throw buildNoResumableRunError(workflowName, cwd);
     return { detachedRunId: continuationRun.id };
   }
@@ -540,12 +552,17 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
   // the stamps the executor only writes when IT creates the row. `working_path` is
   // the one field this process cannot know — the child cuts the worktree — so it
   // stays null until the child fills it in (write-once in the store).
+  // No reserved id: this process's own capture is discarded on the way out, and
+  // reusing its id would point the child's capture at a directory this process is
+  // about to reclaim. The row's generated id is what the child files under.
+  // The run's complete `$INPUTS`, as its child's dispatch resolves them, so the refusal below
+  // judges a pack setting's value as the child will. A pack setting the project must set and
+  // does not refuses here, before any row exists.
+  const { inputs: startInputs } = await resolveRunStartInputs(cwd, workflow, resolvedInputs);
+  const launchToken = crypto.randomUUID();
+  let created: WorkflowRun;
   try {
-    // No reserved id: this process's own capture is discarded on the way out, and
-    // reusing its id would point the child's capture at a directory this process is
-    // about to reclaim. The row's generated id is what the child files under.
-    const launchToken = crypto.randomUUID();
-    const created = await host.deps.store.createWorkflowRun({
+    created = await host.deps.store.createWorkflowRun({
       workflow_name: workflow.name,
       origin: {
         userId: cliUserId,
@@ -568,20 +585,27 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
           : {}),
       },
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
+      ...(launch.options.item === undefined ? {} : { item_key: launch.options.item }),
     });
-    return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
   } catch (error) {
     throw new Error(
-      `Failed to create the workflow run: ${(error as Error).message}\nNothing was started.`
+      `Failed to create the workflow run: ${(withItemHint(error) as Error).message}\nNothing was started.`
     );
   }
+  // Every refusal admission would make on this row (a broken run-ended binding, asks or an
+  // unsupplied result_of input with no item) is made here, before the fork, so the caller
+  // hears it instead of an acknowledgement. Read on the created row, which carries the item
+  // the store resolved from --item; the child's admission checks again before its claim (#5783).
+  const refusal = await refusePendingStart(host.deps, workflow, created, startInputs);
+  if (refusal) throw new Error(`${refusal}\nNothing was started.`);
+  return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
 }
 
 /** The arguments the child gets on top of this process's argv. */
 function buildDetachedChildArgs(
   launch: DetachedLaunch,
-  launchedRunId: string | undefined
-): { extraArgs: string[]; pinnedBranch: string | undefined } {
+  { detachedRunId, launchedRunId }: DetachedRunClaim
+): { extraArgs: string[]; generatedIdentifier: string | undefined } {
   const {
     workflowName,
     options,
@@ -591,23 +615,20 @@ function buildDetachedChildArgs(
     declaration,
   } = launch;
   const extraArgs: string[] = [];
-  let pinnedBranch: string | undefined;
+  let generatedIdentifier: string | undefined;
   // Pin identity after name resolution so a rename cannot redirect the child.
   if (!launch.isContinuation && options.codebaseId && launch.codebase) {
     extraArgs.push('--project', launch.codebase.id);
   }
-  // Pin a generated branch only when isolating AND the caller didn't pass
-  // --branch (an explicit --branch is already in argv). Without this, the child
-  // would generate its own timestamped branch and fork a second worktree.
-  // Never pin a branch for folder projects — they run in place with no worktree.
+  // Transfer the identifier without making the engine's branch an operator-named branch.
   if (
     wantsIsolation &&
     !detachIsFolder &&
     options.branchName === undefined &&
     options.adoptRunId === undefined
   ) {
-    pinnedBranch = `${workflowName}-${String(Date.now())}`;
-    extraArgs.push('--branch', pinnedBranch);
+    generatedIdentifier = generatedWorktreeIdentifier(workflowName, detachedRunId);
+    extraArgs.push('--internal-detached-worktree-identifier', generatedIdentifier);
   }
   // A continued chat run retains its transport thread across the fork.
   if (options.conversationId === undefined && childDestination.kind === 'conversation') {
@@ -633,7 +654,7 @@ function buildDetachedChildArgs(
   if (launchedRunId !== undefined) {
     extraArgs.push('--internal-detached-run-id', launchedRunId);
   }
-  return { extraArgs, pinnedBranch };
+  return { extraArgs, generatedIdentifier };
 }
 
 function continuationChildArgs(declaration: NonNullable<DetachedLaunch['declaration']>): string[] {
@@ -693,13 +714,13 @@ async function printDetachedLaunchAck(
   launch: DetachedLaunch,
   ack: {
     detachedRunId: string;
-    pinnedBranch: string | undefined;
+    branch: string | undefined;
     transcriptPath: string | null;
     logPath: string | null;
   }
 ): Promise<void> {
   const { options, workflow, destination: childDestination } = launch;
-  const { detachedRunId, pinnedBranch, transcriptPath, logPath } = ack;
+  const { detachedRunId, branch, transcriptPath, logPath } = ack;
   if (options.json) {
     await writeJsonLine({
       ok: true,
@@ -709,7 +730,7 @@ async function printDetachedLaunchAck(
       // can query or wait on it without polling for the run to appear.
       runId: detachedRunId,
       workflow: workflow.name,
-      branch: pinnedBranch ?? options.branchName ?? null,
+      branch: branch ?? null,
       conversationId:
         childDestination.kind === 'conversation'
           ? destinationCorrelationId(childDestination)

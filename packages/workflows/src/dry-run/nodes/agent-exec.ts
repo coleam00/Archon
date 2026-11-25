@@ -1,6 +1,7 @@
 import { readComposedBindings } from '../../compiled-command';
 import { inputEnvVars, resolveNodeBindings } from '../../dag/references';
 import { substituteLoopBodyText } from '../../dag/loop-scope';
+import { bindTypedOutputs } from '../../typed-output-bindings';
 import type { NodeExecutionMetadata } from '../../schemas/node-execution';
 import {
   isAgentNode,
@@ -62,7 +63,7 @@ async function resolveNodeText(
   // A composed command node carries its map in the engine-private payload, having
   // been materialized into an inline prompt at expansion (#2964).
   const nodeWith = isExecNode(node)
-    ? node.with
+    ? await boundWith(node, ctx)
     : node.source.kind === 'command'
       ? node.source.with
       : readComposedBindings(node);
@@ -84,6 +85,16 @@ async function resolveNodeText(
   );
 }
 
+/**
+ * A script node's `with:` map with its typed-outputs bindings resolved by the executor's
+ * own `bindTypedOutputs`, against the outputs the simulation has produced so far.
+ */
+function boundWith(node: ExecNode, ctx: DryRunContext): Promise<ExecNode['with']> {
+  return bindTypedOutputs(node.id, node.with, outputType =>
+    Promise.resolve(ctx.typedOutputs.filter(recorded => recorded.outputType === outputType))
+  );
+}
+
 async function executeLocally(
   node: ExecNode,
   resolvedText: string,
@@ -96,7 +107,11 @@ async function executeLocally(
     node,
     resolvedText,
     ctx,
-    inputEnvVars(node, bindingShellContext(ctx, outputs), ctx.inputs),
+    inputEnvVars(
+      { ...node, with: await boundWith(node, ctx) },
+      bindingShellContext(ctx, outputs),
+      ctx.inputs
+    ),
     execution
   );
   if ('error' in executed) {

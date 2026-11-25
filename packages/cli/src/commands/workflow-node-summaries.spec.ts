@@ -1,15 +1,18 @@
+// @archon-test-isolated
 /**
  * `buildNodeSummaries` projects a run's event log into the per-node view that
  * `archon workflow get/status --verbose` renders, and the `nodes` array their
  * `--json` form emits.
  */
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
 import {
+  formatSkipCause,
   NODE_SUMMARY_EVENT_TYPES,
   buildNodeSummaries,
   buildRunNodes,
+  printVerboseNodes,
 } from './workflow-node-summaries';
 
 function event(
@@ -31,6 +34,69 @@ function event(
 }
 
 describe('buildNodeSummaries', () => {
+  it('renders include provenance while retaining legacy cause wording', () => {
+    const boundary = { includeId: 'cycle.review%5Fqa', workflow: 'review-block' };
+    const causes = [
+      { kind: 'condition', expr: "$gate.output == 'go'" },
+      { kind: 'condition_parse_error', expr: '$INPUTS.missing' },
+      { kind: 'upstream_failed', origin: 'original-failure' },
+      { kind: 'upstream_skipped', origin: 'original-skip' },
+      { kind: 'timeout' },
+    ] as const;
+    const expected = [
+      "condition: $gate.output == 'go'",
+      'condition parse error: $INPUTS.missing',
+      'upstream failed: original-failure',
+      'upstream skipped: original-skip',
+      'timeout',
+    ];
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      for (const [index, cause] of causes.entries()) {
+        expect(formatSkipCause(cause)).toBe(expected[index]!);
+        const detail =
+          cause.kind === 'condition_parse_error'
+            ? 'condition evaluation error: $INPUTS.missing'
+            : expected[index];
+        const rendered = `${detail} [include 'cycle.["review_qa"]', workflow 'review-block']`;
+        expect(formatSkipCause({ ...cause, boundary })).toBe(rendered);
+        printVerboseNodes([
+          event(`skip-${index}`, 'node_skipped', 'review__node', '2026-11-12T10:00:00Z', {
+            cause: { ...cause, boundary },
+          }),
+        ]);
+        expect(log).toHaveBeenCalledWith(`    - review__node (${rendered})`);
+      }
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('distinguishes empty from absent output', () => {
+    const summaries = buildNodeSummaries([
+      event('empty', 'node_completed', 'empty', '2026-11-10T10:00:00.000Z', { node_output: '' }),
+      event('absent', 'node_completed', 'absent', '2026-11-10T10:00:00.000Z'),
+    ]);
+    expect(summaries[0]).toMatchObject({ output: '', outputTruncated: false, outputPreview: '' });
+    expect(summaries[1]).not.toHaveProperty('output');
+    expect(summaries[1]).not.toHaveProperty('outputTruncated');
+  });
+
+  it('keeps human output limited to the preview', () => {
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      printVerboseNodes([
+        event('output', 'node_completed', 'work', '2026-11-10T10:00:00.000Z', {
+          node_output: `${'x'.repeat(200)}hidden suffix`,
+        }),
+      ]);
+      expect(log).toHaveBeenCalledWith(`        Output: ${'x'.repeat(200)}...`);
+      expect(log.mock.calls.flat().join(' ')).not.toContain('hidden suffix');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('resets a retried node to its current running attempt', () => {
     const summaries = buildNodeSummaries([
       {
@@ -112,6 +178,8 @@ describe('buildNodeSummaries', () => {
         startedAt: '2026-08-29T14:27:29.000Z',
         durationMs: 107_000,
         outputPreview: 'https://github.com/coleam00/Archon/pull/2971',
+        output: 'https://github.com/coleam00/Archon/pull/2971',
+        outputTruncated: false,
       },
     ]);
   });
@@ -175,7 +243,13 @@ describe('buildNodeSummaries', () => {
     ]);
 
     expect(summaries).toEqual([
-      { nodeId: 'triage__triage', state: 'completed', outputPreview: 'bug' },
+      {
+        nodeId: 'triage__triage',
+        state: 'completed',
+        outputPreview: 'bug',
+        output: 'bug',
+        outputTruncated: false,
+      },
     ]);
   });
 });
@@ -288,6 +362,8 @@ describe('buildNodeSummaries resume resets', () => {
             startedAt: '2026-10-03T10:05:01.000Z',
             durationMs: 2_000,
             outputPreview: 'prepared again',
+            output: 'prepared again',
+            outputTruncated: false,
           },
         ]);
       });
@@ -301,7 +377,15 @@ describe('buildNodeSummaries resume resets', () => {
               node_output: 'prepared',
             }),
           ])
-        ).toEqual([{ nodeId: 'prepare', state: 'completed', outputPreview: 'prepared' }]);
+        ).toEqual([
+          {
+            nodeId: 'prepare',
+            state: 'completed',
+            outputPreview: 'prepared',
+            output: 'prepared',
+            outputTruncated: false,
+          },
+        ]);
       });
     });
   }
@@ -390,6 +474,62 @@ describe('buildNodeSummaries session ids', () => {
       event('2', 'node_completed', 'plan', at(1), { node_output: 'done' }),
     ]);
     expect(summary).not.toHaveProperty('sessionIds');
+  });
+});
+
+describe('buildNodeSummaries - failed bash/script node structured fields', () => {
+  function failedNode(data: Record<string, unknown>) {
+    return buildNodeSummaries([
+      event('f-start', 'node_started', 'check', '2026-11-12T10:00:00.000Z'),
+      event('f-failed', 'node_failed', 'check', '2026-11-12T10:00:01.000Z', {
+        type: 'bash',
+        error: "Bash node 'check' failed",
+        ...data,
+      }),
+    ])[0];
+  }
+
+  it('exposes exitCode on a failed node when exit_code is recorded', () => {
+    expect(failedNode({ exit_code: 1 })).toMatchObject({ state: 'failed', exitCode: 1 });
+  });
+
+  it('omits exitCode when exit_code is absent (spawn failure, timeout, cancel)', () => {
+    expect(failedNode({})).not.toHaveProperty('exitCode');
+  });
+
+  it('exposes captured stdout on a failed node when node_output is recorded', () => {
+    expect(failedNode({ exit_code: 1, node_output: 'line1' })).toMatchObject({
+      state: 'failed',
+      exitCode: 1,
+      output: 'line1',
+      outputPreview: 'line1',
+      outputTruncated: false,
+    });
+  });
+
+  it('reports a truncated stdout tail as truncated', () => {
+    expect(
+      failedNode({ exit_code: 1, node_output: 'tail', node_output_truncated: true })
+    ).toMatchObject({ output: 'tail', outputTruncated: true });
+  });
+
+  it('omits output fields when no stdout was captured', () => {
+    // `''` is what config failures and older binaries persist for "no stdout".
+    for (const node of [
+      failedNode({ exit_code: 1 }),
+      failedNode({ exit_code: 1, node_output: '' }),
+    ]) {
+      expect(node).not.toHaveProperty('output');
+      expect(node).not.toHaveProperty('outputPreview');
+      expect(node).not.toHaveProperty('outputTruncated');
+    }
+  });
+
+  it('leaves non-exec failures unchanged, even when they kept partial output', () => {
+    const summary = failedNode({ type: 'agent', node_output: 'partial agent text' });
+    expect(summary).toMatchObject({ state: 'failed' });
+    expect(summary).not.toHaveProperty('output');
+    expect(summary).not.toHaveProperty('exitCode');
   });
 });
 

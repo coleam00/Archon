@@ -167,26 +167,21 @@ describe('parseFixtureFile', () => {
     expect(parsed.stubs).toEqual({ 'node-a': 'stub' });
   });
 
-  it('accepts authored verdict expectations and rejects invalid values', () => {
-    for (const authored of ['succeeded', 'failed']) {
+  it('accepts authored outcome expectations of either form and rejects invalid values', () => {
+    for (const authored of ['succeeded', 'failed', 'built']) {
       expect(parseFixtureFile(`fixture:\n  authored: ${authored}`, 'x').declaration).toMatchObject({
         expect: 'completed',
         authored,
       });
     }
-    expect(() => parseFixtureFile('fixture:\n  authored: completed', 'x')).toThrow(
-      "'fixture' block"
-    );
+    expect(() => parseFixtureFile('fixture:\n  authored: ""', 'x')).toThrow("'fixture' block");
   });
 
-  it.each(['authoredOutcome', 'expected', 'failNode', 'reachd', 'input', 'resolvedTextContains'])(
-    'rejects unknown fixture declaration key %s',
-    key => {
-      expect(() => parseFixtureFile(`fixture:\n  ${key}: failed`, 'x')).toThrow(
-        `Unrecognized key: "${key}"`
-      );
-    }
-  );
+  it.each(['failNode'])('rejects unknown fixture declaration key %s', key => {
+    expect(() => parseFixtureFile(`fixture:\n  ${key}: failed`, 'x')).toThrow(
+      `Unrecognized key: "${key}"`
+    );
+  });
 
   it('preserves every supported fixture declaration key', () => {
     const declaration: FixtureDeclaration = {
@@ -196,6 +191,7 @@ describe('parseFixtureFile', () => {
       reached: ['node-a'],
       inputs: { branch: 'task-123' },
       'resolved-text-contains': { 'node-a': 'task-123' },
+      'wait-labels': { 'node-a': { stage: 'deliver' } },
     };
     expect(parseFixtureFile(Bun.YAML.stringify({ fixture: declaration }), 'x').declaration).toEqual(
       declaration
@@ -271,13 +267,13 @@ describe('runFixtures', () => {
     expect(report.passed).toBe(1);
     expect(report.failed).toBe(0);
     expect(report.results[0].outcome).toBe('completed');
-    expect(report.results[0].authoredOutcome).toBeNull();
+    expect(report.results[0].completedOutcome).toBeNull();
   });
 
   it('reports authored outcome without changing execution-outcome expectations', async () => {
     const { cwd } = writeTempProject({
       workflowYaml:
-        'name: test-wf\ndescription: test\nreturns: node-a\noutcome_field: green\nnodes:\n' +
+        'name: test-wf\ndescription: test\nreturns: { node: node-a, outcome: green }\nnodes:\n' +
         '  - id: node-a\n    prompt: verdict\n    output_format:\n' +
         '      type: object\n      properties:\n        green: { type: boolean }\n' +
         '      required: [green]\n',
@@ -292,7 +288,7 @@ describe('runFixtures', () => {
     expect(report).toMatchObject({
       passed: 1,
       failed: 0,
-      results: [{ outcome: 'completed', authoredOutcome: 'failed', pass: true }],
+      results: [{ outcome: 'completed', completedOutcome: 'failed', pass: true }],
     });
     expect(formatFixtureReport(report)).toContain('Simulation outcome: completed');
     expect(formatFixtureReport(report)).toContain('Authored outcome: failed');
@@ -310,8 +306,7 @@ describe('runFixtures', () => {
       const workflowYaml = [
         'name: test-wf',
         'description: stubbed verdict',
-        'returns: node-a',
-        'outcome_field: green',
+        'returns: { node: node-a, outcome: green }',
         'nodes:',
         '  - id: node-a',
         node,
@@ -338,8 +333,8 @@ describe('runFixtures', () => {
         passed: 2,
         failed: 0,
         results: [
-          { outcome: 'completed', authoredOutcome: authored, pass: true },
-          { outcome: 'completed', authoredOutcome: authored, pass: true },
+          { outcome: 'completed', completedOutcome: authored, pass: true },
+          { outcome: 'completed', completedOutcome: authored, pass: true },
         ],
       });
     }
@@ -357,7 +352,7 @@ describe('runFixtures', () => {
       expect(report.results[0]).toMatchObject({
         outcome,
         pass: false,
-        authoredOutcome: null,
+        completedOutcome: null,
         failureReason: 'expected authored outcome succeeded, dry-run reported undeclared',
       });
     }
@@ -425,6 +420,116 @@ describe('runFixtures', () => {
     });
 
     expect(report.passed).toBe(1);
+  });
+
+  // #5442: the printed failure named a downstream field reference; only the per-node
+  // trace showed that every loop body node had been skipped.
+  it('prints each node status for a failed fixture, without node payloads', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: test\nnodes:\n' +
+        '  - id: rounds\n' +
+        '    loop_group:\n' +
+        '      until_bash: "true"\n' +
+        '      max_iterations: 1\n' +
+        '      nodes:\n' +
+        '        - id: gate\n          prompt: decide payload-marker\n' +
+        '          output_format: { type: object, properties: { status: { type: string } } }\n' +
+        '        - id: deliver\n          prompt: ship\n          depends_on: [gate]\n' +
+        `          when: "$gate.output.status == 'go-payload-marker'"\n` +
+        '  - id: report\n    prompt: $rounds.output.pr_url\n    depends_on: [rounds]\n',
+      body: [
+        'fixture:',
+        '  expect: completed',
+        "gate: { status: stop, note: 'payload-marker' }",
+        'deliver: "shipped"',
+      ].join('\n'),
+    });
+    const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+
+    const result = report.results[0];
+    expect(result.pass).toBe(false);
+    expect(result.trace).toEqual([
+      { nodeId: 'gate', nodeType: 'prompt', state: 'stubbed', iteration: 1 },
+      {
+        nodeId: 'deliver',
+        nodeType: 'prompt',
+        state: 'skipped',
+        iteration: 1,
+        reason: 'when_condition',
+      },
+      expect.objectContaining({ nodeId: 'rounds', state: 'completed' }),
+      { nodeId: 'report', nodeType: 'prompt', state: 'failed' },
+    ]);
+    const rendered = formatFixtureReport(report);
+    expect(rendered).toContain(
+      '    trace:\n' +
+        '      STUBBED   gate (prompt) [iteration 1]\n' +
+        '      SKIPPED   deliver (prompt) [iteration 1] — when_condition\n'
+    );
+    expect(rendered).toContain('      FAILED    report (prompt)\n');
+    expect(rendered).toContain(`    report: ${result.nodeFailures?.[0]?.reason}`);
+    const json = JSON.stringify(report);
+    expect(JSON.parse(json).results[0].trace).toEqual(result.trace);
+    // Resolved prompts, stub outputs and `when:` expressions stay out of the report.
+    expect(rendered).not.toContain('payload-marker');
+    expect(json).not.toContain('payload-marker');
+  });
+
+  it.each([
+    ['schema failure', 'completed', 'does not satisfy its output_format'],
+    ['schema failure', 'failed', 'does not satisfy its output_format'],
+    ['malformed JSON', 'completed', 'is not one JSON document'],
+    ['malformed JSON', 'failed', 'is not one JSON document'],
+  ] as const)(
+    'reports a %s without stub contents under expect: %s',
+    async (kind, expected, category) => {
+      const nodeId = 'node-a';
+      const leaked = 'SYNTHETIC_SECRET/abc';
+      const workflowYaml = [
+        'name: test-wf',
+        'description: stubbed verdict',
+        'nodes:',
+        '  - id: node-a',
+        '    prompt: verdict',
+        '    output_format:',
+        '      type: object',
+        '      additionalProperties:',
+        '        type: string',
+      ].join('\n');
+      const { cwd } = writeTempProject({
+        workflowYaml,
+        fixtureName: kind === 'schema failure' ? 'schema' : 'malformed',
+        body: Bun.YAML.stringify({
+          fixture:
+            expected === 'failed'
+              ? { expect: 'failed', 'fail-node': nodeId }
+              : { expect: 'completed' },
+          [nodeId]: kind === 'schema failure' ? { [leaked]: 1 } : leaked,
+        }),
+      });
+      const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+      const result = report.results[0];
+      expect(result.expect).toBe(expected);
+      expect(result.outcome).toBe('failed');
+      expect(result.pass).toBe(result.outcome === expected);
+      expect(result.nodeFailures?.[0]?.nodeId).toBe(nodeId);
+      for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+        expect(output).not.toContain(leaked);
+        expect(output).not.toContain('SYNTHETIC_SECRET~1abc');
+        expect(output).toContain(nodeId);
+        expect(output).toContain(category);
+      }
+    }
+  );
+
+  it('keeps a passing fixture free of the trace', async () => {
+    const { cwd } = writeTempProject({ body: STUB_FIXTURE });
+    const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+
+    expect(report.results[0].pass).toBe(true);
+    expect(report.results[0].trace).toBeUndefined();
+    expect(formatFixtureReport(report)).not.toContain('trace:');
   });
 
   it('reports the full failed set when a single fail-node cannot cover it', async () => {
@@ -731,6 +836,97 @@ describe('runFixtures', () => {
     });
 
     expect(report.passed).toBe(1);
+  });
+
+  it.each([
+    { expected: 'deliver', passes: true },
+    { expected: 'wrong', passes: false },
+  ])('asserts exact resolved wait labels ($passes)', async ({ expected, passes }) => {
+    const { cwd } = writeTempProject({
+      workflowYaml: [
+        'name: test-wf',
+        'description: test',
+        'nodes:',
+        '  - id: decide',
+        '    bash: unused',
+        '  - id: ask',
+        '    depends_on: [decide]',
+        '    wait:',
+        '      attention: Merge it?',
+        '      form: select',
+        '      options: [{ id: merge }]',
+        '      labels:',
+        '        stage: $decide.output.stage',
+        '        area: delivery',
+      ].join('\n'),
+      body: [
+        'fixture:',
+        '  expect: paused',
+        '  wait-labels:',
+        '    ask:',
+        `      stage: ${expected}`,
+        '      area: delivery',
+        'decide:',
+        '  stage: deliver',
+      ].join('\n'),
+    });
+
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['test-wf']),
+      cwd,
+    });
+
+    expect(report.results[0]?.pass).toBe(passes);
+    if (!passes) {
+      expect(report.results[0]?.failureReason).toBe(
+        'expected wait \'ask\' labels to equal {"stage":"wrong","area":"delivery"}'
+      );
+      expect(report.results[0]?.trace).toEqual([
+        expect.objectContaining({ nodeId: 'decide', state: 'stubbed' }),
+        expect.objectContaining({ nodeId: 'ask', state: 'paused' }),
+      ]);
+      expect(JSON.stringify(report.results[0]?.trace)).not.toContain('attentionAsk');
+    }
+  });
+
+  it('checks wait labels on every reached loop occurrence, not only a matching earlier ask', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml: [
+        'name: test-wf',
+        'description: test',
+        'nodes:',
+        '  - id: group',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 2',
+        '      on_exhausted: complete',
+        '      nodes:',
+        '        - id: ask',
+        '          wait:',
+        '            attention: Merge it?',
+        '            form: select',
+        '            options: [{ id: merge }]',
+        '            labels:',
+        '              stage: $LOOP_PREV.ask.output.decision',
+      ].join('\n'),
+      body: [
+        'fixture:',
+        '  wait-labels:',
+        '    ask: { stage: "" }',
+        'ask: { decision: merge, text: "" }',
+      ].join('\n'),
+    });
+
+    const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+
+    expect(report.results[0]).toMatchObject({
+      pass: false,
+      outcome: 'completed',
+      failureReason: 'expected wait \'ask\' labels to equal {"stage":""}',
+    });
+    expect(
+      report.results[0].trace?.filter(entry => entry.nodeId === 'ask').map(entry => entry.iteration)
+    ).toEqual([1, 2]);
   });
 
   it('matches a multi-line fragment against a command file checked out with CRLF', async () => {
@@ -1208,6 +1404,49 @@ describe('runFixtures', () => {
   });
 });
 
+describe('bundled fixtures follow the bundled-workflow setting', () => {
+  /** A project whose own fixture is valid, beside a bundled scope with a fixture of its own. */
+  function projectWithBundledFixture(): { cwd: string; sourceRoots: WorkflowSourceRoots } {
+    const cwd = makeTempProject();
+    writeWorkflowDirs(cwd, ['mine']);
+    const bundled = makeTempProject();
+    mkdirSync(join(bundled, 'ship', 'fixtures'), { recursive: true });
+    writeFileSync(join(bundled, 'ship', 'ship-wf.yaml'), stubWorkflowYaml('ship-wf'));
+    writeFileSync(join(bundled, 'ship', 'fixtures', 'ship.stubs.yaml'), STUB_FIXTURE);
+    return { cwd, sourceRoots: { ...isolatedSourceRoots(cwd), bundledWorkflows: bundled } };
+  }
+
+  it('skips them when bundled workflows are off, so a workflow left out of the catalog is not a failure', async () => {
+    const { cwd, sourceRoots } = projectWithBundledFixture();
+
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['mine-wf'], 'mine'),
+      cwd,
+      sourceRoots,
+      sourceConfig: { ...DEFAULT_WORKFLOW_SOURCE_CONFIG, load_default_workflows: false },
+    });
+
+    expect(report.results.map(r => r.fixture)).toEqual(['mine/fixtures/mine.stubs.yaml']);
+    expect(report).toMatchObject({ passed: 1, failed: 0 });
+  });
+
+  it('still checks them when bundled workflows are on, and reports one that has no workflow', async () => {
+    const { cwd, sourceRoots } = projectWithBundledFixture();
+
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['mine-wf'], 'mine'),
+      cwd,
+      sourceRoots,
+    });
+
+    expect(report.results.map(r => [r.fixture, r.pass])).toEqual([
+      ['mine/fixtures/mine.stubs.yaml', true],
+      ['ship/fixtures/ship.stubs.yaml', false],
+    ]);
+    expect(report.results[1].failureReason).toContain('no discovered workflow matches');
+  });
+});
+
 describe('discovery and fixture execution agree (#3183)', () => {
   for (const [label, path] of [
     ['directly under the workflows root', 'hello'],
@@ -1343,8 +1582,7 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       workflowYaml: [
         'name: test-wf',
         'description: executed verdict',
-        'returns: verdict',
-        'outcome_field: succeeded',
+        'returns: { node: verdict, outcome: succeeded }',
         'nodes:',
         '  - id: verdict',
         '    runtime: bun',
@@ -1371,11 +1609,11 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       results: [
         {
           outcome: 'completed',
-          authoredOutcome: 'failed',
+          completedOutcome: 'failed',
           pass: false,
           failureReason: 'expected authored outcome succeeded, dry-run reported failed',
         },
-        { outcome: 'completed', authoredOutcome: 'failed', pass: true },
+        { outcome: 'completed', completedOutcome: 'failed', pass: true },
       ],
     });
     expect(formatFixtureReport(report)).toContain('Authored outcome: failed');
@@ -1401,9 +1639,12 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       writeFileSync(join(cwd, 'scratch.txt'), 'untracked stray\n');
       const dirtyReport = await runFixtures({ workflows, cwd });
       expect(dirtyReport.passed).toBe(1);
-      expect(
-        execSpy.mock.calls.filter(([cmd]) => cmd === 'git').map(([, args]) => args.slice(0, 2))
-      ).toEqual([
+      // Node scratch release lists worktrees once per node end, whatever the fixture's
+      // isolation does; it is not the preflight this guards against.
+      const isolationCalls = execSpy.mock.calls
+        .filter(([cmd, args]) => cmd === 'git' && !(args[0] === '-C' && args[3] === 'list'))
+        .map(([, args]) => args.slice(0, 2));
+      expect(isolationCalls).toEqual([
         ['worktree', 'add'],
         ['worktree', 'remove'],
         ['worktree', 'add'],

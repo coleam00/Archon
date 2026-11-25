@@ -15,6 +15,11 @@ export class CliTestScope {
   }
 
   async run(command: string[], cwd: string, env: NodeJS.ProcessEnv, input = '') {
+    return this.start(command, cwd, env, input).result;
+  }
+
+  /** `run`, keeping the child so a test can signal it before it settles. */
+  start(command: string[], cwd: string, env: NodeJS.ProcessEnv, input = '') {
     if (this.closed) throw new Error('CLI test scope is closed');
     const child = Bun.spawn(command, { cwd, env, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
     const settled = Promise.all([
@@ -25,9 +30,11 @@ export class CliTestScope {
     this.children.set(child, settled);
     child.stdin.write(input);
     child.stdin.end();
-    const [output, error, code] = await settled;
-    if (this.closed) throw new Error('CLI test scope is closed');
-    return { output, error, code };
+    const result = settled.then(([output, error, code]) => {
+      if (this.closed) throw new Error('CLI test scope is closed');
+      return { output, error, code };
+    });
+    return { child, result };
   }
 
   async close(): Promise<void> {

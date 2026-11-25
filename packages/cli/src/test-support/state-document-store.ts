@@ -2,6 +2,8 @@ import {
   applyStatePatch,
   statePutSchema,
   parseStatePatchInput,
+  stateClaimSchema,
+  stateClaimValue,
   stateDeleteSchema,
   stateNamePrefixSchema,
   statePatchOperation,
@@ -92,6 +94,14 @@ export function createInMemoryStateDocumentStore(
     },
     deleteStateDocument: async (supplied): ReturnType<IStateDocumentStore['deleteStateDocument']> =>
       commit(stateDeleteSchema.parse(supplied), { op: 'delete' }, null),
+    claimStateDocument: async (supplied): ReturnType<IStateDocumentStore['claimStateDocument']> => {
+      const input = stateClaimSchema.parse(supplied);
+      return commit(
+        { ...input, lease: 'take' },
+        { op: 'claim' },
+        stateClaimValue(rows(input.scope, input.name).at(-1), input)
+      );
+    },
     listStateRevisions: async (
       scope,
       name,

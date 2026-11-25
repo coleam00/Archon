@@ -67,18 +67,18 @@ function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): Reac
 
   return (
     <div
-      className={`flex w-[180px] cursor-pointer overflow-hidden rounded-lg border bg-surface transition-all ${
+      className={`flex w-45 cursor-pointer overflow-hidden rounded-lg border bg-surface transition-all ${
         selected ? 'border-accent-bright ring-1 ring-accent-bright' : 'border-border'
       }`}
     >
       <Handle type="target" position={Position.Top} className="!h-2 !w-2 !bg-accent" />
 
-      <div aria-hidden className="w-[3px] shrink-0" style={stripeStyle} />
+      <div aria-hidden className="w-0.75 shrink-0" style={stripeStyle} />
 
       <div className="min-w-0 flex-1 px-2.5 py-2">
         <div className="mb-1 flex items-center gap-1.5">
           <span
-            className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase"
+            className="shrink-0 rounded px-1.5 py-0.5 text-console-9 font-semibold uppercase"
             style={badgeStyle}
           >
             {data.label}
@@ -89,7 +89,9 @@ function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): Reac
         </div>
 
         {preview.length > 0 ? (
-          <div className="mb-1 truncate font-mono text-[10px] text-text-tertiary">{preview}</div>
+          <div className="mb-1 truncate font-mono text-console-10 text-text-tertiary">
+            {preview}
+          </div>
         ) : null}
 
         <div className="flex flex-wrap gap-1">
@@ -110,7 +112,7 @@ function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): Reac
 
 function Pill({ children }: { children: ReactNode }): ReactElement {
   return (
-    <span className="inline-flex items-center rounded bg-surface-inset px-1.5 py-0.5 text-[9px] font-medium text-text-secondary">
+    <span className="inline-flex items-center rounded bg-surface-inset px-1.5 py-0.5 text-console-9 font-medium text-text-secondary">
       {children}
     </span>
   );

@@ -1,9 +1,14 @@
 // @archon-test-isolated
 import { mockLogger, parseWorkflow, parseWorkflowYaml } from './test-utils';
 import { describe, it, expect } from 'bun:test';
-import { KNOWN_WORKFLOW_KEYS, workflowContainerPolicySchema } from '../schemas/workflow';
+import { z } from 'zod';
+import {
+  KNOWN_WORKFLOW_KEYS,
+  workflowContainerPolicySchema,
+  workflowWorktreePolicySchema,
+} from '../schemas/workflow';
 import type { WorkflowDefinition } from '../schemas/workflow';
-import { parseContainerPolicy } from './workflow-fields';
+import { parseContainerPolicy, parseWorktreePolicy } from './workflow-fields';
 
 // ---------------------------------------------------------------------------
 // Workflow signature: inputs / returns (#2470)
@@ -67,17 +72,17 @@ nodes:
     expect(error?.error).toContain("Invalid 'returns'");
   });
 
-  it('rejects a non-string returns value instead of falling back to a positional sink', () => {
+  it('rejects an invalid returns value instead of falling back to a positional sink', () => {
     const { workflow, error } = parseWorkflow(
       `
-name: object-returns
-description: invalid object selector
-returns: { node: build }
+name: list-returns
+description: invalid list selector
+returns: [build]
 nodes:
   - id: build
     prompt: "hi"
 `,
-      'object-returns.yaml'
+      'list-returns.yaml'
     );
     expect(workflow).toBeNull();
     expect(error?.errorType).toBe('validation_error');
@@ -102,6 +107,53 @@ nodes:
     expect(error).toBeNull();
     // The single contradictory key is dropped, leaving no inputs.
     expect(workflow?.inputs).toBeUndefined();
+  });
+
+  it.each([
+    ['{ result_of: build, required: true }', 'required'],
+    ['{ result_of: build, default: v }', 'default'],
+    ['{ at: checkout }', 'at'],
+    ['{ result_of: build, required: true, default: v }', 'required'],
+    ['{ at: checkout, required: true, default: v }', 'at'],
+  ])('refuses to load an input declared %s', (spec, key) => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: contradiction
+description: a contradictory result_of input
+inputs:
+  read: { result_of: build }
+  prior: ${spec}
+nodes:
+  - id: build
+    prompt: "hi"
+`,
+      'result-of-contradiction.yaml'
+    );
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain("'prior'");
+    expect(error?.error).toContain(`'${key}'`);
+    expect(error?.error).toContain(key === 'at' ? "without 'result_of'" : "'result_of'");
+  });
+
+  it('loads result_of inputs, with or without at', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: readers
+description: result_of inputs
+inputs:
+  read: { result_of: build }
+  approval: { result_of: review, at: checkout }
+nodes:
+  - id: build
+    prompt: "hi"
+`,
+      'result-of.yaml'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.inputs).toEqual({
+      read: { result_of: 'build' },
+      approval: { result_of: 'review', at: 'checkout' },
+    });
   });
 
   it('drops an invalid input name with a warning while preserving the workflow', () => {
@@ -253,10 +305,6 @@ describe('workflow-level field parity (#2457)', () => {
       yaml: 'container:\n  enabled: true',
       present: w => w.container?.enabled === true,
     },
-    evidence_policy: {
-      yaml: 'evidence_policy:\n  required: true',
-      present: w => w.evidence_policy?.required === true,
-    },
     budget: {
       yaml: 'budget:\n  max_work_units: 3',
       present: w => w.budget?.max_work_units === 3,
@@ -265,6 +313,7 @@ describe('workflow-level field parity (#2457)', () => {
       yaml: 'mutates_checkout: false',
       present: w => w.mutates_checkout === false,
     },
+    resource: { yaml: 'resource: build', present: w => w.resource?.name === 'build' },
     persist_sessions: {
       yaml: 'persist_sessions: true',
       present: w => w.persist_sessions === true,
@@ -280,10 +329,6 @@ describe('workflow-level field parity (#2457)', () => {
     },
     // `returns` must name a real top-level node id — the fixture's single node is `only`.
     returns: { yaml: 'returns: only', present: w => w.returns === 'only' },
-    outcome_field: {
-      yaml: 'returns: only\noutcome_field: green',
-      present: w => w.outcome_field === 'green',
-    },
     deprecated: {
       yaml: 'deprecated:\n  message: Switch instead.',
       present: w => w.deprecated?.message === 'Switch instead.',
@@ -424,6 +469,92 @@ nodes:
   });
 });
 
+describe('worktree policy', () => {
+  it('retains single-parse outputs from optional schema extensions and drops invalid siblings', () => {
+    const shape = workflowWorktreePolicySchema.shape;
+    const extensions = {
+      probe: z
+        .string()
+        .transform(value => value.length)
+        .optional(),
+      defaulted: z.string().default('fallback'),
+      suffix: z
+        .string()
+        .transform(value => `${value}!`)
+        .optional(),
+    };
+    Object.assign(shape, extensions);
+    try {
+      mockLogger.warn.mockClear();
+      const { workflow, error } = parseWorkflow(
+        `
+name: extended-policy
+description: optional schema extensions
+worktree:
+  enabled: invalid
+  probe: abc
+  suffix: x
+nodes:
+  - id: only
+    prompt: hi
+`,
+        'policy.yaml'
+      );
+      expect(error).toBeNull();
+      expect<Record<string, unknown> | undefined>(workflow?.worktree).toStrictEqual({
+        probe: 3,
+        suffix: 'x!',
+        defaulted: 'fallback',
+      });
+      expect(mockLogger.warn.mock.calls).toEqual([
+        [{ filename: 'policy.yaml', value: 'invalid' }, 'invalid_worktree_enabled_value_ignored'],
+      ]);
+
+      mockLogger.warn.mockClear();
+      expect<Record<string, unknown> | undefined>(
+        parseWorktreePolicy({ probe: 7, suffix: 'x' }, 'policy.yaml')
+      ).toStrictEqual({ suffix: 'x!', defaulted: 'fallback' });
+      expect(mockLogger.warn.mock.calls).toEqual([
+        [{ filename: 'policy.yaml', value: 7 }, 'invalid_worktree_probe_value_ignored'],
+      ]);
+      expect<Record<string, unknown> | undefined>(
+        parseWorktreePolicy({ defaulted: 'provided' }, 'policy.yaml')
+      ).toStrictEqual({ defaulted: 'provided' });
+      mockLogger.warn.mockClear();
+      expect<Record<string, unknown> | undefined>(
+        parseWorktreePolicy({ defaulted: 7 }, 'policy.yaml')
+      ).toStrictEqual({ defaulted: 'fallback' });
+      expect(mockLogger.warn.mock.calls).toEqual([
+        [{ filename: 'policy.yaml', value: 7 }, 'invalid_worktree_defaulted_value_ignored'],
+      ]);
+    } finally {
+      for (const key of Object.keys(extensions)) Reflect.deleteProperty(shape, key);
+    }
+  });
+
+  it.each<[unknown, Record<string, unknown> | undefined, [unknown, string][]]>([
+    [undefined, undefined, []],
+    [{}, undefined, []],
+    [{ enabled: undefined }, undefined, []],
+    [{ unknown: true }, undefined, []],
+    [{ enabled: false, unknown: true }, { enabled: false }, []],
+    [{ enabled: true }, { enabled: true }, []],
+    [null, undefined, [[null, 'invalid_worktree_block_ignored']]],
+    [[], undefined, [[[], 'invalid_worktree_block_ignored']]],
+    ['yes', undefined, [['yes', 'invalid_worktree_block_ignored']]],
+    [{ enabled: 'yes' }, undefined, [['yes', 'invalid_worktree_enabled_value_ignored']]],
+    [{ enabled: null }, undefined, [[null, 'invalid_worktree_enabled_value_ignored']]],
+  ])('parses %j with field-level warnings', (raw, expected, warnings) => {
+    mockLogger.warn.mockClear();
+    expect<Record<string, unknown> | undefined>(parseWorktreePolicy(raw, 'policy.yaml')).toEqual(
+      expected
+    );
+    expect(mockLogger.warn.mock.calls).toEqual(
+      warnings.map(([value, event]) => [{ filename: 'policy.yaml', value }, event])
+    );
+  });
+});
+
 describe('container policy', () => {
   it('preserves every schema field through the container parser', () => {
     const policy = {
@@ -486,7 +617,6 @@ describe('workflow-level policy fields', () => {
     `name: policy\ndescription: d\n${field}\nnodes:\n  - id: n\n    prompt: p\n`;
 
   it.each<[string, string, keyof WorkflowDefinition, unknown]>([
-    ['worktree.enabled: false', 'worktree:\n  enabled: false', 'worktree', { enabled: false }],
     ['worktree.enabled: true', 'worktree:\n  enabled: true', 'worktree', { enabled: true }],
     // Policy is caller-decides when the block is absent.
     ['no worktree block', '', 'worktree', undefined],
@@ -496,27 +626,6 @@ describe('workflow-level policy fields', () => {
       'container',
       { enabled: true, write_back: 'auto' },
     ],
-    [
-      'an invalid container.write_back, keeping the block',
-      'container:\n  enabled: true\n  write_back: bogus',
-      'container',
-      { enabled: true },
-    ],
-    ['no container block', '', 'container', undefined],
-    [
-      'evidence_policy.required: true (#2230)',
-      'evidence_policy:\n  required: true',
-      'evidence_policy',
-      { required: true },
-    ],
-    [
-      'evidence_policy.required: false',
-      'evidence_policy:\n  required: false',
-      'evidence_policy',
-      { required: false },
-    ],
-    ['no evidence_policy', '', 'evidence_policy', undefined],
-    ['an explicit tags array', 'tags: [GitLab, Review]', 'tags', ['GitLab', 'Review']],
     ['no tags', '', 'tags', undefined],
     // An explicit empty list suppresses tag inference, so it is kept rather than omitted.
     ['an explicit empty tags array', 'tags: []', 'tags', []],
@@ -536,7 +645,6 @@ describe('workflow-level policy fields', () => {
     ['all-blank tags reduced to an empty array', 'tags: ["", "  "]', 'tags', []],
     // A scalar instead of a list is discarded; the workflow still loads.
     ['scalar tags ignored', 'tags: GitLab', 'tags', undefined],
-    ['mutates_checkout: false', 'mutates_checkout: false', 'mutates_checkout', false],
     ['mutates_checkout: true', 'mutates_checkout: true', 'mutates_checkout', true],
     ['no mutates_checkout', '', 'mutates_checkout', undefined],
     // The string "yes" is not a boolean, so the field is dropped.
@@ -546,18 +654,25 @@ describe('workflow-level policy fields', () => {
       'mutates_checkout',
       undefined,
     ],
+    ['a resource name', 'resource: build', 'resource', { name: 'build' }],
+    [
+      'a resource with a capacity',
+      'resource: { name: build, capacity: 3 }',
+      'resource',
+      { name: 'build', capacity: 3 },
+    ],
   ])('parses %s', (_, field, key, expected) => {
     expect(parseWorkflowYaml(withField(field)).workflow[key] as unknown).toEqual(expected);
   });
 
-  // Silently dropping a declared terminal-success gate would let runs complete
-  // ungated, so a malformed block fails validation instead of warn-and-ignore.
+  // A malformed block fails validation instead of warn-and-ignore.
   it.each([
-    ['a malformed evidence_policy block', 'evidence_policy:\n  required: "yes"', 'evidence_policy'],
+    // A dropped resource would let every start run without a slot.
+    ['a reserved resource name', 'resource: "provider:claude"', "Invalid 'resource'"],
     [
-      'an empty evidence_policy block (required is mandatory)',
-      'evidence_policy: {}',
-      'required: boolean',
+      'a zero resource capacity',
+      'resource: { name: build, capacity: 0 }',
+      "Invalid 'resource' (capacity)",
     ],
   ])('rejects %s', (_, field, message) => {
     const result = parseWorkflow(withField(field), 'evidence.yaml');

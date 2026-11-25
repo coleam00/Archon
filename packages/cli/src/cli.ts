@@ -15,6 +15,7 @@ import './workflow-scope';
 // Load Archon env before command imports. loadCliEnv preserves inherited workflow
 // identity and prevents repository env from redirecting the user's stored gh login.
 import { loadCliEnv } from './load-cli-env';
+import { SCHEDULE_LAUNCH_FLAG } from './triggers/schedule-launch-flag';
 import {
   captureDetachedInstallContext,
   restoreDetachedInstallContext,
@@ -23,6 +24,13 @@ import {
 // A command's stdout is its output (`archon … > file`, `| jq`, an agent reading
 // it); logs are diagnostics. Set before anything below can log.
 setLogDestination('stderr');
+// A Windows schedule tick's launcher (`triggers/windows-hidden-desktop.ts`). It runs before
+// any env loads: the job's wrapper inherits this process's environment, which must stay the
+// task's.
+if (process.argv[2] === SCHEDULE_LAUNCH_FLAG) {
+  const { runScheduleLaunch } = await import('./triggers/windows-hidden-desktop');
+  await withDrainedExit(async () => runScheduleLaunch(process.argv[3]));
+}
 const hasDetachedRunConfigHandoff = process.argv
   .slice(2)
   .includes('--internal-detached-run-config');
@@ -52,14 +60,15 @@ import { installPipeSafeConsole } from './utils/safe-console';
 import { withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import { escapeRunJobIfRequested } from './utils/run-job-escape';
-import { rejectConfigOutsideRun, RESUME_RUN_CONFIG_CONFLICT } from './dispatch-guards';
+import { rejectRunFlagsOutsideRun } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
+import { trackerExit } from './utils/tracker-exit';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 installPipeSafeConsole();
 
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
-import { shouldReportCliStart } from './utils/cli-start-telemetry';
+import { cliStartStore, shouldReportCliStart } from './utils/cli-start-telemetry';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { type CliRouteContext, fail, getLog, printUsageFor } from './routes/context';
@@ -139,12 +148,13 @@ interface ParsedCliArgs {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
-  // Anonymous startup event (self-gates on opt-out). Emitted before any early
-  // return so every invocation — including bare `archon`, `--help`, and
-  // `--version` — is counted once; `serve` and detached run owners are counted
+  // Anonymous startup event (self-gates on opt-out, sent once per day). Emitted
+  // before any early return so every invocation — including bare `archon`,
+  // `--help`, and `--version` — can count; `serve` and detached run owners are counted
   // by another process (see shouldReportCliStart). Each early-return path below
   // flushes via shutdownTelemetry(); the main command path flushes in its finally.
-  if (shouldReportCliStart(args, process.env)) captureArchonStarted({ surface: 'cli' });
+  if (shouldReportCliStart(args, process.env))
+    captureArchonStarted({ surface: 'cli', store: await cliStartStore() });
 
   if (args.length === 0) return await printIndexHelp();
 
@@ -235,10 +245,13 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   const command = positionals[0];
   const subcommand = positionals[1];
   const json = values.json as boolean | undefined;
-  if (values['base-branch'] !== undefined && (command !== 'workflow' || subcommand !== 'run')) {
+  const registers =
+    (command === 'workflow' && subcommand === 'run') ||
+    (command === 'project' && subcommand === 'add');
+  if (values['base-branch'] !== undefined && !registers) {
     await fail(
       values.json === true,
-      '--base-branch is only supported by workflow run for initial project registration.'
+      '--base-branch is only supported by workflow run and project add for initial project registration.'
     );
     await shutdownTelemetry();
     return 1;
@@ -284,6 +297,8 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
     return await reportCommandError(error as Error, json);
   } finally {
     if (showUpdateNotice) printUpdateNotice();
+    // Before the database closes: a run this process changed may owe its item's tracker.
+    await trackerExit.syncIfOwed(forgeTrustedEnv);
     // Flush queued telemetry events before the CLI process exits.
     // Short-lived CLI commands lose buffered events if shutdown() is skipped.
     await shutdownTelemetry();
@@ -342,14 +357,7 @@ async function decodeDetachedRunConfig({
     const { decodeWorkflowRunConfigHandoff } = await import(
       '@archon/core/config/run-config-handoff'
     );
-    const detachedRunConfig = decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
-    // Fail-fast for the decode step, not a second copy of the invariant: `workflow-run-admission.ts`
-    // still owns this rejection for every caller. A legitimately spawned detached child
-    // cannot reach it — the parent refuses to seal a config for a continuation before it
-    // forks — so this only fires on a hand-built `--internal-detached-run-config`, and
-    // saves it a database round-trip on the way to the same message.
-    if (values.resume) throw new Error(RESUME_RUN_CONFIG_CONFLICT);
-    return detachedRunConfig;
+    return decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
   }
   return undefined;
 }
@@ -357,29 +365,30 @@ async function decodeDetachedRunConfig({
 /** Routes the commands that run before the project gate, then gates and routes the rest. */
 async function dispatchCommand(base: CliRouteContext): Promise<number> {
   const { command, subcommand, values } = base;
-  const configOutsideRun = rejectConfigOutsideRun(
-    command,
-    subcommand,
-    values.config,
-    values['config-from-run']
-  );
-  if (configOutsideRun) return await fail(base.json, configOutsideRun);
+  const flagOutsideRun = rejectRunFlagsOutsideRun(command, subcommand, values);
+  if (flagOutsideRun) return await fail(base.json, flagOutsideRun);
   await assertFileStoreIfNeeded(base);
   const ctx = { ...base, detachedRunConfig: await decodeDetachedRunConfig(base) };
 
   if (command === 'forge') return await routes.runForge(ctx);
+  if (command === 'script') return await routes.runScript(ctx);
   if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
     return await workflowRoutes.runWorkflowContinuation(ctx, subcommand);
   }
   if (command === 'continue') return await routes.runRemovedContinue(ctx);
   if (command === 'provider') return await routes.runProvider(ctx);
   if (command === 'plugin') return await routes.runPlugin(ctx);
+  // Reads the pack from --cwd as discovery finds it; the checkout need not be registered.
+  if (command === 'pack') return await routes.runPack(ctx);
   // Note: orphaned run cleanup moved to `workflow cleanup` command only.
   // Running it on every CLI startup killed parallel workflow runs (all
   // 'running' status rows were marked failed by each new process).
 
   if (command === 'workflow' && subcommand === 'test') {
     return await workflowRoutes.runWorkflowTest(ctx);
+  }
+  if (command === 'workflow' && subcommand === 'types') {
+    return await workflowRoutes.runWorkflowTypes(ctx);
   }
 
   const effectiveCwd = await resolveEffectiveCwd(ctx);
@@ -391,7 +400,9 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
 const NO_GIT_COMMANDS = [
   'state',
   'metrics',
+  'tracker',
   'trigger',
+  'hold',
   'version',
   'help',
   'setup',
@@ -404,21 +415,49 @@ const NO_GIT_COMMANDS = [
   'user',
   'ai',
   'project',
+  // Isolation commands act on every registered project and never read the working directory.
+  'isolation',
 ];
 
-function requiresGitRepo(command: string | undefined, subcommand: string | undefined): boolean {
-  // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
-  // directory's project, which need not be registered or a git repository.
+/** Item reads and writes that take their item and project from `--item-of <run-id>`. */
+const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing'];
+
+/**
+ * Reads of one run by id. A full run id names one run in the whole store, and
+ * `--chat-project-id` names the project, so either needs no directory and skips the gate.
+ * A short prefix goes through the gate, so it resolves in the project `workflow runs`
+ * lists from the same directory, and is refused with a request for the full id where the
+ * gate finds no project. `wait --item` resolves its item in the project, so it is not one.
+ */
+const BY_ID_READS = ['get', 'logs', 'artifacts', 'wait'];
+function isByIdRead({ command, subcommand, values }: CliRouteContext): boolean {
   return (
-    !NO_GIT_COMMANDS.includes(command ?? '') &&
-    !(command === 'workflow' && subcommand === 'attention')
+    command === 'workflow' && BY_ID_READS.includes(subcommand ?? '') && values.item === undefined
   );
+}
+
+function requiresGitRepo({ command, subcommand, values }: CliRouteContext): boolean {
+  // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
+  // directory's project, which need not be registered or a git repository. `workflow
+  // notice` acts on the run its environment names, wherever the node runs, and so does
+  // an `--item-of` read or write, which `archon:script` makes from any directory.
+  if (NO_GIT_COMMANDS.includes(command ?? '')) return false;
+  if (command !== 'workflow') return true;
+  if (subcommand === 'attention' || subcommand === 'notice') return false;
+  return !(values['item-of'] !== undefined && ITEM_OF_SUBCOMMANDS.includes(subcommand ?? ''));
 }
 
 /** The project gate: the directory a command acts on, or the exit code of its refusal. */
 async function resolveEffectiveCwd(ctx: CliRouteContext): Promise<string | number> {
   const { command, subcommand, values, cwd, json } = ctx;
-  if (!requiresGitRepo(command, subcommand)) return cwd;
+  if (!requiresGitRepo(ctx)) return cwd;
+  if (isByIdRead(ctx)) {
+    const runId = ctx.positionals[2];
+    if (values['chat-project-id'] !== undefined) return cwd;
+    // Imported here: the CLI startup import boundary keeps `@archon/core` out of startup.
+    const { isFullRunId } = await import('@archon/core/workflows/run-id');
+    if (runId !== undefined && isFullRunId(runId)) return cwd;
+  }
   if (!existsSync(cwd)) {
     return await fail(json, `Error: Directory does not exist: ${cwd}`);
   }
@@ -447,6 +486,7 @@ async function resolveRegisteredCwd(
     const host = await createCliWorkflowHost();
     const { codebase, repoRoot } = await resolveCodebaseForPath(realCwd, host.records.codebases);
     if (!repoRoot && codebase?.kind !== 'folder') {
+      if (isByIdRead(ctx)) return await refuseShortRunId(ctx);
       return await fail(
         ctx.json,
         'Error: Not in a git repository.\n' +
@@ -457,6 +497,12 @@ async function resolveRegisteredCwd(
   } catch (error) {
     return await fallBackToRepoRoot(ctx, realCwd, error as Error);
   }
+}
+
+/** A short prefix read where the gate finds no project to resolve it in. */
+async function refuseShortRunId(ctx: CliRouteContext): Promise<number> {
+  const { shortRunIdNeedsProject } = await import('./commands/workflow-shared');
+  return await fail(ctx.json, `Error: ${shortRunIdNeedsProject(ctx.positionals[2] ?? '')}`);
 }
 
 /** Workflow discovery still works in an unverifiable checkout when its git root is known. */
@@ -480,8 +526,12 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
       return await routes.runState(ctx);
     case 'metrics':
       return await routes.runMetrics(ctx);
+    case 'tracker':
+      return await routes.runTracker(ctx);
     case 'trigger':
       return await routes.runTrigger(ctx);
+    case 'hold':
+      return await routes.runHold(ctx);
     case 'version':
       return await routes.runVersion();
     case 'help':
@@ -512,6 +562,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowRuns(route);
         case 'resume':
           return await workflowRoutes.runWorkflowResume(route);
+        case 'pause':
+          return await workflowRoutes.runWorkflowPause(route);
         case 'abandon':
           return await workflowRoutes.runWorkflowAbandon(route);
         case 'end-turn':
@@ -534,6 +586,20 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowResetSessions(route);
         case 'event':
           return await workflowRoutes.runWorkflowEvent(route);
+        case 'notice':
+          return await workflowRoutes.runWorkflowNotice(route);
+        case 'rule':
+          return await workflowRoutes.runWorkflowRule(route);
+        case 'end':
+          return await workflowRoutes.runWorkflowEnd(route);
+        case 'items':
+          return await workflowRoutes.runWorkflowItems(route);
+        case 'merged':
+          return await workflowRoutes.runWorkflowMerged(route);
+        case 'landing':
+          return await workflowRoutes.runWorkflowLanding(route);
+        case 'link':
+          return await workflowRoutes.runWorkflowLink(route);
         default:
           return await workflowRoutes.runUnknownWorkflowSubcommand(route);
       }

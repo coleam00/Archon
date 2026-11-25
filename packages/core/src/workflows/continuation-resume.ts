@@ -1,10 +1,13 @@
+import { CONTINUATION_GIVEN_UP_METADATA_KEY } from '@archon/workflows/schemas/continuation-give-up';
 import * as runSource from '@archon/workflows/run-source';
 import {
   CONTINUATION_RETRY_MS,
   WorkflowNotResumableError,
+  RunLimitError,
   WorkflowResourceBusyError,
   resumeCursorMatches,
   deadlineWaitCursor,
+  leasedResumeCursor,
   type IWorkflowStore,
   type ResumeRefusal,
 } from '@archon/workflows/store';
@@ -18,7 +21,7 @@ import type {
   WorkflowResumeInput,
 } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
-import type { WorkflowResumeCursor } from '@archon/workflows/store';
+import type { ResumeRequestCursor, WorkflowResumeCursor } from '@archon/workflows/store';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   answeredPauseContinuation,
@@ -38,9 +41,8 @@ export function unverifiableSourceGuidance(
 ): string {
   return `frozen workflow source cannot be verified (${error.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${runId}, or abandon with archon workflow abandon ${runId}.`;
 }
-type Accepted = Extract<WorkflowResumeAdmission, { accepted: true }>;
 export type ContinuationAdmission =
-  | { kind: 'accepted'; run: WorkflowRun; settled: Accepted['settled'] }
+  | { kind: 'accepted'; run: WorkflowRun; settled: WorkflowResumeAdmission['settled'] }
   | { kind: 'not-accepted' }
   /** The run's resource is full; it stays paused and keeps its place as a capacity waiter. */
   | {
@@ -56,6 +58,8 @@ export type ContinuationAdmission =
       refusal: Exclude<ResumeRefusal, 'waiting'>;
       message: string;
     }
+  /** The install's run limit is full; the run keeps its state and a later wake retries it. */
+  | { kind: 'run_limit_full'; message: string }
   | { kind: 'unavailable'; reason: string; sourceError?: runSource.WorkflowSourceIntegrityError };
 export type ContinuationContext =
   | { kind: 'ready'; platform: IWorkflowPlatform; conversationId: string }
@@ -80,7 +84,7 @@ export async function resumeRunContinuation(
   host: { deps: WorkflowDeps; engine: IWorkflowEngine },
   runId: string,
   resolveContext: (run: WorkflowRun) => Promise<ContinuationContext>,
-  cursor?: WorkflowResumeCursor,
+  cursor?: ResumeRequestCursor,
   options: { actorUserId?: string; resolveProject?: ResolveProject } & Pick<
     WorkflowResumeOptions,
     'deferScratchCleanup'
@@ -88,7 +92,7 @@ export async function resumeRunContinuation(
 ): Promise<ContinuationAdmission> {
   const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
-  if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) return { kind: 'not-accepted' };
+  if (!continuable(run, cursor)) return { kind: 'not-accepted' };
   try {
     await runSource.resolveRunSourceCapture(run.metadata);
   } catch (error) {
@@ -132,9 +136,22 @@ export async function resumeRunContinuation(
   });
 }
 
+/**
+ * A failed or paused run continues. A `running` run continues only under the `ownerless`
+ * cursor of an operator's resume, which `resumeWorkflow` checked; the store refuses it if
+ * its claim moved since.
+ */
+function continuable(run: WorkflowRun, cursor: ResumeRequestCursor | undefined): boolean {
+  if (run.status === 'running') return cursor?.kind === 'ownerless';
+  return RESUMABLE_WORKFLOW_STATUSES.includes(run.status);
+}
+
+/** The engine's resume input before the live-owner lease is attached to its cursor. */
+type UnleasedResumeInput = Omit<WorkflowResumeInput, 'cursor'> & { cursor?: ResumeRequestCursor };
+
 async function resumeWithLiveOwner(
   engine: IWorkflowEngine,
-  input: WorkflowResumeInput
+  input: UnleasedResumeInput
 ): Promise<ContinuationAdmission> {
   try {
     const owner = await startRunLiveOwner(input.run.id);
@@ -147,8 +164,10 @@ async function resumeWithLiveOwner(
     };
     let accepted = false;
     try {
-      const admission = await engine.resume(input);
-      if (!admission.accepted) return { kind: 'not-accepted' };
+      const admission = await engine.resume({
+        ...input,
+        cursor: leasedResumeCursor(input.cursor, owner.lease),
+      });
       accepted = true;
       const settled = admission.settled.finally(close);
       // Hosts may attach their settlement handler after other admissions finish.
@@ -169,6 +188,7 @@ async function resumeWithLiveOwner(
         ? { kind: 'waiting_for_capacity', blocker, message }
         : { kind: 'resource_busy', blocker, refusal, message };
     }
+    if (error instanceof RunLimitError) return { kind: 'run_limit_full', message: error.message };
     throw error;
   }
 }
@@ -197,7 +217,7 @@ export type ContinuationWakeOutcome = { runId: string; deferError?: unknown } & 
 
 type ContinuationStore = Pick<
   IWorkflowStore,
-  'listDueWorkflowContinuations' | 'deferWorkflowContinuation'
+  'listDueWorkflowContinuations' | 'deferWorkflowContinuation' | 'updateWorkflowRun'
 >;
 const structuralFailures = new Map<string, { cursor: WorkflowResumeCursor; count: number }>();
 const warnedRuns = new Set<string>();
@@ -246,7 +266,9 @@ export async function wakeDueWorkflowContinuations(
           { runId: run.id, kind: outcome.kind, blocker: outcome.blocker },
           'workflow_continuation_capacity_refused'
         );
-      if (sourceFailureLimitReached(outcome, cursor)) return outcome;
+      if (outcome.kind === 'run_limit_full')
+        log.info({ runId: run.id, kind: outcome.kind }, 'workflow_continuation_capacity_refused');
+      if (await sourceFailureLimitReached(store, outcome, cursor)) return outcome;
       if (outcome.kind === 'accepted') structuralFailures.delete(run.id);
       if (outcome.kind !== 'accepted') {
         try {
@@ -265,10 +287,36 @@ export async function wakeDueWorkflowContinuations(
   );
 }
 
-function sourceFailureLimitReached(
+/** Record on the run that this host gave up on it, so attention shows it after a restart. */
+async function recordGiveUp(
+  store: Pick<ContinuationStore, 'updateWorkflowRun'>,
+  runId: string,
+  attempts: number,
+  path: string | null,
+  cursor: WorkflowResumeCursor
+): Promise<void> {
+  try {
+    await store.updateWorkflowRun(runId, {
+      metadata: {
+        [CONTINUATION_GIVEN_UP_METADATA_KEY]: {
+          at: new Date().toISOString(),
+          attempts,
+          path,
+          cursor,
+        },
+      },
+    });
+  } catch (error) {
+    // The host still stops resuming it; only the record attention reads is missing.
+    log.error({ err: error, runId }, 'workflow_continuation_give_up_record_failed');
+  }
+}
+
+async function sourceFailureLimitReached(
+  store: Pick<ContinuationStore, 'updateWorkflowRun'>,
   outcome: ContinuationWakeOutcome,
   cursor: WorkflowResumeCursor
-): boolean {
+): Promise<boolean> {
   const runId = outcome.runId;
   const sourceError =
     outcome.kind === 'unavailable'
@@ -286,6 +334,7 @@ function sourceFailureLimitReached(
           { err: sourceError, runId, path: sourceError.path, attempts: count },
           `This host stopped automatically resuming run ${runId}: ${unverifiableSourceGuidance(runId, sourceError)}`
         );
+        await recordGiveUp(store, runId, count, sourceError.path ?? null, cursor);
       }
       return true;
     }

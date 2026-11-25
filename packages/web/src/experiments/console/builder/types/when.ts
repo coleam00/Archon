@@ -2,7 +2,8 @@
  * AST types for the `when:` expression grammar.
  *
  * Wire syntax: `$<nodeId>.output[.<field>]` (canonical), `$<nodeId>.<field>`
- * (shorthand) or `$INPUTS.<name>` (a declared workflow input), compared against a
+ * (shorthand), `$INPUTS.<name>` (a declared workflow input), or
+ * `$LOOP_PREV.<nodeId>.output[.<field>]` in loop context, compared against a
  * single-quoted string or a bare number/boolean, joined by `||` (outer / OR) and
  * `&&` (inner / AND). The AST is in disjunctive normal form: an outer OR of inner
  * AND-groups of atoms.
@@ -49,8 +50,15 @@ export interface InputAtom extends AtomComparison {
   name: string;
 }
 
+/** A comparison against output from the previous loop-group iteration. */
+export interface LoopPrevAtom extends AtomComparison {
+  kind: 'loop_prev';
+  nodeId: string;
+  field?: string;
+}
+
 /** A single comparison atom. */
-export type AtomNode = NodeAtom | InputAtom;
+export type AtomNode = NodeAtom | InputAtom | LoopPrevAtom;
 
 /** Disjunctive normal form: outer OR of inner AND-groups. */
 export interface WhenAst {

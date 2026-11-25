@@ -66,7 +66,10 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     // the adopted lane's worktree and resolve the branch's vintage of the workflow.
     discoverMock
       .mockResolvedValueOnce({
-        workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Parent vintage' })],
+        // `project`: a run with an explicit --workflow-source must find the named workflow there.
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'assist', description: 'Parent vintage' }, 'project'),
+        ],
         errors: [],
       })
       .mockResolvedValueOnce({
@@ -176,53 +179,6 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     });
 
     expect(workflowDb.findWorkflowRunsByIdPrefix).toHaveBeenCalledWith('0b1ee8da', 'cb-adopt');
-    expect(adoption.resolveWorkflowAdoption).toHaveBeenCalledWith(
-      expect.objectContaining({ adoptedRunId })
-    );
-  });
-
-  it('rejects an ambiguous adopted run prefix with its candidates', async () => {
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDb = await import('@archon/core/db/workflows');
-    const adoption = await import('@archon/core/operations/workflow-adoption');
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockClear();
-    (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockClear();
-    setupAdoptMocks();
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-adopt',
-      name: 'test-repo',
-      default_cwd: '/test/path',
-      kind: 'repo',
-    });
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: '0b1ee8da-1111-2222-3333-444455556666' },
-      { id: '0b1ee8da-9999-8888-7777-666655554444' },
-    ]);
-
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-        adoptRunId: '0b1ee8da',
-      })
-    ).rejects.toThrow(
-      '0b1ee8da-1111-2222-3333-444455556666\n  0b1ee8da-9999-8888-7777-666655554444'
-    );
-    expect(adoption.resolveWorkflowAdoption).not.toHaveBeenCalled();
-    (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockReset();
-  });
-
-  it('passes a full adopted run id through unchanged', async () => {
-    const adoptedRunId = '0b1ee8da-1111-2222-3333-444455556666';
-    const workflowDb = await import('@archon/core/db/workflows');
-    const adoption = await import('@archon/core/operations/workflow-adoption');
-    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockClear();
-    (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockClear();
-    setupAdoptMocks();
-
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-      adoptRunId: adoptedRunId,
-    });
-
-    expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
     expect(adoption.resolveWorkflowAdoption).toHaveBeenCalledWith(
       expect.objectContaining({ adoptedRunId })
     );
@@ -423,12 +379,17 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       // Both capture calls use the detached child's pre-created run ID.
       setupAdoptMocks();
       const workflowDb = await import('@archon/core/db/workflows');
-      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      const handedOverRow = {
         id: 'run-detached-child',
         metadata: { cli_detached_launch_token: 'launch-token' },
         workflow_name: 'assist',
         status: 'pending',
-      });
+      };
+      // Admission reads the row, and the child reads it again under its lease.
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockImplementation(
+        async (id: string) =>
+          id === handedOverRow.id ? handedOverRow : makeContinuationRun({ id })
+      );
       const prepareMock = prepareWorkflowSource as ReturnType<typeof mock>;
 
       const tempRoot = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-recapture-same-root-')));

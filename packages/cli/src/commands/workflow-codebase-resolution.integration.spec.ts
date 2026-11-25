@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, expect, test, mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { listCodebaseRegistrations } from '@archon/core/db/codebases';
@@ -259,6 +260,59 @@ test.each(['primary', 'external linked worktree'])(
   },
   60_000
 );
+
+test('a run that reuses a worktree in a repository with no remote keeps the base it was cut from', () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-no-remote-reuse-'));
+  roots.push(root);
+  const repo = join(root, 'repo');
+  const home = join(root, 'home');
+  const out = join(root, 'base.out');
+  mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(
+    join(repo, '.archon', 'workflows', 'base.yaml'),
+    `name: base\ndescription: Report the base\nnodes:\n  - id: base\n    bash: echo "$BASE_BRANCH" > '${out}'\n`
+  );
+  git(repo, ['init', '-qb', 'trunk']);
+  git(repo, ['add', '.']);
+  git(repo, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'fixture']);
+  const latestRun = (): string => {
+    const db = new Database(join(home, 'archon.db'), { readonly: true });
+    try {
+      const row = db
+        .query<{ id: string }, []>(
+          'SELECT id FROM remote_agent_workflow_runs ORDER BY started_at DESC, rowid DESC LIMIT 1'
+        )
+        .get();
+      if (!row) throw new Error('No run recorded');
+      return row.id;
+    } finally {
+      db.close();
+    }
+  };
+  // Create the worktree, reuse it by branch, then adopt the run that left it.
+  for (const attempt of ['creates', 'reuses', 'adopts']) {
+    const lane = attempt === 'adopts' ? ['--adopt', latestRun()] : ['--branch', 'repeat'];
+    const result = spawnSync(
+      process.execPath,
+      [join(import.meta.dir, '..', 'cli.ts'), 'workflow', 'run', 'base', ...lane],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          DATABASE_URL: '',
+          WORKFLOW_ID: '',
+          ARCHON_NODE_EXECUTION: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      }
+    );
+    expect(result.status, `${attempt}: ${result.stdout}${result.stderr}`).toBe(0);
+    expect(readFileSync(out, 'utf8').trim(), attempt).toBe('trunk');
+  }
+});
 
 test('legacy relative registration fails with recovery guidance', () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-legacy-cwd-'));

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import type { components } from '@/lib/api.generated';
 import { detailFixture, terminalRecord } from '../primitives/run.test-fixtures';
 import { toRun } from '../primitives/run';
-import { getRun, listRuns, respondRun } from './runs';
+import { getRun, listRuns, respondRun, fetchArtifact, listRunsNeedingAttention } from './runs';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -22,6 +22,7 @@ describe('run responses', () => {
       run: {
         ...detailFixture.run,
         outcome: 'succeeded',
+        completed_outcome: 'succeeded',
         terminal_record: terminalRecord(
           {
             availability: 'available',
@@ -132,4 +133,92 @@ describe('respondRun', () => {
     }) as typeof fetch;
     await respondRun('legacy-run', 'approve');
   });
+});
+
+test('artifact bytes use a generated route with the complete encoded filename', async () => {
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    expect(input).toBe('/api/artifacts/run%2F1/nested%2Fa%20b%25.md');
+    return Promise.resolve(new Response('# artifact\n'));
+  }) as typeof fetch;
+  expect(await fetchArtifact('run/1', 'nested/a b%.md')).toBe('# artifact\n');
+});
+
+for (const [body, expected] of [
+  [JSON.stringify({ error: 'missing artifact' }), 'missing artifact'],
+  [JSON.stringify({ error: 42 }), 'Failed to fetch artifact: 404'],
+  ['<html>proxy</html>', 'Failed to fetch artifact: 404'],
+]) {
+  test(`artifact error handling: ${body}`, async () => {
+    globalThis.fetch = Object.assign(() => Promise.resolve(new Response(body, { status: 404 })), {
+      preconnect: originalFetch.preconnect,
+    });
+    await expect(fetchArtifact('run-1', 'a.md')).rejects.toThrow(expected);
+  });
+}
+
+test('attention list refuses a count response instead of claiming an empty queue', async () => {
+  respond({ counts: { by: 'project', counts: [] } });
+  await expect(listRunsNeedingAttention()).rejects.toThrow('counts instead of runs');
+});
+
+test('attention list keeps asks no run holds apart from run items, with refusals', async () => {
+  const base = { project: null, revision: 1, labels: {}, pausedAt: null, message: 'Keep it?' };
+  const ask = {
+    ...base,
+    kind: 'attention',
+    ref: 'ask:a1',
+    item: { id: 'item-1', projectKey: 'acme', key: 'issues/7' },
+    form: 'select',
+    options: [{ id: 'keep', does: 'Keeps it.', cost: 'A flag.' }],
+  };
+  const held = {
+    ...base,
+    kind: 'awaiting_response',
+    ref: 'run-1:pause-1',
+    item: { id: 'item-2', projectKey: 'acme', key: 'issues/8' },
+    run: { id: 'run-1' },
+  };
+  respond({ runs: [detailFixture.run], items: [ask, held], answerRefusals: { 'ask:a1': 'No.' } });
+  expect<unknown>(await listRunsNeedingAttention()).toEqual({
+    runs: [toRun(detailFixture.run)],
+    ownerLost: [],
+    asks: [ask],
+    answerRefusals: { 'ask:a1': 'No.' },
+    itemIds: new Set(['item-1', 'item-2']),
+    degraded: [],
+  });
+});
+
+test('attention list keeps a lost-owner item holder, which has no paused run row', async () => {
+  const items: components['schemas']['RunsNeedingAttentionResponse']['items'] = [
+    {
+      kind: 'owner_lost',
+      ref: 'holder-1',
+      project: { key: 'p', codebaseId: 'cb-1', name: 'demo' },
+      item: { id: 'i-1', projectKey: 'p', key: 'issue-1' },
+      revision: 1,
+      labels: {},
+      pausedAt: null,
+      run: {
+        id: 'holder-1',
+        workflow: 'build',
+        parentRunId: null,
+        fanOut: null,
+        context: { artifactsDir: null, transcript: null, workingPath: null, branch: null },
+      },
+      observedStatus: 'running',
+    },
+  ];
+  respond({ runs: [], items, answerRefusals: {} });
+  expect((await listRunsNeedingAttention()).ownerLost).toEqual([
+    {
+      runId: 'holder-1',
+      workflow: 'build',
+      projectId: 'cb-1',
+      projectName: 'demo',
+      itemKey: 'issue-1',
+      observedStatus: 'running',
+      start: null,
+    },
+  ]);
 });

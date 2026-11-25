@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { FAN_OUT_CANCEL_REASONS, executionClaim, type IWorkflowStore } from '../store';
 import { TERMINAL_WORKFLOW_STATUSES, isTerminalRunStatus } from '../schemas/workflow-run';
 import { terminalRecordSchema } from '../schemas/terminal-record';
+import { subrunSummaryMetadata } from '../schemas/run-metadata';
+import { childOutcomeFromRun } from '../dag/child-run';
 import type { WorkflowStoreHarness } from '../store-conformance';
 import {
   CONFORMANCE_CONVERSATION_ID,
@@ -25,6 +27,50 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
       store = harness.store;
     });
 
+    test.each([
+      ['a boolean', { kind: 'boolean', value: 'failed' }, undefined, 'failed', 'failed'],
+      ['an enum', { kind: 'enum', value: 'built' }, { node_counts: { total: 1 } }, null, 'built'],
+      ['no', undefined, { node_counts: { total: 1 } }, null, null],
+    ] as const)(
+      'completion writes %s outcome in the write that completes the run, and its terminal record (#5660)',
+      async (_label, outcome, metadata, legacy, completed) => {
+        const run = await running(store);
+        await store.completeWorkflowRun(
+          run.id,
+          { duration_ms: 1 },
+          metadata,
+          outcome === undefined ? undefined : { outcome }
+        );
+        expect(await store.getWorkflowRun(run.id)).toMatchObject({
+          status: 'completed',
+          outcome: legacy,
+          completed_outcome: completed,
+        });
+        const [event] = await store.listWorkflowEvents(run.id);
+        expect(terminalRecordSchema.parse(event?.data.terminal_record)).toMatchObject({
+          outcome: legacy,
+          completed_outcome: completed,
+        });
+      }
+    );
+    test.each([
+      ['null', null],
+      ['false', false],
+      ['0', 0],
+      ['an object with a null field', { a: null }],
+      ['a string', 'x'],
+    ] as const)("a child's %s result reads back as the same typed value", async (_label, value) => {
+      const parent = await running(store);
+      const child = await running(store, { parent_run_id: parent.id });
+      await store.completeWorkflowRun(
+        child.id,
+        { duration_ms: 1 },
+        { summary: JSON.stringify(value), ...subrunSummaryMetadata(value) }
+      );
+      const read = await store.getWorkflowRun(child.id);
+      if (!read) throw new Error('child run not found');
+      expect(childOutcomeFromRun(read).structuredOutput).toStrictEqual(value);
+    });
     test('gate resolution has one winner and no loser events', async () => {
       await assertWorkflowGateRace(store);
     });
@@ -101,8 +147,9 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
           const won = results.filter(
             result =>
               result.status === 'fulfilled' &&
-              result.value !== undefined &&
-              ('failed' in result.value ? result.value.failed : result.value.cancelled)
+              ('failed' in result.value
+                ? result.value.failed
+                : 'cancelled' in result.value && result.value.cancelled)
           );
           expect(won).toHaveLength(1);
         }
@@ -285,6 +332,8 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
           error: 'EACCES',
           retryAt: new Date().toISOString(),
         };
+        const creation = new Date('2020-01-01');
+        await harness.backdate(recovered.id, { started_at: creation });
         await store.cancelFanOutRun(recovered.id, reason);
         const results = await Promise.allSettled(
           Array.from({ length: 8 }, () => store.recoverCancelledFanOutRun(recovered.id))
@@ -295,6 +344,8 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
         });
         const resumed = await store.getWorkflowRun(recovered.id);
         expect(resumed?.status).toBe('running');
+        expect(resumed?.started_at).toEqual(creation);
+        expect(resumed?.active_phase_started_at?.getTime()).toBeGreaterThan(creation.getTime());
         expect(await types(store, recovered.id)).toEqual(['workflow_resumed']);
         expect(
           await store.releaseRunForUnreadableSource(recovered.id, {

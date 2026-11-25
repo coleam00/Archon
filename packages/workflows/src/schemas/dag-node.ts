@@ -15,7 +15,9 @@
  * nodes, and a module that imported `dagNodeSchema` back from here would make the
  * import order decide whether the mode table below can read it.
  */
+import { INPUTS_SCOPE } from '../reference-scopes';
 import { z } from 'zod';
+import { deprecatedFields } from './field-deprecation';
 import { agentDefinitionSchema } from '@archon/provider-contract';
 export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
 import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
@@ -35,7 +37,12 @@ import {
 } from './loop';
 import { validateNodeHooks } from './hooks';
 import type { AgentNode } from './agent-node';
-import { dagNodeBaseSchema, isNodeContextResume, nodeContextResumeSchema } from './dag-node-base';
+import {
+  dagNodeBaseSchema,
+  isNodeContextResume,
+  isNodeContextSame,
+  nodeContextResumeSchema,
+} from './dag-node-base';
 import {
   bashExecAuthoringSchema,
   bashExecFlatSchema,
@@ -70,6 +77,7 @@ export {
   type AttentionLabels,
   attentionLabelKeySchema,
   attentionLabelsSchema,
+  OTHER_ATTENTION_OPTION,
 } from './wait-node';
 export { getApprovalDecisions } from './gate-node';
 
@@ -295,8 +303,12 @@ function validateDagNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
     addIssue(ctx, "missing required field 'id'", ['id']);
     return;
   }
-  if (id === 'INPUTS') {
-    addIssue(ctx, "node id 'INPUTS' is reserved for the $INPUTS.<name> parameter surface", ['id']);
+  if (id === INPUTS_SCOPE) {
+    addIssue(
+      ctx,
+      `node id '${INPUTS_SCOPE}' is reserved for the $${INPUTS_SCOPE}.<name> parameter surface`,
+      ['id']
+    );
   }
 
   const modes = selectedModes(data);
@@ -307,6 +319,19 @@ function validateDagNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
   const mode = modes[0];
   if (isNodeContextResume(data.context) && mode !== 'command' && mode !== 'prompt') {
     addIssue(ctx, "'context.resume' is only supported on command and prompt nodes", ['context']);
+  }
+  if (isNodeContextSame(data.context)) {
+    if (mode !== 'command' && mode !== 'prompt') {
+      addIssue(ctx, "'context: same' is only supported on command and prompt nodes", ['context']);
+    }
+    // Two cross-run mechanisms with different scopes on one node: say which, never pick one.
+    if (data.persist_session !== undefined) {
+      addIssue(
+        ctx,
+        "'context: same' and 'persist_session' are mutually exclusive: 'same' already continues the node's session across runs on the same item",
+        ['persist_session']
+      );
+    }
   }
   if (mode === undefined) {
     validateModelessNode(data, ctx);
@@ -446,7 +471,8 @@ const loopGroupShape = (loopGroupNodeConfigSchema as unknown as z.ZodObject<z.Zo
  * Absent on purpose — these node fields do not silently strip, so there is
  * nothing to warn about:
  *   `output_format` — free-form JSON Schema (`z.record`); every key is accepted
- *   `sandbox`       — `.passthrough()`; unknown keys are preserved, not dropped
+ *   `sandbox`       — `.passthrough()` at every level (top, `network`, `filesystem`,
+ *                     `ripgrep`); unknown keys are preserved, not dropped
  *   `hooks`         — `.strict()`; unknown keys already hard-error at parse time
  * `loop_group.nodes` is deliberately not modelled here: its entries are full DAG
  * nodes, so the loader recurses into them with KNOWN_DAG_NODE_KEYS instead.
@@ -584,4 +610,9 @@ function rejectTopLevelLoopSettings(
       params: { nodeId: id },
     });
   }
+}
+
+/** Resolve after initialization: loop_group's body schema references dagNodeSchema. */
+export function nodeFieldDeprecations() {
+  return deprecatedFields(dagNodeFlatSchema);
 }

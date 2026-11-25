@@ -48,7 +48,7 @@ export const mockPostgresDialect: SqlDialect = {
     return 'NOW()';
   },
   jsonMerge(column: string, paramIndex: number): string {
-    return `${column} || $${String(paramIndex)}::jsonb`;
+    return `(${column} || $${String(paramIndex)}::jsonb)`;
   },
   nowMinusDays(paramIndex: number): string {
     return `NOW() - ($${String(paramIndex)} || ' days')::INTERVAL`;
@@ -60,4 +60,5 @@ export const mockPostgresDialect: SqlDialect = {
   jsonRemove: postgresDialect.jsonRemove,
   rowLock: postgresDialect.rowLock,
   indexedBy: postgresDialect.indexedBy,
+  messageOrderTieBreaker: postgresDialect.messageOrderTieBreaker,
 };

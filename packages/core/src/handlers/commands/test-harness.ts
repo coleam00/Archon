@@ -23,7 +23,10 @@ import { createMockLogger } from '../../test/mocks/logger';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../../schemas/workflow-run';
-import type { CleanupOperationResult } from '../../services/cleanup/merged-sweep';
+import type {
+  CleanupOperationResult,
+  MergedCleanupOutcome,
+} from '../../services/cleanup/merged-sweep';
 import {
   WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
@@ -113,8 +116,10 @@ export function makeWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowR
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'test request',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -124,6 +129,7 @@ export function makeWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowR
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     ...overrides,
   };
 }
@@ -329,6 +335,8 @@ mock.module('../../db/sessions', () => ({
 }));
 
 mock.module('../../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getActiveWorkflowRun: mockGetActiveWorkflowRun,
@@ -424,10 +432,24 @@ export const mockIsolationDestroy = mock(
     })
 );
 
-const { VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } = await import(
-  '@archon/isolation'
-);
+const {
+  generatedTaskBranch,
+  validateWorktreeConfig,
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+} = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  checkWorktreeStartable: mock(async () => undefined),
+  readWorktreeBaseBranch: () => undefined,
+  generatedTaskBranch,
+  validateWorktreeConfig,
+  resolveWorktreeBase: mock(async () => {
+    throw new Error('resolveWorktreeBase is not mocked here');
+  }),
+  refuseUnappliedStartPoint: mock(async () => undefined),
+  getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
+    state: 'NONE',
+  })),
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
   dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
@@ -444,9 +466,6 @@ mock.module('@archon/isolation', () => ({
     providerType: 'worktree',
     create: mockIsolationCreate,
     destroy: mockIsolationDestroy,
-    get: mock(() => Promise.resolve(null)),
-    list: mock(() => Promise.resolve([])),
-    adopt: mock(() => Promise.resolve(null)),
     healthCheck: mock(() => Promise.resolve(true)),
   }),
   // Loaded transitively via the orchestrator → child-isolation-resolver (PR-A).
@@ -464,7 +483,9 @@ export const emptyCleanup = (): CleanupOperationResult => ({
   releasedFailedRuns: [],
   warnings: [],
 });
-export const mockCleanupMergedWorktrees = mock(() => Promise.resolve(emptyCleanup()));
+export const mockCleanupMergedWorktrees = mock(
+  (): Promise<MergedCleanupOutcome> => Promise.resolve({ kind: 'swept', result: emptyCleanup() })
+);
 export const mockCleanupStaleWorktrees = mock(() => Promise.resolve(emptyCleanup()));
 // Capture the real class before mock.module replaces the module, so the mock
 // re-exports it rather than a hand-declared copy that could drift.
@@ -479,7 +500,7 @@ mock.module('../../services/run-owner-stop', () => ({
 }));
 
 export const mockReclaimContainerEnv = mock(async () => undefined);
-export const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
+export const mockGetUseBlocker = mock<typeof CleanupRunLock.getUseBlocker>(() =>
   Promise.resolve(null)
 );
 export const mockGetWorktreeStatusBreakdown = mock<
@@ -501,7 +522,8 @@ mock.module('../../services/cleanup-service', () => ({
   getWorktreeStatusBreakdown: mockGetWorktreeStatusBreakdown,
 }));
 mock.module('../../services/cleanup/run-lock', () => ({
-  getLiveRunBlocker: mockGetLiveRunBlocker,
+  getUseBlocker: mockGetUseBlocker,
+  useBlockerLogFields: () => ({}),
   getCleanupRunLock: mock(),
   toUnpushedLock: mock(),
   countUnpushedCommits: mock(),
@@ -520,7 +542,6 @@ mock.module('../../services/cleanup/containers', () => ({
 }));
 mock.module('../../services/cleanup/merged-sweep', () => ({
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
-  cleanupToMakeRoom: mock(),
   recordCleanupRemoval: mock(),
 }));
 
@@ -583,8 +604,8 @@ export function clearAllMocks(): void {
   mockIsolationEnvDbCreate.mockClear();
   mockIsolationEnvDbGet.mockClear();
   mockMarkWorktreeDestroyed.mockClear();
-  mockGetLiveRunBlocker.mockReset();
-  mockGetLiveRunBlocker.mockResolvedValue(null);
+  mockGetUseBlocker.mockReset();
+  mockGetUseBlocker.mockResolvedValue(null);
   // Cleanup service mocks
   mockCleanupMergedWorktrees.mockClear();
   mockCleanupStaleWorktrees.mockClear();

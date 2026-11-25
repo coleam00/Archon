@@ -13,6 +13,7 @@ import {
   type BashSpawnHook,
 } from '@earendil-works/pi-coding-agent';
 import { delimiter } from 'node:path';
+import { envPathKey } from '@archon/paths/env-path';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
 
 /**
@@ -111,13 +112,22 @@ function buildBashSpawnHook(env: Record<string, string> | undefined): BashSpawnH
   if (!env || Object.keys(env).length === 0) return undefined;
   return (context: BashSpawnContext): BashSpawnContext => {
     const merged = { ...context.env, ...env };
-    const basePath = context.env.PATH;
-    if (env.PATH !== undefined && basePath) {
-      const callerEntries = env.PATH.split(delimiter);
-      merged.PATH = [
-        ...callerEntries,
-        ...basePath.split(delimiter).filter(entry => !callerEntries.includes(entry)),
-      ].join(delimiter);
+    // Pi's env copies process.env, which on Windows can spell the key `Path`: merge
+    // under Pi's key and drop a differently cased caller key, so the child gets one.
+    const baseKey = envPathKey(context.env);
+    const callerKey = envPathKey(env);
+    const basePath = context.env[baseKey];
+    const callerPath = env[callerKey];
+    if (callerPath !== undefined) {
+      if (callerKey !== baseKey) delete merged[callerKey];
+      // A baseline's empty entries stay: on POSIX one means the working directory.
+      const callerEntries = callerPath.split(delimiter);
+      merged[baseKey] = basePath
+        ? [
+            ...callerEntries,
+            ...basePath.split(delimiter).filter(entry => !callerEntries.includes(entry)),
+          ].join(delimiter)
+        : callerPath;
     }
     return { ...context, env: merged };
   };
@@ -151,9 +161,9 @@ function buildPiTool(
 
 export interface ResolvedTools {
   /**
-   * The tools array to pass to Pi, or `undefined` to leave Pi's default
-   * tools in place. An empty array means "no tools —
-   * LLM-only response" which is a valid explicit setting.
+   * The built-in tools payload, or `undefined` to leave Pi's defaults in place.
+   * An empty array selects no built-in tools; separately supplied Archon tools
+   * and user extension tools are outside this filter.
    */
   tools: PiTool[] | undefined;
   /** Unknown tool names in allowed_tools / denied_tools (e.g. Claude-specific like WebFetch). */
@@ -224,10 +234,10 @@ export function freshPiToolNames(
  *   - neither allow/deny set, env present → return the session's default tools
  *     (see `buildDefaultPiTools`) with an env-aware bash, so codebase env vars
  *     reach bash subprocesses
- *   - allowed_tools: [] → return [] (explicit no-tools; valid Archon idiom)
- *   - allowed_tools: [X, Y] → only X, Y (normalized to lowercase)
+ *   - allowed_tools: [] → return [] (no selected built-in tools)
+ *   - allowed_tools: [X, Y] → only supported built-ins X, Y (normalized to lowercase)
  *   - denied_tools subtracts from allowed_tools (or full set if allowed_tools absent)
- *   - tool names not in Pi's built-in set are silently dropped but reported
+ *   - tool names not in PI_TOOL_NAMES are dropped from this payload but reported
  *     via `unknownTools` so the caller can surface a warning.
  *
  * The `env` parameter is the caller's `requestOptions.env` merged with any

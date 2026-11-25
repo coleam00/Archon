@@ -1,3 +1,4 @@
+import type { WireWorkflowDefinition } from '../builder/types/wire';
 import type { components } from '@/lib/api.generated';
 
 /**
@@ -18,16 +19,18 @@ export type WorkflowSource = components['schemas']['WorkflowSource'];
  * rendering. A run supplies values for these; an omitted name takes `default`, and a
  * `required` one with no value is refused before the run starts (#2554).
  */
+type WorkflowInputSpec = NonNullable<components['schemas']['WorkflowDefinition']['inputs']>[string];
+
 export interface WorkflowInput {
   name: string;
-  required: boolean;
+  required: NonNullable<WorkflowInputSpec['required']>;
   default: string | null;
-  description: string | null;
+  description: NonNullable<WorkflowInputSpec['description']> | null;
 }
 
 export interface Workflow {
-  name: string;
-  description: string | null;
+  name: components['schemas']['WorkflowDefinition']['name'];
+  description: components['schemas']['WorkflowDefinition']['description'] | null;
   /**
    * Where the workflow came from. Known values carry `WorkflowSource` literals
    * so the downstream helpers (`isReadOnlySource`, `saveTargetFor`) keep their
@@ -42,34 +45,17 @@ export interface Workflow {
    * Empty for a clean workflow. The workflow still loads and runs — this is what
    * was ignored, which can include a gate the author believed they had.
    */
-  parseWarnings: string[];
+  parseWarnings: NonNullable<components['schemas']['WorkflowListEntry']['parseWarnings']>;
   /** Declared `inputs:` in declaration order; empty when the workflow declares none. */
   inputs: WorkflowInput[];
 }
 
-/**
- * The workflow object as `GET /api/workflows` sends it, for the fields the console
- * reads. Exported because `skills/workflows.ts` describes the same wire shape for its
- * own `listWorkflows`/`getWorkflowGraph` calls — two hand-rolled copies drifted once
- * already (its copy never learned about `inputs`, which type-checked silently because
- * a missing optional property still satisfies the parameter type, and would have gone
- * on compiling while the run form quietly stopped rendering).
- */
-export interface RawWorkflowShape {
-  name: string;
-  description?: string | null;
-  inputs?: Record<
-    string,
-    { required?: boolean; default?: string; description?: string } | null | undefined
-  >;
-  returns?: string;
-}
-
-interface RawWorkflowEntry {
+type RawWorkflowShape = Pick<components['schemas']['WorkflowDefinition'], 'name'> &
+  Partial<Pick<components['schemas']['WorkflowDefinition'], 'description' | 'inputs' | 'returns'>>;
+type RawWorkflowEntry = Pick<components['schemas']['WorkflowListEntry'], 'parseWarnings'> & {
   workflow: RawWorkflowShape;
-  source: string;
-  parseWarnings?: string[];
-}
+  source: Workflow['source'];
+};
 
 export function toWorkflow(raw: RawWorkflowEntry): Workflow {
   // Pass the raw source through verbatim. Three distinct sources matter for
@@ -85,7 +71,12 @@ export function toWorkflow(raw: RawWorkflowEntry): Workflow {
   const inputs: WorkflowInput[] = Object.entries(raw.workflow.inputs ?? {}).map(([name, spec]) => ({
     name,
     required: spec?.required === true,
-    default: spec?.default ?? null,
+    default:
+      spec?.default == null
+        ? null
+        : typeof spec.default === 'string'
+          ? spec.default
+          : (JSON.stringify(spec.default) ?? null),
     description: spec?.description ?? null,
   }));
   return {
@@ -96,3 +87,35 @@ export function toWorkflow(raw: RawWorkflowEntry): Workflow {
     inputs,
   };
 }
+
+/** Discovered workflows plus the repo-curated recommended names (declared order). */
+export interface WorkflowListResult {
+  workflows: Workflow[];
+  recommended: components['schemas']['WorkflowListResponse']['recommended'];
+}
+
+/** Normalized result of `loadWorkflow`. */
+export interface LoadedWorkflow {
+  definition: WireWorkflowDefinition;
+  filename: components['schemas']['GetWorkflowResponse']['filename'];
+  /**
+   * Where the workflow came from. Same widening rationale as
+   * `Workflow.source`: an unrecognised value reaches the editor
+   * verbatim and the downstream helpers (`isReadOnlySource`, `saveTargetFor`)
+   * — both accepting `string` — decide what to do with it.
+   */
+  source: Workflow['source'];
+}
+
+/**
+ * An installed-pack workflow (`owner/plugin:entrypoint`). The server resolves it through
+ * the catalog and returns no authored form, so the builder shows it as read-only instead
+ * of opening an editor on it.
+ */
+export interface InstalledPackWorkflow {
+  installedPack: true;
+  name: components['schemas']['WorkflowDefinition']['name'];
+}
+
+/** What `loadWorkflow` resolves to: a definition to edit, or a pack workflow that has none. */
+export type WorkflowLoad = LoadedWorkflow | InstalledPackWorkflow;

@@ -101,12 +101,12 @@ export function StreamCard({
         <time
           dateTime={timestamp}
           title={wallClock}
-          className="font-mono text-[10px] tabular-nums text-text-tertiary"
+          className="font-mono text-console-10 tabular-nums text-text-tertiary"
         >
           {displayed}
         </time>
         <span
-          className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] ${style.pill}`}
+          className={`rounded px-1.5 py-0.5 text-console-9 font-semibold uppercase tracking-console-label ${style.pill}`}
         >
           {label ?? style.label}
         </span>

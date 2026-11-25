@@ -101,7 +101,7 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toEndWith(
-          'Worktrees: 3 total\n  • 1 merged (can auto-remove)\n  • 1 stale (14+ days inactive)\n  • 1 active'
+          'Worktrees: 3 total\n  • 1 integrated into base (cleanup checks PR coverage and blockers)\n  • 1 stale (14+ days inactive)\n  • 1 active'
         );
       });
 
@@ -312,27 +312,6 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).not.toContain('Active Workflow');
-      });
-
-      test('should show active workflow info in status without stale warnings', async () => {
-        const startedAt = new Date(Date.now() - 10 * 60 * 1000); // 10 minutes ago
-        const lastActivity = new Date(Date.now() - 7 * 60 * 1000); // 7 minutes ago
-        mockGetActiveWorkflowRun.mockResolvedValueOnce(
-          makeWorkflowRun({
-            id: 'wf-active',
-            workflow_name: 'long-workflow',
-            started_at: startedAt,
-            user_message: 'test',
-            last_activity_at: lastActivity,
-          })
-        );
-
-        const result = await handleCommand(baseConversation, '/status', operator);
-
-        expect(result.success).toBe(true);
-        expect(result.message).toContain('Active Workflow');
-        expect(result.message).toContain('long-workflow');
-        expect(result.message).not.toContain('possibly stale');
       });
 
       test('should gracefully handle workflow database errors in status', async () => {

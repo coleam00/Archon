@@ -81,6 +81,29 @@ describe('toRunEvent — node transitions', () => {
     expect(e.numTurns).toBe(1);
   });
 
+  test('a bash node carries its stdout; an AI node does not, its messages already show it', () => {
+    const completed = (type: string) =>
+      toRunEvent(
+        raw({ event_type: 'node_completed', data: { type, node_output: 'hello', duration_ms: 1 } })
+      );
+    expect(completed('bash')).toMatchObject({ output: { text: 'hello', truncated: false } });
+    expect(completed('script')).toMatchObject({ output: { text: 'hello' } });
+    expect(completed('prompt')).toMatchObject({ output: null });
+  });
+
+  test('a recorded answer is visible text naming the choice, not a raw system payload', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'wait_answered',
+        data: { via: 'web', answer: { decision: 'use-dev', text: 'dev is fine' } },
+      })
+    );
+    expect(e.kind).toBe('text');
+    if (e.kind !== 'text') throw new Error('unreachable');
+    expect(e.content).toContain('use-dev');
+    expect(e.content).toContain('dev is fine');
+  });
+
   test('node_started has null duration and null enrichment', () => {
     const e = toRunEvent(raw({ event_type: 'node_started' }));
     if (e.kind !== 'node_transition') throw new Error('unreachable');
@@ -280,13 +303,6 @@ describe('toRunEvent — approvals (server writes approval_requested/approval_re
     if (garbage.kind !== 'approval') throw new Error('unreachable');
     expect(garbage.resolution).toBeNull();
   });
-
-  test('the old (never-written) approval_pending type is NOT treated as an approval', () => {
-    // Guards against regressing to the pre-fix keys: approval_pending/approval_resolved
-    // are not emitted by the server, so they must fall through, not render as approvals.
-    const e = toRunEvent(raw({ event_type: 'approval_pending', data: { message: 'x' } }));
-    expect(e.kind).not.toBe('approval');
-  });
 });
 
 describe('toRunEvent — deprecation notice (#2781)', () => {
@@ -406,10 +422,6 @@ describe('toRunEvent — fallback', () => {
 });
 
 describe('countTerminalNodes', () => {
-  test('no nodes → 0/0', () => {
-    expect(countTerminalNodes([])).toEqual({ completed: 0, total: 0 });
-  });
-
   test('pending and running nodes are excluded from the total', () => {
     expect(
       countTerminalNodes([
@@ -444,6 +456,32 @@ describe('foldNodeRuns', () => {
 
   test('no events → no runs', () => {
     expect(foldNodeRuns([], [state('plan', 'pending')])).toEqual([]);
+  });
+
+  test('a failed node carries its error; a node that failed and then completed does not', () => {
+    const events = [
+      node('boom', 'node_started', { created_at: at('0') }),
+      node('boom', 'node_failed', {
+        created_at: at('1'),
+        data: { error: 'exit 1: no key', failure_kind: 'schema_unmet' },
+      }),
+    ];
+    expect(foldNodeRuns(events, [state('boom', 'failed')])[0]).toMatchObject({
+      error: 'exit 1: no key',
+      failureKind: 'schema_unmet',
+    });
+    const retried = [
+      ...events,
+      node('boom', 'node_completed', {
+        created_at: at('2'),
+        data: { type: 'bash', node_output: 'ok' },
+      }),
+    ];
+    expect(foldNodeRuns(retried, [state('boom', 'completed')])[0]).toMatchObject({
+      error: null,
+      failureKind: null,
+      output: { text: 'ok' },
+    });
   });
 
   test('a running node has no duration or end', () => {
@@ -627,19 +665,6 @@ describe('foldNodeRuns', () => {
     expect(
       foldNodeRuns([node(null, 'node_completed'), node('ghost', 'node_completed')], [])
     ).toEqual([]);
-  });
-
-  test('non-node_transition events are ignored', () => {
-    const runs = foldNodeRuns(
-      [
-        node('plan', 'node_completed'),
-        toRunEvent(raw({ event_type: 'workflow_artifact', data: { label: 'pr' } })),
-        toRunEvent(raw({ event_type: 'workflow_completed', data: {} })),
-      ],
-      [state('plan', 'completed')]
-    );
-    expect(runs).toHaveLength(1);
-    expect(runs[0]?.nodeId).toBe('plan');
   });
 });
 

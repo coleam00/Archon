@@ -1,0 +1,5 @@
+# This repository's values for the SDLC pack's settings (`.archon/workflows/sdlc/.pack/pack.yaml`).
+# What this project holds a change to before it lands is policy text, in
+# `.archon/sdlc/policy/land.md`.
+settings:
+  ci: forge

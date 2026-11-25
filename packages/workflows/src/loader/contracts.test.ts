@@ -2,8 +2,14 @@
 import { clearRegistry, providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { describe, it, expect } from 'bun:test';
-import { isAgentNode, isExecNode, type DagNode } from '../schemas';
+import { isAgentNode, isExecNode, workflowDefinitionSchema, type DagNode } from '../schemas';
 import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from '../loader';
+import { resolveWorkflow } from '../graph-plan';
+import { findPreparedStrictSchemaIssues } from '@archon/provider-contract';
+import { itemAsksJsonSchema, parseItemAsks, storedItemAskSchema } from '../schemas/item-ask';
+import { itemWaitsJsonSchema } from '../schemas/item-wait';
+import { validateWorkflowResultContract } from './contracts';
+import { validateStructuredOutput } from '../structured-output';
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
 clearRegistry();
@@ -18,10 +24,10 @@ function parseWorkflow(
 }
 
 // ---------------------------------------------------------------------------
-// Authored workflow outcome (#2618)
+// The result contract: returns: { node, outcome } (#2618, #5660)
 // ---------------------------------------------------------------------------
 
-describe('workflow authored outcome declaration (#2618)', () => {
+describe('workflow result contract: returns.outcome', () => {
   const parseOutcomeWorkflow = (
     declaration: string,
     outputFormat = `
@@ -45,11 +51,101 @@ nodes:
     );
 
   it('accepts a trimmed field naming a required boolean on the selected return node', () => {
-    const { workflow, error } = parseOutcomeWorkflow('returns: result\noutcome_field: "  green  "');
+    const { workflow, error } = parseOutcomeWorkflow(
+      'returns: { node: result, outcome: "  green  " }'
+    );
 
     expect(error).toBeNull();
     expect(workflow?.returns).toBe('result');
-    expect(workflow?.outcome_field).toBe('green');
+    expect(workflow?.result).toEqual({ outcome: 'green' });
+  });
+
+  it('loads the shorthand and the object form without an outcome the same', () => {
+    const shorthand = parseOutcomeWorkflow('returns: result');
+    const object = parseOutcomeWorkflow('returns: { node: result }');
+
+    expect(shorthand.error).toBeNull();
+    expect(object.workflow).toEqual(shorthand.workflow);
+    expect(object.workflow?.result).toBeUndefined();
+  });
+
+  it('accepts a required string property with an enum', () => {
+    const { workflow, error } = parseOutcomeWorkflow(
+      'returns: { node: result, outcome: stage }',
+      `
+    output_format:
+      type: object
+      properties:
+        stage: { type: string, enum: [built, stop] }
+      required: [stage]`
+    );
+
+    expect(error).toBeNull();
+    expect(workflow?.result).toEqual({ outcome: 'stage' });
+  });
+
+  it('keeps the declaration through the published workflow schema', () => {
+    const parsed = workflowDefinitionSchema.parse({
+      name: 'authored-outcome',
+      description: 'independently reports the authored verdict',
+      nodes: [{ id: 'result', bash: 'true' }],
+      returns: 'result',
+      result: { outcome: 'green' },
+    });
+
+    expect(parsed.result).toEqual({ outcome: 'green' });
+  });
+
+  it('does not take the declaration from an authored result: key', () => {
+    const { workflow, warnings } = parseOutcomeWorkflow(
+      'returns: result\nresult: { outcome: green }'
+    );
+
+    expect(workflow?.result).toBeUndefined();
+    expect(warnings?.join('\n')).toContain("'result'");
+  });
+
+  it.each([
+    ['a string with no enum', '{ type: string }'],
+    ['an enum of non-strings', '{ type: string, enum: [1, 2] }'],
+  ])('refuses an outcome declared as %s', (_label, property) => {
+    const { workflow, error } = parseOutcomeWorkflow(
+      'returns: { node: result, outcome: stage }',
+      `
+    output_format:
+      type: object
+      properties:
+        stage: ${property}
+      required: [stage]`
+    );
+
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain('type: string with a non-empty enum of strings');
+  });
+
+  it('refuses an outcome enum with an empty-string member, naming workflow and node', () => {
+    const { workflow, error } = parseOutcomeWorkflow(
+      'returns: { node: result, outcome: stage }',
+      `
+    output_format:
+      type: object
+      properties:
+        stage: { type: string, enum: ['', built] }
+      required: [stage]`
+    );
+
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain("'authored-outcome'");
+    expect(error?.error).toContain("node 'result'");
+    expect(error?.error).toContain('empty string');
+  });
+
+  it('refuses the removed outcome_field, naming the declaration that replaces it', () => {
+    const { workflow, error } = parseOutcomeWorkflow('returns: result\noutcome_field: green');
+
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain("'outcome_field:' has been removed");
+    expect(error?.error).toContain('returns: { node: <id>, outcome: <field> }');
   });
 
   for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
@@ -59,7 +155,7 @@ nodes:
           Bun.YAML.stringify({
             name: 'composed-selector',
             description: 'Composed boolean selector contract',
-            ...(selector === 'outcome' ? { returns: 'result', outcome_field: field } : {}),
+            ...(selector === 'outcome' ? { returns: { node: 'result', outcome: field } } : {}),
             nodes: [
               {
                 id: 'result',
@@ -202,21 +298,16 @@ nodes:
     }
   }
 
-  it('rejects outcome_field without an explicit returns node', () => {
-    const { workflow, error } = parseOutcomeWorkflow('outcome_field: green');
-
-    expect(workflow).toBeNull();
-    expect(error?.error).toContain('without returns:');
-  });
-
   it.each([
-    ['blank', 'returns: result\noutcome_field: "   "'],
-    ['non-string', 'returns: result\noutcome_field: { field: green }'],
-  ])('rejects a %s outcome_field instead of silently dropping it', (_label, declaration) => {
+    ['a blank outcome', 'returns: { node: result, outcome: "   " }'],
+    ['a non-string outcome', 'returns: { node: result, outcome: { field: green } }'],
+    ['no node', 'returns: { outcome: green }'],
+    ['an unknown key', 'returns: { node: result, noticed: noticed }'],
+  ])('refuses returns with %s instead of silently dropping it', (_label, declaration) => {
     const { workflow, error } = parseOutcomeWorkflow(declaration);
 
     expect(workflow).toBeNull();
-    expect(error?.error).toContain("Invalid 'outcome_field'");
+    expect(error?.error).toContain("Invalid 'returns'");
   });
 
   it.each([
@@ -258,13 +349,13 @@ nodes:
     ],
   ])('rejects an outcome field with %s', (_label, outputFormat) => {
     const { workflow, error } = parseOutcomeWorkflow(
-      'returns: result\noutcome_field: green',
+      'returns: { node: result, outcome: green }',
       outputFormat
     );
 
     expect(workflow).toBeNull();
     expect(error?.errorType).toBe('validation_error');
-    expect(error?.error).toContain('outcome_field');
+    expect(error?.error).toContain('returns.outcome');
   });
 
   it('rejects a fan-out workflow node because its runtime output is an aggregate array', () => {
@@ -272,8 +363,7 @@ nodes:
       `
 name: fan-out-outcome
 description: invalid direct outcome over child aggregates
-returns: work
-outcome_field: green
+returns: { node: work, outcome: green }
 nodes:
   - id: plan
     prompt: emit tasks
@@ -303,8 +393,7 @@ nodes:
       `
 name: compose-fan-out-outcome
 description: invalid direct outcome over an in-parent instance aggregate
-returns: fan
-outcome_field: green
+returns: { node: fan, outcome: green }
 nodes:
   - id: fan
     include: some-block
@@ -330,8 +419,7 @@ nodes:
       `
 name: loop-group-outcome
 description: invalid outcome over a raw loop group result
-returns: group
-outcome_field: green
+returns: { node: group, outcome: green }
 nodes:
   - id: group
     output_format:
@@ -356,9 +444,333 @@ nodes:
   });
 });
 
+describe('workflow result contract: returns.asks', () => {
+  const parseAsks = (
+    declaration: string,
+    node = `
+  - id: decide
+    prompt: decide
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }`
+  ): ParseResult =>
+    parseWorkflow(
+      `
+name: leaves-asks
+description: leaves decisions for an operator
+${declaration}
+nodes:${node}
+`,
+      'leaves-asks.yaml'
+    );
+
+  it('loads a declared asks property, which the engine adds to the returns node when resolved', () => {
+    const { workflow, error } = parseAsks('returns: { node: decide, asks: asks }');
+    expect(error).toBeNull();
+    expect(workflow?.result).toEqual({ asks: 'asks' });
+    if (workflow === null) throw new Error('Expected the workflow to load');
+    const resolved = resolveWorkflow(workflow);
+    const node = resolved.nodes.find(candidate => candidate.id === 'decide');
+    expect(node?.output_format?.properties).toEqual({
+      summary: { type: 'string' },
+      asks: itemAsksJsonSchema(),
+    });
+    // The resolved workflow passes the contract again, as dispatch checks it.
+    expect(validateWorkflowResultContract(resolved)).toBeNull();
+    // The loaded definition is left as authored.
+    const authored = workflow.nodes[0];
+    const authoredFormat = authored && 'output_format' in authored ? authored.output_format : {};
+    expect(Object.keys(authoredFormat?.properties ?? {})).toEqual(['summary']);
+  });
+
+  it('takes an ask with a null recommendation, and its schema stays strict-mode ready', () => {
+    const ask = {
+      question: 'Which way?',
+      context: 'Nothing settles it.',
+      options: [
+        { id: 'drop', does: 'Drops it.', cost: 'The work is lost.' },
+        { id: 'reshape', does: 'Plans it again.', cost: 'A round.' },
+      ],
+      recommendation: null,
+      artifacts: [],
+    };
+    expect(parseItemAsks([ask])).toEqual({ asks: [ask] });
+    expect(parseItemAsks([{ ...ask, recommendation: { option: 'keep', why: 'x' } }])).toEqual({
+      problem: "[0].recommendation.option names 'keep', which is not one of the ask's options",
+    });
+    expect(findPreparedStrictSchemaIssues(itemAsksJsonSchema())).toEqual([]);
+  });
+
+  it('opens an ask that recommends no option with no recommendation and the reason beside it', () => {
+    const ask = {
+      question: 'Which way?',
+      context: 'Nothing settles it.',
+      options: [
+        { id: 'drop', does: 'Drops it.', cost: 'The work is lost.' },
+        { id: 'reshape', does: 'Plans it again.', cost: 'A round.' },
+      ],
+      recommendation: { option: null, why: 'Only you can weigh the deadline.' },
+      artifacts: [],
+    };
+    // Stored with `recommendation: null`, so a binary that reads a recommendation as always
+    // naming an option still reads the ask, and the reason in its own key.
+    const opened = { ...ask, recommendation: null, no_recommendation: ask.recommendation.why };
+    expect(parseItemAsks([ask])).toEqual({ asks: [opened] });
+    expect(storedItemAskSchema.safeParse(opened).success).toBe(true);
+  });
+
+  it('refuses a property the author declared under the asks name', () => {
+    const { workflow, error } = parseAsks(
+      'returns: { node: decide, asks: asks }',
+      `
+  - id: decide
+    prompt: decide
+    output_format:
+      type: object
+      properties:
+        asks: { type: array }`
+    );
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain("returns.asks: 'asks' on node 'decide'");
+    expect(error?.error).toContain('the engine defines this property');
+  });
+
+  it('refuses a returns node with no output_format', () => {
+    const { error } = parseAsks(
+      'returns: { node: decide, asks: asks }',
+      `
+  - id: decide
+    prompt: decide`
+    );
+    expect(error?.error).toContain("returns.asks: 'asks' selects node 'decide'");
+    expect(error?.error).toContain('no output_format');
+  });
+
+  it('refuses asks naming the outcome property', () => {
+    const { error } = parseAsks(
+      'returns: { node: decide, outcome: green, asks: green }',
+      `
+  - id: decide
+    prompt: decide
+    output_format:
+      type: object
+      properties:
+        green: { type: boolean }
+      required: [green]`
+    );
+    expect(error?.error).toContain(
+      "returns.asks: 'green' names the same property as returns.outcome"
+    );
+  });
+
+  it('refuses a loop_group returns node, as returns.outcome does', () => {
+    const { error } = parseAsks(
+      'returns: { node: group, asks: asks }',
+      `
+  - id: group
+    output_format:
+      type: object
+      properties: {}
+    loop_group:
+      until: DONE
+      max_iterations: 2
+      nodes:
+        - id: author
+          prompt: author a result`
+    );
+    expect(error?.error).toContain("returns.asks: 'asks' cannot select loop_group node 'group'");
+  });
+});
+
+describe('workflow result contract: returns.options', () => {
+  const OPTIONS = `[
+      { id: send-back, does: The builder continues., cost: A round. },
+      { id: take-as-is, does: The change goes on as it is., cost: Nothing more is built. }
+    ]`;
+  const parse = (returns: string): ParseResult =>
+    parseWorkflow(
+      `
+name: declares-options
+description: every ask offers the same options
+returns: ${returns}
+nodes:
+  - id: decide
+    prompt: decide
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+`,
+      'declares-options.yaml'
+    );
+  const ask = {
+    question: 'Which way?',
+    context: 'Nothing settles it.',
+    recommendation: { option: 'take-as-is', why: 'It is done.' },
+    artifacts: [],
+  };
+
+  it('gives the agent a schema with no options and a recommendation limited to the declared ids', () => {
+    const { workflow, error } = parse(`{ node: decide, asks: asks, options: ${OPTIONS} }`);
+    expect(error).toBeNull();
+    if (workflow === null) throw new Error('Expected the workflow to load');
+    const declared = workflow.result?.options ?? [];
+    expect(declared.map(option => option.id)).toEqual(['send-back', 'take-as-is']);
+    const resolved = resolveWorkflow(workflow);
+    expect(validateWorkflowResultContract(resolved)).toBeNull();
+    const schema = resolved.nodes.find(node => node.id === 'decide')?.output_format;
+    if (schema === undefined) throw new Error('Expected an output_format');
+    expect(findPreparedStrictSchemaIssues(itemAsksJsonSchema(declared))).toEqual([]);
+
+    const check = (asks: unknown[]) => validateStructuredOutput({ summary: 's', asks }, schema);
+    const errors = (asks: unknown[]) => {
+      const result = check(asks);
+      return result.valid ? [] : result.errors;
+    };
+    expect(check([ask])).toEqual({ valid: true });
+    expect(check([{ ...ask, recommendation: null }])).toEqual({ valid: true });
+    // Both refusals name the declared ids, so a retry can correct the output. Options the
+    // writer added are refused whether the recommendation is valid or null.
+    const namesDeclaredIds = expect.stringMatching(/^\/asks\/0.*send-back.*take-as-is/);
+    expect(errors([{ ...ask, recommendation: { option: 'drop', why: 'x' } }])).toContainEqual(
+      namesDeclaredIds
+    );
+    for (const recommendation of [ask.recommendation, null])
+      expect(errors([{ ...ask, recommendation, options: declared }])).toEqual([namesDeclaredIds]);
+
+    // At run end each ask gets the declared options, with does and cost from the YAML.
+    expect(parseItemAsks([ask], declared)).toEqual({
+      asks: [{ ...ask, options: declared }],
+    });
+  });
+
+  it.each([
+    ['without asks', `{ node: decide, options: ${OPTIONS} }`],
+    ['with one option', '{ node: decide, asks: asks, options: [{ id: land, does: d, cost: c }] }'],
+    [
+      'with an id twice',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d, cost: c }, { id: land, does: d, cost: c }] }',
+    ],
+    [
+      'with the reserved other',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d, cost: c }, { id: other, does: d, cost: c }] }',
+    ],
+    [
+      'with an option missing its cost',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d }, { id: drop, does: d, cost: c }] }',
+    ],
+  ])('refuses options %s', (_case, returns) => {
+    // The same workflow loads with a valid set (the test above), so the options are why.
+    const { workflow, error } = parse(returns);
+    expect(workflow).toBeNull();
+    expect(error).not.toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Declared contract schemas compile at load time (#2453)
 // ---------------------------------------------------------------------------
+
+describe('workflow result contract: returns.waits', () => {
+  const parse = (declaration: string, properties = 'summary: { type: string }'): ParseResult =>
+    parseWorkflow(
+      `
+name: waits-outside
+description: waits for checks on its change
+${declaration}
+nodes:
+  - id: host
+    prompt: read the change
+    output_format:
+      type: object
+      properties:
+        ${properties}
+`,
+      'waits-outside.yaml'
+    );
+
+  it('loads a declared waits property, which the engine adds beside the asks property', () => {
+    const { workflow, error } = parse('returns: { node: host, asks: asks, waits: waits }');
+    expect(error).toBeNull();
+    expect(workflow?.result).toEqual({ asks: 'asks', waits: 'waits' });
+    if (workflow === null) throw new Error('Expected the workflow to load');
+    const resolved = resolveWorkflow(workflow);
+    const node = resolved.nodes.find(candidate => candidate.id === 'host');
+    expect(node?.output_format?.properties).toEqual({
+      summary: { type: 'string' },
+      asks: itemAsksJsonSchema(),
+      waits: itemWaitsJsonSchema(),
+    });
+    expect(node?.output_format?.required).toEqual(['asks', 'waits']);
+    expect(validateWorkflowResultContract(resolved)).toBeNull();
+  });
+
+  it('refuses an authored waits property and waits naming the asks property', () => {
+    expect(
+      parse('returns: { node: host, waits: waits }', 'waits: { type: array }').error?.error
+    ).toContain("returns.waits: 'waits' on node 'host': the engine defines this property");
+    expect(parse('returns: { node: host, asks: next, waits: next }').error?.error).toContain(
+      "returns.waits: 'next' names the same property as returns.asks"
+    );
+  });
+});
+
+describe('workflow result contract: returns.final and returns.summary', () => {
+  const parse = (
+    declaration: string,
+    properties = `stage: { type: string, enum: [approve, replan, landed] }
+        why: { type: string }`,
+    required = 'stage'
+  ): ParseResult =>
+    parseWorkflow(
+      `
+name: deliver
+description: delivers a change
+${declaration}
+nodes:
+  - id: result
+    prompt: report
+    output_format:
+      type: object
+      properties:
+        ${properties}
+      required: [${required}]
+`,
+      'deliver.yaml'
+    );
+
+  it('loads final outcomes of an enum and a declared string summary', () => {
+    const { workflow, error } = parse(
+      'returns: { node: result, outcome: stage, final: [landed], summary: why }'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.result).toEqual({ outcome: 'stage', final: ['landed'], summary: 'why' });
+  });
+
+  it('takes the boolean form by its outcome names', () => {
+    const { error } = parse(
+      'returns: { node: result, outcome: green, final: [succeeded] }',
+      'green: { type: boolean }',
+      'green'
+    );
+    expect(error).toBeNull();
+  });
+
+  it.each([
+    ['a value the outcome cannot take', 'outcome: stage, final: [merged]', "names 'merged'"],
+    ['a value named twice', 'outcome: stage, final: [landed, landed]', "'landed' twice"],
+    ['final without an outcome', 'final: [landed]', 'needs returns.outcome'],
+    ['an undeclared summary', 'outcome: stage, summary: reason', "returns.summary: 'reason'"],
+    [
+      'a summary that is not a string',
+      'outcome: stage, summary: stage',
+      "returns.summary: 'stage'",
+    ],
+  ])('refuses %s', (_, declaration, message) => {
+    expect(parse(`returns: { node: result, ${declaration} }`).error?.error).toContain(message);
+  });
+});
 
 describe('output_format compiles at load time (#2453)', () => {
   it('rejects output_format on a workflow: node, naming the child returns: node as the owner', () => {

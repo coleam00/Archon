@@ -1,11 +1,13 @@
 import type { IsolationEnvironmentRow, PrLookup } from '@archon/isolation';
 import { toBranchName, toRepoPath, toWorktreePath } from '@archon/git';
-import type { BranchName, RepoPath } from '@archon/git';
+import type { RepoPath } from '@archon/git';
+import { loadRepoConfig } from '../../config/config-loader';
 import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../../platforms/registry';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import {
   judgeBranchForRemoval,
-  resolveRepoGitContext,
+  NO_MERGE_REMOTE_REASON,
+  resolveMergeRemote,
   skipReasonFor,
   type MergeVerdict,
 } from './merge-verdict';
@@ -15,6 +17,7 @@ import {
   removeEnvironment,
   type RemoveEnvironmentResult,
 } from './remove-environment';
+import { checkoutExists } from './checkout-presence';
 import { getLog } from './log';
 
 /**
@@ -27,15 +30,6 @@ export interface CleanupOperationResult {
   skipped: { branchName: string; reason: string }[];
   /** Removed environments that a failed run no longer locked. */
   releasedFailedRuns: ({ branchName: string } & ReleasedFailedRun)[];
-}
-
-/**
- * A merged-cleanup result. Carries the base ref the merge decision actually
- * compared against so callers report the repo's configured base branch instead
- * of guessing at one.
- */
-export interface MergedCleanupResult extends CleanupOperationResult {
-  baseRef: BranchName;
 }
 
 export function recordCleanupRemoval(
@@ -56,6 +50,14 @@ export function recordCleanupRemoval(
   }
 }
 
+/** One codebase's merged cleanup: swept, or not checked because its checkout is gone. */
+export type MergedCleanupOutcome =
+  | { kind: 'swept'; result: CleanupOperationResult }
+  | {
+      kind: 'repository-gone';
+      environments: { branchName: string; workingPath: string }[];
+    };
+
 /** What every environment in one merged sweep is judged against. */
 interface MergedSweep {
   repoPath: RepoPath;
@@ -63,57 +65,101 @@ interface MergedSweep {
   remote: string;
   includeClosed: boolean;
   prStateCache: Map<string, PrLookup>;
-  result: MergedCleanupResult;
+  result: CleanupOperationResult;
 }
 
 /**
- * Clean up merged worktrees for a codebase
- * Respects uncommitted changes and live workflow runs
+ * Remove a codebase's worktree environments whose branches are merged, keeping any with
+ * uncommitted changes or a live workflow run. Every route into the merged sweep calls this.
+ *
+ * A checkout directory that does not exist is reported, not swept: every Git check
+ * would fail, and whether the project was deleted or its disk is unmounted is the
+ * operator's call. A checkout that exists but cannot be read still fails the sweep.
+ * A repository with no merge remote (see resolveMergeRemote) keeps every environment.
  */
 export async function cleanupMergedWorktrees(
   codebaseId: string,
   mainRepoPath: string,
   options: { includeClosed?: boolean } = {}
-): Promise<MergedCleanupResult> {
+): Promise<MergedCleanupOutcome> {
   getRegisteredPlatformPolicies();
   const environments = (await isolationEnvDb.listByCodebase(codebaseId)).filter(
     env => env.provider === 'worktree'
   );
-  const repoPath = toRepoPath(mainRepoPath);
-  const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
-  const sweep: MergedSweep = {
-    repoPath,
-    mainRepoPath,
-    remote,
-    includeClosed: options.includeClosed ?? false,
-    prStateCache: new Map<string, PrLookup>(),
-    result: {
-      errors: [],
-      removed: [],
-      warnings: [],
-      skipped: [],
-      releasedFailedRuns: [],
-      baseRef: remoteMainRef,
-    },
+  if (!(await checkoutExists(mainRepoPath))) {
+    getLog().warn(
+      { codebaseId, repoPath: mainRepoPath, environments: environments.length },
+      'isolation.merged_cleanup_repository_gone'
+    );
+    return {
+      kind: 'repository-gone',
+      environments: environments.map(env => ({
+        branchName: env.branch_name,
+        workingPath: env.working_path,
+      })),
+    };
+  }
+  const result: CleanupOperationResult = {
+    errors: [],
+    removed: [],
+    warnings: [],
+    skipped: [],
+    releasedFailedRuns: [],
   };
+  // No worktree to judge: a folder project with only containers has no Git to ask.
+  if (environments.length === 0) return { kind: 'swept', result };
+  const sweep = await openMergedSweep(codebaseId, mainRepoPath, environments.length, {
+    includeClosed: options.includeClosed ?? false,
+    result,
+  });
 
   for (const env of environments) {
     const reason = unknownPlatformReason(env.created_by_platform);
-    if (reason) {
-      sweep.result.skipped.push({ branchName: env.branch_name, reason });
+    if (reason || !sweep) {
+      result.skipped.push({
+        branchName: env.branch_name,
+        reason: reason ?? NO_MERGE_REMOTE_REASON,
+      });
       continue;
     }
-    const verdict = await judgeMergedEnvironment(env, sweep);
-    if (verdict === 'merged' || verdict === 'pr-closed') {
-      await removeMergedEnvironment(env, verdict, sweep);
-    } else if (verdict) {
-      const skipReason = skipReasonFor(verdict);
-      if (skipReason)
-        sweep.result.skipped.push({ branchName: env.branch_name, reason: skipReason });
-    }
+    await sweepMergedEnvironment(env, sweep);
   }
 
-  return sweep.result;
+  return { kind: 'swept', result };
+}
+
+/** The sweep's shared judgment context, or null when the repository has no merge remote. */
+async function openMergedSweep(
+  codebaseId: string,
+  mainRepoPath: string,
+  environments: number,
+  shared: Pick<MergedSweep, 'includeClosed' | 'result'>
+): Promise<MergedSweep | null> {
+  const repoPath = toRepoPath(mainRepoPath);
+  const remote = await resolveMergeRemote(repoPath, await loadRepoConfig(mainRepoPath));
+  if (!remote) {
+    getLog().info(
+      { codebaseId, repoPath: mainRepoPath, environments },
+      'isolation.merged_cleanup_no_remote'
+    );
+    return null;
+  }
+  return { repoPath, mainRepoPath, remote, prStateCache: new Map<string, PrLookup>(), ...shared };
+}
+
+async function sweepMergedEnvironment(
+  env: IsolationEnvironmentRow,
+  sweep: MergedSweep
+): Promise<void> {
+  const verdict = await judgeMergedEnvironment(env, sweep);
+  if (verdict === 'merged' || verdict === 'pr-closed') {
+    await removeMergedEnvironment(env, verdict, sweep);
+    return;
+  }
+  if (!verdict) return;
+  const reason =
+    verdict === 'unmerged' ? 'no cleanup evidence covers all local tips' : skipReasonFor(verdict);
+  if (reason) sweep.result.skipped.push({ branchName: env.branch_name, reason });
 }
 
 /** The environment's merge verdict, or null when the check failed and is recorded as an error. */
@@ -125,10 +171,9 @@ async function judgeMergedEnvironment(
     return await judgeBranchForRemoval({
       repoPath: sweep.repoPath,
       branchName: toBranchName(env.branch_name),
-      baseRef: sweep.result.baseRef,
       prStateCache: sweep.prStateCache,
-      includeClosed: sweep.includeClosed,
       remote: sweep.remote,
+      includeClosed: sweep.includeClosed,
       worktreePath: toWorktreePath(env.working_path),
     });
   } catch (error) {
@@ -164,17 +209,4 @@ async function removeMergedEnvironment(
     const err = error as Error;
     sweep.result.errors.push({ branchName: env.branch_name, error: err.message });
   }
-}
-
-/**
- * Clean up to make room when limit reached (Phase 3D)
- * Attempts to remove merged branches first
- * Returns detailed results for user feedback
- */
-export async function cleanupToMakeRoom(
-  codebaseId: string,
-  mainRepoPath: string
-): Promise<CleanupOperationResult> {
-  // Reuse the merged cleanup logic
-  return cleanupMergedWorktrees(codebaseId, mainRepoPath);
 }

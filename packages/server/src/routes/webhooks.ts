@@ -15,7 +15,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type {
   WebhookSourceOutcome,
   WebhookSourcePluginHost,
-} from '../services/webhook-source-plugins';
+} from '@archon/core/workflows/source-plugins';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -208,7 +208,7 @@ const sourceRejections: Record<
 
 export function registerWebhookSourceRoutes(
   app: OpenAPIHono,
-  sources: WebhookSourcePluginHost,
+  sources: Pick<WebhookSourcePluginHost, 'hasSource' | 'receive'>,
   /** Called after a receipt commits, without awaiting, so execution never delays the ACK. */
   onReceiptAccepted?: () => void
 ): void {

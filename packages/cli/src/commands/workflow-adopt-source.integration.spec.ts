@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, describe, expect, test, mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { spawnSync } from 'node:child_process';
@@ -339,6 +340,7 @@ describe('public CLI adopted workflow source', () => {
           await canonicalizeProjectPath(fixture.source)
         );
         expect(state.record.source_config?.command_folder).toBe('.archon/prompts');
+        expect(JSON.parse(run.metadata).dispatch?.source).toBe('project');
         const capture = await loadWorkflowSource(
           state.record.root,
           state.record.digest,

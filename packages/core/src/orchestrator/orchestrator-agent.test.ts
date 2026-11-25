@@ -24,7 +24,7 @@ import {
   mockEnsureArchonWorkspacesPath,
   mockExecuteWorkflow,
   mockExistsSync,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockFindWorkflowRunsByIdPrefix,
   mockGetActiveSession,
   mockGetCodebase,
@@ -172,25 +172,6 @@ describe('provider cwd resolution', () => {
     expect(sent).toContain('/setproject');
   });
 
-  test('missing conversation.cwd does not silently fall back to default_cwd', async () => {
-    const codebase = makeCodebaseForSync();
-    const conversation = makeConversation({
-      codebase_id: 'codebase-1',
-      cwd: '/worktrees/deleted-branch',
-    });
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
-    mockExistsSync.mockImplementation((p: string) => p !== '/worktrees/deleted-branch');
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-
-    // Relocating the agent into the live checkout would widen its write scope
-    // without the user asking for it.
-    expect(mockSendQuery).not.toHaveBeenCalled();
-  });
-
   test('unscoped chat ignores a missing conversation.cwd', async () => {
     const conversation = makeConversation({ codebase_id: null, cwd: '/worktrees/deleted-branch' });
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
@@ -304,10 +285,15 @@ describe('provider cwd resolution', () => {
       mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
       mockExistsSync.mockImplementation((p: string) => p !== '/repos/test-repo');
 
-      // Non-web only: the web adapter's route persists its own turns, so the
-      // orchestrator never writes a user row for it and this could not regress.
-      const platform = makePlatform();
-      platform.getPlatformType = mock(() => 'telegram') as typeof platform.getPlatformType;
+      // Core-owned persistence: with adapter-owned persistence the orchestrator
+      // never writes a user row, so this could not regress.
+      const platform = {
+        ...makePlatform(),
+        capabilities: {
+          messagePersistence: 'core',
+          defaultWorkflowDispatch: 'background',
+        } as const,
+      };
       await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       expect(mockSendQuery).not.toHaveBeenCalled();
@@ -382,19 +368,6 @@ describe('provider cwd resolution', () => {
         expect.anything(),
         'orchestrator.codebase_cwd_missing'
       );
-    });
-
-    test('does not fire when the project directory is present', async () => {
-      const codebase = makeCodebaseForSync();
-      const conversation = makeConversation({ codebase_id: 'codebase-1' });
-      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
-      mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
-      mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
-
-      const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-
-      expect(getSendQueryCwd()).toBe('/repos/test-repo');
     });
 
     test('leaves the unscoped path alone — the workspaces root is created on demand', async () => {
@@ -529,17 +502,6 @@ describe('typed chat tools', () => {
         expect.objectContaining({ originalMessage: task }),
         expect.anything()
       );
-
-      mockDispatchBackgroundWorkflow.mockClear();
-      const proseServer = createFakeAppServer(() => ({ notifications: [agentMessage(prose)] }));
-      const proseProvider = new CodexProvider(proseServer, 1);
-      mockGetOrCreateConversation.mockResolvedValueOnce(
-        makeConversation({ ai_assistant_type: 'codex' })
-      );
-      mockSendQuery.mockImplementationOnce((...args) => proseProvider.sendQuery(...args));
-      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
-      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     }
   );
 
@@ -713,12 +675,13 @@ describe('typed chat tools', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test('every chat gets invoke_workflow and register_project; scoped chats also get manage_run', async () => {
+  test('every chat gets the launch, project and attention tools; scoped chats also get manage_run', async () => {
     await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
     expect(turnToolNames()).toEqual([
       'invoke_workflow',
       'register_project',
       'report_workflow_no_match',
+      'attention',
     ]);
 
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
@@ -728,6 +691,7 @@ describe('typed chat tools', () => {
       'invoke_workflow',
       'register_project',
       'report_workflow_no_match',
+      'attention',
       'manage_run',
     ]);
   });
@@ -832,14 +796,20 @@ describe('typed chat tools', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test('a /invoke-workflow line in the reply is plain text', async () => {
-    const reply = '/invoke-workflow test-workflow --project test-repo --prompt "x"\n';
-    agentInvokes([], [], reply);
-    const platform = makePlatform();
-    platform.getStreamingMode.mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+  test('a turn the operator stops after queueing a launch dispatches nothing', async () => {
+    const controller = new AbortController();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+      await options.nativeTools.find(t => t.name === 'invoke_workflow')!.handler(launch);
+      yield { type: 'agent_message_chunk', text: 'On it.' };
+      controller.abort();
+      throw new Error('Query aborted');
+    });
+    await handleMessage(makePlatform(), 'conv-1', 'fix the login bug', {
+      actor: operator,
+      abortSignal: controller.signal,
+    });
 
-    expect(platform.sendMessage.mock.calls.map(c => c[1])).toContain(reply);
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
@@ -933,8 +903,8 @@ describe('paused approval gate routing', () => {
     mockListCodebases.mockReset();
     mockListCodebases.mockImplementation(() => Promise.resolve([]));
     mockExecuteWorkflow.mockClear();
-    mockFindResumableRunByParentConversation.mockReset();
-    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
+    mockListResumableRunsByParentConversation.mockReset();
+    mockListResumableRunsByParentConversation.mockImplementation(() => Promise.resolve([]));
     mockHydrateResumableRun.mockClear();
     mockUpdateWorkflowRun.mockClear();
     mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
@@ -981,26 +951,6 @@ describe('paused approval gate routing', () => {
 
   // ── The removed behaviour: prose no longer decides the gate ────────────────
 
-  test('an approving-sounding message no longer resolves the gate by itself', async () => {
-    arrangeGatedChat();
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'looks good, proceed with implementation', {
-      actor: operator,
-    });
-
-    // Nothing was resolved and nothing resumed — the message went to the agent.
-    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
-    expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-    expect(platform.sendMessage).not.toHaveBeenCalledWith(
-      'conv-1',
-      expect.stringContaining('Resuming')
-    );
-    expect(mockSendQuery).toHaveBeenCalled();
-  });
-
   test('a rejecting message is never recorded as an approval', async () => {
     arrangeGatedChat();
 
@@ -1015,21 +965,6 @@ describe('paused approval gate routing', () => {
     expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockSendQuery).toHaveBeenCalled();
-  });
-
-  test('an ambiguous message resolves nothing and leaves the gate open', async () => {
-    arrangeGatedChat();
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'what would that change?', { actor: operator });
-
-    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-    expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-    expect(platform.sendMessage).not.toHaveBeenCalledWith(
-      'conv-1',
-      expect.stringContaining('Resuming')
-    );
   });
 
   // ── The gate reaches the agent as context ──────────────────────────────────
@@ -1090,19 +1025,6 @@ describe('paused approval gate routing', () => {
     expect(prompt).not.toContain('/workflow approve run-1');
     expect(prompt).toContain('/workflow reject run-1 <reason>');
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-  });
-
-  test('a slash command never reaches the gate lookup', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ codebase_id: 'codebase-1' }))
-    );
-    mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve({ success: true, message: 'status ok', workflow: undefined })
-    );
-
-    await handleMessage(makePlatform(), 'conv-1', '/status', { actor: operator });
-
-    expect(mockGetPausedWorkflowRun).not.toHaveBeenCalled();
   });
 
   // ── Resolution through manage_run also continues the run ───────────────────

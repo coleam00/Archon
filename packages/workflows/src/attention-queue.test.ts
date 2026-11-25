@@ -1,9 +1,12 @@
 // @archon-test-isolated
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, jest, test } from 'bun:test';
 import { join } from 'node:path';
 import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths/archon-paths';
 import {
+  type AttentionQueueSource,
+  attentionQueueItemForRun,
   fanOutPosition,
+  listAttentionQueue,
   parseAttentionLabelPairs,
   parseAttentionQueueCountBy,
   parseAttentionQueueOrder,
@@ -11,6 +14,7 @@ import {
   projectRefForRun,
   toAttentionQueueItem,
 } from './attention-queue';
+import { OWNER_OBSERVATION_CONCURRENCY, OWNER_OBSERVATION_DEADLINE_MS } from './owner-observation';
 import { queuedRunAttention, type WorkflowRun } from './schemas/workflow-run';
 
 describe('attention queue arguments', () => {
@@ -49,8 +53,13 @@ describe('attention queue arguments', () => {
     expect(parseAttentionQueueCountBy('label:ci')).toEqual({ by: 'label', key: 'ci' });
     expect(() => parseAttentionQueueOrder('newest')).toThrow("sort must be 'age' or 'label:<key>'");
     expect(() => parseAttentionQueueOrder('label:')).toThrow('invalid label key');
+    expect(parseAttentionQueueCountBy('answerer')).toEqual({ by: 'answerer' });
     expect(() => parseAttentionQueueCountBy('codebase')).toThrow(
-      "count-by must be 'project' or 'label:<key>'"
+      "count-by must be 'project', 'label:<key>' or 'answerer'"
+    );
+    // An open item has no answer, so only a count of started waits groups by answerer.
+    expect(() => parseAttentionQueueRequest({ labels: [], countBy: 'answerer' })).toThrow(
+      "count-by 'answerer' counts answered waits from events and needs since"
     );
   });
 
@@ -105,6 +114,7 @@ describe('a usage-limit wait', () => {
       codebase_id: null,
       status: 'paused',
       outcome: null,
+      completed_outcome: null,
       user_message: '',
       metadata: {
         wait: {
@@ -116,6 +126,7 @@ describe('a usage-limit wait', () => {
           resumeAt: '2026-10-15T14:00:00.000Z',
         },
       },
+      active_phase_started_at: null,
       started_at: new Date('2026-10-15T08:00:00.000Z'),
       completed_at: null,
       last_activity_at: null,
@@ -125,6 +136,7 @@ describe('a usage-limit wait', () => {
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      item_id: null,
     };
     const attention = queuedRunAttention(run);
     expect(attention).toEqual({
@@ -134,11 +146,150 @@ describe('a usage-limit wait', () => {
       resumeAt: '2026-10-15T14:00:00.000Z',
     });
     if (attention === undefined) return;
-    expect(toAttentionQueueItem(run, attention, { codebase: null, branch: null })).toMatchObject({
+    expect(
+      toAttentionQueueItem(run, attention, { codebase: null, branch: null, item: null })
+    ).toMatchObject({
       kind: 'usage_limit',
-      node: 'implement',
+      ref: 'limited',
+      run: { id: 'limited', node: 'implement' },
       resetAt: '2026-10-15T14:00:00.000Z',
       pausedAt: '2026-10-15T09:00:00.000Z',
     });
+  });
+});
+
+describe('owner observations', () => {
+  const running = (id: string): WorkflowRun => ({
+    origin: null,
+    id,
+    workflow_name: 'build',
+    conversation_id: null,
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'running',
+    outcome: null,
+    completed_outcome: null,
+    user_message: '',
+    metadata: {},
+    active_phase_started_at: null,
+    started_at: new Date('2026-11-25T08:00:00.000Z'),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    checkout_baseline: null,
+    item_id: null,
+  });
+
+  test('run a bounded number at once, and one past its deadline reads as unknown, never gone', async () => {
+    const runs = Array.from({ length: OWNER_OBSERVATION_CONCURRENCY + 2 }, (_, index) =>
+      running(`run-${String(index)}`)
+    );
+    const started: string[] = [];
+    const source: AttentionQueueSource = {
+      store: {
+        listAttentionQueueRows: async () => [],
+        getWorkflowRun: async () => null,
+        getWorkflowRunForAttention: async () => null,
+        getCodebase: async () => null,
+        getItem: async () => null,
+      },
+      branchOf: async () => null,
+      ownerLost: {
+        runs: async () => runs,
+        // The last run is gone; every other owner hangs, as a live one can on a busy machine.
+        observe: run => {
+          started.push(run.id);
+          return run === runs.at(-1) ? Promise.resolve('unreachable') : new Promise(() => {});
+        },
+      },
+    };
+    jest.useFakeTimers();
+    try {
+      const listed = listAttentionQueue(source);
+      for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+      expect(started).toHaveLength(OWNER_OBSERVATION_CONCURRENCY);
+      for (let round = 0; round < 3; round++) {
+        jest.advanceTimersByTime(OWNER_OBSERVATION_DEADLINE_MS);
+        for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+      }
+      expect((await listed).map(item => ('ref' in item ? item.ref : item))).toEqual([
+        `run-${String(OWNER_OBSERVATION_CONCURRENCY + 1)}`,
+      ]);
+      expect(started).toHaveLength(runs.length);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('a continuation a host gave up on', () => {
+  const wait = {
+    owner: 'node',
+    kind: 'time',
+    nodeId: 'delay',
+    waitingSince: '2026-11-25T08:00:00.000Z',
+    resumeAt: '2026-11-25T09:00:00.000Z',
+  };
+  const givenUp = (resumeAt: string) => ({
+    at: '2026-11-25T09:03:00.000Z',
+    attempts: 3,
+    path: '/src/manifest.json',
+    cursor: { kind: 'wait', nodeId: 'delay', resumeAt },
+  });
+  const paused = (metadata: Record<string, unknown>): WorkflowRun => ({
+    origin: null,
+    id: 'parked',
+    workflow_name: 'deliver',
+    conversation_id: null,
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'paused',
+    outcome: null,
+    completed_outcome: null,
+    user_message: '',
+    metadata,
+    active_phase_started_at: null,
+    started_at: new Date('2026-11-25T07:00:00.000Z'),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    checkout_baseline: null,
+    item_id: null,
+  });
+  const source = {
+    store: {
+      listAttentionQueueRows: async () => [],
+      getWorkflowRun: async () => null,
+      getWorkflowRunForAttention: async () => null,
+      getCodebase: async () => null,
+      getItem: async () => null,
+    },
+    branchOf: async () => null,
+  };
+
+  test('is listed while the run is at that continuation, with what to do', async () => {
+    const item = await attentionQueueItemForRun(
+      source,
+      paused({ wait, continuation_given_up: givenUp(wait.resumeAt) })
+    );
+    expect(item).toMatchObject({ kind: 'unreadable', reason: 'continuation_given_up' });
+    expect(item && 'detail' in item ? item.detail : '').toContain('archon workflow resume parked');
+  });
+
+  test('is inert once the run waits at another continuation', async () => {
+    expect(
+      await attentionQueueItemForRun(
+        source,
+        paused({ wait, continuation_given_up: givenUp('2026-11-25T08:30:00.000Z') })
+      )
+    ).toBeNull();
   });
 });

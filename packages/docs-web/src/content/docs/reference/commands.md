@@ -35,13 +35,13 @@ These commands are handled deterministically by the orchestrator — they always
 | `/workflow reload` | Reload workflow definitions |
 | `/workflow status` | Show active workflows |
 | `/workflow get <id>` | Show one run, whatever its status |
-| `/workflow cancel [id]` | Cancel a running workflow (default: this conversation's). Refuses when no owner answers; check the recorded host and pid, verify the owner has stopped, then use `/workflow abandon <id>` |
-| `/workflow resume <id>` | Resume a failed or paused run (re-runs, skipping completed nodes) |
+| `/workflow cancel [id]` | Cancel a running workflow, or a pending one before it starts (default: this conversation's). A pending run that no process on this machine holds is cancelled directly; a starter on another machine that shares the database is not seen ([`workflow cancel`](/reference/cli/#workflow-cancel)). A running run whose owner does not answer is refused; check the recorded host and pid, verify the owner has stopped, then use `/workflow abandon <id>` |
+| `/workflow resume <id>` | Resume a failed, paused or killed run (re-runs, skipping completed nodes) |
 | `/workflow abandon <id>` | Discard a run (running, paused, or failed) and attempt removal of the worktree it created, keeping the branch. Owner warnings retain the checkout: inspect it (`lsof` when output is still held), resolve the warning, then run abandon again on the cancelled run to retry removal. A silent descendant also retains its checkout and the selected root's checkout, even if the root's owner stopped; each descendant needs its own owner check. If the selected sub-run has no answering endpoint, cancellation succeeds but its subtree's owned checkouts remain: silence does not prove the enclosing execution stopped. Inspect the owning execution and stop or abandon it only if you intend to stop its whole scope; repeated child-only abandonment may still retain the checkouts. |
 | `/workflow approve <id> [comment]` | Answer `approve` to a paused run: an attention wait, or a deprecated approval gate (deprecated interactive-loop gates: no comment on a signal-bearing gate = accept & complete; a comment runs another iteration) |
 | `/workflow reject <id> [reason]` | Answer `reject` to a paused run (attention wait or deprecated approval gate). Rejecting an attention wait continues the run with `decision: reject` |
 | `/workflow run <name> [args]` | Run a workflow directly |
-| `/workflow cleanup [days]` | CLI only -- delete old run records (default: 7 days) |
+| `/workflow cleanup [days]` | CLI only -- delete old runs and their files (default: 7 days) |
 
 > **Note:** Workflows are YAML files in `.archon/workflows/`
 

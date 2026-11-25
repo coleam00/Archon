@@ -11,7 +11,7 @@ export const runExitReasonSchema = z.enum([
   'node_error',
   // The executor caught an error outside any node.
   'unhandled_error',
-  // All nodes succeeded but `evidence_policy.required` found no evidence marker (#2230).
+  // Retired with `evidence_policy` (#5630). Nothing writes it; runs that ended with it still hold it.
   'evidence_missing',
   // The run budget refused new work, or its spend could not be measured (#2814).
   'budget_refused',
@@ -21,7 +21,7 @@ export const runExitReasonSchema = z.enum([
   'not_finalized',
   // The CLI process owning the run was terminated by a signal.
   'process_terminated',
-  // A detached launch failed before its worker took the run.
+  // Launch preparation or detached spawning failed before workflow execution.
   'launch_failed',
   // No run row could be written, so the run never existed.
   'run_not_created',

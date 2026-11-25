@@ -15,6 +15,7 @@ import type { OperationContext } from './context';
 import {
   answerText,
   assertAnswerAdmissible,
+  assertGateTakesNoAnswerer,
   ChildRunRedirectError,
   lostGateError,
   unreadableGateMessage,
@@ -147,7 +148,7 @@ export function assertDeclaredDecision(
  * Handles both interactive_loop and standard approval gate paths.
  * The run STAYS 'paused' — the resolution is recorded on the approval context
  * (`metadata.approval.resolved`, #2075) and the resume machinery already picks
- * up paused runs (resumableStatusClause / findResumableRunByParentConversation).
+ * up paused runs (listResumableRunsByParentConversation, `resumeWorkflow`).
  * Does NOT auto-resume — callers decide whether to execute.
  */
 export async function approveWorkflow(
@@ -164,6 +165,7 @@ export async function approveWorkflow(
   await ctx.assertMayAct(run, actor, 'approve');
   assertAnswerAdmissible(run, origin);
   const approval = assertApprovable(run);
+  assertGateTakesNoAnswerer(run, actor);
 
   const approvalComment = comment ?? 'Approved';
   const isInteractiveLoop = approval.type === 'interactive_loop';

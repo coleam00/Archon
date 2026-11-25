@@ -6,7 +6,9 @@ import {
   forgeEventEnvelopeSchema,
   type ForgeEvent,
   type ForgeEventEnvelope,
+  type ReviewState,
 } from '@archon/forge';
+import { actor, userSchema } from './actor';
 
 type PrLifecycleAction = Extract<ForgeEvent, { kind: 'pr.lifecycle' }>['action'];
 
@@ -30,6 +32,10 @@ export const githubSourceCapabilities = {
     ).map(action => ({ kind: 'pr.lifecycle' as const, action })),
     ...(['added', 'removed'] as const).map(action => ({ kind: 'label.changed' as const, action })),
     { kind: 'comment.changed', action: 'created' } as const,
+    ...(['submitted', 'dismissed'] as const).map(action => ({
+      kind: 'review.changed' as const,
+      action,
+    })),
     { kind: 'check.changed', action: 'changed', unitKind: 'check' } as const,
     { kind: 'check.changed', action: 'changed', unitKind: 'commit_status' } as const,
   ],
@@ -50,14 +56,12 @@ export type GitHubNormalizationResult =
   | { status: 'malformed'; reason: string };
 
 const repositorySchema = z.object({ full_name: z.string().min(1) });
-const senderSchema = z.object({
-  id: z.union([z.string().min(1), z.number().int()]),
-  login: z.string().min(1).nullable().optional(),
-});
+// A webhook sender is the REST user object. Deliveries omit it; they never send it as null.
+const senderSchema = userSchema.unwrap().optional();
 const baseSchema = z.object({
   action: z.string().min(1),
   repository: repositorySchema,
-  sender: senderSchema.optional(),
+  sender: senderSchema,
 });
 const issueSchema = baseSchema.extend({
   issue: z.object({
@@ -104,8 +108,18 @@ const issueCommentSchema = baseSchema.extend({
   }),
   comment: z.object({
     id: z.union([z.string().min(1), z.number().int()]),
-    user: senderSchema.nullable(),
+    user: userSchema,
     created_at: z.iso.datetime({ offset: true }).nullable().optional(),
+  }),
+});
+const pullRequestReviewSchema = baseSchema.extend({
+  pull_request: z.object({ number: z.number().int().positive() }),
+  review: z.object({
+    id: z.union([z.string().min(1), z.number().int()]),
+    user: userSchema,
+    state: z.string().min(1),
+    commit_id: z.string().min(1).nullable().optional(),
+    submitted_at: z.iso.datetime({ offset: true }).nullable().optional(),
   }),
 });
 const checkRunSchema = baseSchema.extend({
@@ -129,18 +143,11 @@ const statusSchema = z.object({
   created_at: z.iso.datetime({ offset: true }).nullable().optional(),
   updated_at: z.iso.datetime({ offset: true }).nullable().optional(),
   repository: repositorySchema,
-  sender: senderSchema.optional(),
+  sender: senderSchema,
 });
 
 function id(value: string | number | undefined): string | null {
   return value === undefined ? null : String(value);
-}
-
-function actor(
-  sender: z.infer<typeof senderSchema> | undefined,
-  host: string
-): SourceActor | undefined {
-  return sender ? { host, id: String(sender.id), login: sender.login ?? null } : undefined;
 }
 
 export function checkPhase(status: string): 'pending' | 'running' | 'completed' | 'unknown' {
@@ -169,7 +176,7 @@ function malformed(error: z.ZodError): GitHubNormalizationResult {
 function normalizeEnvelope(
   event: ForgeEvent,
   context: GitHubEnvelopeContext,
-  sourceActor: SourceActor | undefined,
+  sourceActor: SourceActor | null,
   occurredAt: string | null
 ): GitHubNormalizationResult {
   const envelope = forgeEventEnvelopeSchema.safeParse({
@@ -179,7 +186,8 @@ function normalizeEnvelope(
     contentDigest: context.contentDigest,
     receivedAt: context.receivedAt,
     occurredAt,
-    sourceActor,
+    // An envelope without a sender omits `sourceActor` rather than recording null.
+    sourceActor: sourceActor ?? undefined,
     event,
   });
   return envelope.success
@@ -195,7 +203,7 @@ function normalizeIssues(
   const parsed = issueSchema.safeParse(payload);
   if (!parsed.success) return malformed(parsed.error);
   const value = parsed.data;
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt = value.issue.updated_at ?? null;
   if (value.action === 'labeled' || value.action === 'unlabeled') {
     if (!value.label) return { status: 'malformed', reason: 'label: Required for label action' };
@@ -211,7 +219,7 @@ function normalizeIssues(
       },
       label: { name: value.label.name, id: id(value.label.id) },
       // GitHub's sender on a labeled delivery is whoever changed the label.
-      actor: sourceActor ?? null,
+      actor: sourceActor,
     };
   } else if (
     value.action === 'opened' ||
@@ -271,7 +279,7 @@ function normalizePullRequest(
   const parsed = pullRequestSchema.safeParse(payload);
   if (!parsed.success) return malformed(parsed.error);
   const value = parsed.data;
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt =
     value.pull_request.merged_at ??
     value.pull_request.closed_at ??
@@ -291,7 +299,7 @@ function normalizePullRequest(
       },
       label: { name: value.label.name, id: id(value.label.id) },
       // GitHub's sender on a labeled delivery is whoever changed the label.
-      actor: sourceActor ?? null,
+      actor: sourceActor,
     };
   } else {
     const action = prLifecycleAction(value.action, value.pull_request.merged);
@@ -328,7 +336,7 @@ function normalizeIssueComment(
       status: 'unsupported',
       reason: `Unsupported GitHub issue_comment action: ${value.action}`,
     };
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt = value.comment.created_at ?? null;
   const ref = {
     repo: { host: context.host, path: value.repository.full_name },
@@ -341,9 +349,59 @@ function normalizeIssueComment(
     subject: value.issue.pull_request === undefined ? { kind: 'issue', ref } : { kind: 'pr', ref },
     comment: {
       id: String(value.comment.id),
-      author: actor(value.comment.user ?? undefined, context.host) ?? null,
+      author: actor(context.host, value.comment.user),
     },
   };
+  return normalizeEnvelope(event, context, sourceActor, occurredAt);
+}
+
+/** GitHub sends review states lowercase in webhooks and uppercase in its APIs. */
+export function reviewState(state: string): ReviewState {
+  switch (state.toLowerCase()) {
+    case 'approved':
+      return 'approved';
+    case 'changes_requested':
+      return 'changes_requested';
+    case 'commented':
+      return 'commented';
+    case 'dismissed':
+      return 'dismissed';
+    default:
+      return 'unknown';
+  }
+}
+
+function normalizePullRequestReview(
+  payload: unknown,
+  context: GitHubEnvelopeContext
+): GitHubNormalizationResult {
+  const parsed = pullRequestReviewSchema.safeParse(payload);
+  if (!parsed.success) return malformed(parsed.error);
+  const value = parsed.data;
+  // `edited` changes only a review's text, which the event does not carry.
+  if (value.action !== 'submitted' && value.action !== 'dismissed')
+    return {
+      status: 'unsupported',
+      reason: `Unsupported GitHub pull_request_review action: ${value.action}`,
+    };
+  const sourceActor = actor(context.host, value.sender ?? null);
+  const event: ForgeEvent = {
+    kind: 'review.changed',
+    action: value.action,
+    pr: {
+      repo: { host: context.host, path: value.repository.full_name },
+      number: value.pull_request.number,
+    },
+    review: {
+      id: String(value.review.id),
+      state: reviewState(value.review.state),
+      nativeState: value.review.state,
+      commit: value.review.commit_id ?? null,
+      author: actor(context.host, value.review.user),
+    },
+  };
+  // A dismissal happens after submission; GitHub's payload carries no dismissal time.
+  const occurredAt = value.action === 'submitted' ? (value.review.submitted_at ?? null) : null;
   return normalizeEnvelope(event, context, sourceActor, occurredAt);
 }
 
@@ -357,7 +415,7 @@ function normalizeCheckRun(
   if (value.action !== 'created' && value.action !== 'completed') {
     return { status: 'unsupported', reason: 'Unsupported GitHub check_run action' };
   }
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt = value.check_run.completed_at ?? value.check_run.started_at ?? null;
   const event: ForgeEvent = {
     kind: 'check.changed',
@@ -384,7 +442,7 @@ function normalizeStatus(
   const parsed = statusSchema.safeParse(payload);
   if (!parsed.success) return malformed(parsed.error);
   const value = parsed.data;
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt = value.updated_at ?? value.created_at ?? null;
   const event: ForgeEvent = {
     kind: 'check.changed',
@@ -422,6 +480,8 @@ export function normalizeGitHubWebhook(
       return normalizePullRequest(payload, context);
     case 'issue_comment':
       return normalizeIssueComment(payload, context);
+    case 'pull_request_review':
+      return normalizePullRequestReview(payload, context);
     case 'check_run':
       return normalizeCheckRun(payload, context);
     case 'status':

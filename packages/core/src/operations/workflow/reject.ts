@@ -16,6 +16,7 @@ import { releaseRunResources, type OperationContext } from './context';
 import {
   answerText,
   assertAnswerAdmissible,
+  assertGateTakesNoAnswerer,
   ChildRunRedirectError,
   lostGateError,
   unreadableGateMessage,
@@ -188,6 +189,7 @@ export async function rejectWorkflow(
   await ctx.assertMayAct(run, actor, 'reject');
   assertAnswerAdmissible(run, origin);
   const approval = assertRejectable(run);
+  assertGateTakesNoAnswerer(run, actor);
   if (approval === undefined) return rejectGate(ctx, run, undefined, reason, origin);
 
   // Exhaustively switched on the suspend reason (#2489) so a future reason value

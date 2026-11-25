@@ -26,8 +26,10 @@ function harness(thresholdMs = 100, reportedBackgroundWork = false) {
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: '',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(time),
     completed_at: null,
     last_activity_at: null,
@@ -36,6 +38,7 @@ function harness(thresholdMs = 100, reportedBackgroundWork = false) {
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
   };
   const read = mock(
@@ -471,6 +474,10 @@ describe('tool call attention', () => {
         streamId: published.streamId,
         toolCallId: published.toolCallId,
         raisedAt: published.raisedAt,
+        name: published.name,
+        ...(published.title !== undefined ? { title: published.title } : {}),
+        startedAt: published.startedAt,
+        lastProgressAt: published.lastProgressAt,
       },
     ]);
     const plan = planEndTurn({ ...h.run, metadata: { tool_call_attention: h.snapshots[0] } });

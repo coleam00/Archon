@@ -5,18 +5,14 @@ import type { components } from '@/lib/api.generated';
 export type ProviderInfo = components['schemas']['ProviderInfo'];
 
 export function listProviders(): Promise<ProviderInfo[]> {
-  return requestJson<components['schemas']['ProviderListResponse']>('/api/providers').then(
-    r => r.providers
-  );
+  return requestJson('/api/providers', 'get').then(r => r.providers);
 }
 
 export type PiModelInfo = components['schemas']['PiModelInfo'];
 
 /** Best-effort: the server returns `{ models: [] }` when the catalog can't load. */
 export function listPiModels(): Promise<PiModelInfo[]> {
-  return requestJson<components['schemas']['PiModelListResponse']>('/api/providers/pi/models').then(
-    r => r.models
-  );
+  return requestJson('/api/providers/pi/models', 'get').then(r => r.models);
 }
 
 export type OpencodeCredentialProvider = components['schemas']['OpencodeCredentialProvider'];
@@ -28,9 +24,7 @@ export type OpencodeCredentialProvider = components['schemas']['OpencodeCredenti
  * Throws HttpError 503 when the runtime is unavailable.
  */
 export function listOpencodeCredentials(): Promise<OpencodeCredentialProvider[]> {
-  return requestJson<components['schemas']['OpencodeCredentialListResponse']>(
-    '/api/providers/opencode/credentials'
-  ).then(r => r.providers);
+  return requestJson('/api/providers/opencode/credentials', 'get').then(r => r.providers);
 }
 
 /**

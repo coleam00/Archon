@@ -2,7 +2,7 @@
 
 Use this change as its operator would, and judge whether it is clear, responsive and honest. Other lenses judge whether the code is correct; you judge what a person meets on the screen. Read `$ARTIFACTS_DIR/review/scope.md` first for the change and its work order, and judge the change against what the work order says its user needs.
 
-Start the app from a scratch worktree under this run (`git worktree add --detach "$(mkdir -p "$ARTIFACTS_DIR/.archon/scratch/ux" && mktemp -d "$ARTIFACTS_DIR/.archon/scratch/ux/XXXXXX")" HEAD`; the workflow removes it; install its dependencies with the project's own package manager in locked mode) and drive it with playwright-cli: `$playwright-cli` where skills are invoked that way, otherwise the `playwright-cli` command and its `SKILL.md` in the project's or your skills directory. Seed the data a page needs through the app's own API or CLI. Look at it the way its user would, at the sizes they would use it.
+First find the browser tool, as `ui-check.md` says, before any setup. Then start the app from a scratch worktree under this run (`git worktree add --detach "$(mktemp -d "$NODE_SCRATCH_DIR/XXXXXX")" HEAD`; Archon removes it when you finish; install its dependencies with the project's own package manager in locked mode) and drive it with that tool. Seed the data a page needs through the app's own API or CLI. Look at it the way its user would, at the sizes they would use it.
 
 What to judge:
 
@@ -17,11 +17,11 @@ Rules:
 - Never run it on the user's real data or a live database. `ui-check.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`) says how this project starts safely.
 - Never modify this checkout or post anywhere: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Scratch files go under `$ARTIFACTS_DIR`.
 - Stop exactly what you started.
-- If you could not run it, say so; do not judge the UX from the code alone.
+- If you could not run it, say so; do not judge the UX from the code alone. When no browser tool is found, start nothing: write `ux.md` opening with the statement that the app was not exercised because no browser tool is on this host, with no findings, and reply. Synthesis reads that report as a coverage gap, never as a clean UX pass.
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/ux.md`: each finding begins with `sources: [ux]`, then what the user meets and what it costs them, the screenshot, the `file:line` that produces it, and the smallest fix. Never assign a severity: synthesis labels every finding. Then list what you exercised and found clear. On a continuation round, scope.md names the prior report: give a verdict per prior `ux` finding (still open / fixed / disproved, with evidence), then judge the delta.
+Write `$ARTIFACTS_DIR/review/ux.md`: each finding begins with `sources: [ux]`, then what the user meets and what it costs them, the screenshot, the `file:line` that produces it, and the smallest fix. Never assign a severity: synthesis labels every finding. Then list what you exercised and found clear. On a continuation round, scope.md names the prior report: give a verdict per prior `ux` finding still open (still open / fixed / disproved, with evidence), check whether its fix introduced a new defect or side effect a person meets, then judge the rest of the delta.
 
 A UX problem you meet that the change did not cause is a discovery: write `$ARTIFACTS_DIR/discoveries/review-ux.json` as a JSON array of records with `title`, `claim`, `evidence`, `relation` (`unrelated` or `scope_conflict`) and `source_node` (`ux`). Write no file for no discovery.
 

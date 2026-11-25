@@ -1,10 +1,24 @@
+import {
+  listedRunThroughput,
+  printModelThroughput,
+  printListedRunThroughput,
+} from './workflow-throughput';
 import { getPluginsPath } from '@archon/paths';
 import { scanReceipts } from '@archon/plugin-manifest/store';
-import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import {
+  attentionQueueSource,
+  projectRefForCodebase,
+} from '@archon/core/operations/attention-queue';
+import { readItem, readItemOfRun } from '@archon/workflows/item-read';
+import { itemReadLines } from './workflow-item-text';
+import { attentionItemLines } from './workflow-attention-text';
+import { refusedStartItems } from '@archon/workflows/queue-items-without-run';
+import { servedHosts } from '../utils/install-hosts';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
-import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
+import { heldStartLine, readHeldStarts } from './workflow-held-starts';
 import { resolveDryRunEnvironment } from './workflow-dry-run';
 import { createCliWorkflowHost } from '../utils/workflow-host';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -12,25 +26,25 @@ import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
 import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import { workflowSourceConfigFrom } from '@archon/workflows/run-source';
+import { latestWorkflowNotices } from '@archon/workflows/workflow-notice';
 import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
 import type { WorkflowLoadError, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
-import { workflowRunStatusSchema, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  displayedRunOutcome,
+  workflowRunStatusSchema,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import { operatorPause } from '@archon/workflows/schemas/operator-pause';
 import {
   loadWorkflows,
   projectWorkflowDescription,
   WORKFLOW_DESCRIPTION_TRUNCATION_MARKER,
   type WorkflowJsonEntry,
 } from './workflow-list';
-import {
-  buildNodeSummaries,
-  fetchVerboseEvents,
-  listRunEvents,
-  withRunDetail,
-} from './workflow-node-summaries';
+import { buildNodeSummaries, fetchVerboseEvents, withRunDetail } from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { type RequestedBy, requestedBy } from '../utils/requested-by';
 import {
   formatAge,
   getLog,
@@ -47,15 +61,8 @@ import {
   finishTranscriptDecode,
   transcriptUnavailableMessage,
 } from './workflow-transcript';
-import {
-  printStatusRun,
-  announceWaitAttached,
-  writeWaitOutcome,
-  type LeaveBehind,
-  buildLeaveBehind,
-  readParseWarningEvents,
-  printRunDetail,
-} from './workflow-inspect';
+import { printStatusRun, announceWaitAttached, writeWaitOutcome } from './workflow-inspect';
+import { findRunsCodebase, type RunsCodebase } from './workflow-item-runs';
 
 async function reportUnavailablePlugins(): Promise<void> {
   // Discovery reports scan failures alongside any independently loaded workflows.
@@ -329,11 +336,17 @@ export async function workflowStatusCommand(
 ): Promise<void> {
   const codebase = await resolveStatusCodebase(host, cwd, opts.all);
   let runs: DashboardWorkflowRun[];
+  let notices: Awaited<ReturnType<typeof latestWorkflowNotices>>;
   try {
     const result = await host.operations.getWorkflowStatus(
       codebase ? { codebaseId: codebase.id } : undefined
     );
     runs = result.runs;
+    // What each live run last said it is doing, so one read answers "what is running".
+    notices = await latestWorkflowNotices(
+      host.deps.store,
+      runs.map(run => run.id)
+    );
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cwd }, 'cli.workflow_status_failed');
@@ -341,23 +354,44 @@ export async function workflowStatusCommand(
   }
 
   const scopeFallback = !opts.all && !codebase;
+  const { hold, heldStarts } = await readHeldStarts(host, codebase?.id);
 
   if (opts.json) {
     if (!opts.verbose) {
       await writeJsonLine({
-        runs: runs.map(run => ({ ...run, attention: runAttention(run) })),
+        runs: runs.map(run => ({
+          ...run,
+          attention: runAttention(run),
+          notice: notices.get(run.id) ?? null,
+        })),
         scopeFallback,
+        hold,
+        heldStarts,
       });
       return;
     }
 
     const runsOutput = await verboseStatusRuns(host, runs, opts.rawEvents);
-    await writeJsonLine({ runs: runsOutput, scopeFallback });
+    await writeJsonLine({
+      runs: runsOutput.map(run => ({ ...run, notice: notices.get(run.id) ?? null })),
+      scopeFallback,
+      hold,
+      heldStarts,
+    });
     return;
   }
 
   if (scopeFallback) {
     console.log('(not a registered project — showing all runs)');
+  }
+
+  if (hold) {
+    console.log(
+      `New runs are held on this install (${describeInstallHold(hold)}). Running runs continue; lift with: archon hold lift`
+    );
+    console.log(`\nHeld starts (${String(heldStarts.length)}):`);
+    if (heldStarts.length === 0) console.log('  none');
+    for (const start of heldStarts) console.log(heldStartLine(start));
   }
 
   if (runs.length === 0) {
@@ -367,7 +401,7 @@ export async function workflowStatusCommand(
 
   console.log(`\nActive workflows (${runs.length}):\n`);
   for (const run of runs) {
-    await printStatusRun(host, run, opts.verbose);
+    await printStatusRun(host, run, opts.verbose, notices.get(run.id));
   }
 }
 
@@ -393,7 +427,7 @@ export async function workflowWaitCommand(
   let result: RunWaitResult;
   let resolvedId: string;
   try {
-    resolvedId = await resolveRunIdArg(host, runId, cwd);
+    resolvedId = await resolveRunIdArg(host, runId, cwd, 'refuse-outside-project');
     result = await waitForRunAttention(host.deps.store, resolvedId, {
       doorbell: host.doorbell,
       // No timeout by default: a wait that ends on its own clock would answer a
@@ -432,7 +466,7 @@ export async function workflowLogsCommand(
 ): Promise<number> {
   let resolvedId = runId;
   try {
-    resolvedId = await resolveRunIdArg(host, runId, cwd);
+    resolvedId = await resolveRunIdArg(host, runId, cwd, 'refuse-outside-project');
     let run = await host.deps.store.getWorkflowRun(resolvedId);
     if (!run) {
       await writeStderr(`Workflow run not found: ${runId}\n`);
@@ -487,141 +521,7 @@ export async function workflowLogsCommand(
   }
 }
 
-/**
- * Show detail for a single workflow run by ID (any status).
- *
- * Unlike `status` (active runs only), this resolves one run regardless of
- * status — so an agent can answer "did the review pass?" for a completed/failed
- * run. `--verbose` adds the per-node summary; `--json` emits the raw run plus a
- * `nodes` array when verbose (`--events` selects raw event rows instead).
- *
- * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
- */
-export async function workflowGetCommand(
-  host: WorkflowHost,
-  runId: string,
-  json?: boolean,
-  verbose?: boolean,
-  cwd?: string,
-  rawEvents?: boolean
-): Promise<number> {
-  let run: WorkflowRun | null;
-  try {
-    const resolvedId = await resolveRunIdArg(host, runId, cwd);
-    run = await host.deps.store.getWorkflowRun(resolvedId);
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, runId }, 'cli.workflow_get_failed');
-    // In --json mode never throw — emit one parseable {ok:false} line (same
-    // contract as the write commands) so a parsing agent always gets JSON.
-    if (json) {
-      await writeJsonLine({ ok: false, runId, error: err.message });
-      return 1;
-    }
-    throw new Error(`Failed to get workflow run: ${err.message}`);
-  }
-
-  if (!run) {
-    // Not-found exits non-zero so `get <id> && ...` and CI checks see the
-    // failure (the JSON envelope already carries ok:false for parsers).
-    if (json) {
-      await writeJsonLine({ ok: false, runId, error: 'not_found' });
-    } else {
-      console.log(`Workflow run not found: ${runId}`);
-    }
-    return 1;
-  }
-
-  // The terminal record is persisted in the event log, including for default get.
-  let events: WorkflowEventRow[];
-  let terminalRecord;
-  try {
-    events = await listRunEvents(host, run.id, rawEvents ?? false);
-    terminalRecord = getTerminalRecord(run.status, events);
-  } catch (error) {
-    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_events_failed');
-    if (json) {
-      await writeJsonLine({ ok: false, runId: run.id, error: 'workflow_events_unavailable' });
-    } else {
-      console.log(`Workflow run events unavailable: ${run.id} (see logs)`);
-    }
-    return 1;
-  }
-
-  // Leave-behind view (#2747): what did this run leave, and where. Assembled
-  // from existing data — status/outcome, adoption chain, and its artifact file
-  // list resolved through the persisted output_root (read-only by contract).
-  let leaveBehind: LeaveBehind | undefined;
-  try {
-    leaveBehind = await buildLeaveBehind(host, run);
-  } catch (error) {
-    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_leave_behind_failed');
-  }
-
-  let transcriptPath: string | null = null;
-  try {
-    transcriptPath = await resolveRunTranscriptPath(host, run);
-  } catch (error) {
-    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_transcript_failed');
-  }
-
-  const origin = await requestedBy(host, run.metadata);
-  if (json) {
-    return writeWorkflowGetJson(
-      { ...run, requested_by: origin },
-      transcriptPath,
-      terminalRecord,
-      leaveBehind,
-      events,
-      verbose,
-      rawEvents
-    );
-  }
-
-  const detail = { transcriptPath, terminalRecord, leaveBehind, events, verbose };
-  printRunDetail(run, { ...detail, requestedBy: origin });
-  return 0;
-}
-
-async function writeWorkflowGetJson(
-  run: WorkflowRun & { requested_by: RequestedBy },
-  transcriptPath: string | null,
-  terminalRecord: ReturnType<typeof getTerminalRecord>,
-  leaveBehind: LeaveBehind | undefined,
-  events: WorkflowEventRow[],
-  verbose?: boolean,
-  rawEvents?: boolean
-): Promise<number> {
-  if (!verbose) {
-    await writeJsonLine({
-      ...run,
-      transcript_path: transcriptPath,
-      terminal_record: terminalRecord,
-      ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
-    });
-    return 0;
-  }
-
-  const parseWarnings = readParseWarningEvents(events);
-  const output = rawEvents
-    ? {
-        ...run,
-        transcript_path: transcriptPath,
-        terminal_record: terminalRecord,
-        events,
-      }
-    : {
-        ...run,
-        transcript_path: transcriptPath,
-        terminal_record: terminalRecord,
-        nodes: buildNodeSummaries(events),
-        // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
-        // named field rather than leaving the caller to scan raw events.
-        ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
-      };
-  await writeJsonLine(output);
-  return 0;
-}
+export { workflowGetCommand } from './workflow-get';
 
 /**
  * List recent workflow runs for the current project (all statuses, cwd-scoped).
@@ -645,22 +545,43 @@ export async function workflowRunsCommand(
   }
   const statusFilter = parseRunsStatus(opts.status);
   if (statusFilter instanceof Error) return refuseRuns(opts, statusFilter);
+  if (opts.itemOf !== undefined) {
+    if (opts.item !== undefined)
+      return refuseRuns(opts, new Error('--item and --item-of are mutually exclusive.'));
+    return await readItemOfRunCommand(host, opts.itemOf, opts);
+  }
   const codebase = await findRunsCodebase(host, cwd, opts);
   if (codebase instanceof Error) return refuseRuns(opts, codebase);
   // The open-work inbox contains terminal failed runs with no adopter or successor.
-  if (opts.open) return listOpenWorkRuns(host, opts, codebase);
-  return listRecentRuns(host, cwd, opts, codebase, statusFilter);
+  try {
+    if (opts.item !== undefined) return await readItemCommand(host, opts.item, opts, codebase);
+    if (opts.open) return await listOpenWorkRuns(host, opts, codebase);
+    return await listRecentRuns(host, cwd, opts, codebase, statusFilter);
+  } catch (error) {
+    if (!opts.throughput) throw error;
+    return refuseRuns(
+      opts,
+      new Error(
+        `Failed to read workflow throughput: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      )
+    );
+  }
 }
 
 interface RunsOptions {
+  throughput?: boolean;
   json?: boolean;
   all?: boolean;
   status?: string;
   limit?: number;
   open?: boolean;
+  /** Read this item in the project: its runs, open questions and answers. */
+  item?: string;
+  /** Read the item this run belongs to, in whichever project it is. */
+  itemOf?: string;
   verbose?: boolean;
 }
-type RunsCodebase = Awaited<ReturnType<typeof findCodebaseForCheckoutPath>> | undefined;
 
 /** --json never throws — emit one parseable {ok:false} line (write-command contract). */
 async function refuseRuns(
@@ -682,20 +603,77 @@ function parseRunsStatus(status: string | undefined): WorkflowRunStatus | undefi
   );
 }
 
-async function findRunsCodebase(
+/** Read one item: its runs, open questions and answers (`readItem`), oldest first. */
+async function readItemCommand(
   host: WorkflowHost,
-  cwd: string,
-  opts: RunsOptions
-): Promise<RunsCodebase | Error> {
-  try {
-    const inherited = await inheritedWorkflowCodebase(host, opts.all);
-    if (inherited !== undefined || opts.all) return inherited;
-    return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
-    return new Error(`Failed to resolve workflow runs project: ${err.message}`, { cause: err });
+  item: string,
+  opts: RunsOptions,
+  codebase: RunsCodebase
+): Promise<number> {
+  if (!codebase) {
+    return refuseRuns(opts, new Error('--item reads an item in one registered project.'));
   }
+  const project = projectRefForCodebase(codebase);
+  const read = await readItem(
+    attentionQueueSource(host.deps.store, host.records.isolation),
+    project.key,
+    item
+  );
+  if (read === null) {
+    // No start has made the item yet; a refused one may have been for it.
+    const refused = (await refusedStartItems(host.deps.store)).filter(
+      start => start.project?.codebaseId === codebase.id && start.start.itemKey === item
+    );
+    if (opts.json) {
+      await writeJsonLine({ ok: false, error: 'not_found', item, refused });
+      return 1;
+    }
+    await writeStderr(
+      refused.length === 0
+        ? `No item '${item}' in project ${project.name}.\n`
+        : `No item '${item}' in project ${project.name}: no start has made it yet. Refused starts for it:\n${refused
+            .map(start => attentionItemLines(start, 'brief').join('\n'))
+            .join('\n')}\n`
+    );
+    return 1;
+  }
+  if (opts.json) {
+    await writeJsonLine(read);
+    return 0;
+  }
+  const served = await servedHosts();
+  console.log(`\n${itemReadLines(read, served).join('\n')}\n`);
+  return 0;
+}
+
+/**
+ * Read the item a run belongs to (`readItemOfRun`): the host command behind the
+ * `archon:script` `item()` export. A run with no item is `not_found`, like an unknown run.
+ */
+async function readItemOfRunCommand(
+  host: WorkflowHost,
+  runId: string,
+  opts: RunsOptions
+): Promise<number> {
+  const read = await readItemOfRun(
+    attentionQueueSource(host.deps.store, host.records.isolation),
+    runId
+  );
+  if (read === null) {
+    if (opts.json) {
+      await writeJsonLine({ ok: false, error: 'not_found', run: runId });
+      return 1;
+    }
+    await writeStderr(`Run ${runId} is not on an item, or this store does not know it.\n`);
+    return 1;
+  }
+  if (opts.json) {
+    await writeJsonLine(read);
+    return 0;
+  }
+  const served = await servedHosts();
+  console.log(`\n${itemReadLines(read, served).join('\n')}\n`);
+  return 0;
 }
 
 async function listOpenWorkRuns(
@@ -707,9 +685,11 @@ async function listOpenWorkRuns(
     codebaseId: codebase?.id,
     limit: opts.limit ?? 20,
   });
+  const report = await listedRunThroughput(host, runs, opts);
   if (opts.json) {
     await writeJsonLine({
-      runs: opts.verbose ? await withRunDetail(host, runs) : runs,
+      ...(report ? { throughput: report.throughput } : {}),
+      runs: report?.runs ?? (opts.verbose ? await withRunDetail(host, runs) : runs),
       total: runs.length,
       scopeFallback: !opts.all && !codebase,
     });
@@ -717,14 +697,17 @@ async function listOpenWorkRuns(
   }
   if (runs.length === 0) {
     console.log('No open workflow runs — nothing ended with work on the table.');
+    printModelThroughput(report?.throughput);
     return 0;
   }
   console.log(`\nOpen work (${String(runs.length)}):\n`);
   for (const run of runs) {
+    printListedRunThroughput(run.id, report?.runs);
     console.log(
       `  ${run.id.slice(0, 8)}  ${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
     );
   }
+  printModelThroughput(report?.throughput);
   console.log('');
   return 0;
 }
@@ -757,32 +740,55 @@ async function listRecentRuns(
   // it silently mistakes for a project-scoped one.
   const scopeFallback = !opts.all && !codebase;
 
+  const report = await listedRunThroughput(host, result.runs, opts);
+
   if (opts.json) {
     // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
     // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
-    const runs = opts.verbose ? await withRunDetail(host, result.runs) : result.runs;
-    await writeJsonLine({ ...result, runs, scopeFallback });
+    const runs =
+      report?.runs ?? (opts.verbose ? await withRunDetail(host, result.runs) : result.runs);
+    await writeJsonLine({
+      ...result,
+      runs,
+      scopeFallback,
+      ...(report ? { throughput: report.throughput } : {}),
+    });
     return 0;
   }
 
   if (scopeFallback) console.log('(not a registered project — showing all runs)');
   if (result.runs.length === 0) {
     console.log('No workflow runs found.');
+    printModelThroughput(report?.throughput);
     return 0;
   }
 
   console.log(`\nRecent runs (${result.runs.length} of ${result.total}):\n`);
   for (const run of result.runs) {
+    printListedRunThroughput(run.id, report?.runs);
     const activeNodes =
       run.active_nodes.length > 0 ? ` · active node(s): ${run.active_nodes.join(', ')}` : '';
     console.log(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${operatorPauseMark(run)}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
     );
   }
+  printModelThroughput(report?.throughput);
   console.log('');
   return 0;
 }
 
-function authoredOutcome(run: { outcome?: string | null }): string {
-  return run.outcome ? ` · authored outcome: ${run.outcome}` : '';
+function operatorPauseMark(run: Pick<WorkflowRun, 'status' | 'metadata'>): string {
+  const state = operatorPause(run)?.state;
+  return state === 'paused'
+    ? ' · paused by an operator'
+    : state === 'requested'
+      ? ' · pause requested'
+      : '';
+}
+
+function authoredOutcome(
+  run: Pick<WorkflowRun, 'status' | 'outcome' | 'completed_outcome'>
+): string {
+  const outcome = displayedRunOutcome(run);
+  return outcome !== null ? ` · authored outcome: ${outcome}` : '';
 }

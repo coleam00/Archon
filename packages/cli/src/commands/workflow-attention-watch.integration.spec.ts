@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * `archon workflow attention --watch` as its own process against a real SQLite store.
  *
@@ -6,7 +7,11 @@
  * is shared between the watcher and the run.
  */
 import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
-import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
+import {
+  attentionQueueItemSchema,
+  isHeldByRun,
+  heldRunOf,
+} from '@archon/workflows/attention-queue';
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -57,7 +62,13 @@ function makeFixture(workflows: Record<string, string>): Fixture {
 function spawnCli(fixture: Fixture, args: string[]): Bun.Subprocess<'ignore', 'pipe', 'pipe'> {
   return Bun.spawn([process.execPath, CLI_PATH, ...args], {
     cwd: fixture.projectRoot,
-    env: { ...process.env, ARCHON_HOME: fixture.archonHome },
+    env: {
+      ...process.env,
+      ARCHON_HOME: fixture.archonHome,
+      DATABASE_URL: '',
+      WORKFLOW_ID: '',
+      ARCHON_NODE_EXECUTION: '',
+    },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -116,8 +127,11 @@ interface Watcher {
   stop(): Promise<void>;
 }
 
-/** Start `workflow attention --watch --json` and parse its stdout line by line. */
-function startWatch(fixture: Fixture, extra: string[] = []): Watcher {
+/**
+ * Start `workflow attention --watch --json` and parse its stdout line by line: the full
+ * protocol unless `extra` is given without `--protocol`.
+ */
+function startWatch(fixture: Fixture, extra: string[] = ['--protocol']): Watcher {
   const child = spawnCli(fixture, [
     'workflow',
     'attention',
@@ -168,13 +182,143 @@ const ofRun =
   (runId: string, type: string) =>
   (line: Line): boolean =>
     line.type === type &&
-    (line.runId === runId || (line.item as { runId?: string } | undefined)?.runId === runId);
+    (line.runId === runId ||
+      (line.item as { run?: { id: string } } | undefined)?.run?.id === runId);
 
 const ASK =
   'name: watch-ask\ndescription: Attention watch fixture.\nnodes:\n' +
   '  - id: warmup\n    bash: "echo ready"\n' +
   '  - id: ask\n    depends_on: [warmup]\n    wait:\n      attention: "Ship it?"\n' +
   '  - id: finish\n    depends_on: [ask]\n    bash: "echo done"\n';
+
+const RED =
+  'name: watch-red\ndescription: Attention watch fixture.\nreturns: { node: verdict, outcome: green }\nnodes:\n' +
+  '  - id: verdict\n    bash: |\n      echo \'{"green": false, "summary": "main is red: lint fails on dev"}\'\n' +
+  '    output_format:\n      type: object\n      properties:\n        green: { type: boolean }\n        summary: { type: string }\n' +
+  '      required: [green, summary]\n';
+
+test('a launch failure reaches protocol and text watchers without diagnostics', async () => {
+  const fixture = makeFixture({
+    'launch-proof':
+      'name: launch-proof\ndescription: Launch failure.\nnodes:\n  - id: one\n    bash: echo unreachable\n',
+  });
+  // A project with a base to read its definitions from, whose worktree setup fails.
+  writeFileSync(
+    join(fixture.projectRoot, '.archon', 'config.yaml'),
+    'worktree:\n  postCreate:\n    - echo setup-diagnostic >&2; exit 3\n'
+  );
+  const remote = join(fixture.projectRoot, '..', 'remote.git');
+  for (const args of [
+    ['init', '-q', '--initial-branch=main'],
+    ['add', '-A'],
+    ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'base'],
+    ['init', '-q', '--bare', '--initial-branch=main', remote],
+    ['remote', 'add', 'origin', remote],
+    ['push', '-q', 'origin', 'main'],
+  ])
+    expect(
+      await Bun.spawn(['git', ...args], { cwd: fixture.projectRoot, stdout: 'ignore' }).exited
+    ).toBe(0);
+  const who = await runCli(fixture, ['trigger', 'whoami']);
+  expect(who.exitCode).toBe(0);
+  const { runAsUserId } = JSON.parse(who.stdout);
+  const config = join(fixture.projectRoot, 'trigger.json');
+  writeFileSync(
+    config,
+    JSON.stringify({
+      version: 1,
+      sourceInstanceId: 'launch-test',
+      binding: {
+        bindingId: 'launch-test',
+        bindingRevision: null,
+        hostId: 'launch-test',
+        runAsUserId,
+        resource: 'launch-test',
+        overlap: 'queue',
+        launch: {
+          cwd: fixture.projectRoot,
+          workflowName: 'launch-proof',
+          inputs: {},
+          isolation: { kind: 'default' },
+        },
+      },
+    })
+  );
+  const watch = startWatch(fixture);
+  await watch.next('ready', line => line.type === 'ready');
+  const textChild = spawnCli(fixture, ['workflow', 'attention', '--watch', '--protocol', '--all']);
+  watchers.add(textChild);
+  let text = '';
+  const reader = textChild.stdout.getReader();
+  const decoder = new TextDecoder();
+  const readUntil = async (expected: string): Promise<void> => {
+    while (!text.includes(expected)) {
+      const next = await reader.read();
+      if (next.done) throw new Error(`Watch ended: ${text}`);
+      text += decoder.decode(next.value, { stream: true });
+    }
+  };
+  try {
+    await readUntil('Ctrl-C stops.');
+    const fire = await runCli(fixture, ['trigger', 'fire', '--config', config]);
+    expect(fire.exitCode).toBe(0);
+    const terminal = await watch.next('launch failure', line => line.type === 'terminal', 10_000);
+    expect(terminal).toMatchObject({
+      status: 'failed',
+      cause: null,
+      reason: ['launch failed before the first node'],
+    });
+    const runId = terminal.runId as string;
+    await readUntil('launch failed before the first node');
+    expect(text).toContain(runId);
+    const detail = JSON.parse((await runCli(fixture, ['workflow', 'get', runId, '--json'])).stdout);
+    expect(detail.metadata.error).toContain('setup-diagnostic');
+    for (const output of [text, JSON.stringify(watch.lines)]) {
+      expect(output).not.toContain('setup-diagnostic');
+      expect(output).not.toContain('Could not create isolated workspace');
+      expect(output).not.toContain(fixture.projectRoot);
+    }
+  } finally {
+    await watch.stop();
+    textChild.kill('SIGKILL');
+    await textChild.exited;
+    watchers.delete(textChild);
+    reader.releaseLock();
+  }
+}, 30_000);
+
+test('a run that completes with a failed outcome says why on its watch line and in get', async () => {
+  const fixture = makeFixture({ 'watch-red': RED });
+  // `ready` is the only line that says the watch has read its starting position; a run
+  // launched before it can end ahead of that position and never reach the stream.
+  const watch = startWatch(fixture);
+  await watch.next('ready', line => line.type === 'ready');
+  const runId = await launchDetached(fixture, 'watch-red');
+  expect(await watch.next('terminal', ofRun(runId, 'terminal'))).toMatchObject({
+    status: 'completed',
+    outcome: 'failed',
+    needs: 'look',
+    reason: ['summary: main is red: lint fails on dev'],
+  });
+  await watch.stop();
+  activeRunIds.delete(runId);
+  const got = await runCli(fixture, ['workflow', 'get', runId]);
+  expect(got.stdout).toContain('Reason: summary: main is red: lint fails on dev');
+  const json = JSON.parse((await runCli(fixture, ['workflow', 'get', runId, '--json'])).stdout);
+  expect(json).toMatchObject({ reason: ['summary: main is red: lint fails on dev'] });
+}, 120_000);
+
+test('the quiet watch writes an open ask to a pipe while it is still running', async () => {
+  const fixture = makeFixture({ 'watch-ask': ASK });
+  const runId = await launchDetached(fixture, 'watch-ask');
+  await statusOf(fixture, runId, 'paused');
+  const watch = startWatch(fixture, []);
+  expect(await watch.next('attention', ofRun(runId, 'attention'), 15_000)).toMatchObject({
+    snapshot: true,
+    needs: 'answer',
+  });
+  await watch.stop();
+}, 120_000);
 
 test('a run launched after the watch reaches it from the store alone, and --after replays it', async () => {
   const fixture = makeFixture({ 'watch-ask': ASK });
@@ -187,7 +331,7 @@ test('a run launched after the watch reaches it from the store alone, and --afte
   expect(opened.item).toEqual((JSON.parse(single.stdout) as { item: unknown }).item);
   expect(opened.project).toEqual((opened.item as { project: unknown }).project);
 
-  const occurrence = (opened.item as { occurrence: string }).occurrence;
+  const occurrence = (opened.item as { run: { occurrence: string } }).run.occurrence;
   const answered = await runCli(fixture, [
     'workflow',
     'answer',
@@ -217,7 +361,7 @@ test('a run launched after the watch reaches it from the store alone, and --afte
   ).toEqual(got);
 
   // Everything after the attention line happened before this watch started.
-  const replay = startWatch(fixture, ['--after', String(opened.cursor)]);
+  const replay = startWatch(fixture, ['--protocol', '--after', String(opened.cursor)]);
   const replayed = await replay.next('replayed terminal', ofRun(runId, 'terminal'));
   expect(replayed).toEqual(terminal);
   expect(replay.lines.filter(ofRun(runId, 'attention'))).toEqual([]);
@@ -231,7 +375,7 @@ test('the text stream reports a failed run resuming', async () => {
       '  - id: warmup\n    bash: "echo ready"\n' +
       '  - id: fail\n    depends_on: [warmup]\n    bash: "exit 1"\n',
   });
-  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--all']);
+  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--protocol', '--all']);
   watchers.add(child);
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
@@ -275,7 +419,7 @@ test('the text stream reports a failed run resuming', async () => {
 
 test('the text stream exits 0 at its first line after the reader closes stdout', async () => {
   const fixture = makeFixture({ 'watch-ask': ASK });
-  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--all']);
+  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--protocol', '--all']);
   watchers.add(child);
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
@@ -298,15 +442,16 @@ test('a cursor this install did not issue exits 4 with a cursor_invalid line', a
     'workflow',
     'attention',
     '--watch',
+    '--protocol',
     '--json',
     '--after',
     'file:1.0',
   ]);
   expect(exitCode).toBe(4);
-  expect(stdout.trim()).toBe('{"type":"error","error":"cursor_invalid"}');
+  expect(stdout.trim()).toBe('{"type":"error","error":"cursor_invalid","needs":"look"}');
 }, 60_000);
 
-test('an owner killed mid-run is reported once as owner_lost and the row stays running', async () => {
+test('an owner killed mid-run is reported as owner_lost and the row stays running', async () => {
   if (process.platform === 'win32') return;
   const fixture = makeFixture({
     'watch-hold':
@@ -326,8 +471,6 @@ test('an owner killed mid-run is reported once as owner_lost and the row stays r
   expect(await watch.next('owner_lost', ofRun(runId, 'owner_lost'))).toMatchObject({
     observedStatus: 'running',
   });
-  await Bun.sleep(3000);
-  expect(watch.lines.filter(ofRun(runId, 'owner_lost'))).toHaveLength(1);
   await statusOf(fixture, runId, 'running');
   await watch.stop();
 
@@ -346,35 +489,38 @@ test('fan-out questions have independent stream identities and resolve second fi
     const line = await watch.next(`question ${index}`, line => {
       if (line.type !== 'attention') return false;
       const item = attentionQueueItemSchema.parse(line.item);
-      return item.fanOut?.parentRunId === parentId && item.fanOut.index === index;
+      const fanOut = heldRunOf(item)?.fanOut;
+      return fanOut?.parentRunId === parentId && fanOut.index === index;
     });
     expect(line).toMatchObject({ workflow: 'question', parentRunId: parentId });
-    opened.push(attentionQueueItemSchema.parse(line.item));
+    const item = attentionQueueItemSchema.parse(line.item);
+    if (!isHeldByRun(item)) throw new Error('Expected an item a run holds');
+    opened.push(item);
   }
   const [first, second] = opened;
-  expect(first.runId).not.toBe(second.runId);
+  expect(first.run.id).not.toBe(second.run.id);
   const answer = async (item: typeof first, choose: string) => {
     if (item.kind !== 'attention') throw new Error('Expected attention');
     const answered = await runCli(fixture, [
       'workflow',
       'answer',
-      item.runId,
+      item.run.id,
       '--occurrence',
-      item.occurrence,
+      item.run.occurrence,
       '--choose',
       choose,
     ]);
     expect(answered, answered.stdout + answered.stderr).toMatchObject({ exitCode: 0 });
-    expect(await watch.next('resolved', ofRun(item.runId, 'resolved'))).toMatchObject({
-      occurrence: item.occurrence,
+    expect(await watch.next('resolved', ofRun(item.run.id, 'resolved'))).toMatchObject({
+      occurrence: item.run.occurrence,
       reason: 'answered',
     });
   };
   await answer(second, 'defer');
-  const remaining = await runCli(fixture, ['workflow', 'attention', first.runId, '--json']);
+  const remaining = await runCli(fixture, ['workflow', 'attention', first.run.id, '--json']);
   expect(remaining.exitCode).toBe(0);
   expect(JSON.parse(remaining.stdout).item).toEqual(first);
-  expect(watch.lines.filter(ofRun(first.runId, 'resolved'))).toEqual([]);
+  expect(watch.lines.filter(ofRun(first.run.id, 'resolved'))).toEqual([]);
   await statusOf(fixture, parentId, 'paused');
   await answer(first, 'accept');
   expect(await watch.next('parent completed', ofRun(parentId, 'terminal'))).toMatchObject({

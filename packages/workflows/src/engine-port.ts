@@ -1,6 +1,6 @@
 import type { IWorkflowPlatform } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
-import type { WorkflowEventCursor, WorkflowResumeCursor } from './store';
+import type { ResumeClaimCursor, WorkflowEventCursor } from './store';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ResolvedWorkflow, WorkflowRun, WorkflowExecutionResult } from './schemas';
 import type { AttentionLabels } from './schemas/wait-node';
@@ -37,6 +37,7 @@ export const RESUME_FORBIDDEN_OPTIONS = [
   'preparedSource',
   'capturedSourceOwner',
   'adoptedFromRunId',
+  'item',
   'continuationMode',
   'cutFromCommit',
 ] as const satisfies readonly (keyof ExecuteWorkflowOptions)[];
@@ -65,7 +66,12 @@ export interface WorkflowResumeInput extends WorkflowEngineCallBase {
   run: WorkflowRun;
   /** Used only for runs created before frozen workflow-source captures existed. */
   legacyWorkflow?: ResolvedWorkflow;
-  cursor?: WorkflowResumeCursor;
+  /**
+   * The continuation occurrence a host claims, or the `ownerless` cursor of a running run
+   * `resumeWorkflow` checked (`checkedResumeCursor`), carrying the live-owner lease the
+   * caller opened for it (`leasedResumeCursor`).
+   */
+  cursor?: ResumeClaimCursor;
   options?: WorkflowResumeOptions;
   /**
    * Runs after committed admission; rejection fails the admitted run.
@@ -78,14 +84,11 @@ export interface WorkflowResumeInput extends WorkflowEngineCallBase {
   }>;
 }
 
-export type WorkflowResumeAdmission =
-  | { accepted: false; reason: 'nothing-to-resume' }
-  | {
-      accepted: true;
-      runId: string;
-      /** Settles this execution segment, which may pause rather than finish the run. */
-      settled: Promise<WorkflowExecutionResult>;
-    };
+export interface WorkflowResumeAdmission {
+  runId: string;
+  /** Settles this execution segment, which may pause rather than finish the run. */
+  settled: Promise<WorkflowExecutionResult>;
+}
 
 /** One committed event of the subscribed run tree. Resubscribing `after` its cursor continues the feed. */
 export interface WorkflowRunDelivery {

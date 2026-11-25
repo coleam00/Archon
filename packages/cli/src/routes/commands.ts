@@ -6,8 +6,31 @@
 import { resolve } from 'path';
 import { BUNDLED_VERSION, getPluginsPath } from '@archon/paths';
 import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from '../attachment-commands';
-import { type CliRouteContext, fail, printUsageFor } from './context';
+import { type CliRouteContext, fail, isPathDirectory, printUsageFor } from './context';
 import { loadRoute, usesDatabaseStore } from './route-loader';
+
+export async function runScript({
+  subcommand,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
+  if (subcommand !== 'types' && subcommand !== 'preload')
+    return await fail(
+      json,
+      'Usage: archon script types [--out <file>] [--check]\n       archon script preload --out <file> [--check]'
+    );
+  const { scriptTypesCommand, scriptPreloadCommand } = await loadRoute(
+    () => import('../commands/script-types'),
+    { providers: false }
+  );
+  const run = subcommand === 'types' ? scriptTypesCommand : scriptPreloadCommand;
+  return await run(cwd, {
+    json,
+    check: values.check === true,
+    out: typeof values.out === 'string' ? values.out : undefined,
+  });
+}
 
 export async function runForge({
   subcommand,
@@ -68,6 +91,36 @@ export async function runPlugin({
   });
 }
 
+export async function runPack({
+  subcommand,
+  positionals,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
+  // The graph resolves each run-ended file's project from the codebase records.
+  const { packCommand } = await loadRoute(() => import('../commands/pack'), {
+    database: subcommand === 'graph' && (await usesDatabaseStore()),
+  });
+  const text = (name: string): string | undefined => {
+    const value = values[name];
+    return typeof value === 'string' ? value : undefined;
+  };
+  await packCommand(subcommand, positionals.slice(2), {
+    cwd,
+    repo: text('repo'),
+    host: text('host'),
+    runAs: text('run-as'),
+    out: text('out'),
+    config: text('config'),
+    workflowSource: text('workflow-source'),
+    only: text('only'),
+    force: values.force === true,
+    json,
+  });
+  return 0;
+}
+
 export async function runState({
   subcommand,
   positionals,
@@ -95,6 +148,7 @@ export async function runState({
       ...(values.values === true ? { values: true } : {}),
       ...(values.lease === true ? { lease: true } : {}),
       ...(values['release-lease'] === true ? { releaseLease: true } : {}),
+      ...(values.held === true ? { held: true } : {}),
     },
     { storeKind }
   );
@@ -108,7 +162,7 @@ export async function runMetrics({ positionals, values }: CliRouteContext): Prom
   if (positionals[2] !== undefined) {
     return await fail(
       values.json === true,
-      'Usage: archon metrics [name] [--since <7d|24h|2w|ISO>] [--until <ISO>] [--subject <s>] [--compare <ISO> | --by-model <node>] [--project <id|name|key>] [--json]'
+      'Usage: archon metrics [name] [--since <40m|7d|24h|2w|ISO>] [--until <ISO>] [--subject <s>] [--by-model <node> | [--compare <ISO>] [--by-dimension <key>]] [--project <id|name|key>] [--json]'
     );
   }
   const option = (key: string): string | undefined =>
@@ -119,8 +173,34 @@ export async function runMetrics({ positionals, values }: CliRouteContext): Prom
     subject: option('subject'),
     compare: option('compare'),
     byModel: option('by-model'),
+    byDimension: option('by-dimension'),
     project: option('project'),
     json: values.json === true,
+  });
+}
+
+const TRACKER_USAGE =
+  'Usage: archon tracker sync [--json]\n       archon tracker release <project> [--json]';
+
+export async function runTracker({
+  subcommand,
+  positionals,
+  json,
+  forgeTrustedEnv,
+}: CliRouteContext): Promise<number> {
+  const project = positionals[2];
+  const known =
+    (subcommand === 'sync' && project === undefined) ||
+    (subcommand === 'release' && project !== undefined && positionals[3] === undefined);
+  if (!known) return await fail(json, TRACKER_USAGE);
+  const { trackerSyncCommand, trackerReleaseCommand, syncConfiguredProjects } = await loadRoute(
+    () => import('../commands/tracker'),
+    { database: true }
+  );
+  if (project !== undefined) return await trackerReleaseCommand(project, { json: json === true });
+  return await trackerSyncCommand({
+    json: json === true,
+    sync: () => syncConfiguredProjects(forgeTrustedEnv),
   });
 }
 
@@ -128,12 +208,18 @@ export async function runTrigger({
   subcommand,
   positionals,
   values,
+  forgeTrustedEnv,
 }: CliRouteContext): Promise<number> {
   const { triggerCommand, spawnAdmitted } = await loadRoute(() => import('../commands/trigger'), {
     database: await usesDatabaseStore(),
   });
   const { createCliWorkflowHost } = await import('../utils/workflow-host');
-  const host = await createCliWorkflowHost(true);
+  // A `trigger execute` process was handed its run by a drain of the host it runs for, so
+  // the run it ends admits that host's next start.
+  const host = await createCliWorkflowHost(
+    { forgeTrustedEnv },
+    subcommand === 'execute' && typeof values.host === 'string' ? values.host : undefined
+  );
   await triggerCommand(
     host,
     subcommand,
@@ -144,12 +230,31 @@ export async function runTrigger({
       owner: typeof values.owner === 'string' ? values.owner : undefined,
       deliveryId: typeof values['delivery-id'] === 'string' ? values['delivery-id'] : undefined,
       inputs: typeof values.inputs === 'string' ? values.inputs : undefined,
+      item: typeof values.item === 'string' ? values.item : undefined,
+      noItem: values['no-item'] === true,
       limit: typeof values.limit === 'string' ? values.limit : undefined,
       yes: values.yes === true,
     },
     { dispatch: (requestId, hostId) => spawnAdmitted(host, requestId, hostId) }
   );
   return 0;
+}
+
+export async function runHold({
+  subcommand,
+  values,
+  forgeTrustedEnv,
+}: CliRouteContext): Promise<number> {
+  const { holdCommand } = await loadRoute(() => import('../commands/hold'), {
+    database: await usesDatabaseStore(),
+  });
+  const { spawnAdmitted } = await import('../commands/trigger');
+  const { createCliWorkflowHost } = await import('../utils/workflow-host');
+  // Lifting prepares the held starts and admits them, as `trigger drain` does.
+  const host = await createCliWorkflowHost({ forgeTrustedEnv });
+  return await holdCommand(host, subcommand, { json: values.json === true }, (requestId, hostId) =>
+    spawnAdmitted(host, requestId, hostId)
+  );
 }
 
 export async function runVersion(): Promise<number> {
@@ -228,14 +333,24 @@ export async function runSetup({
   });
 }
 
-export async function runProject({ positionals, json }: CliRouteContext): Promise<number> {
+export async function runProject({
+  positionals,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
   const { projectCommand } = await loadRoute(() => import('../commands/project'), {
     // `project config` validates assistant settings and resolves tier defaults
     // against the provider registry, as the server does.
     ...(positionals[1] === 'config' ? {} : { providers: false as const }),
     database: await usesDatabaseStore(),
   });
-  return await projectCommand(positionals.slice(1), json);
+  return await projectCommand(positionals.slice(1), {
+    json,
+    cwd,
+    folder: values.folder === true,
+    baseBranch: typeof values['base-branch'] === 'string' ? values['base-branch'] : undefined,
+  });
 }
 
 export async function runUser({
@@ -283,6 +398,15 @@ export async function runIsolation({
   values,
   json,
 }: CliRouteContext): Promise<number> {
+  if (subcommand === 'cleanup' && positionals[2] === 'schedule') {
+    // The timer commands never open the store, but install refuses a file-store install:
+    // the merged cleanup is SQL-only, so every pass it schedules would fail.
+    const { isolationCleanupScheduleCommand } = await loadRoute(
+      () => import('../commands/isolation-schedule'),
+      { providers: false, database: positionals[3] === 'install' }
+    );
+    return await isolationCleanupScheduleCommand(positionals.slice(3), values);
+  }
   const { isolationListCommand, isolationCleanupCommand, isolationCleanupMergedCommand } =
     await loadRoute(() => import('../commands/isolation'), { database: true });
   switch (subcommand) {
@@ -294,6 +418,7 @@ export async function runIsolation({
       if (values.merged) {
         return await isolationCleanupMergedCommand({
           includeClosed: Boolean(values['include-closed']),
+          json: Boolean(json),
         });
       } else {
         const days = parseInt(positionals[2] ?? '7', 10);
@@ -314,15 +439,32 @@ export async function runIsolation({
 export async function runValidate({
   subcommand,
   positionals,
+  values,
+  cwd,
   effectiveCwd,
   json,
+  forgeTrustedEnv,
 }: CliRouteContext): Promise<number> {
   const { validateWorkflowsCommand, validateCommandsCommand } = await loadRoute(
     () => import('../commands/validate')
   );
   switch (subcommand) {
-    case 'workflows':
-      return await validateWorkflowsCommand(effectiveCwd, positionals[2], json);
+    case 'workflows': {
+      // Resolved against the process cwd, not --cwd, as `workflow run` resolves it.
+      const flag = values['workflow-source'];
+      const source = typeof flag === 'string' ? resolve(flag) : undefined;
+      if (source !== undefined && !(await isPathDirectory(source))) {
+        return await fail(json, `Error: --workflow-source is not a directory: ${source}`);
+      }
+      return await validateWorkflowsCommand(
+        effectiveCwd,
+        positionals[2],
+        json,
+        forgeTrustedEnv,
+        cwd,
+        source
+      );
+    }
 
     case 'commands':
       return await validateCommandsCommand(effectiveCwd, positionals[2], json);
@@ -505,6 +647,7 @@ export async function runTelemetry({ subcommand, json }: CliRouteContext): Promi
 export async function runSkill({
   subcommand,
   positionals,
+  values,
   cwd,
   json,
 }: CliRouteContext): Promise<number> {
@@ -526,9 +669,14 @@ export async function runSkill({
   }
   const targetArg = positionals[2];
   const targetPath = targetArg ? resolve(targetArg) : cwd;
-  const { skillInstallCommand } = await loadRoute(() => import('../commands/skill'), {
-    providers: false,
-  });
+  const { packSkillInstallCommand, skillInstallCommand } = await loadRoute(
+    () => import('../commands/skill'),
+    { providers: false }
+  );
+  if (typeof values.pack === 'string') {
+    // The trusted plugins directory, as `archon plugin` uses, so repo env cannot redirect it.
+    return await packSkillInstallCommand(values.pack, targetPath, getPluginsPath());
+  }
   return await skillInstallCommand(targetPath);
 }
 

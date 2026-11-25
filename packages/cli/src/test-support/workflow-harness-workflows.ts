@@ -76,7 +76,16 @@ mock.module('@archon/workflows/executor', () => ({
   }),
 }));
 mock.module('@archon/workflows/run-resume', () => ({
-  hydrateResumableRun: mock(() => Promise.resolve(null)),
+  hydrateResumableRun: mock((_deps: unknown, candidate: { id: string }) =>
+    Promise.resolve({
+      preCreatedRun: { ...candidate, status: 'running' },
+      priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'retry_failed',
+      priorUsage: { costUsd: 0 },
+      priorNodeSessions: [],
+    })
+  ),
 }));
 mock.module('@archon/workflows/run-source', () => ({
   withCapturedSource: mock((body: Parameters<typeof withObservableCapturedSource>[1]) =>
@@ -84,8 +93,9 @@ mock.module('@archon/workflows/run-source', () => ({
   ),
   resolveContinuationWorkflow: mockResolveContinuationWorkflow,
   // Stub capture so routing tests do not freeze real source trees.
-  prepareWorkflowSource: mock(() =>
+  prepareWorkflowSource: mock((_deps: unknown, opts?: { definitions?: unknown }) =>
     Promise.resolve({
+      ...(opts?.definitions !== undefined ? { definitions: opts.definitions } : {}),
       runId: 'test-run-id',
       origin: '/test/path',
       manifest: {
@@ -133,11 +143,13 @@ mock.module('@archon/workflows/run-paths', () => ({
       artifactsRoot: join(mockArtifactsRoot, 'artifacts'),
       stateDir: join(mockArtifactsRoot, 'state'),
       outputRoot: mockArtifactsRoot,
-      identityResolution: 'resolved' as const,
+      identityFaulted: false,
     })
   ),
 }));
+const realDryRun = { ...(await import('@archon/workflows/dry-run')) };
 mock.module('@archon/workflows/dry-run', () => ({
+  ...realDryRun,
   loadDryRunStubs: mock(() => Promise.resolve({ node: 'stubbed output' })),
   writeDryRunStubScaffold: mock(() => Promise.resolve({ first: 'TODO', second: 'TODO' })),
   dryRunWorkflow: mock(() =>

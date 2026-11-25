@@ -18,16 +18,28 @@ export const worktreeHelp: HelpGroup = {
     {
       command: 'isolation',
       subcommand: 'cleanup',
-      spec: 'isolation cleanup --merged',
-      description: 'Remove environments with branches merged into the base branch',
+      spec: 'isolation cleanup --merged [--json]',
+      description: 'Remove worktrees covered by Git integration or a merged PR',
       scopedFlags: [
         {
           spec: '--merged',
-          description: 'Remove environments with branches merged into the base branch',
+          description: 'Remove worktrees covered by Git integration or a merged PR',
         },
         {
           spec: '--include-closed',
-          description: 'Also remove environments whose PRs were closed without merging',
+          description: 'Also remove worktrees covered by closed PRs',
+        },
+      ],
+    },
+    {
+      command: 'isolation',
+      subcommand: 'cleanup',
+      spec: 'isolation cleanup schedule install|remove|status',
+      description: 'Manage the OS timer that runs the merged cleanup',
+      scopedFlags: [
+        {
+          spec: '--interval <seconds>',
+          description: 'Timer interval (positive integer, default: 21600)',
         },
       ],
     },

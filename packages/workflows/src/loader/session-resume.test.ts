@@ -353,14 +353,6 @@ nodes:
 });
 
 describe('persist_session capability gating', () => {
-  it('parses persist_session: true on a node', () => {
-    const { workflow } = parseWorkflowYaml(
-      `name: t\ndescription: t\nprovider: claude\nnodes:\n  - id: planner\n    prompt: p\n    persist_session: true\n`
-    );
-    const node = workflow.nodes[0];
-    expect('persist_session' in node ? node.persist_session : undefined).toBe(true);
-  });
-
   it('does NOT capability-check non-AI nodes when persist_sessions is workflow-level', () => {
     // Regression for CodeRabbit #7: workflow-level persist_sessions: true with a bash
     // node would falsely trigger the capability check on a provider that can't even
@@ -448,6 +440,211 @@ describe('persist_session capability gating', () => {
       expect((body as DagNode | undefined)?.persist_session).toBeUndefined();
       // The top-level AI node still receives it — only the body is excluded.
       expect(nodes.find(n => n.id === 'after')?.persist_session).toBe(true);
+    });
+  });
+});
+
+describe('a named session source that arrives through an include', () => {
+  const root = useTempWorkflowRoot();
+  const LOOP_BLOCK = `name: build-loop
+description: a build that returns its loop
+nodes:
+  - id: work
+    loop:
+      prompt: Build
+      until: DONE
+      max_iterations: 3
+`;
+  // `returns:` names the command, so the trailing script is not what a caller resumes.
+  const COMMAND_BLOCK = `name: build-command
+description: a build that returns its prompt node
+returns: work
+nodes:
+  - id: work
+    prompt: Build
+  - id: record
+    bash: echo recorded
+    depends_on: [work]
+`;
+  const SCRIPT_BLOCK = `name: build-script
+description: a build whose last node is a script
+nodes:
+  - id: work
+    prompt: Build
+  - id: record
+    bash: echo recorded
+    depends_on: [work]
+`;
+  const parent = (build: string, groupDependsOn = 'build'): string => `name: parent
+description: one owner corrects what the included build made
+nodes:
+${build}
+  - id: other
+    bash: echo other
+  - id: corrections
+    depends_on: [${groupDependsOn}]
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+        - id: owner
+          prompt: Correct
+          context: { resume: build }
+`;
+  const include = (target: string): string => `  - id: build\n    include: ${target}`;
+
+  async function load(files: Record<string, string>) {
+    const result = await discoverFiles(root(), files);
+    const loaded = result.workflows.find(entry => entry.workflow.name === 'parent')?.workflow;
+    const group = (loaded?.nodes as DagNode[] | undefined)?.find(n => n.id === 'corrections');
+    return {
+      owner: group && isLoopGroupNode(group) ? (group.loop_group.nodes[0] as DagNode) : undefined,
+      error: result.errors.map(e => e.error).join('\n'),
+    };
+  }
+
+  it('resumes the loop an included workflow returns', async () => {
+    const { owner, error } = await load({
+      'block.yaml': LOOP_BLOCK,
+      'parent.yaml': parent(include('build-loop')),
+    });
+    expect(error).toBe('');
+    expect(owner?.context).toEqual({ resume: 'build__work' });
+  });
+
+  it('resumes the declared returns node of an included workflow', async () => {
+    const { owner, error } = await load({
+      'block.yaml': COMMAND_BLOCK,
+      'parent.yaml': parent(include('build-command')),
+    });
+    expect(error).toBe('');
+    expect(owner?.context).toEqual({ resume: 'build__work' });
+  });
+
+  it('resumes through a nested include', async () => {
+    const { owner, error } = await load({
+      'block.yaml': LOOP_BLOCK,
+      'middle.yaml': `name: middle\ndescription: wraps the build\nnodes:\n  - id: inner\n    include: build-loop\n`,
+      'parent.yaml': parent(include('middle')),
+    });
+    expect(error).toBe('');
+    expect(owner?.context).toEqual({ resume: 'build__inner__work' });
+  });
+
+  it('refuses an include whose returned node produces no session, naming both', async () => {
+    const { error } = await load({
+      'block.yaml': SCRIPT_BLOCK,
+      'parent.yaml': parent(include('build-script')),
+    });
+    expect(error).toContain(
+      "Node 'owner' context.resume source 'build' (include returns 'build__record') is not a session-producing command, prompt, or loop node"
+    );
+  });
+
+  it('refuses an include that fans out, which has no single session', async () => {
+    const { error } = await load({
+      'block.yaml': LOOP_BLOCK,
+      'parent.yaml': parent(
+        `  - id: list\n    bash: echo "[]"\n  - id: build\n    include: build-loop\n    depends_on: [list]\n    fan_out: { items: $list.output, as: item }`
+      ),
+    });
+    expect(error).toContain(
+      "context.resume source 'build' is not a session-producing command, prompt, or loop node"
+    );
+  });
+
+  it('refuses a consumer whose provider cannot fork a session', () => {
+    withRegistry(registerCommunityProviders, () => {
+      const result = parseWorkflow(
+        parent(include('build-loop')).replace('description:', 'provider: copilot\ndescription:'),
+        'parent.yaml'
+      );
+      expect(result.error?.error).toContain(
+        "Node 'owner' context.resume requires immutable session forks, but provider 'copilot' does not support sessionFork"
+      );
+    });
+  });
+
+  it('refuses an include the group does not depend on', async () => {
+    const { error } = await load({
+      'block.yaml': LOOP_BLOCK,
+      'parent.yaml': parent(include('build-loop'), 'other'),
+    });
+    expect(error).toContain(
+      "context.resume source 'build' is not an upstream dependency of the loop_group"
+    );
+  });
+});
+
+describe('context: same', () => {
+  const loopWith = (body: string, provider = 'claude'): string =>
+    `name: t\ndescription: t\nprovider: ${provider}\nnodes:\n  - id: group\n    loop_group:\n      until: DONE\n      max_iterations: 2\n      nodes:\n${body}`;
+
+  it('loads on a prompt node inside a loop_group body and at top level', () => {
+    const looped = parseWorkflow(
+      loopWith('        - id: build\n          prompt: p\n          context: same\n'),
+      't.yaml'
+    );
+    expect(looped.error).toBeNull();
+    const top = parseWorkflow(
+      `name: t\ndescription: t\nprovider: claude\nnodes:\n  - id: build\n    prompt: p\n    context: same\n`,
+      't.yaml'
+    );
+    expect(top.error).toBeNull();
+  });
+
+  it('is refused on a node that takes no agent turn', () => {
+    const error = parseError(
+      `name: t\ndescription: t\nnodes:\n  - id: build\n    bash: echo hi\n    context: same\n`
+    );
+    expect(error).toContain("'context: same' is only supported on command and prompt nodes");
+  });
+
+  it('is refused next to persist_session, which keys continuity on another scope', () => {
+    const error = parseError(
+      `name: t\ndescription: t\nprovider: claude\nnodes:\n  - id: build\n    prompt: p\n    context: same\n    persist_session: true\n`
+    );
+    expect(error).toContain("'context: same' and 'persist_session' are mutually exclusive");
+  });
+
+  const root = useTempWorkflowRoot();
+
+  it('does not take a workflow-level persist_sessions default', async () => {
+    const result = await discoverFiles(root(), {
+      'same.yaml': `name: same-collapse\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: build\n    prompt: p\n    context: same\n  - id: other\n    prompt: p\n`,
+    });
+    expect(result.errors).toEqual([]);
+    const byId = new Map((result.workflows[0].workflow.nodes as DagNode[]).map(n => [n.id, n]));
+    expect(byId.get('build')?.persist_session).toBeUndefined();
+    expect(byId.get('other')?.persist_session).toBe(true);
+  });
+
+  it('rejects a known provider without sessionResume, inside a loop_group body too', () => {
+    withRegistry(
+      () => registerNoResumeProvider('no-resume-same'),
+      () => {
+        const error = parseError(
+          loopWith(
+            '        - id: build\n          prompt: p\n          context: same\n',
+            'no-resume-same'
+          )
+        );
+        expect(error).toContain("Node 'build' has context: same");
+        expect(error).toContain('sessionResume');
+      }
+    );
+  });
+
+  it('warns, and still loads, when the provider cannot fork', () => {
+    withRegistry(registerCommunityProviders, () => {
+      const copilot = parseWorkflow(
+        loopWith('        - id: build\n          prompt: p\n          context: same\n', 'copilot'),
+        't.yaml'
+      );
+      expect(copilot.error).toBeNull();
+      expect(copilot.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
+        expect.stringContaining("Node 'build'"),
+      ]);
     });
   });
 });

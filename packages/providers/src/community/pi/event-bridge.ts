@@ -5,6 +5,7 @@ import {
   toolCallSchema,
   truncateToolOutput,
   type ProviderStopReason,
+  type ModelCallUsage,
 } from '@archon/provider-contract';
 
 import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
@@ -189,7 +190,7 @@ function sumPromptUsage(
   }
   const sum = (pick: (u: Usage) => number): number =>
     calls.reduce((total, u) => total + pick(u), 0);
-  return usageToTokens({
+  const totals = usageToTokens({
     input: sum(u => u.input),
     output: sum(u => u.output),
     cacheRead: sum(u => u.cacheRead),
@@ -203,6 +204,30 @@ function sumPromptUsage(
       total: sum(u => u.cost.total),
     },
   });
+  // Each request's counters come from usageToTokens, the one owner of the gross-input
+  // formula, so the requests of a turn without side calls sum to its totals.
+  totals.calls = assistants
+    .filter(message => !isZero(message.usage))
+    .map((message): ModelCallUsage => {
+      const { input, output, cacheRead, cacheWrite } = usageToTokens(message.usage);
+      return {
+        input,
+        output,
+        ...(cacheRead !== undefined ? { cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+        ...(message.provider ? { provider: message.provider } : {}),
+        // The served model, as resolvedModel reports it; `model` is what was requested,
+        // possibly an alias, and pricing by it would price the wrong model.
+        ...(typeof message.responseModel === 'string' && message.responseModel.length > 0
+          ? { model: message.responseModel }
+          : {}),
+        ...(message.responseId ? { responseId: message.responseId } : {}),
+      };
+    });
+  // Compaction usage may itself combine several requests, and does not reliably
+  // identify their models. It remains in totals, never masquerades as one call.
+  if (sideCalls.length > 0) totals.callsPartial = true;
+  return totals;
 }
 
 /** Pi's stop reason in ACP's names; `undefined` for one ACP has no name for. */
@@ -438,15 +463,38 @@ export interface BridgeNotifier {
 }
 
 /**
+ * How long teardown waits for an interrupted prompt to stop. Pi writes the interrupted
+ * assistant message to the session on `message_end`, before `abort()` resolves, and
+ * `dispose()` disconnects that writer; waiting keeps the reply in the session a later turn
+ * resumes. Bounded because a wedged session never answers `abort()` (#1561).
+ */
+const ABORT_SETTLE_MS = 2_000;
+
+/** Whether `promise` settled within `ms`. */
+async function settlesWithin(promise: Promise<void>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    promise.then(() => true),
+    new Promise<boolean>(resolve => {
+      timer = setTimeout(() => resolve(false), ms);
+    }),
+  ]);
+  clearTimeout(timer);
+  return settled;
+}
+
+/**
  * Bridge a Pi `AgentSession` into Archon's `AsyncGenerator<MessageChunk>` contract.
  *
  * Behavior:
  *  - subscribe before calling prompt, unsubscribe in finally
- *  - yield mapped events in order
+ *  - yield the session id first, then mapped events in order
  *  - complete on successful `session.prompt()` resolution
  *  - throw on `session.prompt()` rejection, listener errors, or attributed extension errors
- *  - forward `abortSignal` to `session.abort()` fire-and-forget, and throw on abort
- *    even when the session never answers it
+ *  - forward `abortSignal` to `session.abort()`, and throw on abort even when the
+ *    session never answers it
+ *  - before disposing, give an interrupted prompt up to `ABORT_SETTLE_MS` to stop, so Pi
+ *    stores the partial reply the caller already saw
  *  - always `dispose()` the session to avoid listener accumulation
  */
 export async function* bridgeSession(
@@ -458,6 +506,11 @@ export async function* bridgeSession(
   extensionTurn?: PiExtensionTurn
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
+  // The session exists before the prompt runs, so it is named first, as the result will name
+  // it. Queued rather than yielded so an aborted caller still gets no chunk.
+  if (session.sessionId) {
+    queue.push({ kind: 'chunk', chunk: { type: 'session', sessionId: session.sessionId } });
+  }
 
   type TextChunk = Extract<MessageChunk, { type: 'agent_message_chunk' | 'agent_thought_chunk' }>;
   let pending: TextChunk | undefined;
@@ -605,8 +658,9 @@ export async function* bridgeSession(
     }
   });
 
+  let aborting: Promise<void> | undefined;
   const onAbort = (): void => {
-    void session.abort().catch((err: unknown) => {
+    aborting ??= session.abort().catch((err: unknown) => {
       // Abort is best-effort — failures are recoverable via the dispose()
       // call in the `finally` below. But log at debug so a regression in
       // Pi's abort path doesn't silently disappear.
@@ -636,24 +690,26 @@ export async function* bridgeSession(
     onAbort();
   });
 
-  const promptPromise =
-    extensionFailed || abortSignal?.aborted
-      ? Promise.resolve()
-      : session.prompt(prompt).then(
-          () => {
-            if (sawAgentEnd) {
-              flushPending();
-              queue.push({
-                kind: 'chunk',
-                chunk: buildResultChunk(promptMessages, promptSideCalls),
-              });
-            }
-            queue.push({ kind: 'done' });
-          },
-          (err: unknown) => {
-            queue.push({ kind: 'error', error: err as Error });
+  let promptRunning = !(extensionFailed || abortSignal?.aborted);
+  const promptPromise = !promptRunning
+    ? Promise.resolve()
+    : session.prompt(prompt).then(
+        () => {
+          promptRunning = false;
+          if (sawAgentEnd) {
+            flushPending();
+            queue.push({
+              kind: 'chunk',
+              chunk: buildResultChunk(promptMessages, promptSideCalls),
+            });
           }
-        );
+          queue.push({ kind: 'done' });
+        },
+        (err: unknown) => {
+          promptRunning = false;
+          queue.push({ kind: 'error', error: err as Error });
+        }
+      );
 
   const finishResult = (terminal: ResultChunk): ResultChunk => {
     extensionTurn?.throwIfFailed();
@@ -681,6 +737,11 @@ export async function* bridgeSession(
     unsubscribe();
     if (abortSignal) {
       abortSignal.removeEventListener('abort', onAbortSignal);
+    }
+    // A caller that stops reading without a signal interrupts the prompt the same way.
+    if (promptRunning) onAbort();
+    if (aborting && !(await settlesWithin(aborting, ABORT_SETTLE_MS))) {
+      getLog().warn({ waitedMs: ABORT_SETTLE_MS }, 'pi.event-bridge.abort_unanswered');
     }
     try {
       session.dispose();

@@ -1,7 +1,9 @@
-import { z } from 'zod';
 import { getRunArtifactsDirForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
 import {
   type ArtifactManifest,
+  RESULT_COMMIT_METADATA_KEY,
+  resultCommitSchema,
+  type ResultCommit,
   RUN_GRAPH_METADATA_KEY,
   runGraphSchema,
   terminalRecordSchema,
@@ -21,6 +23,7 @@ import {
 } from './schemas/workflow-run';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import {
+  isExecNodeRecord,
   nodeInvocationKey,
   parseNodeInvocationKey,
   readNodeRecordData,
@@ -34,21 +37,19 @@ import {
 } from './schemas/node-outcomes';
 import {
   nodeFailureKindSchema,
+  type NodeExecutionMetadata,
   type NodeFailureKind,
   type NodeInvocation,
 } from './schemas/node-execution';
 import type { FanOutOutcome } from './schemas/fan-out-outcome';
+import type { SerializedNodeData } from './node-record-serialization';
+import type { LoopRound, LoopRoundNode } from './schemas/loop-rounds';
 
 export interface TerminalRecordEvent {
   event_type: string;
   step_name?: string | null;
   data: unknown;
 }
-const eventDataSchema = z.record(z.string(), z.unknown());
-function eventData(value: unknown): Record<string, unknown> {
-  return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
-}
-
 function withFanOutOutcome(
   state: RunNodeState,
   fanOutOutcome: FanOutOutcome | undefined
@@ -60,7 +61,25 @@ interface NodeEventFold {
   graph: RunGraph | undefined;
   nodes: Map<string, RunNodeState>;
   outputs: Map<string, Record<string, unknown>>;
+  /**
+   * A failed exec node's recorded stdout, kept apart from `outputs`: the terminal return
+   * and node outcomes read only a completed node's output, a loop round reads both.
+   */
+  failedOutputs: Map<string, Pick<SerializedNodeData, 'node_output' | 'node_output_truncated'>>;
   failureOrder: Map<string, number>;
+  /** Each key's invocation timing, folded from its attempts; a cache record carries none. */
+  timings: Map<string, InvocationTiming>;
+}
+
+/**
+ * An invocation's timing across its attempts: when its first attempt started, and each
+ * attempt's latest recorded duration by attempt id (undefined while that attempt runs).
+ * An attempt's start and its end are two records of one attempt, so keying by attempt id
+ * counts each attempt once.
+ */
+interface InvocationTiming {
+  startedAt: string;
+  attempts: Map<string, number | undefined>;
 }
 
 /**
@@ -78,7 +97,9 @@ function foldNodeEvents(
   const nodes = new Map<string, RunNodeState>();
   const outputs = new Map<string, Record<string, unknown>>();
   const failureOrder = new Map<string, number>();
-  const folded = { graph, nodes, outputs, failureOrder };
+  const failedOutputs: NodeEventFold['failedOutputs'] = new Map();
+  const timings = new Map<string, InvocationTiming>();
+  const folded = { graph, nodes, outputs, failedOutputs, failureOrder, timings };
   if (graph)
     for (const nodeId of graph.node_ids)
       nodes.set(keyOf(nodeId, []), { node_id: nodeId, state: 'pending' });
@@ -104,13 +125,41 @@ function foldNodeEvents(
   return folded;
 }
 
+function foldTiming(
+  timings: Map<string, InvocationTiming>,
+  key: string,
+  { invocation, attempt, timing }: NodeExecutionMetadata
+): void {
+  const folded = timings.get(key) ?? { startedAt: invocation.startedAt, attempts: new Map() };
+  folded.attempts.set(attempt.id, timing.durationMs);
+  timings.set(key, folded);
+}
+
+/** Exec writers record a failed command's stdout; only a loop round reads it. */
+function keepFailedExecOutput(
+  failedOutputs: NodeEventFold['failedOutputs'],
+  key: string,
+  record: ReadNodeRecordEvent
+): void {
+  const { node_output, node_output_truncated } = record.data;
+  if (!isExecNodeRecord(record) || node_output === undefined) return;
+  failedOutputs.set(key, {
+    node_output,
+    ...(node_output_truncated ? { node_output_truncated } : {}),
+  });
+}
+
 function foldNodeRecord(
-  { nodes, outputs, failureOrder }: Omit<NodeEventFold, 'graph'>,
+  { nodes, outputs, failedOutputs, failureOrder, timings }: Omit<NodeEventFold, 'graph'>,
   record: ReadNodeRecordEvent,
   key: string,
   index: number
 ): void {
   const nodeId = record.path;
+  // Cache records (replay, reset, invalidation) carry no invocation or timing, and fold
+  // under the top-level key, which no loop round reads.
+  if (record.metadata) foldTiming(timings, key, record.metadata);
+  failedOutputs.delete(key);
   switch (record.eventType) {
     case 'node_started':
     case 'node_suspended':
@@ -152,11 +201,13 @@ function foldNodeRecord(
             node_id: nodeId,
             state: 'failed',
             ...(typeof data.error === 'string' ? { error: data.error } : {}),
+            ...(data.failure_kind !== undefined ? { failure_kind: data.failure_kind } : {}),
           },
           data.fan_out_outcome
         )
       );
       outputs.delete(key);
+      keepFailedExecOutput(failedOutputs, key, record);
       failureOrder.set(key, index);
       break;
     }
@@ -221,6 +272,51 @@ export function buildNodeOutcomes(
 }
 
 /**
+ * Each round of each `loop_group` the run has entered, in the order each round first
+ * appeared, with the body node invocations it recorded. A running round lists the nodes
+ * it has reached; one it has not reached yet is absent. Empty when the run ran no loop.
+ */
+export function buildLoopRounds(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): LoopRound[] {
+  const { nodes, outputs, failedOutputs, timings } = foldNodeEvents(run, events, nodeInvocationKey);
+  const rounds = new Map<string, LoopRound>();
+  for (const [key, state] of nodes) {
+    const { loopPath } = parseNodeInvocationKey(key);
+    if (loopPath.length === 0) continue;
+    const roundKey = JSON.stringify(loopPath);
+    let round = rounds.get(roundKey);
+    if (!round) {
+      round = { loop_group_path: loopPath, nodes: [] };
+      rounds.set(roundKey, round);
+    }
+    round.nodes.push(
+      loopRoundNode(state, timings.get(key), outputs.get(key) ?? failedOutputs.get(key))
+    );
+  }
+  return [...rounds.values()];
+}
+
+function loopRoundNode(
+  state: RunNodeState,
+  timing: InvocationTiming | undefined,
+  data: Record<string, unknown> | undefined
+): LoopRoundNode {
+  const entry: LoopRoundNode = { ...state };
+  if (timing) entry.started_at = timing.startedAt;
+  const durations = timing ? [...timing.attempts.values()] : [];
+  // Only once every attempt has ended: a running retry has no duration yet.
+  if (durations.length > 0 && durations.every(ms => ms !== undefined))
+    entry.duration_ms = durations.reduce((total, ms) => total + ms, 0);
+  if (!data) return entry;
+  if (typeof data.node_output === 'string') entry.output = data.node_output;
+  if (data.node_output_truncated === true) entry.output_truncated = true;
+  if (Object.hasOwn(data, 'structured_output')) entry.structured_output = data.structured_output;
+  return entry;
+}
+
+/**
  * Failed and cancelled runs keep their worktree without inspecting it; only a completed
  * run's disposition needs git, so the executor assesses it and stores it in run metadata
  * before the terminal write.
@@ -245,15 +341,54 @@ function readWorktreeDisposition(
   }
 }
 
-function selectRecordedReturn({ graph, nodes, outputs }: NodeEventFold): TerminalRecord['returns'] {
-  const selected = graph?.returns;
+/**
+ * The executor samples a completed run's checkout and stores where its result holds in run
+ * metadata before the terminal write. Only a completed run has a result. A malformed value
+ * throws: it is engine-written, so it is damage, not "no commit".
+ */
+function readResultCommit(run: Pick<WorkflowRun, 'status' | 'metadata'>): ResultCommit | undefined {
+  if (run.status !== 'completed') return undefined;
+  const value = run.metadata?.[RESULT_COMMIT_METADATA_KEY];
+  return value === undefined ? undefined : resultCommitSchema.parse(value);
+}
+
+function selectRecordedReturn(folded: NodeEventFold): TerminalRecord['returns'] {
+  const selected = folded.graph?.returns;
   if (selected === undefined) {
     return {
       availability: 'unavailable',
       node_id: null,
-      reason: graph ? 'not_declared' : 'graph_unavailable',
+      reason: folded.graph ? 'not_declared' : 'graph_unavailable',
     };
   }
+  return returnOfNode(selected, folded);
+}
+
+/**
+ * The run's returned value, as its terminal record and a run-ended or asks-settled binding
+ * read it. `returnsNode` is the workflow's `returns:` node. Its node events decide it:
+ *
+ * - it did not complete: no value (`node_not_completed`);
+ * - it carries structured output (`output_format`): that value, whatever its size, since
+ *   structured output is persisted whole;
+ * - its text fits the persisted output cap: the text, as a string, whether or not it is
+ *   JSON. Typed data travels through `output_format`, never by sniffing text;
+ * - its text passed the cap: no value, reported `truncated` with the spill path and the
+ *   original size. The spill file is never read: it exists only on the host that ran
+ *   the node, and the value must read the same everywhere.
+ */
+export function recordedReturn(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[],
+  returnsNode: string
+): TerminalRecord['returns'] {
+  return returnOfNode(returnsNode, foldNodeEvents(run, events));
+}
+
+function returnOfNode(
+  selected: string,
+  { nodes, outputs }: NodeEventFold
+): TerminalRecord['returns'] {
   const data = outputs.get(selected);
   if (nodes.get(selected)?.state !== 'completed') {
     return { availability: 'unavailable', node_id: selected, reason: 'node_not_completed' };
@@ -331,7 +466,7 @@ export function terminalArtifactsFor(
 
 /** Fold ordered durable events; never reconstruct producer values from artifact contents. */
 export function buildTerminalRecord(input: {
-  run: Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'metadata'>;
+  run: Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'completed_outcome' | 'metadata'>;
   events: readonly TerminalRecordEvent[];
   artifacts: ArtifactManifest;
 }): TerminalRecord {
@@ -339,16 +474,19 @@ export function buildTerminalRecord(input: {
   const folded = foldNodeEvents(run, events);
   const { nodes, failureOrder } = folded;
   const worktreeDisposition = readWorktreeDisposition(run);
+  const resultCommit = readResultCommit(run);
   return terminalRecordSchema.parse({
     run_id: run.id,
     status: terminalStatusSchema.parse(run.status),
     outcome: run.outcome,
+    completed_outcome: run.completed_outcome,
     error: typeof run.metadata?.error === 'string' ? run.metadata.error : null,
     first_failed_node: [...failureOrder].sort((left, right) => left[1] - right[1])[0]?.[0] ?? null,
     nodes: [...nodes.values()],
     returns: selectRecordedReturn(folded),
     artifacts,
     ...(worktreeDisposition ? { worktree_disposition: worktreeDisposition } : {}),
+    ...(resultCommit ? { result_commit: resultCommit } : {}),
   });
 }
 
@@ -361,7 +499,7 @@ export function getTerminalRecord(
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
     if (event?.event_type !== `workflow_${runStatus}`) continue;
-    const data = eventData(event.data);
+    const data = readNodeRecordData(event.data);
     if (data.terminal_record === undefined) return null;
     const record = terminalRecordSchema.parse(data.terminal_record);
     if (record.status !== runStatus)
@@ -389,8 +527,75 @@ export function firstFailedNodeEvent<E extends TerminalRecordEvent>(
   return undefined;
 }
 
+/** The per-node state of a record's `first_failed_node`, when it has one. */
+export function firstFailedNodeState(
+  record: Pick<TerminalRecord, 'first_failed_node' | 'nodes'>
+): TerminalRecord['nodes'][number] | undefined {
+  return record.nodes.find(node => node.node_id === record.first_failed_node);
+}
+
 /** The failure kind a `node_failed` event recorded; undefined when it recorded none. */
 export function recordedFailureKind(event: TerminalRecordEvent): NodeFailureKind | undefined {
   const kind = nodeFailureKindSchema.safeParse(readNodeRecordData(event.data).failure_kind);
   return kind.success ? kind.data : undefined;
+}
+
+const REASON_LINES = 2;
+const REASON_LINE_LENGTH = 200;
+
+/** The first line of `text` that says anything. */
+function firstLine(text: string): string | undefined {
+  return text
+    .split('\n')
+    .map(candidate => candidate.trim())
+    .find(candidate => candidate !== '');
+}
+
+/** What a returned value says in text: its lines, or each text field of an object as `key: text`. */
+function returnedText(value: unknown): string[] {
+  if (typeof value === 'string') return value.split('\n').map(line => line.trim());
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+  return Object.entries(value).flatMap(([key, field]) => {
+    const line = typeof field === 'string' ? firstLine(field) : undefined;
+    // A key is authored text too: one with a line break must not make the entry span lines.
+    // Only the breaks are replaced, so any other key is written as authored.
+    return line === undefined ? [] : [`${key.replace(/\s*[\r\n]+\s*/g, ' ')}: ${line}`];
+  });
+}
+
+const boundedReason = (lines: readonly string[]): string[] =>
+  lines
+    .filter(line => line !== '')
+    .slice(0, REASON_LINES)
+    .map(line =>
+      line.length > REASON_LINE_LENGTH ? `${line.slice(0, REASON_LINE_LENGTH - 1)}…` : line
+    );
+
+/**
+ * Why a run completed with a failed outcome, in at most two short lines: what its
+ * `returns:` node said, since that node authored the verdict. Empty for any other run and
+ * when the record holds no returned text. The attention stream carries this, because the
+ * workflow wrote it to be read as the run's result.
+ */
+export function failedOutcomeReason(record: TerminalRecord | null): string[] {
+  if (record?.status !== 'completed' || record.outcome !== 'failed') return [];
+  if (record.returns.availability !== 'available') return [];
+  return boundedReason(returnedText(record.returns.value));
+}
+
+/**
+ * Why a run that ended needs a look, for a reader of that one run: the failed-outcome
+ * reason, or for a failed run the first line of its first failed node's error, or else of
+ * the run's own, led by that node's recorded failure kind. Error text is whatever a
+ * command or provider printed, so it stays out of the attention stream, which uses
+ * structured failure facts instead.
+ */
+export function terminalReason(record: TerminalRecord | null): string[] {
+  if (record?.status !== 'failed') return failedOutcomeReason(record);
+  const failed = firstFailedNodeState(record);
+  const reason = boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
+  const kind = failed?.failure_kind;
+  return kind === undefined
+    ? reason
+    : reason.map((line, i) => (i === 0 ? `(${kind}) ${line}` : line));
 }

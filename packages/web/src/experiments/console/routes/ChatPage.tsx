@@ -6,9 +6,11 @@ import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { WorkingIndicator } from '../components/WorkingIndicator';
 import { WorkflowDock } from '../components/WorkflowDock';
 import { EmptyState } from '../components/EmptyState';
+import { SELECT_CLASS_COMPACT, SelectShell } from '../components/SettingsFormPrimitives';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useConversationSSE } from '../lib/sse';
 import { followTail } from '../lib/follow-tail';
+import { relativeTime } from '../lib/format';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
@@ -21,21 +23,45 @@ import type { ConversationSummary } from '../primitives/conversation';
 // EventSource in dev can miss bursts). Mirrors RunDetailPage's safety-net poll.
 const ACTIVE_POLL_MS = 3000;
 // Consider the turn done once the trailing message is an assistant reply that
-// has stayed stable this long. Independent of any SSE lock event.
+// has stayed stable this long, unless the server still reports the turn locked.
 const SETTLE_MS = 6000;
 // Hard cap so a turn that never produces a reply (server error, etc.) can't
-// disable the composer forever.
+// disable the composer forever. It does not apply while the server reports the
+// conversation locked.
 const MAX_WAIT_MS = 300_000;
 // Distance from the bottom (px) within which we treat the scroll as "at bottom"
 // — drives both auto-scroll stickiness and the jump-to-bottom button's visibility.
 const NEAR_BOTTOM_PX = 120;
 
+// The chat a person last had open in a project. Starting a run from the draft card
+// creates a web conversation of its own, so "the most recent web conversation" alone
+// would replace the person's chat with that run's after a reload.
+const chatKey = (projectId: string): string => `archon.console.chat.${projectId}`;
+
+function readStoredChat(projectId: string): string | null {
+  try {
+    return localStorage.getItem(chatKey(projectId));
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredChat(projectId: string, conversationId: string | null): void {
+  try {
+    if (conversationId === null) localStorage.removeItem(chatKey(projectId));
+    else localStorage.setItem(chatKey(projectId), conversationId);
+  } catch {
+    /* storage unavailable: the choice lasts for this page only */
+  }
+}
+
 /**
  * Project-scoped agent chat. A tab peer of the runs view under a project.
  *
- * MVP conversation model: one active conversation per project — the most-recent
- * web conversation, or created lazily on first send. No multi-conversation
- * sidebar yet (spike decision #3, deferred).
+ * Conversation model: one active conversation at a time, the one this browser last
+ * had open in the project, else the most-recent web conversation, else created lazily
+ * on first send. The header's picker switches between the project's web conversations
+ * or starts a new one.
  *
  * Data flow mirrors RunDetailPage: load messages via useEntity(K.messages),
  * keep live via useConversationSSE (invalidate → refetch), render with the
@@ -54,23 +80,32 @@ export function ChatPage(): ReactElement {
     () => (projectId !== undefined ? skill.listConversations(projectId) : Promise.resolve([]))
   );
 
-  // Active conversation: most-recent web conversation, else null until first send.
+  const webConversations = useMemo(
+    () => (conversations ?? []).filter(c => c.platformType === 'web'),
+    [conversations]
+  );
+
+  // Active conversation: null until one is picked, created by the first send, or
+  // while the person has asked for a new chat.
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [newChat, setNewChat] = useState(false);
   useEffect(() => {
-    if (activeConvId !== null) return;
-    const web = (conversations ?? []).find(c => c.platformType === 'web');
-    if (web !== undefined) setActiveConvId(web.id);
-  }, [conversations, activeConvId]);
+    if (activeConvId !== null || newChat || projectId === undefined) return;
+    const stored = readStoredChat(projectId);
+    const pick = webConversations.find(c => c.id === stored) ?? webConversations[0];
+    if (pick !== undefined) setActiveConvId(pick.id);
+  }, [webConversations, activeConvId, newChat, projectId]);
 
   const { data: messages, error: messagesError } = useEntity<Message[]>(
     activeConvId !== null ? K.messages(activeConvId) : 'noop:no-conv',
     () => (activeConvId !== null ? skill.listMessages(activeConvId) : Promise.resolve([]))
   );
 
-  // `busy` = a reply is pending → composer disabled + recovery poll active.
-  // Driven by message content and the send action, NOT by the SSE lock event,
-  // so it stays correct even when the per-conversation SSE drops or never
-  // connects (which it can, cross-origin in dev). SSE is a pure accelerator.
+  // `busy` = a reply is pending → composer disabled (Stop shown) + recovery poll.
+  // Driven by message content and the send action, so it stays correct even when
+  // the per-conversation SSE drops or never connects (which it can, cross-origin
+  // in dev). When SSE is there, its lock events are authoritative: lock:true keeps
+  // the turn busy through message silence, lock:false ends it at once.
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Non-error advisory (distinct channel from `error` so it doesn't read as a
@@ -81,21 +116,39 @@ export function ChatPage(): ReactElement {
   // works even when SSE is absent. The SSE lock event is a fast-path on top of it.
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settleSigRef = useRef('');
+  // The server's own word that a turn is running (SSE conversation_lock:true). While it
+  // holds, message silence does not end the turn: a long tool call is quiet, and the
+  // Stop control must stay for as long as the reply can still be stopped.
+  const serverLockedRef = useRef(false);
+  // The reply a Stop names: the turn the latest lock event said started, or the one this
+  // page's send started. A stop names it so it never stops the reply queued after it.
+  const turnIdRef = useRef<string | undefined>(undefined);
 
-  // SSE accelerator: invalidates the message cache on text/tool events, and via
-  // onLockChange clears `busy` the instant the server releases the conversation
-  // lock (conversation_lock:false) instead of waiting out SETTLE_MS. Must be
+  // SSE: invalidates the message cache on text/tool events. Via onLockChange,
+  // conversation_lock:true holds `busy` against the settle timer and
+  // conversation_lock:false clears it at once instead of waiting out SETTLE_MS. Must be
   // useCallback-stable — the hook's effect depends on it, so an inline lambda
   // would reconnect the EventSource on every render.
-  const onLockChange = useCallback((locked: boolean): void => {
-    if (locked) return;
+  const onLockChange = useCallback((locked: boolean, turnId: string | undefined): void => {
+    serverLockedRef.current = locked;
+    if (locked) {
+      if (turnId !== undefined) turnIdRef.current = turnId;
+      setBusy(true);
+      return;
+    }
+    turnIdRef.current = undefined;
     if (settleTimerRef.current !== null) {
       clearTimeout(settleTimerRef.current);
       settleTimerRef.current = null;
     }
     setBusy(false);
   }, []);
-  useConversationSSE(activeConvId, onLockChange);
+  // A stream that closed for good reports no more locks, so the last one it reported
+  // stops counting and the settle timer and cap decide again.
+  const onStreamClosed = useCallback((): void => {
+    serverLockedRef.current = false;
+  }, []);
+  useConversationSSE(activeConvId, onLockChange, onStreamClosed);
 
   // Derive turn state from the trailing message: a user message means a reply
   // is pending; once an assistant reply lands and stays stable for SETTLE_MS the
@@ -121,7 +174,7 @@ export function ChatPage(): ReactElement {
     settleSigRef.current = sig;
     if (settleTimerRef.current !== null) clearTimeout(settleTimerRef.current);
     settleTimerRef.current = setTimeout(() => {
-      setBusy(false);
+      if (!serverLockedRef.current) setBusy(false);
     }, SETTLE_MS);
   }, [messages]);
   useEffect(
@@ -138,7 +191,10 @@ export function ChatPage(): ReactElement {
     if (!busy || activeConvId === null) return;
     busySinceRef.current = Date.now();
     const id = setInterval(() => {
-      if (Date.now() - busySinceRef.current > MAX_WAIT_MS) {
+      // The cap guards against a turn nobody reports on. A lock the server holds is a
+      // report: a reconnect's lock snapshot corrects a stale one, and a stream that
+      // closed for good drops it (onStreamClosed).
+      if (Date.now() - busySinceRef.current > MAX_WAIT_MS && !serverLockedRef.current) {
         setBusy(false);
         return;
       }
@@ -161,7 +217,10 @@ export function ChatPage(): ReactElement {
       try {
         if (activeConvId === null) {
           const conv = await skill.createConversation(projectId, text);
+          turnIdRef.current = conv.turnId;
           setActiveConvId(conv.conversationId);
+          setNewChat(false);
+          writeStoredChat(projectId, conv.conversationId);
           invalidate(K.conversations(projectId));
           invalidate(K.messages(conv.conversationId));
           // createConversation is JSON-only — files can't ride the first message.
@@ -174,7 +233,8 @@ export function ChatPage(): ReactElement {
             );
           }
         } else {
-          await skill.sendMessage(activeConvId, text, files);
+          turnIdRef.current = await skill.sendMessage(activeConvId, text, files);
+          writeStoredChat(projectId, activeConvId);
           invalidate(K.messages(activeConvId));
         }
       } catch (e: unknown) {
@@ -183,6 +243,32 @@ export function ChatPage(): ReactElement {
       }
       // On success `busy` stays true until the settle detector sees the reply.
     })();
+  };
+
+  // `busy` is not cleared here: the server's lock release (SSE) or the stop marker
+  // message (settle detector) returns the composer to idle once the turn has ended.
+  const onStop = (): void => {
+    if (activeConvId === null) return;
+    const turnId = turnIdRef.current;
+    if (turnId === undefined) {
+      setError('Stop failed: the server has not said which reply is running yet.');
+      return;
+    }
+    skill.cancelConversation(activeConvId, turnId).catch((e: unknown) => {
+      setError(e instanceof Error ? e.message : 'Stop failed.');
+    });
+  };
+
+  const selectConversation = (conversationId: string | null): void => {
+    if (projectId === undefined) return;
+    setActiveConvId(conversationId);
+    setNewChat(conversationId === null);
+    writeStoredChat(projectId, conversationId);
+    setError(null);
+    setNotice(null);
+    serverLockedRef.current = false;
+    turnIdRef.current = undefined;
+    setBusy(false);
   };
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -254,6 +340,11 @@ export function ChatPage(): ReactElement {
             </h1>
             <p className="text-xs text-text-tertiary">{project?.path ?? 'Loading…'}</p>
           </div>
+          <ConversationPicker
+            conversations={webConversations}
+            active={activeConvId}
+            onSelect={selectConversation}
+          />
         </div>
         <ProjectViewTabs projectId={projectId} active="chat" />
       </header>
@@ -262,10 +353,10 @@ export function ChatPage(): ReactElement {
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="h-full overflow-y-auto px-[30px] pt-[26px] pb-[18px]"
+          className="h-full overflow-y-auto px-7.5 pt-6.5 pb-4.5"
         >
           {/* Match the composer's centered 940px column (design: .stream-inner) */}
-          <div ref={contentRef} className="mx-auto max-w-[940px]">
+          <div ref={contentRef} className="mx-auto max-w-235">
             {messageList.length === 0 && !busy ? (
               <EmptyState
                 title="No messages yet."
@@ -292,7 +383,7 @@ export function ChatPage(): ReactElement {
             type="button"
             onClick={scrollToBottom}
             aria-label="Jump to bottom"
-            className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+            className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-console-11 text-text-secondary shadow-md transition-colors hover:text-text-primary"
           >
             <span aria-hidden>↓</span>
             Jump to bottom
@@ -303,14 +394,18 @@ export function ChatPage(): ReactElement {
       <WorkflowDock projectId={projectId} />
 
       {notice !== null ? (
-        <div className="shrink-0 border-t border-warning/30 bg-warning/[0.06] px-6 py-2 font-mono text-[11px] text-warning">
+        <div className="shrink-0 border-t border-warning/30 bg-warning/[0.06] px-6 py-2 font-mono text-console-11 text-warning">
           {notice}
         </div>
       ) : null}
 
       <ChatError error={error} loadError={loadError} />
 
-      <ChatComposer onSend={onSend} disabled={busy} />
+      <ChatComposer
+        onSend={onSend}
+        disabled={busy}
+        onStop={activeConvId !== null ? onStop : undefined}
+      />
     </section>
   );
 }
@@ -323,8 +418,41 @@ function ChatError({
   loadError: Error | undefined;
 }): ReactElement | null {
   return error !== null || loadError !== undefined ? (
-    <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
+    <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-console-11 text-error">
       {error ?? `Failed to load chat: ${loadError?.message ?? 'unknown error'}`}
     </div>
   ) : null;
+}
+
+/** Switches between the project's web conversations, or to a new one. */
+function ConversationPicker({
+  conversations,
+  active,
+  onSelect,
+}: {
+  conversations: ConversationSummary[];
+  active: string | null;
+  onSelect: (conversationId: string | null) => void;
+}): ReactElement | null {
+  if (conversations.length === 0) return null;
+  return (
+    <SelectShell className="w-70 max-w-[40vw] shrink-0">
+      <select
+        aria-label="Conversation"
+        value={active ?? ''}
+        onChange={e => {
+          onSelect(e.target.value === '' ? null : e.target.value);
+        }}
+        className={SELECT_CLASS_COMPACT}
+      >
+        <option value="">New chat</option>
+        {conversations.map(c => (
+          <option key={c.id} value={c.id}>
+            {c.title ?? 'Untitled'}
+            {c.lastActivityAt !== null ? ` · ${relativeTime(c.lastActivityAt)}` : ''}
+          </option>
+        ))}
+      </select>
+    </SelectShell>
+  );
 }

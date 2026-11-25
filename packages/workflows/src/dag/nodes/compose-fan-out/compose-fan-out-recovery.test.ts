@@ -584,12 +584,12 @@ nodes:
       foldDagResumeSnapshot(persistedEvents(store), runId)
     );
     const cause = new Error('instance usage unavailable');
-    let reads = 0;
+    let priorUsageReads = 0;
     const listEvents = store.listWorkflowEvents.getMockImplementation();
     if (!listEvents) throw new Error('missing event reader');
-    store.listWorkflowEvents.mockImplementation(async () => {
-      if (++reads === 2) throw cause;
-      return listEvents('parent');
+    store.listWorkflowEvents.mockImplementation(async (runId, options) => {
+      if (options === undefined && ++priorUsageReads === 2) throw cause;
+      return listEvents(runId, options);
     });
     const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
       childRunId: 'paid-child',
@@ -623,7 +623,7 @@ nodes:
         },
       })
     );
-    expect(reads).toBe(2);
+    expect(priorUsageReads).toBe(2);
     expect(runChildWorkflow).toHaveBeenCalledTimes(1);
     expect(runUsageWrites(store).at(-1)).toMatchObject({
       total_cost_usd: expect.closeTo(0.04, 8),

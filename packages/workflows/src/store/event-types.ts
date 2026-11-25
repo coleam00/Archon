@@ -1,5 +1,6 @@
 import {
   DEFERRED_NODE_USAGE_EVENT_TYPE,
+  NODE_EXECUTION_EVENT_TYPES,
   type SerializedDeferredNodeUsageEvent,
   type SerializedNodeEvent,
 } from '../node-record-serialization';
@@ -12,11 +13,7 @@ import { TERMINAL_RUN_EVENT_TYPES } from '../schemas/workflow-run';
 import { WORKTREE_SETUP_EVENT_TYPES } from '../schemas/worktree-setup';
 
 export const NODE_LIFECYCLE_EVENT_TYPES = [
-  'node_started',
-  'node_suspended',
-  'node_completed',
-  'node_failed',
-  'node_skipped',
+  ...Object.values(NODE_EXECUTION_EVENT_TYPES),
   'node_skipped_prior_success',
 ] as const;
 
@@ -80,6 +77,9 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow.checkout_shared',
   ...DURABLE_WORKFLOW_EVENT_TYPES,
   'node_retry_scheduled',
+  // One per call of a tool an agent node declares under `tools:`. A record of the call,
+  // not node state: resume does not read it.
+  'script_tool_call',
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',
@@ -106,6 +106,14 @@ export const WORKFLOW_EVENT_TYPES = [
   // occurrence, the keys set and unset, and the revision it produced; the row's
   // timestamp is when.
   'attention_labeled',
+  // An ask a completed run left was answered or withdrawn (`schemas/item-ask.ts`). Written
+  // on the run that left it, after that run completed; `data` carries the ask's id, the
+  // surface (`via`), who (`by`, `fromRun`) and, for an answer, the answer.
+  'ask_answered',
+  'ask_withdrawn',
+  // The last open ask of a run's set closed. Written once, on the run that left the set;
+  // `data` counts the asks `answered` and `withdrawn`, so `answered: 0` means none was.
+  'asks_settled',
   'wait_completed',
   'wait_expired',
   'quota_resume_scheduled',
@@ -116,6 +124,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // paused instead of failed. `data` carries `node_id`, `path` (when known), `error` and
   // `retry_at`; any host that can read the source continues it.
   'source_released',
+  // An operator's pause request took effect at a node boundary: the run moved from running
+  // to paused in the same transaction. `data` carries `requested` (who asked, through
+  // which surface, when) and `paused_at`.
+  'operator_paused',
   'workflow_artifact',
   'integration_operation',
   'node_session_resumed',
@@ -134,9 +146,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'writeback_requested',
   'writeback_applied',
   'writeback_discarded',
-  // File-presence gate (#2230): `evidence_policy.required` was set but its
-  // conventional `$ARTIFACTS_DIR/evidence.json` marker was absent at completion.
-  // Data carries the expected path; the legacy event name is a persisted contract.
+  // Retired with `evidence_policy` (#5630). Nothing writes it; stored rows still hold it.
   'evidence_validation_failed',
   // #2814 — the run budget refused new work, or a spend-limited run's spend could
   // not be measured. `data` carries the reason, refused node, limits and consumption.
@@ -158,6 +168,13 @@ export const WORKFLOW_EVENT_TYPES = [
   // `data.notice` is the composed message; absence means not deprecated OR the run
   // predates this event type.
   'workflow_deprecation_notice',
+  // A notice a node of the run emitted (`workflow notice`): something the run did that
+  // nobody has to act on. `data` is `workflowNoticeDataSchema`: `text`, `labels` and the
+  // emitting `node`; the row's timestamp is when. Never pauses the run.
+  'workflow_notice',
+  // The engine sent a stalled session a message, or found its provider cannot take one.
+  // `data` is `stallMessageEventDataSchema` (`schemas/workflow-event.ts`).
+  'stall_message',
   // #2512 — audit snapshot of a composed fan-out's ordered instance set (identity +
   // item per ordinal), written before the first instance schedules.
   'fan_out_instances',

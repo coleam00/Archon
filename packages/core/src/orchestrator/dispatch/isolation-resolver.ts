@@ -2,7 +2,12 @@
 // which applies the resolver's verdict to the conversation and tells the user about it.
 import type { WorktreeSetupExecutor } from '@archon/isolation';
 import type { IsolationHints, IsolationEnvironmentRow, ResolvedIsolation } from '@archon/isolation';
-import { IsolationBlockedError, IsolationResolver, getIsolationProvider } from '@archon/isolation';
+import {
+  IsolationBlockedError,
+  IsolationResolver,
+  getIsolationProvider,
+  readWorktreeBaseBranch,
+} from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { toBranchName } from '@archon/git';
 import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
@@ -11,8 +16,6 @@ import * as db from '../../db/conversations';
 import { createIsolationStore } from '../../db/isolation-environments';
 import { toError } from '../../utils/error';
 import { configureWorktreeIsolation } from '../../workflows/worktree-setup';
-import { getWorktreeStatusBreakdown, STALE_THRESHOLD_DAYS } from '../../services/cleanup-service';
-import { cleanupToMakeRoom } from '../../services/cleanup/merged-sweep';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -22,7 +25,7 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export type IsolationResolution =
-  | { status: 'existing'; cwd: string; env: IsolationEnvironmentRow }
+  | { status: 'existing'; cwd: string; env: IsolationEnvironmentRow; resolvedBaseBranch?: string }
   | {
       status: 'new';
       ownedWorktree?: OwnedWorktree;
@@ -30,8 +33,9 @@ export type IsolationResolution =
       env: IsolationEnvironmentRow;
       /** The commit a branch created by this resolution was cut from. */
       cutFromCommit?: string;
+      resolvedBaseBranch?: string;
     }
-  | { status: 'none'; cwd: string; env: null };
+  | { status: 'none'; cwd: string; env: null; resolvedBaseBranch?: undefined };
 
 // Lazy resolver singleton
 let resolver: IsolationResolver | null = null;
@@ -50,14 +54,6 @@ function getResolver(): IsolationResolver {
     resolver = new IsolationResolver({
       store: createIsolationStore(),
       provider: getIsolationProvider(),
-      cleanup: {
-        makeRoom: async (codebaseId, repoPath): Promise<{ removedCount: number }> => {
-          const result = await cleanupToMakeRoom(codebaseId, repoPath);
-          return { removedCount: result.removed.length };
-        },
-        getBreakdown: getWorktreeStatusBreakdown,
-      },
-      staleThresholdDays: STALE_THRESHOLD_DAYS,
     });
   }
   return resolver;
@@ -184,8 +180,11 @@ async function sendResolutionNotices(
 }
 
 function toIsolationResolution(result: ResolvedIsolation): IsolationResolution {
+  // The record keeps the base its worktree was cut from, however the resolver reached it:
+  // created, reused for the same workflow, shared through a linked issue, or existing.
+  const resolvedBaseBranch = readWorktreeBaseBranch(result.env.metadata);
   if (result.method.type === 'existing') {
-    return { status: 'existing', cwd: result.cwd, env: result.env };
+    return { status: 'existing', cwd: result.cwd, env: result.env, resolvedBaseBranch };
   }
   const created = result.method.type === 'created' ? result.method : undefined;
   return {
@@ -194,6 +193,7 @@ function toIsolationResolution(result: ResolvedIsolation): IsolationResolution {
     cwd: result.cwd,
     env: result.env,
     ...(created?.cutFromCommit !== undefined ? { cutFromCommit: created.cutFromCommit } : {}),
+    resolvedBaseBranch,
   };
 }
 

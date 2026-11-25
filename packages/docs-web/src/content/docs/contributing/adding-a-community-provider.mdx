@@ -20,7 +20,9 @@ A successful stream yields provider events, a `result`, then `settled` only afte
 observed work ends. A running state update, new tool call, or started subtask requires
 a fresh result before settlement. Housekeeping progress uses `heartbeat` to reset the
 idle watchdog without starting a new result phase. Report usage once. Include the
-native session id when declaring session resume. Carry failures through the typed failure class; do not classify free
+native session id when declaring session resume. When the runtime confirms the session
+before the turn ends, also send one `session` chunk with that id before the first
+`result`, so a turn stopped early can still be resumed. Carry failures through the typed failure class; do not classify free
 prose with keyword matching. Cancellation must stop the provider's own work and must
 not manufacture `settled`.
 
@@ -161,17 +163,27 @@ The wire uses ACP v1's `initialize`, `session/new`, `session/prompt`, and
 `session/cancel` lifecycle, with unchanged `ProviderChunk` values in `_archon/chunk`
 notifications. Stdout is exclusively newline-delimited JSON-RPC. Native tool specifications
 travel in the session request; `_archon/tool_call` invokes the host handler and returns
-its text result. Calls require a live, unsettled session. Dynamic credential catalogs
+its text result. Calls require a live, unsettled session. A provider that declares the
+`turnMessages` capability receives the engine's message to a stalled session as
+`_archon/turn_message` notifications, which `serveProvider` hands to `sendQuery` as
+`turnMessages`; it delivers each text into the live session without interrupting the
+turn. A text its runtime refuses must be reported as a `warning` whose `code` is
+`TURN_MESSAGE_REFUSED_WARNING_CODE` (from `@archon/provider-contract`) and whose `message`
+is the runtime's error; only that code makes the engine record the refusal, so status and
+logs do not show the message as delivered. Dynamic credential catalogs
 and mid-run permission requests remain unsupported. A dynamic catalog is rejected.
 `_archon/log` carries structured metadata logs (`level`, `msg`, JSON `bindings`).
 `serveProvider` supplies an awaitable log sink to `create(log)`; `connectProvider` accepts
 an `onLog` callback. Log metadata only, never credentials, tokens, or message text.
 The process host logs a fixed `provider.plugin.log` event at the supplied severity
 through `provider.<id>`, using its own descriptor id. The only plugin values it forwards
-are `bindings.failureClass`, when it is one of the contract's failure classes, and
+are `bindings.failureClass`, when it is one of the contract's failure classes,
 `bindings.lifecycle`, when it is one of the contract's lifecycle events
-(`providerLifecycleEventSchema`), plus a lifecycle event's non-negative integer
-`bindings.waitedMs`; the host drops a record with neither enum value. Plugin `msg`, module identity, and all other
+(`providerLifecycleEventSchema`), and `bindings.credentialInput`, when it is one of the
+contract's credential inputs (`providerCredentialInputSchema`). A lifecycle event also
+forwards its non-negative integer `bindings.waitedMs`, and a credential input the names in
+`bindings.credentialKeys` that are in the contract's closed list
+(`providerCredentialKeySchema`). The host drops a record with no enum value. Plugin `msg`, module identity, and all other
 bindings are withheld: any plugin-chosen string, even one that looks like a machine
 token, can carry a credential.
 Container requests carry their optional `env` bag as session data while the plugin

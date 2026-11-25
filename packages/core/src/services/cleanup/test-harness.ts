@@ -14,7 +14,7 @@ import {
   WorktreeRemovalInProgressError,
 } from '@archon/isolation/types';
 import { createMockLogger } from '../../test/mocks/logger';
-import { toBranchName } from '@archon/git';
+import { GitFailure, toBranchName } from '@archon/git';
 import type {
   ContainerBackend,
   IIsolationProvider,
@@ -29,6 +29,8 @@ import type * as SessionDb from '../../db/sessions';
 import type * as CodebaseDb from '../../db/codebases';
 import type * as ConfigLoader from '../../config/config-loader';
 import type * as WorkflowDb from '../../db/workflows';
+import type * as CheckoutPresence from './checkout-presence';
+import type { CleanupOperationResult } from './merged-sweep';
 
 export const ageBasedPolicies = ['test', 'github', 'slack', 'cli', 'web', 'new-forge'].map(id => ({
   id,
@@ -166,9 +168,11 @@ mock.module('@archon/paths', () => ({
 
 // Every mock's default is installed by the top-level beforeEach, so no test sees
 // another's leftovers.
+export const mockExecFileAsync = mock<typeof Git.execFileAsync>();
 export const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChangesStrict>();
 export const mockWorktreeExists = mock<typeof Git.worktreeExists>();
 export const mockGetDefaultBranch = mock<typeof Git.getDefaultBranch>();
+export const mockGetDefaultRemote = mock<typeof Git.getDefaultRemote>();
 export const mockIsBranchMerged = mock<typeof Git.isBranchMerged>();
 export const mockIsPatchEquivalent = mock<typeof Git.isPatchEquivalent>();
 export const mockLocalBranchExists = mock<typeof Git.localBranchExists>();
@@ -176,16 +180,18 @@ export const mockGetLastCommitDate = mock<typeof Git.getLastCommitDate>();
 export const mockIsRevCoveredBy = mock<typeof Git.isRevCoveredBy>();
 export const mockCountCommitsMissingFromRemotes = mock<typeof Git.countCommitsMissingFromRemotes>();
 mock.module('@archon/git', () => ({
+  GitFailure,
   getGitCheckoutIdentity: async () => ({
     gitDir: '/workspace/repo',
     commonGitDir: '/workspace/repo',
     linkedWorktree: false,
   }),
   countCommitsMissingFromRemotes: mockCountCommitsMissingFromRemotes,
-  execFileAsync: mock(() => Promise.resolve({ stdout: '', stderr: '' })),
+  execFileAsync: mockExecFileAsync,
   hasUncommittedChangesStrict: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
   getDefaultBranch: mockGetDefaultBranch,
+  getDefaultRemote: mockGetDefaultRemote,
   isBranchMerged: mockIsBranchMerged,
   isPatchEquivalent: mockIsPatchEquivalent,
   localBranchExists: mockLocalBranchExists,
@@ -197,6 +203,7 @@ mock.module('@archon/git', () => ({
 }));
 
 export const mockDestroy = mock<IIsolationProvider['destroy']>();
+export const mockGetPrsForCommit = mock<typeof Isolation.getPrsForCommit>();
 export const mockGetPrState = mock<typeof Isolation.getPrState>();
 export const mockContainerDestroy = mock<ContainerBackend['destroy']>();
 export const mockContainerOptions =
@@ -214,10 +221,21 @@ export class MockContainerBackend {
 export const mockReleaseVerificationImages = mock<typeof Isolation.releaseRunVerificationImages>(
   async () => undefined
 );
-const { VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } = await import(
-  '@archon/isolation'
-);
+const {
+  generatedTaskBranch,
+  validateWorktreeConfig,
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+} = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  checkWorktreeStartable: mock(async () => undefined),
+  readWorktreeBaseBranch: () => undefined,
+  generatedTaskBranch,
+  validateWorktreeConfig,
+  resolveWorktreeBase: mock(async () => {
+    throw new Error('resolveWorktreeBase is not mocked here');
+  }),
+  refuseUnappliedStartPoint: mock(async () => undefined),
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
   dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
@@ -231,6 +249,7 @@ mock.module('@archon/isolation', () => ({
     destroy: mockDestroy,
   }),
   getPrState: mockGetPrState,
+  getPrsForCommit: mockGetPrsForCommit,
   ContainerBackend: MockContainerBackend,
 }));
 
@@ -245,6 +264,11 @@ export const mockListByCodebaseWithAge =
   mock<typeof IsolationEnvironmentDb.listByCodebaseWithAge>();
 export const mockListActiveContainerEnvironments =
   mock<typeof IsolationEnvironmentDb.listActiveContainerEnvironments>();
+// The real settlement list, read before the module is mocked, so the mocks below cannot
+// drift from the statuses production derives from the workflow-run schema.
+const { SETTLEABLE_WORKFLOW_STATUSES } = await import('../../db/isolation-env-users');
+const isSettleable = (status: string): boolean =>
+  (SETTLEABLE_WORKFLOW_STATUSES as readonly string[]).includes(status);
 mock.module('../../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
   updateStatus: mock(() => Promise.resolve()),
@@ -254,7 +278,7 @@ mock.module('../../db/isolation-environments', () => ({
     remove: Parameters<typeof IsolationEnvironmentDb.withWorktreeRegistration>[1]
   ) => remove(() => mockMarkWorktreeDestroyed(env)),
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
-  isSettleableRunStatus: (status: string) => status === 'failed',
+  isSettleableRunStatus: isSettleable,
   getById: mockGetById,
   listByCodebase: mockListByCodebase,
   listByCodebaseWithAge: mockListByCodebaseWithAge,
@@ -263,10 +287,33 @@ mock.module('../../db/isolation-environments', () => ({
   createIsolationStore: () => ({}),
 }));
 
+export const mockGetWaitingHandoffOfEnv =
+  mock<() => Promise<import('../../db/isolation-env-users').WaitingHandoff | null>>();
+// getEnvUse in one read; tests drive its runs through mockGetLiveRunOwningEnv, called as
+// the separate reads were: the released owner is asked for only behind a failed owner.
+mock.module('../../db/isolation-env-users', () => ({
+  getEnvUse: async (
+    envId: string,
+    release?: import('../../db/isolation-env-users').FailedRunRelease
+  ) => {
+    const owner = await mockGetLiveRunOwningEnv(envId);
+    const releasedOwner =
+      release && owner && isSettleable(owner.status)
+        ? await mockGetLiveRunOwningEnv(envId, release)
+        : null;
+    return { owner, releasedOwner, handoff: await mockGetWaitingHandoffOfEnv() };
+  },
+  liveRunOwnerSql: mock(),
+  runOwnsEnvSql: mock(),
+  SETTLEABLE_WORKFLOW_STATUSES,
+}));
+
 export const mockGetWorkflowRun = mock<typeof WorkflowDb.getWorkflowRun>(async () => null);
 export const mockGetRunIdsByIsolationEnvId = mock<typeof WorkflowDb.getRunIdsByIsolationEnvId>();
 export const mockGetRunByIsolationEnvId = mock<typeof WorkflowDb.getRunByIsolationEnvId>();
 mock.module('../../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getWorkflowRun: mockGetWorkflowRun,
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
@@ -303,6 +350,13 @@ mock.module('../../config/config-loader', () => ({
   loadRepoConfig: mockLoadRepoConfig,
 }));
 
+// The fixtures' checkout paths are fake, so the merged sweep's presence check is mocked;
+// it defaults to present.
+export const mockCheckoutExists = mock<typeof CheckoutPresence.checkoutExists>();
+mock.module('./checkout-presence', () => ({
+  checkoutExists: mockCheckoutExists,
+}));
+
 // Default for the merge judgment: the branch is not patch-equivalent, and the
 // worktree's HEAD (checked once a git signal proves the branch merged) sits at the
 // branch tip, so it is covered by whatever proved the merge.
@@ -318,6 +372,7 @@ export function resetCleanupMocks(): void {
   mockHasUncommittedChanges.mockReset().mockResolvedValue(false);
   mockWorktreeExists.mockReset().mockResolvedValue(false);
   mockGetDefaultBranch.mockReset().mockResolvedValue(toBranchName('main'));
+  mockGetDefaultRemote.mockReset().mockResolvedValue('origin');
   mockIsBranchMerged.mockReset().mockResolvedValue(false);
   mockIsPatchEquivalent.mockReset().mockImplementation(branchUnmergedHeadAtTip);
   mockLocalBranchExists.mockReset().mockResolvedValue(true);
@@ -332,12 +387,15 @@ export function resetCleanupMocks(): void {
     directoryClean: true,
     warnings: [],
   });
+  mockExecFileAsync.mockReset().mockResolvedValue({ stdout: 'a'.repeat(40), stderr: '' });
+  mockGetPrsForCommit.mockReset().mockResolvedValue({ state: 'NONE' });
   mockGetPrState.mockReset().mockResolvedValue(NO_PR);
   mockContainerDestroy.mockReset().mockResolvedValue(undefined);
   mockContainerOptions.mockReset();
   mockListAllActiveWithCodebase.mockReset().mockResolvedValue([]);
   mockMarkWorktreeDestroyed.mockReset().mockResolvedValue(undefined);
   mockGetLiveRunOwningEnv.mockReset().mockResolvedValue(null);
+  mockGetWaitingHandoffOfEnv.mockReset().mockResolvedValue(null);
   mockGetById.mockReset().mockResolvedValue(null);
   mockListByCodebase.mockReset().mockResolvedValue([]);
   mockListByCodebaseWithAge.mockReset().mockResolvedValue([]);
@@ -354,6 +412,17 @@ export function resetCleanupMocks(): void {
   mockDeleteOldSessions.mockReset().mockResolvedValue(0);
   mockGetCodebase.mockReset().mockResolvedValue(makeCodebase());
   mockLoadRepoConfig.mockReset().mockResolvedValue({});
+  mockCheckoutExists.mockReset().mockResolvedValue(true);
+}
+
+/** Runs the merged sweep on a present checkout and returns what it swept. */
+export async function sweepMerged(
+  ...args: Parameters<typeof import('./merged-sweep').cleanupMergedWorktrees>
+): Promise<CleanupOperationResult> {
+  const { cleanupMergedWorktrees } = await import('./merged-sweep');
+  const outcome = await cleanupMergedWorktrees(...args);
+  if (outcome.kind !== 'swept') throw new Error(`Expected a swept outcome, got ${outcome.kind}`);
+  return outcome.result;
 }
 
 /** Lets removal read each environment back by id, as the database would. */

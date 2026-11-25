@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import { heldRunOf } from '@archon/workflows/attention-queue';
 import { afterAll, expect, mock, spyOn, test } from 'bun:test';
 import type { WorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
@@ -207,15 +208,16 @@ test.each(
           getWorkflowRun: workflows.getWorkflowRun,
           getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
           getCodebase: async () => null,
+          getItem: async () => null,
         },
         branchOf: async () => null,
       })
     );
-    expect(result.values.map(item => item.runId)).toContain(valid.id);
-    expect(result.values.find(item => item.runId === missing.id)?.kind).toBe('unreadable');
+    expect(result.values.map(item => heldRunOf(item)?.id)).toContain(valid.id);
+    expect(result.values.find(item => heldRunOf(item)?.id === missing.id)?.kind).toBe('unreadable');
     const parents = nested ? [parent, intermediate] : [parent];
     for (const blockedParent of parents) {
-      expect(result.values.map(item => item.runId)).not.toContain(blockedParent.id);
+      expect(result.values.map(item => heldRunOf(item)?.id)).not.toContain(blockedParent.id);
     }
     const affectedParents = status === 'paused' ? [] : parents;
     const expectedReports = [badPaused, ...affectedParents].map(run => ({
@@ -268,6 +270,7 @@ test('batch attention preserves unexpected descendant read failures', async () =
           getWorkflowRun: workflows.getWorkflowRun,
           getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
           getCodebase: async () => null,
+          getItem: async () => null,
         },
         branchOf: async () => null,
       })

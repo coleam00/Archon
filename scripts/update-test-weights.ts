@@ -1,7 +1,10 @@
 import { join } from 'node:path';
 
 /**
- * Rewrites `scripts/test-weights.json` from the Windows test jobs of one CI run:
+ * Rewrites `scripts/test-weights.json` from the Windows test jobs (`test-windows`) of one CI
+ * run. Only a push to `main`, a scheduled run on `dev` that ran them, a dispatch with
+ * `windows-full-suite` set, or a pull request whose change runs every job runs them, so use one
+ * of those runs:
  *
  *   bun scripts/update-test-weights.ts <run-id>
  *
@@ -32,7 +35,7 @@ if (runId === undefined || !/^\d+$/.test(runId)) {
 const { jobs } = JSON.parse(gh(`repos/${REPO}/actions/runs/${runId}/jobs?per_page=100`)) as {
   jobs: { id: number; name: string; conclusion: string | null }[];
 };
-const windowsTestJobs = jobs.filter(job => /^test \(windows-latest\b/.test(job.name));
+const windowsTestJobs = jobs.filter(job => job.name.startsWith('test-windows ('));
 if (windowsTestJobs.length === 0) throw new Error(`Run ${runId} has no Windows test jobs`);
 
 const weights: Record<string, Record<string, number>> = {};

@@ -1,6 +1,7 @@
 import { splitAttentionRead } from '../schemas/attention-degraded';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import {
+  currentExecutionOwner,
   executionClaim,
   WorkflowNotResumableError,
   continuablePauseCursor,
@@ -19,7 +20,7 @@ import {
   type WorkflowRun,
 } from '../schemas/workflow-run';
 import { PAUSE_CAUSE_METADATA_KEY } from '../schemas/pause-cause';
-import { listAttentionQueue } from '../attention-queue';
+import { heldRunOf, listAttentionQueue } from '../attention-queue';
 import type { WorkflowStoreHarness } from '../store-conformance';
 import {
   approval,
@@ -118,6 +119,7 @@ export function describePausesAndWaitsConformance(getHarness: () => WorkflowStor
           expect(result.reason).toBeInstanceOf(WorkflowRunPauseConflictError);
       expect((await store.getWorkflowRun(run.id))?.metadata).toEqual({
         execution_claim: executionClaim(resumed.metadata),
+        execution_owner: currentExecutionOwner(),
         keep: true,
         extra: true,
         approval,
@@ -200,7 +202,7 @@ export function describePausesAndWaitsConformance(getHarness: () => WorkflowStor
       expect(
         splitAttentionRead(
           await listAttentionQueue({ store, branchOf: async () => null })
-        ).values.map(item => item.runId)
+        ).values.map(item => heldRunOf(item)?.id)
       ).toContain(run.id);
       const labeled = await store.labelAttentionWait(run.id, {
         pauseId: 'ask-1',

@@ -16,6 +16,8 @@ import {
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
+import { ITEM_ASKS_DESCRIPTION, itemAsksJsonSchema } from '../schemas/item-ask';
+import { readCompletedAsks } from '../completed-asks';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -24,7 +26,6 @@ import {
   type MockWorkflowStore,
   createMockStore,
   runUsageWrites,
-  authoredOutcomeWrites,
   mockClaudeCapabilities,
   mockSendQueryDag,
   mockGetAgentProviderDag,
@@ -39,10 +40,11 @@ import {
   makeWorkflowRun,
   readTranscript,
 } from './test-utils';
-import { executeDagWorkflow, type ExecuteDagWorkflowOptions } from '../dag-executor';
-import type { DagNode, AgentNode, ExecNode, WorkflowRun } from '../schemas';
+import { executeDagWorkflow } from '../dag-executor';
+import type { DagNode, AgentNode, NodeOutput, WorkflowRun } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
-import { captureWorkflowSource, capturedSourceRoots } from '../workflow-source';
+import type { RunEndedFacts, WorkflowDeps } from '../deps';
+import type { LinkedRunEndedStart, SourceReceiptAcceptance } from '../schemas/resource-start';
 
 /**
  * #2469 — a run's spend has to survive its outcome. Usage used to be written only in
@@ -856,12 +858,9 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     ).toBe(true);
   });
 
-  it.each([
-    ['records usage and an earlier authored outcome when a store write escapes', false],
-    ['preserves the escaping error when the outcome backstop also fails', true],
-  ])('%s', async (_label, outcomeWriteFails) => {
-    // A halt's rejected cancel write interrupts the layer before its usage and authored
-    // outcome reach the run accumulator. Both must survive without a terminal transition.
+  it('records usage when a store write escapes', async () => {
+    // A halt's rejected cancel write interrupts the layer before its usage reaches the
+    // run accumulator. It must survive without a terminal transition.
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'spent before the halt write failed' };
       yield {
@@ -896,17 +895,12 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     const order: string[] = [];
     const realUpdateRun = store.updateWorkflowRun;
     store.updateWorkflowRun = mock<IWorkflowStore['updateWorkflowRun']>((id, updates) => {
-      if (updates.outcome !== undefined) {
-        order.push('outcome-write');
-        if (outcomeWriteFails) return Promise.reject(new Error('outcome database unavailable'));
-      }
       if (updates.metadata && 'total_cost_usd' in updates.metadata) order.push('usage-write');
       return realUpdateRun(id, updates);
     });
 
-    // The halt sibling starts concurrently but waits for the selected result to finish
-    // before its cancel write rejects, so the only remaining outcome write is the unwind
-    // backstop.
+    // The halt sibling starts concurrently but waits for the spending node to finish
+    // before its cancel write rejects, so the usage write is left to the unwind backstop.
     const platform = createMockPlatform();
     platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
       if (message.includes('Workflow cancelled')) await nodeFinishedSignal;
@@ -925,8 +919,6 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
           cwd: testDir,
           workflow: {
             name: 'usage-on-throw',
-            returns: 'spend',
-            outcome_field: 'green',
             nodes: [
               {
                 id: 'spend',
@@ -952,42 +944,36 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     expect(runUsageWrites(store)).toEqual([
       { total_cost_usd: 0.01, total_tokens_in: 20, total_tokens_out: 2 },
     ]);
-    expect(authoredOutcomeWrites(store)).toEqual(['succeeded']);
-    // Both durable backstops run only after the write that killed layer aggregation.
+    // The durable backstop runs only after the write that killed layer aggregation.
     expect(order[0]).toBe('cancel-write-rejected');
     expect(order.indexOf('cancel-write-rejected')).toBeLessThan(order.indexOf('usage-write'));
-    expect(order.indexOf('cancel-write-rejected')).toBeLessThan(order.indexOf('outcome-write'));
-    expect(
-      (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
-        call => call[1] === 'dag.authored_outcome_persist_failed_during_unwind'
-      )
-    ).toBe(outcomeWriteFails);
   });
 });
 
-describe('executeDagWorkflow -- authored run outcome (#2618)', () => {
+describe('executeDagWorkflow -- the outcome is written when the run completes (#5660)', () => {
   let testDir: string;
 
-  const resultNode = (alwaysRun = false): DagNode => ({
+  const booleanSchema = {
+    type: 'object',
+    properties: { green: { type: 'boolean' } },
+    required: ['green'],
+  };
+
+  const resultNode = (
+    alwaysRun = false,
+    output_format: Record<string, unknown> = booleanSchema
+  ): DagNode => ({
     id: 'result',
     kind: 'agent',
     source: { kind: 'inline', prompt: 'author the result' },
     ...(alwaysRun ? { always_run: true } : {}),
-    output_format: {
-      type: 'object',
-      properties: { green: { type: 'boolean' } },
-      required: ['green'],
-    },
+    output_format,
   });
 
-  const mockStructuredVerdict = (green: boolean): void => {
+  const mockStructuredResult = (value: Record<string, unknown>): void => {
     mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: JSON.stringify({ green }) };
-      yield {
-        type: 'result',
-        sessionId: 'outcome-session',
-        structuredOutput: { green },
-      };
+      yield { type: 'agent_message_chunk', text: JSON.stringify(value) };
+      yield { type: 'result', sessionId: 'outcome-session', structuredOutput: value };
     });
   };
 
@@ -996,33 +982,39 @@ describe('executeDagWorkflow -- authored run outcome (#2618)', () => {
     nodes: DagNode[],
     options: {
       workflowRun?: WorkflowRun;
-      declared?: boolean;
+      outcome?: string | false;
       priorCompletedNodes?: Map<string, PersistedNodeOutput>;
-      workflowSourceRoots?: ExecuteDagWorkflowOptions['workflowSourceRoots'];
+      runEndedStarts?: WorkflowDeps['runEndedStarts'];
+      platform?: ReturnType<typeof createMockPlatform>;
     } = {}
   ): Promise<void> => {
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(store),
+        deps: { ...createMockDeps(store), runEndedStarts: options.runEndedStarts },
+        ...(options.platform ? { platform: options.platform } : {}),
         conversationId: 'conv-outcome',
         cwd: testDir,
         workflow: {
-          name: 'authored-outcome',
+          name: 'completed-outcome',
           nodes,
-          ...(options.declared === false ? {} : { returns: 'result', outcome_field: 'green' }),
+          ...(options.outcome === false
+            ? {}
+            : { returns: 'result', result: { outcome: options.outcome ?? 'green' } }),
         },
-        workflowRun: options.workflowRun ?? makeWorkflowRun('authored-outcome-run'),
+        workflowRun: options.workflowRun ?? makeWorkflowRun('completed-outcome-run'),
         priorCompletedNodes: options.priorCompletedNodes,
-        workflowSourceRoots: options.workflowSourceRoots,
       })
     );
   };
 
+  /** The `result` argument of the one completion write. */
+  const completedWith = (store: MockWorkflowStore): unknown => {
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    return store.completeWorkflowRun.mock.calls[0]?.[3];
+  };
+
   beforeEach(async () => {
-    testDir = join(
-      tmpdir(),
-      `dag-authored-outcome-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    );
+    testDir = join(tmpdir(), `dag-outcome-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
     mockSendQueryDag.mockClear();
     mockGetAgentProviderDag.mockClear();
@@ -1036,18 +1028,124 @@ describe('executeDagWorkflow -- authored run outcome (#2618)', () => {
     await removeTempTree(testDir);
   });
 
-  it('persists false as failed while lifecycle completion remains successful', async () => {
-    mockStructuredVerdict(false);
+  it('completes a boolean false as the failed outcome, with lifecycle completion', async () => {
+    mockStructuredResult({ green: false });
     const store = createMockStore();
 
     await run(store, [resultNode()]);
 
-    expect(authoredOutcomeWrites(store)).toEqual(['failed']);
-    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(completedWith(store)).toEqual({ outcome: { kind: 'boolean', value: 'failed' } });
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
-  it('persists the verdict before a later layer finishes', async () => {
+  it('completes an enum outcome with its value', async () => {
+    mockStructuredResult({ stage: 'built' });
+    const store = createMockStore();
+
+    await run(
+      store,
+      [
+        resultNode(false, {
+          type: 'object',
+          properties: { stage: { type: 'string', enum: ['built', 'stop'] } },
+          required: ['stage'],
+        }),
+      ],
+      { outcome: 'stage' }
+    );
+
+    expect(completedWith(store)).toEqual({ outcome: { kind: 'enum', value: 'built' } });
+  });
+
+  it('hands the starts its end causes, read from its result and inputs, to the completing write', async () => {
+    mockStructuredResult({ green: true, plan: 'ship it' });
+    const store = createMockStore();
+    const receipt = { receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance;
+    const linked = { endedRunId: 'ended-run' } as unknown as LinkedRunEndedStart;
+    const seen: RunEndedFacts[] = [];
+
+    await run(store, [resultNode()], {
+      workflowRun: makeWorkflowRun('ended-run', { metadata: { inputs: { issue: 'i-1' } } }),
+      runEndedStarts: async ended => {
+        seen.push(ended);
+        return { receipts: [receipt], linked: [linked] };
+      },
+    });
+
+    expect(seen).toMatchObject([
+      {
+        run: { id: 'ended-run' },
+        outcome: { kind: 'boolean', value: 'succeeded' },
+        outcomeForm: { kind: 'boolean' },
+        result: { green: true, plan: 'ship it' },
+        inputs: { issue: 'i-1' },
+      },
+    ]);
+    expect(completedWith(store)).toEqual({
+      outcome: { kind: 'boolean', value: 'succeeded' },
+      startReceipts: [receipt],
+      linkedStarts: [linked],
+    });
+  });
+
+  // A replayed completion that kept only text: the binding reads what the terminal record
+  // holds, the text as a string, and nothing once the text passed the persisted cap.
+  it.each([
+    ['text within the cap', JSON.stringify({ green: true, plan: 'x' }), false],
+    ['text past the cap', JSON.stringify({ green: true, pad: 'x'.repeat(40_000) }), true],
+  ])('hands a binding the result its terminal record holds for %s', async (_, output, cut) => {
+    const store = createMockStore();
+    const seen: RunEndedFacts[] = [];
+
+    await run(store, [resultNode()], {
+      priorCompletedNodes: new Map([['result', { output }]]),
+      runEndedStarts: async ended => {
+        seen.push(ended);
+        return { receipts: [], linked: [] };
+      },
+    });
+
+    const replayed = persistedEvents(store).find(
+      e => e.event_type === 'node_skipped_prior_success'
+    );
+    expect(replayed?.data?.node_output_truncated === true).toBe(cut);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.result).toEqual(cut ? undefined : output);
+  });
+
+  it('fails the run naming the reason when its run-ended triggers cannot be read', async () => {
+    mockStructuredResult({ green: true });
+    const store = createMockStore();
+
+    await run(store, [resultNode()], {
+      runEndedStarts: async () => {
+        throw new Error('Trigger file /home/triggers/b.json is not readable JSON');
+      },
+    });
+
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      'Trigger file /home/triggers/b.json is not readable JSON'
+    );
+  });
+
+  it('fails the run naming the field when the completed value is not of the declared form', async () => {
+    const store = createMockStore();
+
+    // A rehydrated output is not re-validated against its schema, so it can carry a value
+    // the declared boolean does not admit.
+    await run(store, [resultNode()], {
+      priorCompletedNodes: new Map([['result', { output: JSON.stringify({ green: 'yes' }) }]]),
+    });
+
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      "returns.outcome 'green' on node 'result' is not a boolean"
+    );
+  });
+
+  it('writes no outcome while later work runs after the returns node completed', async () => {
     let releaseLater: (() => void) | undefined;
     const laterReleased = new Promise<void>(resolve => {
       releaseLater = resolve;
@@ -1059,11 +1157,7 @@ describe('executeDagWorkflow -- authored run outcome (#2618)', () => {
     mockSendQueryDag.mockImplementation(async function* (prompt) {
       if (prompt.includes('author the result')) {
         yield { type: 'agent_message_chunk', text: JSON.stringify({ green: true }) };
-        yield {
-          type: 'result',
-          sessionId: 'outcome-session',
-          structuredOutput: { green: true },
-        };
+        yield { type: 'result', sessionId: 'outcome-session', structuredOutput: { green: true } };
         return;
       }
       announceLaterStarted?.();
@@ -1084,185 +1178,65 @@ describe('executeDagWorkflow -- authored run outcome (#2618)', () => {
     ]);
     await laterStarted;
 
-    expect(authoredOutcomeWrites(store)).toEqual(['succeeded']);
+    // A process that died here would leave only these writes behind: none carries an outcome.
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    const writtenKeys = store.updateWorkflowRun.mock.calls.flatMap(([, updates]) =>
+      Object.keys(updates)
+    );
+    expect(writtenKeys).not.toContain('outcome');
+    expect(writtenKeys).not.toContain('completed_outcome');
+
     releaseLater?.();
     await runPromise;
+    expect(completedWith(store)).toEqual({ outcome: { kind: 'boolean', value: 'succeeded' } });
   });
 
-  it('retains succeeded when a later node fails', async () => {
-    mockStructuredVerdict(true);
-    const store = createMockStore();
-
-    await run(store, [
-      resultNode(),
-      {
-        id: 'later-failure',
-        kind: 'exec',
-        runtime: 'sh',
-        script: 'exit 1',
-        depends_on: ['result'],
-      },
-    ]);
-
-    expect(authoredOutcomeWrites(store)).toEqual(['succeeded']);
-    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('persists the selected verdict when a sibling fails in the same layer', async () => {
-    mockStructuredVerdict(true);
-    const store = createMockStore();
-
-    await run(store, [
-      resultNode(),
-      { id: 'sibling-failure', kind: 'exec', runtime: 'sh', script: 'exit 1' },
-    ]);
-
-    expect(authoredOutcomeWrites(store)).toEqual(['succeeded']);
-    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
-  });
-
-  it('retains succeeded when a later approval pauses the run', async () => {
-    mockStructuredVerdict(true);
-    const store = createMockStore();
-    let status: WorkflowRun['status'] = 'running';
-    store.pauseWorkflowRun.mockImplementation(async () => {
-      status = 'paused';
-    });
-    store.getWorkflowRunStatus.mockImplementation(async () => status);
-
-    await run(store, [
-      resultNode(),
-      {
-        id: 'review',
-        kind: 'gate',
-        message: 'Ship?',
-        decisions: [{ id: 'approve' }, { id: 'reject' }],
-        captureResponse: false,
-        decisionsAuthored: false,
-        depends_on: ['result'],
-      },
-    ]);
-
-    expect(authoredOutcomeWrites(store)).toEqual(['succeeded']);
-    expect(await store.getWorkflowRunStatus('run-1')).toBe('paused');
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('retains succeeded when a later node cancels the run', async () => {
-    mockStructuredVerdict(true);
-    const store = createMockStore();
-    let status: WorkflowRun['status'] = 'running';
-    store.cancelWorkflowRun.mockImplementation(async () => {
-      status = 'cancelled';
-      return { cancelled: true };
-    });
-    store.getWorkflowRunStatus.mockImplementation(async () => status);
-
-    await run(store, [
-      resultNode(),
-      { id: 'stop', kind: 'halt', reason: 'not shipping', depends_on: ['result'] },
-    ]);
-
-    expect(authoredOutcomeWrites(store)).toEqual(['succeeded']);
-    expect(await store.getWorkflowRunStatus('run-1')).toBe('cancelled');
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('resolves a selected result rehydrated from serialized completion output', async () => {
-    const store = createMockStore();
-
-    await run(store, [resultNode()], {
-      priorCompletedNodes: new Map([['result', { output: JSON.stringify({ green: true }) }]]),
-    });
-
-    expect(authoredOutcomeWrites(store)).toEqual(['succeeded']);
-    expect(mockSendQueryDag).not.toHaveBeenCalled();
-  });
-
-  it('does not clear or rewrite an already-persisted outcome during resume', async () => {
-    const store = createMockStore();
-
-    await run(store, [resultNode()], {
-      workflowRun: makeWorkflowRun('resume-existing-outcome', { outcome: 'succeeded' }),
-      priorCompletedNodes: new Map([['result', { output: JSON.stringify({ green: true }) }]]),
-    });
-
-    expect(authoredOutcomeWrites(store)).toEqual([]);
-  });
-
-  it('allows a real selected-node re-execution to replace the prior verdict', async () => {
-    mockStructuredVerdict(false);
+  it('completes with the value of a returns node re-executed on resume', async () => {
+    mockStructuredResult({ green: false });
     const store = createMockStore();
 
     await run(store, [resultNode(true)], {
-      workflowRun: makeWorkflowRun('resume-reworked-outcome', { outcome: 'succeeded' }),
       priorCompletedNodes: new Map([['result', { output: JSON.stringify({ green: true }) }]]),
     });
 
-    expect(authoredOutcomeWrites(store)).toEqual(['failed']);
+    expect(completedWith(store)).toEqual({ outcome: { kind: 'boolean', value: 'failed' } });
   });
 
-  it('keeps an earlier outcome when source integrity stops the selected node', async () => {
-    const scriptsDir = join(testDir, '.archon', 'scripts');
-    const captureRoot = join(testDir, 'capture');
-    await mkdir(scriptsDir, { recursive: true });
-    await writeFile(join(scriptsDir, 'result.ts'), 'console.log(\'{"green":false}\')');
-    const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
-    await writeFile(
-      join(captureRoot, 'project', '.archon', 'scripts', 'result.ts'),
-      'console.log(\'{"green":true}\')'
+  /** The messages the run sent that say it completed with no outcome. */
+  const noOutcomeMessages = (platform: ReturnType<typeof createMockPlatform>): string[] =>
+    platform.sendMessage.mock.calls
+      .map(call => String(call[1]))
+      .filter(text => text.includes('completed with no outcome'));
+
+  it('completes an undeclared workflow with no outcome', async () => {
+    mockStructuredResult({ green: true });
+    const store = createMockStore();
+    const platform = createMockPlatform();
+
+    await run(store, [resultNode()], { outcome: false, platform });
+
+    expect(completedWith(store)).toBeUndefined();
+    expect(noOutcomeMessages(platform)).toEqual([]);
+  });
+
+  it('says the run completed with no outcome when its returns node was skipped', async () => {
+    mockStructuredResult({ green: true });
+    const store = createMockStore();
+    const platform = createMockPlatform();
+
+    await run(
+      store,
+      [
+        { id: 'gate', kind: 'agent', source: { kind: 'inline', prompt: 'decide' } },
+        { ...resultNode(), depends_on: ['gate'], when: "$gate.output == 'never'" },
+      ],
+      { platform }
     );
-    const store = createMockStore();
-    const selectedScript: ExecNode = {
-      id: 'result',
-      kind: 'exec',
-      runtime: 'bun',
-      script: 'result',
-      output_format: {
-        type: 'object',
-        properties: { green: { type: 'boolean' } },
-        required: ['green'],
-      },
-    };
-    const workflowRun = makeWorkflowRun('integrity-existing-outcome', {
-      outcome: 'succeeded',
-    });
 
-    await run(store, [selectedScript], {
-      workflowRun,
-      workflowSourceRoots: capturedSourceRoots(capture.anchor),
-    });
-
-    expect(authoredOutcomeWrites(store)).toEqual([]);
-    expect(workflowRun.outcome).toBe('succeeded');
-    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
-  });
-
-  it('leaves undeclared workflows and unreached selected outputs unchanged', async () => {
-    mockStructuredVerdict(true);
-    const undeclaredStore = createMockStore();
-    await run(undeclaredStore, [resultNode()], { declared: false });
-    expect(authoredOutcomeWrites(undeclaredStore)).toEqual([]);
-
-    mockSendQueryDag.mockImplementation(async function* () {
-      throw new Error('selected node failed');
-    });
-    const failedStore = createMockStore();
-    await run(failedStore, [resultNode()]);
-    expect(authoredOutcomeWrites(failedStore)).toEqual([]);
-  });
-
-  it('surfaces a declared-outcome persistence failure', async () => {
-    mockStructuredVerdict(true);
-    const store = createMockStore();
-    store.updateWorkflowRun.mockImplementation(async (_id, updates) => {
-      if (updates.outcome !== undefined) throw new Error('outcome database unavailable');
-    });
-
-    await expect(run(store, [resultNode()])).rejects.toThrow('outcome database unavailable');
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(completedWith(store)).toBeUndefined();
+    expect(noOutcomeMessages(platform)).toEqual([
+      "\u2139\ufe0f Workflow 'completed-outcome' completed with no outcome: its returns node 'result' was skipped, so nothing bound to its outcome starts.",
+    ]);
   });
 });
 
@@ -1862,5 +1836,372 @@ describe('executeDagWorkflow -- run budget (#2814)', () => {
       )
     ).toHaveLength(0);
     expect(store.getDagResumeSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeDagWorkflow -- the asks a run leaves are written when it completes', () => {
+  let testDir: string;
+
+  const asksSchema = {
+    type: 'object',
+    properties: { summary: { type: 'string' } },
+    required: ['summary'],
+  };
+  const resultNode: DagNode = {
+    id: 'decide',
+    kind: 'agent',
+    source: { kind: 'inline', prompt: 'decide' },
+    output_format: asksSchema,
+  };
+  const anAsk = {
+    question: 'Keep the flag?',
+    context: 'Two readings of the issue.',
+    options: [
+      { id: 'keep', does: 'Keep it.', cost: 'One more flag.' },
+      { id: 'drop', does: 'Drop it.', cost: 'Old configs break.' },
+    ],
+    recommendation: { option: 'keep', why: 'Nothing needs it gone.' },
+    artifacts: [],
+  };
+
+  const mockStructuredResult = (value: Record<string, unknown>): void => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: JSON.stringify(value) };
+      yield { type: 'result', sessionId: 'asks-session', structuredOutput: value };
+    });
+  };
+
+  const run = async (
+    store: MockWorkflowStore,
+    options: {
+      asks?: boolean;
+      workflowRun?: WorkflowRun;
+      asksCheckout?: WorkflowDeps['asksCheckout'];
+    } = {}
+  ): Promise<void> => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: { ...createMockDeps(store), asksCheckout: options.asksCheckout },
+        conversationId: 'conv-asks',
+        cwd: testDir,
+        workflow: {
+          name: 'leaves-asks',
+          nodes: [resultNode],
+          returns: 'decide',
+          ...(options.asks === false ? {} : { result: { asks: 'asks' } }),
+        },
+        workflowRun: options.workflowRun ?? makeWorkflowRun('asks-run'),
+      })
+    );
+  };
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-asks-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+    await removeTempTree(testDir);
+  });
+
+  /** The output schema the one provider call was sent. */
+  const sentSchema = (): Record<string, unknown> | undefined =>
+    (mockSendQueryDag.mock.calls[0]?.[3] as { outputFormat?: { schema: Record<string, unknown> } })
+      ?.outputFormat?.schema;
+
+  it('sends the engine-owned ask schema, with its descriptions, only when the workflow declares asks', async () => {
+    mockStructuredResult({ summary: 'done', asks: [] });
+    await run(createMockStore());
+    const declared = sentSchema();
+    expect((declared?.properties as Record<string, unknown>).asks).toEqual(itemAsksJsonSchema());
+    expect(declared).toMatchObject({
+      required: ['summary', 'asks'],
+      properties: {
+        asks: {
+          description: ITEM_ASKS_DESCRIPTION,
+          items: { properties: { options: { items: { required: ['id', 'does', 'cost'] } } } },
+        },
+      },
+    });
+
+    // Every field the model writes carries its own guidance: walk each property of the
+    // sent schema, through objects and array items, and require a description on it.
+    const undescribed: string[] = [];
+    const walk = (schema: unknown, path: string): void => {
+      if (typeof schema !== 'object' || schema === null) return;
+      const { properties, items } = schema as { properties?: unknown; items?: unknown };
+      if (typeof properties === 'object' && properties !== null)
+        for (const [key, property] of Object.entries(properties)) {
+          const description = (property as { description?: unknown }).description;
+          if (typeof description !== 'string' || description.trim() === '')
+            undescribed.push(`${path}.${key}`);
+          walk(property, `${path}.${key}`);
+        }
+      walk(items, `${path}[]`);
+    };
+    walk({ properties: { asks: (declared?.properties as Record<string, unknown>).asks } }, '');
+    expect(undescribed).toEqual([]);
+
+    mockSendQueryDag.mockClear();
+    await run(createMockStore(), { asks: false });
+    const undeclared = sentSchema();
+    expect((undeclared?.properties as Record<string, unknown>).asks).toBeUndefined();
+    expect(JSON.stringify(undeclared)).not.toContain(ITEM_ASKS_DESCRIPTION.slice(0, 40));
+  });
+
+  it('completes with the asks in the completing write, and with an empty set when none are left', async () => {
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const store = createMockStore();
+    await run(store);
+    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ asks: [anAsk] });
+
+    mockStructuredResult({ summary: 'done', asks: [] });
+    const empty = createMockStore();
+    await run(empty);
+    expect(empty.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ asks: [] });
+  });
+
+  it('completes with the waits the run leaves, and fails naming the field when two name one event', async () => {
+    const waits = [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 30 }];
+    mockStructuredResult({ summary: 'done', waits });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-waits',
+        cwd: testDir,
+        workflow: {
+          name: 'waits',
+          nodes: [resultNode],
+          returns: 'decide',
+          result: { waits: 'waits' },
+        },
+        workflowRun: makeWorkflowRun('waits-run'),
+      })
+    );
+    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ waits });
+
+    // The schema cannot hold "each event once"; the engine's check does.
+    mockStructuredResult({ summary: 'done', waits: [...waits, ...waits] });
+    const twice = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(twice),
+        conversationId: 'conv-waits',
+        cwd: testDir,
+        workflow: {
+          name: 'waits',
+          nodes: [resultNode],
+          returns: 'decide',
+          result: { waits: 'waits' },
+        },
+        workflowRun: makeWorkflowRun('waits-run'),
+      })
+    );
+    expect(twice.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(twice.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      "returns.waits 'waits' on node 'decide': [1].event 'checks' is named more than once"
+    );
+  });
+
+  it('fails the run naming the field when an ask does not hold together, and opens none', async () => {
+    // Valid JSON Schema, but the recommendation names no option: only the engine's check sees it.
+    mockStructuredResult({
+      summary: 'done',
+      asks: [{ ...anAsk, recommendation: { option: 'neither', why: 'x' } }],
+    });
+    const store = createMockStore();
+    await run(store);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      "returns.asks 'asks' on node 'decide': [0].recommendation.option names 'neither'"
+    );
+  });
+
+  it('fails the run naming the field when the asks value has the wrong type, and opens none', async () => {
+    // The node's own output check refuses it. Its node_failed error is what `workflow get`
+    // prints as the run's reason (`terminalReason`); the run-level summary is the generic
+    // one every node failure has.
+    mockStructuredResult({ summary: 'done', asks: 'keep the flag' });
+    const store = createMockStore();
+    await run(store);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    const failed = store.createWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(event => event.event_type === 'node_failed' && event.step_name === 'decide');
+    expect(String(failed?.data?.error)).toContain('/asks');
+  });
+
+  it('leaves an earlier open set alone when the returns node was skipped', () => {
+    const workflow = { name: 'asks-wf', returns: 'decide', result: { asks: 'asks' } };
+    const skipped = new Map([['decide', { state: 'skipped', output: '' } as NodeOutput]]);
+    expect(readCompletedAsks(workflow, { parent_run_id: null }, skipped)).toEqual({ kind: 'none' });
+  });
+
+  it('records the checkout it leaves for the asks-settled bindings that take it', async () => {
+    const recorded = (store: MockWorkflowStore): unknown =>
+      (store.completeWorkflowRun.mock.calls[0]?.[2] as Record<string, unknown>).asks_checkout;
+    const handoff = { runId: 'asks-run', branch: 'archon/plan', commit: 'b'.repeat(40) };
+    const worktree = '/worktrees/plan';
+
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const taken = createMockStore();
+    await run(taken, { asksCheckout: async () => ({ handoff, worktree }) });
+    expect(recorded(taken)).toEqual({ handoff, worktree });
+
+    // No binding takes it, or the run leaves no asks to settle: nothing is read or recorded.
+    const untaken = createMockStore();
+    await run(untaken, { asksCheckout: async () => undefined });
+    expect(recorded(untaken)).toBeUndefined();
+    mockStructuredResult({ summary: 'done', asks: [] });
+    const reads: string[] = [];
+    const noAsks = createMockStore();
+    await run(noAsks, {
+      asksCheckout: async ended => {
+        reads.push(ended.id);
+        return { handoff, worktree };
+      },
+    });
+    expect(reads).toEqual([]);
+    expect(recorded(noAsks)).toBeUndefined();
+  });
+
+  it('fails the run naming the reason when its asks-settled triggers cannot be read', async () => {
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const store = createMockStore();
+    await run(store, {
+      asksCheckout: async () => {
+        throw new Error('Trigger file /home/triggers/build.json is not readable JSON');
+      },
+    });
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      'Trigger file /home/triggers/build.json is not readable JSON'
+    );
+  });
+
+  it('opens no asks from a workflow: child, whose asks stay data in its result', async () => {
+    mockStructuredResult({ summary: 'done', asks: [anAsk] });
+    const store = createMockStore();
+    await run(store, { workflowRun: makeWorkflowRun('asks-child', { parent_run_id: 'parent' }) });
+    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toBeUndefined();
+  });
+});
+
+describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#6108)', () => {
+  let testDir: string;
+
+  const anAsk = {
+    question: 'Replan or drop?',
+    context: 'The plan no longer fits.',
+    options: [
+      { id: 'replan', does: 'Plan it again.', cost: 'A round.' },
+      { id: 'drop', does: 'Drop it.', cost: 'The work is lost.' },
+    ],
+    recommendation: null,
+    artifacts: [],
+  };
+
+  const run = async (
+    store: MockWorkflowStore,
+    value: Record<string, unknown>,
+    options: {
+      asks?: boolean;
+      workflowRun?: WorkflowRun;
+      receipts?: readonly SourceReceiptAcceptance[];
+    } = {}
+  ): Promise<void> => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: JSON.stringify(value) };
+      yield { type: 'result', sessionId: 'stop-session', structuredOutput: value };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: {
+          ...createMockDeps(store),
+          runEndedStarts: async () => ({ receipts: options.receipts ?? [], linked: [] }),
+        },
+        conversationId: 'conv-stop',
+        cwd: testDir,
+        workflow: {
+          name: 'deliver',
+          nodes: [
+            {
+              id: 'result',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'decide' },
+              output_format: {
+                type: 'object',
+                properties: {
+                  stage: { type: 'string', enum: ['approve', 'replan', 'landed'] },
+                  why: { type: 'string' },
+                },
+                required: ['stage'],
+              },
+            },
+          ],
+          returns: 'result',
+          result: {
+            outcome: 'stage',
+            final: ['landed'],
+            summary: 'why',
+            ...(options.asks === true ? { asks: 'asks' } : {}),
+          },
+        },
+        workflowRun: options.workflowRun ?? makeWorkflowRun('stop-run', { item_id: 'item-1' }),
+      })
+    );
+  };
+
+  /** The metadata the one completion write merged. */
+  const completedMetadata = (store: MockWorkflowStore): Record<string, unknown> | undefined => {
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    return store.completeWorkflowRun.mock.calls[0]?.[2];
+  };
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-stop-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+    await removeTempTree(testDir);
+  });
+
+  it('records the stop with its declared summary when the outcome is not final and nothing follows', async () => {
+    const store = createMockStore();
+    await run(store, { stage: 'replan', why: '  The plan missed the schema change.  ' });
+
+    expect(completedMetadata(store)?.item_stopped).toEqual({
+      summary: 'The plan missed the schema change.',
+    });
+  });
+
+  it.each([
+    ['ended in a final outcome', { stage: 'landed', why: 'merged' }, {}],
+    ['left an ask', { stage: 'replan', why: 'x', asks: [anAsk] }, { asks: true }],
+    [
+      'started the next stage',
+      { stage: 'replan', why: 'x' },
+      { receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance] },
+    ],
+    ['is on no item', { stage: 'replan', why: 'x' }, { workflowRun: makeWorkflowRun('stop-run') }],
+  ] as const)('records no stop for a run that %s', async (_, value, options) => {
+    const store = createMockStore();
+    await run(store, value, options);
+
+    expect(completedMetadata(store)).not.toHaveProperty('item_stopped');
   });
 });

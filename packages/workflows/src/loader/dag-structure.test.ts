@@ -691,8 +691,31 @@ ${wait}
       options: [{ id: a, value: 1 }, { id: b }]`,
       "'value' is only valid on options of form 'select', not 'multi_select'",
     ],
+    [
+      "a declared option with the id 'other: true' reserves",
+      `      attention: Merge it?
+      form: select
+      options: [{ id: merge }, { id: other }]
+      other: true`,
+      "option id 'other' is reserved when 'other: true' is set",
+    ],
+    [
+      "'other: true' on a multi_select wait",
+      `      attention: Which?
+      form: multi_select
+      options: [{ id: a }, { id: b }]
+      other: true`,
+      "'other' is only valid for form 'select', not 'multi_select'",
+    ],
   ])('rejects %s at load', (_case, wait, message) => {
     expect(parseWait(wait).error?.error).toContain(message);
+  });
+
+  it("loads a select wait that declares an option named 'other' without 'other: true'", () => {
+    const result = parseWait(`      attention: Merge it?
+      form: select
+      options: [{ id: merge }, { id: other }]`);
+    expect(result.error).toBeNull();
   });
 });
 

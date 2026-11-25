@@ -79,7 +79,7 @@ export function LoopFields({
           onChange({ ...data, until_bash: raw.trim().length > 0 ? raw : undefined });
         }}
       />
-      <p className="text-[11.5px] text-text-secondary">
+      <p className="text-console-12 text-text-secondary">
         New loops start with a placeholder check that never completes. Replace it with a real check
         before running. Exit 0 completes the loop; leaving the placeholder reaches the iteration cap
         and fails the node.
@@ -93,7 +93,7 @@ export function LoopFields({
           onChange({ ...data, until_field: raw.trim().length > 0 ? raw : undefined });
         }}
       />
-      <p className="text-[11.5px] text-text-secondary">
+      <p className="text-console-12 text-text-secondary">
         Until field requires an output_format schema on this node. Author the schema in YAML; the
         builder does not edit output_format. The field must be declared in properties, listed in
         required, and have type boolean if a string type is declared.

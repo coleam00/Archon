@@ -25,9 +25,11 @@ const mockListDueWorkflowContinuations = mock(
   async (_now: Date, _limit: number) => [] as WorkflowRun[]
 );
 const mockDeferWorkflowContinuation = mock(async () => undefined);
+const mockUpdateWorkflowRun = mock(async () => undefined);
 const store = {
   listDueWorkflowContinuations: mockListDueWorkflowContinuations,
   deferWorkflowContinuation: mockDeferWorkflowContinuation,
+  updateWorkflowRun: mockUpdateWorkflowRun,
 };
 const { wakeDueWorkflowContinuations } = await import('@archon/core/workflows/continuation-resume');
 
@@ -61,8 +63,10 @@ function run(
     codebase_id: null,
     status,
     outcome: null,
+    completed_outcome: null,
     user_message: 'deliver',
     metadata,
+    active_phase_started_at: null,
     started_at: new Date('2026-08-24T10:00:00.000Z'),
     completed_at: status === 'failed' ? new Date('2026-08-24T10:01:00.000Z') : null,
     last_activity_at: null,
@@ -72,6 +76,7 @@ function run(
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
   };
 }
 

@@ -5,3 +5,4 @@ export * from './bindings';
 export * from './operations';
 export * from './cli-response';
 export { parseRemoteUrl } from './remote-url';
+export * from './cli-json-schemas';

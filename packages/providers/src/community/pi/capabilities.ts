@@ -27,7 +27,8 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   plugins: false, // Pi has no plugins; its extensions are user-owned configuration
   agents: false,
   toolRestrictions: true,
-  structuredOutput: 'best-effort', // terminating tool call, unforceable; text fallback + reask×3
+  structuredOutput: 'best-effort', // terminating tool call, unforceable; text fallback
+  structuredOutputCorrection: 'fresh-session',
   requiresAllPropertiesRequired: false, // best-effort providers never reject schemas at API level
   envInjection: true,
   costControl: false, // no maxBudgetUsd translation — the executor warns and drops it

@@ -1,5 +1,4 @@
 import {
-  mockLogger,
   capturedListener,
   mockPrompt,
   mockAbort,
@@ -231,8 +230,8 @@ describe('PiProvider lifecycle', () => {
     expect(mockDispose).toHaveBeenCalledTimes(1);
   });
 
-  // #3769: without maxConcurrent there is no slot to release, so the retry only needs a
-  // fresh session; the wedged one is disposed and the cached extension loader reused.
+  // #3769: the retry needs a fresh session; the wedged one is disposed and the cached
+  // extension loader reused.
   test('a retry after a watchdog abort on a wedged session gets a fresh session', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
@@ -242,6 +241,7 @@ describe('PiProvider lifecycle', () => {
       model: 'google/gemini-2.5-pro',
       abortSignal: watchdog.signal,
     });
+    expect((await gen.next()).value).toMatchObject({ type: 'session' });
     const abandoned = gen.next();
     abandoned.catch(() => undefined);
     while (mockPrompt.mock.calls.length < 1) await new Promise(resolve => setTimeout(resolve, 1));
@@ -260,118 +260,6 @@ describe('PiProvider lifecycle', () => {
     expect(outcome === 'stuck' ? undefined : outcome.failure).toBeUndefined();
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
     expect(mockDispose).toHaveBeenCalledTimes(2);
-    expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
-  });
-
-  // Semaphore tests run last — the module-level piSemaphore singleton persists
-  // across tests once initialized, so these must not affect tests that run before.
-  test('maxConcurrent initializes semaphore and logs pi.semaphore_initialized', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        assistantConfig: { maxConcurrent: 2 },
-      })
-    );
-
-    expect(mockLogger.info).toHaveBeenCalledWith({ maxConcurrent: 2 }, 'pi.semaphore_initialized');
-    // Semaphore slot released: dispose fires on successful completion
-    expect(mockDispose).toHaveBeenCalledTimes(1);
-  });
-
-  test('semaphore is not initialized when maxConcurrent is absent', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-      })
-    );
-
-    const initCalls = (mockLogger.info.mock.calls as unknown[][]).filter(
-      c => c[1] === 'pi.semaphore_initialized'
-    );
-    expect(initCalls).toHaveLength(0);
-  });
-
-  test('a caller that aborts while waiting for a maxConcurrent slot disposes its session', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-    // The process-wide semaphore was sized 2 by the first maxConcurrent test above.
-    const releases: (() => void)[] = [];
-    const holdSlot = (): Promise<void> =>
-      new Promise<void>(resolve => {
-        releases.push(resolve);
-      });
-    mockPrompt.mockImplementationOnce(holdSlot).mockImplementationOnce(holdSlot);
-    const options = { model: 'google/gemini-2.5-pro', assistantConfig: { maxConcurrent: 2 } };
-    const holders = [
-      consume(new PiProvider().sendQuery('one', '/tmp', undefined, options)),
-      consume(new PiProvider().sendQuery('two', '/tmp', undefined, options)),
-    ];
-    const acquiring = (): number =>
-      (mockLogger.debug.mock.calls as unknown[][]).filter(c => c[0] === 'pi.semaphore_acquiring')
-        .length;
-    const controller = new AbortController();
-    try {
-      while (releases.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
-      const waiter = consume(
-        new PiProvider().sendQuery('three', '/tmp', undefined, {
-          ...options,
-          abortSignal: controller.signal,
-        })
-      );
-      while (acquiring() < 3) await new Promise(resolve => setTimeout(resolve, 1));
-      controller.abort();
-      const result = await waiter;
-
-      expect(result.error).toBeDefined();
-      // Only the waiter's session is gone; both slot holders are still mid-prompt.
-      expect(mockDispose).toHaveBeenCalledTimes(1);
-      expect(mockPrompt).toHaveBeenCalledTimes(2);
-    } finally {
-      for (const release of releases) release();
-      await Promise.all(holders);
-    }
-  });
-
-  // #3769: the engine's idle watchdog aborts a silent node and abandons its pending
-  // next(). When the wedged session also ignores abort(), the attempt must still release
-  // its slot, or every retry waits on it and times out in turn.
-  test('a retry after watchdog aborts on wedged sessions gets a maxConcurrent slot', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-    // The process-wide semaphore was sized 2 by the first maxConcurrent test above.
-    const options = { model: 'google/gemini-2.5-pro', assistantConfig: { maxConcurrent: 2 } };
-    const wedged = (): Promise<void> => new Promise<void>(() => undefined);
-    mockPrompt.mockImplementationOnce(wedged).mockImplementationOnce(wedged);
-    for (const attempt of ['one', 'two']) {
-      const controller = new AbortController();
-      const gen = new PiProvider().sendQuery(attempt, '/tmp', undefined, {
-        ...options,
-        abortSignal: controller.signal,
-      });
-      const abandoned = gen.next();
-      abandoned.catch(() => undefined);
-      while (mockPrompt.mock.calls.length < (attempt === 'one' ? 1 : 2)) {
-        await new Promise(resolve => setTimeout(resolve, 1));
-      }
-      controller.abort();
-    }
-
-    const retry = consume(new PiProvider().sendQuery('retry', '/tmp', undefined, options));
-    const outcome = await Promise.race([
-      retry,
-      new Promise<'stuck'>(resolve => setTimeout(() => resolve('stuck'), 1000)),
-    ]);
-
-    expect(outcome).not.toBe('stuck');
-    expect(outcome === 'stuck' ? undefined : outcome.error).toBeUndefined();
-    expect(mockDispose).toHaveBeenCalledTimes(3);
-    // The retry reuses the cached extension loader; it never reloads it.
     expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
   });
 });

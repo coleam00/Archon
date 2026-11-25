@@ -2,6 +2,7 @@ import { scriptInvocation } from '../../../script-invocation';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
+  subprocessCredentialValues,
   type RawSubprocessRejection,
 } from '../../../subprocess';
 import { finishNodeExecution } from '../../../node-execution';
@@ -17,6 +18,7 @@ import {
 } from '../../../workflow-source';
 import type { ExecNode } from '../../../schemas';
 import { writeInvocationListings, type InvocationListings } from '../../../invocation-listings';
+import { bindTypedOutputs, runTypedOutputs } from '../../../typed-output-bindings';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
 import {
   isInlineScript,
@@ -52,11 +54,20 @@ export async function executeScriptNode(
   const stepName = ctx.stepNamePrefix + node.id;
   // Fresh per call, same as executeBashNode: one attempt, one observation.
   const listings = await writeInvocationListings(ctx);
+  // Read at the same moment as the listings, so both describe one view of the run.
+  const bound: ExecNode = {
+    ...node,
+    with: await bindTypedOutputs(
+      node.id,
+      node.with,
+      runTypedOutputs(ctx.artifactsDir, ctx.workflowRun.id)
+    ),
+  };
   const finalScript = substituteScript(ctx, node, listings);
   const source = await captureScriptSource(ctx, finalScript, stepName);
   await reserveBudget();
   const execution = await startScriptExecution(ctx, node);
-  const subprocessEnv = scriptEnvironment(ctx, node, listings, execution);
+  const subprocessEnv = scriptEnvironment(ctx, bound, listings, execution);
 
   const lookup = resolveScriptInvocation(ctx, node, finalScript, source.namedScripts);
   if ('errorMsg' in lookup) return recordScriptConfigFailure(ctx, node, execution, lookup.errorMsg);
@@ -72,6 +83,33 @@ export async function executeScriptNode(
 }
 
 type ScriptInvocation = ReturnType<typeof scriptInvocation>;
+
+/**
+ * Resolve a named script once for an agent node's tool, so each call of the tool goes
+ * straight to {@link runScript}. `credentialValues` is the set those runs redact.
+ * @throws Error when the script cannot be resolved; RunSourceUnreadableError as a script node does.
+ */
+export async function prepareToolScript(
+  ctx: RunLayersContext,
+  node: ExecNode,
+  execution: NodeExecutionRecord
+): Promise<{
+  invocation: ScriptInvocation;
+  env: NodeJS.ProcessEnv;
+  credentialValues: readonly string[];
+}> {
+  const listings = await writeInvocationListings(ctx);
+  const source = await captureScriptSource(ctx, node.script, execution.path);
+  const invocation = resolveScriptInvocation(ctx, node, node.script, source.namedScripts);
+  if ('errorMsg' in invocation) throw new Error(invocation.errorMsg);
+  const env = scriptEnvironment(ctx, node, listings, execution);
+  const credentialValues = subprocessCredentialValues(ctx.execContext, {
+    env,
+    protectedEnvKeys: ctx.config.protectedEnvKeys,
+    protectedCredentialValues: ctx.config.protectedCredentialValues,
+  });
+  return { invocation, env, credentialValues };
+}
 
 /** Discovered named scripts, the discovery error, or undefined for an inline script. */
 interface ScriptSource {
@@ -206,10 +244,12 @@ function resolveScriptInvocation(
   namedScripts: ScriptSource['namedScripts']
 ): ScriptInvocation | { errorMsg: string } {
   if (isInlineScript(finalScript)) {
+    const runtime = node.runtime === 'bun' ? 'bun' : 'uv';
     return scriptInvocation(
-      node.runtime === 'bun' ? 'bun' : 'uv',
+      runtime,
       { kind: 'inline', code: finalScript },
-      node.deps
+      node.deps,
+      ctx.artifactsDir
     );
   }
   if (namedScripts instanceof Error) {
@@ -226,7 +266,12 @@ function resolveScriptInvocation(
       errorMsg: `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or ~/.archon/scripts/`,
     };
   }
-  return scriptInvocation(scriptDef.runtime, { kind: 'file', path: scriptDef.path }, node.deps);
+  return scriptInvocation(
+    scriptDef.runtime,
+    { kind: 'file', path: scriptDef.path },
+    node.deps,
+    ctx.artifactsDir
+  );
 }
 
 async function recordScriptConfigFailure(
@@ -271,7 +316,7 @@ async function recheckNamedScriptSource(
   }
 }
 
-async function runScript(
+export async function runScript(
   ctx: RunLayersContext,
   node: ExecNode,
   { command, args, input }: ScriptInvocation,
@@ -357,6 +402,8 @@ async function recordScriptFailure(
     'dag_node_failed'
   );
 
+  const failureKind = scriptFailureKind(err, contractFailure, isTimeout);
+
   return recordNodeState(
     { store: ctx.deps.store, logDir: ctx.logDir },
     finishNodeExecution(
@@ -364,10 +411,13 @@ async function recordScriptFailure(
       {
         status: 'failed',
         error: errorMsg,
-        failureKind: scriptFailureKind(err, contractFailure, isTimeout),
+        // A killed process can still exit with a number (a SIGTERM trap); that status
+        // describes the kill, not a failure of the command.
+        exitCode: failureKind === 'exec_failed' ? formatted.exitCode : undefined,
+        failureKind,
         ...(contractFailure ? { retryable: false as const } : {}),
       },
-      { output: { text: '' } }
+      formatted.capturedOutput ? { output: formatted.capturedOutput } : {}
     )
   );
 }

@@ -8,7 +8,7 @@ export const metricsHelp: HelpGroup = {
       description: 'Aggregate metric records by name, window and instrument',
       scopedFlags: [
         {
-          spec: '--since <7d|24h|2w|ISO>',
+          spec: '--since <40m|7d|24h|2w|ISO>',
           description: 'Window start: a duration before --until, or a date (default 30d)',
         },
         { spec: '--until <ISO>', description: 'Window end, exclusive (default now)' },
@@ -21,7 +21,14 @@ export const metricsHelp: HelpGroup = {
           spec: '--by-model <node>',
           description: 'Split records by the model that ran this node (not with --compare)',
         },
-        { spec: '--project <id|name|key>', description: 'Only records from this codebase' },
+        {
+          spec: '--by-dimension <key>',
+          description: 'Split records by their value for this dimension (not with --by-model)',
+        },
+        {
+          spec: '--project <id|name|key>',
+          description: "Only records from this codebase, and its packs' item metrics",
+        },
       ],
     },
   ],

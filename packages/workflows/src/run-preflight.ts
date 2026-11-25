@@ -47,6 +47,8 @@ import type {
 } from './schemas/run-config';
 import { createLogger } from '@archon/paths';
 
+export { assistantModelDefaults, resolveWorkflowModelScope } from './node-model-resolution';
+
 const log = createLogger('workflow.run-preflight');
 type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
 
@@ -60,6 +62,12 @@ export interface RunAiConfigurationOptions {
   modelOverrideLayer?:
     | { kind: 'raw'; overrides: RunModelOverrides }
     | { kind: 'resolved'; overrides: ResolvedRunModelOverrides };
+  /**
+   * Where the project `.archon/config.yaml` is read, when not `cwd`: the run's capture
+   * when its definitions came from the base branch (`runProjectConfigRoot`). Provider
+   * lookups keep `cwd`.
+   */
+  configRoot?: string;
 }
 
 // The resolvers that throw NoDefaultProviderError are pure and shared with the executor
@@ -133,7 +141,7 @@ async function prepareAiConfiguration(
     ? (options.continuationRun.user_id ?? undefined)
     : options.userId;
   const { effectiveRunConfig, runConfigMetadata } = resolveEffectiveRunConfig(deps, options);
-  const fileConfig = await deps.loadConfig(cwd);
+  const fileConfig = await deps.loadConfig(options.configRoot ?? cwd);
   const dbEnvVars = options.codebaseId
     ? await deps.store.getCodebaseEnvVars(options.codebaseId)
     : {};

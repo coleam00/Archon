@@ -5,7 +5,11 @@ import * as workflowEventDb from '@archon/core/db/workflow-events';
 import { observeRunOwner } from '@archon/core/services/run-attention-watch';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { nodeCostScope } from '@archon/workflows/node-record-serialization';
-import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
+import {
+  buildLoopRounds,
+  buildRunNodeStates,
+  getTerminalRecord,
+} from '@archon/workflows/terminal-record';
 import { resolveAuthContext } from './api-request-auth';
 import { apiError, getLog, jsonError, openApiRouteRegistrar } from './api-route-kit';
 import { toApiDashboardWorkflowRun, toApiWorkflowRun } from './api-serializers';
@@ -229,8 +233,10 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
       // For CLI runs (no parent): conversation_id is the single conversation → set conversation_platform_id only
       let workerPlatformId: string | undefined;
       let conversationPlatformId: string | undefined;
+      let platformType: string | null = null;
       if (run.conversation_id) {
         const conv = await conversationDb.getConversationById(run.conversation_id);
+        platformType = conv?.platform_type ?? null;
         if (run.parent_conversation_id) {
           // Web run: conversation_id points to the worker conversation
           workerPlatformId = conv?.platform_conversation_id;
@@ -248,9 +254,11 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
       }
 
       const terminalRecord = getTerminalRecord(run.status, events);
+      const loopRounds = buildLoopRounds(run, events);
       return c.json({
         run: {
           ...toApiWorkflowRun(run),
+          platform_type: platformType,
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
@@ -258,6 +266,7 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
           terminal_record: terminalRecord,
           // The console reads node state from here and keeps no fold of its own.
           nodes: terminalRecord?.nodes ?? buildRunNodeStates(run, events),
+          ...(loopRounds.length > 0 ? { loop_rounds: loopRounds } : {}),
         },
         // The console renders each cost's scope from here and keeps no copy of the rule.
         events: events.map(event =>

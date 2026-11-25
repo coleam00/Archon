@@ -9,16 +9,21 @@ import {
 } from '../packages/workflows/src/defaults/bundle-inventory';
 import {
   changedFilesBetween,
+  coverageFromScheduledRuns,
   diffRange,
   dispatchDecision,
   packRunnerInputs,
   proofFromPullRequestRun,
+  scheduleDecision,
+  shouldRunEveryJob,
   shouldRunPackTests,
+  shouldRunPushOnlyJob,
   shouldRunTestSuite,
   shouldRunWorkspaceTests,
   workspaceTestInputs,
   type EventPayload,
   type GitHubGet,
+  type Mode,
 } from './should-run-test-suite';
 
 const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
@@ -269,6 +274,17 @@ describe('test-suite change decision', () => {
     expect(result.stdout).toBe('true');
     expect(result.stderr).toContain('No pull request run proves this push');
     expect(result.stderr).toContain('GITHUB_TOKEN');
+  });
+
+  test('only a push to main runs the whole Windows suite; a push to dev runs the Windows set', () => {
+    const decide = (ref: string, mode: string): string =>
+      runDecision(trackTempRoot, 'push', { ref, before: 'HEAD~1', after: 'HEAD' }, process.cwd(), [
+        mode,
+      ]).stdout;
+
+    expect(decide('refs/heads/dev', '--windows-full-suite')).toBe('false');
+    expect(decide('refs/heads/dev', '--full-matrix')).toBe('true');
+    expect(decide('refs/heads/main', '--windows-full-suite')).toBe('true');
   });
 
   test('a bad event stays fatal, so the step cannot publish an empty decision', () => {
@@ -559,11 +575,8 @@ describe('pack test selection', () => {
     'packages/workflows/src/executor.ts',
     'packages/forge/src/index.ts',
     'packages/paths/src/archon-paths.ts',
-    'bunfig.toml',
     'scripts/test-preload.ts',
     'scripts/bun-test-command.ts',
-    '.github/workflows/test.yml',
-    'bun.lock',
   ])('runs for %s', file => {
     expect(shouldRunPackTests(['README.md', file], runner)).toBe(true);
   });
@@ -621,6 +634,11 @@ describe('pack test selection', () => {
     ['--pack-fixtures', {}, 'false'],
     [undefined, { 'pack-tests': 'false' }, 'true'],
     ['--workspace-tests', { 'pack-tests': 'false' }, 'true'],
+    ['--full-matrix', {}, 'true'],
+    ['--windows-full-suite', {}, 'false'],
+    ['--windows-full-suite', { 'windows-full-suite': 'true' }, 'true'],
+    ['--docker-build', {}, 'true'],
+    ['--serve-binary', {}, 'true'],
   ])('a dispatch with %s and inputs %j decides %s', (mode, inputs, expected) => {
     const result = runDecision(
       track,
@@ -640,16 +658,121 @@ describe('pack test selection', () => {
     expect(dispatchDecision('pack-tests', { inputs: { 'pack-tests': true } })).toBe(true);
   });
 
-  test('every pack mode has the boolean dispatch input of its name in test.yml', () => {
+  test('every opt-in mode has the boolean dispatch input of its name in test.yml', () => {
     const workflow = Bun.YAML.parse(
       readFileSync(resolve(REPO_ROOT, '.github/workflows/test.yml'), 'utf8')
     ) as { on: { workflow_dispatch: { inputs: Record<string, unknown> } } };
-    for (const mode of ['pack-tests', 'pack-fixtures']) {
+    for (const mode of ['pack-tests', 'pack-fixtures', 'windows-full-suite']) {
       expect(workflow.on.workflow_dispatch.inputs[mode]).toMatchObject({
         type: 'boolean',
         default: false,
       });
     }
+  });
+});
+
+describe('what a pull request leaves to the push', () => {
+  const track = trackTempRoots();
+  const runner = packRunnerInputs(resolve(import.meta.dir, '..'));
+  const MODES = [
+    '--full-matrix',
+    '--windows-full-suite',
+    '--docker-build',
+    '--serve-binary',
+  ] as const;
+
+  test.each([
+    '.github/workflows/test.yml',
+    '.github/workflows/release.yml',
+    'package.json',
+    'bun.lock',
+    'bunfig.toml',
+    'scripts/validate.ts',
+    'scripts/repo-tests.ts',
+    'scripts/bun-test-command.ts',
+    'scripts/should-run-test-suite.ts',
+    'scripts/test-suite-outcome.ts',
+  ])('a change to %s runs every job', file => {
+    expect(shouldRunEveryJob(['README.md', file], runner)).toBe(true);
+  });
+
+  test.each([
+    'packages/core/src/index.ts',
+    'packages/paths/src/archon-paths.ts',
+    'Dockerfile',
+    'scripts/build-binaries.sh',
+    '.github/workflows/README.md',
+  ])('a change to %s does not run every job', file => {
+    expect(shouldRunEveryJob([file], runner)).toBe(false);
+  });
+
+  test('a job comes back for the paths it exists to check, and only that job', () => {
+    expect(shouldRunPushOnlyJob('docker-build', ['README.md', 'Dockerfile'])).toBe(true);
+    expect(shouldRunPushOnlyJob('serve-binary', ['scripts/build-binaries.sh'])).toBe(true);
+    expect(shouldRunPushOnlyJob('serve-binary', ['Dockerfile'])).toBe(false);
+    expect(shouldRunPushOnlyJob('docker-build', ['packages/core/src/index.ts'])).toBe(false);
+    // No path list names platform-dependent code, so only a run of every job has the Windows
+    // legs and the macOS job.
+    expect(shouldRunPushOnlyJob('full-matrix', ['Dockerfile', 'packages/paths/src/a.ts'])).toBe(
+      false
+    );
+  });
+
+  test('the script decides a pull request from its diff', () => {
+    const repo = track(mkdtempSync(join(tmpdir(), 'push-only-decision-')));
+    gitIn(repo, 'init', '-q', '-b', 'main');
+    gitIn(repo, 'config', 'user.email', 'test@example.com');
+    gitIn(repo, 'config', 'user.name', 'Test');
+    mkdirSync(join(repo, 'packages/core'), { recursive: true });
+    mkdirSync(join(repo, '.github/workflows'), { recursive: true });
+    for (const file of ['packages/core/db.ts', 'Dockerfile', '.github/workflows/test.yml']) {
+      writeFileSync(join(repo, file), '');
+    }
+    gitIn(repo, 'add', '.');
+    gitIn(repo, 'commit', '-q', '-m', 'seed');
+    const base = gitIn(repo, 'rev-parse', 'HEAD');
+
+    const decide = (file: string): Record<string, string> => {
+      gitIn(repo, 'checkout', '-q', '-B', 'change', base);
+      writeFileSync(join(repo, file), 'changed\n');
+      gitIn(repo, 'commit', '-q', '-am', `change ${file}`);
+      const head = gitIn(repo, 'rev-parse', 'HEAD');
+      return Object.fromEntries(
+        [...MODES, '--pack-fixtures'].map(mode => {
+          const result = runDecision(
+            track,
+            'pull_request',
+            { pull_request: { base: { sha: base }, head: { sha: head } } },
+            repo,
+            [mode]
+          );
+          expect(result.exitCode).toBe(0);
+          return [mode, result.stdout];
+        })
+      );
+    };
+
+    expect(decide('packages/core/db.ts')).toEqual({
+      '--full-matrix': 'false',
+      '--windows-full-suite': 'false',
+      '--docker-build': 'false',
+      '--serve-binary': 'false',
+      '--pack-fixtures': 'false',
+    });
+    expect(decide('Dockerfile')).toEqual({
+      '--full-matrix': 'false',
+      '--windows-full-suite': 'false',
+      '--docker-build': 'true',
+      '--serve-binary': 'false',
+      '--pack-fixtures': 'false',
+    });
+    expect(decide('.github/workflows/test.yml')).toEqual({
+      '--full-matrix': 'true',
+      '--windows-full-suite': 'true',
+      '--docker-build': 'true',
+      '--serve-binary': 'true',
+      '--pack-fixtures': 'true',
+    });
   });
 });
 
@@ -660,6 +783,21 @@ function gitIn(cwd: string, ...args: string[]): string {
 }
 
 describe('a push proven by its pull request run', () => {
+  /**
+   * A pull request run proves its push only when every job concluded `success`, so a job that
+   * skips for the pull request's event, rather than for a `changes` output, makes every merge
+   * rerun the suite on push. An event gate belongs on a step.
+   */
+  test('no job in test.yml is gated on the event', () => {
+    const workflow = Bun.YAML.parse(
+      readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
+    ) as { jobs: Record<string, { if?: unknown }> };
+    const eventGated = Object.entries(workflow.jobs)
+      .filter(([, job]) => String(job.if ?? '').includes('github.event_name'))
+      .map(([id]) => id);
+    expect(eventGated).toEqual([]);
+  });
+
   const PUSH = { head: 'squash-commit' };
   const PR_BASE = 'pr-base';
   const PR_HEAD = 'pr-head';
@@ -685,7 +823,7 @@ describe('a push proven by its pull request run', () => {
         total_count: 2,
         jobs: [
           { name: 'changes', conclusion: 'success' },
-          { name: 'test (windows-latest, packages)', conclusion: 'success' },
+          { name: 'test-windows (package-tests, 1/2)', conclusion: 'success' },
         ],
       },
     };
@@ -749,17 +887,17 @@ describe('a push proven by its pull request run', () => {
       'differ',
     ],
     [
-      'a run that skipped a gated job (a prose-only pull request)',
+      'a run that skipped a gated job (prose only, or one that left Windows to the push)',
       (answers: Record<string, unknown>) => {
         answers[JOBS] = {
           total_count: 2,
           jobs: [
             { name: 'changes', conclusion: 'success' },
-            { name: 'test (windows-latest, packages)', conclusion: 'skipped' },
+            { name: 'test-windows (package-tests, 1/2)', conclusion: 'skipped' },
           ],
         };
       },
-      'test (windows-latest, packages)=skipped',
+      'test-windows (package-tests, 1/2)=skipped',
     ],
     [
       'a run whose latest attempt failed a job',
@@ -914,5 +1052,48 @@ describe('a push proven by its pull request run', () => {
       expect(result.stdout).toBe('true');
       expect(result.stderr).toContain('No pull request run proves this push');
     });
+  });
+});
+
+describe('a scheduled run', () => {
+  const HEAD = 'dev-head';
+  const RUNS = `actions/workflows/test.yml/runs?event=schedule&head_sha=${HEAD}&status=completed`;
+  const RUN_URL = 'https://github.com/coleam00/Archon/actions/runs/9';
+  const WINDOWS_MODES: Mode[] = ['windows-full-suite', 'pack-tests', 'pack-fixtures'];
+  const OTHER_MODES: Mode[] = ['suite', 'workspace', 'full-matrix', 'docker-build', 'serve-binary'];
+
+  const coverage = (answer: unknown) =>
+    coverageFromScheduledRuns(HEAD, async path => {
+      if (path !== RUNS) throw new Error(`unexpected GET ${path}`);
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+  const runsWith = (...conclusions: string[]) => ({
+    workflow_runs: conclusions.map(conclusion => ({ conclusion, html_url: RUN_URL })),
+  });
+
+  test('dev moved since a scheduled run covered it: the whole suite runs on Windows', async () => {
+    const result = await coverage(runsWith());
+    expect(result.covered).toBe(false);
+    for (const mode of WINDOWS_MODES) expect(scheduleDecision(mode, result)).toBe(true);
+  });
+
+  test.each(['success', 'failure'])(
+    'a %s scheduled run at the same commit covers it, so nothing runs',
+    async conclusion => {
+      const result = await coverage(runsWith('cancelled', conclusion));
+      expect(result).toEqual({ covered: true, why: expect.stringContaining(RUN_URL) });
+      for (const mode of WINDOWS_MODES) expect(scheduleDecision(mode, result)).toBe(false);
+    }
+  );
+
+  test('a cancelled run covers nothing, and neither does an unreadable answer', async () => {
+    expect((await coverage(runsWith('cancelled'))).covered).toBe(false);
+    expect((await coverage(new Error('answered 502'))).covered).toBe(false);
+    expect((await coverage({ message: 'Not Found' })).covered).toBe(false);
+  });
+
+  test.each(OTHER_MODES)('%s never runs on a schedule', mode => {
+    expect(scheduleDecision(mode, { covered: false, why: 'dev moved' })).toBe(false);
   });
 });

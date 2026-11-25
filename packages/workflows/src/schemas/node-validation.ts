@@ -4,6 +4,8 @@
  * shares. Mode selection itself, and its errors, stay in dag-node.ts beside the mode table.
  */
 import { z } from 'zod';
+import { approvalConfigSchema } from './gate-node';
+import { deprecationReplacement, fieldDeprecation } from './field-deprecation';
 import { isValidCommandName } from '../command-validation';
 import {
   declaredFieldsFromSchema,
@@ -14,7 +16,13 @@ import {
 import type { DagNodeFields, NodeMode } from './dag-node';
 import { bashExecAuthoringSchema, execNodeSchema, scriptExecAuthoringSchema } from './exec-node';
 import { composeFanOutNodeSchema } from './include-node';
-import { bindingDirectiveSchema, INPUT_NAME_PATTERN, inputEnvKey } from './node-bindings';
+import {
+  bindingDirectiveSchema,
+  INPUT_NAME_PATTERN,
+  inputEnvKey,
+  isTypedOutputsDirective,
+  typedOutputsDirectiveSchema,
+} from './node-bindings';
 import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
 
 type NodeIssue = { message: string; path?: readonly PropertyKey[] };
@@ -191,14 +199,6 @@ function validateLoopUntilField(data: DagNodeFields, ctx: z.RefinementCtx): void
   }
 }
 
-/**
- * 'decisions' (#2707 step 1, the new authoring surface) and 'on_reject' (the
- * deprecated legacy mechanism) are mutually exclusive: mixing them would
- * leave it ambiguous which mechanism resolves the gate. Validated here
- * rather than via a superRefine on approvalConfigSchema itself, which would
- * wrap it in a ZodEffects and erase the precise `.shape` KNOWN_NODE_NESTED_KEYS
- * relies on for compile-time-checked child keys (see approvalConfigSchema's doc).
- */
 function validateApprovalNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
   const decisions = data.approval?.decisions;
   if (decisions === undefined) return;
@@ -207,8 +207,10 @@ function validateApprovalNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
     addIssue(
       ctx,
       "'approval.decisions' and 'approval.on_reject' are mutually exclusive. " +
-        "'on_reject' is deprecated — wire a rework node with a " +
-        "\"when: \\\"$<this gate's id>.output.decision == 'reject'\\\"\" edge and declare 'decisions' instead.",
+        deprecationReplacement(fieldDeprecation(approvalConfigSchema.shape.on_reject), [
+          'approval',
+          'on_reject',
+        ]),
       path
     );
     return;
@@ -238,7 +240,7 @@ function validateWaitNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
 }
 
 function validateIncludeNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
-  if (data.with !== undefined) validateWithShape('include', data.with, ctx);
+  if (data.with !== undefined) validateIncludeWith('include', data.with, ctx);
   if (data.fan_out !== undefined) {
     const result = composeFanOutNodeSchema.pick({ fan_out: true }).safeParse(data);
     if (!result.success) addIssues(ctx, result.error.issues);
@@ -247,7 +249,7 @@ function validateIncludeNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
 }
 
 function validateWorkflowNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
-  if (data.with !== undefined) validateWithShape('workflow', data.with, ctx);
+  if (data.with !== undefined) validateIncludeWith('workflow', data.with, ctx);
   // A `workflow:` node has ONE input channel per invocation: either the untyped
   // `input:` string ($ARGUMENTS) or the named `with:` map ($INPUTS.<name>). Accepting
   // both would require a precedence rule between two overlapping channels — the exact
@@ -366,6 +368,33 @@ function validateWithShape(
 }
 
 /**
+ * Include/workflow `with:` values are JSON literals, except a top-level object with
+ * exactly the binding directive's shape (#5760): that is the directive, validated by the
+ * same rules as on command and script nodes. Any other object, such as
+ * `{ from: 'alice', to: 'bob' }`, stays a literal. `{ outputs }` is still refused: only
+ * a script node's own `with:` reads it, and here it would pass as a literal.
+ */
+function validateIncludeWith(
+  kind: 'include' | 'workflow',
+  value: unknown,
+  ctx: z.RefinementCtx
+): void {
+  const map = validateWithShape(kind, value, ctx);
+  if (map === undefined) return;
+  for (const [key, entry] of Object.entries(map)) {
+    if (bindingDirectiveSchema.safeParse(entry).success) {
+      validateBindingDirective(kind, key, entry as object, ctx);
+    } else if (typedOutputsDirectiveSchema.safeParse(entry).success) {
+      addIssue(
+        ctx,
+        `${kind} input '${key}': '{ outputs }' is a typed-outputs directive, which only a script node's own 'with:' reads; on ${kind} nodes an object is passed as a literal. Read the outputs in a script node and pass that node's output.`,
+        ['with', key]
+      );
+    }
+  }
+}
+
+/**
  * Node-local bindings on command/script nodes (#2637): same key/value grammar as
  * include/workflow `with:`, plus the object position is RESERVED for the binding
  * directive — any other object shape is rejected naming both accepted forms.
@@ -375,9 +404,39 @@ function validateBindings(kind: 'command' | 'script', value: unknown, ctx: z.Ref
   if (map === undefined) return;
   validateBindingEnvKeys(kind, map, ctx);
   for (const [key, entry] of Object.entries(map)) {
-    if (typeof entry === 'object' && entry !== null && !Array.isArray(entry)) {
-      validateBindingDirective(kind, key, entry, ctx);
-    }
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
+    if (isTypedOutputsDirective(entry)) validateTypedOutputsDirective(kind, key, entry, ctx);
+    else validateBindingDirective(kind, key, entry, ctx);
+  }
+}
+
+/**
+ * `{ outputs: <output_type> }` is delivered to a script's environment only. A command
+ * node is refused rather than handed a JSON array spliced into its prompt: an agent
+ * reads the same outputs through `$TYPED_ARTIFACTS_FILE`.
+ */
+function validateTypedOutputsDirective(
+  kind: 'command' | 'script',
+  key: string,
+  value: object,
+  ctx: z.RefinementCtx
+): void {
+  const parsed = typedOutputsDirectiveSchema.safeParse(value);
+  if (!parsed.success) {
+    addIssue(
+      ctx,
+      `${kind} binding '${key}': a typed-outputs binding must be ` +
+        `{ outputs: '<output_type>', if_unreadable?: null | [...] } — ${parsed.error.issues[0]?.message ?? 'invalid shape'}`,
+      ['with', key]
+    );
+    return;
+  }
+  if (kind === 'command') {
+    addIssue(
+      ctx,
+      `command binding '${key}': '{ outputs: ${parsed.data.outputs} }' is only supported on script nodes; a command reads typed outputs through $TYPED_ARTIFACTS_FILE`,
+      ['with', key]
+    );
   }
 }
 
@@ -409,7 +468,7 @@ function validateBindingEnvKeys(
 }
 
 function validateBindingDirective(
-  kind: 'command' | 'script',
+  kind: 'command' | 'script' | 'include' | 'workflow',
   key: string,
   value: object,
   ctx: z.RefinementCtx
@@ -419,7 +478,7 @@ function validateBindingDirective(
     addIssue(
       ctx,
       `${kind} binding '${key}': an object value must be a binding directive ` +
-        "{ from: '$node.output[.a.b]', if_skipped?: <value> } — " +
+        "{ from: '$node.output[.a.b]', if_skipped?: <value> } or { outputs: '<output_type>' } — " +
         `${parsed.error.issues[0]?.message ?? 'invalid shape'}. ` +
         'Use a string, number, boolean, null, or array for a literal value.',
       ['with', key]

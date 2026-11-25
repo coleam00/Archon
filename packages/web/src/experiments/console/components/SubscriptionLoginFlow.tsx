@@ -127,7 +127,7 @@ export function SubscriptionLoginFlow({
   };
 
   return (
-    <div className="flex flex-col gap-2 rounded border border-border bg-surface-inset p-3 text-[12px] text-text-secondary">
+    <div className="flex flex-col gap-2 rounded border border-border bg-surface-inset p-3 text-console-12 text-text-secondary">
       <div className="flex items-center justify-between gap-3">
         <span className="font-medium text-text-primary capitalize">
           {displayName ?? provider} subscription login
@@ -135,7 +135,7 @@ export function SubscriptionLoginFlow({
         <button
           type="button"
           onClick={onDone}
-          className="shrink-0 rounded border border-border px-2 py-0.5 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
+          className="shrink-0 rounded border border-border px-2 py-0.5 text-console-11 text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
         >
           Cancel
         </button>
@@ -197,13 +197,13 @@ export function SubscriptionLoginFlow({
               }}
               placeholder="Paste code or localhost callback URL"
               autoComplete="off"
-              className="w-full rounded-[9px] border border-border bg-surface px-3 py-2 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none"
+              className="w-full rounded-lg border border-border bg-surface px-3 py-2 font-mono text-console-12 text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none"
             />
             <button
               type="button"
               onClick={submitCode}
               disabled={code.trim() === ''}
-              className="brand-bar shrink-0 rounded px-3 py-1 text-[11px] font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
+              className="brand-bar shrink-0 rounded px-3 py-1 text-console-11 font-medium text-white transition-all hover:brightness-110 disabled:opacity-40"
             >
               Submit
             </button>
@@ -213,7 +213,7 @@ export function SubscriptionLoginFlow({
 
       {message !== null ? (
         <p
-          className={`font-mono text-[11px] ${phase === 'error' ? 'text-error' : 'text-text-tertiary'}`}
+          className={`font-mono text-console-11 ${phase === 'error' ? 'text-error' : 'text-text-tertiary'}`}
         >
           {message}
         </p>

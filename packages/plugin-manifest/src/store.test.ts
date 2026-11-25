@@ -54,6 +54,49 @@ describe('scanReceipts', () => {
       `Invalid JSON in plugin receipt ${badJson}`
     );
   });
+
+  test('reads a receipt a newer Archon wrote with keys this one does not know', async () => {
+    const pluginsDir = tempRoot(await mkdtemp(join(tmpdir(), 'plugin-store-')));
+    const forge: PluginReceipt = {
+      schemaVersion: 1,
+      id: 'acme/forge',
+      manifest: {
+        schemaVersion: 1,
+        kind: 'forge',
+        name: 'forge-acme',
+        description: 'x',
+        executable: 'archon-forge-acme',
+      },
+      tag: 'v1.0.0',
+      commit: 'a'.repeat(40),
+      installedAt: new Date(0).toISOString(),
+      files: [{ path: 'archon-forge-acme', sha256: 'b'.repeat(64) }],
+    };
+    const pack: PluginReceipt = {
+      schemaVersion: 1,
+      id: 'acme/pack',
+      manifest: {
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'review-kit',
+        description: 'x',
+        entrypoints: { review: 'review/review.yaml' },
+      },
+      commit: 'a'.repeat(40),
+      installedAt: new Date(0).toISOString(),
+    };
+    for (const receipt of [forge, pack]) {
+      const newer = {
+        ...receipt,
+        installedBy: '0.99.0',
+        manifest: { ...receipt.manifest, skills: ['review'] },
+      };
+      await writeReceipt(pluginsDir, receipt.id, JSON.stringify(newer));
+    }
+
+    expect(await scanReceipts(pluginsDir)).toEqual({ receipts: [forge, pack], broken: [] });
+    expect(await readReceipts(pluginsDir)).toEqual([forge, pack]);
+  });
 });
 
 const providerReceipt = {
@@ -81,6 +124,7 @@ const providerReceipt = {
       ...Object.fromEntries(Object.keys(providerCapabilitiesSchema.shape).map(key => [key, false])),
       backgroundWork: 'none',
       sessionFork: undefined,
+      structuredOutputCorrection: undefined,
       knownToolNames: undefined,
       renamedTools: undefined,
     },

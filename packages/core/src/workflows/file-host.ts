@@ -1,4 +1,9 @@
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
+import {
+  CHECKOUT_HANDOFF_METADATA_KEY,
+  checkoutHandoffRunMetadataSchema,
+} from '@archon/workflows/schemas/resource-start';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -36,12 +41,13 @@ import {
 import { assertAbsoluteDefaultCwd, defaultCwdKey, isSameDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
+import { loadResourceCapacities } from '../config/concurrency-config';
 import { completedRunWorktreeDeps, createWorkflowDeps } from './store-adapter';
 import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
 import { runOwnerLossWatch } from '../services/run-attention-watch';
-import { attentionQueueSource } from '../operations/attention-queue';
+import { attentionQueueSource, watchSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
 const worktreeReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
@@ -74,7 +80,11 @@ const fileUserSchema = userRowSchema.extend({
   platform: identityPlatformSchema,
   platform_user_id: z.string(),
 });
-export async function createFileWorkflowHost(root: string): Promise<WorkflowHost> {
+export async function createFileWorkflowHost(
+  root: string,
+  /** Wraps the store every part of the host shares, before any part captures it. */
+  wrapStore: <S extends IWorkflowStore>(store: S) => Promise<S> = async store => store
+): Promise<WorkflowHost> {
   await assertFileStoreConfiguration();
   async function users(): Promise<z.infer<typeof fileUserSchema>[]> {
     return z.array(fileUserSchema).parse((await readJson(join(root, 'host/users.json'))) ?? []);
@@ -329,34 +339,50 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())[0] ?? null,
     },
   };
-  const store = await createFileWorkflowStore({
-    root,
-    getCodebase: id => records.codebases.getCodebase(id),
-    listReusableCheckouts: async () =>
-      (await environments())
-        .filter(row => row.status === 'active' && row.workflow_type === 'task')
-        .map(row => ({
-          codebaseId: row.codebase_id,
-          branch: row.workflow_id,
-          workingPath: row.working_path,
-        })),
-    isCheckoutReleased: async (run, path) => {
-      const matching = (await environments()).filter(
-        row =>
-          row.provider === 'worktree' &&
-          row.codebase_id === run.codebase_id &&
-          row.working_path === (run.working_path ?? path)
-      );
-      return matching.length > 0 && matching.every(row => row.status !== 'active');
-    },
-    getCodebaseEnvVars: async id =>
-      (await readCodebases()).find(row => row.id === id)?.envVars ?? {},
-  });
+  const store = await wrapStore(
+    await createFileWorkflowStore({
+      root,
+      getCodebase: id => records.codebases.getCodebase(id),
+      resourceCapacity: async resource => (await loadResourceCapacities()).get(resource),
+      listReusableCheckouts: async () =>
+        (await environments())
+          .filter(row => row.status === 'active' && row.workflow_type === 'task')
+          .map(row => ({
+            codebaseId: row.codebase_id,
+            branch: row.workflow_id,
+            workingPath: row.working_path,
+          })),
+      isCheckoutReleased: async (run, path) => {
+        const matching = (await environments()).filter(
+          row =>
+            row.provider === 'worktree' &&
+            row.codebase_id === run.codebase_id &&
+            row.working_path === (run.working_path ?? path)
+        );
+        return matching.length > 0 && matching.every(row => row.status !== 'active');
+      },
+      getCodebaseEnvVars: async id =>
+        (await readCodebases()).find(row => row.id === id)?.envVars ?? {},
+    })
+  );
   const worktreeReaders: WorktreeOwnershipReaders = {
     getCodebase: id => records.codebases.getCodebase(id),
     getLiveRunOwningEnv: async (id, _release, excludeRunId) => {
       const env = await records.isolation.getById(id);
       const runs = await listRuns(root);
+      const ownsEnv = (row: (typeof runs)[number]): boolean =>
+        row.metadata[ISOLATION_ENV_ID_METADATA_KEY] === id ||
+        worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
+        (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path);
+      // As in the database reader: a run started on a hand-off from a run that owns the
+      // environment owns it too, before its lane records an environment of its own.
+      const handedOwner = (row: (typeof runs)[number]): boolean => {
+        const from = checkoutHandoffRunMetadataSchema.safeParse(
+          row.metadata[CHECKOUT_HANDOFF_METADATA_KEY]
+        ).data?.runId;
+        const source = from === undefined ? undefined : runs.find(run => run.id === from);
+        return source !== undefined && ownsEnv(source);
+      };
       return (
         runs
           .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
@@ -365,9 +391,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
               row.id !== excludeRunId &&
               (!isTerminalRunStatus(row.status) ||
                 RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
-              (row.metadata[ISOLATION_ENV_ID_METADATA_KEY] === id ||
-                worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
-                (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path))
+              (ownsEnv(row) || handedOwner(row))
           ) ?? null
       );
     },
@@ -384,7 +408,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
     records,
     deps,
     engine: new InProcessWorkflowEngine(deps, {
-      branchOf: attentionQueueSource(store, records.isolation).branchOf,
+      ...watchSource(attentionQueueSource(store, records.isolation)),
       ownerLoss: runOwnerLossWatch(store),
     }),
     operations: createWorkflowOperations({

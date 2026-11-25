@@ -13,6 +13,7 @@ build/
 # Node.js
 node_modules/
 dist/
+.tsbuild/
 coverage/
 *.log
 npm-debug.log*
@@ -55,7 +56,7 @@ e2e-screenshots/
 .archon/config.*.yaml
 !.archon/config.example.yaml
 
-# Maintainer standup — per-maintainer state and briefs (direction.md is committed)
+# Retired maintainer standup: local state may still exist in old checkouts; keep it out of commits
 .archon/maintainer-standup/profile.md
 .archon/maintainer-standup/state.json
 .archon/maintainer-standup/briefs/

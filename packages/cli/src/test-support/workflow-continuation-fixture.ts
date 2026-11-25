@@ -10,8 +10,10 @@ export function makeContinuationRun(overrides: Partial<WorkflowRun> = {}): Workf
     codebase_id: 'codebase-1',
     status: 'completed',
     outcome: null,
+    completed_outcome: null,
     user_message: 'original prompt',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -21,6 +23,7 @@ export function makeContinuationRun(overrides: Partial<WorkflowRun> = {}): Workf
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     ...overrides,
   };
 }

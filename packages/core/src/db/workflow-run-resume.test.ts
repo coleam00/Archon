@@ -20,12 +20,9 @@ mock.module('./connection', () => ({
   getDatabaseType: () => 'postgresql' as const,
 }));
 
-import { WorkflowNotResumableError } from '@archon/workflows/store';
-import {
-  findResumableRun,
-  findResumableRunByParentConversation,
-  resumeWorkflowRun,
-} from './workflow-run-resume';
+import { currentExecutionOwner, WorkflowNotResumableError } from '@archon/workflows/store';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
+import { listResumableRunsByParentConversation, resumeWorkflowRun } from './workflow-run-resume';
 
 describe('workflow run resume', () => {
   beforeEach(() => {
@@ -33,121 +30,28 @@ describe('workflow run resume', () => {
     mockQuery.mockImplementation(() => Promise.resolve(createQueryResult([])));
   });
 
-  describe('findResumableRun', () => {
-    test('returns the most recent failed run matching workflow name and path', async () => {
-      const failedRun = {
-        ...mockWorkflowRun,
-        status: 'failed' as const,
-        working_path: '/repo/path',
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([failedRun]));
+  describe('listResumableRunsByParentConversation', () => {
+    test('lists every failed or paused run of the workflow in the conversation and codebase', async () => {
+      const olderRun = { ...mockWorkflowRun, id: 'older-run' };
+      mockQuery.mockResolvedValueOnce(createQueryResult([mockWorkflowRun, olderRun]));
 
-      const result = await findResumableRun('feature-development', '/repo/path');
+      const result = await listResumableRunsByParentConversation('piv', 'conv-1', 'codebase-789');
 
-      expect(result).toEqual(failedRun);
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain("status IN ('failed', 'paused')");
-      expect(query).toContain('working_path = $2');
-      expect(query).not.toContain('conversation_id');
-      expect(query).toContain('ORDER BY started_at DESC');
-      expect(query).not.toMatch(/--.*\$\d/); // regression guard for #999: $N in SQL comments breaks convertPlaceholders
-      expect(params).toEqual(['feature-development', '/repo/path', 1]);
-    });
-
-    test('returns a stale running run (no activity for >1 day)', async () => {
-      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
-      const staleRun = {
-        ...mockWorkflowRun,
-        status: 'running' as const,
-        working_path: '/repo/path',
-        last_activity_at: twoDaysAgo,
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([staleRun]));
-
-      const result = await findResumableRun('feature-development', '/repo/path');
-
-      expect(result).toEqual(staleRun);
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain("status = 'running'");
-      expect(query).toContain('last_activity_at');
-      expect(params).toEqual(['feature-development', '/repo/path', 1]);
-    });
-
-    test('returns a running run with null last_activity_at (never recorded activity)', async () => {
-      const staleRun = {
-        ...mockWorkflowRun,
-        status: 'running' as const,
-        working_path: '/repo/path',
-        last_activity_at: null,
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([staleRun]));
-
-      const result = await findResumableRun('feature-development', '/repo/path');
-
-      expect(result).toEqual(staleRun);
-      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain('last_activity_at IS NULL');
-    });
-
-    test('returns null when no resumable run exists', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await findResumableRun('feature-development', '/repo/path');
-
-      expect(result).toBeNull();
-    });
-
-    test('throws on database error', async () => {
-      mockQuery.mockRejectedValueOnce(new Error('Connection refused'));
-
-      await expect(findResumableRun('test', '/path')).rejects.toThrow(
-        'Failed to find resumable run: Connection refused'
-      );
-    });
-  });
-
-  describe('findResumableRunByParentConversation', () => {
-    test('scopes by workflow name, parent conversation and codebase', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockWorkflowRun]));
-
-      const result = await findResumableRunByParentConversation('piv', 'conv-1', 'codebase-789');
-
-      expect(result).toEqual(mockWorkflowRun);
+      expect(result).toEqual([mockWorkflowRun, olderRun]);
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('workflow_name = $1');
       expect(query).toContain('parent_conversation_id = $2');
       expect(query).toContain('codebase_id = $3');
-      expect(params).toEqual(['piv', 'conv-1', 'codebase-789']);
-    });
-
-    test('prefers a paused run over a newer failed one (paused-first ordering)', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      await findResumableRunByParentConversation('piv', 'conv-1', 'cb');
-
-      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status IN ('failed', 'paused')");
-      // Status is the primary sort key: an open gate auto-resumes, while a
-      // failed candidate is gated behind an explicit user prompt. Ordering by
-      // started_at alone lets a newer failure shadow an older waiting gate.
-      expect(query).toContain("ORDER BY CASE WHEN status = 'paused' THEN 0 ELSE 1 END");
-      // Recency still breaks ties within a status.
-      expect(query).toContain('started_at DESC');
-    });
-
-    test('returns null when no run matches', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await findResumableRunByParentConversation('piv', 'conv-1', 'cb');
-
-      expect(result).toBeNull();
+      expect(query).not.toContain('LIMIT');
+      expect(params).toEqual(['piv', 'conv-1', 'codebase-789']);
     });
 
     test('throws on database error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('Connection refused'));
 
-      await expect(findResumableRunByParentConversation('piv', 'conv-1', 'cb')).rejects.toThrow(
-        'Failed to find resumable run by parent conversation: Connection refused'
+      await expect(listResumableRunsByParentConversation('piv', 'conv-1', 'cb')).rejects.toThrow(
+        'Failed to list resumable runs by parent conversation: Connection refused'
       );
     });
   });
@@ -177,18 +81,19 @@ describe('workflow run resume', () => {
       const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(updateQuery).toContain("status = 'running'");
       expect(updateQuery).toContain('completed_at = NULL');
-      expect(updateQuery).toContain('metadata = metadata || $3::jsonb');
-      // $1 = id, $2 = ORPHAN_RESUME_STALE_DAYS. The day param MUST be bound or the
-      // CAS predicate's `< $2 days` references an unbound placeholder (PR #1830 C1).
-      expect(updateParams).toEqual(['workflow-run-123', 1, expect.any(String)]);
-      expect(JSON.parse(String(updateParams[2]))).toEqual({
+      expect(updateQuery).toContain('metadata = (metadata || $2::jsonb');
+      expect(updateParams).toEqual(['workflow-run-123', expect.any(String)]);
+      expect(JSON.parse(String(updateParams[1]))).toEqual({
         tool_call_attention: null,
         error: null,
         stop_reason: null,
+        continuation_given_up: null,
         continuation_retry_at: null,
         capacity_wait: null,
         source_release: null,
+        operator_pause: null,
         execution_claim: expect.any(String),
+        execution_owner: currentExecutionOwner(),
       });
       // Third call: SELECT
       const [selectQuery, selectParams] = mockQuery.mock.calls[2] as [string, unknown[]];
@@ -198,11 +103,7 @@ describe('workflow run resume', () => {
       expect(mockQuery.mock.calls).toHaveLength(3);
     });
 
-    test('refreshes started_at to NOW so resumed row competes fairly in the path-lock tiebreaker', async () => {
-      // Without this refresh, a resumed row carries its original (potentially
-      // hours-old) started_at and sorts ahead of any currently-active holder
-      // in the older-wins tiebreaker — slipping past the lock and causing
-      // two active workflows on the same working_path.
+    test('advances phase priority without overwriting creation time', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(
@@ -212,36 +113,45 @@ describe('workflow run resume', () => {
       await resumeWorkflowRun('workflow-run-123');
 
       const [updateQuery] = mockQuery.mock.calls[1] as [string, unknown[]];
-      expect(updateQuery).toContain('started_at = NOW()');
+      expect(updateQuery).toContain('active_phase_started_at = NOW()');
+      expect(updateQuery).not.toMatch(/(?:^|\s)started_at =/);
     });
 
-    test('guards the UPDATE with the resumable-status CAS predicate', async () => {
-      // The flip to 'running' must only match a row that is still resumable —
-      // failed/paused, or a stale 'running' orphan — so two concurrent resumers
-      // can't both win and double-claim the worktree.
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
+    test('without a cursor, only a failed or paused row matches the CAS', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'failed', metadata: {} }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([])); // workflow_resumed event
       mockQuery.mockResolvedValueOnce(
         createQueryResult([{ ...mockWorkflowRun, status: 'running' as const }])
       );
 
       await resumeWorkflowRun('workflow-run-123');
 
-      const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
-      expect(updateQuery).toContain("status IN ('failed', 'paused')");
-      expect(updateQuery).toContain("status = 'running' AND");
-      // The stale-orphan arm references $2 — it MUST be bound to the day count.
-      expect(updateQuery).toContain('$2');
-      expect(updateParams).toEqual(['workflow-run-123', 1, expect.any(String)]);
-      expect(JSON.parse(String(updateParams[2]))).toEqual({
-        tool_call_attention: null,
-        error: null,
-        stop_reason: null,
-        continuation_retry_at: null,
-        capacity_wait: null,
-        source_release: null,
-        execution_claim: expect.any(String),
+      const [updateQuery] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateQuery).toContain("AND status IN ('failed', 'paused')");
+      expect(updateQuery).not.toContain("AND status = 'running'");
+    });
+
+    test('an ownerless cursor matches a running row only on the claim it read', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ status: 'running', metadata: { execution_claim: 'claim-1' } }])
+      );
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...mockWorkflowRun, status: 'running' as const }])
+      );
+
+      await resumeWorkflowRun('workflow-run-123', {
+        kind: 'ownerless',
+        executionClaim: 'claim-1',
+        lease: testRunOwnerLease('workflow-run-123'),
       });
+
+      const [updateQuery, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateQuery).toContain("AND status = 'running' AND");
+      expect(updateQuery).toContain("->>'execution_claim' = $3");
+      expect(updateQuery).not.toContain("status IN ('failed', 'paused')");
+      expect(updateParams).toEqual(['workflow-run-123', expect.any(String), 'claim-1']);
     });
 
     test('preserves the cleared error as a workflow_resumed event (CAS winner only)', async () => {
@@ -295,7 +205,7 @@ describe('workflow run resume', () => {
       });
 
       const [, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
-      expect(JSON.parse(updateParams[2] as string)).toMatchObject({
+      expect(JSON.parse(updateParams[1] as string)).toMatchObject({
         error: null,
         scheduled_resume: {
           ...scheduled,
@@ -408,18 +318,6 @@ describe('workflow run resume', () => {
 
       await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
         'Failed to resume workflow run: Lock timeout'
-      );
-    });
-
-    test('throws on database error during SELECT after UPDATE', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
-      // UPDATE succeeds
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      // SELECT fails
-      mockQuery.mockRejectedValueOnce(new Error('Connection lost'));
-
-      await expect(resumeWorkflowRun('workflow-run-123')).rejects.toThrow(
-        'Failed to resume workflow run: Connection lost'
       );
     });
 

@@ -461,7 +461,10 @@ describe('interactive loop node', () => {
     }
   );
 
-  it('interactive loop resumes from stored iteration with user input', async () => {
+  it('LEGACY: interactive loop resumes from stored iteration with user input (pre-#2074 approval metadata)', async () => {
+    // Rows paused before #2074 have neither completionSignaled nor signaledOutput in
+    // metadata.approval, and no loop_feedback_given. The bare-approve finalize must not
+    // trigger; the loop runs a normal resumed iteration.
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       callCount++;
@@ -899,6 +902,124 @@ describe('interactive loop node', () => {
     );
     expect(completed.length).toBe(1);
     expect(completed[0][0].data).not.toHaveProperty('tokens');
+  });
+
+  it('resumes a gate whose saved execution holds unreadable calls, keeping totals partial', async () => {
+    const node: DagNode = {
+      id: 'refine',
+      kind: 'loop',
+      loop: {
+        fresh_context: false,
+        prompt: 'Refine.',
+        until: 'APPROVED',
+        max_iterations: 10,
+        interactive: true,
+        gate_message: 'Review.',
+      },
+    };
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Pass one. <promise>APPROVED</promise>' };
+      yield {
+        type: 'result',
+        sessionId: 'calls-sid',
+        tokens: { input: 3, output: 4, calls: [{ input: 3, output: 4 }] },
+      };
+    });
+    const pausing = createMockDeps();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: pausing,
+        cwd: testDir,
+        workflow: { name: 'gate-invalid-calls', nodes: [node] },
+        workflowRun: makeWorkflowRun('gate-invalid-calls-run'),
+      })
+    );
+    const saved = pausing.store.pauseWorkflowRun.mock.calls[0]?.[1];
+    const execution = saved?.execution as
+      | { spend: { tokens: { source: string; value: Record<string, unknown> } } }
+      | undefined;
+    if (execution?.spend.tokens.source !== 'provider') throw new Error('expected gate spend');
+    execution.spend.tokens.value.calls = 'not-a-list';
+
+    const resuming = createMockDeps();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: resuming,
+        cwd: testDir,
+        workflow: { name: 'gate-invalid-calls', nodes: [node] },
+        workflowRun: makeWorkflowRun('gate-invalid-calls-run', {
+          metadata: { approval: saved, loop_user_input: 'Approved', loop_feedback_given: false },
+        }),
+      })
+    );
+    const completed = resuming.store.createWorkflowEvent.mock.calls.filter(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'refine'
+    );
+    expect(completed.length).toBe(1);
+    expect(completed[0]?.[0].data?.tokens).toEqual({ input: 3, output: 4, callsPartial: true });
+  });
+
+  it('warns and marks the breakdown partial when persisted gate calls are unreadable', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'should never run' };
+      yield { type: 'result', sessionId: 'never' };
+    });
+
+    const mockDeps = createMockDeps();
+    const workflowRun = makeWorkflowRun('finalize-invalid-calls-run', {
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'refine',
+          iteration: 1,
+          sessionId: 'sig-session-1',
+          message: 'gate',
+          completionSignaled: true,
+          signaledOutput: 'REPORT',
+          signaledTokens: { input: 3, output: 4, calls: 'not-a-list' },
+        },
+        loop_user_input: 'Approved',
+        loop_feedback_given: false,
+      },
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        cwd: testDir,
+        workflow: {
+          name: 'finalize-invalid-calls',
+          nodes: [
+            {
+              id: 'refine',
+              kind: 'loop',
+              loop: {
+                fresh_context: false,
+                prompt: 'Refine.',
+                until: 'APPROVED',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review.',
+              },
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    const warnCalls = mockLogFn.mock.calls.filter(
+      (call: unknown[]) => call[1] === 'dag_loop.signaled_calls_invalid_ignored'
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]?.[0]).toEqual(
+      expect.objectContaining({ workflowRunId: workflowRun.id, nodeId: 'refine' })
+    );
+    const completed = mockDeps.store.createWorkflowEvent.mock.calls.filter(
+      ([event]) => event.event_type === 'node_completed' && event.step_name === 'refine'
+    );
+    expect(completed.length).toBe(1);
+    expect(completed[0]?.[0].data?.tokens).toEqual({ input: 3, output: 4, callsPartial: true });
   });
 
   it('a finalize from a metadata-less paused loop gate persists the path contract and its legacy root fields', async () => {
@@ -1932,101 +2053,5 @@ describe('interactive loop node', () => {
       });
       expect(loopIterations).toBe(2);
     });
-  });
-
-  it('LEGACY: resume with pre-#2074 approval metadata (no completionSignaled/signaledOutput keys) iterates', async () => {
-    // Rows paused before #2074 have neither key in metadata.approval and no
-    // loop_feedback_given — the finalize path must NOT trigger; the loop runs
-    // a normal resumed iteration exactly as before.
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'Legacy pass. <promise>APPROVED</promise>' };
-      yield { type: 'result', sessionId: 'legacy-session-2' };
-    });
-
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('legacy-resume-run', {
-      metadata: {
-        approval: {
-          type: 'interactive_loop',
-          nodeId: 'refine',
-          iteration: 1,
-          sessionId: 'legacy-session-1',
-          message: 'Review and provide feedback.',
-        },
-        loop_user_input: 'approved',
-      },
-    });
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'legacy-loop-resume',
-          nodes: [
-            {
-              id: 'refine',
-              kind: 'loop',
-              loop: {
-                fresh_context: false,
-                prompt: 'User said: $LOOP_USER_INPUT. Refine.',
-                until: 'APPROVED',
-                max_iterations: 10,
-                interactive: true,
-                gate_message: 'Review and provide feedback.',
-              },
-            },
-          ],
-        },
-        workflowRun,
-      })
-    );
-
-    // A real iteration ran (no zero-duration finalize short-circuit).
-    expect(mockSendQueryDag.mock.calls.length).toBe(1);
-    const promptArg = mockSendQueryDag.mock.calls[0][0] as string;
-    expect(promptArg).toContain('approved');
-  });
-
-  it('non-interactive loop is unaffected (no pause)', async () => {
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'Still working...' };
-      yield { type: 'result', sessionId: 'loop-session' };
-    });
-
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'non-interactive-loop',
-          nodes: [
-            {
-              id: 'my-loop',
-              kind: 'loop',
-              loop: {
-                fresh_context: false,
-                prompt: 'Do task.',
-                until: 'COMPLETE',
-                max_iterations: 2,
-              },
-            },
-          ],
-        },
-        workflowRun,
-      })
-    );
-
-    // pauseWorkflowRun should never be called for non-interactive loops
-    const pauseCalls = (mockDeps.store.pauseWorkflowRun as Mock<IWorkflowStore['pauseWorkflowRun']>)
-      .mock.calls;
-    expect(pauseCalls.length).toBe(0);
   });
 });

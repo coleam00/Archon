@@ -18,8 +18,15 @@ import {
   repoLabelsListSchema,
   prViewRequestSchema,
   prViewSchema,
+  workItemLabelAddedRequestSchema,
+  workItemLabelAddedSchema,
   workItemListRequestSchema,
   workItemListSchema,
+  workItemOpenedRequestSchema,
+  workItemOpenedSchema,
+  workItemSearchItemSchema,
+  workItemSearchRequestSchema,
+  workItemSearchSchema,
   workItemViewRequestSchema,
   workItemViewSchema,
   workItemCommentsRequestSchema,
@@ -37,7 +44,12 @@ import {
 
 export * from './lifecycle';
 export * from './checks';
-import { rerunGroupSchema } from './checks';
+import {
+  checkLogSchema,
+  checksLogsRequestSchema,
+  checksLogsSchema,
+  rerunGroupSchema,
+} from './checks';
 
 export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
 export type ChecksState = z.infer<typeof checksStateSchema>;
@@ -115,6 +127,29 @@ export const commitChecksObservationSchema = checkSetSchema.safeExtend({
   revision: gitObjectIdSchema,
   approvalPending: z.boolean().nullable().optional(),
 });
+export type CommitChecksObservation = z.infer<typeof commitChecksObservationSchema>;
+export type PrReviewsObservation = z.infer<typeof prReviewsSchema>;
+export type WorkItemList = z.infer<typeof workItemListSchema>;
+export type WorkItemLabelAdded = z.infer<typeof workItemLabelAddedSchema>;
+export type WorkItemOpened = z.infer<typeof workItemOpenedSchema>;
+/** The `forge check` refusals a plugin can state its own remedy for. */
+const pluginRemedyKinds = ['unsupported_op', 'no_credential'] as const;
+type PluginRemedyKind = (typeof pluginRemedyKinds)[number];
+/**
+ * The `forge check` refusals the operator fixes, each answered with a remedy. A run
+ * refused at start reports these kinds as they are; any other failure is the check's own.
+ * `authorization` and `not_found` come from the check's read of the repository.
+ */
+export const forgeAccessRefusalKinds = [
+  'no_plugin_for_host',
+  ...pluginRemedyKinds,
+  'authorization',
+  'not_found',
+] as const;
+export type ForgeAccessRefusalKind = (typeof forgeAccessRefusalKinds)[number];
+export function isForgeAccessRefusalKind(kind: string): kind is ForgeAccessRefusalKind {
+  return (forgeAccessRefusalKinds as readonly string[]).includes(kind);
+}
 export const pluginIdentitySchema = z.object({
   name: z.string().regex(/^[a-z0-9-]+$/),
   version: z.string().min(1),
@@ -126,8 +161,24 @@ export const pluginMetadataSchema = pluginIdentitySchema.extend({
   hosts: z.array(z.string().min(1)),
   capabilities: z.array(z.string().min(1)),
   token_env: z.array(z.string().min(1)).default([]),
+  // The operator's next step when `forge check` refuses for this plugin; forge supplies
+  // generic text for a plugin that states none.
+  remedies: z
+    .object({
+      unsupported_op: z.string().min(1),
+      no_credential: z.string().min(1),
+    } satisfies Record<PluginRemedyKind, z.ZodString>)
+    .partial()
+    .optional(),
 });
 export type PluginMetadata = z.infer<typeof pluginMetadataSchema>;
+/**
+ * The capability a plugin advertises when `resolve` with `web: true` reads the
+ * forge's web URL of an issue or a pull request. URL shapes belong to the forge, so a
+ * caller never parses one. An older plugin would answer for the repository alone, or
+ * not at all, so the host refuses the request without it.
+ */
+export const RESOLVE_SUBJECT = 'resolve:subject';
 export const resolveResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('none'), forge: z.literal('none') }),
   z.object({
@@ -135,12 +186,19 @@ export const resolveResultSchema = z.discriminatedUnion('kind', [
     forge: z.string().min(1),
     repo: repoRefSchema,
     plugin: pluginIdentitySchema,
+    // The issue or pull request the URL names, in `repo`: only on a `web` request, and
+    // required there; the host refuses a resolved `web` answer without it.
+    subject: z
+      .object({ kind: z.enum(['issue', 'pr']), number: z.number().int().positive() })
+      .optional(),
   }),
 ]);
 export const resolveRequestSchema = z.object({
   operationId: z.string().min(1),
   op: z.literal('resolve'),
+  // A git remote URL, or with `web` the forge's web URL of an issue or a pull request.
   remote: z.string().nullable(),
+  web: z.literal(true).optional(),
 });
 export const checksRequestSchema = z.object({
   operationId: z.string().min(1),
@@ -160,18 +218,23 @@ export const forgeRequestSchema = z.discriminatedUnion('op', [
   resolveRequestSchema,
   checksRequestSchema,
   checksCommitRequestSchema,
+  checksLogsRequestSchema,
   ...lifecycleReadRequestSchemas,
   ...mutationRequestSchemas,
 ]);
 export type ForgeRequest = z.infer<typeof forgeRequestSchema>;
+/**
+ * The failures that say nothing about the request itself: the forge did not answer or
+ * answered that it is failing (`unavailable`), or it is limiting the caller
+ * (`rate_limited`). The host repeats a read that fails with one of them. A plugin sets
+ * them from a status, a documented header or an error code, never from message text.
+ */
+export const temporaryErrorKinds = ['unavailable', 'rate_limited'] as const;
 export const forgeErrorSchema = z.object({
   kind: z.enum([
-    'unsupported_op',
+    ...temporaryErrorKinds,
+    ...forgeAccessRefusalKinds,
     'conflict',
-    'authorization',
-    'no_plugin_for_host',
-    'no_credential',
-    'not_found',
     'forge_error',
     'invalid_request',
     'invalid_response',
@@ -192,6 +255,7 @@ export const forgeResponseSchema = z.discriminatedUnion('ok', [
       z.object({ op: z.literal('resolve'), value: resolveResultSchema }),
       z.object({ op: z.literal('checks.state'), value: checksObservationSchema }),
       z.object({ op: z.literal('checks.commit'), value: commitChecksObservationSchema }),
+      z.object({ op: checksLogsRequestSchema.shape.op, value: checksLogsSchema }),
       ...lifecycleReadResultSchemas,
       ...mutationResultSchemas,
     ]),
@@ -256,6 +320,29 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
       z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
       z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
       z.object({
+        op: workItemLabelAddedRequestSchema.shape.op,
+        value: workItemLabelAddedSchema,
+      }),
+      z.object({ op: workItemOpenedRequestSchema.shape.op, value: workItemOpenedSchema }),
+      z.object({
+        op: workItemSearchRequestSchema.shape.op,
+        value: workItemSearchSchema.omit({ text: true }).extend({
+          query: contentAuditSchema,
+          items: z.array(
+            workItemSearchItemSchema.omit({ title: true }).extend({ content: contentAuditSchema })
+          ),
+        }),
+      }),
+      z.object({
+        op: checksLogsRequestSchema.shape.op,
+        value: checksLogsSchema.extend({
+          log: z.discriminatedUnion('kind', [
+            checkLogSchema.options[0].omit({ text: true }).extend({ content: contentAuditSchema }),
+            checkLogSchema.options[1],
+          ]),
+        }),
+      }),
+      z.object({
         op: prFilesRequestSchema.shape.op,
         value: prFilesSchema.extend({
           files: z.array(
@@ -302,9 +389,36 @@ function bodyAudit(body: string): z.infer<typeof contentAuditSchema> {
   return { digest: contentDigest(body), bytes: Buffer.byteLength(body) };
 }
 
+type ForgeResult = Extract<ForgeResponse, { ok: true }>['result'];
+type ForgeAuditResult = Extract<ForgeAuditResponse, { ok: true }>['result'];
+
+/** A search's words and titles and a check's log are authored text: digests only. */
+function searchAudit(result: Extract<ForgeResult, { op: 'workitem.search' }>): ForgeAuditResult {
+  const { text, ...facts } = result.value;
+  return {
+    op: result.op,
+    value: {
+      ...facts,
+      query: bodyAudit(text),
+      items: facts.items.map(({ title, ...item }) => ({ ...item, content: bodyAudit(title) })),
+    },
+  };
+}
+function logAudit(result: Extract<ForgeResult, { op: 'checks.logs' }>): ForgeAuditResult {
+  const log = result.value.log;
+  if (log.kind === 'none') return { op: result.op, value: { ...result.value, log } };
+  const { text, ...facts } = log;
+  return {
+    op: result.op,
+    value: { ...result.value, log: { ...facts, content: bodyAudit(text) } },
+  };
+}
+
 export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse {
   if (!response.ok) return response;
   const result = response.result;
+  if (result.op === 'workitem.search') return { ...response, result: searchAudit(result) };
+  if (result.op === 'checks.logs') return { ...response, result: logAudit(result) };
   if (result.op === 'pr.reviews')
     return {
       ...response,
@@ -392,6 +506,8 @@ export const forgeOperationAuditSchema = z.object({
   target: z.union([prRefSchema, repoRefSchema]).nullable(),
   plugin: pluginIdentitySchema.nullable(),
   result: auditResponseSchema,
+  // How many times the host repeated a read that failed temporarily before `result`.
+  retries: z.number().int().nonnegative(),
   durationMs: z.number().nonnegative(),
 });
 

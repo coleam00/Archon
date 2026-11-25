@@ -69,6 +69,30 @@ test('denylist excludes repositories before reading their manifests, ignoring ca
   expect(messages).toContain('[plugins] Skipping test-author/test-pack: denylisted repository');
 });
 
+test('an empty repository is skipped, and a 409 elsewhere still fails the build', async () => {
+  const { options, messages } = fixture();
+  const plugins = await discoverPlugins({
+    ...options,
+    fetch: async (url, init) =>
+      url.includes('/repos/test-author/test-pack/commits/')
+        ? Response.json({ message: 'Git Repository is empty.' }, { status: 409 })
+        : options.fetch(url, init),
+  });
+  expect(plugins.map(plugin => plugin.id)).toEqual([
+    'test-author/archived-forge',
+    'test-author/untagged-pack',
+  ]);
+  expect(messages).toContain('[plugins] Skipping test-author/test-pack: empty repository');
+
+  await expect(
+    discoverPlugins({
+      ...options,
+      fetch: async (url, init) =>
+        url.includes('/git/trees/') ? new Response('', { status: 409 }) : options.fetch(url, init),
+    })
+  ).rejects.toThrow('HTTP 409');
+});
+
 test('malformed JSON is skipped with a reason', async () => {
   const messages: string[] = [];
   const plugins = await discoverPlugins({

@@ -6,7 +6,9 @@
  * - Can answer directly or invoke workflows
  * - Does NOT require a project to be selected before starting a conversation
  */
-import { createSqlWorkflowOperations } from '../workflows/sql-host';
+import { createSqlWorkflowOperations, createWorkflowHostStore } from '../workflows/sql-host';
+import { createWorkflowStore } from '../workflows/store-adapter';
+import { attentionQueueSource, resolveAttentionProject } from '../operations/attention-queue';
 import { existsSync } from 'fs';
 import type {
   IPlatformAdapter,
@@ -25,6 +27,7 @@ import { toError } from '../utils/error';
 import { quoteCommandArg } from '../utils/command-args';
 import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
+import { buildAttentionTool } from './attention-tool';
 import {
   buildInvokeWorkflowTool,
   buildRegisterProjectTool,
@@ -240,6 +243,7 @@ export async function handleMessage(
       workflows,
       config,
       cwd,
+      abortSignal: context.abortSignal,
     });
 
     // 5. Send to AI provider
@@ -275,7 +279,7 @@ export async function handleMessage(
       conversationId,
       conversation,
       pendingLaunch.launch,
-      turn.failed,
+      turn,
       context
     );
     await reportSourceWork(platform, conversationId, conversation, discoveredCodebase);
@@ -298,16 +302,16 @@ async function dispatchPendingLaunch(
   conversationId: string,
   conversation: Conversation,
   launch: ChatLaunch | null,
-  failed: boolean,
+  turn: Pick<ChatTurn, 'failed' | 'stopped'>,
   context: HandleMessageContext
 ): Promise<void> {
   // After the gate continuation: a launch has committed nothing yet, so unlike a resolved
-  // gate it is dropped when the turn throws or ends in an error result, and the user sees
-  // the error instead.
-  if (launch !== null && failed) {
+  // gate it is dropped when the turn throws, ends in an error result, or is stopped by the
+  // operator; the user sees the error or the stop instead.
+  if (launch !== null && (turn.failed || turn.stopped)) {
     getLog().info(
       { conversationId, workflowName: launch.entry.workflow.name },
-      'orchestrator.invoke_workflow_dropped_failed_turn'
+      'orchestrator.invoke_workflow_dropped_unfinished_turn'
     );
   } else if (launch !== null) {
     const { entry, codebase, prompt, inputs } = launch;
@@ -394,6 +398,7 @@ async function runChatTurn(
     startedAt: Date.now(),
     reported: false,
     failed: false,
+    stopped: false,
   };
   const turnInput = { ...input, turn };
   try {
@@ -690,10 +695,11 @@ function attachNativeTools(
   // reason: on a foreground surface the run would otherwise block the agent loop.
   const pendingLaunch: { launch: ChatLaunch | null } = { launch: null };
 
-  // Providers with in-process native tools launch workflows and
-  // register projects through typed tools in every chat. Project-scoped chats also
-  // get `manage_run` to inspect and operate that project's runs.
+  // Providers with in-process native tools launch workflows, register projects and
+  // read and answer the attention queue through typed tools in every chat.
+  // Project-scoped chats also get `manage_run` to inspect and operate that project's runs.
   if (caps.nativeTools) {
+    const operations = createSqlWorkflowOperations();
     const tools = [
       buildInvokeWorkflowTool({
         workflows: workflowsWithSource,
@@ -706,12 +712,19 @@ function attachNativeTools(
       }),
       buildRegisterProjectTool({ registerProject }),
       buildReportWorkflowNoMatchTool(),
+      buildAttentionTool({
+        actor,
+        operations,
+        queue: attentionQueueSource(createWorkflowStore(), createWorkflowHostStore().isolation),
+        resolveProject: spec => resolveAttentionProject(codebaseDb, spec),
+        codebaseId: conversation.codebase_id,
+      }),
     ];
     if (conversation.codebase_id !== null) {
       tools.push(
         buildManageRunTool({
           actor,
-          operations: createSqlWorkflowOperations(),
+          operations,
           codebaseId: conversation.codebase_id,
           surface: platform,
           // One continuation per turn: the resume runs in this conversation and

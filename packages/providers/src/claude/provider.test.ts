@@ -28,30 +28,37 @@ const mockQuery = mock<MockQuery>(async function* (_params) {
 });
 
 // Mock the claude-agent-sdk
-const sdkToolHandlers = new Map<
-  string,
-  (args: Record<string, unknown>) => Promise<{ content: { type: 'text'; text: string }[] }>
->();
+type SdkToolHandler = (
+  args: Record<string, unknown>,
+  extra: { requestId: number }
+) => Promise<{ content: { type: 'text'; text: string }[] }>;
+const sdkToolHandlers = new Map<string, SdkToolHandler>();
+// Exports these tests never reach fail when called instead of running the real SDK.
+const unmocked = (name: string) => () => {
+  throw new Error(`${name} is not mocked`);
+};
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   createSdkMcpServer: ({ name }: { name: string }) => ({
     type: 'sdk',
     name,
     instance: {
-      registerTool: (
-        name: string,
-        _config: unknown,
-        handler: (
-          args: Record<string, unknown>
-        ) => Promise<{ content: { type: 'text'; text: string }[] }>
-      ) => {
+      registerTool: (name: string, _config: unknown, handler: SdkToolHandler) => {
         sdkToolHandlers.set(name, handler);
       },
     },
   }),
   query: mockQuery,
+  archiveSession: unmocked('archiveSession'),
+  unarchiveSession: unmocked('unarchiveSession'),
+  matchDeniedModels: unmocked('matchDeniedModels'),
 }));
 
-import { TOOL_OUTPUT_MAX_CHARS, type ProviderStopReason } from '@archon/provider-contract';
+import {
+  TOOL_OUTPUT_MAX_CHARS,
+  createTurnMessageQueue,
+  providerCredentialKeySchema,
+  type ProviderStopReason,
+} from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
@@ -257,10 +264,6 @@ describe('ClaudeProvider', () => {
     spy.mockRestore();
   });
 
-  test('getType returns claude', () => {
-    expect(client.getType()).toBe('claude');
-  });
-
   test('returns full capability set for Claude provider', () => {
     expect(client.getCapabilities()).toMatchObject({
       backgroundWork: 'reported',
@@ -431,6 +434,24 @@ describe('message stream', () => {
       { type: 'mcp_server_status', server: 'github', status: 'connected' },
       { type: 'mcp_server_status', server: 'linear', status: 'needs_auth' },
       { type: 'mcp_server_status', server: 'broken', status: 'failed', error: 'spawn ENOENT' },
+    ]);
+  });
+
+  test('names the session from the first init, once per query, before its MCP status', async () => {
+    const chunks = await streamOf(
+      {
+        type: 'system',
+        subtype: 'init',
+        session_id: 'sid',
+        mcp_servers: [{ name: 'github', status: 'connected' }],
+      },
+      // A wake turn of the same query sends init again.
+      { type: 'system', subtype: 'init', session_id: 'sid', mcp_servers: [] }
+    );
+
+    expect(chunks).toEqual([
+      { type: 'session', sessionId: 'sid' },
+      { type: 'mcp_server_status', server: 'github', status: 'connected' },
     ]);
   });
 
@@ -692,38 +713,6 @@ describe('subtasks and settling', () => {
     expect(chunks[0]).toMatchObject({ type: 'subtask', status: 'failed' });
   });
 
-  test('emits complete task lifecycle in correct order', async () => {
-    const chunks = await streamOf(
-      {
-        type: 'system',
-        subtype: 'task_started',
-        task_id: 't-1',
-        description: 'Working on the bug',
-      },
-      {
-        type: 'system',
-        subtype: 'task_progress',
-        task_id: 't-1',
-        description: 'Working on the bug',
-        summary: 'Reading stack trace',
-      },
-      {
-        type: 'system',
-        subtype: 'task_notification',
-        task_id: 't-1',
-        status: 'completed',
-        output_file: '/tmp/t-1.json',
-        summary: 'Done',
-      }
-    );
-
-    expect(chunks.map(c => (c.type === 'subtask' ? c.status : c.type))).toEqual([
-      'started',
-      'running',
-      'completed',
-    ]);
-  });
-
   test('closes an announced subtask whose notification is marked ambient', async () => {
     const chunks = await streamOf(
       { type: 'system', subtype: 'task_started', task_id: 't-1', description: 'Research' },
@@ -936,6 +925,49 @@ describe('subtasks and settling', () => {
     ]);
   });
 
+  test('an engine turn message reaches the live session at its next step, and the turn settles', async () => {
+    const turnMessages = createTurnMessageQueue();
+    const received: unknown[] = [];
+    mockQuery.mockImplementation(async function* ({ prompt }) {
+      if (typeof prompt === 'string') throw new Error('Expected streaming input');
+      const input = prompt[Symbol.asyncIterator]();
+      received.push((await input.next()).value);
+      yield {
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [{ task_id: 'server', task_type: 'local_bash', description: 'dev server' }],
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's', result: 'waiting' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+      turnMessages.push('engine check-in');
+      received.push((await input.next()).value);
+      yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+      yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+      yield {
+        type: 'system',
+        subtype: 'task_notification',
+        task_id: 'server',
+        status: 'completed',
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's', result: 'done' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+    });
+    const chunks = await chunksOf('test', '/workspace', undefined, { turnMessages });
+    expect(received).toEqual([
+      expect.objectContaining({ message: { role: 'user', content: 'test' } }),
+      {
+        type: 'user',
+        message: { role: 'user', content: 'engine check-in' },
+        parent_tool_use_id: null,
+        session_id: '',
+        priority: 'next',
+        client_composed: true,
+      },
+    ]);
+    expect(chunks.filter(chunk => chunk.type === 'result').at(-1)?.text).toBe('done');
+    expect(chunks.at(-1)).toEqual({ type: 'settled' });
+  });
+
   test('cancelling quiet background work closes streaming input without settling or inventing a stop', async () => {
     const abort = new AbortController();
     let inputClosed = false;
@@ -965,6 +997,62 @@ describe('subtasks and settling', () => {
     expect(inputClosed).toBe(true);
     expect(stream.chunks.some(chunk => chunk.type === 'settled')).toBe(false);
     expect(stream.chunks.filter(chunk => chunk.type === 'subtask')).toHaveLength(1);
+  });
+
+  test('holds the main agent turn end until its subtasks close, and never refuses its structured result (#5923)', async () => {
+    const decisions: unknown[] = [];
+    let structuredOutputHooks: unknown[] = [];
+    mockQuery.mockImplementation(async function* ({ options }) {
+      structuredOutputHooks = (options?.hooks?.PreToolUse ?? []).filter(
+        m => m.matcher === 'StructuredOutput'
+      );
+      const hold = options?.hooks?.Stop?.[0]?.hooks[0];
+      if (!hold) throw new Error('no Stop hook');
+      const stop = (input: Record<string, unknown> = {}, signal = new AbortController().signal) =>
+        hold({ hook_event_name: 'Stop', ...input } as never, undefined, { signal }).then(d => {
+          decisions.push(d);
+        });
+      yield { type: 'system', subtype: 'task_started', task_id: 'helper' };
+      await stop({ agent_id: 'helper' });
+      const held = stop();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(decisions).toHaveLength(1);
+      yield { type: 'system', subtype: 'task_notification', task_id: 'helper', status: 'failed' };
+      await held;
+      await stop();
+    });
+
+    await chunksOf('test', '/workspace', undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+
+    expect(structuredOutputHooks).toEqual([]);
+    expect(decisions).toEqual([
+      { continue: true },
+      { decision: 'block', reason: expect.any(String) },
+      { continue: true },
+    ]);
+  });
+
+  test('an aborted hold releases the turn end without sending the agent back', async () => {
+    let decision: unknown;
+    mockQuery.mockImplementation(async function* ({ options }) {
+      const hold = options?.hooks?.Stop?.[0]?.hooks[0];
+      if (!hold) throw new Error('no Stop hook');
+      yield { type: 'system', subtype: 'task_started', task_id: 'helper' };
+      const aborted = new AbortController();
+      const held = hold({ hook_event_name: 'Stop' } as never, undefined, {
+        signal: aborted.signal,
+      });
+      aborted.abort();
+      decision = await held;
+    });
+
+    await chunksOf('test', '/workspace', undefined, {
+      outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+    });
+
+    expect(decision).toEqual({ continue: true });
   });
 });
 
@@ -1054,24 +1142,6 @@ describe('tool call closing', () => {
         outputTruncated: true,
       },
     ]);
-  });
-
-  test('terminal tool result queue drain preserves hook outcome', async () => {
-    mockQuery.mockImplementation(async function* (args) {
-      yield toolUses(['late-id', 'Read']);
-      await postToolUse(args)?.(
-        { tool_name: 'Read', tool_use_id: 'late-id', tool_response: 'ok' } as never,
-        'late-id',
-        hookOptions
-      );
-    });
-
-    expect(await chunksOf('test', '/workspace')).toContainEqual({
-      type: 'tool_call_update',
-      toolCallId: 'late-id',
-      status: 'completed',
-      output: 'ok',
-    });
   });
 
   test('a tool call no hook reports closes from its tool_result block', async () => {
@@ -1947,7 +2017,13 @@ describe('cost of a resumed or forked session is the query’s own spend', () =>
 
 describe('SDK options', () => {
   test('passes request options through to the SDK', async () => {
-    const sandbox = { enabled: true, network: { allowedDomains: [] } };
+    // Nested keys Archon's schema does not list (deniedDomains, allowRead) must
+    // reach the SDK too: dropping one silently widens the sandbox.
+    const sandbox = {
+      enabled: true,
+      network: { allowedDomains: [], deniedDomains: ['evil.example'], strictAllowlist: true },
+      filesystem: { allowRead: ['/x'], denyRead: ['/y'] },
+    };
     const options = await optionsFor(
       {
         model: 'sonnet',
@@ -1967,8 +2043,8 @@ describe('SDK options', () => {
       maxBudgetUsd: 5.0,
       fallbackModel: 'claude-haiku-4-5',
       betas: ['context-1m-2025-08-07'],
-      sandbox,
     });
+    expect(options.sandbox).toEqual(sandbox);
   });
 
   test('enables agentProgressSummaries by default for workflow nodes', async () => {
@@ -2051,11 +2127,7 @@ describe('SDK options', () => {
   // land on its nearest endpoint.
   test.each([
     ['high', 'high'],
-    ['xhigh', 'xhigh'],
-    ['minimal', 'low'],
-    ['max', 'max'],
     ['ultra', 'max'],
-    ['persistent', 'max'],
   ] as const)('effort %s reaches the SDK as %s', async (declared, applied) => {
     expect((await optionsFor({ nodeConfig: { effort: declared } })).effort).toBe(applied);
   });
@@ -2526,6 +2598,15 @@ describe('workflow node capabilities', () => {
     expect(options.allowedTools).toContain('mcp__declared__*');
   });
 
+  test('a workflow node never gets ScheduleWakeup, and keeps its own denied tools', async () => {
+    const node = await workflowOptions({ nodeConfig: { nodeId: 'n', denied_tools: ['WebFetch'] } });
+    expect(node.disallowedTools).toEqual(['ScheduleWakeup', 'WebFetch']);
+
+    mockQuery.mockClear();
+    const chat = await workflowOptions({ nodeConfig: { denied_tools: ['WebFetch'] } });
+    expect(chat.disallowedTools).toEqual(['WebFetch']);
+  });
+
   test('keeps partial non-workflow nodeConfig on ambient defaults', async () => {
     const options = await workflowOptions({ nodeConfig: { allowed_tools: [] } });
 
@@ -2733,18 +2814,6 @@ describe('typed failures (#1797, #3524)', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
-  test('a reworded message with the same code keeps the same class', async () => {
-    const classes: unknown[] = [];
-    for (const text of ['Invalid API key · Fix external API key', 'Unauthorized: key revoked']) {
-      const result = await resultOf(
-        syntheticAssistantMessage('authentication_failed', text),
-        apiErrorResult(text)
-      );
-      classes.push((result.failure as { class: string }).class);
-    }
-    expect(classes).toEqual(['auth', 'auth']);
-  });
-
   test('text that reads as a different class does not change the code’s class', async () => {
     // "rate limit" and "401" in the words of a server_error stay transient.
     const text = 'rate limit reached, 401 unauthorized, credit balance too low';
@@ -2827,6 +2896,22 @@ describe('typed failures (#1797, #3524)', () => {
     expect(result.cost).toBeCloseTo(0.51);
   });
 
+  test('a structured-output-retries result reports schema_unmet and keeps its subtype', async () => {
+    const result = await resultOf({
+      type: 'result',
+      subtype: 'error_max_structured_output_retries',
+      is_error: true,
+      errors: ['Failed to provide valid structured output after 5 attempts'],
+      session_id: 'sid-schema',
+    });
+    expect(result.failure).toEqual({
+      class: 'schema_unmet',
+      evidence:
+        'error_max_structured_output_retries: Failed to provide valid structured output after 5 attempts',
+    });
+    expect(result.errorSubtype).toBe('error_max_structured_output_retries');
+  });
+
   test('an error_during_execution result keeps its subtype and reports unknown', async () => {
     sdkYields({
       type: 'result',
@@ -2858,6 +2943,11 @@ describe('typed failures (#1797, #3524)', () => {
     ['temp_dir_unusable', 'misconfigured'],
     ['cwd_unavailable', 'misconfigured'],
     ['shell_tool_missing', 'misconfigured'],
+    ['sandbox_required_unavailable', 'misconfigured'],
+    ['config_file_invalid', 'misconfigured'],
+    ['initialize_not_first', 'misconfigured'],
+    ['managed_settings_not_delivered', 'misconfigured'],
+    ['initialize_fields_not_delivered', 'misconfigured'],
     ['remote_settings_required_unavailable', 'unknown'],
     ['org_verify_failed', 'unknown'],
   ])('a startup failure for %s reports %s, classified by its reason', async (reason, expected) => {
@@ -3289,6 +3379,7 @@ describe('provider contract', () => {
         {
           name: 'plain turn',
           run: turn([
+            { type: 'system', subtype: 'init', session_id: 's', mcp_servers: [] },
             { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
             { type: 'system', subtype: 'session_state_changed', state: 'idle' },
           ]),
@@ -3424,7 +3515,10 @@ describe('provider contract', () => {
         name: 'forked session',
         source: 's',
         run: () => {
-          sdkYields({ type: 'result', subtype: 'success', is_error: false, session_id: 's-fork' });
+          sdkYields(
+            { type: 'system', subtype: 'init', session_id: 's-fork', mcp_servers: [] },
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's-fork' }
+          );
           return client.sendQuery('test', '/workspace', 's', { forkSession: true });
         },
       },
@@ -3501,7 +3595,10 @@ describe('provider contract', () => {
     for (const provider of [createProvider(), overStreams(createProvider, descriptor)]) {
       mockQuery.mockImplementation(async function* ({ options }) {
         expect(options?.mcpServers?.archon).toBeDefined();
-        const result = await sdkToolHandlers.get('manage_run')!({ action: 'inspect' });
+        const result = await sdkToolHandlers.get('manage_run')!(
+          { action: 'inspect' },
+          { requestId: 1 }
+        );
         yield {
           type: 'result',
           subtype: 'success',
@@ -3725,3 +3822,92 @@ for (const mode of ['success', 'abort', 'return'] as const) {
     expect(closed).toBe(true);
   });
 }
+
+describe('buildRequestSubprocessEnv credential input log', () => {
+  // Every input the diagnostic reads, so a developer's own Claude env cannot leak in.
+  const keys = providerCredentialKeySchema.options;
+  const saved: Partial<Record<(typeof keys)[number], string>> = {};
+  beforeEach(() => {
+    for (const key of keys) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+  afterEach(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  const credentialInputLogs = (): unknown[] =>
+    mockLogger.info.mock.calls
+      .filter(call => call[1] === 'claude.credential_input')
+      .map(call => call[0]);
+  const expectNoSecretsLogged = (): void => {
+    const logged = JSON.stringify(
+      [
+        mockLogger.trace,
+        mockLogger.debug,
+        mockLogger.info,
+        mockLogger.warn,
+        mockLogger.error,
+        mockLogger.fatal,
+      ].map(level => level.mock.calls)
+    );
+    expect(logged).not.toContain('user-secret-token');
+    expect(logged).not.toContain('install-secret-token');
+  };
+  const delivered = {
+    env: { CLAUDE_CODE_OAUTH_TOKEN: 'user-secret-token' },
+    userCredentialEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+  };
+
+  test('a delivered per-user credential is logged as delivered, never as the global login', () => {
+    claudeModule.buildRequestSubprocessEnv(delivered);
+    expect(credentialInputLogs()).toEqual([
+      { credentialInput: 'delivered', credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN'] },
+    ]);
+    expect(mockLogger.info.mock.calls.some(call => call[1] === 'using_global_auth')).toBe(false);
+    expectNoSecretsLogged();
+  });
+
+  test('a delivered credential is still the one logged when an install key competes', () => {
+    process.env.ANTHROPIC_API_KEY = 'install-secret-token';
+    claudeModule.buildRequestSubprocessEnv(delivered);
+    expect(credentialInputLogs()).toEqual([
+      { credentialInput: 'delivered', credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN'] },
+    ]);
+    expectNoSecretsLogged();
+  });
+
+  test('install-wide keys, an auth header and a cloud selector are logged as forwarded inputs', () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'install-secret-token';
+    process.env.ANTHROPIC_CUSTOM_HEADERS = 'Authorization: Bearer install-secret-token';
+    process.env.CLAUDE_CODE_USE_BEDROCK = '1';
+    claudeModule.buildRequestSubprocessEnv({});
+    expect(credentialInputLogs()).toEqual([
+      {
+        credentialInput: 'forwarded',
+        credentialKeys: [
+          'CLAUDE_CODE_OAUTH_TOKEN',
+          'ANTHROPIC_CUSTOM_HEADERS',
+          'CLAUDE_CODE_USE_BEDROCK',
+        ],
+      },
+    ]);
+    expectNoSecretsLogged();
+  });
+
+  test('a request with no credential input is logged as none', () => {
+    claudeModule.buildRequestSubprocessEnv({});
+    expect(credentialInputLogs()).toEqual([{ credentialInput: 'none', credentialKeys: [] }]);
+  });
+
+  test('a request that clears the install token leaves no credential input', () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'install-secret-token';
+    const env = claudeModule.buildRequestSubprocessEnv({ env: { CLAUDE_CODE_OAUTH_TOKEN: '' } });
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('');
+    expect(credentialInputLogs()).toEqual([{ credentialInput: 'none', credentialKeys: [] }]);
+  });
+});

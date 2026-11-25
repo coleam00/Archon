@@ -62,7 +62,7 @@ function ToolButton({
       aria-label={title}
       disabled={disabled}
       onClick={onClick}
-      className="rounded-[7px] p-1.5 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-35"
+      className="rounded-md p-1.5 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-35"
     >
       <Icon aria-hidden className="h-3.5 w-3.5" />
     </button>
@@ -96,7 +96,7 @@ export function Toolbar({
 }: ToolbarProps): ReactElement {
   return (
     <div className="flex items-center gap-1 border-b border-border bg-surface px-3 py-1.5">
-      <span className="mr-2 truncate font-mono text-[12px] font-semibold text-text-primary">
+      <span className="mr-2 truncate font-mono text-console-12 font-semibold text-text-primary">
         {workflowName}
       </span>
 
@@ -204,7 +204,7 @@ export function Toolbar({
         type="button"
         title="Auto-arrange the graph with dagre (A)"
         onClick={onAutoArrange}
-        className="brand-bar flex items-center gap-1.5 rounded-[8px] px-2.5 py-1 text-[12px] font-semibold text-white/95 transition-opacity hover:brightness-110"
+        className="brand-bar flex items-center gap-1.5 rounded-md px-2.5 py-1 text-console-12 font-semibold text-white/95 transition-opacity hover:brightness-110"
       >
         <Workflow aria-hidden className="h-3.5 w-3.5" />
         Auto-arrange

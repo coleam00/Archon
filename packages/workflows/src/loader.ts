@@ -1,6 +1,7 @@
 /**
  * Workflow loader - parses and validates a workflow YAML file
  */
+import { LineCounter, parseDocument } from 'yaml';
 import type { ProviderRegistry } from '@archon/provider-contract';
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, IncludeDirective } from './schemas';
 import type { WorkflowPack } from './schemas/pack-settings';
@@ -14,26 +15,24 @@ import {
   validateLoopGroupProseCompletion,
   validateNodeOutputFormats,
   validateRunBudgetShape,
-  validateWorkflowOutcomeDeclaration,
+  validateWorkflowResultContract,
 } from './loader/contracts';
 import {
   collectConditionalJoinWarnings,
   collectLegacyPauseWarnings,
   collectUnknownWorkflowKeys,
-  warnSignalCompletesWithoutInteractive,
 } from './loader/parse-warnings';
 import {
   parseBetas,
   parseContainerPolicy,
   parseDeprecation,
-  parseEvidencePolicy,
   parseFallbackModel,
   parseWorkflowModel,
   inputEnvKeyCollision,
   parseInputs,
   parseMutatesCheckout,
   parseOptionalField,
-  parseOutcomeField,
+  parseWorkflowResource,
   parseRequires,
   parseReturns,
   parseRunBudget,
@@ -44,6 +43,7 @@ import {
 import { parseDagNodes } from './loader/node-parse';
 import {
   persistSessionError,
+  sameContextProviderError,
   sessionResumeProviderError,
   unknownProviderError,
 } from './loader/provider-checks';
@@ -82,6 +82,12 @@ function parseWorkflowHeader(
 
   if (Object.hasOwn(raw, 'thinking')) {
     return "'thinking:' has been removed; use 'effort:' instead";
+  }
+  if (Object.hasOwn(raw, 'outcome_field')) {
+    return "'outcome_field:' has been removed; declare 'returns: { node: <id>, outcome: <field> }' instead";
+  }
+  if (Object.hasOwn(raw, 'evidence_policy')) {
+    return "'evidence_policy:' has been removed; use a 'bash:' or 'script:' node that exits non-zero to fail the run instead";
   }
 
   // A load failure reaches the author through the returned `error`, which discovery
@@ -150,7 +156,7 @@ export function parseWorkflow(
     const raw = parseYaml(content) as Record<string, unknown>;
     return parseWorkflowDocument(raw, filename, providers, configuredEnvNames, pack);
   } catch (error) {
-    return yamlParseFailure(filename, error as Error);
+    return yamlParseFailure(filename, content, error as Error);
   }
 }
 
@@ -226,19 +232,19 @@ interface WorkflowFields {
   readonly webSearchMode: WorkflowDefinition['webSearchMode'];
   readonly persistSessions: boolean;
   readonly mutatesCheckout: ReturnType<typeof parseMutatesCheckout>;
+  readonly resource: WorkflowDefinition['resource'];
   readonly effort: ReturnType<typeof resolveEffort>;
   readonly fallbackModel: ReturnType<typeof parseFallbackModel>;
   readonly betas: ReturnType<typeof parseBetas>;
   readonly sandbox: WorkflowDefinition['sandbox'];
   readonly worktree: ReturnType<typeof parseWorktreePolicy>;
   readonly container: ReturnType<typeof parseContainerPolicy>;
-  readonly evidencePolicy: WorkflowDefinition['evidence_policy'];
   readonly budget: WorkflowDefinition['budget'];
   readonly tags: ReturnType<typeof parseTags>;
   readonly requires: ReturnType<typeof parseRequires>;
   readonly inputs: WorkflowDefinition['inputs'];
   readonly returns: WorkflowDefinition['returns'];
-  readonly outcomeField: WorkflowDefinition['outcome_field'];
+  readonly result: WorkflowDefinition['result'];
   readonly deprecated: WorkflowDefinition['deprecated'];
 }
 
@@ -264,7 +270,8 @@ function parseWorkflowFields(
   const providerError =
     unknownProviderError(provider, dagNodes, providers) ??
     sessionResumeProviderError(dagNodes, provider, providers) ??
-    persistSessionError(dagNodes, persistSessions, provider, providers, parseWarnings);
+    persistSessionError(dagNodes, persistSessions, provider, providers, parseWarnings) ??
+    sameContextProviderError(dagNodes, provider, providers, parseWarnings);
   if (providerError !== null) return providerError;
 
   const modelReasoningEffort = parseOptionalField(
@@ -285,25 +292,21 @@ function parseWorkflowFields(
     { valid: webSearchModeSchema.options }
   );
 
-  warnSignalCompletesWithoutInteractive(dagNodes, filename);
-
   const worktree = parseWorktreePolicy(raw.worktree, filename);
   const container = parseContainerPolicy(raw.container, filename);
-  const evidencePolicy = parseEvidencePolicy(raw.evidence_policy);
-  if ('error' in evidencePolicy) return evidencePolicy.error;
   const budget = parseRunBudget(raw.budget);
   if ('error' in budget) return budget.error;
   const deprecated = parseDeprecation(raw.deprecated);
   if ('error' in deprecated) return deprecated.error;
   const mutatesCheckout = parseMutatesCheckout(raw.mutates_checkout, filename);
+  const resource = parseWorkflowResource(raw.resource);
+  if ('error' in resource) return resource.error;
   const tags = parseTags(raw.tags, filename);
   const requires = parseRequires(raw.requires, filename);
   const inputs = parseInputs(raw.inputs, filename);
   if ('error' in inputs) return inputs.error;
   const returns = parseReturns(raw.returns, dagNodes, filename);
   if ('error' in returns) return returns.error;
-  const outcomeField = parseOutcomeField(raw.outcome_field, filename);
-  if ('error' in outcomeField) return outcomeField.error;
   const effort = resolveEffort(
     raw.effort,
     modelReasoningEffort,
@@ -324,19 +327,19 @@ function parseWorkflowFields(
     webSearchMode,
     persistSessions,
     mutatesCheckout,
+    resource: resource.value,
     effort,
     fallbackModel: parseFallbackModel(raw.fallbackModel, filename),
     betas: parseBetas(raw.betas, filename),
     sandbox,
     worktree,
     container,
-    evidencePolicy: evidencePolicy.value,
     budget: budget.value,
     tags,
     requires,
     inputs: inputs.value,
-    returns: returns.value,
-    outcomeField: outcomeField.value,
+    returns: returns.value?.node,
+    result: returns.value?.result,
     deprecated: deprecated.value,
   };
 }
@@ -349,7 +352,7 @@ function buildWorkflowDefinition(
   pack: WorkflowPack | undefined
 ): WorkflowDefinition {
   return {
-    ...(pack !== undefined ? { pack } : {}),
+    ...(pack !== undefined ? { pack: { ...pack, workflow: header.name } } : {}),
     name: header.name,
     description: header.description,
     provider: fields.provider,
@@ -366,6 +369,7 @@ function buildWorkflowDefinition(
 function executionSettings(fields: WorkflowFields): Partial<WorkflowDefinition> {
   return {
     ...(fields.mutatesCheckout !== undefined ? { mutates_checkout: fields.mutatesCheckout } : {}),
+    ...(fields.resource !== undefined ? { resource: fields.resource } : {}),
     ...(fields.effort !== undefined ? { effort: fields.effort } : {}),
     ...(fields.fallbackModel !== undefined ? { fallbackModel: fields.fallbackModel } : {}),
     ...(fields.betas !== undefined ? { betas: fields.betas } : {}),
@@ -378,13 +382,12 @@ function runPolicies(fields: WorkflowFields): Partial<WorkflowDefinition> {
   return {
     ...(fields.worktree ? { worktree: fields.worktree } : {}),
     ...(fields.container ? { container: fields.container } : {}),
-    ...(fields.evidencePolicy !== undefined ? { evidence_policy: fields.evidencePolicy } : {}),
     ...(fields.budget !== undefined ? { budget: fields.budget } : {}),
     ...(fields.tags !== undefined ? { tags: fields.tags } : {}),
     ...(fields.requires !== undefined ? { requires: fields.requires } : {}),
     ...(fields.inputs !== undefined ? { inputs: fields.inputs } : {}),
     ...(fields.returns !== undefined ? { returns: fields.returns } : {}),
-    ...(fields.outcomeField !== undefined ? { outcome_field: fields.outcomeField } : {}),
+    ...(fields.result !== undefined ? { result: fields.result } : {}),
     ...(fields.deprecated !== undefined ? { deprecated: fields.deprecated } : {}),
   };
 }
@@ -411,30 +414,43 @@ function workflowContractError(
   const execInputValidation = validateInlineExecInputs(workflow, configuredEnvNames);
   parseWarnings.push(...execInputValidation.warnings);
   if (execInputValidation.errors.length > 0) return execInputValidation.errors.join(' ');
-  return validateWorkflowOutcomeDeclaration(workflow) ?? validateRunBudgetShape(workflow);
+  return validateWorkflowResultContract(workflow) ?? validateRunBudgetShape(workflow);
 }
 
-function yamlParseFailure(filename: string, err: Error): ParseResult {
-  // Extract line number from YAML parse errors if available
-  const linePattern = /line (\d+)/i;
-  const lineMatch = linePattern.exec(err.message);
-  const lineInfo = lineMatch ? ` (near line ${lineMatch[1]})` : '';
+/**
+ * The author-facing error for a workflow Bun's YAML parser rejected. Bun's YAML errors carry no
+ * source position (their `line`/`column` are the JavaScript call site), so the `yaml` package
+ * re-parses the text on this failure path only, and its structured error offset gives the
+ * line and column.
+ */
+function yamlParseFailure(filename: string, content: string, err: Error): ParseResult {
+  const location = locateYamlError(content);
   // Debug for the same reason as the validation failures above: the returned
   // parse_error is what the author sees, and discovery re-parses on every command.
-  getLog().debug(
-    {
-      filename,
-      lineInfo: lineInfo || undefined,
-    },
-    'workflow_parse_failed'
-  );
+  // The reason and source line stay out of the log: both can quote the file's text.
+  getLog().debug({ filename, line: location?.line, col: location?.col }, 'workflow_parse_failed');
+  // The two parsers can disagree. Bun decides whether a file loads, so when `yaml` accepts
+  // what Bun rejected, report Bun's error without inventing a position.
+  const error = location
+    ? `${filename}:${location.line}:${location.col}: YAML syntax error: ${location.reason}\n  ${location.sourceLine}\n  ${' '.repeat(location.col - 1)}^`
+    : `${filename}: YAML syntax error: ${err.message}`;
+  return { workflow: null, error: { filename, error, errorType: 'parse_error' } };
+}
+
+function locateYamlError(
+  content: string
+): { line: number; col: number; reason: string; sourceLine: string } | undefined {
+  // Normalized as parseYaml does, so positions match the text Bun saw.
+  const normalized = content.replaceAll('\r\n', '\n');
+  const lineCounter = new LineCounter();
+  const first = parseDocument(normalized, { prettyErrors: false, lineCounter }).errors[0];
+  if (first === undefined) return undefined;
+  const { line, col } = lineCounter.linePos(first.pos[0]);
   return {
-    workflow: null,
-    error: {
-      filename,
-      error: `YAML parse error${lineInfo}: ${err.message}`,
-      errorType: 'parse_error',
-    },
+    line,
+    col,
+    reason: first.message,
+    sourceLine: normalized.split('\n')[line - 1] ?? '',
   };
 }
 

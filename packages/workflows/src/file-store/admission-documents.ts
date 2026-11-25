@@ -5,9 +5,8 @@ import {
   preparedWorkflowLaunchSchema,
   resourceStartOverlapSchema,
   resourceStartRequestStatusSchema,
-  startBindingPreparationStatusSchema,
+  startBindingInspectionSchema,
   sourceReceiptOutcomeSchema,
-  resourceStartBindingIntentSchema,
   resourceStartDispositionSchema,
   sourceReceiptInputSchema,
 } from '../schemas/resource-start';
@@ -70,18 +69,9 @@ export const requestEnvelopeSchema = requestSchema.pick({ resource: true, status
   status: z.literal('admitted'),
   launch: z.unknown(),
 });
-export const bindingSchema = z.object({
-  receiptId: z.string(),
-  bindingId: z.string(),
-  bindingRevision: z.string().nullable(),
-  hostId: z.string().nullable(),
-  status: startBindingPreparationStatusSchema,
-  ownerId: z.string().nullable(),
-  error: z.string().nullable(),
-  intent: resourceStartBindingIntentSchema.nullable(),
+export const bindingSchema = startBindingInspectionSchema.extend({
   requestIds: z.array(z.string()),
 });
-export const bindingInspectionSchema = bindingSchema.omit({ requestIds: true });
 export const receiptFieldsSchema = sourceReceiptInputSchema.strip();
 export const receiptSchema = sourceReceiptInputSchema.extend({
   outcome: sourceReceiptOutcomeSchema,

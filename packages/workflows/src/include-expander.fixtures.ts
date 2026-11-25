@@ -1,6 +1,6 @@
 import { resolvedBodyNodes } from './graph-plan';
 import { dagNodeSchema } from './schemas';
-import type { WorkflowDefinition, ResolvedWorkflow, DagNode } from './schemas';
+import type { WorkflowDefinition, WorkflowPack, ResolvedWorkflow, DagNode } from './schemas';
 import {
   COMPILED_LOOP_COMMAND,
   COMPOSED_NODE,
@@ -15,12 +15,19 @@ import {
 export function wf(
   name: string,
   nodes: unknown[],
-  options: Partial<Omit<WorkflowDefinition, 'name' | 'nodes'>> = {}
+  {
+    pack,
+    ...options
+  }: Partial<Omit<WorkflowDefinition, 'name' | 'nodes' | 'pack'>> & {
+    pack?: WorkflowPack;
+  } = {}
 ): WorkflowDefinition {
   return {
     name,
     description: `${name} description`,
     ...options,
+    // As the loader does, a packed workflow is a member of its pack under its own name.
+    ...(pack !== undefined ? { pack: { ...pack, workflow: name } } : {}),
     nodes: nodes.map(n => dagNodeSchema.parse(n)),
   };
 }

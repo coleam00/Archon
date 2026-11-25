@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
+import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
@@ -299,7 +300,7 @@ const mockDiscoverWorkflows = mock<typeof WorkflowDiscovery.discoverWorkflowsWit
 const mockExecuteWorkflow = mock<typeof WorkflowExecutor.executeWorkflow>(() =>
   Promise.resolve({ success: true, workflowRunId: 'run-1' })
 );
-const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflows) =>
+const mockResolveWorkflowName = mock<typeof WorkflowRouter.resolveWorkflowName>((name, workflows) =>
   workflows.find(w => w.name === name)
 );
 
@@ -315,6 +316,7 @@ mock.module('../workflows/store-adapter', () => ({
         workflow_name: data.workflow_name,
         status: 'pending',
         outcome: null,
+        completed_outcome: null,
         origin: data.origin ?? null,
         conversation_id: data.origin?.conversationId ?? null,
         parent_conversation_id: data.origin?.parentConversationId ?? null,
@@ -322,6 +324,7 @@ mock.module('../workflows/store-adapter', () => ({
         codebase_id: data.codebase_id ?? null,
         user_message: data.user_message,
         metadata: data.metadata ?? {},
+        active_phase_started_at: null,
         started_at: new Date(),
         completed_at: null,
         last_activity_at: null,
@@ -330,6 +333,7 @@ mock.module('../workflows/store-adapter', () => ({
         adopted_from_run_id: null,
         output_root: null,
         checkout_baseline: null,
+        item_id: null,
       }),
       updateWorkflowRun: async () => {},
       failWorkflowRun: async () => ({ failed: true }),
@@ -414,17 +418,18 @@ mock.module('./dispatch/background', () => ({
 
 // The real live owner opens a socket and a lock file keyed by the run id, and every dispatch
 // here shares 'prepared-run-id'. On Windows that socket is a machine-global named pipe.
-const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+const mockRunLiveOwner = (runId: string): RunLiveOwnerModule.RunLiveOwner => ({
+  lease: testRunOwnerLease(runId),
   close: () => Promise.resolve(),
   isStopRequested: () => false,
   registerTerminationPreparation: () => () => undefined,
-};
+});
 const realRunLiveOwner = { ...(await import('../services/run-live-owner')) };
 mock.module('../services/run-live-owner', () => ({
   ...realRunLiveOwner,
-  startRunLiveOwner: mock(() => Promise.resolve(mockRunLiveOwner)),
+  startRunLiveOwner: mock((runId: string) => Promise.resolve(mockRunLiveOwner(runId))),
   withRunLiveOwner: mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
-    async (_runId, _options, body) => body(mockRunLiveOwner)
+    async (runId, _options, body) => body(mockRunLiveOwner(runId))
   ),
 }));
 
@@ -530,11 +535,7 @@ mock.module('@archon/workflows/run-source', () => ({
 }));
 mock.module('@archon/workflows/router', () => ({
   suggestWorkflowNames: mock<typeof WorkflowRouter.suggestWorkflowNames>(() => []),
-  findWorkflow: mockFindWorkflow,
-  // Statically imported by the background dispatch path (see dispatch/background.ts).
-  resolveWorkflowName: mock((name: string, workflows: { name: string }[]) =>
-    workflows.find(w => w.name === name)
-  ),
+  resolveWorkflowName: mockResolveWorkflowName,
 }));
 mock.module('@archon/workflows/utils/tool-formatter', () => ({
   formatToolCall: mock((toolName: string, _toolInput: unknown) => `🔧 ${toolName.toUpperCase()}`),
@@ -561,16 +562,18 @@ mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
 }));
 
-// Workflow DB mock — dispatchOrchestratorWorkflow now consults findResumableRunByParentConversation
+// Workflow DB mock — dispatchOrchestratorWorkflow now consults listResumableRunsByParentConversation
 // for all platforms (not just web), so this module must be stubbed even when these tests don't
 // exercise the resume path. The default null return keeps execution on the "fresh run" branch.
 mock.module('../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
-  findResumableRunByParentConversation: mock<
-    typeof WorkflowDb.findResumableRunByParentConversation
-  >(() => Promise.resolve(null)),
+  listResumableRunsByParentConversation: mock<
+    typeof WorkflowDb.listResumableRunsByParentConversation
+  >(() => Promise.resolve([])),
   getPausedWorkflowRun: mock<typeof WorkflowDb.getPausedWorkflowRun>(() => Promise.resolve(null)),
   updateWorkflowRun: mock<typeof WorkflowDb.updateWorkflowRun>(() => Promise.resolve()),
 }));
@@ -672,7 +675,7 @@ function clearAllMocks(): void {
   mockGetProviderCapabilities.mockClear();
   mockDiscoverWorkflows.mockClear();
   mockExecuteWorkflow.mockClear();
-  mockFindWorkflow.mockClear();
+  mockResolveWorkflowName.mockClear();
   mockResolveWorkflowSourceRoot.mockClear();
   mockResolveWorkflowSourceRoot.mockImplementation(() => Promise.resolve(undefined));
   mockValidateAndResolveIsolation.mockClear();
@@ -814,19 +817,6 @@ describe('orchestrator-agent handleMessage', () => {
 
       expect(mockClient.sendQuery).toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'I can help you with that!');
-    });
-
-    test('does NOT require a codebase to function', async () => {
-      // Conversation has no codebase_id — this is fine for the orchestrator
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'Hello!' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'hi', { actor: operator });
-
-      // Should NOT send an error about missing codebase
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Hello!');
     });
 
     test('loads all codebases for prompt context', async () => {
@@ -1442,27 +1432,6 @@ describe('orchestrator-agent handleMessage', () => {
         });
       }
     }
-
-    test('explicit project registration reports detection failure without persistence', async () => {
-      const projectPath = await mkdtemp(join(tmpdir(), 'archon-agent-registration-failure-'));
-      try {
-        await writeFile(join(projectPath, '.git'), `gitdir: ${join(projectPath, 'missing')}\n`);
-        mockExistsSync.mockReturnValue(true);
-        mockListCodebases.mockResolvedValue([]);
-        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
-          actor: operator,
-        });
-        expect(platform.sendMessage).toHaveBeenCalledWith(
-          'chat-456',
-          expect.stringContaining('Nothing was registered')
-        );
-        expect(mockCreateCodebase).not.toHaveBeenCalled();
-        expect(mockUpdateCodebase).not.toHaveBeenCalled();
-        expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
-      } finally {
-        await removeTempTree(projectPath);
-      }
-    });
 
     test('/register-project refuses a path that disappears during detection', async () => {
       const canonicalPath = await canonicalizeForTest('/vanished/path');

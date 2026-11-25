@@ -33,6 +33,12 @@ export class WebAdapter implements IPlatformAdapter {
     string,
     Map<string, { toolCallId: string; name: string; startedAt: number }>
   >();
+  /**
+   * Conversations whose last emitted lock event was `locked: true`. It changes only where
+   * that event is emitted, so a lock snapshot never disagrees with the event stream. The
+   * value is the turn holding the lock, when a lock event named one.
+   */
+  private lockedConversations = new Map<string, string | undefined>();
 
   constructor(
     private transport: SSETransport,
@@ -234,17 +240,14 @@ export class WebAdapter implements IPlatformAdapter {
     this.workflowBridge.stop();
     this.persistence.clearAll();
     this.runningTools.clear();
+    this.lockedConversations.clear();
   }
 
   /**
    * Emit a lock event to the SSE stream for a conversation.
    * Called by API routes based on acquireLock() return status.
    */
-  async emitLockEvent(
-    conversationId: string,
-    locked: boolean,
-    queuePosition?: number
-  ): Promise<void> {
+  async emitLockEvent(conversationId: string, locked: boolean, turnId?: string): Promise<void> {
     if (!locked) {
       // Finalize ALL running tools and emit tool_result for each before lock release
       const convTools = this.runningTools.get(conversationId);
@@ -276,15 +279,43 @@ export class WebAdapter implements IPlatformAdapter {
         getLog().error({ conversationId, err: e }, 'lock_release_flush_failed');
       });
     }
+    // A queued message's early lock event names no turn; the running turn keeps its id.
+    if (locked)
+      this.lockedConversations.set(
+        conversationId,
+        turnId ?? this.lockedConversations.get(conversationId)
+      );
+    else this.lockedConversations.delete(conversationId);
     // Use transport.emit() directly so the lock event is fully awaited and ordered after tool_results
     const lockEvent = JSON.stringify({
       type: 'conversation_lock',
       conversationId,
       locked,
-      queuePosition,
+      ...(turnId !== undefined ? { turnId } : {}),
       timestamp: Date.now(),
     });
     await this.transport.emit(conversationId, lockEvent);
+  }
+
+  /** Whether the conversation's last emitted lock event was `locked: true`. */
+  isConversationLocked(conversationId: string): boolean {
+    return this.lockedConversations.has(conversationId);
+  }
+
+  /**
+   * The conversation's lock state as of its last lock event, as one `conversation_lock`
+   * event. A stream that opens or reconnects mid-turn writes it first, so the client
+   * knows a reply is still running even though the turn's earlier events were delivered.
+   */
+  lockSnapshotEvent(conversationId: string): string {
+    const turnId = this.lockedConversations.get(conversationId);
+    return JSON.stringify({
+      type: 'conversation_lock',
+      conversationId,
+      locked: this.isConversationLocked(conversationId),
+      ...(turnId !== undefined ? { turnId } : {}),
+      timestamp: Date.now(),
+    });
   }
 
   hasActiveStream(conversationId: string): boolean {

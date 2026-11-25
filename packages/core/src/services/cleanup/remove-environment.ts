@@ -122,8 +122,8 @@ function destroyRegisteredWorktree(
     const provider = getIsolationProvider();
     // A branch this environment did not create (an existing branch it checked out)
     // may hold the only copy of someone's commits, so local deletion requires a
-    // request for remote cleanup. Callers request that only when the branch is finished:
-    // merged, or an operator's explicit `--include-closed` or `archon complete`.
+    // request for remote cleanup. Callers authorize that through the cleanup
+    // policy or an operator's explicit `archon complete`.
     const deleteBranch = readWorktreeBranchCreated(env.metadata) || options?.deleteRemoteBranch;
     const destroyResult = await provider.destroy(env.working_path, {
       force: options?.force,

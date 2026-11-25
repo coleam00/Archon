@@ -1,10 +1,6 @@
 import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
-import {
-  readExecutionOwner,
-  readOwnedWorktree,
-  SUBRUN_METADATA_KEYS,
-} from '@archon/workflows/schemas/workflow-run';
+import { readExecutionOwner, readOwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import type {
   ExecutionOwnerRecord,
   OwnedWorktree,
@@ -16,6 +12,7 @@ import { getLog, releaseRunResources, type OperationContext } from './context';
 import {
   cancelRunAndCleanup,
   findParentBlockedOn,
+  isSubrun,
   MAX_CASCADE_RUNS,
   reclaimCancelledRunContainer,
   stopLiveOwner,
@@ -39,7 +36,11 @@ export class AbandonOwnerNotStoppedError extends Error {
 export function describeReleasedWorktrees(released: readonly ReleasedWorktree[] = []): string[] {
   return released.map(
     worktree =>
-      `Removed worktree ${worktree.path} with any uncommitted changes; branch ${worktree.branch} is kept.`
+      `Removed worktree ${worktree.path} with any uncommitted changes; ${
+        worktree.branchDeleted
+          ? `branch ${worktree.branch} had no commits and was deleted`
+          : `branch ${worktree.branch} is kept`
+      }.`
   );
 }
 
@@ -213,13 +214,6 @@ export async function collectAbandonmentTree(
 interface WorktreeOwnerCheck {
   safe: boolean;
   warnings: string[];
-}
-
-function isSubrun(run: WorkflowRun): boolean {
-  // Parent deletion clears the foreign key, but not the spawning node's metadata.
-  return (
-    run.parent_run_id !== null || Object.hasOwn(run.metadata, SUBRUN_METADATA_KEYS.parentNodeId)
-  );
 }
 
 async function checkWorktreeOwner(

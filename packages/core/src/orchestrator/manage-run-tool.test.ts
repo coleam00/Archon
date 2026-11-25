@@ -162,6 +162,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     id: 'r1abcdef-1234',
     workflow_name: 'archon-investigate',
     status: 'running',
+    active_phase_started_at: null,
     started_at: new Date('2026-06-01T00:00:00.000Z'),
     completed_at: null,
     metadata: {},
@@ -169,6 +170,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     conversation_id: 'conv-1',
     parent_conversation_id: null,
     outcome: null,
+    completed_outcome: null,
     user_message: 'Run the workflow',
     last_activity_at: new Date('2026-06-01T00:00:00.000Z'),
     working_path: null,
@@ -177,6 +179,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     ...overrides,
   };
 }
@@ -355,12 +358,18 @@ describe('manage_run — reads', () => {
     );
   });
 
-  test('get renders a succeeded authored outcome beside paused status', async () => {
-    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused', outcome: 'succeeded' })]);
+  test('get renders the outcome a run completed with, and none for a paused run', async () => {
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
-    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
-    expect(out).toContain('status: paused');
-    expect(out).toContain('authored outcome: succeeded');
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({ status: 'completed', outcome: null, completed_outcome: 'built' }),
+    ]);
+    expect(await tool.handler({ action: 'get', runId: 'r1abcdef' })).toContain(
+      'authored outcome: built'
+    );
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused', outcome: 'succeeded' })]);
+    expect(await tool.handler({ action: 'get', runId: 'r1abcdef' })).not.toContain(
+      'authored outcome'
+    );
   });
 
   test('get sends a wait paused before answers to resume and abandon', async () => {
@@ -544,6 +553,7 @@ describe('manage_run — reads', () => {
     mockFindByPrefix.mockResolvedValue([
       makeRun({
         status: 'completed',
+        active_phase_started_at: null,
         started_at: '2026-07-10 18:26:36' as unknown as Date,
         completed_at: '2026-07-10 18:30:00' as unknown as Date,
       }),
@@ -1343,6 +1353,7 @@ describe('manage_run authorization refusal', () => {
           findWorkflowRunsByIdPrefix: async () => [run],
           persistWorkflowEvent: unexpected,
           cancelWorkflowRun: unexpected,
+          requestOperatorPause: unexpected,
           resolveApprovalGate: unexpected,
           resolveAndCancelApprovalGate: unexpected,
           answerAttentionWait: unexpected,
@@ -1351,6 +1362,7 @@ describe('manage_run authorization refusal', () => {
           deleteWorkflowNodeSessions: unexpected,
           signalWorkflowWait: unexpected,
           deleteWorkflowRun: unexpected,
+          getCodebase: unexpected,
         },
         hostStore: {
           isolation: {

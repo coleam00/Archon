@@ -67,6 +67,16 @@ test('merge conditions cannot disappear during validation and reruns cannot dupl
       conditions: { head: 'head', extra: 'unsafe' },
     }).success
   ).toBe(false);
+  // A merge not pinned to a head is refused before it reaches a plugin.
+  expect(
+    forgeRequestSchema.safeParse({
+      operationId: '1',
+      op: 'pr.merge',
+      ref,
+      method: 'merge',
+      conditions: { base: 'base' },
+    }).success
+  ).toBe(false);
   const selected = { unit: failed.unit, rerun: null };
   for (const units of [[], [selected, selected]])
     expect(
@@ -78,6 +88,25 @@ test('merge conditions cannot disappear during validation and reruns cannot dupl
         units,
       }).success
     ).toBe(false);
+});
+
+test('checks.rerun takes a check entry exactly as checks.state returned it', async () => {
+  const { forgeRequestSchema } = await import('./operations');
+  const entry: CheckObservation = {
+    ...failed,
+    unit: { kind: 'check', id: '7', name: 'e2e' },
+    rerun: { id: 'run', attempt: 1 },
+  };
+  const request = forgeRequestSchema.parse({
+    operationId: '3',
+    op: 'checks.rerun',
+    ref: { repo: { host: 'forge', path: 'repo' }, number: 1 },
+    revision: 'head',
+    units: [entry],
+  });
+  // Only what identifies the check and its rerun group reaches the plugin.
+  expect(request).toMatchObject({ units: [{ unit: entry.unit, rerun: entry.rerun }] });
+  expect(Object.keys((request as { units: object[] }).units[0]!)).toEqual(['unit', 'rerun']);
 });
 
 test('failure evidence cannot belong to another operation or call observed reruns a refusal', async () => {

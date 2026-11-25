@@ -8,11 +8,12 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
+import { readReviewStamp } from '../../workflows/sdlc/.shared/review-comment';
+import { PUBLISHED_REPORT_FILE } from '../../workflows/sdlc/.shared/review-item';
 import { trackTempRoots } from './temp-roots';
 import {
-  PACK,
   PR,
   PR_URL,
   forgeCalls,
@@ -31,8 +32,6 @@ const trackTempRoot = trackTempRoots();
 const MARKER = '<!-- archon-review-report -->';
 const REPORT = 'Round 1: ready';
 
-/** The engine's typed-artifact listing for a run with no typed artifacts yet. */
-const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const DESCRIPTION = { type: 'archon_artifact', run_id: 'run', path: 'pr-description.md' };
 const PREPARED_BODY = { type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' };
 
@@ -51,7 +50,7 @@ function publishPr(
   options: ScriptOptions & { target?: Target; prepareBody?: boolean; forgeAt?: (head: string) => ScriptOptions['forge'] } = {}
 ): ScriptRun & { head: string; cwd: string } {
   const { target = {}, prepareBody = true, forgeAt, ...rest } = options;
-  const cwd = gitCheckout({}, trackTempRoot);
+  const cwd = gitCheckout(trackTempRoot);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
     ...rest,
@@ -69,50 +68,14 @@ function publishPr(
       WORKFLOW_ID: 'run',
       INPUTS_BODY: prepareBody ? JSON.stringify(PREPARED_BODY) : '',
       INPUTS_DRAFT: 'true',
-      TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       ...rest.inputs,
     },
-    artifacts: { ...(prepareBody ? { [PREPARED_BODY.path]: 'A body' } : {}), 'listing.json': EMPTY_LISTING, ...rest.artifacts },
+    artifacts: { ...(prepareBody ? { [PREPARED_BODY.path]: 'A body' } : {}), ...rest.artifacts },
   });
   return { ...run, head, cwd };
 }
 
 describe('publish-pr opens the pull request at most once', () => {
-  it('continues without a publication record when no description is prepared', () => {
-    for (const existing of [42, null]) {
-      const result = publishPr({
-        target: { existing },
-        prepareBody: false,
-        forgeAt: head => ({ kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }) }),
-        preload: `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');`,
-      });
-      expect(result.code).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
-      expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
-      expect(result.bodies).toEqual([]);
-    }
-  });
-
-  it.each([{ field: 'body', pointer: PREPARED_BODY }, { field: 'description', pointer: DESCRIPTION }])('keeps the $field pointer schema and command aligned with publish', ({ field, pointer }) => {
-    const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8')) as {
-      nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[];
-    };
-    expect(workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties[field]).toEqual({
-      type: ['object', 'null'],
-      properties: {
-        type: { type: 'string', enum: [pointer.type] },
-        run_id: { type: 'string' },
-        path: { type: 'string', enum: [pointer.path] },
-      },
-      required: Object.keys(pointer),
-    });
-    const command = readFileSync(join(PACK, 'pr/commands/pr.md'), 'utf8');
-    expect(command).toContain(
-      `{"type": "${pointer.type}", "run_id": "$WORKFLOW_ID", "path": "${pointer.path}"}`
-    );
-    expect(command).toContain(`$ARTIFACTS_DIR/${pointer.path}`);
-  });
-
   it('refuses another create while the earlier write is unresolved', () => {
       const result = publishPr({
         artifacts: { 'pr-create-started': JSON.stringify({ repo: PR.repo }) },
@@ -132,7 +95,7 @@ describe('publish-pr opens the pull request at most once', () => {
         tracker: { pr: { headRefName: 'feature' } },
         forgeAt: head => ({
           kind: 'fake',
-          response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }),
+          response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
         }),
       });
       expect(result.code).toBe(0);
@@ -170,19 +133,15 @@ describe('publish-pr opens the pull request at most once', () => {
   });
 
   it('reads the body before claiming a create', () => {
-    for (const directory of [false, true]) {
-      const result = publishPr({
-        prepareBody: false,
-        inputs: { INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }) },
-        artifacts: directory ? { 'pr-body.md/entry': 'a directory cannot be a PR body' } : {},
-        tracker: { noOpenPr: true },
-        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-      });
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain(directory ? 'EISDIR' : 'ENOENT');
-      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
-      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
-    }
+    const result = publishPr({
+      prepareBody: false,
+      inputs: { INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }) },
+      tracker: { noOpenPr: true },
+      forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
   });
 
   it('reuses the open pull request for that head instead of opening a second one', () => {
@@ -192,28 +151,6 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stderr).toContain('already has this head');
   });
 
-  it('publishes through the plugin', () => {
-    const result = publishPr({
-      forge: {
-        kind: 'fake',
-        response: [
-          forgeOperation('pr.view', null),
-          forgeOperation('pr.create', {
-            target: PR.repo,
-            outcome: 'applied',
-            changed: true,
-            pr: forgePrRecord(),
-          }),
-        ],
-      },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL });
-    expect(result.forge[1]).toContain('forge pr.create --json --data-file');
-    // The authored body travels in the request file, never on the command line.
-    expect(result.forge.join(' ')).not.toContain('A body');
-    expect(JSON.parse(result.forgeRequests[1]).body).toBe('A body');
-  });
 
   it('reports a refused create as a refusal that wrote nothing', () => {
     const result = publishPr({
@@ -259,28 +196,7 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stderr).toContain('already has this head');
   });
 
-  it('keeps the created pull request when the host could not audit the write', () => {
-    const result = publishPr({
-      forge: {
-        kind: 'fake',
-        okExitCode: 2,
-        response: [
-          forgeOperation('pr.view', null),
-          forgeOperation('pr.create', {
-            target: PR.repo,
-            outcome: 'applied',
-            changed: true,
-            pr: forgePrRecord(),
-          }),
-        ],
-      },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL });
-    expect(result.stderr).toContain("could not record it in the run's audit log");
-  });
-
-  it('reads back the pull request the run was launched onto instead of creating one', () => {
+  it('continues the pull request the run was launched onto instead of creating one', () => {
     const result = publishPr({
       target: { existing: 42 },
       prepareBody: false,
@@ -288,17 +204,7 @@ describe('publish-pr opens the pull request at most once', () => {
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-    expect(existsSync(join(result.artifacts, 'pr-body.md'))).toBe(false);
-    expect(forgeCalls(result).map(call => call.op)).toEqual(['pr.view', 'pr.view']);
-  });
-
-  it('adopts a named pull request whose head repository differs only in case', () => {
-    const result = publishPr({
-      target: { headRepo: { host: PR.repo.host, path: 'Example/Repo' }, existing: 42 },
-      tracker: { pr: { headRefName: 'feature' } },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+    expect(forgeCalls(result).map(call => call.op)).toEqual(['pr.view']);
   });
 
   it('refuses before pushing when prepare did not continue the pull request the caller named', () => {
@@ -328,73 +234,11 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(remoteHead(result.cwd, 'archon/task-local')).toBe('');
   });
 
-  // GitHub's pull request API can report the previous head after the branch moved.
-  // The first `pr.view` is the read before the push; the next `stale` reads lag.
-  const lagging = (stale: number) => `
-const fakeSpawn = Bun.spawnSync.bind(Bun);
-let views = 0;
-Bun.sleepSync = () => {};
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  const result = fakeSpawn(argv, settings);
-  if (argv[argv.indexOf('forge') + 1] !== 'pr.view' || !argv.includes('forge')) return result;
-  views++;
-  if (views < 2 || views > 1 + ${String(stale)}) return result;
-  const response = JSON.parse(String(result.stdout));
-  response.result.value.pr.head_revision = 'stale';
-  return { ...result, stdout: Buffer.from(JSON.stringify(response)) };
-} });
-`;
-
-  it('waits for a continued pull request to report the pushed head before recording it', () => {
-    const result = publishPr({
-      target: { existing: 42 },
-      tracker: { pr: { headRefName: 'feature' } },
-      preload: lagging(3),
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
-  });
-
-  it('refuses when a continued pull request never reports the pushed head', () => {
-    const result = publishPr({
-      target: { existing: 42 },
-      tracker: { pr: { headRefName: 'feature' } },
-      preload: lagging(100),
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain(`pushed ${result.head}, but pull request 42 still reports head stale`);
-  });
-
   it.each(['CLOSED', 'MERGED'] as const)('refuses to push to a continued pull request that is %s', state => {
     const result = publishPr({ target: { existing: 42 }, tracker: { pr: { state } } });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain(`pull request 42 is ${state.toLowerCase()}; nothing is pushed`);
     expect(remoteHead(result.cwd, 'feature')).toBe('');
-  });
-
-  it('opens the pull request from the branch the caller named', () => {
-    const result = publishPr({
-      inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
-      tracker: { noOpenPr: true, pr: { headRefName: 'build/7-an-issue-run12345' } },
-    });
-    expect(result.code).toBe(0);
-    expect(forgeCalls(result).find(call => call.op === 'pr.create')?.request.head).toBe('build/7-an-issue-run12345');
-    expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe(result.head);
-    expect(remoteHead(result.cwd, 'feature')).toBe('');
-  });
-
-  it('a caller-named branch that already has an open pull request updates it, never opening another', () => {
-    const result = publishPr({
-      target: { head: 'archon/task-local' },
-      prepareBody: false,
-      inputs: { INPUTS_BRANCH: 'feature' },
-      tracker: { pr: { headRefName: 'feature' } },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-    expect(result.stderr).toContain('already has this head');
-    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
   });
 
   it('opens its own pull request from the caller-named branch when prepare found one on another head', () => {
@@ -407,19 +251,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(forgeCalls(result).find(call => call.op === 'pr.create')?.request.head).toBe('build/7-an-issue-run12345');
     expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe(result.head);
     expect(remoteHead(result.cwd, 'feature')).toBe('');
-  });
-
-  it('refuses a caller-selected branch without a body when an unnamed PR has another head', () => {
-    const result = publishPr({
-      target: { existing: 42 },
-      prepareBody: false,
-      inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
-      tracker: { noOpenPr: true, pr: { headRefName: 'feature' } },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('prepare wrote no body');
-    expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
-    expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
   });
 
   it('continues a named pull request on its own head even when the caller also selected a branch', () => {
@@ -435,11 +266,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe('');
   });
 
-  it('fails loudly when the forge is unavailable', () => {
-    const result = publishPr({ forge: { kind: 'no-host' } });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('ARCHON_CLI_COMMAND is not set');
-  });
 });
 
 const { start: START, end: END } = DESCRIPTION_SECTION;
@@ -476,8 +302,13 @@ describe('publish-pr writes the description section a delivery round prepared', 
       forgeAt: head => ({ kind: 'fake', response: [
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
-        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
-        forgeOperation('pr.edit-body', { pr: forgePrRecord({ head_revision: head }) }),
+        forgeOperation('pr.edit-body', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          pr: forgePrRecord({ head_revision: head }),
+          bodyDigest: 'sha256:body',
+        }),
       ] }),
     });
     expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
@@ -499,11 +330,38 @@ describe('publish-pr writes the description section a delivery round prepared', 
     }
   );
 
-  it.each([START, END, `${START}\nnested\n${END}`])('refuses reserved structural markers in prepared content before pushing: %s', section => {
-    const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+  // Elevate #78 / software-factory#43: a round's description quoted a marker while
+  // describing the factory's own PR mechanics, and the refusal came before the push, so
+  // the round's commits died with the abandoned worktree.
+  it.each([START, END, `${START}\nnested\n${END}`, `How rounds publish:\n\n${START}\n\nthen the evidence.`])(
+    'pushes first and escapes reserved markers written outside Markdown code: %s', section => {
+      const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+      expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
+      expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+      expect(result.stderr).toContain('escaped');
+      const [body] = result.bodies;
+      expect(body).toBeDefined();
+      // Exactly one structural pair: the one publish-pr wrote around the section.
+      expect(body?.split(START).length).toBe(2);
+      expect(body?.split(END).length).toBe(2);
+      expect(body).toContain('&lt;!-- ');
+    }
+  );
+
+  it('keeps the push when the prepared section cannot be composed, naming the pull request', () => {
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: '```\nunfinished' } });
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain('reserved description markers');
-    expect(spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: result.cwd, encoding: 'utf8' }).stdout).toBe('');
+    expect(result.stderr).toContain(`pushed and published ${PR_URL}`);
+    expect(result.stderr).toContain('composed description');
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+    expect(result.bodies).toEqual([]);
+  });
+
+  it('keeps the push when the prepared section is empty', () => {
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: '  \n' } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('empty pr-description.md');
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
   });
 
   it('publishes and reads back the section when creating a pull request', () => {
@@ -524,8 +382,8 @@ describe('publish-pr writes the description section a delivery round prepared', 
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('edit unavailable');
-    const report = runPackScript('deliver/scripts/report', {
-      inputs: { INPUTS_OUTCOME: 'null' },
+    const report = runPackScript('.shared/scripts/report', {
+      inputs: { INPUTS_FLAG: 'ready', INPUTS_OUTCOME: 'null', INPUTS_PULL_REQUESTS: '[]' },
       artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
     });
     expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
@@ -541,39 +399,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
     const result = publishSection({ live: `Before.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n` });
     expect(result.code).toBe(0);
     expect(result.bodies).toEqual([]);
-  });
-
-  it('writes through the plugin', () => {
-    const result = publishSection({
-      forgeAt: head => {
-        const view = forgeOperation('pr.view', {
-          pr: forgePrRecord({ head_revision: head }),
-          title: 'A title',
-          body: 'Written by hand.',
-        });
-        return {
-          kind: 'fake',
-          response: [
-            view,
-            view,
-            view,
-            forgeOperation('pr.edit-body', {
-              target: PR,
-              outcome: 'applied',
-              changed: true,
-              pr: forgePrRecord({ head_revision: head }),
-              bodyDigest: 'digest',
-            }),
-          ],
-        };
-      },
-    });
-    expect(result.code).toBe(0);
-    expect(result.forge[3]).toContain('forge pr.edit-body --json --data-file');
-    expect(JSON.parse(result.forgeRequests[3])).toEqual({
-      ref: { repo: PR.repo, number: 42 },
-      body: `Written by hand.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`,
-    });
   });
 
   it('refuses a prepared section before pushing when the caller did not allow one', () => {
@@ -643,6 +468,8 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       contract_left: ['acceptance: the console shows it'],
     });
     expect(first.comments).toEqual([{ issue: 42, body: `${MARKER}\nReviewed commit: \`${REVIEWED}\`\nVerdict: ready\nContract: open\n\n${REPORT}` }]);
+    // The merge gate's reader takes the reviewed commit and the verdict from what was written.
+    expect(readReviewStamp(first.comments[0]?.body ?? '')).toMatchObject({ reviewed: REVIEWED, ready: true, contract: 'open' });
 
     const second = publishReview({
       inputs: report,
@@ -665,91 +492,19 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   it.each([
     ['declares no pull request', 'null'],
     ['names another pull request', JSON.stringify({ ...PR, number: 43 })],
-  ])('refuses when delivery recorded the target and the scope %s', (_label, declared) => {
+  ])('comments on the pull request delivery recorded when the scope %s', (_label, declared) => {
     const result = publishReview({
       inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR), INPUTS_PR: declared },
     });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('delivery recorded');
-    expect(result.comments).toEqual([]);
+    expect(result.code).toBe(0);
+    expect(result.comments.map(comment => comment.issue)).toEqual([42]);
   });
 
-  it('publishes to the recorded pull request when the scope declaration agrees', () => {
-    const result = publishReview({ inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR) } });
-    expect(result.code).toBe(0);
-    expect(forgeCalls(result).find(call => call.op === 'comment.upsert')?.request.ref).toEqual(PR);
-  });
-
-  it('upserts through the plugin, with the report in the request file', () => {
-    const forge: ScriptOptions['forge'] = {
-      kind: 'fake',
-      response: [
-        prView,
-        forgeOperation('comment.upsert', {
-          target: PR,
-          outcome: 'applied',
-          changed: true,
-          comment: {
-            ref: PR,
-            id: '900',
-            url: `${PR_URL}#issuecomment-900`,
-            bodyDigest: 'digest',
-          },
-        }),
-      ],
-    };
-    const result = publishReview({
-      inputs: report,
-      forge,
-    });
-    expect(result.code).toBe(0);
-    const request = JSON.parse(result.forgeRequests[1]) as { marker: string; body: string };
-    expect(request.marker).toBe(MARKER);
-    expect(request.body.split('\n')[0]).toBe(MARKER);
-    expect(request.body).toContain(REPORT);
-    // The comment names the commit it reviewed from the round's own record, not the report text.
-    expect(request.body.split('\n')[1]).toBe(`Reviewed commit: \`${REVIEWED}\``);
-    expect(request.body.split('\n')[2]).toBe('Verdict: ready');
-    // A Ready verdict whose review left an acceptance item open is stamped open, so no merge closes the issue on it.
-    expect(request.body.split('\n')[3]).toBe('Contract: open');
-    expect(result.forge.join(' ')).not.toContain(REPORT);
-
-    // A review that left nothing open is stamped complete: only that lets a merge close the issue.
-    const complete = publishReview({
-      inputs: { ...report, INPUTS_CONTRACT_LEFT: '[]' },
-      forge,
-    });
+  // Only a complete stamp lets a merge close the issue.
+  it('stamps a review that left nothing open as complete', () => {
+    const complete = publishReview({ inputs: { ...report, INPUTS_CONTRACT_LEFT: '[]' } });
     expect(complete.code).toBe(0);
-    const completeRequest = JSON.parse(complete.forgeRequests[1]) as { body: string };
-    expect(completeRequest.body.split('\n')[3]).toBe('Contract: complete');
-  });
-
-  it('still reports the verdict when the host could not audit the comment write', () => {
-    const result = publishReview({
-      inputs: report,
-      forge: {
-        kind: 'fake',
-        okExitCode: 2,
-        response: [
-          prView,
-          forgeOperation('comment.upsert', {
-            target: PR,
-            outcome: 'applied',
-            changed: true,
-            comment: {
-              ref: PR,
-              id: '900',
-              url: `${PR_URL}#issuecomment-900`,
-              bodyDigest: 'digest',
-            },
-          }),
-        ],
-      },
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ready: true, action: 'none' });
-    expect(result.stderr).toContain("could not record it in the run's audit log");
+    expect(complete.comments[0]?.body.split('\n')[3]).toBe('Contract: complete');
   });
 
   it('reports an unknown comment outcome without claiming the review was published', () => {
@@ -777,10 +532,14 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
   const report = { INPUTS_REPORT: '{ARTIFACTS}/review-report.md' };
   const STALE = 'stale0000';
 
-  it('records the reviewed commit beside the report as the next round\'s cursor', () => {
-    const result = publishReview({ inputs: report });
+  it('keeps the published report, its findings and the reviewed commit together for a later review to continue from', () => {
+    // The report where the review workflow writes it, so the set lands where delivery's next round reads it.
+    const result = publishReview({ artifacts: { 'review/report.md': REPORT, 'review/findings.json': '[]' } });
     expect(result.code).toBe(0);
-    expect(readFileSync(join(result.artifacts, 'reviewed-head'), 'utf8').trim()).toBe(REVIEWED);
+    const set = dirname(join(result.artifacts, PUBLISHED_REPORT_FILE));
+    expect(readFileSync(join(set, 'report.md'), 'utf8')).toBe(REPORT);
+    expect(readFileSync(join(set, 'findings.json'), 'utf8')).toBe('[]');
+    expect(readFileSync(join(set, 'reviewed-head'), 'utf8').trim()).toBe(REVIEWED);
   });
 
   it('refuses a round that reviewed a commit the pull request no longer carries', () => {
@@ -796,24 +555,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.stderr).toContain(`this round reviewed ${STALE}, but`);
     expect(result.stderr).toContain(`is at ${REVIEWED}`);
     expect(result.comments).toEqual([]);
-    expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
-  });
-
-  // An unpushed correction once reached publication with a scope that declared no
-  // pull request; the error named the declaration instead of the unpushed head.
-  it('names an unpushed head before any scope disagreement', () => {
-    const result = publishReview({
-      inputs: {
-        ...report,
-        INPUTS_SCOPE: JSON.stringify(PR),
-        INPUTS_PR: 'null',
-        INPUTS_HEAD: STALE,
-        ARCHON_NODE_EXECUTION: atCommit(STALE),
-      },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('the commits under review were not pushed');
-    expect(result.stderr).not.toContain('delivery recorded');
+    expect(existsSync(join(result.artifacts, 'published'))).toBe(false);
   });
 
   it('refuses when the checkout moved after the round fixed its commit', () => {

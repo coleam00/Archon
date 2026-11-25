@@ -45,6 +45,7 @@ export async function simulateLoopGroup(
   const outerScope = ctx.scope;
   const outerLoopPrevOutputs = ctx.loopPrevOutputs;
   const outerLoopBodyScopes = ctx.loopBodyScopes;
+  const outerLoopGroupPath = ctx.loopGroupPath;
   let loopPrevOutputs: Map<string, NodeOutput> | undefined;
   let lastOutput = '';
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
@@ -57,6 +58,7 @@ export async function simulateLoopGroup(
     ctx.scope = bodyScope;
     ctx.loopPrevOutputs = loopPrevOutputs;
     ctx.loopBodyScopes = [...outerLoopBodyScopes, iterScope];
+    ctx.loopGroupPath = [...outerLoopGroupPath, { groupId: node.id, iteration: current }];
     try {
       ctx.interactionAdmission = loopBodyAdmission(outerAdmission);
       await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
@@ -65,6 +67,7 @@ export async function simulateLoopGroup(
       ctx.scope = outerScope;
       ctx.loopPrevOutputs = outerLoopPrevOutputs;
       ctx.loopBodyScopes = outerLoopBodyScopes;
+      ctx.loopGroupPath = outerLoopGroupPath;
     }
     loopPrevOutputs = bodyOutputs;
     const iterationOutput = loopGroupIterationOutput(bodyNodes, bodyOutputs)?.output ?? '';

@@ -1,8 +1,6 @@
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "noEmit": true
-  },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*", "src/**/*.json", "schema/*.json"],
+  "exclude": ["node_modules", "dist"],
+  "references": [{ "path": "../provider-contract" }]
 }

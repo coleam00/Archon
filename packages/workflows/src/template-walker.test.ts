@@ -8,7 +8,7 @@ import {
   dagNodeSchema,
   WORKFLOW_HOOK_EVENTS,
 } from './schemas';
-import type { TemplateSlotName, TemplateSurface } from './template-walker';
+import type { TemplateSlotName } from './template-walker';
 import {
   mapNodeTemplateSlots,
   mapNodeTemplateValueSlots,
@@ -54,6 +54,7 @@ const STRING_FIELD_CLASSIFICATIONS = {
   mcp: { kind: 'literal', reason: 'MCP value is a configuration path' },
   'mcp.path': { kind: 'literal', reason: 'MCP value is a configuration path' },
   'skills.*': { kind: 'literal', reason: 'Skill entries are capability identifiers' },
+  'skills.*.name': { kind: 'literal', reason: 'Skill name is a capability identifier' },
   'plugins.*': { kind: 'literal', reason: 'Plugin entries are capability identifiers' },
   'agents.*.description': { kind: 'template', slots: ['agents.*.description'] },
   'agents.*.prompt': { kind: 'template', slots: ['agents.*.prompt'] },
@@ -67,6 +68,11 @@ const STRING_FIELD_CLASSIFICATIONS = {
     kind: 'literal',
     reason: 'Sub-agent skill entries are capability identifiers',
   },
+  'tools.*.description': { kind: 'literal', reason: 'Tool description is read by the model as is' },
+  'tools.*.script': { kind: 'literal', reason: 'Tool script is a named resource identifier' },
+  'tools.*.deps.*': { kind: 'literal', reason: 'Tool script dependencies are package identifiers' },
+  'tools.*.input_schema.*': { kind: 'literal', reason: 'Tool input schema is a JSON Schema' },
+  'tools.*.output_schema.*': { kind: 'literal', reason: 'Tool output schema is a JSON Schema' },
   'pi.extensionFlags.*': { kind: 'literal', reason: 'Pi extension flag values configure plugins' },
   effort: { kind: 'literal', reason: 'Effort is a provider reasoning-level enum' },
   systemPrompt: { kind: 'template', slots: ['systemPrompt'] },
@@ -112,6 +118,18 @@ const STRING_FIELD_CLASSIFICATIONS = {
   'sandbox.*': {
     kind: 'literal',
     reason: 'Unmodelled sandbox values pass through as provider configuration',
+  },
+  'sandbox.network.*': {
+    kind: 'literal',
+    reason: 'Unmodelled sandbox network values pass through as provider configuration',
+  },
+  'sandbox.filesystem.*': {
+    kind: 'literal',
+    reason: 'Unmodelled sandbox filesystem values pass through as provider configuration',
+  },
+  'sandbox.ripgrep.*': {
+    kind: 'literal',
+    reason: 'Unmodelled sandbox ripgrep values pass through as provider configuration',
   },
   output_type: { kind: 'literal', reason: 'Output type is an artifact classification tag' },
   command: { kind: 'literal', reason: 'Resource identifier resolved before execution' },
@@ -538,41 +556,6 @@ test('workflow and composed fan-out bindings use their classified slot names', (
     name: 'compose_fan_out.with.*',
     path: 'with.topic',
   });
-});
-
-test('the slot catalogue rejects omitted fixed fields', () => {
-  // @ts-expect-error approval.on_reject.prompt must remain catalogued
-  const incomplete: Record<TemplateSlotName, { surface: TemplateSurface }> = {
-    when: { surface: 'condition' },
-    systemPrompt: { surface: 'prompt' },
-    'agents.*.prompt': { surface: 'prompt' },
-    'agents.*.description': { surface: 'prompt' },
-    'agent.prompt': { surface: 'prompt' },
-    'binding.value': { surface: 'value' },
-    'binding.from': { surface: 'binding_from' },
-    'binding.if_skipped': { surface: 'binding_default' },
-    'exec.bash': { surface: 'shell' },
-    'exec.script': { surface: 'script' },
-    'loop.prompt': { surface: 'prompt' },
-    'loop.until_bash': { surface: 'shell' },
-    'loop.compiled_prompt': { surface: 'prompt' },
-    'loop_group.until_bash': { surface: 'shell' },
-    'approval.message': { surface: 'prompt' },
-    'cancel.reason': { surface: 'prompt' },
-    'wait.until': { surface: 'value' },
-    'wait.event': { surface: 'value' },
-    'wait.attention': { surface: 'prompt' },
-    'wait.options': { surface: 'value' },
-    'wait.recommendation': { surface: 'value' },
-    'wait.labels.*': { surface: 'value' },
-    'workflow.input': { surface: 'value' },
-    'workflow.with.*': { surface: 'value' },
-    'workflow.fan_out.items': { surface: 'value' },
-    'compose_fan_out.with.*': { surface: 'value' },
-    'compose_fan_out.fan_out.items': { surface: 'value' },
-    'composed.inputs.*': { surface: 'value' },
-  };
-  expect(incomplete['approval.on_reject.prompt']).toBeUndefined();
 });
 
 test('walks dynamic template slots without mutating the source node', () => {

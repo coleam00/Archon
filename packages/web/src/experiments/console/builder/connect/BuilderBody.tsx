@@ -11,11 +11,11 @@ import type { Project } from '../../primitives/project';
 import type { ImportResult } from '../model';
 
 const SECONDARY_BUTTON_CLASS =
-  'mt-3 rounded-[8px] border border-border bg-surface px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
+  'mt-3 rounded-md border border-border bg-surface px-2.5 py-1 text-console-12 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
 
 function EmptyState({ children }: { children: ReactNode }): ReactElement {
   return (
-    <div className="flex h-full items-center justify-center p-8 text-center text-[12.5px] text-text-tertiary">
+    <div className="flex h-full items-center justify-center p-8 text-center text-console-13 text-text-tertiary">
       <div className="max-w-md">{children}</div>
     </div>
   );

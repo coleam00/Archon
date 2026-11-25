@@ -1,3 +1,17 @@
+// @archon-test-isolated
+// @archon-test-windows
+import { runProject } from '@archon/workflows/attention-queue';
+import { watchAttentionQueue } from '@archon/workflows/attention-watch';
+import {
+  attentionWatchReader,
+  type ClassifiedAttentionStreamLine,
+} from '@archon/workflows/attention-needs';
+import {
+  emitWorkflowNotice,
+  WORKFLOW_NOTICE_LIMITS,
+  workflowNoticeSchema,
+} from '@archon/workflows/workflow-notice';
+import { workflowAttentionCommand } from './workflow-attention';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, readFile, realpath, stat, unlink } from 'node:fs/promises';
@@ -5,6 +19,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import type { IsolationEnvironmentRow } from '@archon/isolation/types';
 import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { loadConfig } from '@archon/core/config/config-loader';
@@ -32,8 +47,8 @@ import {
   createInMemoryWorkflowStore,
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
-import { registerFolder } from '@archon/core/handlers/clone';
-import { triggerCommand } from './trigger';
+import { registerFolder, registerRepository } from '@archon/core/handlers/clone';
+import { drainHost, triggerCommand } from './trigger';
 import { workflowGetCommand } from './workflow-query';
 import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
 
@@ -134,7 +149,9 @@ test('admission preserves FIFO, skips overlap, deduplicates receipts and fences 
   expect(await store.drainResourceStarts({ hostId: 'host', resource: 'one' })).toEqual([
     { status: 'admitted', requestId: second.run.id, runId: second.run.id },
   ]);
-  expect((await store.withdrawQueuedResourceStart(third.run.id))?.run.id).toBe(third.run.id);
+  expect((await store.withdrawQueuedResourceStart(third.run.id))?.launch?.run.id).toBe(
+    third.run.id
+  );
   expect(await store.withdrawQueuedResourceStart(third.run.id)).toBeNull();
   expect(await store.withdrawQueuedResourceStart(second.run.id)).toBeNull();
   const binding: ResourceStartBindingIntent = {
@@ -437,6 +454,7 @@ test('receipt preparation and real engine execution use supplied ports without S
       hostId: 'host',
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
     const [id] = admitted;
@@ -485,6 +503,7 @@ test('receipt preparation and real engine execution use supplied ports without S
       hostId: 'host',
       startAdmitted: async requestId => {
         pending.push(requestId);
+        return null;
       },
     });
     const delayedId = pending[0];
@@ -555,6 +574,229 @@ test('receipt preparation and real engine execution use supplied ports without S
   }
 });
 
+// Cancel commits after a starter read the run pending but before it took the owner lock.
+// The starter reads again under the lock and stops before preparation reaches the engine.
+test('a start cancelled before its starter holds the owner lock never prepares', async () => {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-cancel-')));
+  const project = join(await realpath(root), 'project');
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = join(root, 'home');
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  await mkdir(join(project, '.archon/workflows'), { recursive: true });
+  await writeFile(
+    join(project, '.archon/workflows/portable.yaml'),
+    'name: portable\ndescription: Portable trigger\nworktree:\n  enabled: false\nnodes:\n  - id: result\n    bash: echo done\n'
+  );
+  const host = hostForTest();
+  await registerFolder(host.records.codebases, project, 'portable');
+  const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+  if (!user) throw new Error('Expected test identity');
+  try {
+    await host.deps.store.acceptStartReceipt(
+      acceptance(
+        {
+          bindingId: 'binding',
+          bindingRevision: '1',
+          hostId: 'host',
+          runAsUserId: user.id,
+          resource: 'portable',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: project,
+            workflowName: 'portable',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+        'delivery'
+      )
+    );
+    const admitted: string[] = [];
+    await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        admitted.push(id);
+        return null;
+      },
+    });
+    const [id] = admitted;
+    if (!id) throw new Error('Expected an admitted start');
+
+    const readRun = host.deps.store.getWorkflowRun.bind(host.deps.store);
+    let cancelledBetween = false;
+    host.deps.store.getWorkflowRun = async runId => {
+      const row = await readRun(runId);
+      if (runId === id && !cancelledBetween) {
+        cancelledBetween = true;
+        expect(await host.operations.cancelWorkflow(id, { kind: 'operator' })).toMatchObject({
+          kind: 'pending',
+        });
+      }
+      return row;
+    };
+    const submitted: string[] = [];
+    const engine = {
+      resume: host.engine.resume.bind(host.engine),
+      subscribe: host.engine.subscribe.bind(host.engine),
+      watchAttention: host.engine.watchAttention.bind(host.engine),
+      submit: async (input: Parameters<typeof host.engine.submit>[0]) => {
+        submitted.push(id);
+        return host.engine.submit(input);
+      },
+    };
+
+    const started = await startAdmittedResourceStart({
+      host: { ...host, engine },
+      hostId: 'host',
+      requestId: id,
+      createPlatform: () => new HeadlessPlatform(),
+    }).catch((error: unknown) => error);
+
+    expect(started).toMatchObject({ message: expect.stringContaining('cancelled, not pending') });
+    expect(submitted).toEqual([]);
+    expect((await readRun(id))?.status).toBe('cancelled');
+  } finally {
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+  }
+});
+
+function gitIn(cwd: string, ...args: string[]): string {
+  const result = Bun.spawnSync(['git', '-C', cwd, ...args]);
+  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  return result.stdout.toString().trim();
+}
+
+test("a binding start reads the base branch with the checkout's uncommitted config on top, and runs on that commit", async () => {
+  const root = await realpath(tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-base-'))));
+  const remote = join(root, 'remote.git');
+  const upstream = join(root, 'upstream');
+  const project = join(root, 'project');
+  Bun.spawnSync(['git', 'init', '-q', '--bare', '--initial-branch=dev', remote]);
+  Bun.spawnSync(['git', 'clone', '-q', remote, upstream]);
+  for (const repo of [upstream]) {
+    gitIn(repo, 'config', 'user.name', 'Test');
+    gitIn(repo, 'config', 'user.email', 'test@example.com');
+  }
+  const workflow = (marker: string) =>
+    `name: portable\ndescription: Base trigger\nnodes:\n  - id: result\n    bash: echo ${marker} > ran.txt\n`;
+  await mkdir(join(upstream, '.archon/workflows'), { recursive: true });
+  await writeFile(join(upstream, '.archon/workflows/portable.yaml'), workflow('old'));
+  await writeFile(join(upstream, '.archon/config.yaml'), 'worktree:\n  initSubmodules: false\n');
+  gitIn(upstream, 'add', '-A');
+  gitIn(upstream, 'commit', '-qm', 'old');
+  gitIn(upstream, 'push', '-q', 'origin', 'dev');
+  // Windows runners set core.autocrlf=true, which would check the workflow out with CRLF
+  // and break the byte comparison that proves the checkout was left alone.
+  Bun.spawnSync(['git', 'clone', '-q', '-c', 'core.autocrlf=false', remote, project]);
+  // Landed on the base, never pulled into the operator's checkout.
+  await writeFile(join(upstream, '.archon/workflows/portable.yaml'), workflow('new'));
+  gitIn(upstream, 'commit', '-qam', 'new');
+  gitIn(upstream, 'push', '-q', 'origin', 'dev');
+  const base = gitIn(upstream, 'rev-parse', 'HEAD');
+  // The operator's own uncommitted config edit.
+  const localConfig = 'worktree:\n  initSubmodules: false\n# local trial\n';
+  await writeFile(join(project, '.archon/config.yaml'), localConfig);
+  const checkoutHead = gitIn(project, 'rev-parse', 'HEAD');
+
+  const previousHome = process.env.ARCHON_HOME;
+  process.env.ARCHON_HOME = join(root, 'home');
+  registerBuiltinProviders();
+  setPlatformPolicies([]);
+  try {
+    const host = hostForTest();
+    // The worktree lane registers the checkout it cuts; the test store keeps it in memory.
+    const environments = new Map<string, IsolationEnvironmentRow>();
+    host.records.isolation.create = async params => {
+      const row = {
+        ...params,
+        id: randomUUID(),
+        status: 'active',
+        metadata: params.metadata ?? {},
+      } as unknown as IsolationEnvironmentRow;
+      environments.set(row.id, row);
+      return row;
+    };
+    host.records.isolation.getById = async envId => environments.get(envId) ?? null;
+    await registerRepository(host.records.codebases, project);
+    const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
+    if (!user) throw new Error('Expected test identity');
+    await host.deps.store.acceptStartReceipt(
+      acceptance(
+        {
+          bindingId: 'binding',
+          bindingRevision: null,
+          hostId: 'host',
+          runAsUserId: user.id,
+          resource: 'portable',
+          capacity: 1,
+          overlap: 'queue',
+          launch: {
+            cwd: project,
+            workflowName: 'portable',
+            inputs: {},
+            isolation: { kind: 'default' },
+          },
+        },
+        'base'
+      )
+    );
+    const admitted: string[] = [];
+    await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async id => {
+        admitted.push(id);
+        return null;
+      },
+    });
+    const [id] = admitted;
+    const prepared = await host.deps.store.getResourceStartRequest(id);
+    expect(prepared?.launch.run.metadata.workflow_source).toMatchObject({
+      origin: project,
+      definitions: {
+        from: 'base',
+        remote: 'origin',
+        branch: 'dev',
+        commit: base,
+        checkout: project,
+        local_files: [{ path: '.archon/config.yaml', change: 'modified' }],
+      },
+    });
+
+    // Another change lands while the start waits: the run still cuts its worktree from the
+    // commit its definitions were read at, not from the newer base.
+    await writeFile(join(upstream, '.archon/workflows/portable.yaml'), workflow('newer'));
+    gitIn(upstream, 'commit', '-qam', 'newer');
+    gitIn(upstream, 'push', '-q', 'origin', 'dev');
+
+    const result = await startAdmittedResourceStart({
+      host,
+      hostId: 'host',
+      requestId: id,
+      createPlatform: () => new HeadlessPlatform(),
+    });
+    expect(result.success).toBe(true);
+    const worktree = (await host.deps.store.getWorkflowRun(id))?.working_path;
+    if (!worktree) throw new Error('Expected a worktree');
+    expect(await readFile(join(worktree, 'ran.txt'), 'utf8')).toBe('new\n');
+    expect(gitIn(worktree, 'rev-parse', 'HEAD')).toBe(base);
+    // The local edit is in the capture, never in the run's checkout.
+    expect(await readFile(join(worktree, '.archon/config.yaml'), 'utf8')).not.toContain('local');
+    expect(gitIn(project, 'rev-parse', 'HEAD')).toBe(checkoutHead);
+    expect(await readFile(join(project, '.archon/workflows/portable.yaml'), 'utf8')).toBe(
+      workflow('old')
+    );
+    expect(await readFile(join(project, '.archon/config.yaml'), 'utf8')).toBe(localConfig);
+  } finally {
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+  }
+});
+
 test('receipt inspection rejects invalid limits through the in-memory store', async () => {
   const store = hostForTest().deps.store;
   for (const limit of [NaN, 1.5, 0, 1001]) {
@@ -564,6 +806,149 @@ test('receipt inspection rejects invalid limits through the in-memory store', as
   }
   expect(await store.listStartReceipts(1)).toEqual([]);
   expect(await store.listStartReceipts(1000)).toEqual([]);
+});
+
+test('trigger list shows a refused binding with its forge refusal and omits the others', async () => {
+  const host = hostForTest();
+  const binding = (bindingId: string): ResourceStartBindingIntent => ({
+    bindingId,
+    bindingRevision: null,
+    hostId: 'host',
+    runAsUserId: 'operator',
+    resource: 'portable',
+    capacity: 1,
+    overlap: 'queue',
+    launch: {
+      cwd: '/portable',
+      workflowName: 'portable',
+      inputs: {},
+      isolation: { kind: 'in-place' },
+    },
+  });
+  const accepted: SourceReceiptAcceptance = {
+    ...acceptance(binding('refused'), 'listed'),
+    outcome: 'matched',
+    bindings: [binding('refused'), binding('waiting')],
+  };
+  await host.deps.store.acceptStartReceipt(accepted);
+  const identity = { receiptId: accepted.receipt.id, bindingId: 'refused', ownerId: 'owner' };
+  const forgeRefusal = {
+    pack: 'sdlc',
+    failures: [
+      { remote: 'origin', reason: 'no_credential', message: 'no token', remedy: 'Log in.' },
+    ],
+  };
+  expect(await host.deps.store.claimStartBindingPreparation(identity)).toBe(true);
+  expect(
+    await host.deps.store.failStartBindingPreparation({
+      ...identity,
+      retryable: false,
+      error: 'launch_preparation_failed',
+      forgeRefusal,
+    })
+  ).toBe(true);
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    _chunk: unknown,
+    callback?: () => void
+  ) => {
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    await triggerCommand(host, 'list', [], {});
+    const [listed] = JSON.parse(stdout.mock.calls.map(call => String(call[0])).join('')) as {
+      refusedBindings: unknown[];
+    }[];
+    expect(listed.refusedBindings).toEqual([
+      {
+        bindingId: 'refused',
+        status: 'rejected',
+        error: 'launch_preparation_failed',
+        forgeRefusal,
+      },
+    ]);
+  } finally {
+    stdout.mockRestore();
+  }
+});
+
+test('trigger list names the run limit on a receipt whose queued start only the limit holds', async () => {
+  const host = hostForTest();
+  const accepted = acceptance(
+    {
+      bindingId: 'queued',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'portable',
+      capacity: 1,
+      overlap: 'queue',
+      launch: {
+        cwd: '/portable',
+        workflowName: 'portable',
+        inputs: {},
+        isolation: { kind: 'in-place' },
+      },
+    },
+    'limited'
+  );
+  await host.deps.store.acceptStartReceipt(accepted);
+  // The in-memory store keeps no run limit; stand in for one with a start queued under it,
+  // or admitted by a drain after the limit was read (`admittedSince`).
+  let admittedSince = false;
+  const read = host.deps.store.getStartReceipt.bind(host.deps.store);
+  host.deps.store.getStartReceipt = async id => {
+    const receipt = await read(id);
+    return (
+      receipt && {
+        ...receipt,
+        bindings: receipt.bindings.map(binding => ({
+          ...binding,
+          ...(admittedSince
+            ? {
+                requestStatus: 'admitted' as const,
+                disposition: {
+                  status: 'admitted' as const,
+                  requestId: 'queued-request',
+                  runId: 'queued-request',
+                },
+              }
+            : {
+                requestStatus: 'queued' as const,
+                disposition: {
+                  status: 'queued' as const,
+                  requestId: 'queued-request',
+                  blocker: { kind: 'run' as const, id: 'holder' },
+                },
+              }),
+        })),
+      }
+    );
+  };
+  for (const [waiting, admitted, listed] of [
+    [['queued-request'], false, { limit: 1, live: 1 }],
+    [['another-request'], false, null],
+    [['queued-request'], true, null],
+  ] as const) {
+    host.deps.store.getRunLimit = async () => ({ limit: 1, live: 1, waiting });
+    admittedSince = admitted;
+    const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+      _chunk: unknown,
+      callback?: () => void
+    ) => {
+      callback?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await triggerCommand(host, 'list', [], {});
+      const [receipt] = JSON.parse(stdout.mock.calls.map(call => String(call[0])).join('')) as {
+        runLimit: unknown;
+      }[];
+      expect(receipt?.runLimit).toEqual(listed);
+    } finally {
+      stdout.mockRestore();
+    }
+  }
 });
 
 /** Accept one binding for `workflowYaml` and drain it; returns the prepared request or the error. */
@@ -611,6 +996,7 @@ async function prepareTriggerInputs(
       hostId: 'host',
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
   } catch (error) {
@@ -645,6 +1031,7 @@ test('preparation refuses event-mapped inputs for a workflow that declares none'
   expect((await host.deps.store.getStartReceipt(receiptId))?.bindings[0]).toMatchObject({
     status: 'rejected',
     error: 'launch_preparation_failed',
+    forgeRefusal: null,
   });
 });
 
@@ -725,9 +1112,182 @@ async function fireFixture(fileStore = false): Promise<{
   };
 }
 
-const noDispatch = async (): Promise<void> => {};
+const noDispatch = async (): Promise<null> => null;
 /** An environment with no calling node, whatever the shell running the tests exports. */
 const NO_RUN: NodeJS.ProcessEnv = {};
+
+type PrintedReceipt = {
+  id: string;
+  bindings: {
+    status: string;
+    ownerId: string | null;
+    requestStatus: string | null;
+    disposition: { status: string; requestId: string } | null;
+  }[];
+};
+
+/** Runs `fire` with stdout and stderr captured: the receipt it printed, and its stderr. */
+async function captureFire(
+  run: () => Promise<void>
+): Promise<{ printed: PrintedReceipt; stderr: string }> {
+  const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    _chunk: unknown,
+    callback?: () => void
+  ) => {
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    await run();
+    const output = stdout.mock.calls
+      .map(call => String(call[0]))
+      .find(chunk => chunk.startsWith('{\n'));
+    if (!output) throw new Error('Expected printed receipt');
+    return {
+      printed: JSON.parse(output) as PrintedReceipt,
+      stderr: stderr.mock.calls.map(call => String(call[0])).join(''),
+    };
+  } finally {
+    stderr.mockRestore();
+    stdout.mockRestore();
+  }
+}
+
+test('fire reports the disposition of its binding when another process prepares it', async () => {
+  const { host, configPath, restore } = await fireFixture();
+  const store = host.deps.store;
+  const accept = store.acceptStartReceipt.bind(store);
+  const claim = store.claimStartBindingPreparation.bind(store);
+  const read = store.getStartReceipt.bind(store);
+  // Another process's drain claims the binding the moment it is accepted, and holds it
+  // until this fire has drained and gone back to read its receipt.
+  let claimed!: () => void;
+  const claimedByOther = new Promise<void>(resolve => (claimed = resolve));
+  let release!: () => void;
+  const released = new Promise<void>(resolve => (release = resolve));
+  let otherDrain: Promise<void> | undefined;
+  let readsAfterClaim = 0;
+  store.acceptStartReceipt = async input => {
+    const accepted = await accept(input);
+    otherDrain = drainHost(host, 'host', noDispatch);
+    await claimedByOther;
+    return accepted;
+  };
+  store.claimStartBindingPreparation = async input => {
+    const won = await claim(input);
+    if (won) {
+      claimed();
+      await released;
+    }
+    return won;
+  };
+  store.getStartReceipt = async id => {
+    // The first read is the fire's own before its drain; the second comes after it.
+    if (otherDrain && ++readsAfterClaim === 2) release();
+    return read(id);
+  };
+  try {
+    const { printed } = await captureFire(() =>
+      triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        { dispatch: noDispatch, env: NO_RUN }
+      )
+    );
+    await otherDrain;
+    const [binding] = printed.bindings;
+    expect(binding?.status).toBe('complete');
+    expect(binding?.disposition?.requestId).toEqual(expect.any(String));
+    expect(binding?.disposition?.status).toBe(binding?.requestStatus ?? 'missing');
+  } finally {
+    release();
+    restore();
+  }
+});
+
+test('fire exits 0 naming the owner when another process holds preparation past the wait', async () => {
+  const { host, configPath, restore } = await fireFixture();
+  const store = host.deps.store;
+  const accept = store.acceptStartReceipt.bind(store);
+  store.acceptStartReceipt = async input => {
+    const accepted = await accept(input);
+    await store.claimStartBindingPreparation({
+      receiptId: accepted.receiptId,
+      bindingId: 'fired',
+      ownerId: 'stuck',
+    });
+    return accepted;
+  };
+  try {
+    const { printed, stderr } = await captureFire(() =>
+      triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        {
+          dispatch: noDispatch,
+          env: NO_RUN,
+          preparationWait: { intervalMs: 5, timeoutMs: 50 },
+        }
+      )
+    );
+    expect(printed.bindings[0]).toMatchObject({ status: 'preparing', ownerId: 'stuck' });
+    expect(stderr).toContain(`recover-preparation ${printed.id} fired --owner stuck`);
+    expect((await store.getStartReceipt(printed.id))?.bindings[0]?.status).toBe('preparing');
+  } finally {
+    restore();
+  }
+});
+
+test("fire fails when another process's preparation of its binding fails", async () => {
+  const { host, configPath, restore } = await fireFixture();
+  const store = host.deps.store;
+  const accept = store.acceptStartReceipt.bind(store);
+  store.acceptStartReceipt = async input => {
+    const accepted = await accept(input);
+    const identity = { receiptId: accepted.receiptId, bindingId: 'fired', ownerId: 'other' };
+    await store.claimStartBindingPreparation(identity);
+    await store.failStartBindingPreparation({
+      ...identity,
+      retryable: false,
+      error: 'launch_preparation_failed',
+    });
+    return accepted;
+  };
+  try {
+    await expect(
+      triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        { dispatch: noDispatch, env: NO_RUN }
+      )
+    ).rejects.toThrow('launch_preparation_failed');
+  } finally {
+    restore();
+  }
+});
+
+test('a replayed delivery whose preparation failed reports the stored receipt', async () => {
+  const { host, configPath, inputsPath, restore } = await fireFixture();
+  await writeFile(inputsPath, JSON.stringify({ order_id: 'from-the-event' }));
+  const options = { config: configPath, inputs: inputsPath, deliveryId: 'refused-once' };
+  const deps = { dispatch: noDispatch, env: NO_RUN };
+  try {
+    await expect(triggerCommand(host, 'fire', [], options, deps)).rejects.toThrow(
+      'declares no inputs'
+    );
+    const { printed } = await captureFire(() => triggerCommand(host, 'fire', [], options, deps));
+    expect(printed.bindings[0]).toMatchObject({ status: 'rejected', disposition: null });
+  } finally {
+    restore();
+  }
+});
 
 test('fire reports why preparation refused while the receipt keeps only the stage', async () => {
   const { host, configPath, inputsPath, restore } = await fireFixture();
@@ -900,6 +1460,7 @@ test.each([true, false])(
         {
           dispatch: async requestId => {
             started.push(requestId);
+            return null;
           },
           env: NO_RUN,
         }
@@ -955,6 +1516,7 @@ test('a damaged receipt does not stop preparing a healthy binding on the same ho
         hostId: 'host',
         startAdmitted: async requestId => {
           started.push(requestId);
+          return null;
         },
       }).catch((error: unknown) => error);
       if (!(failure instanceof ResourceStartDrainError)) throw new Error('Expected drain failure');
@@ -1017,6 +1579,7 @@ test('keyed replays fail for every receipt queued on a resource whose drain fail
     const damaged = JSON.stringify(row);
     await writeFile(path, damaged);
     stdout.mockClear();
+    stderr.mockClear();
     for (const deliveryId of deliveries)
       await expect(
         triggerCommand(
@@ -1056,7 +1619,8 @@ test('a queued start that fails is attributed to the receipt that requested it',
   });
   const holder = launch(codebase.id);
   const queued = launch(codebase.id);
-  queued.run.metadata = { resource_start: { receiptId: 'receipt-of-queued', bindingId: 'b' } };
+  const receiptId = randomUUID();
+  queued.run.metadata = { resource_start: { receiptId, bindingId: 'b' } };
   const intent = (prepared: PreparedWorkflowLaunch): ResourceStartIntent => ({
     resource: 'one',
     capacity: 1,
@@ -1081,9 +1645,7 @@ test('a queued start that fails is attributed to the receipt that requested it',
   );
 
   expect(error).toBeInstanceOf(ResourceStartDrainError);
-  expect((error as ResourceStartDrainError).failures).toMatchObject([
-    { receiptId: 'receipt-of-queued' },
-  ]);
+  expect((error as ResourceStartDrainError).failures).toMatchObject([{ receiptId }]);
 });
 
 test('preparation preserves both failures when rejection cannot be persisted', async () => {
@@ -1197,6 +1759,7 @@ test('a triggered run pauses at a gate and an attention wait and continues after
       hostId: 'host',
       startAdmitted: async id => {
         admitted.push(id);
+        return null;
       },
     });
     const [runId] = admitted;
@@ -1223,7 +1786,6 @@ test('a triggered run pauses at a gate and an attention wait and continues after
         cwd: project,
         userMessage: '',
       });
-      if (!admission.accepted) throw new Error('The answered run was not resumed');
       await admission.settled;
     };
 
@@ -1301,6 +1863,263 @@ test('a fire from inside a run records that run, and the started run and its req
       id: disposition.runId,
       requested_by: origin,
     });
+  } finally {
+    stdout.mockRestore();
+    restore();
+  }
+});
+
+test('a skipped hand-off from an ended run appears in the notice window and watch', async () => {
+  const { host, project, configPath, restore } = await fireFixture(true);
+  const store = host.deps.store;
+  const codebase = await host.records.codebases.findCodebaseByDefaultCwd(project);
+  if (!codebase) throw new Error('Expected registered project');
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  config.binding.overlap = 'skip';
+  await writeFile(configPath, JSON.stringify(config));
+  const holder = launch(codebase.id);
+  holder.execution.cwd = project;
+  await store.admitResourceStart({
+    resource: 'portable',
+    capacity: 1,
+    overlap: 'skip',
+    hostId: 'host',
+    launch: holder,
+  });
+  const source = await store.createWorkflowRun({
+    workflow_name: 'requester',
+    codebase_id: codebase.id,
+    user_message: '',
+  });
+  await store.claimPendingWorkflowRun(source.id);
+  await store.completeWorkflowRun(source.id, { duration_ms: 1 });
+  const projectRef = await runProject({ store }, source);
+  if (!projectRef) throw new Error('Expected source project');
+  const reader = attentionWatchReader('notices');
+  const lines: ClassifiedAttentionStreamLine[] = [];
+  const received = Promise.withResolvers<void>();
+  const watch = await watchAttentionQueue(
+    store,
+    { branchOf: async () => null },
+    line => {
+      const classified = reader(line);
+      if (classified) lines.push(classified);
+      if (classified?.type === 'notice') received.resolve();
+    },
+    { scope: { kind: 'project', project: projectRef }, pollIntervalMs: 5 }
+  );
+  const output: string[] = [];
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: unknown,
+    callback?: () => void
+  ) => {
+    output.push(String(chunk));
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath, deliveryId: 'handoff' },
+      {
+        dispatch: noDispatch,
+        env: {
+          WORKFLOW_ID: source.id,
+          ARCHON_NODE_EXECUTION: JSON.stringify({ runId: source.id, path: 'handoff' }),
+        },
+      }
+    );
+    await received.promise;
+    expect(lines.filter(line => line.type === 'notice')).toMatchObject([
+      {
+        type: 'notice',
+        runId: source.id,
+        needs: 'nothing',
+        workflow: 'requester',
+        node: null,
+        labels: { binding: 'fired', resource: 'portable', blocker: holder.run.id },
+      },
+    ]);
+    output.length = 0;
+    expect(
+      await workflowAttentionCommand(host, project, undefined, {
+        notices: true,
+        since: '24h',
+        json: true,
+        labels: [],
+      })
+    ).toBe(0);
+    const { notices } = JSON.parse(output.join(''));
+    expect(notices).toHaveLength(1);
+    const notice = workflowNoticeSchema.parse(notices[0]);
+    expect(notice).toMatchObject({
+      runId: source.id,
+      workflow: 'requester',
+      parentRunId: null,
+      node: null,
+      project: projectRef,
+      text: 'Trigger fire dropped, not queued (overlap=skip).',
+      labels: {
+        kind: 'trigger_fire_skipped',
+        binding: 'fired',
+        resource: 'portable',
+        overlap: 'skip',
+        blocker_kind: 'run',
+        blocker: holder.run.id,
+        delivery: 'handoff',
+      },
+    });
+    expect((await store.getWorkflowRun(source.id))?.status).toBe('completed');
+  } finally {
+    await watch.close();
+    stdout.mockRestore();
+    restore();
+  }
+});
+
+test('a hand-off at the notice limit is skipped and remains inspectable', async () => {
+  const { host, project, configPath, restore } = await fireFixture(true);
+  const store = host.deps.store;
+  const output: string[] = [];
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: unknown,
+    callback?: () => void
+  ) => {
+    output.push(String(chunk));
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    const codebase = await host.records.codebases.findCodebaseByDefaultCwd(project);
+    if (!codebase) throw new Error('Expected registered project');
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    config.binding.overlap = 'skip';
+    await writeFile(configPath, JSON.stringify(config));
+    const holder = launch(codebase.id);
+    holder.execution.cwd = project;
+    await store.admitResourceStart({
+      resource: 'portable',
+      capacity: 1,
+      overlap: 'skip',
+      hostId: 'host',
+      launch: holder,
+    });
+    const source = await store.createWorkflowRun({
+      workflow_name: 'requester',
+      codebase_id: codebase.id,
+      user_message: '',
+    });
+    await store.claimPendingWorkflowRun(source.id);
+    for (let i = 0; i < WORKFLOW_NOTICE_LIMITS.perRun; i++)
+      await emitWorkflowNotice(store, {
+        runId: source.id,
+        text: 'Author notice',
+        node: 'author',
+        labels: {},
+      });
+    await store.completeWorkflowRun(source.id, { duration_ms: 1 });
+    output.length = 0;
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath, deliveryId: 'limited-handoff' },
+      {
+        dispatch: noDispatch,
+        env: {
+          WORKFLOW_ID: source.id,
+          ARCHON_NODE_EXECUTION: JSON.stringify({ runId: source.id, path: 'handoff' }),
+        },
+      }
+    );
+    const receipt = JSON.parse(output.at(-1) ?? '');
+    expect(receipt.bindings).toMatchObject([
+      {
+        status: 'complete',
+        error: null,
+        disposition: { status: 'skipped', blocker: { kind: 'run', id: holder.run.id } },
+      },
+    ]);
+    const requestId = receipt.bindings[0].disposition.requestId;
+    for (const id of [receipt.id, requestId]) {
+      output.length = 0;
+      await triggerCommand(host, 'inspect', [id], {});
+      const inspected = JSON.parse(output.join(''));
+      if (id === receipt.id)
+        expect(inspected.bindings).toMatchObject([
+          { status: 'complete', error: null, disposition: { status: 'skipped', requestId } },
+        ]);
+      else expect(inspected).toMatchObject({ status: 'skipped', id: requestId });
+    }
+    expect(await store.getWorkflowRun(requestId)).toBeNull();
+    expect((await store.getWorkflowRun(source.id))?.status).toBe('completed');
+    const notices =
+      (await store.listEventsForRuns([source.id], ['workflow_notice'])).get(source.id) ?? [];
+    expect(notices).toHaveLength(WORKFLOW_NOTICE_LIMITS.perRun);
+    expect(notices.map(event => event.data)).toEqual(
+      Array.from({ length: WORKFLOW_NOTICE_LIMITS.perRun }, () => ({
+        text: 'Author notice',
+        node: 'author',
+        labels: {},
+      }))
+    );
+  } finally {
+    stdout.mockRestore();
+    restore();
+  }
+});
+
+test('launch diagnostics retain all lines in both inspect forms and workflow get', async () => {
+  const { host, configPath, restore } = await fireFixture(true);
+  const output: string[] = [];
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: unknown,
+    callback?: () => void
+  ) => {
+    output.push(String(chunk));
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  const diagnostic = 'delivery preparation failed\nsecond diagnostic line';
+  try {
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath },
+      { dispatch: noDispatch, env: NO_RUN }
+    );
+    const [receipt] = await host.deps.store.listStartReceipts();
+    const binding = (await host.deps.store.getStartReceipt(receipt.id))?.bindings[0];
+    if (binding?.disposition?.status !== 'admitted') throw new Error('Expected admission');
+    const { runId } = binding.disposition;
+    await expect(
+      startAdmittedResourceStart({
+        host,
+        hostId: 'host',
+        requestId: binding.disposition.requestId,
+        createPlatform: () => {
+          throw new Error(diagnostic);
+        },
+      })
+    ).rejects.toThrow(diagnostic);
+    for (const id of [receipt.id, binding.disposition.requestId]) {
+      output.length = 0;
+      await triggerCommand(host, 'inspect', [id], {});
+      const inspected = JSON.parse(output.join(''));
+      expect(id === receipt.id ? inspected.bindings[0].run : inspected.run).toMatchObject({
+        id: runId,
+        status: 'failed',
+        error: diagnostic,
+      });
+    }
+    output.length = 0;
+    await workflowGetCommand(host, runId, true);
+    const got = JSON.parse(output.join(''));
+    expect(got.metadata.error).toBe(diagnostic);
+    expect(got.terminal_record.error).toBe(diagnostic);
   } finally {
     stdout.mockRestore();
     restore();

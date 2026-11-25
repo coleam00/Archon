@@ -154,9 +154,9 @@ function resolveSystemMessage(requestOptions?: SendQueryOptions): SystemMessageC
 
 /**
  * Translate Archon's per-node `allowed_tools` / `denied_tools` to Copilot's
- * `availableTools` / `excludedTools`. Copilot's spec: `availableTools` takes
- * precedence over `excludedTools`; we pass both through when present and let
- * the SDK enforce precedence.
+ * `availableTools` / `excludedTools`. Both match every session tool, MCP tools
+ * included, and `excludedTools` wins over `availableTools`; we pass both
+ * through when present and let the SDK enforce precedence.
  */
 function applyToolRestrictions(
   sessionConfig: SessionConfig,
@@ -603,6 +603,9 @@ export class CopilotProvider implements IAgentProvider {
     );
 
     try {
+      // Inside the try, so a caller that stops here still has the client stopped below.
+      // After a failed resume this is the fresh session, as the result will report.
+      yield { type: 'session', sessionId: session.sessionId };
       yield* closeOpenToolCalls(
         bridgeSession(
           session,

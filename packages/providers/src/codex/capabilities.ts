@@ -4,6 +4,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   backgroundWork: 'reported',
   sessionResume: true,
   sessionFork: true, // `thread/fork` copies a thread into a new one
+  turnMessages: true, // `turn/steer` adds input to the active turn
   mcp: true,
   hooks: false,
   // Codex has native filesystem skills, but does not implement Archon's per-node
@@ -14,6 +15,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   agents: false,
   toolRestrictions: false,
   structuredOutput: 'enforced', // turn outputSchema grammar-constrains decoding
+  structuredOutputCorrection: 'same-session', // thread/resume keeps the node's work; outputSchema rides every turn
   requiresAllPropertiesRequired: true, // OpenAI strict-mode: every key in properties must appear in required
   envInjection: true,
   costControl: false,

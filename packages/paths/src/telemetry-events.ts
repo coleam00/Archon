@@ -14,7 +14,7 @@ import type { WORKFLOW_SOURCES } from './workflow-source';
  * Bumped when the captured property set changes (documented in README). 7 is
  * skipped: a fork shipping this embedded key already sends it.
  */
-export const TELEMETRY_SCHEMA_VERSION = 12;
+export const TELEMETRY_SCHEMA_VERSION = 14;
 
 /**
  * Privacy invariants attached to EVERY telemetry event by the transport, not
@@ -188,7 +188,7 @@ export interface WorkflowAncestryProperties {
  * team server deployments.
  */
 export interface DeploymentShapeProperties {
-  dbKind?: 'sqlite' | 'postgresql';
+  dbKind?: Exclude<ArchonStoreKind, 'files'>;
   webAuthEnabled?: boolean;
   /** Per-user credentials mode (TOKEN_ENCRYPTION_KEY configured). */
   multiUser?: boolean;
@@ -201,14 +201,36 @@ export interface DeploymentShapeProperties {
   adapterGitlab?: boolean;
 }
 
-/** Once-per-process startup event — the basis for active-install counting. */
+/** Where an install keeps runs: the file store (CLI only) or a database. */
+export type ArchonStoreKind = 'files' | 'sqlite' | 'postgresql';
+
+/** Once-per-day startup event — the basis for active-install counting. */
 export interface ArchonStartedProperties extends DeploymentShapeProperties {
   surface: 'cli' | 'server';
+  store?: ArchonStoreKind;
+}
+
+export interface TelemetryUsageProperties {
+  /** Provider-reported cost (USD) for the run or turn. */
+  costUsd?: number;
+  /** Provider-reported gross input tokens for the run or turn. */
+  tokensIn?: number;
+  tokensOut?: number;
+  /** Cache-read input tokens; absent when no contribution reported the axis. */
+  cacheReadTokens?: number;
+  /** Cache-write input tokens; absent when no contribution reported the axis. */
+  cacheWriteTokens?: number;
+  /**
+   * True when the two cache totals above are a FLOOR because at least one contributing
+   * result did not report that axis. Without it a narrowed total would be indistinguishable
+   * from a complete one and would bias aggregate cache figures low (#2662).
+   */
+  cachePartialTokens?: true;
 }
 
 /**
  * One completed direct-chat AI turn (NOT workflow execution — workflows emit
- * `workflow_invoked` instead). Carries only platform + provider; never
+ * `workflow_invoked` instead). Carries categorical context and numeric usage; never
  * message content, conversation ids, or prompt/response data.
  *
  * `platform`/`provider` are open strings because this leaf package cannot
@@ -217,17 +239,14 @@ export interface ArchonStartedProperties extends DeploymentShapeProperties {
  * `aiClient.getType()`) — both are structurally categorical (fixed literals
  * per adapter/provider implementation), never user input.
  */
-export interface ChatTurnProperties {
+export interface ChatTurnProperties extends TelemetryUsageProperties {
   platform?: string;
   provider?: string;
   /** Resolved model ref — passed through {@link sanitizeModelForTelemetry}. */
   model?: string;
-  outcome: 'completed' | 'failed';
+  /** `cancelled`: the operator stopped the turn while it was in flight. */
+  outcome: 'completed' | 'failed' | 'cancelled';
   durationMs?: number;
-  /** Provider-reported aggregate usage for the turn. Numbers only. */
-  costUsd?: number;
-  tokensIn?: number;
-  tokensOut?: number;
 }
 
 /**
@@ -238,8 +257,7 @@ export type WorkflowExitReason =
   | 'no_nodes_completed'
   | 'node_error'
   | 'unhandled_error'
-  // File-presence gate (#2230): all nodes succeeded but `evidence_policy.required`
-  // found no conventional `$ARTIFACTS_DIR/evidence.json` marker, so the run failed.
+  // Retired with `evidence_policy` (#5630). Nothing sends it; kept to mirror the engine enum.
   | 'evidence_missing'
   // The run budget refused new work, or its spend could not be measured (#2814).
   | 'budget_refused'
@@ -273,6 +291,7 @@ export type WorkflowErrorClass =
   | 'timeout'
   | 'exec_failed'
   | 'output_contract'
+  | 'schema_unmet'
   | 'max_iterations'
   | 'child_failed'
   | 'cancelled'
@@ -297,9 +316,9 @@ export type WorkflowNodeType =
  * `workflow_cancelled`. Sent once per committed terminal transition by the run
  * store (see `buildRunTerminalTelemetry` in `@archon/workflows`), so every path
  * that ends a run reports it — plus `run_not_created` from the executor when no
- * run row could be written.
+ * run row could be written. Usage covers every resumed segment, including child spend.
  */
-export interface WorkflowTerminalProperties {
+export interface WorkflowTerminalProperties extends TelemetryUsageProperties {
   outcome: 'completed' | 'failed' | 'cancelled';
   /** Run row id, hashed into `run_ref` here; never sent raw. Absent without a row. */
   runId?: string;
@@ -323,21 +342,6 @@ export interface WorkflowTerminalProperties {
   errorClass?: WorkflowErrorClass;
   /** Type of the first failed node. */
   failedNodeType?: WorkflowNodeType;
-  /** Provider-reported cost (USD) across every segment, a child's spend included. */
-  costUsd?: number;
-  /** Provider-reported gross input tokens across every segment. */
-  tokensIn?: number;
-  tokensOut?: number;
-  /** Cache-read input tokens; absent when no contribution reported the axis. */
-  cacheReadTokens?: number;
-  /** Cache-write input tokens; absent when no contribution reported the axis. */
-  cacheWriteTokens?: number;
-  /**
-   * True when the two cache totals above are a FLOOR because at least one contributing
-   * node did not report that axis. Without it a narrowed total would be indistinguishable
-   * from a complete one and would bias aggregate cache figures low (#2662).
-   */
-  cachePartialTokens?: true;
   /** Completed loop iterations across every segment. */
   loopIterations?: number;
 }
@@ -404,8 +408,8 @@ export function workflowInvokedEventProperties(props: WorkflowInvokedProperties)
 }
 
 /**
- * Serialize deployment-shape fields to wire properties, omitting absent ones
- * (the CLI surface passes none; the server surface passes all). `archon_started`
+ * Serialize start-event fields to wire properties, omitting absent ones (the CLI
+ * surface passes only `store`; the server surface passes the full deployment shape). `archon_started`
  * and `archon_active` both build from this, so they can never drift apart.
  */
 export function archonSurfaceEventProperties(props: ArchonStartedProperties): EventProperties {
@@ -413,6 +417,7 @@ export function archonSurfaceEventProperties(props: ArchonStartedProperties): Ev
     surface: props.surface,
     schema_version: TELEMETRY_SCHEMA_VERSION,
     ...withoutUndefined({
+      store: props.store,
       db_kind: props.dbKind,
       web_auth_enabled: props.webAuthEnabled,
       multi_user: props.multiUser,
@@ -439,6 +444,9 @@ export function chatTurnEventProperties(props: ChatTurnProperties): EventPropert
       cost_usd: props.costUsd,
       tokens_in: props.tokensIn,
       tokens_out: props.tokensOut,
+      cache_read_tokens: props.cacheReadTokens,
+      cache_write_tokens: props.cacheWriteTokens,
+      cache_partial: props.cachePartialTokens ? true : undefined,
     }),
   };
 }

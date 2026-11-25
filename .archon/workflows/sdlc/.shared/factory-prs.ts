@@ -12,16 +12,22 @@
  * per name and subject, so a re-run replaces rather than adds.
  */
 
+import { createHash } from 'node:crypto';
 import { BUILD_BRANCH_PREFIX } from './build.ts';
-import { invokeForge, parsePrRecord, type QualifiedPr, record, sameRepo } from './forge.ts';
-import { note } from './io.ts';
-import { prFromUrl } from './merge.ts';
+import { forge, state, type ForgeOperations } from 'archon:script';
+import { sameRepo } from './identity.ts';
+import { resolvePrUrl } from './pr.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */
-const MAX_RUNS = 20;
+export const MAX_RUNS = 20;
 
-/** One pull request's facts as the forge's `pr.view` reports them. */
+/**
+ * One pull request's facts as the forge's `pr.view` reports them. A merged pull request's
+ * facts are kept as this object under `SETTLED_PREFIX`: change this shape, or how
+ * `prFacts()` derives a kept value, and bump that prefix's version with it, so a run
+ * never serves a kept document of the old shape or with an old derivation.
+ */
 export interface PrFacts {
   readonly url: string;
   readonly state: 'OPEN' | 'CLOSED' | 'MERGED';
@@ -69,46 +75,111 @@ export function factoryPrRuns(items: readonly WorkItem[]): Map<string, string[]>
  * optional in the forge contract because a plugin that predates it omits it, so a
  * view without it refuses rather than counting the pull request with no times.
  */
-export function prFacts(url: string, view: Record<string, unknown> | null): PrFacts {
+export function prFacts(url: string, view: ForgeOperations['pr.view']['result']): PrFacts {
   if (view === null) throw new Error(`forge pr.view reported no pull request for ${url}`);
-  const pr = parsePrRecord(view.pr);
-  const times = record(view.timestamps);
+  const { pr, timestamps: times } = view;
   if (times === undefined) {
     throw new Error(
       `forge pr.view reported no timestamps for ${url}; PR metrics need a forge plugin whose pr.view reports them`
     );
   }
-  const time = (field: string): string | null => (typeof times[field] === 'string' ? (times[field] as string) : null);
-  const createdAt = time('created_at');
+  const createdAt = times.created_at;
   if (createdAt === null) throw new Error(`forge pr.view reported no creation time for ${url}`);
   return {
     url,
     state: pr.state === 'open' ? 'OPEN' : pr.state === 'merged' ? 'MERGED' : 'CLOSED',
     createdAt,
-    mergedAt: time('merged_at'),
-    closedAt: time('closed_at'),
+    mergedAt: times.merged_at,
+    closedAt: times.closed_at,
     headRefName: pr.head,
     isCrossRepository: pr.head_repo === null || !sameRepo(pr.head_repo, pr.repo),
   };
 }
 
 /**
- * Read each pull request by number, so no list limit can drop an old one. A recorded
- * URL that is not a pull request URL is noted and left out.
+ * A merged pull request's facts never change, so a run keeps them: one state document
+ * per recorded URL, holding the facts. The next run reads every kept document in one
+ * call and asks the forge only about the pull requests that can still change: open
+ * ones, closed ones (which can reopen), and merged ones no run has kept yet. The cost
+ * of a run then grows with those, not with every pull request ever recorded.
+ *
+ * The version is in the prefix: a document holds `PrFacts` as of that version, so a
+ * change to `PrFacts` bumps it and the old documents are left unread. Bump it also when
+ * the way `prFacts()` derives a kept value (such as `isCrossRepository` or the state
+ * mapping) changes while the shape stays the same, or kept documents keep the old values.
+ */
+const SETTLED_PREFIX = 'pr-facts/v1/';
+
+const settledName = (url: string): string => `${SETTLED_PREFIX}${createHash('sha256').update(url).digest('hex')}`;
+
+/** The facts a run kept for `url`, or undefined for a document that does not hold them. */
+function keptFacts(value: unknown, url: string): PrFacts | undefined {
+  const facts = value as Partial<PrFacts> | null;
+  return facts?.state === 'MERGED' && facts.url === url ? (facts as PrFacts) : undefined;
+}
+
+/**
+ * Keep a merged pull request's facts. The metrics are already right without the
+ * document, so a failed write is noted and the run goes on, and the next run reads the
+ * pull request again.
+ *
+ * A refused write means the document moved since the listing: another run kept the
+ * facts, which needs nothing more, or the document was deleted, and a deleted document
+ * keeps its revision, which a recreating write must name. So after a refusal the
+ * document is read, and written once at its own revision unless it holds the facts. A
+ * second refusal is another run moving it again, and is left to that run.
+ */
+function keepFacts(name: string, facts: PrFacts, revision: number): void {
+  try {
+    if (state.put(name, facts, { ifRevision: revision }).ok) return;
+    const moved = state.get(name);
+    if (keptFacts(moved.value, facts.url) === undefined) state.put(name, facts, { ifRevision: moved.revision });
+  } catch (error) {
+    console.error(`PR metrics could not keep the facts of ${facts.url}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Read each pull request by number, so no list limit can drop an old one, except a
+ * merged one an earlier run kept. A recorded URL the forge says is not a pull request
+ * URL is noted and left out; a forge that cannot resolve one fails the read, so the
+ * cohort is never silently short.
  */
 export function readPrFacts(urls: Iterable<string>): PrFacts[] {
+  const stored = new Map(state.listValues(SETTLED_PREFIX).map(document => [document.name, document]));
   const facts: PrFacts[] = [];
   for (const url of urls) {
-    let ref: QualifiedPr;
-    try {
-      ref = prFromUrl(url);
-    } catch (error) {
-      note(`PR metrics skip a round's URL: ${error instanceof Error ? error.message : String(error)}`);
+    const name = settledName(url);
+    const kept = keptFacts(stored.get(name)?.value, url);
+    if (kept !== undefined) {
+      facts.push(kept);
       continue;
     }
-    facts.push(prFacts(url, invokeForge('pr.view', { selector: { kind: 'number', ref } })));
+    let view: ForgeOperations['pr.view']['result'];
+    try {
+      const ref = resolvePrUrl(url);
+      if (ref === undefined) {
+        console.error(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
+        continue;
+      }
+      view = forge('pr.view', { selector: { kind: 'number', ref } });
+    } catch (error) {
+      throw new Error(`PR metrics could not read ${url}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+    const read = prFacts(url, view);
+    facts.push(read);
+    // A listed document that does not hold these facts is replaced at its revision; a name not listed is created.
+    if (read.state === 'MERGED' && read.mergedAt !== null) keepFacts(name, read, stored.get(name)?.revision ?? 0);
   }
   return facts;
+}
+
+/** The time a window bound such as `since` names: an ISO date or time, or `<n>d` back from now. */
+export function sinceTime(since: string): number {
+  const days = /^(\d+)d$/.exec(since)?.[1];
+  const from = days === undefined ? Date.parse(since) : Date.now() - Number(days) * 86_400_000;
+  if (Number.isNaN(from)) throw new Error(`a window bound must be an ISO date or time, or a number of days such as 7d; received ${JSON.stringify(since)}`);
+  return from;
 }
 
 /** A pull request from a round's branch: a `build/` branch in the repository itself. */

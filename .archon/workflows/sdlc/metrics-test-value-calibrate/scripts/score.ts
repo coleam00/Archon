@@ -4,13 +4,13 @@
  * the judge's identity. The tests the judge got wrong are listed in `disagreements`.
  */
 
-import { emit, refuse, text } from '../../.shared/io.ts';
+import { emit, input, refuse } from 'archon:script';
 import { type Case, judgeIdentity, judgeSlots, scoreCalibration } from '../../.shared/test-value.ts';
 
 try {
   // The `cases` node parsed and checked these before any judge ran.
-  const cases = JSON.parse(text(process.env.INPUTS_CASES)) as Case[];
-  emit(scoreCalibration(judgeSlots(cases, JSON.parse(text(process.env.INPUTS_VERDICTS))), judgeIdentity()));
+  const cases = JSON.parse(input('cases')) as Case[];
+  emit(scoreCalibration(judgeSlots(cases, JSON.parse(input('verdicts'))), judgeIdentity()));
 } catch (error) {
   refuse(`score: ${error instanceof Error ? error.message : String(error)}`);
 }

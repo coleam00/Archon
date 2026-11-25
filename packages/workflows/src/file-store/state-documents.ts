@@ -6,6 +6,8 @@ import {
   applyStatePatch,
   statePutSchema,
   parseStatePatchInput,
+  stateClaimSchema,
+  stateClaimValue,
   stateDeleteSchema,
   stateDocumentNameSchema,
   stateNamePrefixSchema,
@@ -164,6 +166,12 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
     },
     deleteStateDocument: async supplied =>
       write(stateDeleteSchema.parse(supplied), { op: 'delete' }, () => null),
+    claimStateDocument: async supplied => {
+      const input = stateClaimSchema.parse(supplied);
+      return write({ ...input, lease: 'take' }, { op: 'claim' }, prior =>
+        stateClaimValue(prior, input)
+      );
+    },
     listStateRevisions: async (scope, name, options = {}) => {
       const limit =
         options.limit === undefined ? undefined : z.number().int().positive().parse(options.limit);

@@ -12,6 +12,7 @@ import {
   updateGlobalConfig,
 } from './config-loader';
 import { InvalidConfigError } from './config-validation';
+import { loadProviderConcurrencyCaps } from './provider-concurrency';
 import {
   mockLogger,
   archonHome,
@@ -79,6 +80,48 @@ describe('config-loader', () => {
     await expect(loadConfig()).rejects.toThrow('Invalid attentionNotices config');
   });
 
+  const trackerYaml = (keys: string, extraProject = ''): string =>
+    `itemTracker:\n  projects:\n    - project: acme/widgets\n      repo: { host: github.com, path: acme/widgets }\n      keys:${keys}${extraProject}`;
+  const issueKeys = "\n        - { prefix: 'issue-', kind: issue }\n";
+
+  test('the item tracker loads from global config only, with usage off by default', async () => {
+    mockFsReadFile.mockImplementation(async (path: string) =>
+      path.replace(/\\/g, '/').includes('/repo/.archon/')
+        ? trackerYaml("\n        - { prefix: 'repo-', kind: issue }\n")
+        : trackerYaml(issueKeys)
+    );
+    expect((await loadConfig('/repo')).itemTracker).toEqual({
+      includeUsage: false,
+      projects: [
+        {
+          project: 'acme/widgets',
+          repo: { host: 'github.com', path: 'acme/widgets' },
+          keys: [{ prefix: 'issue-', kind: 'issue' }],
+        },
+      ],
+    });
+    expect(toSafeConfig(await loadConfig())).not.toHaveProperty('itemTracker');
+  });
+
+  test.each([
+    [
+      'overlapping prefixes',
+      trackerYaml(
+        "\n        - { prefix: 'issue-', kind: issue }\n        - { prefix: 'iss', kind: pr }\n"
+      ),
+    ],
+    [
+      'a duplicate project',
+      trackerYaml(
+        issueKeys,
+        "    - project: acme/widgets\n      repo: { host: github.com, path: acme/widgets }\n      keys:\n        - { prefix: 'pr-', kind: pr }\n"
+      ),
+    ],
+  ])('an item tracker with %s refuses to load', async (_case, yaml) => {
+    mockFsReadFile.mockResolvedValue(yaml);
+    await expect(loadConfig()).rejects.toThrow('Invalid itemTracker config');
+  });
+
   test.each(['concurrency:', 'concurrency: null', 'concurrency: ~'])(
     '%s preserves unrelated global settings and the default conversation limit',
     async concurrency => {
@@ -100,6 +143,24 @@ describe('config-loader', () => {
       });
     }
   );
+
+  test('a null provider cap block allows unrelated global settings updates', async () => {
+    mockFsReadFile.mockResolvedValue('botName: MyBot\nconcurrency:\n  providers: null\n');
+    await updateGlobalConfig({ botName: 'UpdatedBot' });
+    expect(Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string)).toEqual({
+      botName: 'UpdatedBot',
+      concurrency: { providers: null },
+    });
+  });
+
+  test('a conversation limit update keeps existing provider caps', async () => {
+    mockFsReadFile.mockResolvedValue('botName: MyBot\nconcurrency:\n  providers:\n    claude: 2\n');
+    await updateGlobalConfig({ concurrency: { maxConversations: 3 } });
+    expect(Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string)).toEqual({
+      botName: 'MyBot',
+      concurrency: { maxConversations: 3, providers: { claude: 2 } },
+    });
+  });
 
   test('invalid conversation limits refuse to load and cannot be persisted', async () => {
     mockFsReadFile.mockResolvedValue('concurrency:\n  maxConversations: -1\n');
@@ -155,6 +216,15 @@ concurrency:
       expect(config.defaultAssistant).toBe('codex');
       expect(config.streaming?.telegram).toBe('batch');
       expect(config.concurrency?.maxConversations).toBe(5);
+    });
+
+    test.each([
+      'worktree: [.cache]',
+      'worktree:\n  linkFiles: .cache',
+      'worktree:\n  linkFiles: [" "]',
+    ])('rejects invalid global worktree.linkFiles: %s', async setting => {
+      mockFsReadFile.mockResolvedValue(setting);
+      await expect(loadGlobalConfig()).rejects.toThrow('Invalid worktree config');
     });
 
     test.each([
@@ -317,6 +387,26 @@ workflows:
     ])('rejects invalid provisioning setting: %s', async setting => {
       mockFsReadFile.mockResolvedValue(`worktree:\n  ${setting}`);
       await expect(loadRepoConfig('/repo')).rejects.toThrow('worktree.postCreate');
+    });
+
+    test('loads linked files', async () => {
+      mockFsReadFile.mockResolvedValue(
+        'worktree:\n  copyFiles: [".env", ".serena/cache-index"]\n  linkFiles: [".serena/cache"]'
+      );
+      expect((await loadRepoConfig('/repo')).worktree?.linkFiles).toEqual(['.serena/cache']);
+    });
+
+    test.each([
+      'linkFiles: .serena/cache',
+      'linkFiles: [42]',
+      'linkFiles: [" "]',
+      'copyFiles: [".cache/"]\n  linkFiles: [".cache"]',
+      'copyFiles: [".cache"]\n  linkFiles: ["./.cache"]',
+      'copyFiles: [".cache"]\n  linkFiles: [".cache/shared"]',
+      'copyFiles: [".cache/shared"]\n  linkFiles: [".cache"]',
+    ])('rejects invalid linked files: %s', async setting => {
+      mockFsReadFile.mockResolvedValue(`worktree:\n  ${setting}`);
+      await expect(loadRepoConfig('/repo')).rejects.toThrow('worktree.linkFiles');
     });
 
     test('loads from .archon/config.yaml', async () => {
@@ -512,6 +602,94 @@ assistants:
       expect(mockFsWriteFile).toHaveBeenCalledTimes(1);
       const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
       expect(writtenContent).toContain('opus');
+    });
+
+    describe('keeps the file the operator wrote', () => {
+      const written = (): string => mockFsWriteFile.mock.calls[0]?.[1] as string;
+
+      test('comments, key order and layout survive; only the saved keys change', async () => {
+        const file = `# my archon config
+botName: Archon # keep this comment
+tiers:
+  # the cheap one
+  small: { provider: claude, model: haiku }
+  large:
+    provider: claude
+    model: sonnet # was sonnet
+assistants:
+  claude:
+    model: sonnet
+`;
+        mockFsReadFile.mockResolvedValue(file);
+
+        await updateGlobalConfig({
+          defaultAssistant: 'claude',
+          tiers: { large: { provider: 'claude', model: 'opus' } },
+        });
+
+        expect(written()).toBe(
+          file.replace('model: sonnet # was', 'model: opus # was') + 'defaultAssistant: claude\n'
+        );
+      });
+
+      test('the first-run template keeps its comments', async () => {
+        mockFsReadFile.mockResolvedValue('# Archon Global Configuration\n\n# botName: Archon\n');
+
+        await updateGlobalConfig({ defaultAssistant: 'claude' });
+
+        expect(written()).toBe(
+          '# Archon Global Configuration\n\n# botName: Archon\n\ndefaultAssistant: claude\n'
+        );
+      });
+
+      test('a file that is only `~` or `null` takes the save', async () => {
+        mockFsReadFile.mockResolvedValueOnce('# empty for now\n~\n');
+        await updateGlobalConfig({ defaultAssistant: 'claude' });
+        mockFsReadFile.mockResolvedValueOnce('null\n');
+        await updateGlobalConfig({ defaultAssistant: 'claude' });
+
+        expect(mockFsWriteFile.mock.calls.map(call => call[1])).toEqual([
+          '# empty for now\ndefaultAssistant: claude\n',
+          'defaultAssistant: claude\n',
+        ]);
+      });
+
+      test('CRLF line endings are kept', async () => {
+        mockFsReadFile.mockResolvedValue('# note\r\nbotName: Archon\r\n');
+
+        await updateGlobalConfig({ defaultAssistant: 'claude' });
+
+        expect(written()).toBe('# note\r\nbotName: Archon\r\ndefaultAssistant: claude\r\n');
+      });
+
+      test('an unrelated save keeps settings that come through two merge keys', async () => {
+        const file = `a: &a { defaultAssistant: claude }
+b: &b { botName: Bot }
+assistants:
+  <<: *a
+  <<: *b
+`;
+        mockFsReadFile.mockResolvedValue(file);
+
+        await updateGlobalConfig({ botName: 'Archon' });
+
+        expect(written()).toBe(`${file}botName: Archon\n`);
+      });
+
+      test('a save the file cannot take in place is refused and nothing is written', async () => {
+        mockFsReadFile.mockResolvedValue(`base: &base
+  large: { provider: claude, model: opus }
+tiers:
+  <<: *base
+  small: { provider: claude, model: haiku }
+`);
+
+        // `large` comes through the merge key, so deleting it from `tiers` changes nothing.
+        await expect(updateGlobalConfig({ tiers: { large: null } })).rejects.toThrow(
+          /config\.yaml' cannot take this change/
+        );
+        expect(mockFsWriteFile).not.toHaveBeenCalled();
+      });
     });
 
     test('preserves existing non-updated fields', async () => {
@@ -728,6 +906,64 @@ workflows:
 
       const written = Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string);
       expect(written).toEqual({ botName: 'MyBot', workflows: { quotaMaxAttempts: 3 } });
+    });
+
+    test.each([
+      ['claude', 0],
+      ['claude', -1],
+      ['claude', 1.5],
+      ['nope', 2],
+    ])('refuses to write provider cap %s: %p', async (id, cap) => {
+      mockFsReadFile.mockResolvedValue('botName: MyBot\n');
+
+      await expect(
+        updateGlobalConfig({ concurrency: { providers: { [id]: cap } } })
+      ).rejects.toThrow(new RegExp(`Invalid concurrency config.*concurrency\\.providers.*${id}`));
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    const fileWithBadCap = `
+botName: MyBot
+concurrency:
+  maxConversations: 5
+  providers:
+    claude: 0
+    nope: 1
+    codex: 3
+`;
+
+    test('refuses an unrelated edit that leaves an invalid provider cap in place', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadCap);
+
+      await expect(updateGlobalConfig({ botName: 'X' })).rejects.toThrow(
+        /Invalid concurrency config.*concurrency\.providers\.claude/
+      );
+      // Setting another provider's cap is checked against the merged map, not only the patch.
+      await expect(
+        updateGlobalConfig({ concurrency: { providers: { codex: 2 } } })
+      ).rejects.toThrow(/concurrency\.providers\.claude/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+      // Loading stays permissive: only admission and writes refuse a bad cap.
+      await expect(loadGlobalConfig()).resolves.toMatchObject({ botName: 'MyBot' });
+    });
+
+    test('a patch that repairs the provider caps keeps the valid cap and every unrelated key, and admission reads it', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadCap);
+
+      await updateGlobalConfig({ concurrency: { providers: { claude: 2, nope: null } } });
+
+      const yaml = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(Bun.YAML.parse(yaml)).toEqual({
+        botName: 'MyBot',
+        concurrency: { maxConversations: 5, providers: { claude: 2, codex: 3 } },
+      });
+      mockFsReadFile.mockResolvedValue(yaml);
+      expect(await loadProviderConcurrencyCaps()).toEqual(
+        new Map([
+          ['claude', 2],
+          ['codex', 3],
+        ])
+      );
     });
 
     test('an edit to one provider does not overwrite a malformed entry for another', async () => {

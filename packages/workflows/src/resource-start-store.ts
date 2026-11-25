@@ -1,14 +1,28 @@
+import { requestingRun } from './schemas/resource-start';
+import { workflowNoticeDataSchema, WORKFLOW_NOTICE_LIMITS } from './workflow-notice';
 import { createLogger } from '@archon/paths';
-import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
+import {
+  AdmissionCheckoutGuardError,
+  DEFAULT_RESOURCE_CAPACITY,
+  readAdmissionCheckoutGuard,
+} from './schemas/resource-start';
+import type { RunLimitState } from './schemas/run-limit';
+import type { StartRefusalReason } from './schemas/run-metadata';
+import type { FileSettingRefusal } from './schemas/pack-settings';
+import type { BindingRefusal } from './schemas/binding-refusal';
 import type { z } from 'zod';
+import type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 import type {
+  ForgeRefusal,
+  InstallHold,
   PreparedWorkflowLaunch,
+  QueuedItemStart,
   ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
   SourceReceiptInput,
   SourceReceiptAcceptance,
-  startBindingPreparationStatusSchema,
+  startBindingInspectionSchema,
   resourceStartRequestStatusSchema,
 } from './schemas/resource-start';
 import {
@@ -16,38 +30,118 @@ import {
   pendingWorkflowWaitDeadline,
   workflowWaitDue,
   readCapacityWait,
+  type WorkflowItem,
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
-import type { ResumeRefusal, WorkflowResumeCursor } from './store';
+import type { ProcessOwner } from '@archon/paths/process-owner';
+import type { WorkflowResource } from './schemas/resource-name';
+import type { ResumeClaimCursor, ResumeRefusal } from './store';
+import { itemHolder } from './item-hold';
+import type { StartLimitStanding } from './start-limit';
+
+export type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
+
+export function skippedFireNotice(
+  receipt: Pick<SourceReceiptInput, 'deliveryId' | 'sourceActor'>,
+  binding: Pick<ResourceStartIntent, 'resource' | 'overlap'> & { bindingId: string },
+  disposition: ResourceStartDisposition
+) {
+  const source = requestingRun(receipt.sourceActor);
+  if (receipt.deliveryId === null || source === null || disposition.status !== 'skipped')
+    return null;
+  const label = (value: string): string => {
+    const parts = Array.from(value, char =>
+      /[\u0000-\u001f\u007f-\u009f]/u.test(char)
+        ? `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+        : char
+    );
+    const printable = parts.join('');
+    const max = WORKFLOW_NOTICE_LIMITS.labelValueLength;
+    if (printable.length <= max) return printable;
+    let prefix = '';
+    for (const part of parts) {
+      if (prefix.length + part.length >= max) break;
+      prefix += part;
+    }
+    return `${prefix}…`;
+  };
+  return {
+    runId: source.runId,
+    data: workflowNoticeDataSchema.parse({
+      text: 'Trigger fire dropped, not queued (overlap=skip).',
+      node: null,
+      labels: {
+        kind: 'trigger_fire_skipped',
+        binding: label(binding.bindingId),
+        resource: label(binding.resource),
+        overlap: binding.overlap,
+        blocker_kind: disposition.blocker.kind,
+        blocker: label(disposition.blocker.id),
+        delivery: label(receipt.deliveryId),
+      },
+    }),
+  };
+}
 
 export class SourceReceiptDigestConflictError extends Error {}
 
-export class ResourceSlotCapacityConflictError extends Error {
-  constructor(
-    public readonly resource: string,
-    public readonly configured: number,
-    public readonly requested: number
-  ) {
-    super(
-      `Resource '${resource}' has capacity ${String(configured)}; a request declared ${String(requested)}. Every binding for one resource must declare the same capacity.`
-    );
-    this.name = 'ResourceSlotCapacityConflictError';
-  }
-}
-
-export interface StartBindingInspection {
+export interface PreparedBindingInput {
   receiptId: string;
   bindingId: string;
-  bindingRevision: string | null;
-  hostId: string | null;
-  status: z.infer<typeof startBindingPreparationStatusSchema>;
-  ownerId: string | null;
-  error: string | null;
-  intent: ResourceStartBindingIntent | null;
+  launch: PreparedWorkflowLaunch;
+  resource?: WorkflowResource;
+}
+
+/**
+ * The start a prepared binding asks admission for. The run holds its workflow's declared
+ * resource in place of the binding's, so a binding start and a hand start of that workflow
+ * count against one slot. Its capacity is the binding's, else the workflow's, else 1; the
+ * install config's number still wins at admission.
+ */
+export function preparedBindingStart(
+  binding: ResourceStartBindingIntent,
+  { receiptId, bindingId, launch, resource }: PreparedBindingInput
+): ResourceStartIntent {
+  return {
+    resource: resource?.name ?? binding.resource,
+    capacity: binding.capacity ?? resource?.capacity ?? DEFAULT_RESOURCE_CAPACITY,
+    hostId: binding.hostId,
+    overlap: binding.overlap,
+    launch,
+    receipt: { receiptId, bindingId },
+  };
+}
+
+/**
+ * What a slot records as its capacity after a start: the capacity the start declares, or
+ * what the slot already recorded, or the default for a new slot. A declared capacity
+ * replaces the recorded one, so changing it takes effect at the next admission.
+ */
+export function recordedResourceCapacity(
+  recorded: number | undefined,
+  declared: number | undefined
+): number {
+  return declared ?? recorded ?? DEFAULT_RESOURCE_CAPACITY;
+}
+
+/**
+ * The install's own number for a resource (`concurrency.resources.<resource>`), read at
+ * every admission. It wins over the slot's recorded capacity; `undefined` leaves that.
+ */
+export type ResourceCapacityOverride = (resource: string) => Promise<number | undefined>;
+
+/**
+ * The host ID recorded on the admitted request of a start no binding made (a direct
+ * `archon workflow run`, chat or API start). No host drains it: it is admitted at once
+ * or not recorded at all.
+ */
+export const DIRECT_START_HOST_ID = 'direct-start';
+
+export type StartBindingInspection = z.infer<typeof startBindingInspectionSchema> & {
   requestStatus: ResourceStartRequestInspection['status'] | null;
   disposition: ResourceStartDisposition | null;
-}
+};
 
 export interface StartReceiptInspection {
   id: string;
@@ -57,6 +151,7 @@ export interface StartReceiptInspection {
   receivedAt: string;
   occurredAt: string | null;
   sourceActor: SourceReceiptInput['sourceActor'];
+  itemKey: string | null;
   outcome: SourceReceiptAcceptance['outcome'];
   reason: string | null;
   bindings: StartBindingInspection[];
@@ -72,6 +167,160 @@ export interface ResourceStartRequestInspection {
   blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker'] | null;
   blockerRunStatus: WorkflowRunStatus | null;
   launch: PreparedWorkflowLaunch;
+}
+
+/**
+ * A refused (`skipped`) start request as the item read lists it, with the run it recorded
+ * as its blocker. It reads no joined run status and parses no full launch: a row this
+ * binary cannot read in full must not fail the read of the item. `workflow` is null when
+ * the stored launch does not read.
+ */
+export interface SkippedItemStart {
+  requestId: string;
+  workflow: string | null;
+  resource: string;
+  blockerRunId: string | null;
+}
+
+/**
+ * A start the install hold keeps from admission, oldest first. `trigger` is a receipt
+ * binding not yet prepared: its workflow source, project and item are resolved, and
+ * admission or its `overlap` decides it, only after the lift. `queued` is a request that
+ * was already waiting for capacity, its item or its checkout. `workflow`, `cwd` and
+ * `itemKey` are null when the stored intent does not read.
+ */
+export type HeldStart =
+  | {
+      kind: 'trigger';
+      receiptId: string;
+      bindingId: string;
+      hostId: string | null;
+      workflow: string | null;
+      cwd: string | null;
+      itemKey: string | null;
+      receivedAt: string;
+    }
+  | {
+      kind: 'queued';
+      requestId: string;
+      hostId: string;
+      resource: string;
+      workflow: string | null;
+      queuedAt: string;
+    };
+
+/**
+ * A binding start refused for a stored reason (`refusal`) that no run caused: a fire, a
+ * schedule, a webhook or a label made it. Its `codebase` is the project its checkout is
+ * registered as, and `item` the item its key names there once that exists.
+ */
+export interface RefusedStart {
+  receiptId: string;
+  bindingId: string;
+  hostId: string | null;
+  workflow: string | null;
+  itemKey: string;
+  refusal: BindingRefusal;
+  refusedAt: string;
+  codebase: { id: string; name: string; default_cwd: string } | null;
+  item: WorkflowItem | null;
+}
+
+/**
+ * A binding preparation a process claimed and has not finished: the binding is `preparing`.
+ * `preparer` is the process that claimed it, or null when an older binary claimed it or the
+ * record does not read; only with it can a reader prove the preparer gone. `codebase` is the
+ * project its checkout is registered as, and `item` the item it starts on once that exists.
+ */
+export interface PreparingStart {
+  receiptId: string;
+  bindingId: string;
+  hostId: string | null;
+  ownerId: string;
+  preparer: ProcessOwner | null;
+  workflow: string | null;
+  itemKey: string | null;
+  codebase: { id: string; name: string; default_cwd: string } | null;
+  item: WorkflowItem | null;
+  claimedAt: string;
+}
+
+/** A queued request whose stored launch does not read, and what it holds behind it. */
+export interface UnreadableQueuedStart {
+  requestId: string;
+  resource: string;
+  hostId: string;
+  itemId: string | null;
+  queuedAt: string;
+  /** How many requests are queued behind it on its resource and host. */
+  behind: number;
+}
+
+/** A held `trigger` start on one item, as the item read lists it. */
+export type HeldItemStart = Pick<
+  Extract<HeldStart, { kind: 'trigger' }>,
+  'receiptId' | 'bindingId' | 'hostId' | 'workflow' | 'receivedAt'
+>;
+
+/** A binding preparation the install hold turned back: the binding is pending again. */
+export interface HeldPreparation {
+  status: 'held';
+  hold: InstallHold;
+}
+
+/**
+ * A binding start admission refused at its binding's start limit on the item (`limit`), or
+ * because a limited start names no item to count on. The binding is `rejected` with
+ * `reason`; no request or run is written.
+ */
+export interface RefusedPreparation {
+  status: 'refused';
+  reason: string;
+}
+
+/**
+ * The start limits on one item: each limit a start request on it counted under or raised,
+ * with where it stands (`startLimitStanding`), and for each request that counted under a
+ * limit, that limit's name by request id, which is the run id of its run.
+ */
+export interface ItemStartLimits {
+  limits: StartLimitStanding[];
+  countedUnder: Record<string, string>;
+}
+
+/**
+ * What this process observes of a pending admitted start's executor. Null when the run is
+ * no longer pending by the time it looks, so the start no longer awaits execution.
+ */
+export interface StartExecutorObserver {
+  observe(run: WorkflowRun): Promise<StartExecutorObservation | null>;
+}
+
+/**
+ * The start `request` holds when it is admitted but its run has not begun: no executor has
+ * claimed it. Normally that lasts while the executor boots and prepares. If the process
+ * that admitted it died before it handed the start over, or the executor died before its
+ * claim, it stays so until an operator runs it once with
+ * `archon trigger execute <requestId> --host <hostId>`; the observer tells the two apart
+ * where it can prove which (`StartExecutorState`). Without an observer the state is `unknown`,
+ * never `unowned`: a reader that cannot look never reports the executor absent. A hand
+ * start's request is claimed by the process that made it, so it is never this.
+ */
+export async function awaitingExecution(
+  request: Pick<ResourceStartRequestInspection, 'id' | 'hostId' | 'status' | 'runStatus'> | null,
+  run: WorkflowRun,
+  observer: StartExecutorObserver | undefined
+): Promise<AwaitingExecution | null> {
+  if (
+    request?.status !== 'admitted' ||
+    request.runStatus !== 'pending' ||
+    request.hostId === DIRECT_START_HOST_ID
+  )
+    return null;
+  const waiting = { requestId: request.id, hostId: request.hostId };
+  if (observer === undefined) return { ...waiting, state: 'unknown', executor: null };
+  const observed = await observer.observe(run);
+  return observed === null ? null : { ...waiting, ...observed };
 }
 
 export function validateStartReceiptLimit(limit = 50): number {
@@ -163,7 +412,8 @@ export interface ReusableCheckout {
   workingPath: string;
 }
 
-function checkoutKeys(
+/** The checkout keys a run holds: its launch checkout, its working path, and their aliases. */
+export function checkoutKeys(
   launch: PreparedWorkflowLaunch | undefined,
   workingPath: string | null | undefined,
   reusable: readonly ReusableCheckout[]
@@ -201,6 +451,8 @@ export interface QueuedStart {
   id: string;
   hostId: string;
   launch: PreparedWorkflowLaunch;
+  /** The item the start names; null for a start on no item. */
+  itemId: string | null;
 }
 
 /**
@@ -222,9 +474,27 @@ export interface ResourceSlotOccupancy {
   /** Oldest foreign holder whose missing or corrupt launch and absent path hide its checkout. */
   unknownForeignCheckoutHolder?: string;
   reusableCheckouts: readonly ReusableCheckout[];
+  /**
+   * Every item a live run holds for its workflow, across all resources (`itemHolders`): two
+   * starts of one workflow on one item can name different resources.
+   */
+  heldItems: ReadonlyMap<string, string>;
 }
 
-function checkoutHolder(
+/** The run that holds the start's item for its workflow, other than the start's own run. */
+export function queuedItemHolder(
+  held: ReadonlyMap<string, string>,
+  start: Pick<QueuedStart, 'launch' | 'itemId'>
+): string | undefined {
+  return itemHolder(held, {
+    runId: start.launch.run.id,
+    workflow: start.launch.run.workflow_name,
+    itemId: start.itemId,
+  });
+}
+
+/** The run that holds the checkout `launch` locks, other than its own run. */
+export function checkoutHolder(
   slot: Pick<
     ResourceSlotOccupancy,
     'heldCheckouts' | 'foreignHeldCheckouts' | 'unknownForeignCheckoutHolder'
@@ -233,15 +503,18 @@ function checkoutHolder(
 ): string | undefined {
   const checkout = launchCheckout(launch);
   if (checkout === undefined) return undefined;
-  return (
-    slot.heldCheckouts.get(checkout) ??
-    (readAdmissionCheckoutGuard(launch)
-      ? (slot.foreignHeldCheckouts.get(checkout) ?? slot.unknownForeignCheckoutHolder)
-      : undefined)
-  );
+  const holders = [
+    slot.heldCheckouts.get(checkout),
+    ...(readAdmissionCheckoutGuard(launch)
+      ? [slot.foreignHeldCheckouts.get(checkout), slot.unknownForeignCheckoutHolder]
+      : []),
+  ];
+  // A direct start's run row exists before its admission and holds its own checkout.
+  return holders.find(holder => holder !== undefined && holder !== launch.run.id);
 }
 
-function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
+/** The queued starts whose admission guard reads; a corrupt one is logged and passed over. */
+export function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
   return slot.queue.filter(start => {
     try {
       readAdmissionCheckoutGuard(start.launch);
@@ -260,23 +533,45 @@ function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
 }
 
 /**
- * The queued requests that could run now, oldest first. A request whose checkout a live
- * run holds keeps its place and is passed over until the checkout frees, so FIFO holds
- * per checkout and the slot goes to the next request that can run.
+ * The queued requests that could run now, oldest first. A request whose checkout or item a
+ * live run holds keeps its place and is passed over until that frees, so FIFO holds per
+ * checkout and per item, and the slot goes to the next request that can run.
  */
 function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
-  return validQueuedStarts(slot).filter(start => checkoutHolder(slot, start.launch) === undefined);
+  return validQueuedStarts(slot).filter(
+    start =>
+      checkoutHolder(slot, start.launch) === undefined &&
+      queuedItemHolder(slot.heldItems, start) === undefined
+  );
 }
 
-/** What keeps a new start request for `launch` from being admitted now. */
+/**
+ * What keeps a new start request for `launch`, made by `hostId`, from being admitted now.
+ *
+ * An older request of the same host that could run keeps FIFO even when a slot is free:
+ * that host is acting now, and its own queue goes first. An older request of another host
+ * is waiting only for that host to drain it. It holds no slot and blocks nothing; it keeps
+ * its place and takes the next free slot when its host drains. So a hand start (which no
+ * queued request shares a host with) takes any free slot, and on a busy resource can
+ * delay queued work.
+ *
+ * A live run of the same workflow on the start's item blocks it whatever the capacity or
+ * queue: one item is worked by one run of a workflow at a time. The blocker is that run, so a reader
+ * tells an item hold from a capacity hold by the blocker run's workflow and item.
+ */
 export function resourceStartBlocker(
   slot: ResourceSlotOccupancy,
-  launch: PreparedWorkflowLaunch
+  launch: PreparedWorkflowLaunch,
+  hostId: string,
+  itemId: string | null
 ): ResourceBlocker | null {
   readAdmissionCheckoutGuard(launch);
   if (slot.queueError) throw slot.queueError;
-  // An older request that could run keeps FIFO even when a slot is free.
-  const older = runnableQueue(slot)[0];
+  // The item check comes first: a refused (skipped) start records this blocker, and the
+  // item read names the holder only when it is the run on the same item.
+  const itemRun = queuedItemHolder(slot.heldItems, { launch, itemId });
+  if (itemRun !== undefined) return { kind: 'run', id: itemRun };
+  const older = runnableQueue(slot).find(start => start.hostId === hostId);
   if (older) return { kind: 'request', id: older.id };
   const holder = checkoutHolder(slot, launch);
   if (holder !== undefined) return { kind: 'run', id: holder };
@@ -284,26 +579,6 @@ export function resourceStartBlocker(
   return first && slot.holders.length + slot.waiters.length >= slot.capacity
     ? { kind: 'run', id: first.id }
     : null;
-}
-
-/**
- * The queued requests a drain by `hostId` admits now, in order. It stops at the first
- * request that could run but belongs to another host: FIFO order is per resource, not
- * per host. A request admitted here holds its checkout for the rest of the drain.
- */
-export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): QueuedStart[] {
-  const free = slot.capacity - slot.holders.length - slot.waiters.length;
-  const held = new Map(slot.heldCheckouts);
-  const admitted: QueuedStart[] = [];
-  for (const start of validQueuedStarts(slot)) {
-    if (admitted.length >= free) break;
-    if (checkoutHolder({ ...slot, heldCheckouts: held }, start.launch) !== undefined) continue;
-    if (start.hostId !== hostId) break;
-    admitted.push(start);
-    for (const checkout of checkoutKeys(start.launch, undefined, slot.reusableCheckouts))
-      held.set(checkout, start.id);
-  }
-  return admitted;
 }
 
 /**
@@ -349,7 +624,7 @@ export function resourceResumeBlocker(
  */
 export function resumeRefusal(
   run: Pick<WorkflowRun, 'status' | 'metadata'>,
-  cursor: WorkflowResumeCursor | undefined
+  cursor: ResumeClaimCursor | undefined
 ): ResumeRefusal {
   if (run.status !== 'paused') return 'failed';
   const wait = pendingWorkflowWaitDeadline(run);
@@ -374,7 +649,43 @@ export interface DamagedStartReceipt {
 export type PendingStartBindingInspection = StartBindingInspection | DamagedStartReceipt;
 
 export interface IResourceStartStore {
+  /** The install hold, or null when none is set. A store without it reports none. */
+  getInstallHold(): Promise<InstallHold | null>;
+  /** Set the install hold; a hold already set is kept as it was. */
+  setInstallHold(input: { setBy: string }): Promise<{ hold: InstallHold; alreadySet: boolean }>;
+  /** Lift the install hold: the hold that was lifted, or null when none was set. */
+  liftInstallHold(): Promise<InstallHold | null>;
+  /** Every start the hold would keep: unprepared bindings, then queued requests. */
+  listHeldStarts(): Promise<HeldStart[]>;
+  /** The unprepared binding starts on item `itemId`. A store without items returns none. */
+  listHeldItemStarts(itemId: string): Promise<HeldItemStart[]>;
+  /** Every binding a process is preparing now. A store that records no preparer returns none. */
+  listPreparingStarts(): Promise<PreparingStart[]>;
+  /**
+   * The refused starts no run caused that are still their item's newest step: neither the
+   * same binding nor any run has started on the item since. A store without items has none.
+   */
+  listRefusedStarts(): Promise<RefusedStart[]>;
+  /**
+   * The install's run limit (`concurrency.runs`), how many run trees count against it now and
+   * the queued starts only it holds (`RunLimitState`); null when none is set. A store without
+   * the limit reports none.
+   */
+  getRunLimit(): Promise<RunLimitState | null>;
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
+  /**
+   * Admit an existing pending run that no binding started onto `resource` now, or return
+   * what blocks it. `capacity` is the number this start declares: the install config's
+   * number wins over it, and it is not recorded on the slot. A refusal records nothing,
+   * so the caller waits by trying again and never holds a queue position a dead process
+   * could strand. A run that already has an admitted request holds its slot: the result
+   * is `null` and nothing changes.
+   */
+  admitPendingRun(input: {
+    resource: string;
+    capacity: number;
+    launch: PreparedWorkflowLaunch;
+  }): Promise<ResourceBlocker | null>;
   drainResourceStarts(options: {
     resource: string;
     hostId: string;
@@ -384,6 +695,12 @@ export interface IResourceStartStore {
    * belong to a first acceptance; `acceptStartReceipt` still decides replay versus conflict.
    */
   hasStartReceiptForDelivery(sourceInstanceId: string, deliveryId: string): Promise<boolean>;
+  /**
+   * Record a receipt and the starts its bindings make. A binding with `wake` is resolved
+   * here, in the same transaction, against the open waits (see `wake` on the binding
+   * intent): it starts on the wait's item or is recorded as not started, so an event that
+   * arrives twice wakes a set once. A replayed delivery resolves nothing.
+   */
   acceptStartReceipt(
     input: SourceReceiptAcceptance
   ): Promise<{ receiptId: string; replay: boolean }>;
@@ -393,34 +710,75 @@ export interface IResourceStartStore {
   ): Promise<
     Pick<
       StartReceiptInspection,
-      'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
+      'id' | 'sourceInstanceId' | 'deliveryId' | 'itemKey' | 'outcome' | 'reason' | 'receivedAt'
     >[]
   >;
-  /** Damaged receipts are reported as entries beside the bindings; `limit` counts bindings only. */
+  /**
+   * Damaged receipts are reported as entries beside the bindings; `limit` counts bindings only.
+   * `receiptIds` selects only those receipts' bindings, before the limit applies, and reports
+   * no damaged entries: a caller starting known receipts must not lose them behind a backlog.
+   */
   listPendingStartBindings(options: {
     hostId: string;
     limit?: number;
+    receiptIds?: readonly string[];
   }): Promise<PendingStartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
+  /**
+   * The start requests on item `itemId` that were refused (`skipped`), oldest first. A
+   * store without items returns none.
+   */
+  listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
-  withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
+  /** The start limits on item `itemId`. A store without items reports none. */
+  readItemStartLimits(itemId: string): Promise<ItemStartLimits>;
+  /** The starts on item `itemId` whose status is `queued`, in queue order. */
+  listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]>;
+  /**
+   * Withdraw a queued request: the launch it held, `launch: null` when its stored launch does
+   * not read (it is withdrawn all the same, so it no longer holds the queue behind it), or
+   * null when the request is not queued.
+   */
+  withdrawQueuedResourceStart(
+    id: string
+  ): Promise<{ launch: PreparedWorkflowLaunch | null } | null>;
+  /**
+   * The queued requests whose stored launch does not read, oldest first. Admission keeps
+   * queue order, so each holds every request queued behind it on its resource and host until
+   * it is withdrawn. A store that parses every request when it reads it has none.
+   */
+  listUnreadableQueuedStarts(): Promise<UnreadableQueuedStart[]>;
   claimStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;
     ownerId: string;
   }): Promise<boolean>;
-  completeStartBindingPreparation(input: {
-    receiptId: string;
-    bindingId: string;
-    ownerId: string;
-    launch: PreparedWorkflowLaunch;
-  }): Promise<ResourceStartDisposition | null>;
+  /**
+   * Admit a prepared binding start. `resource` is the bound workflow's declaration; see
+   * `preparedBindingStart` for what it changes. Under the install hold nothing is admitted
+   * and the binding is pending again, so the lift prepares it anew. A binding at its start
+   * limit on the item is refused (`RefusedPreparation`) in the same transaction that would
+   * admit it, so two starts cannot both take the last one.
+   */
+  completeStartBindingPreparation(
+    input: PreparedBindingInput & { ownerId: string }
+  ): Promise<ResourceStartDisposition | HeldPreparation | RefusedPreparation | null>;
   failStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;
     ownerId: string;
     retryable: boolean;
     error: string;
+    /** The one preparation failure whose detail is stored: a refusal for the pack's forge needs. */
+    forgeRefusal?: ForgeRefusal;
+    /**
+     * Why a rejected start was refused. When the start was caused by a run's end or settled
+     * asks, the SQL store records it as a stop on that run in the same write, so the run, its
+     * item and attention show it; the file store records no stop.
+     */
+    refusal?: StartRefusalReason;
+    /** The setting a `file_setting_missing` refusal is about, recorded with it on the binding and the stop. */
+    fileSetting?: FileSettingRefusal;
   }): Promise<boolean>;
   resetStartBindingPreparation(input: {
     receiptId: string;

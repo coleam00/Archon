@@ -1,5 +1,5 @@
 /**
- * Tests for the maintenance commands: session reset and history cleanup.
+ * Tests for the session reset maintenance command.
  */
 import {
   mockDeleteNodeSessions,
@@ -7,72 +7,8 @@ import {
   firstJsonPayload,
   createTestWorkflowHost,
 } from '../test-support/workflow-command-harness';
-import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import { workflowCleanupCommand, workflowResetSessionsCommand } from './workflow';
-
-describe('workflowCleanupCommand', () => {
-  let consoleSpy: ReturnType<typeof spyOn>;
-
-  beforeEach(() => {
-    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    consoleSpy.mockRestore();
-  });
-
-  it('should print deletion count when runs are deleted', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
-      count: 5,
-    });
-
-    const host = createTestWorkflowHost();
-    const prune = mock(async () => ({ count: 7 }));
-    host.deps.store.pruneStateRevisions = prune;
-    await workflowCleanupCommand(host, 30);
-    expect(prune).toHaveBeenCalledWith(30);
-    expect(consoleSpy).toHaveBeenCalledWith('Pruned 7 state revision(s) older than 30 days.');
-
-    expect(consoleSpy).toHaveBeenCalledWith('Deleted 5 workflow run(s) older than 30 days.');
-  });
-
-  it('should print no-op message when count is 0', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
-      count: 0,
-    });
-
-    await workflowCleanupCommand(createTestWorkflowHost(), 7);
-
-    expect(consoleSpy).toHaveBeenCalledWith('No workflow runs older than 7 days to clean up.');
-  });
-
-  it('reports committed run deletion when state pruning fails', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
-      count: 5,
-    });
-    const host = createTestWorkflowHost();
-    host.deps.store.pruneStateRevisions = mock(async () => {
-      throw new Error('state unavailable');
-    });
-    await expect(workflowCleanupCommand(host, 7)).rejects.toThrow(
-      'Deleted 5 workflow run(s) older than 7 days, but failed to prune state revisions: state unavailable'
-    );
-  });
-
-  it('should throw when deleteOldWorkflowRuns fails', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('disk full')
-    );
-
-    await expect(workflowCleanupCommand(createTestWorkflowHost(), 7)).rejects.toThrow(
-      'Failed to clean up workflow history: disk full'
-    );
-  });
-});
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { workflowResetSessionsCommand } from './workflow';
 
 describe('workflowResetSessionsCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;

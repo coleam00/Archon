@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { appendFileSync, readFileSync } from 'node:fs';
 
 interface PluginRef {
   repo: { host: string; path: string };
@@ -29,6 +30,7 @@ const OPS = [
   'pr.edit-body',
   'pr.ready',
   'pr.draft',
+  'pr.close',
   'comment.upsert',
   'pr.merge',
   'checks.rerun',
@@ -122,6 +124,10 @@ else {
     bodyDigest: digest(input.body ?? ''),
   };
 
+  // A plugin released before review-thread creation times answers without them.
+  const created = (createdAt: string, commit: string | null) =>
+    mode === 'older-plugin' ? {} : { createdAt, commit };
+
   const answer = (target: unknown, value: object): unknown => ({
     operationId: input.operationId,
     ok: true,
@@ -152,8 +158,10 @@ else {
     read({
       ref: { ...ref, number },
       head_revision: 'headsha',
-      default_branch: 'dev',
-      default_revision: 'devsha',
+      // `old-shape` answers with the fields merge state had before it was base-relative.
+      ...(mode === 'old-shape'
+        ? { default_branch: 'dev', default_revision: 'devsha' }
+        : { base_branch: 'dev', base_revision: 'devsha' }),
       behind: 2,
       mergeable: 'clean',
       merge_commit: null,
@@ -187,6 +195,7 @@ else {
       return answer(repo, { pr: { ...pr, head_revision: 'another-revision' } });
     if (input.op === 'pr.ready' || input.op === 'pr.draft')
       return answer(ref, { pr: { ...pr, is_draft: !pr.is_draft } });
+    if (input.op === 'pr.close') return answer(ref, { pr });
     if (input.op === 'comment.upsert')
       return answer(ref, { comment: { ...comment, bodyDigest: digest('something else') } });
     if (input.op === 'workitem.comment.upsert')
@@ -340,6 +349,7 @@ else {
     'pr.create': () => answer(repo, { pr }),
     'pr.ready': () => answer(ref, { pr }),
     'pr.draft': () => answer(ref, { pr }),
+    'pr.close': () => answer(ref, { pr: { ...pr, state: 'closed' } }),
     'comment.upsert': () => answer(ref, { comment }),
     'workitem.comment.upsert': () => answer(ref, { workitem: subject, comment }),
     'workitem.close': () =>
@@ -354,11 +364,27 @@ else {
           threads: [
             {
               id: 'thread-1',
+              ...created('2026-11-11T09:00:00Z', 'a'.repeat(40)),
               resolved: false,
               outdated: false,
               path: 'src/a.ts',
               line: 3,
-              comments: [{ id: 'c1', author: null, body: 'private thread body', url: pr.url }],
+              comments: [
+                {
+                  id: 'c1',
+                  author: null,
+                  ...created('2026-11-11T09:00:00Z', 'a'.repeat(40)),
+                  body: 'private thread body',
+                  url: pr.url,
+                },
+                {
+                  id: 'c2',
+                  author: null,
+                  ...created('2026-11-11T13:00:00+02:00', null),
+                  body: 'a later reply',
+                  url: pr.url,
+                },
+              ],
             },
           ],
         },
@@ -382,7 +408,25 @@ else {
   const applied = (): unknown =>
     Object.hasOwn(appliedReplies, input.op) ? appliedReplies[input.op]() : editReply();
 
-  if (mode === 'view-content' || mode === 'closed') {
+  // `temporary`: each call adds a line to `--calls`; the first `--fail` of them fail.
+  const callsFile = args[args.indexOf('--calls') + 1];
+  if (mode === 'temporary') appendFileSync(callsFile, '\n');
+  if (
+    mode === 'temporary' &&
+    readFileSync(callsFile, 'utf8').length <= Number(args[args.indexOf('--fail') + 1])
+  ) {
+    process.stdout.write(
+      JSON.stringify({
+        operationId: input.operationId,
+        ok: false,
+        error: { kind: args[args.indexOf('--kind') + 1], message: 'the forge is down' },
+        ...(input.op === 'pr.view'
+          ? {}
+          : { mutation: { op: input.op, target: ref, outcome: 'outcome_unknown' } }),
+      })
+    );
+    process.exit(1);
+  } else if (mode === 'view-content' || mode === 'closed' || mode === 'temporary') {
     process.stdout.write(
       JSON.stringify({
         operationId: input.operationId,

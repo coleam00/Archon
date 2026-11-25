@@ -18,6 +18,7 @@ import { metricsHelp } from './help-table/metrics';
 import { operatorHelp } from './help-table/operator';
 import { orderedFlags } from './help-table/options';
 import { stateHelp } from './help-table/state';
+import { trackerHelp } from './help-table/tracker';
 import type { ExampleHelp, FlagHelp, FlagOwner, HelpEntry, HelpGroup } from './help-table/types';
 import { workflowHelp } from './help-table/workflow';
 import { worktreeHelp } from './help-table/worktree';
@@ -25,6 +26,7 @@ import { worktreeHelp } from './help-table/worktree';
 const HELP_GROUPS: readonly HelpGroup[] = [
   stateHelp,
   metricsHelp,
+  trackerHelp,
   forgeHelp,
   operatorHelp,
   workflowHelp,
@@ -93,7 +95,8 @@ function selectFlagsFor(selected: HelpEntry[], scopedOnly: FlagHelp[] = []): Fla
 }
 
 function selectExamplesFor(selected: HelpEntry[]): ExampleHelp[] {
-  const keys = new Set(selected.map(e => ownerKey(e)));
+  // An example owned by a command alone belongs to every slice of that command.
+  const keys = new Set(selected.flatMap(e => [ownerKey(e), ownerKey({ command: e.command })]));
   return orderedExamples.filter(ex => keys.has(ownerKey(ex.owner)));
 }
 
@@ -145,11 +148,23 @@ export function renderHelp(command?: string, subcommand?: string): string {
     sections.push('Options:');
     sections.push(flags.map(f => formatSpecLine(f.spec, f.description)).join('\n'));
   }
+  // One entry's own help also states the request it reads; a group's help lists many.
+  const request = entries.length === 1 ? entries[0]?.request : undefined;
+  if (request) {
+    sections.push('');
+    sections.push('Request (--data):');
+    sections.push(request.type.replace(/^/gm, '  '));
+    if (request.notes.length > 0) {
+      sections.push('');
+      sections.push(request.notes.map(note => `  ${note}`).join('\n'));
+    }
+  }
   const examples = command === undefined ? orderedExamples : selectExamplesFor(entries);
-  if (examples.length > 0) {
+  const exampleLines = [...(request ? [request.example] : []), ...examples.map(ex => ex.text)];
+  if (exampleLines.length > 0) {
     sections.push('');
     sections.push('Examples:');
-    sections.push(examples.map(ex => `  ${ex.text}`).join('\n'));
+    sections.push(exampleLines.map(text => `  ${text}`).join('\n'));
   }
   return `\n${sections.join('\n')}\n`;
 }

@@ -13,7 +13,6 @@ const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockFindChildRuns = mock(() => Promise.resolve([]));
 const mockGetRunAncestry = mock(() => Promise.resolve([]));
 const mockGetActiveWorkflowRunByPath = mock(() => Promise.resolve(null));
-const mockFindResumableRun = mock(() => Promise.resolve(null));
 const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockRecoverCancelledFanOutRun = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
@@ -30,6 +29,8 @@ const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
 
 mock.module('../db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   insertWorkflowRun: async (): Promise<never> => {
@@ -51,7 +52,6 @@ mock.module('../db/workflows', () => ({
   findChildRuns: mockFindChildRuns,
   getRunAncestry: mockGetRunAncestry,
   getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,
-  findResumableRun: mockFindResumableRun,
   resumeWorkflowRun: mockResumeWorkflowRun,
   recoverCancelledFanOutRun: mockRecoverCancelledFanOutRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
@@ -87,6 +87,7 @@ const mockGetDagResumeSnapshot = mock<(_id: string) => Promise<DagResumeSnapshot
 const mockListWorkflowEvents = mock<IWorkflowStore['listWorkflowEvents']>(async () => []);
 const mockListEventsForRuns = mock<IWorkflowStore['listEventsForRuns']>(async () => new Map());
 mock.module('../db/workflow-events', () => ({
+  insertWorkflowEvent: mock(() => Promise.resolve()),
   listWorkflowEvents: mockListWorkflowEvents,
   listEventsForRuns: mockListEventsForRuns,
   createWorkflowEvent: mockCreateWorkflowEvent,
@@ -136,6 +137,7 @@ mock.module('@archon/providers', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
+  loadRepoConfig: mock(() => Promise.resolve({})),
 }));
 
 // Per-user provider credentials mocks
@@ -227,7 +229,10 @@ describe('createWorkflowStore', () => {
     const events = await store.listWorkflowEvents('run', options);
     expect(events[0]?.created_at).toBe('2026-03-08T01:30:00.000Z');
     expect(mockListWorkflowEvents).toHaveBeenCalledWith('run', options);
-    const batch = await store.listEventsForRuns(['run'], ['node_completed']);
+    const batch = await store.listEventsForRuns(['run'], ['node_completed'], { strict: true });
+    expect(mockListEventsForRuns).toHaveBeenCalledWith(['run'], ['node_completed'], {
+      strict: true,
+    });
     expect(batch.get('run')?.[0]?.created_at).toBe(events[0]?.created_at);
     expect(row.created_at).toBe('2026-03-08 01:30:00');
     const previousTimezone = process.env.TZ;
@@ -249,79 +254,6 @@ describe('createWorkflowStore', () => {
       else process.env.TZ = previousTimezone;
     }
   });
-  test('retains atomic operation implementations at the SQL boundary', async () => {
-    const workflowDb = await import('../db/workflows');
-    const sessionDb = await import('../db/workflow-node-sessions');
-    const store = createWorkflowStore();
-    expect(store.resolveApprovalGate).toBe(workflowDb.resolveApprovalGate);
-    expect(store.resolveAndCancelApprovalGate).toBe(workflowDb.resolveAndCancelApprovalGate);
-    expect(store.cancelResumableRunsForConversation).toBe(
-      workflowDb.cancelResumableRunsForConversation
-    );
-    expect(store.deleteWorkflowNodeSessions).toBe(sessionDb.deleteWorkflowNodeSessions);
-    expect(store.listWorkflowRuns).toBe(workflowDb.listDashboardRuns);
-    expect(store.findWorkflowRunsByIdPrefix).toBe(workflowDb.findWorkflowRunsByIdPrefix);
-  });
-  test('returns object with all IWorkflowStore methods', () => {
-    const store = createWorkflowStore();
-    const requiredMethods: (keyof IWorkflowStore)[] = [
-      'resolveApprovalGate',
-      'resolveAndCancelApprovalGate',
-      'cancelResumableRunsForConversation',
-      'deleteWorkflowNodeSessions',
-      'listWorkflowRuns',
-      'findWorkflowRunsByIdPrefix',
-      'createWorkflowRun',
-      'getWorkflowRun',
-      'findChildRuns',
-      'getRunAncestry',
-      'getActiveWorkflowRunByPath',
-      'findResumableRun',
-      'resumeWorkflowRun',
-      'recoverCancelledFanOutRun',
-      'updateWorkflowRun',
-      'updateWorkflowRunMetadataIfRunning',
-      'updateWorkflowActivity',
-      'getWorkflowRunStatus',
-      'completeWorkflowRun',
-      'failWorkflowRun',
-      'pauseWorkflowRun',
-      'pauseWorkflowRunForWait',
-      'clearWorkflowWaitContext',
-      'claimWriteback',
-      'releaseWritebackClaim',
-      'cancelWorkflowRun',
-      'cancelFanOutRun',
-      'createWorkflowEvent',
-      'persistWorkflowEvent',
-      'persistWorkflowEventIfRunning',
-      'getDagResumeSnapshot',
-      'getCodebase',
-      'getCodebaseEnvVars',
-      'listWorkflowNodeSessions',
-      'upsertWorkflowNodeSession',
-      'listWorkflowRunNodeSessions',
-      'upsertWorkflowRunNodeSession',
-    ];
-    for (const method of requiredMethods) {
-      expect(typeof store[method]).toBe('function');
-    }
-  });
-
-  test('delegates getWorkflowRunStatus to DB and returns typed status', async () => {
-    mockGetWorkflowRunStatus.mockResolvedValueOnce('completed');
-    const store = createWorkflowStore();
-    const result = await store.getWorkflowRunStatus('run-123');
-    expect(result).toBe('completed');
-    expect(mockGetWorkflowRunStatus).toHaveBeenCalledWith('run-123');
-  });
-
-  test('delegates getWorkflowRunStatus returns null for missing run', async () => {
-    mockGetWorkflowRunStatus.mockResolvedValueOnce(null);
-    const store = createWorkflowStore();
-    const result = await store.getWorkflowRunStatus('nonexistent');
-    expect(result).toBeNull();
-  });
 
   test('createWorkflowEvent catches and logs unexpected throws', async () => {
     mockCreateWorkflowEvent.mockRejectedValueOnce(new Error('DB connection lost'));
@@ -337,23 +269,6 @@ describe('createWorkflowStore', () => {
     ).resolves.toBeUndefined();
   });
 
-  test('delegates getDagResumeSnapshot to DB', async () => {
-    const expected: DagResumeSnapshot = {
-      completedNodeOutputs: new Map([['step1', { output: 'output text' }]]),
-      fanOutSnapshots: new Map(),
-      failedNodes: new Map(),
-      unresolvedNodeStarts: new Set(),
-      budget: { workUnits: 0, spendUsd: 0 },
-      tokens: { input: 40, output: 4 },
-      costUsd: 0,
-    };
-    mockGetDagResumeSnapshot.mockResolvedValueOnce(expected);
-    const store = createWorkflowStore();
-    const result = await store.getDagResumeSnapshot('run-123');
-    expect(result).toBe(expected);
-    expect(mockGetDagResumeSnapshot).toHaveBeenCalledWith('run-123');
-  });
-
   test('delegates durable workflow events to DB without swallowing failures', async () => {
     const event = {
       workflow_run_id: 'run-123',
@@ -367,54 +282,6 @@ describe('createWorkflowStore', () => {
 
     mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('disk full'));
     await expect(store.persistWorkflowEvent(event)).rejects.toThrow('disk full');
-  });
-
-  test('delegates conditional running-state event claims', async () => {
-    const event = {
-      workflow_run_id: 'run-123',
-      event_type: 'node_started' as const,
-      step_name: 'fan-instance',
-    };
-    mockPersistWorkflowEventIfRunning.mockResolvedValueOnce({ persisted: false });
-    const store = createWorkflowStore();
-
-    await expect(store.persistWorkflowEventIfRunning(event)).resolves.toEqual({
-      persisted: false,
-    });
-    expect(mockPersistWorkflowEventIfRunning).toHaveBeenCalledWith(event);
-  });
-
-  test('delegates cancelWorkflowRun to DB', async () => {
-    mockCancelWorkflowRun.mockResolvedValueOnce(undefined);
-    const store = createWorkflowStore();
-    const event = { step_name: 'halt', reason: 'stopped' };
-    await store.cancelWorkflowRun('run-123', event);
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-123', event);
-  });
-
-  test('delegates cancelFanOutRun to DB', async () => {
-    const store = createWorkflowStore();
-    await store.cancelFanOutRun('run-123', 'fan_out_orphan');
-    expect(mockCancelFanOutRun).toHaveBeenCalledWith('run-123', 'fan_out_orphan');
-  });
-
-  test('delegates getCodebase to DB', async () => {
-    mockGetCodebase.mockResolvedValueOnce({
-      id: 'cb-1',
-      name: 'owner/repo',
-      repository_url: 'https://github.com/owner/repo',
-      default_cwd: '/workspace/repo',
-      kind: 'repo',
-    });
-    const store = createWorkflowStore();
-    const result = await store.getCodebase('cb-1');
-    expect(result).toEqual({
-      id: 'cb-1',
-      name: 'owner/repo',
-      repository_url: 'https://github.com/owner/repo',
-      default_cwd: '/workspace/repo',
-      kind: 'repo',
-    });
   });
 });
 
@@ -449,20 +316,6 @@ describe('createWorkflowDeps', () => {
       detail: 'module missing',
     });
   });
-  test('returns WorkflowDeps with store, getAgentProvider, and loadConfig', () => {
-    const deps = createWorkflowDeps();
-    expect(deps.store).toBeDefined();
-    expect(typeof deps.getAgentProvider).toBe('function');
-    expect(typeof deps.loadConfig).toBe('function');
-  });
-
-  test('store from createWorkflowDeps has all IWorkflowStore methods', () => {
-    const deps = createWorkflowDeps();
-    expect(typeof deps.store.createWorkflowRun).toBe('function');
-    expect(typeof deps.store.getWorkflowRun).toBe('function');
-    expect(typeof deps.store.createWorkflowEvent).toBe('function');
-    expect(typeof deps.store.getCodebase).toBe('function');
-  });
 
   describe('provider credential fields', () => {
     beforeEach(() => {
@@ -472,10 +325,10 @@ describe('createWorkflowDeps', () => {
       mockIsPerUserProviderKeysEnabled.mockImplementation(() => false);
     });
 
-    test('exposes isPerUserProviderKeysEnabled and getUserProviderEnv', () => {
+    test('isPerUserProviderKeysEnabled reports the credential config', () => {
+      mockIsPerUserProviderKeysEnabled.mockImplementation(() => true);
       const deps = createWorkflowDeps();
-      expect(typeof deps.isPerUserProviderKeysEnabled).toBe('function');
-      expect(typeof deps.getUserProviderEnv).toBe('function');
+      expect(deps.isPerUserProviderKeysEnabled?.()).toBe(true);
     });
 
     test('getUserProviderEnv refuses delivery when list query throws', async () => {

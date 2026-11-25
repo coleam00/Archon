@@ -47,20 +47,28 @@ import type {
   ComposeFanOutNode,
   LoopGroupNode,
 } from './schemas';
+import { validateTypedOutputOrder } from './loader/typed-output-order';
 import { findWorkflowLoadError } from './schemas/workflow';
 import { isIncludeDirective, isLoopGroupNode, isComposeFanOutNode } from './schemas';
 import { validateDagStructure } from './loader/dag-structure';
 import {
   validateLoopGroupProseCompletion,
   validateRunBudgetShape,
-  validateWorkflowOutcomeDeclaration,
+  validateWorkflowResultContract,
 } from './loader/contracts';
 import { resolveWorkflow } from './graph-plan';
-import type { IncludeCommandContent } from './compiled-command';
+import { attachForwardedFanOutWith, type IncludeCommandContent } from './compiled-command';
 import { IncludeExpansionError } from './include/expansion-error';
-import { instantiateResolvedInclude, type ExpandedInclude } from './include/inline';
-import type { ExecInputSource } from './exec-input-validation';
 import {
+  boundaryIdComponent,
+  instantiateResolvedInclude,
+  type ExpandedInclude,
+  type PackIdentity,
+} from './include/inline';
+import { packSettingReads, type ExecInputSource } from './exec-input-validation';
+import type { WorkflowPackMember } from './schemas/pack-settings';
+import {
+  applyLoopPrevOutputRefRename,
   applyOutputRefRename,
   attachIncludeOutputAliases,
   rewriteNodeOutputRefs,
@@ -113,8 +121,10 @@ interface NodeListExpansion {
  *
  * `commandContents` maps command NAME → file content, null when no candidate resolves, or a
  * path-bearing error when a higher-precedence scope cannot be inspected or a matched file
- * cannot be read. Discovery pre-resolves every include-target command with
- * execution-equivalent precedence and never falls through after either error. A caller that
+ * cannot be read. Discovery pre-resolves every command of every workflow with
+ * execution-equivalent precedence and never falls through after either error. The
+ * flattened graph check also reads each remaining command node's body from it, so a
+ * reference in a command file is checked like the same text inline. A caller that
  * omits the map may still expand workflows without commands. Included command nodes fail
  * composition; included loop commands fail before a fresh AI turn but remain discoverable
  * so an already-paused loop can resume from its persisted read-once snapshot.
@@ -215,8 +225,13 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
   // hand-written node, cycles introduced by edge rewiring, unknown deps, and the
   // equivalent failures inside every recursively expanded loop_group body.
   const structureError =
-    validateDagStructure(expanded.nodes, undefined, expanded.includeAliases) ||
-    validateLoopGroupProseCompletion(expanded.nodes);
+    validateDagStructure(expanded.nodes, {
+      includeAliases: expanded.includeAliases,
+      commandContents: expansion.commandContents,
+    }) ||
+    validateLoopGroupProseCompletion(expanded.nodes) ||
+    // Only here: a producer inside an included block is invisible before flattening.
+    validateTypedOutputOrder(expanded.nodes);
   if (structureError) {
     throw new IncludeExpansionError(structureError);
   }
@@ -233,15 +248,37 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
       ? { returns: expanded.renameIncludeRef(collapsed.returns) }
       : {}),
     ...(dedupedRequires.length > 0 ? { requires: dedupedRequires } : {}),
+    ...(collapsed.pack !== undefined
+      ? { pack: withFileSettingReads(expansion, expanded.nodes, collapsed.pack) }
+      : {}),
   };
   const contractError =
-    validateWorkflowOutcomeDeclaration(authoredResult) ?? validateRunBudgetShape(authoredResult);
+    validateWorkflowResultContract(authoredResult) ?? validateRunBudgetShape(authoredResult);
   if (contractError !== null) {
     throw new IncludeExpansionError(contractError);
   }
   const result = resolveWorkflow(authoredResult);
   expansion.memo.set(name, result);
   return result;
+}
+
+/** The workflow's pack with the `file: true` settings its flattened nodes read, if it has any. */
+function withFileSettingReads(
+  expansion: IncludeExpansion,
+  nodes: readonly DagNode[],
+  pack: WorkflowPackMember
+): WorkflowPackMember {
+  const fileSettings = Object.entries(pack.settings ?? {})
+    .filter(([, spec]) => spec.file === true)
+    .map(([name]) => name);
+  if (fileSettings.length === 0) return pack;
+  const reads = packSettingReads(
+    nodes,
+    fileSettings,
+    expansion.namedScripts,
+    expansion.commandContents
+  );
+  return { ...pack, fileSettingReads: [...reads].sort() };
 }
 
 /**
@@ -282,7 +319,8 @@ function expandNodeList(
   expansion: IncludeExpansion,
   nodes: (DagNode | IncludeDirective)[],
   workflowName: string,
-  stack: string[]
+  stack: string[],
+  declarationScope = ''
 ): ExpandedNodeList {
   const list: NodeListExpansion = {
     expandedNodes: [],
@@ -291,13 +329,21 @@ function expandNodeList(
     includeAliases: new Map(),
   };
 
+  const includerPack = expansion.rawByName.get(workflowName)?.pack;
   for (const node of nodes) {
     if (isComposeFanOutNode(node)) {
-      expandComposeFanOut(expansion, list, node, [...stack, workflowName]);
+      expandComposeFanOut(expansion, list, node, [...stack, workflowName], includerPack);
     } else if (isIncludeDirective(node)) {
-      expandIncludeDirective(expansion, list, node, [...stack, workflowName]);
+      expandIncludeDirective(
+        expansion,
+        list,
+        node,
+        [...stack, workflowName],
+        declarationScope,
+        includerPack
+      );
     } else if (isLoopGroupNode(node)) {
-      expandLoopGroupBody(expansion, list, node, workflowName, stack);
+      expandLoopGroupBody(expansion, list, node, workflowName, stack, declarationScope);
     } else {
       // Already a private clone — `collapseWorkflowScope` cloned every node before
       // writing this workflow's config onto it, so the second pass below can mutate
@@ -336,7 +382,8 @@ function expandComposeFanOut(
   expansion: IncludeExpansion,
   list: NodeListExpansion,
   node: ComposeFanOutNode,
-  stack: string[]
+  stack: string[],
+  includerPack: PackIdentity
 ): void {
   const child = expandTarget(expansion, node, stack);
   const suspensionPaths = collectComposedSuspensionPaths(
@@ -353,7 +400,7 @@ function expandComposeFanOut(
   // Exercise the exact ordinary-include instantiation once at load time. Width is
   // still deferred, but the block's input contract and packaged command resources
   // are static and must fail before upstream nodes can spend.
-  instantiateResolvedInclude(
+  const { forwardedSettings } = instantiateResolvedInclude(
     {
       id: node.id,
       kind: 'include',
@@ -361,28 +408,49 @@ function expandComposeFanOut(
       with: { ...(node.with ?? {}), [node.fan_out.as]: null },
     },
     child,
-    expansion.commandContents,
-    expansion.namedScripts
+    {
+      commandContents: expansion.commandContents,
+      namedScripts: expansion.namedScripts,
+      includerPack,
+    }
   );
   list.includedRequirements.push(...(child.requires ?? []));
-  list.expandedNodes.push(node);
+  // A setting forwarded from the block's own pack is written into the node's `with:`, so
+  // an outer include from another pack sees `$INPUTS.<name>` in a `with:` slot it must
+  // supply, and each runtime item receives what it supplied. A forward still standing at
+  // run time is left to each item's own same-pack instantiation (planComposeInstances).
+  if (forwardedSettings.length === 0) {
+    list.expandedNodes.push(node);
+    return;
+  }
+  const forwarding: ComposeFanOutNode = {
+    ...node,
+    with: {
+      ...(node.with ?? {}),
+      ...Object.fromEntries(forwardedSettings.map(name => [name, `$INPUTS.${name}`])),
+    },
+  };
+  attachForwardedFanOutWith(forwarding, forwardedSettings);
+  list.expandedNodes.push(forwarding);
 }
 
 function expandIncludeDirective(
   expansion: IncludeExpansion,
   list: NodeListExpansion,
   node: IncludeDirective,
-  stack: string[]
+  stack: string[],
+  declarationScope: string,
+  includerPack: PackIdentity
 ): void {
   const child = expandTarget(expansion, node, stack);
   warnDroppedWorkflowLevelFields(node, child);
   list.includedRequirements.push(...(child.requires ?? []));
-  const inlined = instantiateResolvedInclude(
-    node,
-    child,
-    expansion.commandContents,
-    expansion.namedScripts
-  );
+  const inlined = instantiateResolvedInclude(node, child, {
+    commandContents: expansion.commandContents,
+    namedScripts: expansion.namedScripts,
+    includeId: `${declarationScope}${boundaryIdComponent(node.id)}`,
+    includerPack,
+  });
   list.includesById.set(node.id, inlined);
   list.includeAliases.set(inlined.primarySink, node.id);
   list.expandedNodes.push(...inlined.namespaced);
@@ -393,9 +461,16 @@ function expandLoopGroupBody(
   list: NodeListExpansion,
   node: LoopGroupNode,
   workflowName: string,
-  stack: string[]
+  stack: string[],
+  declarationScope: string
 ): void {
-  const body = expandNodeList(expansion, node.loop_group.nodes, workflowName, stack);
+  const body = expandNodeList(
+    expansion,
+    node.loop_group.nodes,
+    workflowName,
+    stack,
+    `${declarationScope}${boundaryIdComponent(node.id)}.`
+  );
   list.includedRequirements.push(...body.includedRequirements);
   for (const [sink, alias] of body.includeAliases) list.includeAliases.set(sink, alias);
   list.expandedNodes.push({
@@ -403,10 +478,16 @@ function expandLoopGroupBody(
     loop_group: {
       ...node.loop_group,
       // The completion script runs against THIS body's output map. Rebind an
-      // authored `$include.output` to the included workflow's declared return,
-      // just as refs on ordinary sibling body nodes are rebound below.
+      // authored `$include.output` (and `$LOOP_PREV.<include>.output`) to the included
+      // workflow's declared return, just as refs on ordinary sibling body nodes are
+      // rebound below.
       ...(node.loop_group.until_bash !== undefined
-        ? { until_bash: applyOutputRefRename(node.loop_group.until_bash, body.renameIncludeRef) }
+        ? {
+            until_bash: applyLoopPrevOutputRefRename(
+              applyOutputRefRename(node.loop_group.until_bash, body.renameIncludeRef),
+              body.renameIncludeRef
+            ),
+          }
         : {}),
       nodes: body.nodes,
     },
@@ -426,10 +507,9 @@ function bindIncludeRefs(list: NodeListExpansion): ExpandedNodeList {
     if (node.depends_on !== undefined) {
       node.depends_on = node.depends_on.flatMap(expandIncludeDependency);
     }
-    // `$include.output` is a current-iteration composition alias. It deliberately does
-    // not create a parallel `$LOOP_PREV.<includeId>` grammar: previous-iteration refs
-    // continue to name only the executable body ids produced by `inlineInclude()`.
-    rewriteNodeOutputRefs(node, renameIncludeRef, expandIncludeDependency, id => id);
+    // An include id names the node its workflow returns, in the current round
+    // (`$include.output`) and the previous one (`$LOOP_PREV.<include>.output`) alike.
+    rewriteNodeOutputRefs(node, renameIncludeRef, expandIncludeDependency, renameIncludeRef);
   }
   if (includesById.size > 0) {
     const aliases = Object.fromEntries(

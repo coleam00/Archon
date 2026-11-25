@@ -5,6 +5,7 @@ import {
   isIncludeDirective,
   isLoopGroupNode,
   isNodeContextResume,
+  isNodeContextSame,
   nodeUsesPersistedScope,
   persistedSessionHandling,
 } from '../schemas';
@@ -89,16 +90,17 @@ function sessionConsumerError(
   providers: ProviderRegistry
 ): string | null {
   if (!isNodeContextResume(node.context)) return null;
+  // An include is not in `sources`: its returned node's provider is the included
+  // workflow's to set, so only the consumer's own provider is known here.
   const sourceEntry = sources.get(node.context.resume);
-  if (sourceEntry === undefined) return null;
-  const source = sourceEntry.node;
-  const sourceProvider = sourceEntry.provider;
+  const sourceProvider = sourceEntry?.provider;
   if (
+    sourceEntry !== undefined &&
     consumerProvider !== undefined &&
     sourceProvider !== undefined &&
     consumerProvider !== sourceProvider
   ) {
-    return `Node '${node.id}' context.resume source '${source.id}' uses provider '${sourceProvider}', but the consumer uses '${consumerProvider}'`;
+    return `Node '${node.id}' context.resume source '${sourceEntry.node.id}' uses provider '${sourceProvider}', but the consumer uses '${consumerProvider}'`;
   }
 
   const knownProvider = consumerProvider ?? sourceProvider;
@@ -166,6 +168,50 @@ function persistSessionNodeError(
     const message = `Node '${node.id}': provider '${explicitProvider}' cannot fork a session, so persist_session never continues an earlier run's session and every run starts fresh. Use a provider with sessionFork, or pass state between runs through artifacts.`;
     warnings.push(message);
     getLog().debug({ id: node.id, provider: explicitProvider }, 'persist_session_not_continued');
+  }
+  return null;
+}
+
+/**
+ * `context: same` capability gating, loop_group bodies included, when the node's provider
+ * is known at load time: reject a provider without session resume, and warn for one that
+ * cannot fork, which continues between loop rounds but never across runs. An implicit
+ * provider is checked at run time in agent dispatch with the same answer.
+ */
+export function sameContextProviderError(
+  dagNodes: readonly (DagNode | IncludeDirective)[],
+  provider: string | undefined,
+  providers: ProviderRegistry,
+  warnings: string[]
+): string | null {
+  for (const node of dagNodes) {
+    if (isIncludeDirective(node)) continue;
+    const nodeProvider = node.provider ?? provider;
+    const error = isLoopGroupNode(node)
+      ? sameContextProviderError(node.loop_group.nodes, nodeProvider, providers, warnings)
+      : sameContextNodeError(node, nodeProvider, providers, warnings);
+    if (error !== null) return error;
+  }
+  return null;
+}
+
+function sameContextNodeError(
+  node: DagNode,
+  provider: string | undefined,
+  providers: ProviderRegistry,
+  warnings: string[]
+): string | null {
+  if (!isNodeContextSame(node.context)) return null;
+  const descriptor = provider ? providers.get(provider) : undefined;
+  if (!descriptor) return null;
+  const handling = persistedSessionHandling(descriptor.capabilities);
+  if (handling === 'unsupported') {
+    return `Node '${node.id}' has context: same but provider '${provider}' does not support sessionResume. Use another context, or a provider with sessionResume capability.`;
+  }
+  if (handling === 'fresh') {
+    warnings.push(
+      `Node '${node.id}': provider '${provider}' cannot fork a session, so context: same continues the node's previous loop round but never a session from an earlier run; each run starts fresh.`
+    );
   }
   return null;
 }

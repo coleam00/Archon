@@ -19,7 +19,7 @@ import {
 } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
 import { runOwnerLossWatch } from '../services/run-attention-watch';
-import { attentionQueueSource } from '../operations/attention-queue';
+import { attentionQueueSource, watchSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
 export function createWorkflowHostStore(): IWorkflowHostStore {
@@ -69,7 +69,7 @@ export function createSqlWorkflowHost(deps = createWorkflowDeps()): WorkflowHost
     records,
     doorbell: subscribeToSqlRunDoorbell,
     engine: new InProcessWorkflowEngine(deps, {
-      branchOf: attentionQueueSource(deps.store, records.isolation).branchOf,
+      ...watchSource(attentionQueueSource(deps.store, records.isolation)),
       ownerLoss: runOwnerLossWatch(deps.store),
       doorbell: subscribeToSqlEventDoorbell,
     }),

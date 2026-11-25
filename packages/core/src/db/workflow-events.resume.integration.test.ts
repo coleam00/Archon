@@ -90,10 +90,12 @@ test('a second resume recomputes output invalidated before a rejected node start
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: '',
     metadata: {
       [RUN_GRAPH_METADATA_KEY]: { node_ids: ['upstream', 'consumer'], returns: 'consumer' },
     },
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -102,6 +104,7 @@ test('a second resume recomputes output invalidated before a rejected node start
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
   };
   const store: IWorkflowStore = {
@@ -110,7 +113,7 @@ test('a second resume recomputes output invalidated before a rejected node start
     getWorkflowRunStatus: async () => 'running',
     updateWorkflowRun: async () => {},
     updateWorkflowActivity: async () => {},
-    completeWorkflowRun: async () => {},
+    completeWorkflowRun: async () => ({ startReceipts: [] }),
     failWorkflowRun: async () => ({ failed: true }),
     listWorkflowNodeSessions: async () => [],
     listWorkflowRunNodeSessions: async () => [],

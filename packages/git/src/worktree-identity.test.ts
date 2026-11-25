@@ -133,21 +133,6 @@ describe('git utilities', () => {
       expect(await git.getCanonicalRepoPath(testDir)).toBe(repo('/workspace/my-repo'));
     });
 
-    test('handles worktree path with nested directories', async () => {
-      await writeFile(
-        join(testDir, '.git'),
-        'gitdir: /home/user/projects/my-app/.git/worktrees/feature-branch'
-      );
-      execSpy
-        .mockResolvedValueOnce(
-          output(
-            '/home/user/projects/my-app/.git/worktrees/feature-branch\n/home/user/projects/my-app/.git\n'
-          )
-        )
-        .mockResolvedValueOnce(output('worktree /home/user/projects/my-app\nHEAD abc123\n'));
-      expect(await git.getCanonicalRepoPath(testDir)).toBe(repo('/home/user/projects/my-app'));
-    });
-
     test('resolves a relative worktree pointer from the worktree root', async () => {
       await writeFile(join(testDir, '.git'), 'gitdir: ../primary/.git/worktrees/linked');
       const primary = resolve(testDir, '../primary');

@@ -76,3 +76,26 @@ describe('toWorkflow — declared inputs (#2554)', () => {
     expect(w.inputs.map(i => i.required)).toEqual([false, false]);
   });
 });
+
+test('normalizes JSON input defaults to display text', () => {
+  const workflow = toWorkflow({
+    workflow: {
+      name: 'defaults',
+      inputs: {
+        count: { default: 3 },
+        settings: { default: { mode: 'strict' } },
+        enabled: { default: false },
+        unset: { default: null },
+        text: { default: 'hi' },
+      },
+    },
+    source: 'project',
+  });
+  expect(workflow.inputs.map(input => input.default)).toEqual([
+    '3',
+    '{"mode":"strict"}',
+    'false',
+    null,
+    'hi',
+  ]);
+});

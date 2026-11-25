@@ -1,10 +1,15 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
 import { dispatchForge } from './dispatch';
 import {
+  ATTACHMENT_MAX_BYTES,
   contentDigest,
   forgeAuditResponse,
+  forgeRequestSchema,
   mutationTarget,
   type ForgeRequest,
   type ForgeResponse,
@@ -32,6 +37,7 @@ const create = {
 } satisfies ForgeRequest;
 const draft = { operationId: 'draft-1', op: 'pr.draft', ref } satisfies ForgeRequest;
 const ready = { operationId: 'ready-1', op: 'pr.ready', ref } satisfies ForgeRequest;
+const close = { operationId: 'close-1', op: 'pr.close', ref } satisfies ForgeRequest;
 const marker = '<!-- archon-review-report -->';
 const upsert = {
   operationId: 'comment-1',
@@ -82,12 +88,13 @@ describe('mutation evidence at the dispatch boundary', () => {
   });
 
   // Verification is not pr.edit-body's alone: a plugin's answer to a create, a
-  // ready/draft flip or a comment upsert is the only claim dispatch has that the write
+  // ready/draft flip, a close or a comment upsert is the only claim dispatch has that the write
   // did what it was asked, so each op's branch is exercised both ways.
   test.each([
     ['pr.create', create],
     ['pr.ready', ready],
     ['pr.draft', draft],
+    ['pr.close', close],
     ['comment.upsert', upsert],
   ] as const)('accepts a %s result that answers the request', async (op, request) => {
     const result = await dispatch(request);
@@ -101,6 +108,7 @@ describe('mutation evidence at the dispatch boundary', () => {
     ['pr.create', 'a revision it was not asked for', create],
     ['pr.ready', 'a pull request still in draft', ready],
     ['pr.draft', 'a pull request still ready', draft],
+    ['pr.close', 'a pull request still open', close],
     ['comment.upsert', 'a body it did not write', upsert],
   ] as const)('refuses a %s result naming %s', async (op, _label, request) => {
     const result = await dispatch(request, 'mismatch');
@@ -132,7 +140,10 @@ describe('mutation evidence at the dispatch boundary', () => {
     const result = await dispatch(edit, 'refused');
     expect(result.response).toMatchObject({
       ok: false,
-      error: { kind: 'conflict', message: 'the forge said no' },
+      error: {
+        kind: 'conflict',
+        message: 'the forge said no (pr.edit-body on forge.example/a/b#42)',
+      },
       mutation: { op: 'pr.edit-body', target: ref, outcome: 'refused' },
     });
   });
@@ -169,24 +180,6 @@ describe('mutation evidence at the dispatch boundary', () => {
     expect(result.response.ok).toBe(false);
     expect(result.response).not.toHaveProperty('mutation');
   });
-});
-
-test('mutationTarget names the repository for a create and the pull request otherwise', () => {
-  expect(mutationTarget(edit)).toEqual(ref);
-  expect(
-    mutationTarget({
-      operationId: 'create',
-      op: 'pr.create',
-      repo: ref.repo,
-      headRepo: ref.repo,
-      head: 'feature',
-      headRevision: 'headsha',
-      base: 'dev',
-      title: 'A title',
-      body: 'A body',
-      draft: true,
-    })
-  ).toEqual(ref.repo);
 });
 
 test('the audit record keeps a digest of authored content, never the content', async () => {
@@ -401,7 +394,7 @@ test('merges and reruns require complete applied evidence at dispatch', async ()
   }
 });
 
-test('unsupported or missing merge conditions do not launch the operation', async () => {
+test('unsupported merge conditions do not launch the operation', async () => {
   const discovery = await discoverPlugins({
     config: {
       plugins: [{ plugin: 'mutator', command: process.execPath, args: [fixture] }],
@@ -411,14 +404,13 @@ test('unsupported or missing merge conditions do not launch the operation', asyn
   // If dispatch launches this missing executable, the response is a process failure.
   for (const plugin of discovery.byHost.values()) plugin.command = '/missing-operation-executable';
   for (const conditions of [
-    {},
     { head: 'headsha', base: 'base' },
     { head: 'headsha', tree: 'tree' },
   ]) {
     const result = await dispatchForge({ ...merge, conditions }, { discovery });
     expect(result.response).toMatchObject({
       ok: false,
-      error: { kind: conditions.head ? 'unsupported_op' : 'invalid_request' },
+      error: { kind: 'unsupported_op' },
       mutation: { outcome: 'refused' },
     });
   }
@@ -480,6 +472,54 @@ test('a plugin without draft conversion refuses without executing the operation'
   });
 });
 
+test('a plugin without review submission refuses it by name without running', async () => {
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [{ plugin: 'mutator', command: process.execPath, args: [fixture] }],
+      scanPath: false,
+    },
+  });
+  for (const plugin of discovery.byHost.values()) plugin.command = '/missing-operation-executable';
+  const review = {
+    operationId: 'review-1',
+    op: 'pr.review.submit',
+    ref,
+    commit: 'a'.repeat(40),
+    key: 'run-1',
+    summary: 'A summary.',
+    comments: [],
+  } satisfies ForgeRequest;
+  expect((await dispatchForge(review, { discovery })).response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    mutation: { op: 'pr.review.submit', outcome: 'refused' },
+  });
+});
+
+test('an attachment is an image of the allowed types, from 1 byte up to the size limit', () => {
+  const put = (contentType: string, bytes: number) =>
+    forgeRequestSchema.safeParse({
+      operationId: 'attach-1',
+      op: 'attachment.put',
+      repo: ref.repo,
+      contentType,
+      content: Buffer.alloc(bytes, 1).toString('base64'),
+    }).success;
+  expect(put('image/png', ATTACHMENT_MAX_BYTES)).toBe(true);
+  expect(put('image/png', ATTACHMENT_MAX_BYTES + 1)).toBe(false);
+  expect(put('image/png', 0)).toBe(false);
+  expect(put('image/svg+xml', 1)).toBe(false);
+  expect(
+    forgeRequestSchema.safeParse({
+      operationId: 'attach-1',
+      op: 'attachment.put',
+      repo: ref.repo,
+      contentType: 'image/png',
+      content: 'not base64!',
+    }).success
+  ).toBe(false);
+});
+
 test('draft conversion accepts unchanged evidence and rejects a non-open read-back', async () => {
   expect((await dispatch(draft, 'unchanged')).response).toMatchObject({
     ok: true,
@@ -522,6 +562,33 @@ describe('review threads and issue bodies', () => {
     expect(JSON.stringify(result.response)).toContain('private thread body');
     expect(JSON.stringify(result.audit)).not.toContain('private thread body');
     expect(JSON.stringify(result.audit)).toContain(contentDigest('private thread body'));
+  });
+
+  test('a thread and each comment say when they were created, so a late comment is visible', async () => {
+    const result = await dispatch({ operationId: 'threads', op: 'pr.threads', ref });
+    if (!result.response.ok || result.response.result.op !== 'pr.threads')
+      throw new Error(JSON.stringify(result.response));
+    const [thread] = result.response.result.value.threads;
+    expect(thread).toMatchObject({ createdAt: '2026-11-11T09:00:00Z', commit: 'a'.repeat(40) });
+    const reviewedAt = Date.parse('2026-11-11T10:00:00Z');
+    expect(
+      thread?.comments
+        .filter(comment => Date.parse(comment.createdAt ?? '') > reviewedAt)
+        .map(c => c.id)
+    ).toEqual(['c2']);
+    expect(thread?.comments.map(comment => comment.commit)).toEqual(['a'.repeat(40), null]);
+  });
+
+  test('a plugin that predates creation times still answers pr.threads', async () => {
+    const result = await dispatch(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      'older-plugin'
+    );
+    if (!result.response.ok || result.response.result.op !== 'pr.threads')
+      throw new Error(JSON.stringify(result.response));
+    const [thread] = result.response.result.value.threads;
+    expect(thread).not.toHaveProperty('createdAt');
+    expect(thread?.comments.map(comment => comment.createdAt)).toEqual([undefined, undefined]);
   });
 
   test.each([reply, resolve, editIssue])(
@@ -617,4 +684,107 @@ describe('review threads and issue bodies', () => {
       });
     }
   );
+
+  test('a plugin answering merge state in the pre-base shape is told which field is missing', async () => {
+    const { response } = await dispatch(
+      { operationId: 'merge-state-1', op: 'pr.merge-state', ref },
+      'old-shape'
+    );
+    expect(response).toMatchObject({ ok: false, error: { kind: 'invalid_response' } });
+    const message = response.ok ? '' : response.error.message;
+    expect(message).toContain('pr.merge-state');
+    expect(message).toContain('result.value.base_branch');
+    expect(message).toContain('result.value.base_revision');
+  });
+});
+
+describe('temporary failures at the dispatch boundary', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forge-temporary-'));
+  afterAll(() => removeTempTree(root));
+  const view = {
+    operationId: 'view-1',
+    op: 'pr.view',
+    selector: { kind: 'number', ref },
+  } satisfies ForgeRequest;
+
+  /** Dispatch against a plugin whose first `fail` calls fail with `kind`. */
+  async function temporary(
+    request: ForgeRequest,
+    fail: number,
+    kind = 'unavailable'
+  ): Promise<{
+    result: Awaited<ReturnType<typeof dispatchForge>>;
+    calls: number;
+    waits: number[];
+  }> {
+    const calls = join(root, crypto.randomUUID());
+    const discovery = await discoverPlugins({
+      config: {
+        plugins: [
+          {
+            plugin: 'mutator',
+            command: process.execPath,
+            args: [
+              fixture,
+              '--mode',
+              'temporary',
+              '--calls',
+              calls,
+              '--fail',
+              String(fail),
+              '--kind',
+              kind,
+            ],
+          },
+        ],
+        scanPath: false,
+      },
+    });
+    const waits: number[] = [];
+    const result = await dispatchForge(request, {
+      discovery,
+      sleep: async ms => {
+        waits.push(ms);
+      },
+    });
+    return { result, calls: readFileSync(calls, 'utf8').length, waits };
+  }
+
+  test('a read that fails once and then succeeds returns the result and records the retry', async () => {
+    const { result, calls, waits } = await temporary(view, 1);
+    expect(result.response).toMatchObject({ ok: true, result: { op: 'pr.view' } });
+    expect(result.audit.retries).toBe(1);
+    expect(calls).toBe(2);
+    expect(waits).toEqual([1_000]);
+  });
+
+  test.each(['unavailable', 'rate_limited'])(
+    'a read that stays %s stops at the bound and names its operation and subject',
+    async kind => {
+      const { result, calls, waits } = await temporary(view, 99, kind);
+      expect(result.response).toEqual({
+        operationId: 'view-1',
+        ok: false,
+        error: {
+          kind,
+          message: 'the forge is down (pr.view on forge.example/a/b#42, retried 3 times)',
+        },
+      });
+      expect(result.audit.retries).toBe(3);
+      expect(calls).toBe(4);
+      expect(waits).toEqual([1_000, 2_000, 4_000]);
+    }
+  );
+
+  test('a mutation that fails temporarily runs once and keeps its outcome', async () => {
+    const { result, calls, waits } = await temporary(edit, 99);
+    expect(result.response).toMatchObject({
+      ok: false,
+      error: { kind: 'unavailable' },
+      mutation: { op: 'pr.edit-body', outcome: 'outcome_unknown' },
+    });
+    expect(result.audit.retries).toBe(0);
+    expect(calls).toBe(1);
+    expect(waits).toEqual([]);
+  });
 });

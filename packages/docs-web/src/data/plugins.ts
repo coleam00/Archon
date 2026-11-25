@@ -57,12 +57,14 @@ export async function discoverPlugins({
     'X-GitHub-Api-Version': '2022-11-28',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
-  async function github(path: string): Promise<unknown> {
+  async function github(path: string, { emptyRepository = false } = {}): Promise<unknown> {
     const response = await request(`https://api.github.com${path}`, {
       headers,
       signal: AbortSignal.timeout(30_000),
       redirect: 'error',
     });
+    // GitHub answers 409 for a commit lookup in a repository with no commits yet.
+    if (emptyRepository && response.status === 409) return null;
     if (!response.ok) throw new Error(`GitHub ${path}: HTTP ${response.status}`);
     return response.json();
   }
@@ -90,9 +92,15 @@ export async function discoverPlugins({
       log(`[plugins] Skipping ${repo}: denylisted repository`);
       continue;
     }
-    const { sha: commit } = commitSchema.parse(
-      await github(`/repos/${repo}/commits/${encodeURIComponent(repository.default_branch)}`)
+    const head = await github(
+      `/repos/${repo}/commits/${encodeURIComponent(repository.default_branch)}`,
+      { emptyRepository: true }
     );
+    if (head === null) {
+      log(`[plugins] Skipping ${repo}: empty repository`);
+      continue;
+    }
+    const { sha: commit } = commitSchema.parse(head);
     const tree = treeSchema.parse(await github(`/repos/${repo}/git/trees/${commit}?recursive=1`));
     if (tree.truncated)
       throw new Error(`GitHub tree for ${repo} is truncated; refusing a partial index`);

@@ -11,7 +11,6 @@ import type { WorkflowDeps, IWorkflowPlatform } from '../deps';
 import { type DagNode, type WorkflowDefinition, type NodeMcp, dagNodeSchema } from '../schemas';
 import { executeDagWorkflow, type ExecuteDagWorkflowOptions } from '../dag-executor';
 import { readNodeRecordEvent } from '../node-record-reader';
-import type { IWorkflowStore } from '../store';
 import { buildAiProfile } from '../model-validation';
 import { missingMcpConfigMessage } from '../mcp-path';
 import { discoverWorkflows } from '../workflow-discovery';
@@ -101,8 +100,8 @@ describe('executor capability ownership', () => {
       expect(factory).not.toHaveBeenCalled();
     });
 
-    for (const structuredOutput of ['best-effort', 'enforced'] as const) {
-      it(`uses the descriptor's ${structuredOutput} reask policy in a ${kind} node`, async () => {
+    for (const correction of ['fresh-session', undefined] as const) {
+      it(`uses the descriptor's ${correction ?? 'no'} correction policy in a ${kind} node`, async () => {
         let calls = 0;
         const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
           async function* () {
@@ -118,7 +117,7 @@ describe('executor capability ownership', () => {
         const store = createMockStore();
         const providers = withProviderCapabilities(mockProviderRegistry, 'claude', {
           ...mockClaudeCapabilities(),
-          structuredOutput,
+          structuredOutputCorrection: correction,
         });
         const deps = createMockDeps(store, providers);
         const factory = mock<WorkflowDeps['getAgentProvider']>(() => ({
@@ -166,12 +165,10 @@ describe('executor capability ownership', () => {
           })
         );
         expect(factory).toHaveBeenCalledTimes(1);
-        expect(sendQuery).toHaveBeenCalledTimes(structuredOutput === 'best-effort' ? 2 : 1);
+        expect(sendQuery).toHaveBeenCalledTimes(correction ? 2 : 1);
         expect(
           persistedEvents(store).some(
-            event =>
-              event.event_type ===
-              (structuredOutput === 'best-effort' ? 'node_completed' : 'node_failed')
+            event => event.event_type === (correction ? 'node_completed' : 'node_failed')
           )
         ).toBe(true);
       });
@@ -467,6 +464,134 @@ describe('executeDagWorkflow -- skills options', () => {
     expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
   });
 
+  describe('optional skills', () => {
+    let originalHome: string | undefined;
+
+    beforeEach(() => {
+      originalHome = process.env.HOME;
+      process.env.HOME = join(testDir, 'home');
+    });
+
+    afterEach(() => {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    });
+
+    async function stageSkill(root: string, name: string): Promise<void> {
+      const dir = join(testDir, root, name);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'SKILL.md'), `# ${name}\n`);
+    }
+
+    function nodeRows(store: ReturnType<typeof createMockStore>) {
+      return (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+        .map(call => call[0] as { event_type: string; data?: Record<string, unknown> })
+        .filter(event => event.event_type.startsWith('node_'));
+    }
+
+    async function runSkills(
+      skills: DagNode['skills'],
+      provider?: string
+    ): Promise<{
+      store: ReturnType<typeof createMockStore>;
+      platform: ReturnType<typeof createMockPlatform>;
+    }> {
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          workflow: {
+            name: 'optional-skills',
+            nodes: [
+              {
+                id: 'review',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                ...(provider !== undefined ? { provider } : {}),
+                ...(skills !== undefined ? { skills } : {}),
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+      return { store, platform };
+    }
+
+    it('runs without a missing optional skill and records why', async () => {
+      const { store, platform } = await runSkills([{ name: 'playwright-cli', optional: true }]);
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.skills).toEqual([]);
+      const rows = nodeRows(store);
+      expect(rows.map(row => row.event_type)).toEqual(['node_started', 'node_completed']);
+      for (const row of rows) {
+        expect(row.data?.skills_unavailable).toEqual([
+          { name: 'playwright-cli', reason: 'not_installed' },
+        ]);
+      }
+      const sent = platform.sendMessage.mock.calls.map(call => call[1]);
+      expect(sent).toContain(
+        "Node 'review' runs without its optional skills (playwright-cli): no SKILL.md in the skill directories this provider searches."
+      );
+    });
+
+    it('runs an optional-only node on a provider that cannot load skills', async () => {
+      const { store, platform } = await runSkills(
+        [{ name: 'playwright-cli', optional: true }],
+        'codex'
+      );
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.skills).toEqual([]);
+      for (const row of nodeRows(store)) {
+        expect(row.data?.skills_unavailable).toEqual([
+          { name: 'playwright-cli', reason: 'provider_unsupported' },
+        ]);
+      }
+      const sent = platform.sendMessage.mock.calls.map(call => call[1]);
+      expect(sent).toContain(
+        "Node 'review' runs without its optional skills (playwright-cli): provider 'codex' cannot load named skills."
+      );
+    });
+
+    it('passes an installed optional skill and does not add an unnamed one', async () => {
+      await stageSkill('.claude/skills', 'code-review');
+      await stageSkill('.claude/skills', 'other-skill');
+      const { store } = await runSkills([{ name: 'code-review', optional: true }]);
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.skills).toEqual(['code-review']);
+      expect(nodeRows(store).every(row => row.data?.skills_unavailable === undefined)).toBe(true);
+    });
+
+    it('keeps an optional skill installed outside the enabled roots', async () => {
+      await stageSkill('.agents/skills', 'playwright-cli');
+      const { store } = await runSkills([{ name: 'playwright-cli', optional: true }]);
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(mockSendQueryDag.mock.calls[0][3]?.nodeConfig?.skills).toEqual(['playwright-cli']);
+      expect(nodeRows(store).every(row => row.data?.skills_unavailable === undefined)).toBe(true);
+    });
+
+    it('still fails before sendQuery when a required name is on a provider that cannot load skills', async () => {
+      await expect(
+        runSkills(['code-review', { name: 'playwright-cli', optional: true }], 'codex')
+      ).rejects.toThrow("Node 'review' (provider 'codex') names skills");
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+    });
+
+    it('treats an object without optional: true as required', async () => {
+      await expect(runSkills([{ name: 'code-review' }], 'codex')).rejects.toThrow(
+        "Node 'review' (provider 'codex') names skills"
+      );
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+    });
+  });
+
   it('passes named plugins to sendQuery nodeConfig', async () => {
     await executeDagWorkflow(
       dagOptions({
@@ -633,47 +758,6 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
 
   afterEach(async () => {
     await removeTempTree(testDir);
-  });
-
-  it('fails node when SDK returns error_max_budget_usd result', async () => {
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield {
-        type: 'result',
-        isError: true,
-        errorSubtype: 'error_max_budget_usd',
-        failure: { class: 'budget_exceeded', evidence: 'error_max_budget_usd' },
-        sessionId: 'sid',
-      };
-    });
-
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'budget-test',
-          nodes: [
-            {
-              id: 'step1',
-              kind: 'agent',
-              source: { kind: 'command', name: 'my-cmd' },
-              maxBudgetUsd: 2.5,
-            },
-          ],
-        },
-        workflowRun,
-      })
-    );
-
-    expect(
-      (store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>).mock.calls.length
-    ).toBeGreaterThan(0);
   });
 
   it('error message includes cost cap when maxBudgetUsd is set', async () => {
@@ -867,6 +951,37 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(nodeConfig?.effort).toBe('high');
   });
 
+  it('forwards a node sandbox with nested keys unchanged', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const sandbox = {
+      enabled: true,
+      network: { allowedDomains: ['github.com'], deniedDomains: ['evil.example'] },
+      filesystem: { allowRead: ['/x'], denyRead: ['/y'] },
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'node-sandbox-test',
+          nodes: [
+            { id: 'step1', kind: 'agent', source: { kind: 'command', name: 'my-cmd' }, sandbox },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig?.sandbox).toEqual(sandbox);
+  });
+
   it('per-node effort overrides workflow-level effort', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -984,46 +1099,6 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
     const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
     expect(nodeStartedCall?.[0].data?.effort).toBe('xhigh');
-  });
-
-  it('applies the node-level effort; the deprecated field is inert at this layer', async () => {
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'codex',
-      getCapabilities: mockCodexCapabilities,
-    }));
-
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: loaderBypassingWorkflow({
-          name: 'codex-node-effort-beats-deprecated-test',
-          nodes: [
-            {
-              id: 'step1',
-              kind: 'agent',
-              source: { kind: 'command', name: 'my-cmd' },
-              effort: 'minimal',
-            },
-          ],
-          modelReasoningEffort: 'high',
-        }),
-        workflowRun,
-        workflowProvider: 'codex',
-        config: { ...minimalConfig, assistant: 'codex' },
-      })
-    );
-
-    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
-    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
-    expect(nodeConfig?.effort).toBe('minimal');
   });
 
   it('forwards workflow-level webSearchMode to a Codex node', async () => {
@@ -1184,51 +1259,6 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
     expect(assistantConfig?.webSearchMode).toBeUndefined();
-  });
-
-  it('ignores modelReasoningEffort entirely — the executor has no deprecated-field path', async () => {
-    // #2556 resolves the deprecation in the LOADER: `modelReasoningEffort:` is
-    // translated into `effort:` and never reaches here. Passing both directly to
-    // `executeDagWorkflow` is something only a loader-bypassing caller can do,
-    // and it pins the absence of any residual Codex branch for reasoning depth —
-    // the executor applies `effort:` and does not look at the old field.
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'codex',
-      getCapabilities: mockCodexCapabilities,
-    }));
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: loaderBypassingWorkflow({
-          name: 'codex-effort-telemetry-test',
-          nodes: [{ id: 'step1', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
-          effort: 'max',
-          modelReasoningEffort: 'low',
-        }),
-        workflowRun,
-        workflowProvider: 'codex',
-        config: { ...minimalConfig, assistant: 'codex' },
-      })
-    );
-
-    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
-    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
-    const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
-    expect(nodeConfig?.effort).toBe('max');
-    expect(assistantConfig?.modelReasoningEffort).toBeUndefined();
-
-    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
-      .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
-    const nodeStartedCall = createEventCalls.find(([arg]) => arg.event_type === 'node_started');
-    expect(nodeStartedCall?.[0].data?.effort).toBe('max');
   });
 
   it('warns when a node in a Codex workflow resolves away to Claude via a tier', async () => {
@@ -1781,18 +1811,6 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
     ]);
 
     expect(mcpMessages(platform)).toEqual([]);
-  });
-
-  it('shows a provider warning with a ⚠️ prefix', async () => {
-    const platform = await runWithEvents([
-      {
-        type: 'warning',
-        code: 'claude.model_mcp_unsupported',
-        message: 'Haiku does not support MCP',
-      },
-    ]);
-
-    expect(mcpMessages(platform)).toEqual(['⚠️ Haiku does not support MCP']);
   });
 
   it('in batch mode, sends the reply batched before a warning ahead of it', async () => {

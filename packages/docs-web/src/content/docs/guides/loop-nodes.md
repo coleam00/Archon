@@ -34,6 +34,12 @@ nodes:
 
   - id: implement
     depends_on: [setup]
+    output_format:
+      type: object
+      properties:
+        done: { type: boolean }
+        summary: { type: string }
+      required: [done, summary]
     loop:
       prompt: |
         Read the PRD and implement the next unfinished story.
@@ -42,15 +48,16 @@ nodes:
         Setup context: $setup.output
         User request: $USER_MESSAGE
 
-        When all stories are done, output: <promise>COMPLETE</promise>
-      until: COMPLETE
+        Report done as true only when every story is implemented.
+        In summary, list the stories implemented so far, as the PRD records them.
+      until_field: done
       max_iterations: 10
       fresh_context: true
 
   - id: report
     depends_on: [implement]
     prompt: |
-      Summarize what was implemented: $implement.output
+      Summarize what was implemented: $implement.output.summary
 ```
 
 ## How It Works
@@ -93,7 +100,7 @@ Declaring more than one is fine and means "whichever fires first ends it".
     # command: <name>       # Alternative to `prompt`: package-local or shared command name,
     #                       # loaded once per run and reused for every iteration.
     #                       # Never combine with `prompt` — the loader rejects both together.
-    until: COMPLETE         # Prose completion signal.
+    until: COMPLETE         # Deprecated prose completion signal.
     max_iterations: 10      # Required. Bounds autonomous iterations; reaching it unmet fails the node.
     on_exhausted: fail      # Optional. `complete` ends an exhausted loop with its last output.
     fresh_context: true     # Optional. Default: false.
@@ -166,9 +173,14 @@ as do all the iteration semantics (`until`, `until_bash`, `max_iterations`,
 - id: implement
   model: opus
   depends_on: [generate-prd]
+  output_format:
+    type: object
+    properties:
+      done: { type: boolean }
+    required: [done]
   loop:
     command: archon-ralph-implement   # resolved repo → home → bundled (see precedence above)
-    until: COMPLETE
+    until_field: done
     max_iterations: 15
     fresh_context: true
 ```
@@ -180,7 +192,9 @@ of moving a `prompt:` node to a `command:` node.
 
 ### `until`
 
-Deprecated prose completion signal. Prefer `until_bash` for deterministic checks or
+Deprecated prose completion signal. See
+[deprecated node fields](/reference/workflow-language/#deprecated-node-fields)
+for release and migration guidance. Prefer `until_bash` for deterministic checks or
 `until_field` for model judgment. While `until` remains supported, the executor checks
 each iteration's output for:
 
@@ -233,7 +247,7 @@ field for `$group.output.<field>` to resolve:
 ```yaml
 - id: rounds
   loop_group:
-    until_bash: 'test "$round.output.done" = "true"'
+    until_bash: 'done=$round.output.done; test "$done" = true'
     max_iterations: 4
     on_exhausted: complete
     nodes:
@@ -276,10 +290,12 @@ Controls session continuity between iterations:
 The first iteration is always fresh regardless of this setting.
 
 A structured-output re-ask (see [`until_field`](#until_field)) does **not** disturb
-threading. It runs in its own throwaway session so an invalid turn is not carried
-forward as context, and that session is discarded — the next iteration still resumes
-the conversation the loop was already threading. The repaired answer still reaches it
-through `$LOOP_PREV_OUTPUT`.
+threading. On Pi and Copilot it runs in its own throwaway session so an invalid turn is
+not carried forward as context, and that session is discarded — the next iteration still
+resumes the conversation the loop was already threading. The repaired answer still
+reaches it through `$LOOP_PREV_OUTPUT`. On Codex the correction continues the
+iteration's own thread with only the schema errors, so that thread stays the one the
+next iteration resumes.
 
 ### `until_bash`
 
@@ -400,8 +416,9 @@ carries the same value.
 **Per-provider behavior is the same as any other node.** On a provider with
 *enforced* structured output (Claude, Codex, OpenCode) the schema constrains
 decoding. On a *best-effort* provider the model is asked for the schema (Pi through
-a `structured_output` tool call, Copilot through the prompt), and a payload that fails
-validation is re-asked up to three times **within the same iteration** — a reask does not consume a loop iteration. If those are
+a `structured_output` tool call, Copilot through the prompt). On Pi, Copilot and Codex
+a payload that fails validation is re-asked up to three times **within the same
+iteration** — a reask does not consume a loop iteration. If those are
 exhausted, the node **fails** with the validation errors; it is never treated as an
 incomplete iteration. See
 [provider capabilities](/reference/provider-capabilities/).
@@ -414,7 +431,7 @@ which is the existing way to express the same thing.
 # loop_group equivalent — no new field needed
 loop_group:
   max_iterations: 10
-  until_bash: '[ $decide.output.done = "true" ]'
+  until_bash: 'done=$decide.output.done; [ "$done" = true ]'
   nodes:
     - id: decide
       output_format:
@@ -435,15 +452,20 @@ The prompt tells the agent it has no memory and must bootstrap from files.
 - id: implement
   depends_on: [setup]
   idle_timeout: 600000
+  output_format:
+    type: object
+    properties:
+      done: { type: boolean }
+    required: [done]
   loop:
     prompt: |
       You are in a FRESH session — no memory of previous iterations.
       Read the PRD tracking file to find the next unfinished story.
       Implement it, validate, commit, update tracking.
-      When all stories are done: <promise>COMPLETE</promise>
+      Report done: true once every story is done.
 
       Project context: $setup.output
-    until: COMPLETE
+    until_field: done
     max_iterations: 15
     fresh_context: true
 ```
@@ -469,16 +491,14 @@ iteration's output via `$LOOP_PREV_OUTPUT`:
       Previous iteration output (empty on first pass):
       $LOOP_PREV_OUTPUT
 
-      Use the above to focus your fixes. When all checks pass output:
-      <promise>QA_PASS</promise>
-    until: QA_PASS
+      Use the above to focus your fixes.
+    until_bash: "bun run validate"
     fresh_context: true
     max_iterations: 3
 ```
 
 In a continuous run, the first iteration sees `$LOOP_PREV_OUTPUT` substituted
-to an empty string; iterations 2+ see the previous iteration's cleaned output
-(after `<promise>` tags are stripped).
+to an empty string; iterations 2+ see the previous iteration's output.
 
 ### Accumulating context
 
@@ -487,12 +507,17 @@ refinement where remembering previous attempts matters.
 
 ```yaml
 - id: refine
+  output_format:
+    type: object
+    properties:
+      done: { type: boolean }
+    required: [done]
   loop:
     prompt: |
       Review the current implementation and improve it.
       Run validation after each change.
-      When validation passes with zero issues: <promise>DONE</promise>
-    until: DONE
+      Report done: true once validation passes with zero issues.
+    until_field: done
     max_iterations: 5
     fresh_context: false
 ```
@@ -506,23 +531,28 @@ Combine LLM work with a deterministic completion check:
 
 ```yaml
 - id: fix-tests
+  output_format:
+    type: object
+    properties:
+      done: { type: boolean }
+    required: [done]
   loop:
     prompt: |
       Run the test suite. Read the failures. Fix them one at a time.
-      If all tests pass: <promise>TESTS_PASS</promise>
-    until: TESTS_PASS
+      Report done: true once all tests pass.
+    until_field: done
     max_iterations: 8
     until_bash: "bun run test"
     fresh_context: false
 ```
 
-The loop ends either when the AI signals completion or when the bash check
+The loop ends either when the AI reports completion or when the bash check
 succeeds — whichever comes first.
 
-**No channel vetoes another.** They are OR'd, so an AI that emits `TESTS_PASS`
+**No channel vetoes another.** They are OR'd, so an AI that reports `done: true`
 while tests still fail ends the loop anyway — the bash check never gets to disagree. If the tests
-are the real exit criterion, say so by dropping `until` and the sentence that
-teaches the model to emit it:
+are the real exit criterion, say so by dropping `until_field` and the instruction that
+asks the model to report it:
 
 ```yaml
 - id: fix-tests
@@ -584,7 +614,7 @@ If you need to accumulate results across iterations, write them to files in
 
 | Scenario | Behavior |
 |----------|----------|
-| Iteration fails | A transient, rate-limited or capacity (`overloaded`) failure retries the iteration. Any other failure fails the node (no more iterations) |
+| Iteration fails | A transient, rate-limited or capacity (`overloaded`) failure retries the iteration. With `retry.on_error: schema_unmet`, an iteration whose output did not meet its schema retries too. Any other failure fails the node (no more iterations) |
 | Max iterations exceeded | Node fails with descriptive error; with `on_exhausted: complete`, node completes with the last iteration's output |
 | Workflow cancelled | Detected between iterations, node stops |
 | Idle timeout per iteration | The iteration is retried as a transient failure, whether or not its provider produced output first |
@@ -599,14 +629,14 @@ nodes:
       max_attempts: 1
       delay_ms: 0
     loop:
-      prompt: "Complete the task and output <promise>DONE</promise>"
-      until: DONE
+      prompt: "Make the failing tests pass."
+      until_bash: "bun run test"
       max_iterations: 5
 ```
 
 `max_attempts` is required when declaring `retry:` and accepts integers 1–5, counting retries after the initial attempt. `delay_ms` accepts 0–60000 on loops and defaults to 3000 when omitted. Zero skips ordinary transient retry waits. The budget resets for each iteration; retries do not consume `max_iterations`.
 
-Only `on_error: transient` or omission is supported on loops; `all` is a load error. Unknown, fatal and output-contract failures are not retried by this policy. Structured-output reasks have their own separate budget.
+Loops support `on_error: transient`, `on_error: schema_unmet` or omission; `all` is a load error. `schema_unmet` keeps the transient retries and also retries an iteration whose output did not meet its `output_format` schema; it does not retry unknown failures. Unknown, fatal and output-contract failures are not retried by this policy. Structured-output reasks have their own separate budget.
 
 Rate limits and capacity retain the shared AI-node exceptions: at least five retries, regardless of `max_attempts`. Rate limits wait around 45 seconds with ±50% jitter and keep the larger budget for the rest of the iteration. Capacity waits use centers of 45, 90, 180, 300 and 300 seconds with ±50% jitter; its larger budget applies only while the current failure is capacity. `delay_ms: 0` does not bypass either schedule. See [Retry Configuration](/reference/workflow-language/#retry-configuration).
 
@@ -624,12 +654,12 @@ description: Implement, test, and review until tests pass
 nodes:
   - id: fix-loop
     loop_group:
-      until: TESTS_PASS        # completion signal in the body's terminal output
+      until_bash: 'result=$test.output; [ "$result" = green ]'  # read the body's test node
       max_iterations: 5
       fresh_context: false      # false (default) = body AI sessions continue across iterations
       nodes:                    # sealed sub-DAG body — repeats as a unit
         - id: implement
-          prompt: Fix the failing tests. Emit TESTS_PASS only when all pass.
+          prompt: Fix the failing tests.
           depends_on: []
         - id: test
           bash: |
@@ -640,7 +670,7 @@ nodes:
             fi
           depends_on: [implement]
         - id: review
-          prompt: Summarize the result; echo TESTS_PASS if tests are green.
+          prompt: "Summarize this pass. The tests were $test.output."
           depends_on: [test]
 ```
 
@@ -782,7 +812,7 @@ runtime-resolved graph:
 ```yaml
 - id: converge
   loop_group:
-    until_bash: test $review.output.ready = "true"
+    until_bash: 'ready=$review.output.ready; test "$ready" = true'
     max_iterations: 5
     nodes:
       - id: review
@@ -808,7 +838,7 @@ nodes:
     loop_group:
       # The terminal node's own verdict ends the loop; nothing here emits a
       # prose sentinel, so `until:` would run to max_iterations on a green run.
-      until_bash: test $test.output = "green"
+      until_bash: 'result=$test.output; [ "$result" = green ]'
       max_iterations: 5
       nodes:
         - id: implement
@@ -858,6 +888,11 @@ entire block. A false gate skips the whole block; when true, each node still fol
 its own conditions and trigger rule. If the block contains a nested loop, the include's
 gate still reads the previous iteration of the loop containing that include.
 
+`$LOOP_PREV.<includeId>.output[.field]` reads the previous iteration of the node the
+included workflow returns, just as `$<includeId>.output` reads it in the current
+iteration. A `$LOOP_PREV` reference to an id that is not a node of an enclosing
+`loop_group` body is refused at load instead of reading as empty.
+
 `$LOOP_PREV` works in a body node's `with:` binding **string values** too, with the
 same text semantics as every other body surface: the previous iteration's output is
 substituted into the value each pass (so `with: { prev: $LOOP_PREV.test.output }`
@@ -894,7 +929,7 @@ nodes:
     loop_group:
       max_iterations: 3
       fresh_context: true
-      until_bash: 'test $review.output.done = true'
+      until_bash: 'done=$review.output.done; test "$done" = true'
       nodes:
         - id: owner
           context: { resume: implement }
@@ -919,13 +954,56 @@ a skipped owner keeps its cursor, or waits to fork until its first executed turn
 
 The source must be a command, prompt, or plain `loop:` node in an enclosing scope with
 a dependency path proving it completes before the group starts. Unordered, non-session,
-and loop-group sources are rejected. A source in the same body works differently; see
+and loop-group sources are rejected. The source may also be an `include:` node: the
+owner then continues the session of the node the included workflow returns (its
+`returns:` node, or its first sink), which must itself be a command, prompt, or plain
+`loop:` node. An include whose returned node produces no session is rejected at load,
+as is an include with `fan_out:`, which has no single session. A source in the same body works differently; see
 [Same-iteration sessions](#same-iteration-sessions). Nested groups get separate owner
 cursors for each enclosing invocation. Nested pauses retain every enclosing
 owner cursor and resume within the paused enclosing iteration before advancing.
 The resolved provider must match the source and
 support session resume and immutable forks. Missing context or a replacement owner
 session ID fails the node rather than starting a new conversation.
+
+### One node across rounds: `context: same`
+
+When the node that builds is also the node that fixes, it does not need a pre-loop
+source. `context: same` continues its own session from the previous round:
+
+```yaml
+nodes:
+  - id: corrections
+    loop_group:
+      max_iterations: 3
+      until_bash: 'ready=$review.output.done; [ "$ready" = true ]'
+      nodes:
+        - id: build
+          context: same
+          prompt: |
+            Implement the requested change, or correct what the review found:
+            $LOOP_PREV.review.output.findings
+        - id: review
+          depends_on: [build]
+          context: fresh
+          prompt: Review the change and report whether it is ready.
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+              findings: { type: string }
+            required: [done, findings]
+            additionalProperties: false
+```
+
+Round one starts fresh. Each later round continues `build`'s session in place, whatever
+`fresh_context` says, and whether `build` runs alone or beside other nodes; nodes side by
+side that each declare `same` each keep their own session. A pause inside the loop keeps
+the cursor. When the run has an item, every round's session is also recorded under it,
+so the next run's `build` on that item forks the last round's session in its first round,
+and a failure resume continues the newest round. See
+[Continuing a node's own session](/reference/workflow-language/#continuing-a-nodes-own-session)
+for the full order and what happens on a provider or model change.
 
 ### Same-iteration sessions
 
@@ -937,7 +1015,7 @@ nodes:
   - id: rounds
     loop_group:
       max_iterations: 3
-      until_bash: 'test $work.output.done = true'
+      until_bash: 'done=$work.output.done; test "$done" = true'
       nodes:
         - id: work
           prompt: Review the change, write review.md, and report what you did.
@@ -991,9 +1069,18 @@ Suspension and failure have different recovery rules:
 - **Same-iteration sessions after a nested pause**: a nested group's pause between a
   same-body source and its consumer resumes within the paused iteration, which re-runs
   the source. The consumer forks the re-run, matching the `$source.output` it reads.
-- **Failure resume** (`/workflow resume <id>` after a crash/failure): there is
-  no persisted iteration cursor — the loop_group node restarts from
-  **iteration 1**. Per-body-node resume granularity is not supported in v1.
+- **Failure resume** (`/workflow resume <id>` after a crash/failure): the group
+  resumes in the iteration it stopped in, read from the run's body-node history. An
+  iteration whose body did not finish re-runs in full. One whose body finished re-runs
+  only its completion check, then the group goes on to the next iteration; in an
+  interactive group it re-runs in full, because its gate was never reached. Earlier
+  iterations stay done, and `$LOOP_PREV.*` reads the last completed one, restored the
+  same way as after a pause; if its history or full output cannot be restored, the
+  resume fails. Iterations already used count
+  against `max_iterations`, so a group that failed by running out of iterations fails
+  again without running one. With `fresh_context: false`, the re-entered iteration starts
+  a new session. A `context: same` node continues the newest round's session it recorded
+  under the run's item; a run without an item starts it fresh.
 
 ### What is NOT supported on loop_group nodes (v1)
 
@@ -1003,7 +1090,9 @@ Suspension and failure have different recovery rules:
   [`until_field`](#until_field).
 - `retry` (the loop manages its own iteration) — rejected at parse time.
 - Cross-run `persist_session` for body AI nodes. In-run iterations use the ambient
-  cursor governed by `fresh_context`, or explicit named owner cursors described above.
+  cursor governed by `fresh_context`, explicit named owner cursors, or `context: same`,
+  all described above. A `context: same` body node also continues across runs on the
+  same item.
 - Per-body-node resume (skip-to-failed-body-node) — the whole iteration re-runs.
 - `$LOOP_PREV.<id>.output[N]` history indexing — only the immediately prior
   iteration is reachable.
@@ -1064,9 +1153,10 @@ release did not record that output, so its first resumed iteration sees both as 
 
 By default a legacy interactive loop gates even on an iteration that met its completion
 condition. `signal_completes: true` completes the node on that iteration instead, so the
-gate appears only on iterations that did not complete. Setting it without
-`interactive: true` has no effect and emits a loader warning. Replace it with a terminal
-wait whose `when:` skips it on success, as in the second example under
+gate appears only on iterations that did not complete. Without `interactive: true` the
+flag has no effect, and the load warnings (`archon validate`) say to remove it. Replace
+the interactive shape with a terminal wait whose `when:` skips it on success, as in the
+second example under
 [Pausing to ask inside the body](#pausing-to-ask-inside-the-body).
 
 ## See Also

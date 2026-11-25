@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { providerDiagnosticsSchema, providerModelListSchema } from '../information';
 import { Readable, Writable } from 'node:stream';
 import type { IAgentProvider } from '../agent-provider';
+import { createTurnMessageQueue, type TurnMessageQueue } from '../turn-messages';
 import type { ProviderStopReason } from '../result';
 import { PluginRemoteError, PluginRpc, type PluginIO } from './rpc';
 import {
@@ -12,6 +13,7 @@ import {
   logNotificationSchema,
   type ProviderLogSink,
   cancelNotificationSchema,
+  turnMessageNotificationSchema,
   checkCredentialParamsSchema,
   initializeRequestSchema,
   newSessionRequestSchema,
@@ -55,7 +57,12 @@ export async function serveProvider(
   const connectionAbort = new AbortController();
   const sessions = new Map<
     string,
-    { request: ProviderSessionRequest; abort: AbortController; active: boolean }
+    {
+      request: ProviderSessionRequest;
+      abort: AbortController;
+      active: boolean;
+      turnMessages: TurnMessageQueue;
+    }
   >();
   let initialized = false;
   let nextSession = 0;
@@ -84,7 +91,12 @@ export async function serveProvider(
     if (request.cwd !== params.cwd)
       throw new Error('session/new cwd disagrees with Archon request');
     const sessionId = String(nextSession++);
-    sessions.set(sessionId, { request, abort: new AbortController(), active: false });
+    sessions.set(sessionId, {
+      request,
+      abort: new AbortController(),
+      active: false,
+      turnMessages: createTurnMessageQueue(),
+    });
     return { sessionId };
   });
   rpc.handle('session/prompt', async raw => {
@@ -105,25 +117,30 @@ export async function serveProvider(
           ? {
               nativeTools: nativeTools.map(spec => ({
                 ...spec,
-                handler: async (input): Promise<string> =>
+                handler: async (input, call): Promise<string> =>
                   rpc.parse(
                     toolCallResponseSchema,
                     await rpc.request('_archon/tool_call', {
                       sessionId: params.sessionId,
                       name: spec.name,
                       input,
+                      providerCallId: call?.providerCallId,
                     })
                   ).text,
               })),
             }
           : {}),
         abortSignal: session.abort.signal,
+        ...(descriptor.capabilities.turnMessages === true
+          ? { turnMessages: session.turnMessages }
+          : {}),
       })) {
         if (chunk.type === 'result') reason = chunk.stopReason;
         await rpc.notify('_archon/chunk', { sessionId: params.sessionId, chunk });
       }
       return { stopReason: acpStopReason(reason, session.abort.signal.aborted) };
     } finally {
+      session.turnMessages.close();
       sessions.delete(params.sessionId);
     }
   });
@@ -132,6 +149,11 @@ export async function serveProvider(
     const session = sessions.get(sessionId);
     session?.abort.abort();
     if (session && !session.active) sessions.delete(sessionId);
+  });
+  // A text for a session that already ended has nowhere to go, as a late cancel does.
+  rpc.on('_archon/turn_message', raw => {
+    const { sessionId, text } = rpc.parse(turnMessageNotificationSchema, raw);
+    sessions.get(sessionId)?.turnMessages.push(text);
   });
   rpc.handle('_archon/check_credential', async raw => {
     requireInitialized();

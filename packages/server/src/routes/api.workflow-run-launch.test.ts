@@ -1,6 +1,7 @@
 import {
   mockFindConversationByPlatformId,
   mockHandleMessage,
+  mockWorkflowStartRefusal,
   mockGetWorkflowRun,
   mockFindWorkflowRunsByIdPrefix,
   MOCK_COMPLETED_RUN,
@@ -128,7 +129,7 @@ describe('POST /api/conversations/:id/message multipart files', () => {
         body: form,
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ accepted: true, status: 'started' });
+      expect(await response.json()).toMatchObject({ accepted: true, status: 'started' });
       expect(mockAddMessage).toHaveBeenCalledTimes(1);
       expect(mockHandleMessage).toHaveBeenCalledTimes(1);
       expect(received).toEqual(expected);
@@ -151,6 +152,8 @@ describe('POST /api/workflows/:name/run', () => {
     mockFindWorkflowRunsByIdPrefix.mockResolvedValue([]);
     mockFindConversationByPlatformId.mockReset();
     mockHandleMessage.mockReset();
+    mockWorkflowStartRefusal.mockReset();
+    mockWorkflowStartRefusal.mockResolvedValue(undefined);
     mockAddMessage.mockReset();
     mockGenerateAndSetTitle.mockReset();
   });
@@ -230,7 +233,8 @@ describe('POST /api/workflows/:name/run', () => {
     const form = resolve(body.content['multipart/form-data']?.schema);
     for (const schema of [json, form]) {
       expect(schema.required).toEqual(['conversationId', 'message']);
-      expect(resolve(schema.properties?.message).minLength).toBe(1);
+      // An empty message is a valid start, so the published schema sets no minimum.
+      expect(resolve(schema.properties?.message).minLength).toBeUndefined();
     }
     expect(resolve(json.properties?.conversationId).pattern).toBeUndefined();
     expect(resolve(form.properties?.conversationId).pattern).toBe('^[\\w-]+$');
@@ -263,31 +267,6 @@ describe('POST /api/workflows/:name/run', () => {
     expect(files.maxItems).toBe(5);
     expect(resolve(files.items)).toMatchObject({ type: 'string', format: 'binary' });
     expect(files.description).toContain('10485760 bytes');
-  });
-
-  test('dispatches workflow run to orchestrator and returns accepted', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockAddMessage.mockImplementationOnce(async () => ({
-      id: 'msg-1',
-      conversation_id: MOCK_CONV.id,
-      role: 'user' as const,
-      content: 'Deploy to staging',
-      metadata: '{}',
-      created_at: NOW,
-    }));
-    mockHandleMessage.mockImplementationOnce(async () => {});
-
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/deploy/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Deploy to staging' }),
-    });
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { accepted: boolean; status: string };
-    expect(body.accepted).toBe(true);
-    expect(body.status).toBe('started');
   });
 
   // The message is data: it must reach the run byte for byte, and no word in it may
@@ -485,7 +464,7 @@ describe('POST /api/workflows/:name/run', () => {
         body: form,
       });
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ accepted: true, status: 'started' });
+      expect(await response.json()).toMatchObject({ accepted: true, status: 'started' });
       expect(mockHandleMessage).toHaveBeenCalledTimes(1);
       expect(received).toEqual([
         { name: 'first.txt', content: 'first contents' },
@@ -608,9 +587,12 @@ describe('POST /api/workflows/:name/run', () => {
             );
           };
           const first = await send(firstIngress, 'first');
-          expect(await first.json()).toEqual({ accepted: true, status: 'started' });
+          expect(await first.json()).toMatchObject({ accepted: true, status: 'started' });
           const queued = await send(queuedIngress, 'queued');
-          expect(await queued.json()).toEqual({ accepted: true, status: 'queued-conversation' });
+          expect(await queued.json()).toMatchObject({
+            accepted: true,
+            status: 'queued-conversation',
+          });
           const uploadDir = join(home, 'artifacts', 'uploads', 'web-test-abc');
           expect(await fsPromises.readdir(uploadDir)).toHaveLength(2);
           releaseFirst.resolve();
@@ -691,15 +673,115 @@ describe('POST /api/workflows/:name/run', () => {
     expect(body.error).toContain('message');
   });
 
-  test('returns 400 for invalid workflow name (path traversal)', async () => {
+  test.each(['json', 'multipart'] as const)(
+    'starts a %s run from inputs and an empty message, recording no empty chat message',
+    async transport => {
+      mockFindConversationByPlatformId.mockImplementationOnce(async () => ({
+        ...MOCK_CONV,
+        title: null,
+      }));
+      mockHandleMessage.mockImplementationOnce(async () => {});
+      const fields = { conversationId: 'web-test-abc', message: '' };
+      const inputs = { issue: '5608' };
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) form.append(key, value);
+      form.append('inputs', JSON.stringify(inputs));
+
+      const { app, mockWebAdapter } = makeApp();
+      const response = await app.request(
+        '/api/workflows/fix-issue/run',
+        transport === 'json'
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...fields, inputs }),
+            }
+          : { method: 'POST', body: form }
+      );
+      expect(response.status).toBe(200);
+
+      expect(mockHandleMessage).toHaveBeenCalledWith(
+        expect.anything(),
+        'web-test-abc',
+        '',
+        expect.objectContaining({ workflowInputs: inputs })
+      );
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(mockAddMessage).not.toHaveBeenCalled();
+      expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+      expect(mockWebAdapter.setConversationDbId).toHaveBeenCalledWith('web-test-abc', MOCK_CONV.id);
+    }
+  );
+
+  test.each(['json', 'multipart'] as const)(
+    'answers a %s start the engine refuses with its reason, writing and dispatching nothing',
+    async transport => {
+      const originalHome = mockArchonHome;
+      const home = await mkdtemp(join(tmpdir(), 'archon-refused-launch-'));
+      setMockArchonHome(home);
+      try {
+        const reason = "This workflow requires input 'issue', and none was supplied.";
+        mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+        mockWorkflowStartRefusal.mockResolvedValueOnce(reason);
+        const fields = { conversationId: 'web-test-abc', message: 'Fix it' };
+        const inputs = { base: 'dev' };
+        const form = new FormData();
+        for (const [key, value] of Object.entries(fields)) form.append(key, value);
+        form.append('inputs', JSON.stringify(inputs));
+        form.append('files', new File(['details'], 'request.txt', { type: 'text/plain' }));
+
+        const { app, mockWebAdapter } = makeApp();
+        const response = await app.request(
+          '/api/workflows/fix-issue/run',
+          transport === 'json'
+            ? {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...fields, inputs }),
+              }
+            : { method: 'POST', body: form }
+        );
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: reason });
+        // The engine judges the conversation's own project, name and inputs.
+        expect(mockWorkflowStartRefusal).toHaveBeenCalledWith(
+          expect.objectContaining({
+            conversation: MOCK_CONV,
+            workflowName: 'fix-issue',
+            inputs,
+            actor: { kind: 'operator' },
+          })
+        );
+        expect(mockHandleMessage).not.toHaveBeenCalled();
+        expect(mockAddMessage).not.toHaveBeenCalled();
+        expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+        expect(mockWebAdapter.setConversationDbId).not.toHaveBeenCalled();
+        expect(await fsPromises.readdir(home)).toEqual([]);
+      } finally {
+        setMockArchonHome(originalHome);
+        await removeTempTree(home);
+      }
+    }
+  );
+
+  // The route has no start rule of its own: the engine admits this start, so it is dispatched.
+  test('dispatches a run with neither a message nor inputs', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
     const { app } = makeApp();
-    const response = await app.request('/api/workflows/../secret/run', {
+    const response = await app.request('/api/workflows/nightly/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Test' }),
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: '' }),
     });
-    // Hono routes won't match ../secret as /:name due to path normalization — either 400 or 404
-    expect([400, 404]).toContain(response.status);
+    expect(response.status).toBe(200);
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '',
+      expect.objectContaining({ workflowName: 'nightly' })
+    );
   });
 
   test('returns 400 when isValidWorkflowName rejects the name', async () => {

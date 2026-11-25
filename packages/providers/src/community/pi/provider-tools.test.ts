@@ -39,14 +39,14 @@ describe('PiProvider tools', () => {
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
     // Pi 0.68+: customTools holds the actual Tool objects; noTools: "builtin"
-    // suppresses Pi's default built-in set so the customTools list is authoritative.
+    // suppresses Pi's default built-in set so customTools is authoritative for the built-in payload.
     expect(Array.isArray(callArgs.customTools)).toBe(true);
     expect(callArgs.noTools).toBe('builtin');
     const tools = callArgs.customTools as Array<{ __piTool: string }>;
     expect(tools.map(t => t.__piTool).sort()).toEqual(['grep', 'read']);
   });
 
-  test('nodeConfig.allowed_tools: [] disables all Pi tools (LLM-only)', async () => {
+  test('nodeConfig.allowed_tools: [] suppresses Pi built-in tools', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -58,7 +58,7 @@ describe('PiProvider tools', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    // Empty customTools + noTools: "builtin" == "no tools at all".
+    // Suppresses built-ins; the mocked session does not prove extension-tool isolation.
     expect(callArgs.customTools).toEqual([]);
     expect(callArgs.noTools).toBe('builtin');
   });
@@ -199,6 +199,49 @@ describe('PiProvider tools', () => {
     expect(merged.env.PATH).toBe(['/archon/gh-shim', '/usr/bin', '/pi/agent/bin'].join(delimiter));
   });
 
+  test('a caller PATH keeps the empty entries of Pi baseline PATH', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        env: { PATH: '/archon/gh-shim' },
+      })
+    );
+
+    const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
+    const bashOptions = bashCall![1] as { spawnHook: (c: unknown) => unknown };
+    const merged = bashOptions.spawnHook({
+      command: 'echo',
+      cwd: '/tmp',
+      env: { PATH: ['/bin', '', '/usr/bin'].join(delimiter) },
+    }) as { env: Record<string, string> };
+    expect(merged.env.PATH).toBe(['/archon/gh-shim', '/bin', '', '/usr/bin'].join(delimiter));
+  });
+
+  test('a caller PATH merges into a Pi env that spells the key Path', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        env: { PATH: '/archon/gh-shim' },
+      })
+    );
+
+    const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
+    const bashOptions = bashCall![1] as { spawnHook: (c: unknown) => unknown };
+    const merged = bashOptions.spawnHook({
+      command: 'echo',
+      cwd: '/tmp',
+      env: { Path: '/pi/agent/bin' },
+    }) as { env: Record<string, string> };
+    expect(merged.env.Path).toBe(['/archon/gh-shim', '/pi/agent/bin'].join(delimiter));
+    expect(merged.env.PATH).toBeUndefined();
+  });
+
   test('empty requestOptions.env does NOT construct a spawnHook', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
@@ -263,4 +306,31 @@ describe('PiProvider tools', () => {
       | undefined;
     expect(typeof powershellOptions?.spawnHook).toBe('function');
   });
+
+  test.each(['read', 'structured_output'])(
+    'a declared tool named %s is refused before a session starts',
+    async name => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+      mockCreateAgentSession.mockClear();
+
+      const { failure } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'google/gemini-2.5-pro',
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+          nativeTools: [
+            {
+              name,
+              description: 'A declared tool',
+              inputSchema: { jsonSchema: { type: 'object' } },
+              handler: async () => 'ran',
+            },
+          ],
+        })
+      );
+
+      expect(failure?.class).toBe('misconfigured');
+      expect(mockCreateAgentSession).not.toHaveBeenCalled();
+    }
+  );
 });

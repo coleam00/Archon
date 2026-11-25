@@ -66,6 +66,24 @@ export interface NodeTransitionEvent extends RunEventBase {
   stopReason: string | null;
   numTurns: number | null;
   tokens: TokenUsage | null;
+  /**
+   * A `bash:` or `script:` node's stdout, from its `completed` row. Null for every other
+   * node kind: an AI node's output is already in the stream as the agent's messages.
+   */
+  output: NodeOutput | null;
+  /** Only populated for `failed`: the engine's error for the node. */
+  error: string | null;
+  /**
+   * Only populated for `failed`: the failure kind the engine recorded (e.g. `schema_unmet`),
+   * the name a `retry.on_error` policy targets. Null on rows written without one.
+   */
+  failureKind: string | null;
+}
+
+/** A node's recorded stdout; `truncated` when the engine stored only the head of it. */
+export interface NodeOutput {
+  text: string;
+  truncated: boolean;
 }
 
 /**
@@ -196,7 +214,18 @@ function toNodeTransition(
     stopReason: readStringOrNull(data, 'stop_reason'),
     numTurns: readNumberOrNull(data, 'num_turns'),
     tokens: readTokens(data.tokens),
+    output: transition === 'completed' ? readExecOutput(data) : null,
+    error: transition === 'failed' ? readStringOrNull(data, 'error') : null,
+    failureKind: transition === 'failed' ? readStringOrNull(data, 'failure_kind') : null,
   };
+}
+
+const EXEC_NODE_TYPES = new Set(['bash', 'script']);
+
+function readExecOutput(data: EventData): NodeOutput | null {
+  if (!EXEC_NODE_TYPES.has(readString(data, 'type'))) return null;
+  const text = readString(data, 'node_output');
+  return text === '' ? null : { text, truncated: data.node_output_truncated === true };
 }
 
 function integrationErrorMessage(result: unknown): string {
@@ -362,6 +391,9 @@ const EVENT_MAPPERS = new Map<string, EventMapper>([
         readString(raw.data, 'platform')
       ),
   ],
+  // The answer a person or agent gave to an attention wait. Rendered as `text`, NOT
+  // `system`: it is what the run continued on, and the fallback shows it as raw JSON.
+  ['wait_answered', toWaitAnswer],
   ['error', toError],
   ['workflow_started', workflowLifecycle(() => 'Workflow started')],
   ['workflow_completed', workflowLifecycle(() => 'Workflow completed')],
@@ -372,6 +404,7 @@ const EVENT_MAPPERS = new Map<string, EventMapper>([
       readString(data, 'error') ? 'Workflow resumed (prior error cleared)' : 'Workflow resumed'
     ),
   ],
+  ['operator_paused', workflowLifecycle(() => 'Paused by an operator')],
   ['container_created', containerEvent('Container created')],
   ['container_stopped', containerEvent('Container stopped (paused)')],
   ['container_resumed', containerEvent('Container resumed')],
@@ -412,6 +445,20 @@ const EVENT_MAPPERS = new Map<string, EventMapper>([
   // Rendered as `text`, NOT `system`: it explains a first-node `auth` failure.
   ['credential_check_inconclusive', toCredentialWarning],
 ]);
+
+function toWaitAnswer(raw: RawWorkflowEvent, base: EventBase): RunEvent {
+  const answer = isRecord(raw.data.answer) ? raw.data.answer : {};
+  const decisions = Array.isArray(answer.decisions)
+    ? answer.decisions.filter((id): id is string => typeof id === 'string')
+    : [];
+  const chosen = [readString(answer, 'decision'), ...decisions].filter(id => id !== '');
+  const text = readString(answer, 'text');
+  const via = readString(raw.data, 'via');
+  return textEvent(
+    base,
+    `Answered${via ? ` via ${via}` : ''}${chosen.length > 0 ? `: ${chosen.join(', ')}` : ''}${text ? `\n${text}` : ''}`
+  );
+}
 
 function toCredentialWarning(raw: RawWorkflowEvent, base: EventBase): RunEvent {
   const vendor = readString(raw.data, 'vendor');
@@ -464,6 +511,12 @@ export interface NodeRun {
   stopReason: string | null;
   skipReason: string | null;
   skipExpr: string | null;
+  /** From the `node_completed` behind a `completed` state of a `bash:` or `script:` node. */
+  output: NodeOutput | null;
+  /** From the `node_failed` behind a `failed` state. */
+  error: string | null;
+  /** The failure kind from the same `node_failed`. */
+  failureKind: string | null;
   /** A `workflow:` fan-out node's per-slot record, from the engine's node state. */
   fanOutOutcome: RunNodeState['fan_out_outcome'];
 }
@@ -538,6 +591,21 @@ function scanTransitions(
   return scan;
 }
 
+/**
+ * What the node left behind. Only a `failed` transition carries an error, and `ended`
+ * is that transition only for a failed node.
+ */
+function nodeResult(
+  completed: NodeTransitionEvent | null,
+  ended: NodeTransitionEvent | null
+): Pick<NodeRun, 'output' | 'error' | 'failureKind'> {
+  return {
+    output: completed?.output ?? null,
+    error: ended?.error ?? null,
+    failureKind: ended?.failureKind ?? null,
+  };
+}
+
 function toNodeRun(node: RunNodeState, transitions: NodeTransitionEvent[]): NodeRun {
   const { startedAt, nodeName, lastCompleted, lastSkipped, ended } = scanTransitions(
     transitions,
@@ -566,6 +634,7 @@ function toNodeRun(node: RunNodeState, transitions: NodeTransitionEvent[]): Node
     // Only a `skipped` state's own transition carries these; a replay's are not shown.
     skipReason: ended?.skipReason ?? null,
     skipExpr: ended?.skipExpr ?? null,
+    ...nodeResult(completed, ended),
     fanOutOutcome: node.fan_out_outcome,
   };
 }

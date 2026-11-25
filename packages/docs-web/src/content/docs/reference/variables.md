@@ -14,19 +14,20 @@ Archon substitutes variables in command files, inline prompts, bash scripts, and
 
 These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one) — except the user-controlled ones in `bash:` and `script:` nodes, which arrive as environment variables instead (see [Shell quoting in `bash:` vs `script:`](#shell-quoting-in-bash-vs-script)).
 
-They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they resolve exactly as a `prompt:` does: workflow variables and `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt.
+They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they resolve exactly as a `prompt:` does: workflow variables and `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt. A command file's references get the same check when Archon discovers the project's workflows (`archon validate workflows`, a run, the server's catalog). Parsing a single workflow file on its own, and a workflow composed at run time by a fan-out, do not run this reference check.
 
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
 | `$ARGUMENTS` | The user's input message that triggered the workflow | Primary way to pass user input to commands |
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
-| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. **Scratch work** (a checkout to bisect or spike against, a dependency install) goes under `$ARTIFACTS_DIR/.archon/scratch/`; create it with `mkdir -p`. Archon deletes that directory once the run is completed, failed or cancelled and its nodes have stopped (for a container run, when its container is removed), so a resumed run starts without it. A run whose nodes Archon cannot confirm stopped (its owner ran on another host, or its owner process is still alive) keeps it, and so does a CLI run stopped by a signal until it is abandoned or its conversation is reset; write evidence a later node or the operator reads anywhere else in `$ARTIFACTS_DIR`, which is kept. The deletion removes files only: remove a scratch worktree with `git worktree remove` (or use `git clone`), or its registration stays behind until `git worktree prune`. |
+| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. **Scratch work** (a checkout to bisect or spike against, a dependency install) has two homes. Scratch only the running node needs goes in `$NODE_SCRATCH_DIR` (next row), which Archon removes when that node ends. Scratch several nodes share goes under `$ARTIFACTS_DIR/.archon/scratch/`; create it with `mkdir -p`. Archon deletes that directory, node scratch inside it included, once the run is completed, failed or cancelled and its nodes have stopped (for a container run, when its container is removed), so a resumed run starts without it. A run whose nodes Archon cannot confirm stopped (its owner ran on another host, or its owner process is still alive) keeps it, and so does a CLI run stopped by a signal until it is abandoned or its conversation is reset; write evidence a later node or the operator reads anywhere else in `$ARTIFACTS_DIR`. At the same release point, Archon also removes [validly tagged cache directories](/reference/archon-directories/#user-level-archon) anywhere beneath `$ARTIFACTS_DIR`: a regular `CACHEDIR.TAG` beginning with `Signature: 8a477f597d28d172789f06886806bc55` makes its entire directory disposable. The artifacts root and untagged evidence outside those subtrees are kept; symlinks are never followed. Removed cache paths and estimated reclaimed bytes are logged per run. Before deleting scratch, Archon removes every git worktree of the run's repository that a node added under it (`git worktree add "$ARTIFACTS_DIR/.archon/scratch/<name>"`), uncommitted changes included, so no registration stays behind; no other worktree is touched. A worktree Git refuses to remove is logged and its files are still deleted, which leaves a registration `git worktree prune` drops. A worktree of another repository keeps its registration until `git worktree prune` there; one added inside a container run goes with the container. |
+| `$NODE_SCRATCH_DIR` | Pre-created scratch directory of the running node invocation (`$ARTIFACTS_DIR/.archon/scratch/nodes/<invocation-id>/`) | Exists before the node runs. For a checkout, worktree or dependency install only this node uses (`git worktree add "$NODE_SCRATCH_DIR/wt"`). One directory per invocation: every retry attempt of the node and every iteration of a `loop:` node share it, and each `loop_group` iteration's body nodes get a fresh one. Archon removes it when the invocation completes, fails or is skipped, before dependents and the next `loop_group` iteration start. Before deleting it, Archon removes every git worktree of the run's repository registered under it, by path, uncommitted changes included; no other worktree is touched and `git worktree prune` is not run. A node suspended at a gate, wait or paused `loop_group` keeps its directory, and the resumed invocation receives the same path; when the resumed run instead skips that node (its `when:` or trigger rule now turns it away; a skipped `loop_group` takes its suspended body nodes' directories with it) or replays it as completed (a gate answered by approval while the run was paused), its directory is removed at that point, before its dependents run. A `loop_group` resumed at its body's terminal gate or wait does not run that iteration again: once the answered gate or the settled wait lets it move on, that node's directory is removed before the group's next iteration or its completion. A `loop_group` that ends also removes any body directory a prior pass left in an iteration this pass did not reach. Only invocation directories are removed this way; other entries a workflow puts under `$ARTIFACTS_DIR/.archon/scratch/` stay until the run ends. If a directory on the path to it is a link, the node fails before it runs and Archon removes nothing through the link. A `--dry-run --exec-code` simulation removes each node's directory the same way when the node ends. A node interrupted by a cancel or a stopping run keeps it until the run's scratch is released. In a container run the node registered its worktrees in the container's git, so they are removed through that git, by the same paths, before the files are deleted. A failed removal is logged (`node_scratch.remove_failed`) and does not fail the node; run-end release removes what is left. Do not hand the path to a later node; use run-wide scratch for that. Also delivered to `bash:`/`script:` as the `NODE_SCRATCH_DIR` environment variable. |
 | `$TYPED_ARTIFACTS_FILE` | Absolute path to the current typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation grouped by exact case-sensitive `output_type`. Each agent attempt receives a fresh listing before it starts, including transient retries. Plain `loop` structured-output reasks also receive fresh listings. Ordinary agent structured-output reasks (including agents in a `loop_group` body) reuse their attempt's listing. `bash:` and `script:` nodes receive one before execution. Each `until_bash` check receives a separate listing after the plain loop's agent work or the loop group's body. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/reference/workflow-language/#typed-artifacts-output_type). |
 | `$NODE_OUTCOMES_FILE` | Absolute path to the current node-outcome listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation of every node invocation the run has recorded: its state (`pending`, `running`, `completed`, `failed`, `skipped`), a failed node's error, a skipped node's reason and cause, and a completed node's structured output. One entry per `loop_group` iteration. Written at the same moment as `$TYPED_ARTIFACTS_FILE`, to the same invocation contexts, and delivered to `bash:`/`script:` as the `NODE_OUTCOMES_FILE` environment variable. Referencing it in a context with no listing throws, except in a `--dry-run` preview, which substitutes an empty string. See [Reading what other nodes did](/reference/workflow-language/#reading-what-other-nodes-did-node_outcomes_file). |
 | `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** unlike `$ARTIFACTS_DIR`, this host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
 | `$PACK_DIR` | The directory of the pack the node's workflow file was loaded from, in the run's source (`.archon/workflows/<pack>/`, or an installed or bundled pack's folder) | Read-only by contract. Inside an `include:`d block it is the included workflow's pack, and a `workflow:` child reads its own. Also delivered to `bash:`/`script:` as the `PACK_DIR` environment variable, which project env cannot override. A workflow outside a pack (a flat or grouped `.yaml` under `.archon/workflows/`) that references it fails to load. See [`$PACK_DIR`](#pack_dir-the-workflows-own-pack) |
-| `$BASE_BRANCH` | Base branch for git operations | For top-level runs, resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. Fresh shared-checkout children (`inherit` or omitted) inherit the parent's resolved value, including `--base`. New isolated branches use `worktree.baseBranch`, then the codebase default, then detection, independently of parent flags. If an isolated branch is reused without a surviving child run record, its original base is unavailable; config is not used to guess it. A continuation -- `--resume`, an approved gate, or the automatic resume of a parent whose sub-run gate was approved -- reports the value recorded when the run was first dispatched instead of consulting config, the codebase default, or git again; only a `--base` re-passed to that continuation overrides the recorded value. `--base` sets the worktree cut-from too, so for a newly created top-level branch this variable names the branch the worktree was cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
+| `$BASE_BRANCH` | Base branch for git operations | For top-level runs, resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. Fresh shared-checkout children (`inherit` or omitted) inherit the parent's resolved value, including `--base`. New isolated branches use `worktree.baseBranch`, then the codebase default, then detection, independently of parent flags. If an isolated branch is reused without a surviving child run record, its original base is unavailable; config is not used to guess it. A continuation -- `workflow resume`, an approved gate, or the automatic resume of a parent whose sub-run gate was approved -- reports the value recorded when the run was first dispatched instead of consulting config, the codebase default, or git again. Continuations refuse `--base`. `--base` sets the worktree cut-from too, so for a newly created top-level branch this variable names the branch the worktree was cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
 | `$EXTERNAL_CONTEXT` | Same as `$CONTEXT` | Alias |
@@ -34,7 +35,7 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$LOOP_USER_INPUT` | **Deprecated.** Feedback from a deprecated interactive loop gate. Replacement: end a `loop_group` body in a `wait: attention` node and read `$LOOP_PREV.<wait-id>.output.text`; see [Pausing to ask inside the body](/guides/loop-nodes/#pausing-to-ask-inside-the-body) | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations. On a signal-bearing gate, a bare approve (no feedback) finalizes the node without a new iteration, so the variable is never read |
 | `$REJECTION_REASON` | **Deprecated.** The reason given when rejecting a deprecated `approval:` node. Replacement: a node with `when: "$<wait-id>.output.decision == 'reject'"` that reads `$<wait-id>.output.text`; see [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates) | Only available in `on_reject` prompts. Empty string elsewhere |
 | `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration (loop nodes only) | Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference the prior pass without carrying the full session history |
-| `$LOOP_PREV.<nodeId>.output` | A body node's output from the previous iteration (loop_group body nodes only) | Empty string on iteration 1. `$LOOP_PREV.<nodeId>.output.<field>` accesses structured-output fields with the same strict semantics as `$nodeId.output.field`. In a body `when:`, it is a typed condition reference rather than text substitution. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
+| `$LOOP_PREV.<nodeId>.output` | A body node's output from the previous iteration (loop_group body nodes only) | Empty string on iteration 1. `$LOOP_PREV.<nodeId>.output.<field>` accesses structured-output fields with the same strict semantics as `$nodeId.output.field`. In a body `when:`, it is a typed condition reference rather than text substitution. For an `include:` body node, it reads the node the included workflow returns. An id that is not a node of an enclosing body is refused at load. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 
 ### Context Variable Behavior
 
@@ -48,7 +49,7 @@ Referencing `$BASE_BRANCH` in a prompt, `bash:`, or `script:` body **fails the n
 
 It also happens when an isolated child reuses an existing branch without its original child run record. The historical base is unknown even if current defaults are configured. Changing config or passing parent `--base` or `--from` cannot recover it. Start a new parent run so the child creates a new isolated branch with a known base.
 
-For a new top-level git run, pass `--base`, configure `worktree.baseBranch`, set the codebase default, or repair git detection. Resuming a run retains its recorded base, including an unresolved value, unless that run is explicitly retargeted with `--base`. Folder workflows that do not have a base should avoid referencing the variable.
+For a new top-level git run, pass `--base`, configure `worktree.baseBranch`, set the codebase default, or repair git detection. A resumed run keeps its recorded base, including an unresolved value, and cannot be retargeted: `--base` is refused when continuing a run. To run with a different base, start a new run. Folder workflows that do not have a base should avoid referencing the variable.
 
 If the variable is not referenced, no error occurs even if the base branch cannot be determined.
 
@@ -112,13 +113,39 @@ Runs with an already recorded output root keep using it when resumed.
 
 ### Disposable Docker verification images
 
-Use the current run's identity to opt disposable images into terminal cleanup:
+Label a disposable image with the current run's identity, and record the build in the run's `verification-images` directory:
 
 ```bash
-docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
+mkdir -p "$ARTIFACTS_DIR/verification-images"
+docker build --label "archon.run_id=$WORKFLOW_ID" \
+  --iidfile "$ARTIFACTS_DIR/verification-images/check" -t "verify-$WORKFLOW_ID:check" .
 ```
 
-See the [SDLC Docker verification guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#docker-verification) for build requirements, cleanup eligibility and safe manual recovery.
+The label marks which run owns an image. The record tells Archon the run built one: Archon asks Docker about a run's images only when `$ARTIFACTS_DIR/verification-images/` holds a file, in host and container runs alike. A run without a record is never inventoried, so with Docker stopped it prints nothing about images. Give each build its own `--iidfile` name.
+
+`docker buildx build --load` takes the same `--label` and `--iidfile`. Give each run unique tags, one tag per image, and use the same Docker context as the Archon host. A child run uses its own `$WORKFLOW_ID`. Remove verification containers when the check finishes, including stopped containers.
+
+**When images are removed.** For a run that recorded a build, Archon attempts cleanup when a completed run, or a cancelled run that cannot resume, stops writing. Nothing watches for containers removed later. These keep their images:
+
+- Failed runs, including ones interrupted by SIGINT or SIGTERM, because they can resume under the same run ID. Abandon the run, or recover by hand as below, to release them.
+- Fan-out children cancelled in a way that can resume. Abandoning does not release their images; recover by hand.
+- Images a container uses, and images whose owning run is live or cannot be established.
+- Unlabelled images and other runs' images. Shared build cache also stays: Docker cannot filter it by this label.
+
+Docker errors are reported, and the run's terminal status is unchanged.
+
+**When cleanup cannot list images.** If the first listing of a host run's recorded verification images fails, Archon keeps the run's own exit code and reports a warning that names the run, with manual recovery guidance, whatever caused the failure. Cleanup is then inconclusive and images may remain: restore access to the intended Docker context and recover by hand. A failure after the listing (inspection, container-use checks or removal) fails an otherwise successful foreground command, as does a container run's cleanup failure.
+
+**Recover by hand.** Cleanup deletes immutable image IDs without force or parent pruning, and Docker refuses an ID with several repository references, so an image with several tags needs manual cleanup under exclusive control of its tags. After removing late test containers and confirming the run cannot resume or write:
+
+```bash
+docker image ls --all --no-trunc --filter "label=archon.run_id=<run-id>"
+docker image inspect <full-id>
+docker container ls --all --filter ancestor=<full-id>
+docker image rm --no-prune <full-id>    # only for a confirmed owned, unused image
+```
+
+If several tags prevent removal, verify and remove those references by hand, only while no other build or operator can reassign them. Never force removal or prune shared images or cache.
 
 ### `$PACK_DIR`: the workflow's own pack
 
@@ -325,6 +352,12 @@ reference-looking text there is neither substituted nor validated as an output r
       iteration: { from: $iteration-ready.output.ready, if_skipped: false }
 ```
 
+On a `script:` node an object value may instead be `{ outputs: <output_type> }`: the JSON
+array of every output of that type the run has recorded, oldest first, each
+`{ node, loop, at, value }`. A record the engine cannot read fails the node unless the
+binding declares `if_unreadable:` as `null` or an array, which it then takes. See
+[Binding every output of a type](/reference/workflow-language/#binding-every-output-of-a-type).
+
 Every referenced producer must be an upstream `depends_on` dependency — the loader rejects
 the workflow otherwise, so a binding can never race its producer. Node-local bindings are
 the **nearest** input layer: they win over a composed block's inputs, which win over the
@@ -372,8 +405,9 @@ A `workflow:` parent and a fan-out aggregate relay a child's value unchanged: th
 already proved its pointers against the only run it may name. Reachability and real-path
 checks belong to the read side by design — whether a reader may see that run, and whether
 the path still resolves inside its artifacts directory once symlinks are followed.
-`GET /api/artifacts/<run_id>/<path>` does lexical containment on the untrusted request
-today; real-path resolution at read time is not yet implemented (#3160).
+`GET /api/artifacts/<run_id>/<path>` checks lexical containment, resolves symlinks in
+both the artifacts directory and requested file, and refuses a target outside the
+resolved artifacts directory before reading it.
 
 The value stays a run id plus a relative path in node outputs, events, sub-run results,
 fan-out aggregates, and resumed runs. Archon never rewrites it into an absolute path and
@@ -393,7 +427,7 @@ Where two grammars could match at the same `$`, the earlier group in this list w
 
 1. **Loop references** (inside a `loop_group` body) -- `$LOOP_PREV.<nodeId>.output`, and the
    group's `$LOOP_USER_INPUT` reply
-2. **Workflow variables** -- `$WORKFLOW_ID`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$PACK_DIR`, `$ADOPTED_RUN_DIR`, `$TYPED_ARTIFACTS_FILE`, `$NODE_OUTCOMES_FILE`, `$BASE_BRANCH`, `$DOCS_DIR`, `$USER_MESSAGE`, `$ARGUMENTS`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`, `$INPUTS.<name>`, then the context variables `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
+2. **Workflow variables** -- `$WORKFLOW_ID`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$PACK_DIR`, `$NODE_SCRATCH_DIR`, `$ADOPTED_RUN_DIR`, `$TYPED_ARTIFACTS_FILE`, `$NODE_OUTCOMES_FILE`, `$BASE_BRANCH`, `$DOCS_DIR`, `$USER_MESSAGE`, `$ARGUMENTS`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`, `$INPUTS.<name>`, then the context variables `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
 Issue context that is appended because the template names no context variable is added after
@@ -412,6 +446,7 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context �
 | `$NODE_OUTCOMES_FILE` | Yes (exec and AI nodes) | No | No |
 | `$STATE_DIR` | Yes | No | No |
 | `$PACK_DIR` | Yes (packaged workflows) | No | No |
+| `$NODE_SCRATCH_DIR` | Yes | No | No |
 | `$BASE_BRANCH` | Yes | No | No |
 | `$DOCS_DIR` | Yes | No | No |
 | `$CONTEXT` / aliases | Yes | No | No |

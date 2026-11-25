@@ -3,6 +3,13 @@ export const attachmentCommands = {
     add: {
       args: '[path]',
       description: 'Add archon-cli into .claude/skills and .agents/skills',
+      scopedFlags: [
+        {
+          spec: '--pack <id>',
+          description:
+            "Add an installed workflow pack's own skill instead, under the name its manifest declares",
+        },
+      ],
     },
     install: {
       scopedOnly: true,

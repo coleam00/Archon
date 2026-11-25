@@ -41,8 +41,10 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'test message',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -51,6 +53,7 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
     ...overrides,
   };
@@ -87,6 +90,9 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     deleteStateDocument: async () => {
       throw new Error('Unsupported state documents');
     },
+    claimStateDocument: async () => {
+      throw new Error('Unsupported state documents');
+    },
     pruneStateRevisions: async () => ({ count: 0 }),
     getActiveWorkflowRunByPath: async () => null,
     findChildRuns: async () => [],
@@ -101,7 +107,6 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     createWorkflowEvent: noop,
     persistWorkflowEvent: noop,
     persistWorkflowEventIfRunning: async () => ({ persisted: true }),
-    findResumableRun: async () => null,
     listProviderEvents: async () => [],
     getDagResumeSnapshot: async () => emptySnapshot(),
     resumeWorkflowRun: async () => makeRun(),
@@ -109,7 +114,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     getCodebase: async () => null,
     getCodebaseEnvVars: async () => ({}),
     updateWorkflowActivity: noop,
-    completeWorkflowRun: noop,
+    completeWorkflowRun: async () => ({ startReceipts: [] }),
     pauseWorkflowRun: noop,
     pauseWorkflowRunForWait: noop,
     clearWorkflowWaitContext: async (id, _wait, completion) => ({

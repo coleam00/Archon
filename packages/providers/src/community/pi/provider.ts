@@ -30,7 +30,7 @@ import {
   resolvePiModel,
   resolvePiTurnAuth,
 } from './auth';
-import { ensurePiPackageDirShim } from './sdk-setup';
+import { ensurePiOAuthFlowsRegistered, ensurePiPackageDirShim } from './sdk-setup';
 import { streamPiTurn } from './turn';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
@@ -155,7 +155,13 @@ export class PiProvider implements IAgentProvider {
       credentialValues = authEnv.credentialValues;
       signal.throwIfAborted();
       ensurePiPackageDirShim();
+      // A compiled binary cannot follow pi-ai's computed OAuth import, so the
+      // loaders have to be registered before a stored grant is resolved. Turns
+      // already do this in loadPiTurnModules; doctor and preflight come through
+      // here and never reach that path.
+      const oauthFlowsReady = ensurePiOAuthFlowsRegistered();
       const piCodingAgent = await import('@earendil-works/pi-coding-agent');
+      await oauthFlowsReady;
       const parsed = resolvePiModel(request.model ?? piConfig.model, process.cwd(), piCodingAgent);
       const requestModelRuntime = await createPiModelRuntime(
         piCodingAgent,

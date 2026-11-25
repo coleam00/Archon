@@ -140,7 +140,10 @@ RUN echo tampered >> /opt/archon/image-plugins/archon-chat-slack
 DOCKERFILE
 verification_build=(--network none --build-arg "BASE=$image" -f "$scratch/Dockerfile" -t "$tampered_image")
 if [ -n "${WORKFLOW_ID:-}" ]; then
-  verification_build+=(--label "archon.run_id=$WORKFLOW_ID")
+  # The record tells Archon this run built an image, so it cleans it up.
+  mkdir -p "${ARTIFACTS_DIR:?ARTIFACTS_DIR is required with WORKFLOW_ID}/verification-images"
+  verification_build+=(--label "archon.run_id=$WORKFLOW_ID"
+    --iidfile "$ARTIFACTS_DIR/verification-images/slack-upgrade")
 fi
 docker build "${verification_build[@]}" "$root"
 docker volume rm "$volume" >/dev/null

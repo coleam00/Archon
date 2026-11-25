@@ -10,11 +10,16 @@ import {
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths/logger';
-import type { ResourceStartDisposition } from '../schemas/resource-start';
+import { FileStoreUnsupportedError } from './errors';
 import {
-  drainableStarts,
+  preparedWorkflowLaunchSchema,
+  type ResourceStartDisposition,
+} from '../schemas/resource-start';
+import { drainableStarts } from '../host-start-decision';
+import {
   compareCodeUnits,
   type ReusableCheckout,
+  type ResourceCapacityOverride,
   type IResourceStartStore,
   type ResourceStartRequestInspection,
   type QueuedResourceStartInspection,
@@ -31,23 +36,29 @@ const log = createLogger('file-store.admission');
 
 export function createFileAdmissionStore(
   root: string,
-  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>
+  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>,
+  resourceCapacity?: ResourceCapacityOverride
 ): IResourceStartStore {
+  const transaction = () =>
+    createAdmissionTransaction(root, listReusableCheckouts, resourceCapacity);
   const write: AdmissionWrite = call =>
     commit(root, [], async runs => {
-      const tx = createAdmissionTransaction(root, listReusableCheckouts);
+      const tx = transaction();
       const result = await call(tx, runs);
       return {
         result,
         changes: {
           documents: await tx.changedDocuments(),
-          runs: [...runs.values()].map(run => ({ run })),
+          runs: [...runs.values()].map(run => ({
+            run,
+            events: tx.events.filter(event => event.workflow_run_id === run.id),
+          })),
         },
       };
     });
   const query: AdmissionQuery = async call => {
     await recoverBeforeRead(root);
-    return call(createAdmissionTransaction(root, listReusableCheckouts));
+    return call(transaction());
   };
   async function queueCandidate<S extends z.ZodType>(
     path: string,
@@ -120,7 +131,23 @@ export function createFileAdmissionStore(
     };
   }
   return {
+    // The file store keeps no install hold: it is never set, and setting it is refused.
+    getInstallHold: async () => null,
+    setInstallHold: async () => {
+      throw new FileStoreUnsupportedError('install hold');
+    },
+    liftInstallHold: async () => null,
+    listHeldStarts: async () => [],
+    listHeldItemStarts: async () => [],
+    // The file store records no preparer process, so no preparer can be proven gone.
+    listPreparingStarts: async () => [],
+    // The file store keeps no items, so no refused start is any item's step.
+    listRefusedStarts: async () => [],
+    // The file store keeps no run limit: `assertFileStoreConfiguration` refuses the key.
+    getRunLimit: async () => null,
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
+    admitPendingRun: ({ resource, capacity, launch }) =>
+      write(tx => tx.admitPending(resource, capacity, preparedWorkflowLaunchSchema.parse(launch))),
     drainResourceStarts: options =>
       write(async (tx, runs) => {
         const admitted: ResourceStartDisposition[] = [];
@@ -131,11 +158,18 @@ export function createFileAdmissionStore(
         }
         return admitted;
       }),
+    // No start names an item here (`FileStoreUnsupportedError('items')`).
+    listSkippedItemStarts: async () => [],
+    readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
     getResourceStartRequest: id =>
       query(async tx => {
         const row = await tx.request(id);
         return row ? inspect(row) : null;
       }),
+    // The file store refuses items, so no start on it names one.
+    listQueuedItemStarts: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listQueuedResourceStartsForHost: hostId =>
       query(async () => {
         const queued: { inspection: QueuedResourceStartInspection; position: number }[] = [];
@@ -173,8 +207,10 @@ export function createFileAdmissionStore(
         tx.documents[pathFor('requests', id)] = row;
         const resource = await tx.slot(row.resource);
         resource.queue = resource.queue.filter(key => key !== id);
-        return row.launch;
+        return { launch: row.launch };
       }),
+    // Every request document is parsed when it is read, so none sits unreadable in a queue.
+    listUnreadableQueuedStarts: async () => [],
     ...createReceiptOperations(root, write, query),
   };
 }

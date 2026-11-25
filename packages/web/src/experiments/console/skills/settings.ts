@@ -1,3 +1,11 @@
+import type { AssistantConfigForm, TiersForm, AliasRowForm } from '../primitives/settings';
+export type {
+  AssistantConfigForm,
+  TierRowForm,
+  TiersForm,
+  SettingsScope,
+  AliasRowForm,
+} from '../primitives/settings';
 import { requestJson } from '../lib/http';
 import type { components } from '@/lib/api.generated';
 import { TIER_ORDER, type TierName } from '../lib/tiers';
@@ -19,35 +27,19 @@ export type HealthResponse = components['schemas']['HealthResponse'];
 export type UpdateCheckResponse = components['schemas']['UpdateCheckResponse'];
 
 export function getConfig(): Promise<ConfigResponse> {
-  return requestJson<ConfigResponse>('/api/config');
+  return requestJson('/api/config', 'get');
 }
 
 export function updateAssistantConfig(body: UpdateAssistantConfigBody): Promise<ConfigResponse> {
-  return requestJson<ConfigResponse>('/api/config/assistants', {
-    method: 'PATCH',
-    body: JSON.stringify(body),
-  });
+  return requestJson('/api/config/assistants', 'patch', { body });
 }
 
 export function getHealth(): Promise<HealthResponse> {
-  return requestJson<HealthResponse>('/api/health');
+  return requestJson('/api/health', 'get');
 }
 
 export function getUpdateCheck(): Promise<UpdateCheckResponse> {
-  return requestJson<UpdateCheckResponse>('/api/update-check');
-}
-
-/**
- * Editable assistant form state. `models` is providerId → free-text model (model
- * strings are intentionally unvalidated — the SDK ships models faster than Archon
- * can enumerate them). The codex-only reasoning/web-search fields are flat here
- * and only attached to the codex entry by `buildAssistantUpdate`.
- */
-export interface AssistantConfigForm {
-  assistant: string;
-  models: Record<string, string>;
-  modelReasoningEffort: string;
-  webSearchMode: string;
+  return requestJson('/api/update-check', 'get');
 }
 
 /**
@@ -88,30 +80,11 @@ export type TierEntry = components['schemas']['TierEntry'];
 export type TiersMap = components['schemas']['TiersConfig'];
 export { TIER_ORDER, type TierName };
 
-/**
- * Tier update body. The generated `UpdateTiersBody` drops the `null` that unsets
- * a tier, so this maps over its keys and adds it back.
- */
-export interface UpdateTiersBody {
-  tiers: {
-    [K in keyof components['schemas']['UpdateTiersBody']['tiers']]?: TierEntry | null;
-  };
-}
+export type UpdateTiersBody = components['schemas']['UpdateTiersBody'];
 
 export function updateTiers(body: UpdateTiersBody): Promise<ConfigResponse> {
-  return requestJson<ConfigResponse>('/api/config/tiers', {
-    method: 'PATCH',
-    body: JSON.stringify(body),
-  });
+  return requestJson('/api/config/tiers', 'patch', { body });
 }
-
-export interface TierRowForm {
-  provider: string; // '' = unset (falls back to the built-in default)
-  model: string;
-  effort: NonNullable<TierEntry['effort']> | '';
-}
-
-export type TiersForm = Record<TierName, TierRowForm>;
 
 /**
  * Pure form → PATCH body. A row whose provider OR model is blank is sent as
@@ -136,25 +109,14 @@ export function buildTiersUpdate(form: TiersForm): UpdateTiersBody {
   return { tiers };
 }
 
-// ---------------------------------------------------------------------------
-// @custom aliases (install scope) + per-user AI prefs (Phase 3). Types inlined
-// until a regen lands UserAiPrefs / UpdateAliasesBody in @/lib/api.generated —
-// same convention as the tiers block above.
-// ---------------------------------------------------------------------------
-
-/** `SafeConfig` + the alias field not yet in the generated spec. */
-export type SafeConfigAliases = SafeConfig & { aliases?: Record<string, TierEntry> };
-
-export interface UpdateAliasesBody {
-  aliases: Record<string, TierEntry | null>;
-}
+export type SafeConfigAliases = SafeConfig;
+export type UpdateAliasesBody = components['schemas']['UpdateAliasesBody'];
+export type UpdateUserTiersBody = components['schemas']['UpdateUserTiersBody'];
+export type UpdateUserAliasesBody = components['schemas']['UpdateUserAliasesBody'];
 
 /** Install-wide @custom aliases — writes `aliases:` to ~/.archon/config.yaml. */
 export function updateAliases(body: UpdateAliasesBody): Promise<ConfigResponse> {
-  return requestJson<ConfigResponse>('/api/config/aliases', {
-    method: 'PATCH',
-    body: JSON.stringify(body),
-  });
+  return requestJson('/api/config/aliases', 'patch', { body });
 }
 
 /**
@@ -165,21 +127,15 @@ export function updateAliases(body: UpdateAliasesBody): Promise<ConfigResponse> 
 export type UserAiPrefs = components['schemas']['UserAiPrefs'];
 
 export function getUserAiPrefs(): Promise<UserAiPrefs> {
-  return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs');
+  return requestJson('/api/auth/me/ai-prefs', 'get');
 }
 
-export function updateUserTiers(body: UpdateTiersBody): Promise<UserAiPrefs> {
-  return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs/tiers', {
-    method: 'PATCH',
-    body: JSON.stringify(body),
-  });
+export function updateUserTiers(body: UpdateUserTiersBody): Promise<UserAiPrefs> {
+  return requestJson('/api/auth/me/ai-prefs/tiers', 'patch', { body });
 }
 
-export function updateUserAliases(body: UpdateAliasesBody): Promise<UserAiPrefs> {
-  return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs/aliases', {
-    method: 'PATCH',
-    body: JSON.stringify(body),
-  });
+export function updateUserAliases(body: UpdateUserAliasesBody): Promise<UserAiPrefs> {
+  return requestJson('/api/auth/me/ai-prefs/aliases', 'patch', { body });
 }
 
 /**
@@ -191,21 +147,7 @@ export function updateUserDefault(
   provider: string | null,
   model: string | null
 ): Promise<UserAiPrefs> {
-  return requestJson<UserAiPrefs>('/api/auth/me/ai-prefs/default', {
-    method: 'PATCH',
-    body: JSON.stringify({ provider, model }),
-  });
-}
-
-/** The editable scope of a settings panel: install-wide config vs per-user DB prefs. */
-export type SettingsScope = 'install' | 'user';
-
-/** One editable alias row in the AliasesPanel. */
-export interface AliasRowForm {
-  name: string;
-  provider: string;
-  model: string;
-  effort: NonNullable<TierEntry['effort']> | '';
+  return requestJson('/api/auth/me/ai-prefs/default', 'patch', { body: { provider, model } });
 }
 
 /** Seed editable alias rows from a saved alias map (sorted by name). */

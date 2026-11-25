@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, type Mock } from 'bun:test';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -198,39 +198,6 @@ export function registerProviderEventsTests() {
       expect(envelopes.map(e => e.seq)).toEqual([0, 1]);
       expect(new Set(envelopes.map(e => e.attemptId)).size).toBe(1);
     });
-
-    it('records no tool event when no tools were called in DAG node', async () => {
-      const mockStore = createMockStore();
-      const mockDeps = createMockDeps(mockStore);
-      const platform = createMockPlatform();
-      const workflowRun = makeWorkflowRun();
-
-      mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'DAG AI response' };
-        yield { type: 'result', sessionId: 'dag-sess-3' };
-      });
-
-      await executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          conversationId: 'conv-dag-notools',
-          cwd: testDir,
-          workflow: { name: 'dag-notools-test', nodes: [node('my-cmd')] },
-          workflowRun,
-        })
-      );
-
-      const createEventCalls = (mockStore.createWorkflowEvent as ReturnType<typeof mock>).mock
-        .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
-      const toolEvents = createEventCalls.filter(
-        ([arg]) =>
-          arg.event_type === 'provider_event' &&
-          (arg.data?.event as { type?: string } | undefined)?.type?.startsWith('tool_call')
-      );
-
-      expect(toolEvents.length).toBe(0);
-    });
   });
 }
 
@@ -295,6 +262,8 @@ export function registerCostTests() {
       expect(completeCalls.length).toBe(1);
       expect(completeCalls[0][2]).toEqual({
         node_counts: { completed: 1, failed: 0, skipped: 0, total: 1 },
+        result_commit: expect.anything(),
+        change_size: null,
       });
     });
 

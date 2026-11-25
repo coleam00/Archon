@@ -1,10 +1,9 @@
 // @archon-test-isolated
 import { clearPlatformPolicies } from '../platforms/registry';
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { toRepoPath } from '@archon/git';
+import { GitFailure } from '@archon/git';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import type { Conversation } from '../types';
-import type * as Git from '@archon/git';
 import {
   runScheduledCleanup,
   startCleanupScheduler,
@@ -14,7 +13,6 @@ import {
   cleanupContainerEnvironments,
   SESSION_RETENTION_DAYS,
 } from './cleanup-service';
-import { cleanupMergedWorktrees } from './cleanup/merged-sweep';
 import { removeEnvironment } from './cleanup/remove-environment';
 import {
   RETAINING_PLATFORM,
@@ -43,6 +41,8 @@ import {
   mockCountCommitsMissingFromRemotes,
   mockDestroy,
   mockGetPrState,
+  mockGetPrsForCommit,
+  mockExecFileAsync,
   mockContainerDestroy,
   mockListAllActiveWithCodebase,
   mockMarkWorktreeDestroyed,
@@ -61,6 +61,7 @@ import {
   scheduledSweepFinds,
   selectedEnvironment,
   resetCleanupMocks,
+  sweepMerged,
 } from './cleanup/test-harness';
 
 beforeEach(resetCleanupMocks);
@@ -86,7 +87,7 @@ describe('cleanupContainerEnvironments', () => {
   });
 
   // The reaper reads the same lock the worktree sweeps use, so a failed run's
-  // container survives for `--resume` exactly as a paused one does.
+  // container survives for `workflow resume` exactly as a paused one does.
   test.each(['paused', 'failed'])('never reaps the container of a %s run', async status => {
     mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-1', status });
     const report = await cleanupContainerEnvironments(7);
@@ -186,7 +187,7 @@ describe('runScheduledCleanup', () => {
     async platformId => {
       scheduledSweepFinds(sweptWorktreeEnv('pr-99', { created_by_platform: platformId }));
       mockWorktreeExists.mockResolvedValue(true);
-      mockIsBranchMerged.mockResolvedValue(true);
+      mockGetPrState.mockResolvedValue(prAt('MERGED'));
 
       const report = await runScheduledCleanup();
 
@@ -214,7 +215,7 @@ describe('runScheduledCleanup', () => {
         ...['broken', 'later'].map(branch => sweptWorktreeEnv(branch, { created_at: daysAgo(30) }))
       );
       mockWorktreeExists.mockResolvedValue(sweep !== 'path missing');
-      mockIsBranchMerged.mockResolvedValue(sweep === 'merged');
+      mockGetPrState.mockResolvedValue(sweep === 'merged' ? prAt('MERGED') : NO_PR);
       mockDestroy.mockResolvedValueOnce({
         worktreeRemoved: true,
         directoryClean: true,
@@ -242,7 +243,7 @@ describe('runScheduledCleanup', () => {
   test('skips merged branches with uncommitted changes', async () => {
     scheduledSweepFinds(sweptWorktreeEnv('issue-10'));
     mockWorktreeExists.mockResolvedValue(true);
-    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockHasUncommittedChanges.mockResolvedValue(true);
 
     const report = await runScheduledCleanup();
@@ -257,7 +258,7 @@ describe('runScheduledCleanup', () => {
   test('reports a status failure as an error rather than a dirty skip', async () => {
     scheduledSweepFinds(makeEnvironmentWithCodebase());
     mockWorktreeExists.mockResolvedValue(true);
-    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockHasUncommittedChanges.mockRejectedValueOnce(new Error('status unavailable'));
 
     const report = await runScheduledCleanup();
@@ -271,7 +272,7 @@ describe('runScheduledCleanup', () => {
   test('skips merged branches with a live owning run and a live-run reason', async () => {
     scheduledSweepFinds(sweptWorktreeEnv('issue-11'));
     mockWorktreeExists.mockResolvedValue(true);
-    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-live-1', status: 'paused' });
 
     const report = await runScheduledCleanup();
@@ -368,21 +369,6 @@ describe('runScheduledCleanup', () => {
     });
   });
 
-  test('detects squash-merged branches via isPatchEquivalent fallback', async () => {
-    scheduledSweepFinds(sweptWorktreeEnv('squash-branch'));
-    mockWorktreeExists.mockResolvedValue(true);
-    mockIsPatchEquivalent.mockResolvedValueOnce(true);
-
-    const report = await runScheduledCleanup();
-
-    expect(report.removed).toContain('env-squash-branch (merged)');
-    expect(mockIsPatchEquivalent).toHaveBeenCalledWith(
-      '/workspace/repo',
-      'squash-branch',
-      'origin/main'
-    );
-  });
-
   // A squash merge of more than one commit leaves no patch-equivalent commit for
   // `git cherry` to find, so the PR's state is the only signal that sees it (#3471).
   test('removes a multi-commit squash-merged branch via PR state', async () => {
@@ -414,6 +400,62 @@ describe('runScheduledCleanup', () => {
       'origin'
     );
   });
+
+  test('scheduled cleanup uses commit discovery when published under another name', async () => {
+    scheduledSweepFinds(sweptWorktreeEnv('different-name'));
+    mockWorktreeExists.mockResolvedValue(true);
+    mockGetPrsForCommit.mockResolvedValue({
+      state: 'FOUND',
+      prs: [{ state: 'MERGED', headSha: PR_HEAD_SHA }],
+    });
+    const report = await runScheduledCleanup();
+    expect(report.removed).toEqual(['env-different-name (merged)']);
+    expect(mockGetPrsForCommit).toHaveBeenCalledWith('a'.repeat(40), '/workspace/repo', 'origin');
+  });
+
+  test('scheduled cleanup finds merged proof on the second tip despite an open branch PR', async () => {
+    scheduledSweepFinds(sweptWorktreeEnv('two-tips'));
+    mockWorktreeExists.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('OPEN'));
+    mockExecFileAsync
+      .mockResolvedValueOnce({ stdout: 'a'.repeat(40), stderr: '' })
+      .mockResolvedValueOnce({ stdout: 'b'.repeat(40), stderr: '' });
+    mockGetPrsForCommit.mockResolvedValueOnce({ state: 'NONE' }).mockResolvedValueOnce({
+      state: 'FOUND',
+      prs: [{ state: 'MERGED', headSha: PR_HEAD_SHA }],
+    });
+    const report = await runScheduledCleanup();
+    expect(report.removed).toEqual(['env-two-tips (merged)']);
+    expect(report.errors).toEqual([]);
+  });
+
+  test.each(['unavailable', 'resolution', 'coverage'] as const)(
+    'scheduled fallback %s never reaches stale deletion',
+    async failure => {
+      scheduledSweepFinds(sweptWorktreeEnv('old-fallback', { created_at: daysAgo(30) }));
+      mockWorktreeExists.mockResolvedValue(true);
+      if (failure === 'unavailable')
+        mockGetPrsForCommit.mockResolvedValue({ state: 'UNAVAILABLE' });
+      else if (failure === 'resolution')
+        mockExecFileAsync.mockRejectedValue(new Error('cannot resolve'));
+      else {
+        mockGetPrsForCommit.mockResolvedValue({
+          state: 'FOUND',
+          prs: [{ state: 'MERGED', headSha: PR_HEAD_SHA }],
+        });
+        mockIsRevCoveredBy.mockRejectedValue(new Error('cannot compare'));
+      }
+      const report = await runScheduledCleanup();
+      expect(report.removed).toEqual([]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockGetLastCommitDate).not.toHaveBeenCalled();
+      if (failure === 'unavailable')
+        expect(report.skipped).toEqual([
+          { id: 'env-old-fallback', reason: 'PR state lookup failed — merge state unverifiable' },
+        ]);
+      else expect(report.errors).toHaveLength(1);
+    }
+  );
 
   // Run branch names come from the run identifier, so a re-run reuses the name of a
   // branch whose earlier PR already merged. The merged PR does not cover commits the
@@ -561,39 +603,92 @@ describe('runScheduledCleanup', () => {
     expect(mockDestroy).not.toHaveBeenCalled();
   });
 
-  test('still stale-sweeps an environment git confirms is unmerged', async () => {
-    scheduledSweepFinds(sweptWorktreeEnv('stale-unmerged', { created_at: daysAgo(30) }));
+  test('closed commit evidence permits the existing stale checks with a missing branch ref', async () => {
+    scheduledSweepFinds(sweptWorktreeEnv('closed-associated', { created_at: daysAgo(30) }));
     mockWorktreeExists.mockResolvedValue(true);
-
+    mockLocalBranchExists.mockResolvedValue(false);
+    mockGetPrsForCommit.mockResolvedValue({
+      state: 'FOUND',
+      prs: [{ state: 'CLOSED', headSha: PR_HEAD_SHA }],
+    });
     const report = await runScheduledCleanup();
-
-    expect(report.removed).toContain('env-stale-unmerged (stale)');
+    expect(report.removed).toEqual(['env-closed-associated (stale)']);
   });
 
-  // #1419: a configured worktree.baseBranch replaces default-branch detection.
-  const detection: Parameters<typeof Git.getDefaultBranch>[] = [
-    [toRepoPath('/workspace/myrepo'), 'origin'],
-  ];
-  test.each<[string | undefined, string, Parameters<typeof Git.getDefaultBranch>[]]>([
-    ['master', 'origin/master', []],
-    ['  develop  ', 'origin/develop', []],
-    [undefined, 'origin/main', detection],
-    ['   ', 'origin/main', detection],
-  ])('worktree.baseBranch %p compares against %s', async (baseBranch, baseRef, detected) => {
-    mockLoadRepoConfig.mockResolvedValue({ worktree: { baseBranch } });
-    scheduledSweepFinds(
-      makeEnvironmentWithCodebase({
-        branch_name: 'feature/foo',
-        codebase_default_cwd: '/workspace/myrepo',
-      })
-    );
+  test.each(['coverage_fetch', 'coverage_ancestry'] as const)(
+    'scheduled %s failures retain safe diagnostics and never reach stale cleanup',
+    async kind => {
+      scheduledSweepFinds(sweptWorktreeEnv('coverage-failure', { created_at: daysAgo(30) }));
+      mockWorktreeExists.mockResolvedValue(true);
+      mockGetPrState.mockResolvedValue(prAt('MERGED'));
+      mockIsRevCoveredBy.mockRejectedValue(
+        new GitFailure(
+          kind,
+          'https://user:secret@github.com/repo',
+          Object.assign(new Error('secret'), { code: 128 })
+        )
+      );
+      mockLogger.error.mockClear();
+      const report = await runScheduledCleanup();
+      expect(report.errors).toEqual([
+        {
+          id: 'env-coverage-failure',
+          error: `PR coverage check failed during ${kind === 'coverage_fetch' ? 'fetch' : 'ancestry inspection'} (exit code 128)`,
+        },
+      ]);
+      expect(report.removed).toEqual([]);
+      expect(mockGetLastCommitDate).not.toHaveBeenCalled();
+      const logs = JSON.stringify(mockLogger.error.mock.calls, (_key, value: unknown) =>
+        value instanceof Error ? { message: value.message, cause: value.cause } : value
+      );
+      expect(logs).not.toContain('secret');
+    }
+  );
+
+  test.each([
+    [undefined, 'origin'],
+    ['   ', 'origin'],
+    ['  upstream  ', 'upstream'],
+  ])(
+    'scheduled cleanup retains work when default-branch discovery fails for remote %p',
+    async (remote, expected) => {
+      mockLoadRepoConfig.mockResolvedValue({ worktree: { remote } });
+      scheduledSweepFinds(
+        makeEnvironmentWithCodebase({
+          branch_name: 'feature/foo',
+          codebase_default_cwd: '/workspace/myrepo',
+        })
+      );
+      mockWorktreeExists.mockResolvedValue(true);
+      mockGetDefaultBranch.mockRejectedValue(new Error('remote does not advertise HEAD'));
+      mockGetPrState.mockResolvedValue(prAt('MERGED'));
+
+      const report = await runScheduledCleanup();
+
+      expect(report.errors).toEqual([{ id: 'env-1', error: 'Git integration check failed' }]);
+      expect(report.removed).toEqual([]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/myrepo', expected);
+      expect(mockLoadRepoConfig).toHaveBeenCalledWith('/workspace/myrepo');
+      expect(mockGetPrState).not.toHaveBeenCalled();
+      expect(mockIsRevCoveredBy).not.toHaveBeenCalled();
+    }
+  );
+
+  test('scheduled cleanup reports configuration failure without judging or removing work', async () => {
+    scheduledSweepFinds(sweptWorktreeEnv('config-failure', { created_at: daysAgo(30) }));
     mockWorktreeExists.mockResolvedValue(true);
+    mockLoadRepoConfig.mockRejectedValue(new Error('invalid repository configuration'));
 
     const report = await runScheduledCleanup();
 
-    expect(report.errors).toEqual([]);
-    expect(mockGetDefaultBranch.mock.calls).toEqual(detected);
-    expect(mockIsBranchMerged).toHaveBeenCalledWith('/workspace/myrepo', 'feature/foo', baseRef);
+    expect(report.errors).toEqual([
+      { id: 'env-config-failure', error: 'invalid repository configuration' },
+    ]);
+    expect(report.removed).toEqual([]);
+    expect(mockGetPrState).not.toHaveBeenCalled();
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 });
 
@@ -623,26 +718,28 @@ describe('cleanup environment configuration', () => {
     }
   });
 
-  for (const name of variables) {
-    test.each([
-      'abc',
-      '0',
-      '-1',
-      '1.5',
-      '',
-      ' ',
-      '12days',
-      'Infinity',
-      '9007199254740993',
-      '0.99999999999999999',
-      '1.0000000000000001',
-    ])(`${name} rejects %j during module initialization`, async value => {
-      process.env[name] = value;
-      await expect(loadCleanupService()).rejects.toThrow(
-        `${name} must be a positive integer; received ${JSON.stringify(value)}`
-      );
-    });
-  }
+  // The three variables share one parser: the full table runs against one of them,
+  // and each variable keeps one case proving it goes through that parser.
+  test.each([
+    ['STALE_THRESHOLD_DAYS', 'abc'],
+    ['STALE_THRESHOLD_DAYS', '0'],
+    ['STALE_THRESHOLD_DAYS', '-1'],
+    ['STALE_THRESHOLD_DAYS', '1.5'],
+    ['STALE_THRESHOLD_DAYS', ''],
+    ['STALE_THRESHOLD_DAYS', ' '],
+    ['STALE_THRESHOLD_DAYS', '12days'],
+    ['STALE_THRESHOLD_DAYS', 'Infinity'],
+    ['STALE_THRESHOLD_DAYS', '9007199254740993'],
+    ['STALE_THRESHOLD_DAYS', '0.99999999999999999'],
+    ['STALE_THRESHOLD_DAYS', '1.0000000000000001'],
+    ['CLEANUP_INTERVAL_HOURS', 'abc'],
+    ['SESSION_RETENTION_DAYS', 'abc'],
+  ] as const)('%s rejects %j during module initialization', async (name, value) => {
+    process.env[name] = value;
+    await expect(loadCleanupService()).rejects.toThrow(
+      `${name} must be a positive integer; received ${JSON.stringify(value)}`
+    );
+  });
 
   test('rejects an interval beyond the runtime timer limit at startup', async () => {
     process.env.CLEANUP_INTERVAL_HOURS = '597';
@@ -1103,7 +1200,7 @@ describe('cleanupStaleWorktrees', () => {
 
 describe('cleanup after a chat plugin is removed', () => {
   beforeEach(() => {
-    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
   });
 
   test.each([true, false])(
@@ -1135,7 +1232,7 @@ describe('cleanup after a chat plugin is removed', () => {
     mockListByCodebase.mockResolvedValue([env]);
     const reason = UNKNOWN_PLATFORM_REASON;
     const stale = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
-    const merged = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const merged = await sweepMerged('codebase-1', '/workspace/repo');
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
     expect(stale).toEqual({
       errors: [],
@@ -1178,7 +1275,7 @@ describe('worktree cleanup provider ownership', () => {
     const env = makeEnvironment({ provider: 'container', branch_name: '' });
     mockListByCodebase.mockResolvedValue([env]);
     mockListByCodebaseWithAge.mockResolvedValue([{ ...env, days_since_activity: 30 }]);
-    expect((await cleanupMergedWorktrees('cb', '/repo')).removed).toEqual([]);
+    expect((await sweepMerged('cb', '/repo')).removed).toEqual([]);
     expect((await cleanupStaleWorktrees('cb', '/repo')).removed).toEqual([]);
     expect((await getWorktreeStatusBreakdown('cb', '/repo')).total).toBe(0);
     expect(mockGetPrState).not.toHaveBeenCalled();
@@ -1210,26 +1307,20 @@ describe('failed-run lock release', () => {
       created_at: daysAgo(30),
     });
 
-  test.each([
-    ['MERGED', {}, 'merged'],
-    ['CLOSED', { includeClosed: true }, 'PR closed'],
-  ] as const)(
-    '--merged removes a failed run whose PR is %s and reports the release',
-    async (prState, options, reason) => {
-      mockListByCodebase.mockResolvedValue([makeEnvironment({ branch_name: 'settled' })]);
-      mockGetPrState.mockResolvedValue(prAt(prState));
-      releasedByTheSweep();
+  test('--merged removes a failed run covered by a merged PR and reports the release', async () => {
+    mockListByCodebase.mockResolvedValue([makeEnvironment({ branch_name: 'settled' })]);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
+    releasedByTheSweep();
 
-      const result = await cleanupMergedWorktrees('codebase-123', '/workspace/repo', options);
+    const result = await sweepMerged('codebase-123', '/workspace/repo');
 
-      expect(result.removed).toEqual(['settled']);
-      expect(result.releasedFailedRuns).toEqual([
-        { branchName: 'settled', runId: FAILED_RUN.id, reason },
-      ]);
-      expect(mockGetLiveRunOwningEnv).toHaveBeenLastCalledWith('env-1', { kind: 'settled' });
-      expect(mockCountCommitsMissingFromRemotes).not.toHaveBeenCalled();
-    }
-  );
+    expect(result.removed).toEqual(['settled']);
+    expect(result.releasedFailedRuns).toEqual([
+      { branchName: 'settled', runId: FAILED_RUN.id, reason: 'merged' },
+    ]);
+    expect(mockGetLiveRunOwningEnv).toHaveBeenLastCalledWith('env-1', { kind: 'settled' });
+    expect(mockCountCommitsMissingFromRemotes).not.toHaveBeenCalled();
+  });
 
   test('the stale sweep removes a failed run inactive past the window with nothing unpushed', async () => {
     mockListAllActiveWithCodebase.mockResolvedValue([staleEnv()]);
@@ -1260,7 +1351,7 @@ describe('failed-run lock release', () => {
     async ({ sweep, failure }) => {
       const env = staleEnv();
       scheduledSweepFinds(env);
-      mockIsBranchMerged.mockResolvedValue(sweep === 'merged');
+      mockGetPrState.mockResolvedValue(sweep === 'merged' ? prAt('MERGED') : NO_PR);
       releasedByTheSweep();
       mockDestroy.mockResolvedValueOnce({
         worktreeRemoved: true,
@@ -1435,7 +1526,7 @@ describe('failed-run lock release', () => {
     mockListByCodebase.mockResolvedValue([makeEnvironment({ branch_name: 'paused' })]);
     mockGetPrState.mockResolvedValue(prAt('MERGED'));
 
-    const merged = await cleanupMergedWorktrees('codebase-123', '/workspace/repo');
+    const merged = await sweepMerged('codebase-123', '/workspace/repo');
     mockGetPrState.mockResolvedValue(NO_PR);
     const report = await runScheduledCleanup();
 

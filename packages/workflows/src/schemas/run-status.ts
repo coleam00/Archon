@@ -29,13 +29,23 @@ export type WorkflowRunStatus = z.infer<typeof workflowRunStatusSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * Workflow-authored verdict, independent from engine-owned lifecycle status.
- * Null on a run means no declared result has been authored yet (or the
- * workflow does not declare one); it never means failure.
+ * The boolean form of a run's outcome, independent from engine-owned lifecycle status.
+ * Null on a run means it has not completed, or its workflow declares no boolean
+ * `returns.outcome`; it never means failure.
  */
 export const workflowRunOutcomeSchema = z.enum(['succeeded', 'failed']);
 
 export type WorkflowRunOutcome = z.infer<typeof workflowRunOutcomeSchema>;
+
+/**
+ * The outcome a run completed with, as its `returns.outcome` declared it. Written only in
+ * the write that completes the run: `completed_outcome` holds `value` for both forms, and
+ * the older `outcome` column holds it for the boolean form only, whose column constraint
+ * admits nothing else.
+ */
+export type RunCompletedOutcome =
+  | { readonly kind: 'boolean'; readonly value: WorkflowRunOutcome }
+  | { readonly kind: 'enum'; readonly value: string };
 
 /**
  * The narrow tuple behind `TERMINAL_WORKFLOW_STATUSES`. It exists only so

@@ -1,4 +1,4 @@
-import { FAN_OUT_CANCEL_REASONS } from '@archon/workflows/store';
+import { currentExecutionOwner, FAN_OUT_CANCEL_REASONS } from '@archon/workflows/store';
 import { expect, test } from 'bun:test';
 import type { IDatabase } from './adapters/types';
 import {
@@ -74,6 +74,7 @@ export function toolCallAttentionContract(
     expect((await readRun()).metadata).toEqual({
       keep: 'value',
       execution_claim: expect.any(String),
+      execution_owner: currentExecutionOwner(),
     });
     await Promise.all([
       workflows.setToolCallAttention(runId, 'a', [call('a')]),

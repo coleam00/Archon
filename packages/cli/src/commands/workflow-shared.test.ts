@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import * as chatScope from '../workflow-scope';
 import {
   mockCreateWorkflowEvent,
@@ -66,8 +67,10 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       codebase_id: 'cb-1',
       status: 'completed',
       outcome: null,
+      completed_outcome: null,
       user_message: 'task',
       metadata: {},
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,
@@ -77,6 +80,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      item_id: null,
     };
     try {
       const undashedId = FULL_ID.replaceAll('-', '');
@@ -127,7 +131,16 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
           () => workflowGetCommand(host, FULL_ID, json, undefined, '/repo'),
           () => workflowWaitCommand(host, FULL_ID, json, '/repo'),
           () => workflowArtifactsCommand(host, [FULL_ID], { json, cwd: '/repo' }),
-          () => workflowAnswerCommand(host, FULL_ID, 'occurrence', [], 'answer', json, '/repo'),
+          () =>
+            workflowAnswerCommand(
+              host,
+              FULL_ID,
+              'occurrence',
+              { choose: [] },
+              'answer',
+              json,
+              '/repo'
+            ),
           () => workflowAbandonCommand(host, FULL_ID, json, '/repo'),
           () => workflowCancelCommand(host, FULL_ID, json, '/repo'),
           ...[false, true].flatMap(detach => [
@@ -202,6 +215,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       workflow_name: 'implement',
       status: 'completed',
       working_path: '/tmp/wt',
+      active_phase_started_at: null,
       started_at: new Date(),
       metadata: {},
     });
@@ -227,6 +241,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       workflow_name: 'implement',
       status: 'completed',
       working_path: '/tmp/wt',
+      active_phase_started_at: null,
       started_at: new Date(),
       metadata: {},
     });
@@ -254,6 +269,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       workflow_name: 'implement',
       status: 'completed',
       working_path: '/tmp/wt',
+      active_phase_started_at: null,
       started_at: new Date(),
       metadata: {},
     });
@@ -315,11 +331,10 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     expect(parsed.error).toContain('matches more than one run');
   });
 
-  it('passes the id through unchanged when cwd is not a registered project', async () => {
+  it('refuses a prefix from a cwd in no registered project, naming the full id', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
     const code = await workflowGetCommand(
       createTestWorkflowHost(),
@@ -330,7 +345,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     );
 
     expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
-    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith('deadbeef');
+    expect(workflowDb.getWorkflowRun).not.toHaveBeenCalled();
     expect(code).toBe(1);
   });
 
@@ -688,7 +703,6 @@ describe('workflowRunCommand — continuation conversation lookup', () => {
     const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     const conversationDb = await import('@archon/core/db/conversations');
     const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDb = await import('@archon/core/db/workflows');
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
 
     (
@@ -696,12 +710,6 @@ describe('workflowRunCommand — continuation conversation lookup', () => {
     ).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'resume-thread' })],
       errors: [],
-    });
-    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-prior',
-      working_path: null,
-      workflow_name: 'resume-thread',
-      conversation_id: 'conv-prior',
     });
     (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       preCreatedRun: { id: 'run-prior', workflow_name: 'resume-thread' },
@@ -720,6 +728,13 @@ describe('workflowRunCommand — continuation conversation lookup', () => {
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'resume-thread', 'go', {
         resume: true,
+        continuationRun: makeContinuationRun({
+          id: 'run-prior',
+          working_path: null,
+          workflow_name: 'resume-thread',
+          conversation_id: 'conv-prior',
+          codebase_id: null,
+        }),
       })
     ).rejects.toThrow(
       "Failed to load conversation 'conv-prior' for workflow run 'run-prior': database busy"

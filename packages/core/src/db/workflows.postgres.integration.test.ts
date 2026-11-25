@@ -6,7 +6,7 @@ import { toolCallAttentionContract } from './tool-call-attention.contract';
  *
  * The unit suite mocks the pg driver and the other real-database suites run SQLite, so
  * Postgres-only semantics execute only here:
- * - a `null` in a run-metadata patch must clear the key, as SQLite's json_patch does.
+ * - a `null` in a run-metadata patch must clear the key, as the SQLite merge does.
  *   Plain `||` stores the null, which leaves `metadata.stop_reason: null` on a resumed
  *   run and breaks the API contract that declares the key absent-or-object.
  * - run ids are a uuid column, so a short-id prefix lookup must compare them as text;

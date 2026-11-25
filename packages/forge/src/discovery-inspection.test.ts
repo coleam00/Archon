@@ -216,3 +216,11 @@ for (const configuredSource of ['plugins', 'hosts'] as const) {
     );
   }
 }
+
+test('a plugin configured by name runs instead of the source plugin of that name', async () => {
+  const discovery = await discoverPlugins({
+    config: { plugins: [healthyPlugin], scanPath: false },
+    sourcePlugins: [{ name: 'test', command: join(tmpdir(), `missing-source${exe}`), args: [] }],
+  });
+  expect(discovery.plugins.map(plugin => plugin.source)).toEqual(['config:test']);
+});

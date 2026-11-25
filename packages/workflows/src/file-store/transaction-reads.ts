@@ -1,4 +1,4 @@
-import { holdsWorkflowPath } from '../workflow-path-lock';
+import { holdsWorkflowPath, workflowPathPriorityTime } from '../workflow-path-lock';
 import {
   answeredPauseContinuation,
   isAttentionQueueRow,
@@ -10,7 +10,7 @@ import {
   workflowWaitDue,
   type WorkflowRun,
 } from '../schemas/workflow-run';
-import type { IWorkflowStore } from '../store';
+import type { IWorkflowStore, MetricRecordRow } from '../store';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run-listing';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
@@ -27,14 +27,16 @@ type TransactionReads = Pick<
   | 'listWorkflowEvents'
   | 'listEventsForRuns'
   | 'listMetricRecords'
+  | 'listAttentionWaitStarts'
+  | 'listWorkflowNoticeRows'
   | 'getDagResumeSnapshot'
   | 'findChildRuns'
   | 'getRunAncestry'
   | 'getActiveWorkflowRunByPath'
-  | 'findResumableRun'
   | 'findWorkflowRunsByIdPrefix'
   | 'findAdoptingRuns'
   | 'listAttentionQueueRows'
+  | 'listUnfinishedRuns'
   | 'findOpenWorkRuns'
   | 'listWorkflowRuns'
   | 'getCodebase'
@@ -48,11 +50,9 @@ export const listRunEvents = (events: WorkflowEventRow[], id: string): WorkflowE
 export const newestFirst = (rows: WorkflowRun[]): WorkflowRun[] =>
   rows.sort((a, b) => b.started_at.getTime() - a.started_at.getTime());
 
+/** Resumable without a cursor; a `running` run needs a matching `ownerless` cursor too. */
 export const isResumable = (run: WorkflowRun): boolean =>
-  run.status === 'paused' ||
-  run.status === 'failed' ||
-  (run.status === 'running' &&
-    (run.last_activity_at === null || run.last_activity_at.getTime() < Date.now() - 86_400_000));
+  run.status === 'paused' || run.status === 'failed';
 
 /** A run `cancelResumableRunsForConversation(conversationId)` cancels. */
 export const isConversationResetTarget = (run: WorkflowRun, conversationId: string): boolean =>
@@ -80,6 +80,14 @@ function readMetrics(event: WorkflowEventRow): unknown {
   const structured = event.data.structured_output;
   if (typeof structured !== 'object' || structured === null) return undefined;
   return (structured as { metrics?: unknown }).metrics ?? undefined;
+}
+
+/** `structured_output.metric_dimensions`, when the output has one. */
+function readMetricDimensions(event: WorkflowEventRow): Pick<MetricRecordRow, 'metricDimensions'> {
+  const structured = event.data.structured_output as { metric_dimensions?: unknown };
+  return structured.metric_dimensions === undefined
+    ? {}
+    : { metricDimensions: structuredClone(structured.metric_dimensions) };
 }
 
 /** The read side of a transaction view: queries over the transaction's runs and events. */
@@ -132,6 +140,35 @@ export function createTransactionReads(
           listEvents(id).filter(event => types.some(type => type === event.event_type)),
         ])
       ),
+    listAttentionWaitStarts: async () =>
+      events
+        .filter(
+          event =>
+            event.event_type === 'wait_started' &&
+            event.data.kind === 'attention' &&
+            runs.has(event.workflow_run_id)
+        )
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+        .map(event => ({
+          runId: event.workflow_run_id,
+          startedAt: event.created_at,
+          data: structuredClone(event.data),
+        })),
+    listWorkflowNoticeRows: async () =>
+      events
+        .filter(event => event.event_type === 'workflow_notice' && runs.has(event.workflow_run_id))
+        // A run's own notices of one moment keep the order it emitted them in.
+        .sort(
+          (a, b) =>
+            a.created_at.localeCompare(b.created_at) ||
+            (a.event_order ?? 0) - (b.event_order ?? 0) ||
+            a.id.localeCompare(b.id)
+        )
+        .map(event => ({
+          runId: event.workflow_run_id,
+          at: event.created_at,
+          data: structuredClone(event.data),
+        })),
     listMetricRecords: async () =>
       // event_order counts within one run's log here, so only time orders across runs.
       [...events]
@@ -161,6 +198,7 @@ export function createTransactionReads(
               nodeType: typeof event.data.type === 'string' ? event.data.type : null,
               completedAt: event.created_at,
               metrics: structuredClone(metrics),
+              ...readMetricDimensions(event),
             },
           ];
         }),
@@ -194,20 +232,15 @@ export function createTransactionReads(
               !self?.excludeRunIds?.includes(run.id) &&
               holdsWorkflowPath(run) &&
               (!self ||
-                run.started_at < self.startedAt ||
-                (run.started_at.getTime() === self.startedAt.getTime() && run.id < self.id))
+                workflowPathPriorityTime(run) < self.startedAt ||
+                (workflowPathPriorityTime(run).getTime() === self.startedAt.getTime() &&
+                  run.id < self.id))
           )
           .sort(
-            (a, b) => a.started_at.getTime() - b.started_at.getTime() || a.id.localeCompare(b.id)
+            (a, b) =>
+              workflowPathPriorityTime(a).getTime() - workflowPathPriorityTime(b).getTime() ||
+              (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
           )[0] ?? null
-      ),
-    findResumableRun: async (name, path) =>
-      structuredClone(
-        newestFirst(
-          [...runs.values()].filter(
-            run => run.workflow_name === name && run.working_path === path && isResumable(run)
-          )
-        )[0] ?? null
       ),
     findWorkflowRunsByIdPrefix: async (prefix, codebaseId) =>
       structuredClone(
@@ -225,6 +258,16 @@ export function createTransactionReads(
       ),
     listAttentionQueueRows: async () =>
       structuredClone(newestFirst([...runs.values()].filter(isAttentionQueueRow))),
+    listUnfinishedRuns: async () =>
+      structuredClone(
+        newestFirst(
+          [...runs.values()].filter(
+            run =>
+              run.parent_run_id === null &&
+              (run.status === 'pending' || run.status === 'running' || run.status === 'paused')
+          )
+        ).reverse()
+      ),
     findOpenWorkRuns: async options =>
       structuredClone(
         newestFirst(

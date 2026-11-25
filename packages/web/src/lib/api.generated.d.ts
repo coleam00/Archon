@@ -1257,6 +1257,96 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/conversations/{id}/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Stop the in-flight chat reply
+     * @description Aborts the provider call of the reply `turnId` names, the id its dispatch returned, while that reply is in progress. The partial reply stays in the conversation, followed by a `chat_interrupted` marker message. Queued messages still run. `cancelled` is false when that reply is not in progress (it ended or has not started) or was already stopped; the conversation's current reply then keeps running.
+     */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CancelConversationBody'];
+        };
+      };
+      responses: {
+        /** @description Whether a reply was stopped */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['CancelConversationResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Identity backend unavailable */
+        503: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/codebases': {
     parameters: {
       query?: never;
@@ -1778,7 +1868,7 @@ export interface paths {
     put?: never;
     /**
      * Run a workflow via the orchestrator (JSON or multipart with file uploads)
-     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected. JSON requests may supply `adopt_run_id` or `supersedes_run_id`, but not both. Unique prefixes resolve in the conversation selected project; full IDs select the exact run. Missing project scope for a prefix, unknown or ambiguous IDs, and non-terminal targets return HTTP 400 before queuing; ambiguity errors list candidates. Execution rechecks targets after queuing. If dispatch would continue an existing run, either declaration is refused before continuation or its fresh fallback. Execution-time refusals arrive on conversation SSE after an HTTP 200 accepted response. The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or use a conversation with no open run. An accepted fresh supersede records `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
+     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `message` may be empty: what a run needs to start is decided by the workflow's declared inputs, not by this route. `inputs` supplies values for the workflow's declared `inputs:` (#2554). A start the engine refuses returns HTTP 400 with its reason before anything is written or queued: a workflow that does not resolve, a missing required input, an undeclared key, or an unmet `requires:`. For the input refusals the reason is the text `archon workflow run` prints. A start that names `adopt_run_id`, whose conversation sits in a worktree, or that continues a paused run of the same workflow in the conversation, is judged by the dispatch on the definition it will run and is answered on conversation SSE after an HTTP 200. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected. JSON requests may supply `adopt_run_id` or `supersedes_run_id`, but not both. Unique prefixes resolve in the conversation selected project; full IDs select the exact run. Missing project scope for a prefix, unknown or ambiguous IDs, and non-terminal targets return HTTP 400 before queuing; ambiguity errors list candidates. Execution rechecks targets after queuing. If dispatch would continue an existing run, either declaration is refused before continuation or its fresh fallback. Execution-time refusals arrive on conversation SSE after an HTTP 200 accepted response. The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or use a conversation with no open run. An accepted fresh supersede records `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
      */
     post: {
       parameters: {
@@ -1914,6 +2004,158 @@ export interface paths {
     };
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/attention/answer': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Answer an attention queue item by its ref */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['AnswerAttentionItemBody'];
+        };
+      };
+      responses: {
+        /** @description Answered, or the item already had this answer */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AttentionItemActionResponse'];
+          };
+        };
+        /** @description Bad request: the answer does not fit the item */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Nothing the caller may answer has this ref */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The item is closed, moved, takes no answer, or was answered differently */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/attention/withdraw': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Withdraw an ask, or the open waits, a completed run left, by its ref */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['WithdrawAttentionItemBody'];
+        };
+      };
+      responses: {
+        /** @description Withdrawn, or already withdrawn */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AttentionItemActionResponse'];
+          };
+        };
+        /** @description The ref names an item a paused run holds, which is answered, not withdrawn */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Nothing the caller may withdraw has this ref */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The ask was already answered or replaced, or the waits met or replaced */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
     delete?: never;
     options?: never;
     head?: never;
@@ -2063,6 +2305,371 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/items': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read an item: its runs, open questions and answers, oldest first */
+    get: {
+      parameters: {
+        query: {
+          project: string;
+          key: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The item */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemRead'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description No item under that key in the project */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/items/window': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** A page of a project's items with a run started in a window, each read whole */
+    get: {
+      parameters: {
+        query: {
+          project: string;
+          since?: string;
+          until?: string;
+          limit?: number | null;
+          after?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The page, with the cursor of the next one */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemWindow'];
+          };
+        };
+        /** @description Bad request, an unknown project, or a window or cursor that does not resolve */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/items/rulings': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Record a ruling on an item: a decision made without a question being asked */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['RecordItemRulingBody'];
+        };
+      };
+      responses: {
+        /** @description The ruling as recorded */
+        201: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemRuling'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Only the operator or an admin may record a ruling */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/items/ends': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** End an item: nothing more will happen on it, so it rests until a new run or start */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['RecordItemEndBody'];
+        };
+      };
+      responses: {
+        /** @description The end as recorded */
+        201: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemEnd'];
+          };
+        };
+        /** @description Bad request, an unknown project, or an operator request with no `as` */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Only the operator or an admin may end an item */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description No item under that key in the project */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Something on the item is still active or waiting; the blocker names it */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemEndRefused'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/items/rulings/{rulingId}/withdraw': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Withdraw a ruling; the record stays and says it was withdrawn */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          rulingId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['WithdrawItemRulingBody'];
+        };
+      };
+      responses: {
+        /** @description The ruling, now withdrawn */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemRuling'];
+          };
+        };
+        /** @description Bad request, an unknown project, or a ruling outside the named project */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Only the operator or an admin may withdraw a ruling */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description No ruling with that id */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The ruling was already withdrawn */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/runs/attention/stream': {
     parameters: {
       query?: never;
@@ -2077,6 +2684,7 @@ export interface paths {
           project?: string;
           all?: 'true' | 'false';
           label?: string | string[];
+          level?: 'quiet' | 'notices' | 'protocol';
         };
         header?: {
           'last-event-id'?: string;
@@ -2945,7 +3553,7 @@ export interface paths {
     };
     put?: never;
     post?: never;
-    /** Delete a workflow run and its events */
+    /** Delete a workflow run, its events and its files */
     delete: {
       parameters: {
         query?: never;
@@ -2957,13 +3565,13 @@ export interface paths {
       };
       requestBody?: never;
       responses: {
-        /** @description Deleted */
+        /** @description Deleted; files lists any of its paths still on disk */
         200: {
           headers: {
             [name: string]: unknown;
           };
           content: {
-            'application/json': components['schemas']['WorkflowRunActionResponse'];
+            'application/json': components['schemas']['DeleteWorkflowRunResponse'];
           };
         };
         /** @description Bad request */
@@ -3299,7 +3907,7 @@ export interface paths {
     get: {
       parameters: {
         query?: {
-          /** @description Window start: a duration before `until` (`24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days. */
+          /** @description Window start: a duration before `until` (`40m`, `24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days. */
           since?: string;
           /** @description Exclusive window end: an ISO date or time. Defaults to now. */
           until?: string;
@@ -3311,8 +3919,10 @@ export interface paths {
           codebaseId?: string;
           /** @description An ISO date or time. Each group also reports records whose producing runs started before it against those started at or after it. */
           compare?: string;
-          /** @description A node id. Each group also reports its records split by the model label that ran this node in their producing runs and the runs below them. Not combined with `compare`; a node no producing run ran is a 400 listing the AI nodes they ran. */
+          /** @description A node id. Each group also reports its records split by the model label that ran this node in their producing runs and the runs below them. Not combined with `compare` or `byDimension`; a node no producing run ran is a 400 listing the AI nodes they ran. */
           byModel?: string;
+          /** @description A dimension key. Each group also reports its records split by the value they carry for this key in their `metric_dimensions` entry, each value's group with its own `compare` when `compare` is given. Not combined with `byModel`; a key no record in the window carries is a 400 listing the keys they carry. */
+          byDimension?: string;
         };
         header?: never;
         path?: never;
@@ -3329,7 +3939,7 @@ export interface paths {
             'application/json': components['schemas']['MetricsReport'];
           };
         };
-        /** @description Malformed window or compare cut, compare with byModel, or a byModel node no producing run ran */
+        /** @description Malformed window, compare cut or byDimension key, byModel with compare or byDimension, a byModel node no producing run ran, or a byDimension key no record carries */
         400: {
           headers: {
             [name: string]: unknown;
@@ -3388,6 +3998,86 @@ export interface paths {
         };
         /** @description Codebase not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/packs/{pack}/graph': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** A pack's stages, outcomes and run-ended arrows, each active or declared */
+    get: {
+      parameters: {
+        query: {
+          /** @description The codebase whose project the pack is discovered from and its arrows launch in */
+          codebaseId: string;
+          /** @description An absolute directory the pack's workflows are discovered from instead of the codebase, as a binding's launch.discoveryCwd names it */
+          workflowSource?: string;
+        };
+        header?: never;
+        path: {
+          /** @description The pack key: its folder name */
+          pack: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['PackGraph'];
+          };
+        };
+        /** @description workflowSource is not an absolute path */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found, or no workflow of the pack was found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description A trigger file in the install cannot be read, or the store cannot hold run-ended bindings; the error names the file */
+        422: {
           headers: {
             [name: string]: unknown;
           };
@@ -3735,6 +4425,74 @@ export interface paths {
           };
         };
         /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/artifacts/{runId}/{filename}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read a workflow artifact file */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+          /** @description The complete relative filename encoded as one path value, including slash characters. */
+          filename: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Artifact file contents */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'text/plain': string;
+            'text/markdown': string;
+          };
+        };
+        /** @description Invalid artifact path or filename */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Run or artifact not found */
         404: {
           headers: {
             [name: string]: unknown;
@@ -4416,6 +5174,11 @@ export interface components {
       runId: string;
       nodeId: string;
       name: string;
+      composed?: {
+        nodeId: string;
+        workflow: string;
+        includes: string[];
+      };
       /** @enum {string} */
       status: 'running' | 'completed' | 'failed' | 'skipped';
       duration?: number;
@@ -4430,6 +5193,11 @@ export interface components {
               id: string;
               /** @enum {string} */
               kind: 'agent';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
               source:
                 | {
                     /** @enum {string} */
@@ -4447,37 +5215,72 @@ export interface components {
               kind: 'exec';
               /** @enum {string} */
               runtime: 'sh' | 'bun' | 'uv';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'loop';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
               command?: string;
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'loop_group';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'gate';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'halt';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'wait';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               id: string;
               /** @enum {string} */
               kind: 'workflow';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
               /** @enum {boolean} */
               fanOut?: true;
             }
@@ -4485,6 +5288,11 @@ export interface components {
               id: string;
               /** @enum {string} */
               kind: 'compose_fan_out';
+              composed?: {
+                nodeId: string;
+                workflow: string;
+                includes: string[];
+              };
             }
           | {
               /** @enum {string} */
@@ -4651,6 +5459,17 @@ export interface components {
                   cachePartial?: true;
                   total?: number;
                   cost?: number;
+                  calls?: {
+                    responseId?: string;
+                    provider?: string;
+                    model?: string;
+                    input: number;
+                    output: number;
+                    cacheRead?: number;
+                    cacheWrite?: number;
+                  }[];
+                  /** @enum {boolean} */
+                  callsPartial?: true;
                 };
               }
             | {
@@ -4749,6 +5568,7 @@ export interface components {
                 | 'timeout'
                 | 'exec_failed'
                 | 'output_contract'
+                | 'schema_unmet'
                 | 'max_iterations'
                 | 'child_failed'
                 | 'cancelled'
@@ -4763,12 +5583,14 @@ export interface components {
                   | 'rate_limited'
                   | 'overloaded'
                   | 'transient'
+                  | 'schema_unmet'
                   | 'unknown';
                 retryAfterMs?: number;
                 /** Format: date-time */
                 resetAt?: string;
                 evidence: string;
               };
+              exitCode?: number;
             }
           | {
               /** @enum {string} */
@@ -4785,25 +5607,45 @@ export interface components {
                     /** @enum {string} */
                     kind: 'condition';
                     expr: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'condition_parse_error';
                     expr: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'timeout';
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'upstream_failed';
                     origin: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'upstream_skipped';
                     origin: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   };
             }
           | {
@@ -4828,25 +5670,45 @@ export interface components {
           /** @enum {string} */
           kind: 'condition';
           expr: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'condition_parse_error';
           expr: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'timeout';
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'upstream_failed';
           origin: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'upstream_skipped';
           origin: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         };
     WebPushPayload: {
       runId: string;
@@ -4905,6 +5767,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -4946,7 +5810,8 @@ export interface components {
             | 'child_pointer_missing'
             | 'child_run_missing'
             | 'child_chain_too_deep'
-            | 'source_release_not_continued';
+            | 'source_release_not_continued'
+            | 'continuation_given_up';
           detail: string;
         }
       | {
@@ -5080,14 +5945,34 @@ export interface components {
     };
     UpdateUserTiersBody: {
       tiers: {
-        small?: components['schemas']['TierEntry'] & unknown;
-        medium?: components['schemas']['TierEntry'] & unknown;
-        large?: components['schemas']['TierEntry'] & unknown;
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateUserAliasesBody: {
       aliases: {
-        [key: string]: components['schemas']['TierEntry'] & unknown;
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateUserDefaultBody: {
@@ -5119,6 +6004,7 @@ export interface components {
       conversationId: string;
       id: string;
       dispatched?: boolean;
+      turnId?: string;
     };
     CreateConversationBody: {
       codebaseId?: string;
@@ -5145,6 +6031,7 @@ export interface components {
     DispatchResponse: {
       accepted: boolean;
       status: string;
+      turnId: string;
     };
     SendMessageBody: {
       message: string;
@@ -5153,6 +6040,12 @@ export interface components {
       message: string;
       /** @description Repeated files parts, each at most 10485760 bytes. Upload MIME type restrictions apply. */
       files?: string[];
+    };
+    CancelConversationResponse: {
+      cancelled: boolean;
+    };
+    CancelConversationBody: {
+      turnId: string;
     };
     CodebaseListResponse: components['schemas']['Codebase'][];
     Codebase: {
@@ -5263,11 +6156,15 @@ export interface components {
           allowLocalBinding?: boolean;
           httpProxyPort?: number;
           socksProxyPort?: number;
+        } & {
+          [key: string]: unknown;
         };
         filesystem?: {
           allowWrite?: string[];
           denyWrite?: string[];
           denyRead?: string[];
+        } & {
+          [key: string]: unknown;
         };
         ignoreViolations?: {
           [key: string]: string[];
@@ -5278,6 +6175,8 @@ export interface components {
         ripgrep?: {
           command: string;
           args?: string[];
+        } & {
+          [key: string]: unknown;
         };
       } & {
         [key: string]: unknown;
@@ -5290,14 +6189,15 @@ export interface components {
         /** @enum {string} */
         write_back?: 'approve' | 'auto';
       };
-      evidence_policy?: {
-        required: boolean;
-      };
       budget?: {
         max_work_units?: number;
         max_spend_usd?: number;
       };
       mutates_checkout?: boolean;
+      resource?: {
+        name: string;
+        capacity?: number;
+      };
       persist_sessions?: boolean;
       tags?: string[];
       requires?: 'github'[];
@@ -5306,14 +6206,31 @@ export interface components {
           required?: boolean;
           default?: unknown;
           description?: string;
+          result_of?: string;
+          /** @enum {string} */
+          at?: 'checkout';
         };
       };
       returns?: string;
-      outcome_field?: string;
       deprecated?: {
         message: string;
       };
       nodes: components['schemas']['DagNode'][];
+      result?: {
+        outcome?: string;
+        asks?: string;
+        options?: {
+          /** @description The option's id: kebab-case, one token (e.g. 'keep-the-flag'). The answer names it. */
+          id: string;
+          /** @description What choosing this option does: the change or action that follows from it. */
+          does: string;
+          /** @description What this option costs: what is given up, what breaks, what has to follow. */
+          cost: string;
+        }[];
+        waits?: string;
+        final?: string[];
+        summary?: string;
+      };
     };
     DagNode: {
       id: string;
@@ -5325,7 +6242,7 @@ export interface components {
       model?: string | string[];
       provider?: string;
       context?:
-        | ('fresh' | 'shared')
+        | ('fresh' | 'shared' | 'same')
         | {
             resume: string;
           };
@@ -5339,7 +6256,7 @@ export interface components {
         max_attempts: number;
         delay_ms?: number;
         /** @enum {string} */
-        on_error?: 'transient' | 'all';
+        on_error?: 'transient' | 'schema_unmet' | 'all';
       };
       hooks?: {
         PreToolUse?: {
@@ -5496,7 +6413,13 @@ export interface components {
             path: string;
             optional?: boolean;
           };
-      skills?: string[];
+      skills?: (
+        | string
+        | {
+            name: string;
+            optional?: boolean;
+          }
+      )[];
       plugins?: string[];
       agents?: {
         [key: string]: {
@@ -5507,6 +6430,20 @@ export interface components {
           disallowedTools?: string[];
           skills?: string[];
           maxTurns?: number;
+        };
+      };
+      tools?: {
+        [key: string]: {
+          description: string;
+          script: string;
+          input_schema: {
+            [key: string]: unknown;
+          };
+          output_schema: {
+            [key: string]: unknown;
+          };
+          timeout?: number;
+          deps?: string[];
         };
       };
       pi?: {
@@ -5535,11 +6472,15 @@ export interface components {
           allowLocalBinding?: boolean;
           httpProxyPort?: number;
           socksProxyPort?: number;
+        } & {
+          [key: string]: unknown;
         };
         filesystem?: {
           allowWrite?: string[];
           denyWrite?: string[];
           denyRead?: string[];
+        } & {
+          [key: string]: unknown;
         };
         ignoreViolations?: {
           [key: string]: string[];
@@ -5550,6 +6491,8 @@ export interface components {
         ripgrep?: {
           command: string;
           args?: string[];
+        } & {
+          [key: string]: unknown;
         };
       } & {
         [key: string]: unknown;
@@ -5639,6 +6582,7 @@ export interface components {
             labels?: {
               [key: string]: string;
             };
+            other?: boolean;
           };
       cancel?: string;
       script?: string;
@@ -5777,6 +6721,9 @@ export interface components {
     RunsNeedingAttentionResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
       items: components['schemas']['AttentionQueueItem'][];
+      answerRefusals: {
+        [key: string]: string;
+      };
       degraded?: {
         /** @enum {string} */
         type: 'degraded';
@@ -5800,9 +6747,11 @@ export interface components {
       status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       /** @enum {string|null} */
       outcome: 'succeeded' | 'failed' | null;
+      completed_outcome: string | null;
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
+      active_phase_started_at: string | null;
       completed_at: string | null;
       last_activity_at: string | null;
       working_path: string | null;
@@ -5859,6 +6808,7 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
+      item_id: string | null;
       codebase_name: string | null;
       platform_type: string | null;
       worker_platform_id: string | null;
@@ -5871,9 +6821,37 @@ export interface components {
       agents_completed: number | null;
       agents_failed: number | null;
       agents_total: number | null;
+      /** @description The inputs the run was invoked with (`--input`, the run route's `inputs`, a parent's `with:`), as text by name: not the pack settings and declared defaults `metadata.inputs` also holds. What re-running the run supplies again. Empty for a run started before runs recorded it. */
+      supplied_inputs: {
+        [key: string]: string;
+      };
       attention: components['schemas']['RunAttention'] | (never | null);
+      /** @description An operator's pause (`archon workflow pause`): `requested` while the run still runs the nodes it had started and pauses once they finish, `paused` once it stopped at that boundary, with who asked, through which surface and when. Null when the run is in neither. Derived from the run row; a resume ends it. */
+      operator_pause: {
+        /** @enum {string} */
+        state: 'requested' | 'paused';
+        requested: {
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        };
+        /** Format: date-time */
+        pausedAt: string | null;
+      } | null;
       /**
-       * @description What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.
+       * @description What this server observes about the run's execution owner while its state needs one (running, or paused on a sub-run that runs in its process), by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run needs no owner now (an ordinary pause, a pending or ended run). Observed per request; never stored.
        * @enum {string|null}
        */
       owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
@@ -5911,6 +6889,7 @@ export interface components {
           [key: string]: {
             sessionId: string;
             provider: string;
+            model?: string;
           };
         };
         bodySessionCursorAncestry?: {
@@ -5918,6 +6897,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
         };
@@ -5941,6 +6921,17 @@ export interface components {
           cachePartial?: true;
           total?: number;
           cost?: number;
+          calls?: {
+            responseId?: string;
+            provider?: string;
+            model?: string;
+            input: number;
+            output: number;
+            cacheRead?: number;
+            cacheWrite?: number;
+          }[];
+          /** @enum {boolean} */
+          callsPartial?: true;
         } | null;
         signaledCostUsd?: number | null;
         execution?: {
@@ -5951,6 +6942,11 @@ export interface components {
                 id: string;
                 /** @enum {string} */
                 kind: 'agent';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
                 source:
                   | {
                       /** @enum {string} */
@@ -5968,37 +6964,72 @@ export interface components {
                 kind: 'exec';
                 /** @enum {string} */
                 runtime: 'sh' | 'bun' | 'uv';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'loop';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
                 command?: string;
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'loop_group';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'gate';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'halt';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'wait';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 id: string;
                 /** @enum {string} */
                 kind: 'workflow';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
                 /** @enum {boolean} */
                 fanOut?: true;
               }
@@ -6006,6 +7037,11 @@ export interface components {
                 id: string;
                 /** @enum {string} */
                 kind: 'compose_fan_out';
+                composed?: {
+                  nodeId: string;
+                  workflow: string;
+                  includes: string[];
+                };
               }
             | {
                 /** @enum {string} */
@@ -6180,6 +7216,17 @@ export interface components {
                     cachePartial?: true;
                     total?: number;
                     cost?: number;
+                    calls?: {
+                      responseId?: string;
+                      provider?: string;
+                      model?: string;
+                      input: number;
+                      output: number;
+                      cacheRead?: number;
+                      cacheWrite?: number;
+                    }[];
+                    /** @enum {boolean} */
+                    callsPartial?: true;
                   };
                 }
               | {
@@ -6278,6 +7325,7 @@ export interface components {
                   | 'timeout'
                   | 'exec_failed'
                   | 'output_contract'
+                  | 'schema_unmet'
                   | 'max_iterations'
                   | 'child_failed'
                   | 'cancelled'
@@ -6292,12 +7340,14 @@ export interface components {
                     | 'rate_limited'
                     | 'overloaded'
                     | 'transient'
+                    | 'schema_unmet'
                     | 'unknown';
                   retryAfterMs?: number;
                   /** Format: date-time */
                   resetAt?: string;
                   evidence: string;
                 };
+                exitCode?: number;
               }
             | {
                 /** @enum {string} */
@@ -6314,25 +7364,45 @@ export interface components {
                       /** @enum {string} */
                       kind: 'condition';
                       expr: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'condition_parse_error';
                       expr: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'timeout';
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'upstream_failed';
                       origin: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'upstream_skipped';
                       origin: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     };
               }
             | {
@@ -6414,6 +7484,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -6433,6 +7505,13 @@ export interface components {
                 text: string;
               };
           answeredVia?: string;
+          answeredBy?:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              };
           /** Format: date-time */
           answeredAt?: string;
           labels?: {
@@ -6468,6 +7547,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -6475,6 +7555,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -6498,6 +7579,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -6505,6 +7587,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -6532,6 +7615,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -6539,6 +7623,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -6556,6 +7641,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -6575,6 +7662,13 @@ export interface components {
                 text: string;
               };
           answeredVia?: string;
+          answeredBy?:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              };
           /** Format: date-time */
           answeredAt?: string;
           labels?: {
@@ -6606,33 +7700,41 @@ export interface components {
       | {
           /** @enum {string} */
           kind: 'attention';
-          runId: string;
-          workflow: string;
+          ref: string;
           project: {
             key: string;
             codebaseId: string | null;
             name: string;
           } | null;
-          parentRunId: string | null;
-          fanOut: {
-            parentRunId: string;
-            nodeId: string;
-            index: number;
-          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
           revision: number;
           labels: {
             [key: string]: string;
           };
           /** Format: date-time */
           pausedAt: string | null;
-          context: {
-            artifactsDir: string | null;
-            transcript: string | null;
-            workingPath: string | null;
-            branch: string | null;
+          run?: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
+            occurrence: string;
           };
-          node: string;
-          occurrence: string;
           message: string;
           /** @enum {string} */
           form: 'message' | 'approval' | 'select' | 'multi_select';
@@ -6641,105 +7743,144 @@ export interface components {
             label?: string;
             does?: string;
             value?: unknown;
+            cost?: string;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
             /** @enum {string} */
             confidence?: 'low' | 'medium' | 'high';
           };
+          noRecommendation?: string;
+          context?: string;
+          artifacts?: {
+            /** @enum {string} */
+            type: 'archon_artifact';
+            run_id: string;
+            path: string;
+          }[];
+          askedIn?: {
+            runId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'awaiting_response';
-          runId: string;
-          workflow: string;
+          ref: string;
           project: {
             key: string;
             codebaseId: string | null;
             name: string;
           } | null;
-          parentRunId: string | null;
-          fanOut: {
-            parentRunId: string;
-            nodeId: string;
-            index: number;
-          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
           revision: number;
           labels: {
             [key: string]: string;
           };
           /** Format: date-time */
           pausedAt: string | null;
-          context: {
-            artifactsDir: string | null;
-            transcript: string | null;
-            workingPath: string | null;
-            branch: string | null;
+          run: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
+            occurrence: string;
           };
-          node: string;
-          occurrence: string;
           message: string;
         }
       | {
           /** @enum {string} */
           kind: 'usage_limit';
-          runId: string;
-          workflow: string;
+          ref: string;
           project: {
             key: string;
             codebaseId: string | null;
             name: string;
           } | null;
-          parentRunId: string | null;
-          fanOut: {
-            parentRunId: string;
-            nodeId: string;
-            index: number;
-          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
           revision: number;
           labels: {
             [key: string]: string;
           };
           /** Format: date-time */
           pausedAt: string | null;
-          context: {
-            artifactsDir: string | null;
-            transcript: string | null;
-            workingPath: string | null;
-            branch: string | null;
+          run: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
           };
-          node: string;
           /** Format: date-time */
           resetAt: string;
         }
       | {
           /** @enum {string} */
           kind: 'unreadable';
-          runId: string;
-          workflow: string;
+          ref: string;
           project: {
             key: string;
             codebaseId: string | null;
             name: string;
           } | null;
-          parentRunId: string | null;
-          fanOut: {
-            parentRunId: string;
-            nodeId: string;
-            index: number;
-          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
           revision: number;
           labels: {
             [key: string]: string;
           };
           /** Format: date-time */
           pausedAt: string | null;
-          context: {
-            artifactsDir: string | null;
-            transcript: string | null;
-            workingPath: string | null;
-            branch: string | null;
+          run: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
           };
           /** @enum {string} */
           reason:
@@ -6749,8 +7890,243 @@ export interface components {
             | 'child_pointer_missing'
             | 'child_run_missing'
             | 'child_chain_too_deep'
-            | 'source_release_not_continued';
+            | 'source_release_not_continued'
+            | 'continuation_given_up';
           detail: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'owner_lost';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          run: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+          };
+          /** @enum {string} */
+          observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          start?: {
+            requestId: string;
+            hostId: string;
+          };
+        }
+      | {
+          /** @enum {string} */
+          kind: 'overdue_wait';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          waitingIn: {
+            runId: string;
+            workflow: string;
+          };
+          waits: {
+            event: string;
+            about: string;
+          }[];
+          /** Format: date-time */
+          deadline: string;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'stopped';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          stoppedIn: {
+            runId: string;
+            workflow: string;
+            outcome: string | null;
+          };
+          summary: string | null;
+          limit?: {
+            name: string;
+            starts: number;
+            granted: number;
+            used: number;
+            bindingId: string;
+            workflow: string;
+          };
+          refused?: {
+            receiptId: string;
+            bindingId: string;
+            workflow: string;
+            /** @enum {string} */
+            reason:
+              | 'checkout_refused'
+              | 'inputs_unmapped'
+              | 'link_refused'
+              | 'no_default_provider'
+              | 'file_setting_missing'
+              | 'run_as_user_failed'
+              | 'run_configuration_failed'
+              | 'launch_preparation_failed';
+            refusedAt: string;
+            fileSetting?: {
+              setting: string;
+              path: string;
+              /** @enum {string} */
+              origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+            };
+          }[];
+          failed?: {
+            error: string | null;
+          };
+          checkout: string | null;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'refused_start';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          start: {
+            receiptId: string;
+            bindingId: string;
+            hostId: string | null;
+            workflow: string | null;
+            itemKey: string;
+            reason: string;
+            limit?: {
+              name: string;
+              starts: number;
+              granted: number;
+              used: number;
+              bindingId: string;
+              workflow: string;
+            };
+            fileSetting?: {
+              setting: string;
+              path: string;
+              /** @enum {string} */
+              origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+            };
+          };
+        }
+      | {
+          /** @enum {string} */
+          kind: 'preparation_lost';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          start: {
+            receiptId: string;
+            bindingId: string;
+            hostId: string | null;
+            workflow: string | null;
+            itemKey: string | null;
+            ownerId: string;
+          };
+        }
+      | {
+          /** @enum {string} */
+          kind: 'unreadable_start';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          start: {
+            requestId: string;
+            resource: string;
+            hostId: string;
+            behind: number;
+          };
         };
     AttentionQueueCountsResponse: {
       counts: components['schemas']['AttentionQueueCounts'];
@@ -6773,6 +8149,11 @@ export interface components {
               name: string;
             } | null;
             count: number;
+            recommendations?: {
+              asked: number;
+              answered: number;
+              followed: number;
+            };
           }[];
         }
       | {
@@ -6782,40 +8163,75 @@ export interface components {
           counts: {
             value: string | null;
             count: number;
+            recommendations?: {
+              asked: number;
+              answered: number;
+              followed: number;
+            };
           }[];
         };
+    AttentionItemActionResponse: {
+      ref: string;
+      /** @enum {string} */
+      action: 'answer' | 'withdraw';
+      unchanged: boolean;
+      settled?: boolean;
+      /** @enum {boolean} */
+      nothingStarted?: true;
+      runId?: string;
+      continues?: boolean;
+      cancelled?: boolean;
+    };
+    AnswerAttentionItemBody: {
+      ref: string;
+      choose?: string[];
+      /** @enum {boolean} */
+      recommended?: true;
+      text?: string;
+    };
+    WithdrawAttentionItemBody: {
+      ref: string;
+    };
     AttentionQueueItemResponse: {
       item:
         | {
             /** @enum {string} */
             kind: 'attention';
-            runId: string;
-            workflow: string;
+            ref: string;
             project: {
               key: string;
               codebaseId: string | null;
               name: string;
             } | null;
-            parentRunId: string | null;
-            fanOut: {
-              parentRunId: string;
-              nodeId: string;
-              index: number;
-            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
             revision: number;
             labels: {
               [key: string]: string;
             };
             /** Format: date-time */
             pausedAt: string | null;
-            context: {
-              artifactsDir: string | null;
-              transcript: string | null;
-              workingPath: string | null;
-              branch: string | null;
+            run?: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+              occurrence: string;
             };
-            node: string;
-            occurrence: string;
             message: string;
             /** @enum {string} */
             form: 'message' | 'approval' | 'select' | 'multi_select';
@@ -6824,105 +8240,144 @@ export interface components {
               label?: string;
               does?: string;
               value?: unknown;
+              cost?: string;
             }[];
+            /** @enum {boolean} */
+            other?: true;
             recommendation?: {
               option: string;
               why: string;
               /** @enum {string} */
               confidence?: 'low' | 'medium' | 'high';
             };
+            noRecommendation?: string;
+            context?: string;
+            artifacts?: {
+              /** @enum {string} */
+              type: 'archon_artifact';
+              run_id: string;
+              path: string;
+            }[];
+            askedIn?: {
+              runId: string;
+              workflow: string;
+            };
           }
         | {
             /** @enum {string} */
             kind: 'awaiting_response';
-            runId: string;
-            workflow: string;
+            ref: string;
             project: {
               key: string;
               codebaseId: string | null;
               name: string;
             } | null;
-            parentRunId: string | null;
-            fanOut: {
-              parentRunId: string;
-              nodeId: string;
-              index: number;
-            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
             revision: number;
             labels: {
               [key: string]: string;
             };
             /** Format: date-time */
             pausedAt: string | null;
-            context: {
-              artifactsDir: string | null;
-              transcript: string | null;
-              workingPath: string | null;
-              branch: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+              occurrence: string;
             };
-            node: string;
-            occurrence: string;
             message: string;
           }
         | {
             /** @enum {string} */
             kind: 'usage_limit';
-            runId: string;
-            workflow: string;
+            ref: string;
             project: {
               key: string;
               codebaseId: string | null;
               name: string;
             } | null;
-            parentRunId: string | null;
-            fanOut: {
-              parentRunId: string;
-              nodeId: string;
-              index: number;
-            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
             revision: number;
             labels: {
               [key: string]: string;
             };
             /** Format: date-time */
             pausedAt: string | null;
-            context: {
-              artifactsDir: string | null;
-              transcript: string | null;
-              workingPath: string | null;
-              branch: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
             };
-            node: string;
             /** Format: date-time */
             resetAt: string;
           }
         | {
             /** @enum {string} */
             kind: 'unreadable';
-            runId: string;
-            workflow: string;
+            ref: string;
             project: {
               key: string;
               codebaseId: string | null;
               name: string;
             } | null;
-            parentRunId: string | null;
-            fanOut: {
-              parentRunId: string;
-              nodeId: string;
-              index: number;
-            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
             revision: number;
             labels: {
               [key: string]: string;
             };
             /** Format: date-time */
             pausedAt: string | null;
-            context: {
-              artifactsDir: string | null;
-              transcript: string | null;
-              workingPath: string | null;
-              branch: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
             };
             /** @enum {string} */
             reason:
@@ -6932,8 +8387,243 @@ export interface components {
               | 'child_pointer_missing'
               | 'child_run_missing'
               | 'child_chain_too_deep'
-              | 'source_release_not_continued';
+              | 'source_release_not_continued'
+              | 'continuation_given_up';
             detail: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'owner_lost';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+            };
+            /** @enum {string} */
+            observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            start?: {
+              requestId: string;
+              hostId: string;
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'overdue_wait';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            waitingIn: {
+              runId: string;
+              workflow: string;
+            };
+            waits: {
+              event: string;
+              about: string;
+            }[];
+            /** Format: date-time */
+            deadline: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'stopped';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            stoppedIn: {
+              runId: string;
+              workflow: string;
+              outcome: string | null;
+            };
+            summary: string | null;
+            limit?: {
+              name: string;
+              starts: number;
+              granted: number;
+              used: number;
+              bindingId: string;
+              workflow: string;
+            };
+            refused?: {
+              receiptId: string;
+              bindingId: string;
+              workflow: string;
+              /** @enum {string} */
+              reason:
+                | 'checkout_refused'
+                | 'inputs_unmapped'
+                | 'link_refused'
+                | 'no_default_provider'
+                | 'file_setting_missing'
+                | 'run_as_user_failed'
+                | 'run_configuration_failed'
+                | 'launch_preparation_failed';
+              refusedAt: string;
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+              };
+            }[];
+            failed?: {
+              error: string | null;
+            };
+            checkout: string | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'refused_start';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              receiptId: string;
+              bindingId: string;
+              hostId: string | null;
+              workflow: string | null;
+              itemKey: string;
+              reason: string;
+              limit?: {
+                name: string;
+                starts: number;
+                granted: number;
+                used: number;
+                bindingId: string;
+                workflow: string;
+              };
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+              };
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'preparation_lost';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              receiptId: string;
+              bindingId: string;
+              hostId: string | null;
+              workflow: string | null;
+              itemKey: string | null;
+              ownerId: string;
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'unreadable_start';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              requestId: string;
+              resource: string;
+              hostId: string;
+              behind: number;
+            };
           }
         | unknown;
     };
@@ -6952,7 +8642,1910 @@ export interface components {
       };
       unset?: string[];
     };
-    AttentionStreamLine:
+    ItemRead: {
+      item: {
+        id: string;
+        projectKey: string;
+        key: string;
+      };
+      runs: {
+        id: string;
+        workflow: string;
+        pack: {
+          key: string;
+          workflow: string;
+        } | null;
+        /** @enum {string} */
+        status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        outcome: string | null;
+        /** Format: date-time */
+        startedAt: string;
+        /** Format: date-time */
+        completedAt: string | null;
+        cause:
+          | {
+              /** @enum {string} */
+              kind: 'run_ended';
+              runId: string;
+              sourceInstanceId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'asks_settled';
+              runId: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'run_fired';
+              runId: string;
+              node: string | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'receipt';
+              receiptId: string;
+              sourceInstanceId: string;
+            }
+          | unknown;
+        awaitingExecution: {
+          requestId: string;
+          hostId: string;
+          /** @enum {string} */
+          state: 'starting' | 'unowned' | 'unknown';
+          executor: {
+            host: string;
+            pid: number;
+            uid?: number;
+          } | null;
+        } | null;
+        startLimit: string | null;
+        spend: {
+          usd: number | null;
+          inputTokens: number | null;
+          outputTokens: number | null;
+        };
+        heldBehind: {
+          runId: string;
+          workflow: string;
+          /** @enum {string} */
+          status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          /** @enum {string|null} */
+          owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
+        operatorPause: {
+          /** @enum {string} */
+          state: 'requested' | 'paused';
+          requested: {
+            /** Format: date-time */
+            at: string;
+            via: string;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+        } | null;
+        hasResult: boolean;
+        resultCommit: string | null;
+        changeSize: {
+          base: string;
+          commit: string;
+          files: number;
+          added: number;
+          removed: number;
+        } | null;
+      }[];
+      queued: {
+        requestId: string;
+        workflow: string | null;
+        resource: string;
+        hostId: string;
+        /** Format: date-time */
+        queuedAt: string;
+        ahead: number;
+        blockedBy: string | null;
+        heldBehind: {
+          runId: string;
+          workflow: string;
+          /** @enum {string} */
+          status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          /** @enum {string|null} */
+          owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
+        waitsForRunLimit: boolean;
+      }[];
+      skipped: {
+        requestId: string;
+        workflow: string | null;
+        resource: string;
+        heldBehind: {
+          runId: string;
+          workflow: string;
+          /** @enum {string} */
+          status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          /** @enum {string|null} */
+          owner: 'reachable' | 'unreachable' | 'unknown' | null;
+        } | null;
+      }[];
+      hold: {
+        setBy: string;
+        /** Format: date-time */
+        setAt: string;
+      } | null;
+      held: {
+        receiptId: string;
+        bindingId: string;
+        hostId: string | null;
+        workflow: string | null;
+        receivedAt: string;
+      }[];
+      runLimit: {
+        limit: number;
+        live: number;
+      } | null;
+      startLimits: {
+        name: string;
+        starts: number;
+        resetOn: string | null;
+        since: string | null;
+        granted: number;
+        used: number;
+        left: number;
+        bindings:
+          | {
+              bindingId: string;
+              workflow: string;
+              runEnded: {
+                workflowName: string;
+                outcome: string;
+              } | null;
+            }[]
+          | null;
+      }[];
+      waits: {
+        event: string;
+        about: string;
+        workflow: string;
+        runId: string;
+        /** Format: date-time */
+        waitingSince: string;
+        /** Format: date-time */
+        deadline: string;
+        overdue: boolean;
+      }[];
+      questions: (
+        | {
+            /** @enum {string} */
+            kind: 'attention';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run?: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+              occurrence: string;
+            };
+            message: string;
+            /** @enum {string} */
+            form: 'message' | 'approval' | 'select' | 'multi_select';
+            options: {
+              id: string;
+              label?: string;
+              does?: string;
+              value?: unknown;
+              cost?: string;
+            }[];
+            /** @enum {boolean} */
+            other?: true;
+            recommendation?: {
+              option: string;
+              why: string;
+              /** @enum {string} */
+              confidence?: 'low' | 'medium' | 'high';
+            };
+            noRecommendation?: string;
+            context?: string;
+            artifacts?: {
+              /** @enum {string} */
+              type: 'archon_artifact';
+              run_id: string;
+              path: string;
+            }[];
+            askedIn?: {
+              runId: string;
+              workflow: string;
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'awaiting_response';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+              occurrence: string;
+            };
+            message: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'usage_limit';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+            };
+            /** Format: date-time */
+            resetAt: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'unreadable';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+            };
+            /** @enum {string} */
+            reason:
+              | 'malformed_tool_call_attention'
+              | 'malformed_gate'
+              | 'unrecognized_gate_type'
+              | 'child_pointer_missing'
+              | 'child_run_missing'
+              | 'child_chain_too_deep'
+              | 'source_release_not_continued'
+              | 'continuation_given_up';
+            detail: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'owner_lost';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+            };
+            /** @enum {string} */
+            observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            start?: {
+              requestId: string;
+              hostId: string;
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'overdue_wait';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            waitingIn: {
+              runId: string;
+              workflow: string;
+            };
+            waits: {
+              event: string;
+              about: string;
+            }[];
+            /** Format: date-time */
+            deadline: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'stopped';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            stoppedIn: {
+              runId: string;
+              workflow: string;
+              outcome: string | null;
+            };
+            summary: string | null;
+            limit?: {
+              name: string;
+              starts: number;
+              granted: number;
+              used: number;
+              bindingId: string;
+              workflow: string;
+            };
+            refused?: {
+              receiptId: string;
+              bindingId: string;
+              workflow: string;
+              /** @enum {string} */
+              reason:
+                | 'checkout_refused'
+                | 'inputs_unmapped'
+                | 'link_refused'
+                | 'no_default_provider'
+                | 'file_setting_missing'
+                | 'run_as_user_failed'
+                | 'run_configuration_failed'
+                | 'launch_preparation_failed';
+              refusedAt: string;
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+              };
+            }[];
+            failed?: {
+              error: string | null;
+            };
+            checkout: string | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'refused_start';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              receiptId: string;
+              bindingId: string;
+              hostId: string | null;
+              workflow: string | null;
+              itemKey: string;
+              reason: string;
+              limit?: {
+                name: string;
+                starts: number;
+                granted: number;
+                used: number;
+                bindingId: string;
+                workflow: string;
+              };
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+              };
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'preparation_lost';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              receiptId: string;
+              bindingId: string;
+              hostId: string | null;
+              workflow: string | null;
+              itemKey: string | null;
+              ownerId: string;
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'unreadable_start';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              requestId: string;
+              resource: string;
+              hostId: string;
+              behind: number;
+            };
+          }
+      )[];
+      answers: (
+        | {
+            /** @enum {string} */
+            kind: 'attention';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            answer:
+              | {
+                  text: string;
+                }
+              | {
+                  decision: string;
+                  text: string;
+                }
+              | {
+                  decisions: string[];
+                  text: string;
+                }
+              | unknown;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'gate';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            decision: string | null;
+            text: string | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'ruling';
+            id: string;
+            text: string;
+            /** Format: date-time */
+            at: string;
+            via: string;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+            withdrawn: {
+              /** Format: date-time */
+              at: string;
+              via: string;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            } | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'ask';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            ref: string;
+            question: string;
+            answer:
+              | {
+                  text: string;
+                }
+              | {
+                  decision: string;
+                  text: string;
+                }
+              | {
+                  decisions: string[];
+                  text: string;
+                }
+              | unknown;
+            chosen: {
+              id: string;
+              does: string;
+            } | null;
+            withdrawn: boolean;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'asks_settled';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            answered: number;
+            withdrawn: number;
+          }
+      )[];
+      links: {
+        id: string;
+        /** @enum {string} */
+        kind: 'depends_on' | 'part_of' | 'duplicate_of';
+        /** @enum {string} */
+        direction: 'outgoing' | 'incoming';
+        other: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        /** Format: date-time */
+        at: string;
+        via: string;
+        by:
+          | {
+              declared: string;
+            }
+          | {
+              userId: string;
+            }
+          | unknown;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+        ended: {
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        } | null;
+      }[];
+      merged: {
+        change: string;
+        commit: string | null;
+        /** Format: date-time */
+        at: string;
+        /** Format: date-time */
+        recordedAt: string;
+        via: string;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+      } | null;
+      landing: {
+        branch: string;
+        from:
+          | {
+              /** @enum {string} */
+              kind: 'own';
+            }
+          | {
+              /** @enum {string} */
+              kind: 'part_of';
+              item: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+            };
+      } | null;
+      ended: {
+        /** @enum {string} */
+        kind: 'ended';
+        id: string;
+        reason: string;
+        /** Format: date-time */
+        at: string;
+        via: string;
+        by:
+          | {
+              declared: string;
+            }
+          | {
+              userId: string;
+            }
+          | unknown;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+      } | null;
+      degraded: (
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'run_unreadable';
+            runId?: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'ruling_unreadable';
+            rulingId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'merge_unreadable';
+            itemId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'link_unreadable';
+            linkId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'landing_unresolved';
+            message: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'end_unreadable';
+            endId: string;
+          }
+      )[];
+    };
+    ItemWindow: {
+      window: {
+        /** Format: date-time */
+        since: string;
+        /** Format: date-time */
+        until: string;
+      };
+      items: {
+        item: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        runs: {
+          id: string;
+          workflow: string;
+          pack: {
+            key: string;
+            workflow: string;
+          } | null;
+          /** @enum {string} */
+          status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          outcome: string | null;
+          /** Format: date-time */
+          startedAt: string;
+          /** Format: date-time */
+          completedAt: string | null;
+          cause:
+            | {
+                /** @enum {string} */
+                kind: 'run_ended';
+                runId: string;
+                sourceInstanceId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'asks_settled';
+                runId: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'run_fired';
+                runId: string;
+                node: string | null;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'receipt';
+                receiptId: string;
+                sourceInstanceId: string;
+              }
+            | unknown;
+          awaitingExecution: {
+            requestId: string;
+            hostId: string;
+            /** @enum {string} */
+            state: 'starting' | 'unowned' | 'unknown';
+            executor: {
+              host: string;
+              pid: number;
+              uid?: number;
+            } | null;
+          } | null;
+          startLimit: string | null;
+          spend: {
+            usd: number | null;
+            inputTokens: number | null;
+            outputTokens: number | null;
+          };
+          heldBehind: {
+            runId: string;
+            workflow: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            /** @enum {string|null} */
+            owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+          operatorPause: {
+            /** @enum {string} */
+            state: 'requested' | 'paused';
+            requested: {
+              /** Format: date-time */
+              at: string;
+              via: string;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+          } | null;
+          hasResult: boolean;
+          resultCommit: string | null;
+          changeSize: {
+            base: string;
+            commit: string;
+            files: number;
+            added: number;
+            removed: number;
+          } | null;
+        }[];
+        queued: {
+          requestId: string;
+          workflow: string | null;
+          resource: string;
+          hostId: string;
+          /** Format: date-time */
+          queuedAt: string;
+          ahead: number;
+          blockedBy: string | null;
+          heldBehind: {
+            runId: string;
+            workflow: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            /** @enum {string|null} */
+            owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+          waitsForRunLimit: boolean;
+        }[];
+        skipped: {
+          requestId: string;
+          workflow: string | null;
+          resource: string;
+          heldBehind: {
+            runId: string;
+            workflow: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            /** @enum {string|null} */
+            owner: 'reachable' | 'unreachable' | 'unknown' | null;
+          } | null;
+        }[];
+        hold: {
+          setBy: string;
+          /** Format: date-time */
+          setAt: string;
+        } | null;
+        held: {
+          receiptId: string;
+          bindingId: string;
+          hostId: string | null;
+          workflow: string | null;
+          receivedAt: string;
+        }[];
+        runLimit: {
+          limit: number;
+          live: number;
+        } | null;
+        startLimits: {
+          name: string;
+          starts: number;
+          resetOn: string | null;
+          since: string | null;
+          granted: number;
+          used: number;
+          left: number;
+          bindings:
+            | {
+                bindingId: string;
+                workflow: string;
+                runEnded: {
+                  workflowName: string;
+                  outcome: string;
+                } | null;
+              }[]
+            | null;
+        }[];
+        waits: {
+          event: string;
+          about: string;
+          workflow: string;
+          runId: string;
+          /** Format: date-time */
+          waitingSince: string;
+          /** Format: date-time */
+          deadline: string;
+          overdue: boolean;
+        }[];
+        questions: (
+          | {
+              /** @enum {string} */
+              kind: 'attention';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run?: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+                occurrence: string;
+              };
+              message: string;
+              /** @enum {string} */
+              form: 'message' | 'approval' | 'select' | 'multi_select';
+              options: {
+                id: string;
+                label?: string;
+                does?: string;
+                value?: unknown;
+                cost?: string;
+              }[];
+              /** @enum {boolean} */
+              other?: true;
+              recommendation?: {
+                option: string;
+                why: string;
+                /** @enum {string} */
+                confidence?: 'low' | 'medium' | 'high';
+              };
+              noRecommendation?: string;
+              context?: string;
+              artifacts?: {
+                /** @enum {string} */
+                type: 'archon_artifact';
+                run_id: string;
+                path: string;
+              }[];
+              askedIn?: {
+                runId: string;
+                workflow: string;
+              };
+            }
+          | {
+              /** @enum {string} */
+              kind: 'awaiting_response';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+                occurrence: string;
+              };
+              message: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'usage_limit';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+              };
+              /** Format: date-time */
+              resetAt: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'unreadable';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+              };
+              /** @enum {string} */
+              reason:
+                | 'malformed_tool_call_attention'
+                | 'malformed_gate'
+                | 'unrecognized_gate_type'
+                | 'child_pointer_missing'
+                | 'child_run_missing'
+                | 'child_chain_too_deep'
+                | 'source_release_not_continued'
+                | 'continuation_given_up';
+              detail: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'owner_lost';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              run: {
+                id: string;
+                workflow: string;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+              };
+              /** @enum {string} */
+              observedStatus:
+                | 'pending'
+                | 'running'
+                | 'completed'
+                | 'failed'
+                | 'cancelled'
+                | 'paused';
+              start?: {
+                requestId: string;
+                hostId: string;
+              };
+            }
+          | {
+              /** @enum {string} */
+              kind: 'overdue_wait';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              waitingIn: {
+                runId: string;
+                workflow: string;
+              };
+              waits: {
+                event: string;
+                about: string;
+              }[];
+              /** Format: date-time */
+              deadline: string;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'stopped';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              stoppedIn: {
+                runId: string;
+                workflow: string;
+                outcome: string | null;
+              };
+              summary: string | null;
+              limit?: {
+                name: string;
+                starts: number;
+                granted: number;
+                used: number;
+                bindingId: string;
+                workflow: string;
+              };
+              refused?: {
+                receiptId: string;
+                bindingId: string;
+                workflow: string;
+                /** @enum {string} */
+                reason:
+                  | 'checkout_refused'
+                  | 'inputs_unmapped'
+                  | 'link_refused'
+                  | 'no_default_provider'
+                  | 'file_setting_missing'
+                  | 'run_as_user_failed'
+                  | 'run_configuration_failed'
+                  | 'launch_preparation_failed';
+                refusedAt: string;
+                fileSetting?: {
+                  setting: string;
+                  path: string;
+                  /** @enum {string} */
+                  origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+                };
+              }[];
+              failed?: {
+                error: string | null;
+              };
+              checkout: string | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'refused_start';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              start: {
+                receiptId: string;
+                bindingId: string;
+                hostId: string | null;
+                workflow: string | null;
+                itemKey: string;
+                reason: string;
+                limit?: {
+                  name: string;
+                  starts: number;
+                  granted: number;
+                  used: number;
+                  bindingId: string;
+                  workflow: string;
+                };
+                fileSetting?: {
+                  setting: string;
+                  path: string;
+                  /** @enum {string} */
+                  origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+                };
+              };
+            }
+          | {
+              /** @enum {string} */
+              kind: 'preparation_lost';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              start: {
+                receiptId: string;
+                bindingId: string;
+                hostId: string | null;
+                workflow: string | null;
+                itemKey: string | null;
+                ownerId: string;
+              };
+            }
+          | {
+              /** @enum {string} */
+              kind: 'unreadable_start';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              start: {
+                requestId: string;
+                resource: string;
+                hostId: string;
+                behind: number;
+              };
+            }
+        )[];
+        answers: (
+          | {
+              /** @enum {string} */
+              kind: 'attention';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              answer:
+                | {
+                    text: string;
+                  }
+                | {
+                    decision: string;
+                    text: string;
+                  }
+                | {
+                    decisions: string[];
+                    text: string;
+                  }
+                | unknown;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'gate';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              decision: string | null;
+              text: string | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'ruling';
+              id: string;
+              text: string;
+              /** Format: date-time */
+              at: string;
+              via: string;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+              withdrawn: {
+                /** Format: date-time */
+                at: string;
+                via: string;
+                by:
+                  | {
+                      declared: string;
+                    }
+                  | {
+                      userId: string;
+                    }
+                  | unknown;
+                fromRun: {
+                  runId: string;
+                  nodePath: string;
+                } | null;
+              } | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'ask';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              ref: string;
+              question: string;
+              answer:
+                | {
+                    text: string;
+                  }
+                | {
+                    decision: string;
+                    text: string;
+                  }
+                | {
+                    decisions: string[];
+                    text: string;
+                  }
+                | unknown;
+              chosen: {
+                id: string;
+                does: string;
+              } | null;
+              withdrawn: boolean;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'asks_settled';
+              runId: string;
+              node: string | null;
+              occurrence: string | null;
+              at: string;
+              via: string | null;
+              answered: number;
+              withdrawn: number;
+            }
+        )[];
+        links: {
+          id: string;
+          /** @enum {string} */
+          kind: 'depends_on' | 'part_of' | 'duplicate_of';
+          /** @enum {string} */
+          direction: 'outgoing' | 'incoming';
+          other: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+          ended: {
+            /** Format: date-time */
+            at: string;
+            via: string;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          } | null;
+        }[];
+        merged: {
+          change: string;
+          commit: string | null;
+          /** Format: date-time */
+          at: string;
+          /** Format: date-time */
+          recordedAt: string;
+          via: string;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        } | null;
+        landing: {
+          branch: string;
+          from:
+            | {
+                /** @enum {string} */
+                kind: 'own';
+              }
+            | {
+                /** @enum {string} */
+                kind: 'part_of';
+                item: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+              };
+        } | null;
+        ended: {
+          /** @enum {string} */
+          kind: 'ended';
+          id: string;
+          reason: string;
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        } | null;
+        degraded: (
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'run_unreadable';
+              runId?: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'ruling_unreadable';
+              rulingId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'merge_unreadable';
+              itemId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'link_unreadable';
+              linkId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'landing_unresolved';
+              message: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'end_unreadable';
+              endId: string;
+            }
+        )[];
+      }[];
+      next: string | null;
+    };
+    ItemRuling: {
+      /** @enum {string} */
+      kind: 'ruling';
+      id: string;
+      text: string;
+      /** Format: date-time */
+      at: string;
+      via: string;
+      by:
+        | {
+            declared: string;
+          }
+        | {
+            userId: string;
+          }
+        | unknown;
+      fromRun: {
+        runId: string;
+        nodePath: string;
+      } | null;
+      withdrawn: {
+        /** Format: date-time */
+        at: string;
+        via: string;
+        by:
+          | {
+              declared: string;
+            }
+          | {
+              userId: string;
+            }
+          | unknown;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+      } | null;
+    };
+    RecordItemRulingBody: {
+      project: string;
+      key: string;
+      text: string;
+      as?: string;
+    };
+    ItemEnd: {
+      /** @enum {string} */
+      kind: 'ended';
+      id: string;
+      reason: string;
+      /** Format: date-time */
+      at: string;
+      via: string;
+      by:
+        | {
+            declared: string;
+          }
+        | {
+            userId: string;
+          }
+        | unknown;
+      fromRun: {
+        runId: string;
+        nodePath: string;
+      } | null;
+    };
+    ItemEndRefused: {
+      error: string;
+      blocker:
+        | {
+            /** @enum {string} */
+            kind: 'run';
+            runId: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          }
+        | {
+            /** @enum {string} */
+            kind: 'queued_start';
+            requestId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'held_start';
+            receiptId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'open_ask';
+            ref: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'open_wait';
+            runId: string;
+          };
+    };
+    RecordItemEndBody: {
+      project: string;
+      key: string;
+      reason: string;
+      as?: string;
+    };
+    WithdrawItemRulingBody: {
+      project?: string;
+      as?: string;
+    };
+    AttentionStreamLine: (
       | {
           /** @enum {string} */
           type: 'attention';
@@ -6963,39 +10556,47 @@ export interface components {
             codebaseId: string | null;
             name: string;
           } | null;
-          workflow: string;
+          workflow: string | null;
           parentRunId: string | null;
           item:
             | {
                 /** @enum {string} */
                 kind: 'attention';
-                runId: string;
-                workflow: string;
+                ref: string;
                 project: {
                   key: string;
                   codebaseId: string | null;
                   name: string;
                 } | null;
-                parentRunId: string | null;
-                fanOut: {
-                  parentRunId: string;
-                  nodeId: string;
-                  index: number;
-                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
                 revision: number;
                 labels: {
                   [key: string]: string;
                 };
                 /** Format: date-time */
                 pausedAt: string | null;
-                context: {
-                  artifactsDir: string | null;
-                  transcript: string | null;
-                  workingPath: string | null;
-                  branch: string | null;
+                run?: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
+                  node: string;
+                  occurrence: string;
                 };
-                node: string;
-                occurrence: string;
                 message: string;
                 /** @enum {string} */
                 form: 'message' | 'approval' | 'select' | 'multi_select';
@@ -7004,105 +10605,144 @@ export interface components {
                   label?: string;
                   does?: string;
                   value?: unknown;
+                  cost?: string;
                 }[];
+                /** @enum {boolean} */
+                other?: true;
                 recommendation?: {
                   option: string;
                   why: string;
                   /** @enum {string} */
                   confidence?: 'low' | 'medium' | 'high';
                 };
+                noRecommendation?: string;
+                context?: string;
+                artifacts?: {
+                  /** @enum {string} */
+                  type: 'archon_artifact';
+                  run_id: string;
+                  path: string;
+                }[];
+                askedIn?: {
+                  runId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'awaiting_response';
-                runId: string;
-                workflow: string;
+                ref: string;
                 project: {
                   key: string;
                   codebaseId: string | null;
                   name: string;
                 } | null;
-                parentRunId: string | null;
-                fanOut: {
-                  parentRunId: string;
-                  nodeId: string;
-                  index: number;
-                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
                 revision: number;
                 labels: {
                   [key: string]: string;
                 };
                 /** Format: date-time */
                 pausedAt: string | null;
-                context: {
-                  artifactsDir: string | null;
-                  transcript: string | null;
-                  workingPath: string | null;
-                  branch: string | null;
+                run: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
+                  node: string;
+                  occurrence: string;
                 };
-                node: string;
-                occurrence: string;
                 message: string;
               }
             | {
                 /** @enum {string} */
                 kind: 'usage_limit';
-                runId: string;
-                workflow: string;
+                ref: string;
                 project: {
                   key: string;
                   codebaseId: string | null;
                   name: string;
                 } | null;
-                parentRunId: string | null;
-                fanOut: {
-                  parentRunId: string;
-                  nodeId: string;
-                  index: number;
-                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
                 revision: number;
                 labels: {
                   [key: string]: string;
                 };
                 /** Format: date-time */
                 pausedAt: string | null;
-                context: {
-                  artifactsDir: string | null;
-                  transcript: string | null;
-                  workingPath: string | null;
-                  branch: string | null;
+                run: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
+                  node: string;
                 };
-                node: string;
                 /** Format: date-time */
                 resetAt: string;
               }
             | {
                 /** @enum {string} */
                 kind: 'unreadable';
-                runId: string;
-                workflow: string;
+                ref: string;
                 project: {
                   key: string;
                   codebaseId: string | null;
                   name: string;
                 } | null;
-                parentRunId: string | null;
-                fanOut: {
-                  parentRunId: string;
-                  nodeId: string;
-                  index: number;
-                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
                 revision: number;
                 labels: {
                   [key: string]: string;
                 };
                 /** Format: date-time */
                 pausedAt: string | null;
-                context: {
-                  artifactsDir: string | null;
-                  transcript: string | null;
-                  workingPath: string | null;
-                  branch: string | null;
+                run: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
                 };
                 /** @enum {string} */
                 reason:
@@ -7112,8 +10752,249 @@ export interface components {
                   | 'child_pointer_missing'
                   | 'child_run_missing'
                   | 'child_chain_too_deep'
-                  | 'source_release_not_continued';
+                  | 'source_release_not_continued'
+                  | 'continuation_given_up';
                 detail: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'owner_lost';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                run: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
+                };
+                /** @enum {string} */
+                observedStatus:
+                  | 'pending'
+                  | 'running'
+                  | 'completed'
+                  | 'failed'
+                  | 'cancelled'
+                  | 'paused';
+                start?: {
+                  requestId: string;
+                  hostId: string;
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'overdue_wait';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                waitingIn: {
+                  runId: string;
+                  workflow: string;
+                };
+                waits: {
+                  event: string;
+                  about: string;
+                }[];
+                /** Format: date-time */
+                deadline: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'stopped';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                stoppedIn: {
+                  runId: string;
+                  workflow: string;
+                  outcome: string | null;
+                };
+                summary: string | null;
+                limit?: {
+                  name: string;
+                  starts: number;
+                  granted: number;
+                  used: number;
+                  bindingId: string;
+                  workflow: string;
+                };
+                refused?: {
+                  receiptId: string;
+                  bindingId: string;
+                  workflow: string;
+                  /** @enum {string} */
+                  reason:
+                    | 'checkout_refused'
+                    | 'inputs_unmapped'
+                    | 'link_refused'
+                    | 'no_default_provider'
+                    | 'file_setting_missing'
+                    | 'run_as_user_failed'
+                    | 'run_configuration_failed'
+                    | 'launch_preparation_failed';
+                  refusedAt: string;
+                  fileSetting?: {
+                    setting: string;
+                    path: string;
+                    /** @enum {string} */
+                    origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+                  };
+                }[];
+                failed?: {
+                  error: string | null;
+                };
+                checkout: string | null;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'refused_start';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                start: {
+                  receiptId: string;
+                  bindingId: string;
+                  hostId: string | null;
+                  workflow: string | null;
+                  itemKey: string;
+                  reason: string;
+                  limit?: {
+                    name: string;
+                    starts: number;
+                    granted: number;
+                    used: number;
+                    bindingId: string;
+                    workflow: string;
+                  };
+                  fileSetting?: {
+                    setting: string;
+                    path: string;
+                    /** @enum {string} */
+                    origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+                  };
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'preparation_lost';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                start: {
+                  receiptId: string;
+                  bindingId: string;
+                  hostId: string | null;
+                  workflow: string | null;
+                  itemKey: string | null;
+                  ownerId: string;
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'unreadable_start';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                start: {
+                  requestId: string;
+                  resource: string;
+                  hostId: string;
+                  behind: number;
+                };
               };
         }
       | (
@@ -7126,13 +11007,26 @@ export interface components {
                 codebaseId: string | null;
                 name: string;
               } | null;
-              runId: string;
+              ref: string;
+              runId?: string;
               workflow: string | null;
               parentRunId: string | null;
               occurrence: string | null;
               /** @enum {string} */
               reason: 'answered';
               answeredVia: string | null;
+              answeredBy:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              answeredFromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
               answeredAt: string | null;
             }
           | {
@@ -7144,12 +11038,48 @@ export interface components {
                 codebaseId: string | null;
                 name: string;
               } | null;
-              runId: string;
+              ref: string;
+              runId?: string;
               workflow: string | null;
               parentRunId: string | null;
               occurrence: string | null;
               /** @enum {string} */
               reason: 'withdrawn';
+            }
+          | {
+              /** @enum {string} */
+              type: 'resolved';
+              cursor: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              ref: string;
+              runId?: string;
+              workflow: string | null;
+              parentRunId: string | null;
+              occurrence: string | null;
+              /** @enum {string} */
+              reason: 'replaced';
+              replacedByRunId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'resolved';
+              cursor: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              ref: string;
+              runId?: string;
+              workflow: string | null;
+              parentRunId: string | null;
+              occurrence: string | null;
+              /** @enum {string} */
+              reason: 'no_longer_listed';
             }
         )
       | {
@@ -7161,7 +11091,8 @@ export interface components {
             codebaseId: string | null;
             name: string;
           } | null;
-          runId: string;
+          ref: string;
+          runId?: string;
           workflow: string | null;
           parentRunId: string | null;
           occurrence: string;
@@ -7181,8 +11112,7 @@ export interface components {
           parentRunId: string | null;
           /** @enum {string} */
           status: 'completed' | 'failed' | 'cancelled';
-          /** @enum {string|null} */
-          outcome: 'succeeded' | 'failed' | null;
+          outcome: string | null;
           cause: {
             node: string;
             /** @enum {string|null} */
@@ -7195,12 +11125,14 @@ export interface components {
               | 'timeout'
               | 'exec_failed'
               | 'output_contract'
+              | 'schema_unmet'
               | 'max_iterations'
               | 'child_failed'
               | 'cancelled'
               | 'config'
               | null;
           } | null;
+          reason?: string[];
         }
       | {
           /** @enum {string} */
@@ -7219,6 +11151,25 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          type: 'notice';
+          cursor: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          runId: string;
+          workflow: string | null;
+          parentRunId: string | null;
+          at: string;
+          text: string;
+          labels: {
+            [key: string]: string;
+          };
+          node: string | null;
+        }
+      | {
+          /** @enum {string} */
           type: 'owner_lost';
           cursor: string;
           project: {
@@ -7231,6 +11182,7 @@ export interface components {
           parentRunId: string | null;
           /** @enum {string} */
           observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          item?: string | null;
         }
       | {
           /** @enum {string} */
@@ -7254,7 +11206,11 @@ export interface components {
           type: 'error';
           /** @enum {string} */
           error: 'cursor_invalid';
-        };
+        }
+    ) & {
+      /** @enum {string} */
+      needs: 'answer' | 'look' | 'nothing';
+    };
     DashboardRunsResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
       total: number;
@@ -7326,7 +11282,22 @@ export interface components {
     AnswerWorkflowRunBody: {
       occurrence: string;
       choose?: string[];
+      /** @enum {boolean} */
+      recommended?: true;
       text?: string;
+      as?: string;
+    };
+    DeleteWorkflowRunResponse: {
+      success: boolean;
+      message: string;
+      files: {
+        removedBytes: number;
+        failed: {
+          path: string;
+          error: string;
+        }[];
+        unlocated: string[];
+      };
     };
     ResetWorkflowNodeSessionsResponse: {
       success: boolean;
@@ -7349,9 +11320,11 @@ export interface components {
       /** @enum {string} */
       status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       outcome: components['schemas']['WorkflowRunOutcome'];
+      completed_outcome: string | null;
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
+      active_phase_started_at: string | null;
       completed_at: string | null;
       last_activity_at: string | null;
       working_path: string | null;
@@ -7408,7 +11381,36 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
+      item_id: string | null;
+      /** @description The inputs the run was invoked with (`--input`, the run route's `inputs`, a parent's `with:`), as text by name: not the pack settings and declared defaults `metadata.inputs` also holds. What re-running the run supplies again. Empty for a run started before runs recorded it. */
+      supplied_inputs: {
+        [key: string]: string;
+      };
       attention: components['schemas']['RunAttention'] | (never | null);
+      /** @description An operator's pause (`archon workflow pause`): `requested` while the run still runs the nodes it had started and pauses once they finish, `paused` once it stopped at that boundary, with who asked, through which surface and when. Null when the run is in neither. Derived from the run row; a resume ends it. */
+      operator_pause: {
+        /** @enum {string} */
+        state: 'requested' | 'paused';
+        requested: {
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        };
+        /** Format: date-time */
+        pausedAt: string | null;
+      } | null;
     };
     /** @enum {string|null} */
     WorkflowRunOutcome: 'succeeded' | 'failed' | null;
@@ -7417,11 +11419,13 @@ export interface components {
     };
     WorkflowRunDetail: {
       run: components['schemas']['WorkflowRun'] & {
+        /** @description The platform of the run's own conversation (`web`, `cli`, ...), the same value the dashboard listing serves. Null when the run has no conversation. */
+        platform_type: string | null;
         worker_platform_id?: string;
         parent_platform_id?: string;
         conversation_platform_id: string | null;
         /**
-         * @description What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.
+         * @description What this server observes about the run's execution owner while its state needs one (running, or paused on a sub-run that runs in its process), by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run needs no owner now (an ordinary pause, a pending or ended run). Observed per request; never stored.
          * @enum {string|null}
          */
         owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
@@ -7431,6 +11435,7 @@ export interface components {
           status: 'completed' | 'failed' | 'cancelled';
           /** @enum {string|null} */
           outcome: 'succeeded' | 'failed' | null;
+          completed_outcome?: string | null;
           error: string | null;
           first_failed_node: string | null;
           nodes: {
@@ -7438,6 +11443,21 @@ export interface components {
             /** @enum {string} */
             state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
             error?: string;
+            /** @enum {string} */
+            failure_kind?:
+              | 'fatal'
+              | 'transient'
+              | 'unknown'
+              | 'rate_limited'
+              | 'overloaded'
+              | 'timeout'
+              | 'exec_failed'
+              | 'output_contract'
+              | 'schema_unmet'
+              | 'max_iterations'
+              | 'child_failed'
+              | 'cancelled'
+              | 'config';
             /** @enum {string} */
             reason?:
               | 'prior_success'
@@ -7450,25 +11470,45 @@ export interface components {
                   /** @enum {string} */
                   kind: 'condition';
                   expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'condition_parse_error';
                   expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'timeout';
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'upstream_failed';
                   origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'upstream_skipped';
                   origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 };
             fan_out_outcome?: {
               tally: {
@@ -7599,13 +11639,47 @@ export interface components {
                   | 'check_failed';
                 detail?: string;
               };
+          result_commit?:
+            | {
+                /** @enum {boolean} */
+                held: true;
+                commit: string;
+              }
+            | {
+                /** @enum {boolean} */
+                held: false;
+                /** @enum {string} */
+                reason:
+                  | 'dirty'
+                  | 'not_git'
+                  | 'unavailable'
+                  | 'unborn'
+                  | 'moved'
+                  | 'concurrent'
+                  | 'unobserved';
+              };
         } | null;
-        /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. */
+        /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round. */
         nodes: {
           node_id: string;
           /** @enum {string} */
           state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
           error?: string;
+          /** @enum {string} */
+          failure_kind?:
+            | 'fatal'
+            | 'transient'
+            | 'unknown'
+            | 'rate_limited'
+            | 'overloaded'
+            | 'timeout'
+            | 'exec_failed'
+            | 'output_contract'
+            | 'schema_unmet'
+            | 'max_iterations'
+            | 'child_failed'
+            | 'cancelled'
+            | 'config';
           /** @enum {string} */
           reason?:
             | 'prior_success'
@@ -7618,25 +11692,45 @@ export interface components {
                 /** @enum {string} */
                 kind: 'condition';
                 expr: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'condition_parse_error';
                 expr: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'timeout';
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'upstream_failed';
                 origin: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'upstream_skipped';
                 origin: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               };
           fan_out_outcome?: {
             tally: {
@@ -7689,6 +11783,143 @@ export interface components {
                 }
             )[];
           };
+        }[];
+        /** @description Each round of each loop_group the run has entered, in order: the body nodes it reached, with state, timing and output. Absent when the run ran no loop. */
+        loop_rounds?: {
+          loop_group_path: {
+            groupId: string;
+            iteration: number;
+          }[];
+          nodes: {
+            node_id: string;
+            /** @enum {string} */
+            state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+            error?: string;
+            /** @enum {string} */
+            failure_kind?:
+              | 'fatal'
+              | 'transient'
+              | 'unknown'
+              | 'rate_limited'
+              | 'overloaded'
+              | 'timeout'
+              | 'exec_failed'
+              | 'output_contract'
+              | 'schema_unmet'
+              | 'max_iterations'
+              | 'child_failed'
+              | 'cancelled'
+              | 'config';
+            /** @enum {string} */
+            reason?:
+              | 'prior_success'
+              | 'when_condition'
+              | 'when_condition_parse_error'
+              | 'trigger_rule'
+              | 'timeout';
+            cause?:
+              | {
+                  /** @enum {string} */
+                  kind: 'condition';
+                  expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'condition_parse_error';
+                  expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'timeout';
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'upstream_failed';
+                  origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'upstream_skipped';
+                  origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
+                };
+            fan_out_outcome?: {
+              tally: {
+                total: number;
+                completed: number;
+                failed: number;
+                not_started: number;
+                cancelled_by_engine: number;
+                cancelled_by_workflow: number;
+                cancelled_out_of_band: number;
+                cancelled_unattributed: number;
+              };
+              slots: (
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'completed';
+                    child_run_id: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'failed';
+                    child_run_id: string;
+                    error?: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'not_started';
+                    error: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome:
+                      | 'cancelled_by_engine'
+                      | 'cancelled_by_workflow'
+                      | 'cancelled_out_of_band'
+                      | 'cancelled_unattributed';
+                    child_run_id: string;
+                    /** @enum {string} */
+                    cancel_reason?:
+                      | 'approval_rejected'
+                      | 'operator'
+                      | 'halt_node'
+                      | 'precondition_failed'
+                      | 'conversation_reset'
+                      | 'fan_out';
+                  }
+              )[];
+            };
+            /** Format: date-time */
+            started_at?: string;
+            duration_ms?: number;
+            output?: string;
+            output_truncated?: boolean;
+            structured_output?: unknown;
+          }[];
         }[];
       };
       events: components['schemas']['WorkflowEvent'][];
@@ -7904,14 +12135,14 @@ export interface components {
                     runs_partial_cost: number;
                     runs_missing: number;
                   };
-                  requested_models: string[];
-                  resolved_models: string[];
                   delta_vs_rest: number | null;
                   delta_interval_vs_rest: {
                     low: number;
                     high: number;
                   } | null;
                   separated: boolean;
+                  requested_models: string[];
+                  resolved_models: string[];
                 }
               | {
                   /** @enum {string} */
@@ -7932,14 +12163,14 @@ export interface components {
                     runs_partial_cost: number;
                     runs_missing: number;
                   };
-                  requested_models: string[];
-                  resolved_models: string[];
                   delta_vs_rest: number | null;
                   delta_interval_vs_rest: {
                     low: number;
                     high: number;
                   } | null;
                   separated: boolean;
+                  requested_models: string[];
+                  resolved_models: string[];
                 }
               | {
                   /** @enum {string} */
@@ -7960,17 +12191,129 @@ export interface components {
                     runs_partial_cost: number;
                     runs_missing: number;
                   };
-                  requested_models: string[];
-                  resolved_models: string[];
                   delta_vs_rest: number | null;
                   delta_interval_vs_rest: {
                     low: number;
                     high: number;
                   } | null;
                   separated: boolean;
+                  requested_models: string[];
+                  resolved_models: string[];
                 }
             )[];
             unattributed: number;
+          };
+          by_dimension?: {
+            key: string;
+            groups: (
+              | {
+                  /** @enum {string} */
+                  split: 'value';
+                  label: string;
+                  value: number;
+                  n: number;
+                  interval: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  cost: {
+                    usd: number | null;
+                    input_tokens: number | null;
+                    output_tokens: number | null;
+                    runs: number;
+                    runs_without_cost: number;
+                    runs_without_tokens: number;
+                    runs_partial_cost: number;
+                    runs_missing: number;
+                  };
+                  delta_vs_rest: number | null;
+                  delta_interval_vs_rest: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  separated: boolean;
+                  compare?: {
+                    at: string;
+                    before: {
+                      value: number | null;
+                      n: number;
+                      interval: {
+                        low: number;
+                        high: number;
+                      } | null;
+                    };
+                    after: {
+                      value: number | null;
+                      n: number;
+                      interval: {
+                        low: number;
+                        high: number;
+                      } | null;
+                    };
+                    delta: number | null;
+                    delta_interval: {
+                      low: number;
+                      high: number;
+                    } | null;
+                    separated: boolean;
+                    straddling: number;
+                    unattributed: number;
+                  };
+                }
+              | {
+                  /** @enum {string} */
+                  split: 'none';
+                  value: number;
+                  n: number;
+                  interval: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  cost: {
+                    usd: number | null;
+                    input_tokens: number | null;
+                    output_tokens: number | null;
+                    runs: number;
+                    runs_without_cost: number;
+                    runs_without_tokens: number;
+                    runs_partial_cost: number;
+                    runs_missing: number;
+                  };
+                  delta_vs_rest: number | null;
+                  delta_interval_vs_rest: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  separated: boolean;
+                  compare?: {
+                    at: string;
+                    before: {
+                      value: number | null;
+                      n: number;
+                      interval: {
+                        low: number;
+                        high: number;
+                      } | null;
+                    };
+                    after: {
+                      value: number | null;
+                      n: number;
+                      interval: {
+                        low: number;
+                        high: number;
+                      } | null;
+                    };
+                    delta: number | null;
+                    delta_interval: {
+                      low: number;
+                      high: number;
+                    } | null;
+                    separated: boolean;
+                    straddling: number;
+                    unattributed: number;
+                  };
+                }
+            )[];
           };
           latest: {
             value: number;
@@ -8065,6 +12408,139 @@ export interface components {
         error: string;
       }[];
     };
+    PackGraph: {
+      pack: string;
+      loaded: {
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        key: string;
+        dir: string | null;
+      }[];
+      otherCopies: {
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        key: string;
+        dir: string | null;
+      }[];
+      stages: {
+        name: string;
+        returns: string | null;
+        outcome: {
+          field: string;
+          /** @enum {string} */
+          form: 'enum' | 'boolean';
+          values: {
+            value: string;
+            startsNothing: boolean;
+            final: boolean;
+          }[];
+        } | null;
+        asks: boolean;
+        waits: boolean;
+        nodes: {
+          id: string;
+          kind: string;
+          dependsOn: string[];
+          loopGroup: string | null;
+          blocks: {
+            include: string;
+            workflow: string;
+          }[];
+          fanOut: {
+            workflow: string;
+          } | null;
+        }[];
+      }[];
+      arrows: (
+        | {
+            from:
+              | {
+                  stage: string;
+                  outcome: string;
+                }
+              | {
+                  stage: string;
+                  /** @enum {string} */
+                  settled: 'answered' | 'withdrawn' | 'any';
+                  option?: string;
+                };
+            to: string;
+            linked: {
+              /** @enum {string} */
+              kind: 'depends_on' | 'part_of' | 'duplicate_of';
+              /** @enum {string} */
+              holder: 'from' | 'to';
+              items?: string;
+              entries: {
+                [key: string]: string;
+              };
+            } | null;
+            /** @enum {boolean} */
+            active: true;
+            declared: {
+              binding: string;
+              problems: string[];
+            } | null;
+            installed: {
+              file: string;
+              sourceInstanceId: string;
+              problems: string[];
+            };
+          }
+        | {
+            from:
+              | {
+                  stage: string;
+                  outcome: string;
+                }
+              | {
+                  stage: string;
+                  /** @enum {string} */
+                  settled: 'answered' | 'withdrawn' | 'any';
+                  option?: string;
+                };
+            to: string;
+            linked: {
+              /** @enum {string} */
+              kind: 'depends_on' | 'part_of' | 'duplicate_of';
+              /** @enum {string} */
+              holder: 'from' | 'to';
+              items?: string;
+              entries: {
+                [key: string]: string;
+              };
+            } | null;
+            /** @enum {boolean} */
+            active: false;
+            declared: {
+              binding: string;
+              problems: string[];
+            };
+            installed: unknown;
+          }
+      )[];
+      fanOutBlocks: {
+        workflow: string;
+        nodes: {
+          id: string;
+          kind: string;
+          dependsOn: string[];
+          loopGroup: string | null;
+          blocks: {
+            include: string;
+            workflow: string;
+          }[];
+          fanOut: {
+            workflow: string;
+          } | null;
+        }[];
+      }[];
+      discoveryErrors: {
+        filename: string;
+        workflowName: string | null;
+        error: string;
+      }[];
+    };
     ValidateWorkflowResponse: {
       valid: boolean;
       errors?: string[];
@@ -8152,14 +12628,34 @@ export interface components {
     };
     UpdateTiersBody: {
       tiers: {
-        small?: components['schemas']['TierEntry'] & unknown;
-        medium?: components['schemas']['TierEntry'] & unknown;
-        large?: components['schemas']['TierEntry'] & unknown;
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateAliasesBody: {
       aliases: {
-        [key: string]: components['schemas']['TierEntry'] & unknown;
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     ProviderListResponse: {
@@ -8186,6 +12682,7 @@ export interface components {
       backgroundWork: 'reported' | 'none' | 'unobserved';
       sessionResume: boolean;
       sessionFork?: boolean;
+      turnMessages?: boolean;
       mcp: boolean;
       hooks: boolean;
       skills: boolean;
@@ -8197,6 +12694,8 @@ export interface components {
         [key: string]: string;
       };
       structuredOutput: 'enforced' | 'best-effort' | false;
+      /** @enum {string} */
+      structuredOutputCorrection?: 'fresh-session' | 'same-session';
       requiresAllPropertiesRequired: boolean;
       envInjection: boolean;
       costControl: boolean;
@@ -8289,6 +12788,7 @@ export interface components {
       };
       runningWorkflows: number;
       version?: string;
+      commit?: components['schemas']['AppCommit'];
       is_docker: boolean;
       is_wsl: boolean;
       wsl_distro?: string;
@@ -8305,6 +12805,12 @@ export interface components {
         appVersion: string;
         appliedAt: string | null;
       };
+    };
+    AppCommit: {
+      /** @description Short hash of the commit the running server was built or started from */
+      sha: string;
+      /** @description Committer date of that commit (ISO 8601). Null in a compiled binary, which embeds only the hash. */
+      committedAt: string | null;
     };
     UpdateCheckResponse: {
       updateAvailable: boolean;

@@ -3,50 +3,44 @@
  *
  * It is the queue's memory of the item: every round it ran (one build-queue run), every
  * decision it made with the person's answer when it asked, and what happens next. The
- * deciding agents read it before deciding, and the queue's pickup reads `status` to
- * know whether the item waits for it.
+ * deciding agents read it before deciding, and `buildWaits` reads `status` to know
+ * whether the item waits for a round.
  */
 
-import { type QualifiedPr, sameRepo } from './forge.ts';
-import { followUp } from './follow-up.ts';
-import { note, text } from './io.ts';
-import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
-import type { Attention, DecisionEntry } from './queue.ts';
-import { stateDocuments, statePut } from './state.ts';
+import { input, state, trigger } from 'archon:script';
+import { type QualifiedPr, sameRepo } from './identity.ts';
+import type { NodeOutput } from './outputs.generated.ts';
+import { PR_CREATE_UNRESOLVED, prFromUrl } from './pr.ts';
+import { clipped, type DecisionEntry, withDecision } from './queue.ts';
 import {
-  type Claim,
   type HistoryEntry,
+  itemKey,
   newest,
-  type Pickup,
   parseWorkItem,
-  read,
+  readWorkItem,
   type Stage,
   type TriageFacts,
   type WorkItem,
-  workItemName,
 } from './workitem.ts';
 
-/**
- * What a build choice does when a person picks it; archon-build-queue.yaml declares the
- * same enum. `continue` launches the next round from the brief. `ready` hands the pull
- * request to the merge queue as it stands, such as after a maintainer finished it by
- * hand. `park` stops work until a re-triage.
- */
-export const BUILD_EFFECTS = ['continue', 'ready', 'park'] as const;
-export type BuildEffect = (typeof BUILD_EFFECTS)[number];
-export type BuildAttention = Attention<BuildEffect>;
+/** The question a deciding agent writes, as archon-build-queue.yaml declares it. */
+export type BuildAsk = NonNullable<NodeOutput<'archon-build-queue', 'route'>['ask']>;
 
-/** The decision each agent can declare; archon-build-queue.yaml declares the same enums. */
-export const ROUTE_DECISIONS = ['launch', 'ask', 'ready'] as const;
-export const ANSWER_DECISIONS = ['done', 'continue', 'ask'] as const;
-export const BUILD_PATHS = ['idle', 'closed', 'route'] as const;
-export type BuildPath = (typeof BUILD_PATHS)[number];
-/** What apply reports the run decided; archon-build-queue.yaml declares the same enum. */
-export const APPLY_DECISIONS = ['idle', 'parked', 'ready', 'continue', 'asked', 'launch'] as const;
-export type ApplyDecision = (typeof APPLY_DECISIONS)[number];
-/** Which decision raised an attention item: its class label, which the YAML also declares. */
-export const ASKED_BY = ['route', 'stop', 'scope'] as const;
-export type AskedBy = (typeof ASKED_BY)[number];
+/**
+ * What a build choice does when a person picks it. `continue` launches the next round
+ * from the brief. `ready` hands the pull request to the merge queue as it stands, such
+ * as after a maintainer finished it by hand. `park` stops work until a re-triage.
+ */
+export type BuildEffect = BuildAsk['options'][number]['effect'];
+
+/**
+ * What an asking run hands the run its answer starts, as archon-build-queue.yaml declares
+ * apply's `asked`: the brief, which decision asked, and each option's effect and ruling.
+ */
+export type BuildAsked = NonNullable<NodeOutput<'archon-build-queue', 'apply'>['asked']>;
+
+/** Which decision raised an ask. */
+export type AskedBy = BuildAsked['by'];
 
 /** The stages a triaged item can be launched from: a READY verdict's routes. */
 export const LAUNCH_STAGES = [
@@ -55,6 +49,19 @@ export const LAUNCH_STAGES = [
   'deliver',
   'continue',
 ] as const satisfies readonly Stage[];
+
+/** One review verdict a round's delivery published, at the time the engine produced it. */
+export interface ReviewVerdict {
+  readonly ready: boolean;
+  readonly at: string;
+}
+
+/**
+ * A full validation the delivery's CI agent ran itself, at the commit it ran on, as its
+ * typed `ci-report` declared it. Under the pack's `ci: none` setting the merge gate
+ * trusts this instead of forge checks.
+ */
+export type Validation = NonNullable<NodeOutput<'archon-deliver', 'ci'>['validation']>;
 
 /**
  * One build round, as its terminal report ended it. `run_id` is the build-queue run that
@@ -66,14 +73,34 @@ export interface BuildRound {
   readonly delivered: boolean;
   readonly reason: string;
   readonly pr_url: string;
+  /**
+   * That pull request's number in the item's repository, as the forge resolved the URL
+   * when the round was recorded. Absent on a round recorded before rounds carried it,
+   * whose URL the forge resolves when the item's pull request is read.
+   */
+  readonly pr_number?: number;
   readonly summary: string;
   readonly artifacts: string;
+  /**
+   * The route the round took, as the queue's route agent declared it; its
+   * `output_format` owns the vocabulary. Absent on a round recorded before rounds
+   * carried it, or recorded at a release.
+   */
+  readonly route?: string;
+  /**
+   * Every review verdict the round's delivery published, oldest first. Absent on a round
+   * recorded before rounds carried them, recorded at a release, or whose run's typed
+   * outputs could not be read.
+   */
+  readonly reviews?: readonly ReviewVerdict[];
+  /** The latest validation the round's delivery ran; absent when it ran none. */
+  readonly validation?: Validation;
 }
 
 /**
  * Who owns the item, as the build queue last recorded it. `next`: the build queue, for
- * its next launch from `brief`. `asking`: the build queue, paused on the item's
- * attention item. `ready`: handed to the merge queue, which owns its pull request from
+ * its next launch from `brief`. `asking`: the build queue, whose ask is open on the
+ * item; the answer starts the next run. `ready`: handed to the merge queue, which owns its pull request from
  * here. `parked`: no queue, until a re-triage.
  */
 export type BuildStatus = 'next' | 'asking' | 'ready' | 'parked';
@@ -84,72 +111,113 @@ export interface BuildRecord {
   readonly brief: string;
   readonly rounds: readonly BuildRound[];
   readonly decisions: readonly DecisionEntry[];
-  /** When the queue last decided the item. */
+  /**
+   * When the run that last decided the item read it. A re-triage after that, even one
+   * made while the round ran, starts the item over.
+   */
   readonly at: string;
 }
 
 // Rounds, decisions and their prose are capped so the record keeps the work item well
 // under the state store's 64 KiB limit. `archon state log` keeps every revision.
-const KEPT_ROUNDS = 10;
-const KEPT_DECISIONS = 20;
-const KEPT_TEXT = 1500;
-
-function clipped(text: string): string {
-  return text.length <= KEPT_TEXT ? text : `${text.slice(0, KEPT_TEXT)}…`;
-}
-
-/** Whether an unclaimed item waits for the build queue. */
+export const KEPT_ROUNDS = 10;
+/** Whether the item waits for a build round. */
 export function buildWaits(doc: WorkItem): boolean {
   if (!(LAUNCH_STAGES as readonly string[]).includes(doc.stage)) return false;
   const build = doc.facts.build;
   if (build === undefined || build.status === 'next') return true;
-  // A re-triage after the queue's last decision starts the item over.
+  // A re-triage after the queue's last round began starts the item over.
   return (doc.facts.triage?.at ?? '') > build.at;
 }
 
-export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
+/**
+ * The item's document when it waits for a build round. Throws the reason an operator
+ * acts on when it has none or does not wait.
+ */
+export function waitingItem(number: number): WorkItem {
+  const issue = `issue ${String(number)}`;
+  const doc = readWorkItem(number);
+  if (doc === null) throw new Error(`${issue} has no work item: intake has not recorded it`);
+  if (buildWaits(doc)) return doc;
+  const status = doc.facts.build === undefined ? '' : `, build status ${doc.facts.build.status}`;
+  throw new Error(`${issue} does not wait for the build queue: stage ${doc.stage}${status}`);
+}
 
-/** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
+/**
+ * A blocked item for the revisit agent: which issue, intake's summary of why it is
+ * blocked, when triage gave that verdict, and what the verdict said it waits on. An item
+ * blocked before verdicts stored that carries an empty reason and no blockers.
+ */
 export interface BlockedItem {
   readonly number: number;
   readonly summary: string;
+  readonly blocked_at: string;
+  readonly blocked_reason: string;
+  readonly blocked_by: readonly string[];
 }
 
 // A scheduled queue would otherwise judge the same blocked items on every run.
 const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
 const REVISITED = 'revisited';
 
-/** The unclaimed blocked items the queue has not revisited in the last few hours. */
-export function dueBlocked(at: string): BlockedItem[] {
+function blockedItem(doc: WorkItem): BlockedItem {
+  const triage = doc.facts.triage;
+  return {
+    number: doc.subject.number,
+    summary: doc.history.filter(entry => entry.outcome === 'blocked').at(-1)?.summary ?? '',
+    blocked_at: triage?.at ?? '',
+    blocked_reason: triage?.blocked?.reason ?? '',
+    blocked_by: triage?.blocked?.by ?? [],
+  };
+}
+
+/**
+ * The unclaimed blocked items no run has revisited in the last few hours, each recorded
+ * as revisited by this run before it is listed. The record is a conditional write at the
+ * revision read, so of several runs that list at once exactly one gets each item; a run
+ * whose write loses leaves the item to the run that won.
+ */
+export function dueBlocked(at: string, runId: string): BlockedItem[] {
   const due = new Date(Date.parse(at) - REVISIT_EVERY_MS).toISOString();
   const items: BlockedItem[] = [];
-  for (const stored of stateDocuments('work/')) {
+  for (const stored of state.listValues('work/')) {
     if (stored.value === null) continue;
     let doc: WorkItem;
     try {
       doc = parseWorkItem(stored.value);
     } catch (error) {
-      note(`revisit skips ${stored.name}: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`revisit skips ${stored.name}: ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
     const last = doc.history.filter(entry => entry.outcome === REVISITED).at(-1)?.at ?? '';
     if (doc.stage !== 'blocked' || doc.claim !== null || last >= due) continue;
-    const triaged = doc.history.filter(entry => entry.outcome === 'blocked').at(-1);
-    items.push({ number: doc.subject.number, summary: triaged?.summary ?? '' });
+    const entry: HistoryEntry = { at, stage: 'build', run_id: runId, outcome: REVISITED, summary: 'listed for the revisit agent' };
+    if (!state.put(stored.name, { ...doc, history: newest([...doc.history, entry]) }, { ifRevision: stored.revision }).ok) {
+      console.error(`revisit leaves ${stored.name} to the run that changed it`);
+      continue;
+    }
+    items.push(blockedItem(doc));
   }
   return items;
 }
 
-/** Record that the queue revisited the item, re-reading on a conflict; false if it never landed. */
-export function recordRevisit(subject: QualifiedPr, runId: string, summary: string): boolean {
-  const entry: HistoryEntry = { at: new Date().toISOString(), stage: 'build', run_id: runId, outcome: REVISITED, summary };
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const stored = read(workItemName(subject.number));
-    if (stored === undefined) return false;
-    const doc = { ...stored.doc, history: newest([...stored.doc.history, entry]) };
-    if (statePut(stored.name, doc, stored.revision) === 'ok') return true;
-  }
-  return false;
+/**
+ * Start one intake pickup of `subject` from a build pick: a fire of the operator's
+ * intake binding (the pick's `intake_binding`) on the issue's item, under intake's
+ * resource, capacity and overlap policy. The delivery id names the run, so a retried
+ * node starts no second pickup. `action` is `retriage` for a run's re-triage request.
+ * Returns how the binding admitted it, for the run's summary.
+ */
+export function startIntake(subject: QualifiedPr, runId: string, action?: 'retriage'): string {
+  const binding = input('intake_binding').trim();
+  if (binding === '') throw new Error('intake_binding is empty; a pick starts intake only through that binding');
+  const { repo, number } = subject;
+  const fired = trigger.fire(
+    binding,
+    { repo_host: repo.host, repo_path: repo.path, number: String(number), ...(action === undefined ? {} : { action }) },
+    { deliveryId: `build-pick-intake:${repo.host}/${repo.path}#${String(number)}:${runId}`, item: itemKey(number) }
+  );
+  return fired.disposition?.status ?? 'not admitted';
 }
 
 /**
@@ -163,6 +231,11 @@ export function countedRounds(doc: WorkItem): number {
   const triaged = doc.facts.triage?.at ?? '';
   const since = answered > triaged ? answered : triaged;
   return build.rounds.filter(round => round.at > since).length;
+}
+
+/** The latest validation any of the item's build rounds recorded, or null. */
+export function latestValidation(doc: WorkItem): Validation | null {
+  return doc.facts.build?.rounds.filter(round => round.validation !== undefined).at(-1)?.validation ?? null;
 }
 
 /**
@@ -184,21 +257,18 @@ export function itemPullRequest(
     if (triage !== undefined && triage.at > (round?.at ?? '')) return triaged;
     throw new Error(`round ${round?.run_id} has an unresolved PR create; reconcile its artifacts and re-triage the item, naming the PR if one exists`);
   }
-  const url = rounds.filter(round => round.pr_url !== '').at(-1)?.pr_url;
-  return url === undefined ? triaged : { repo, number: roundPrNumber(url, repo) };
+  const last = rounds.filter(round => round.pr_url !== '').at(-1);
+  if (last === undefined) return triaged;
+  return { repo, number: last.pr_number ?? roundPrNumber(last.pr_url, repo) };
 }
 
-function roundPrNumber(url: string, repo: QualifiedPr['repo']): number {
-  const parsed = URL.canParse(url) ? new URL(url) : null;
-  const match = parsed === null ? null : /^\/(.+)\/pull\/([1-9][0-9]*)$/.exec(parsed.pathname);
-  if (
-    parsed === null ||
-    match === null ||
-    !sameRepo({ host: parsed.hostname, path: match[1] ?? '' }, repo)
-  ) {
+/** The number of the round's pull request, which must be one of the item's repository. */
+export function roundPrNumber(url: string, repo: QualifiedPr['repo']): number {
+  const pr = prFromUrl(url);
+  if (!sameRepo(pr.repo, repo)) {
     throw new Error(`round pr_url ${url} is not a pull request of ${repo.host}/${repo.path}`);
   }
-  return Number(match[2]);
+  return pr.number;
 }
 
 /** Every round's branch starts with this, so a pull request from such a branch is the build queue's. */
@@ -220,75 +290,29 @@ export function buildBranch(number: number, title: string, runId: string): strin
 }
 
 export interface BuildChange {
+  /** The record's `at`: when the deciding run read the item. */
   readonly at: string;
   readonly run_id: string;
   readonly round: BuildRound | null;
   readonly entry: DecisionEntry;
   readonly status: BuildStatus;
   readonly brief: string;
-  /** Clear the claim in the same write: nothing is left for this run to do. */
-  readonly release: boolean;
 }
 
 /** The work item with one decision recorded on it. */
 export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
   const prior = doc.facts.build;
   const round = change.round === null ? [] : [{ ...change.round, summary: clipped(change.round.summary) }];
-  const entry = { ...change.entry, reason: clipped(change.entry.reason) };
   const build: BuildRecord = {
     status: change.status,
     brief: change.status === 'next' ? change.brief : '',
     rounds: [...(prior?.rounds ?? []), ...round].slice(-KEPT_ROUNDS),
-    decisions: [...(prior?.decisions ?? []), entry].slice(-KEPT_DECISIONS),
+    decisions: withDecision(prior?.decisions, change.entry),
     at: change.at,
   };
   return {
     ...doc,
-    claim: change.release ? null : doc.claim,
     facts: { ...doc.facts, build },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
-  };
-}
-
-/** The reason of a round recorded at release: its run ended before it decided the round. */
-export const ENDED_UNDECIDED = 'ended_undecided';
-
-/**
- * Start the item's next build-queue round now, through the operator's build-queue
- * binding (`build_queue_binding`). One run starts at most one next round per item.
- */
-export function nextRound(item: QualifiedPr, runId: string): string {
-  const { host, path } = item.repo;
-  return followUp(
-    text(process.env.INPUTS_BUILD_QUEUE_BINDING),
-    `build-round:${host}/${path}#${String(item.number)}:${runId}`,
-    { repo_host: host, repo_path: path, number: String(item.number) },
-    'its next round'
-  );
-}
-
-/**
- * The work item with the round a released build claim's run left: the pull request
- * whose head is the branch the claim recorded. A run that opened none, and a run that
- * recorded its round before it stopped, such as one that asked, add nothing.
- */
-export function withReleasedRound(doc: WorkItem, claim: Claim, at: string): WorkItem {
-  const prior = doc.facts.build;
-  if (claim.branch === undefined || prior?.rounds.some(round => round.run_id === claim.run_id)) return doc;
-  const pr = findPrByHead(doc.subject.repo, claim.branch);
-  if (pr === undefined) return doc;
-  const round: BuildRound = {
-    run_id: claim.run_id,
-    at,
-    delivered: false,
-    reason: ENDED_UNDECIDED,
-    pr_url: pr.url,
-    summary: `The run ended after it opened ${pr.url} and before it recorded the round.`,
-    artifacts: '',
-  };
-  const build: BuildRecord = prior ?? { status: 'next', brief: '', rounds: [], decisions: [], at };
-  return {
-    ...doc,
-    facts: { ...doc.facts, build: { ...build, rounds: [...build.rounds, round].slice(-KEPT_ROUNDS) } },
   };
 }

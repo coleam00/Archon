@@ -65,6 +65,34 @@ const listRunArtifactsRoute = createRoute({
   },
 });
 
+const getArtifactContentRoute = createRoute({
+  method: 'get',
+  path: '/api/artifacts/{runId}/{filename}',
+  tags: ['Workflows'],
+  summary: 'Read a workflow artifact file',
+  request: {
+    params: z.object({
+      runId: z.string(),
+      filename: z.string().openapi({
+        description:
+          'The complete relative filename encoded as one path value, including slash characters.',
+      }),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'Artifact file contents',
+      content: {
+        'text/plain': { schema: z.string() },
+        'text/markdown': { schema: z.string() },
+      },
+    },
+    400: jsonError('Invalid artifact path or filename'),
+    404: jsonError('Run or artifact not found'),
+    500: jsonError('Server error'),
+  },
+});
+
 type FileEntry = z.infer<typeof listArtifactsResponseSchema>['files'][number];
 async function readArtifactFileEntry(child: string, path: string): Promise<FileEntry | undefined> {
   try {
@@ -173,9 +201,9 @@ export function registerArtifactRoutes(app: OpenAPIHono): void {
   // GET /api/artifacts/:runId/* - Serve workflow artifact file contents
   // The wildcard captures the filename (e.g. "plan.md", "subdir/report.md").
   // Path traversal is blocked: any segment containing ".." is rejected.
-  // NOTE: Uses app.get() instead of registerOpenApiRoute because:
-  //  1. Wildcard path params (*) are not representable in OpenAPI 3.0
-  //  2. Response is raw text/markdown, not JSON
+  // Publish encoded filenames separately so existing unencoded nested URLs
+  // continue to use the wildcard handler without OpenAPI parameter validation.
+  app.openAPIRegistry.registerPath(getArtifactContentRoute);
   app.get('/api/artifacts/:runId/*', async c => {
     const runId = c.req.param('runId');
     // Hono wildcards match but don't capture — extract filename from the URL path.

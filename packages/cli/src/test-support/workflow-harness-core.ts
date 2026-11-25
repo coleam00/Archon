@@ -9,7 +9,9 @@ mock.module('@archon/core/services/provider-admission', () => ({
 
 const realRunConfig = await import('@archon/core/config/run-config');
 const realSealRunConfig = realRunConfig.sealWorkflowRunConfig;
+// Only sealing changes: it needs an encryption key the harness does not set.
 mock.module('@archon/core/config/run-config', () => ({
+  ...realRunConfig,
   sealWorkflowRunConfig: (...args: Parameters<typeof realSealRunConfig>) => {
     const previous = process.env.TOKEN_ENCRYPTION_KEY;
     try {
@@ -31,6 +33,34 @@ mock.module('@archon/core/workflows/branch-launch-source', () => ({
     _branch: string,
     prepare: (path: string) => Promise<unknown>
   ) => prepare('/adopted/snapshot'),
+}));
+
+/**
+ * The base-branch composition, faked: the checkout is passed through as the composed root.
+ * Unset definitions keep a harness run on the checkout; a test that sets them gets a run
+ * whose definitions came from the base branch.
+ */
+export const mockLayeredDefinitions: { definitions: unknown } = { definitions: undefined };
+mock.module('@archon/core/workflows/definition-source', () => ({
+  DefinitionSourceError: class DefinitionSourceError extends Error {},
+  withLayeredDefinitions: async (
+    input: { checkout: string },
+    use: (composed: { root: string; definitions: unknown }) => Promise<unknown>
+  ) => use({ root: input.checkout, definitions: mockLayeredDefinitions.definitions }),
+  discoverBindingWorkflows: async () => {
+    throw new Error('discoverBindingWorkflows is not mocked here');
+  },
+  bindingDefinitionsPlan: () => {
+    throw new Error('bindingDefinitionsPlan is not mocked here');
+  },
+  startsPinnedInPlace: () => {
+    throw new Error('startsPinnedInPlace is not mocked here');
+  },
+  baseRefName: (base: { remote?: string; branch: string }) =>
+    base.remote === undefined ? base.branch : `${base.remote}/${base.branch}`,
+  resolveDefinitionsBase: async () => {
+    throw new Error('resolveDefinitionsBase is not mocked here');
+  },
 }));
 
 export const mockCreateWorkflowEvent = mock(() => Promise.resolve());

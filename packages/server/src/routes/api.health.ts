@@ -11,9 +11,14 @@ import {
 import { readStoreId } from '@archon/paths/server-discovery';
 import * as workflowDb from '@archon/core/db/workflows';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
+import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import { appVersion } from '../app-version';
 import { getLog, openApiRouteRegistrar } from './api-route-kit';
-import { updateCheckResponseSchema } from './schemas/system.schemas';
+import {
+  appCommitSchema,
+  updateCheckResponseSchema,
+  type AppCommit,
+} from './schemas/system.schemas';
 
 /**
  * Public aggregate view of conversation processing. Health is outside the auth
@@ -51,6 +56,10 @@ const getHealthRoute = createRoute({
               concurrency: healthConcurrencySchema,
               runningWorkflows: z.number(),
               version: z.string().optional(),
+              // A source checkout keeps one version across many dev commits, so the
+              // version alone cannot say which code is running. Omitted when there is
+              // no commit to name.
+              commit: appCommitSchema.optional(),
               is_docker: z.boolean(),
               is_wsl: z.boolean(),
               wsl_distro: z.string().optional(),
@@ -110,10 +119,16 @@ export function registerHealthRoutes(
     lockManager,
     activePlatforms,
     attention,
+    commit,
   }: {
     lockManager: Pick<ConversationLockManager, 'getStats'>;
     activePlatforms?: readonly string[];
-    attention?: { router: Pick<AttentionRouter, 'health'> };
+    attention?: {
+      router: Pick<AttentionRouter, 'health'>;
+      tracker?: Pick<ItemTracker, 'health'>;
+    };
+    /** Read once at boot by `readArchonCommit` (`@archon/git/archon-commit`); see there for why not per request. */
+    commit?: AppCommit;
   }
 ): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
@@ -171,12 +186,20 @@ export function registerHealthRoutes(
       concurrency,
       runningWorkflows: runningWorkflowRows.length,
       version: appVersion,
+      ...(commit ? { commit } : {}),
       is_docker: isDocker(),
       is_wsl: isWSL(),
       ...(wslDistro ? { wsl_distro: wslDistro } : {}),
       ...(storeId ? { storeId } : {}),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
-      ...(attention ? { attentionDestinations: attention.router.health() } : {}),
+      ...(attention
+        ? {
+            attentionDestinations: [
+              ...attention.router.health(),
+              ...(attention.tracker?.health() ?? []),
+            ],
+          }
+        : {}),
       ...(schema ? { schema } : {}),
     });
   });

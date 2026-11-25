@@ -6,7 +6,21 @@ import {
   forgeEventEnvelopeSchema,
   mapForgeInputs,
   matchForgeEvent,
+  sourceActorSchema,
 } from './index';
+
+describe('source actor account type', () => {
+  const base = { host: 'github.com', id: '1', login: 'octo' };
+  test('is optional and nullable, so records without it still validate', () => {
+    expect(sourceActorSchema.parse(base)).toEqual(base);
+    expect(sourceActorSchema.parse({ ...base, type: null }).type).toBeNull();
+    for (const type of ['user', 'bot', 'organization'] as const)
+      expect(sourceActorSchema.parse({ ...base, type }).type).toBe(type);
+  });
+  test('refuses a value outside the named kinds', () => {
+    expect(sourceActorSchema.safeParse({ ...base, type: 'Bot' }).success).toBe(false);
+  });
+});
 
 describe('authored forge bindings', () => {
   const parsed = forgeEventEnvelopeSchema.parse({
@@ -146,6 +160,57 @@ describe('authored forge bindings', () => {
       createForgeBindingSchema(z.string()).parse({
         selector: { kind: 'comment.changed', actions: ['created'] },
         inputs: { actor: { source: 'field', field: 'label.actor.login' } },
+      })
+    ).toThrow();
+  });
+
+  test('selects a review by its state and maps the commit it was made on', () => {
+    const reviewed = {
+      kind: 'review.changed',
+      action: 'submitted',
+      pr: { repo: { host: 'github.com', path: 'org/repo' }, number: 7 },
+      review: {
+        id: '300',
+        state: 'approved',
+        nativeState: 'APPROVED',
+        commit: 'abc123',
+        author: { host: 'github.com', id: '42', login: 'octo' },
+      },
+    } as const;
+    const binding = createForgeBindingSchema(z.string()).parse({
+      selector: {
+        kind: 'review.changed',
+        actions: ['submitted'],
+        subject: { kind: 'pr', number: 7 },
+        predicates: [{ field: 'review.state', in: ['approved', 'changes_requested'] }],
+      },
+      inputs: {
+        number: { source: 'field', field: 'subject.number' },
+        commit: { source: 'field', field: 'review.commit' },
+      },
+    });
+    expect(matchForgeEvent(binding.selector, reviewed)).toBe(true);
+    expect(
+      matchForgeEvent(binding.selector, {
+        ...reviewed,
+        review: { ...reviewed.review, state: 'commented' },
+      })
+    ).toBe(false);
+    expect(mapForgeInputs(binding.inputs, reviewed)).toEqual({
+      ok: true,
+      inputs: { number: 7, commit: 'abc123' },
+    });
+    expect(
+      mapForgeInputs(binding.inputs, { ...reviewed, review: { ...reviewed.review, commit: null } })
+    ).toMatchObject({ ok: false, field: 'review.commit' });
+    expect(() =>
+      createForgeBindingSchema(z.string()).parse({
+        selector: {
+          kind: 'review.changed',
+          actions: ['submitted'],
+          subject: { kind: 'issue', number: 7 },
+        },
+        inputs: {},
       })
     ).toThrow();
   });

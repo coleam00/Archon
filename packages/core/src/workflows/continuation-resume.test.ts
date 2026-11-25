@@ -3,6 +3,7 @@ import { beforeEach, expect, mock, test } from 'bun:test';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import type { IWorkflowEngine, WorkflowResumeInput } from '@archon/workflows/engine-port';
 import type { WorkflowDeps } from '@archon/workflows/deps';
+import { WorkflowNotResumableError } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { HeadlessPlatform } from './headless-platform';
 
@@ -15,8 +16,10 @@ const pausedRun: WorkflowRun = {
   codebase_id: null,
   status: 'paused',
   outcome: null,
+  completed_outcome: null,
   user_message: 'deliver',
   metadata: {},
+  active_phase_started_at: null,
   started_at: new Date(),
   completed_at: null,
   last_activity_at: null,
@@ -26,6 +29,7 @@ const pausedRun: WorkflowRun = {
   adopted_from_run_id: null,
   output_root: null,
   checkout_baseline: null,
+  item_id: null,
 };
 const close = mock(async () => {});
 mock.module('../services/run-live-owner', () => ({
@@ -45,7 +49,6 @@ beforeEach(() => {
 
 function headlessHost(run: WorkflowRun) {
   const resume = mock<IWorkflowEngine['resume']>(async () => ({
-    accepted: true,
     runId: run.id,
     settled: Promise.resolve({ success: true, workflowRunId: run.id }),
   }));
@@ -83,9 +86,9 @@ test('a codebase-less paused run resumes from the workspaces path without host r
   expect(close).toHaveBeenCalledTimes(1);
 });
 
-test('an engine refusal closes its live owner before returning not-accepted', async () => {
+test('a lost claim closes its live owner before returning not-accepted', async () => {
   const { host, resume } = headlessHost(pausedRun);
-  resume.mockResolvedValueOnce({ accepted: false, reason: 'nothing-to-resume' });
+  resume.mockRejectedValueOnce(new WorkflowNotResumableError(pausedRun.id, 'running'));
   let closed = false;
   close.mockImplementationOnce(async () => {
     await new Promise<void>(resolve => setImmediate(resolve));

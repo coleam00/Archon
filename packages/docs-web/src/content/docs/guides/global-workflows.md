@@ -59,7 +59,7 @@ Commands resolve by **filename without extension**. Project, global, and bundled
 2. **Global / home-scoped** -- `~/.archon/workflows/`, `~/.archon/commands/`, `~/.archon/scripts/` (override bundled by filename).
 3. **Repo-specific** -- `<repoRoot>/.archon/workflows/`, `<repoRoot>/.archon/commands/`, `<repoRoot>/.archon/scripts/` (override global by filename).
 
-Same-named legacy/shared files at a higher scope win. Packaged commands and scripts resolve only within their owning package and never fall through to another scope.
+Same-named legacy/shared files at a higher scope win. Packaged commands and scripts resolve only within their owning pack and never fall through to another scope.
 
 ## Installed workflow packs
 
@@ -72,6 +72,8 @@ review-kit/                     # plugin root: owner/repo or owner/repo/<path>
 ├── archon-plugin.json
 ├── .shared/                    # modules and documents the pack's scripts use
 │   ├── metric-views.json       # optional overview cards for the console
+│   ├── item-metrics.json       # optional per-item figures for archon metrics
+│   ├── scripts/preflight.ts    # a script any workflow of the pack can name
 │   └── util.ts
 ├── .github/workflows/ci.yml    # a dot directory: never a workflow folder
 ├── tests/                      # no direct YAML: not a workflow folder
@@ -102,6 +104,7 @@ The whole plugin directory is installed, so a pack at the repository root can ke
 - **Names.** A qualified name matches exactly (case-sensitive) and never by suffix or substring, and a project or global workflow that declares an installed name is not loaded. Inside a pack, a reference to a YAML `name:` shared by multiple files fails discovery; when the files have distinct public identities, use a qualified identity such as `acme/review-kit:review` to select the intended target. Qualified identities take precedence over colliding authored names. Support identities use the YAML `name:`, so two support files with the same name also have the same public identity and fail discovery. Rename one support workflow and update its references; qualification cannot distinguish them.
 - **Runs keep their revision.** A run freezes the pack at the commit it started with, and a `workflow:` child takes the packs its parent froze. `archon plugin update` or `remove` affects only runs that start afterwards.
 - **Installed or copied.** An installed pack is read-only and changes only through `archon plugin update`. To change one for a single project, `archon plugin copy <id>` writes it to `.archon/workflows/<name>/`, where it is an ordinary project pack: its workflows run under their own `name:`, and `update` no longer touches it.
+- **Trying a change before installing.** Pass the pack's own folder as the source, `archon workflow run <name> --workflow-source <pack folder>`, and it runs as that project pack without being copied or installed. See [A pack folder as the source](/reference/cli/#a-pack-folder-as-the-source).
 
 ## Practical Examples
 

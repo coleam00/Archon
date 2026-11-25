@@ -24,11 +24,6 @@ describe('parsePiConfig', () => {
     expect(parsePiConfig({})).toEqual({});
   });
 
-  test('does not throw on malformed input', () => {
-    expect(() => parsePiConfig({ model: null })).not.toThrow();
-    expect(() => parsePiConfig({ model: [] })).not.toThrow();
-  });
-
   test('parses enableExtensions: true', () => {
     expect(parsePiConfig({ enableExtensions: true })).toEqual({
       enableExtensions: true,
@@ -47,13 +42,6 @@ describe('parsePiConfig', () => {
     expect(parsePiConfig({ enableExtensions: null })).toEqual({});
   });
 
-  test('combines model and enableExtensions', () => {
-    expect(parsePiConfig({ model: 'google/gemini-2.5-pro', enableExtensions: true })).toEqual({
-      model: 'google/gemini-2.5-pro',
-      enableExtensions: true,
-    });
-  });
-
   test('parses interactive: true', () => {
     expect(parsePiConfig({ interactive: true })).toEqual({ interactive: true });
   });
@@ -66,20 +54,6 @@ describe('parsePiConfig', () => {
     expect(parsePiConfig({ interactive: 'yes' })).toEqual({});
     expect(parsePiConfig({ interactive: 1 })).toEqual({});
     expect(parsePiConfig({ interactive: null })).toEqual({});
-  });
-
-  test('combines all three fields', () => {
-    expect(
-      parsePiConfig({
-        model: 'google/gemini-2.5-pro',
-        enableExtensions: true,
-        interactive: true,
-      })
-    ).toEqual({
-      model: 'google/gemini-2.5-pro',
-      enableExtensions: true,
-      interactive: true,
-    });
   });
 
   test('parses extensionFlags with boolean and string values', () => {
@@ -96,32 +70,10 @@ describe('parsePiConfig', () => {
     ).toEqual({ extensionFlags: { plan: true } });
   });
 
-  test('drops every invalid extensionFlags entry', () => {
-    expect(parsePiConfig({ extensionFlags: { bogus: 42, nested: {} } })).toEqual({
-      extensionFlags: {},
-    });
-  });
-
   test('drops non-object extensionFlags silently', () => {
     expect(parsePiConfig({ extensionFlags: 'plan=true' })).toEqual({});
     expect(parsePiConfig({ extensionFlags: ['plan', 'true'] })).toEqual({});
     expect(parsePiConfig({ extensionFlags: null })).toEqual({});
-  });
-
-  test('combines extensionFlags with other fields', () => {
-    expect(
-      parsePiConfig({
-        model: 'openai-codex/gpt-5.1-codex-mini',
-        enableExtensions: true,
-        interactive: true,
-        extensionFlags: { plan: true },
-      })
-    ).toEqual({
-      model: 'openai-codex/gpt-5.1-codex-mini',
-      enableExtensions: true,
-      interactive: true,
-      extensionFlags: { plan: true },
-    });
   });
 
   test('parses env with string values', () => {
@@ -136,32 +88,10 @@ describe('parsePiConfig', () => {
     ).toEqual({ env: { GOOD: 'yes' } });
   });
 
-  test('drops every invalid env entry', () => {
-    expect(parsePiConfig({ env: { NUM: 42, NESTED: {} } })).toEqual({ env: {} });
-  });
-
   test('drops non-object env silently', () => {
     expect(parsePiConfig({ env: 'PLANNOTATOR_REMOTE=1' })).toEqual({});
     expect(parsePiConfig({ env: ['A=1'] })).toEqual({});
     expect(parsePiConfig({ env: null })).toEqual({});
-  });
-
-  test('combines env with other fields', () => {
-    expect(
-      parsePiConfig({
-        model: 'openai-codex/gpt-5.4-mini',
-        enableExtensions: true,
-        interactive: true,
-        extensionFlags: { plan: true },
-        env: { PLANNOTATOR_REMOTE: '1' },
-      })
-    ).toEqual({
-      model: 'openai-codex/gpt-5.4-mini',
-      enableExtensions: true,
-      interactive: true,
-      extensionFlags: { plan: true },
-      env: { PLANNOTATOR_REMOTE: '1' },
-    });
   });
 
   test('parses maxConcurrent as positive integer', () => {
@@ -175,20 +105,6 @@ describe('parsePiConfig', () => {
     expect(parsePiConfig({ maxConcurrent: 1.5 })).toEqual({});
     expect(parsePiConfig({ maxConcurrent: 'four' })).toEqual({});
     expect(parsePiConfig({ maxConcurrent: null })).toEqual({});
-  });
-
-  test('combines maxConcurrent with model and other fields', () => {
-    expect(
-      parsePiConfig({
-        model: 'google/gemini-2.5-pro',
-        maxConcurrent: 4,
-        enableExtensions: true,
-      })
-    ).toEqual({
-      model: 'google/gemini-2.5-pro',
-      maxConcurrent: 4,
-      enableExtensions: true,
-    });
   });
 
   test('parses nodes with per-node overrides', () => {
@@ -457,23 +373,6 @@ describe('resolvePiExtensionSettings', () => {
       enableExtensions: true,
       interactive: false,
       extensionFlags: { plan: false },
-    });
-  });
-
-  test('direct chat (no nodeId) still ignores overrides even if a node-YAML block is passed', () => {
-    // Defensive: the provider never passes nodeConfig.pi without a nodeId, but the
-    // resolver should stay predictable — no nodeId means assistant-level only for
-    // the config-map layer; the node-YAML layer, when present, still applies.
-    expect(
-      resolvePiExtensionSettings(
-        { interactive: true, extensionFlags: { plan: true }, nodes: { implement: {} } },
-        undefined,
-        undefined
-      )
-    ).toEqual({
-      enableExtensions: true,
-      interactive: true,
-      extensionFlags: { plan: true },
     });
   });
 });

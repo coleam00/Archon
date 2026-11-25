@@ -1,3 +1,5 @@
+import { formatSkipCause } from '../../../skip-cause';
+import { boundaryIdComponent } from '../../../include/inline';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { attemptSpend } from '../../../run-budget';
 import { nodeInvocationKey } from '../../../node-record-reader';
@@ -20,7 +22,7 @@ import { planGraph } from '../../../graph-plan';
 import type { DagResumeSnapshot, PersistedNodeOutput } from '../../../store';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
-import type { IncludeCommandContent } from '../../../compiled-command';
+import { readComposedMeta, type IncludeCommandContent } from '../../../compiled-command';
 import type { FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { logWorkflowEvent } from '../../../logger';
 import { aggregateProviderFailure, rootFailures } from '../../../executor-shared';
@@ -203,6 +205,7 @@ function instanceRunContext(
     configuredCommandFolder: ctx.configuredCommandFolder,
     issueContext: ctx.issueContext,
     persistScope: ctx.persistScope,
+    itemScope: ctx.itemScope,
     workflowPersistSessions: ctx.workflowPersistSessions,
     scopeArtifactsDir: undefined,
     // Runtime cardinality changes only the deterministic instance prefix; the body
@@ -212,6 +215,7 @@ function instanceRunContext(
     priorCompletedNodes: threaded.priorNodes,
     claimedWorkPausePolicy: 'finish_through_parent_pause',
     lastSequentialSession: undefined,
+    getReportedBoundaryErrors: ctx.getReportedBoundaryErrors,
     warnedProviderConflicts: ctx.warnedProviderConflicts,
     totalCostUsd: undefined,
     totalTokens: undefined,
@@ -345,6 +349,25 @@ async function recordInstanceTerminal(
   return outcome;
 }
 
+function blockingBoundaryError(primarySink: string, ctx: RunLayersContext): string | undefined {
+  const nodes = new Map(ctx.layers.flat().map(node => [node.id, node]));
+  const pending = [primarySink];
+  const visited = new Set<string>();
+  for (const id of pending) {
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const output = ctx.nodeOutputs.get(id);
+    if (output?.state !== 'skipped') continue;
+    if (output.cause.kind === 'condition_parse_error' && output.cause.boundary !== undefined) {
+      return formatSkipCause(output.cause);
+    }
+    if (output.cause.kind === 'upstream_skipped') {
+      pending.push(output.cause.origin, ...(nodes.get(id)?.depends_on ?? []));
+    }
+  }
+  return undefined;
+}
+
 /** Reduce a finished body run to the instance outcome, storing its terminal record. */
 async function settleInstance(
   instance: InstanceRun,
@@ -390,6 +413,15 @@ async function settleInstance(
   // deterministic instance finishes through a sibling's pause and reaches its sink.
   // Surface any remaining incompleteness rather than treating absent output as success.
   const terminal = instanceCtx.nodeOutputs.get(primarySink);
+  const error = blockingBoundaryError(primarySink, instanceCtx);
+  if (error !== undefined) {
+    return recordInstanceTerminal(
+      instance,
+      { status: 'failed', output: '', error, ...instanceUsage },
+      { status: 'failed', error, failureKind: 'child_failed' },
+      'failed and its terminal state could not be stored'
+    );
+  }
   if (terminal?.state !== 'completed') {
     return {
       status: 'ambiguous',
@@ -428,12 +460,23 @@ export async function runComposeInstance(
 ): Promise<ComposeInstanceOutcome> {
   let expanded: { nodes: DagNode[]; primarySink: string } | { error: string };
   try {
+    const boundaryScope = [
+      boundaryIdComponent(scope.ctx.stepNamePrefix),
+      scope.ctx.loopGroupPath.map(frame => boundaryIdComponent(frame.groupId)).join('.'),
+      boundaryIdComponent(scope.node.id),
+      boundaryIdComponent(snapshot.identity),
+    ].join('/');
+    // A node that arrived through an include was authored in that block's file; the
+    // run's own nodes were authored in the run's workflow.
+    const composed = readComposedMeta(scope.node);
     expanded = expandComposeInstance(
       scope.node,
       snapshot.identity,
       snapshot.inputs,
       scope.definition,
-      scope.commandContents
+      scope.commandContents,
+      composed !== undefined ? composed.pack : scope.ctx.workflowPack,
+      boundaryScope
     );
   } catch (err) {
     expanded = { error: (err as Error).message };

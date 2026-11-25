@@ -1,35 +1,106 @@
-import type { AttentionLabels } from '../schemas/wait-node';
+import { z } from 'zod';
+import {
+  attentionFormSchema,
+  attentionRecommendationSchema,
+  type AttentionLabels,
+} from '../schemas/wait-node';
 import type { RecordSurface } from '../schemas/record-surface';
 import {
+  attentionAnswererSchema,
+  attentionAnsweringRunSchema,
+  attentionAnswerSchema,
+  attentionForm,
   attentionLabels,
+  attentionOptions,
   attentionRevision,
   pausedAttentionWait,
   workflowWaitStepName,
+  type AttentionAnsweringRun,
   type WorkflowAttentionWaitContext,
   type WorkflowRun,
 } from '../schemas/workflow-run';
 import type { ObservabilityEventInput } from './event-types';
 
 /**
+ * What an attention wait's `wait_started` row records about the ask, beside its labels:
+ * the occurrence, the form, the option ids offered and the recommended one. It is what
+ * measures whether recommendations are followed once the wait's context is gone. Ids
+ * only: never the message, an option's label or the recommendation's `why`.
+ */
+export const attentionAskRecordSchema = z.object({
+  occurrence: z.string(),
+  form: attentionFormSchema,
+  options: z.array(z.string()),
+  /** The last of `options` is the reserved one, whose answer carries its own text. */
+  other: z.literal(true).optional(),
+  recommendation: attentionRecommendationSchema.pick({ option: true, confidence: true }).optional(),
+});
+export type AttentionAskRecord = z.infer<typeof attentionAskRecordSchema>;
+
+/** The ask record of a wait as it pauses; undefined for a wait from before occurrences. */
+export function attentionAskRecord(
+  wait: WorkflowAttentionWaitContext
+): AttentionAskRecord | undefined {
+  if (wait.pauseId === undefined) return undefined;
+  const { recommendation } = wait;
+  return {
+    occurrence: wait.pauseId,
+    form: attentionForm(wait),
+    options: attentionOptions(wait).map(option => option.id),
+    ...(wait.other === true ? { other: true } : {}),
+    ...(recommendation === undefined
+      ? {}
+      : {
+          recommendation: {
+            option: recommendation.option,
+            ...(recommendation.confidence === undefined
+              ? {}
+              : { confidence: recommendation.confidence }),
+          },
+        }),
+  };
+}
+
+/**
+ * What a `wait_answered` row records: the surface, the occurrence, the answer, who, and
+ * the run the answer was given from when it came from inside one.
+ */
+export const attentionAnswerRecordSchema = z.object({
+  occurrence: z.string(),
+  answer: attentionAnswerSchema,
+  by: attentionAnswererSchema.optional(),
+  /** Reported from the run's environment and not verified; attribution, never proof. */
+  fromRun: attentionAnsweringRunSchema.optional(),
+});
+
+/**
  * The audit row for an attention wait's answer, written in the answer's transaction by
- * every store. `wait` is the answered wait as stored.
+ * every store. `wait` is the answered wait as stored, and `fromRun` the write's.
  */
 export function waitAnsweredEvent(
   workflowRunId: string,
-  wait: WorkflowAttentionWaitContext
+  wait: WorkflowAttentionWaitContext,
+  fromRun: AttentionAnsweringRun | undefined
 ): ObservabilityEventInput {
   return {
     workflow_run_id: workflowRunId,
     event_type: 'wait_answered',
     step_name: workflowWaitStepName(wait),
-    data: { via: wait.answeredVia, occurrence: wait.pauseId, answer: wait.answer },
+    data: {
+      via: wait.answeredVia,
+      occurrence: wait.pauseId,
+      answer: wait.answer,
+      ...(wait.answeredBy === undefined ? {} : { by: wait.answeredBy }),
+      ...(fromRun === undefined ? {} : { fromRun }),
+    },
   };
 }
 
 /** One answer to an open attention wait, checked against the occurrence it names. */
 export type AttentionAnswerWrite = Required<
   Pick<WorkflowAttentionWaitContext, 'pauseId' | 'answer' | 'answeredVia' | 'answeredAt'>
->;
+> &
+  Pick<WorkflowAttentionWaitContext, 'answeredBy'> & { fromRun?: AttentionAnsweringRun };
 
 /**
  * The wait `run` sits at once `write` lands: the stored wait, labels and revision
@@ -43,7 +114,9 @@ export function answeredAttentionWait(
   const wait = pausedAttentionWait(run);
   if (wait === undefined || wait.answer !== undefined || wait.pauseId !== write.pauseId)
     return undefined;
-  return { ...wait, ...write };
+  // `fromRun` goes on the event alone (`attentionAnsweringRunSchema`).
+  const { fromRun: _fromRun, ...answer } = write;
+  return { ...wait, ...answer };
 }
 
 /** One label write on an open attention wait, checked against the occurrence it names. */

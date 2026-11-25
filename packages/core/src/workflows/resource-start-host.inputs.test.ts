@@ -3,11 +3,12 @@
  * contract: the workflow's own inputs, or its pack's settings checked against their types.
  */
 import { describe, expect, test } from 'bun:test';
-import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
-import { resolveBindingInputs } from './resource-start-host';
+import type { WorkflowPackMember } from '@archon/workflows/schemas/pack-settings';
+import { resolveBindingInputs, startedWorkflowInputProblems } from './binding-workflow';
 
-const pack: WorkflowPack = {
+const pack: WorkflowPackMember = {
   key: 'alpha',
+  workflow: 'packed',
   source: 'project',
   settings: { strict: { type: 'bool' }, forge: { type: 'enum', values: ['gh', 'glab'] } },
 };
@@ -72,5 +73,27 @@ describe('trigger event inputs and pack settings', () => {
         pack,
       })
     ).toThrow("cannot pass event-mapped input 'title'");
+  });
+});
+
+describe('a check of a binding that maps a pack setting', () => {
+  const workflow = { name: 'packed', inputs: undefined, pack };
+
+  test('ignores a stale launch literal the mapped value replaces at the start', () => {
+    expect(
+      startedWorkflowInputProblems({ workflow }, { forge: 'svn' }, { mapped: ['forge'] })
+    ).toEqual([]);
+    expect(
+      resolveBindingInputs(
+        { launch: { inputs: { forge: 'svn' } }, eventInputs: { forge: 'gh' } },
+        workflow
+      )
+    ).toEqual({ forge: 'gh' });
+  });
+
+  test('still checks the literal of a setting nothing maps', () => {
+    expect(startedWorkflowInputProblems({ workflow }, { forge: 'svn' }, { mapped: [] })).toEqual([
+      expect.stringContaining("pack setting 'forge' must be one of gh, glab"),
+    ]);
   });
 });

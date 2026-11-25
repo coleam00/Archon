@@ -37,7 +37,8 @@ async function read(
   tokenEnv?: string,
   path = root,
   metadataTokens = ['GITHUB_TOKEN', 'GH_TOKEN'],
-  host = 'github.com'
+  host = 'github.com',
+  pathKey = 'PATH'
 ) {
   writeFileSync(join(root, 'expected'), expected);
   writeFileSync(join(root, 'token-env'), JSON.stringify(metadataTokens));
@@ -61,7 +62,7 @@ async function read(
         scanPath: false,
       },
       env: {
-        PATH: path,
+        [pathKey]: path,
         HOME: root,
         GH_CONFIG_DIR: root,
       },
@@ -102,6 +103,13 @@ test('an explicitly empty credential refuses instead of borrowing the host login
   const result = await read({ GH_TOKEN: '', GITHUB_TOKEN: '' }, 'unused');
   expect(result.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
   expect(readFileSync(join(root, 'calls'), 'utf8')).toBe('');
+});
+
+test('finds gh through a Path-only env, as a Windows Task Scheduler start has', async () => {
+  const result = await read({}, 'cli-secret', 'ok', undefined, root, undefined, undefined, 'Path');
+  expect(result.response.ok).toBe(true);
+  expect(result).toHaveProperty('credentialSource', 'gh auth token');
+  expect(JSON.stringify(result)).not.toContain('cli-secret');
 });
 
 test('reports absent sources when gh is not installed', async () => {

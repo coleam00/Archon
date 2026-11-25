@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import { createTestWorkflowHost } from '../test-support/workflow-command-harness';
 
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
@@ -54,6 +55,34 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
       inputs?: Record<string, string>;
     };
     expect(opts.inputs).toEqual({ diff: 'D1' });
+  });
+
+  it('starts the run with the inputs the forge check returns', async () => {
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const forgeAccess = await import('@archon/workflows/run-forge-access');
+    const assertForge = spyOn(forgeAccess, 'assertRunForgeAccess').mockResolvedValue({
+      diff: 'D1',
+      repo_host: 'github.com',
+      repo_path: 'o/project',
+    });
+    await stubInputWorkflow();
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+    try {
+      await workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'review-block', 'go', {
+        noWorktree: true,
+        inputs: ['diff=D1'],
+      });
+    } finally {
+      assertForge.mockRestore();
+    }
+
+    const opts = (executeWorkflow as ReturnType<typeof mock>).mock.calls[0][7] as {
+      inputs?: Record<string, string>;
+    };
+    expect(opts.inputs).toEqual({ diff: 'D1', repo_host: 'github.com', repo_path: 'o/project' });
   });
 
   it('still refuses a required-input workflow when nothing is supplied, before any cost', async () => {
@@ -130,24 +159,6 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
   });
 
-  it('reports the incompatible flag, not an input error, for --dry-run --resume --input', async () => {
-    // The incompatible-flags check must stay ahead of the input gate: with --input no
-    // longer in that list, only ordering keeps the triple reporting the flag conflict.
-    const dryRun = await import('@archon/workflows/dry-run');
-    await stubInputWorkflow();
-    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
-
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'review-block', 'go', {
-        dryRun: true,
-        resume: true,
-        inputs: ['diff=D1'],
-      })
-    ).rejects.toThrow(/--dry-run cannot be combined with --resume/);
-
-    expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
-  });
-
   it('rejects an undeclared --input name on a dry run at the gate', async () => {
     const dryRun = await import('@archon/workflows/dry-run');
     await stubInputWorkflow();
@@ -163,18 +174,15 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
   });
 
-  it('does not re-gate a --resume of a required-input workflow', async () => {
+  it('does not re-gate a resume of a required-input workflow', async () => {
     // The gate is deliberately skipped on resume: the run row already carries inputs
     // validated at creation, and a resume supplies nothing. A refactor that hoists
     // `resolveTopLevelInputs` out of the `if (!options.resume)` guard would make every
     // CLI resume of a required-input workflow throw instead — this is what catches it.
-    // (The `--input` + `--resume` test below cannot: it fails on the mutual-exclusion
-    // check before ever reaching the gate.)
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
     const conversationDb = await import('@archon/core/db/conversations');
     const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDb = await import('@archon/core/db/workflows');
     await stubInputWorkflow();
 
     (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -189,12 +197,6 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
       default_cwd: '/repo/root',
       default_branch: 'develop',
     });
-    // working_path null keeps the resume on the caller cwd, skipping the existsSync probe.
-    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-prior',
-      working_path: null,
-      workflow_name: 'review-block',
-    });
     (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       success: true,
@@ -202,8 +204,15 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     });
 
     // No --input, and the workflow declares a required one: this must NOT throw.
+    // working_path null keeps the resume on the caller cwd, skipping the existsSync probe.
     await workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'review-block', 'go', {
       resume: true,
+      continuationRun: makeContinuationRun({
+        id: 'run-prior',
+        working_path: null,
+        workflow_name: 'review-block',
+        codebase_id: null,
+      }),
     });
 
     expect(executeWorkflow).toHaveBeenCalledTimes(1);
@@ -213,20 +222,12 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     };
     expect(opts.inputs).toBeUndefined();
   });
+});
 
-  it('rejects --input combined with --resume rather than silently ignoring it', async () => {
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    // Flag validation runs after name resolution (as every other flag check does),
-    // so discovery still has to resolve for the conflict to be reached.
-    await stubInputWorkflow();
-
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'review-block', 'go', {
-        resume: true,
-        inputs: ['diff=D1'],
-      })
-    ).rejects.toThrow(/--resume and --input are mutually exclusive/);
-
-    expect(executeWorkflow).not.toHaveBeenCalled();
+describe('readSuppliedInputs (#5678)', () => {
+  it('keeps an --input value that names an existing file as that string', async () => {
+    const { readSuppliedInputs } = await import('./workflow-run-admission');
+    const path = import.meta.path; // this test file: it exists
+    expect(await readSuppliedInputs({ inputs: [`big=${path}`] })).toEqual({ big: path });
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Resume of workflow runs: finding a resumable run, the resume compare-and-swap,
+ * Resume of workflow runs: finding a chat conversation's resumable run, the resume compare-and-swap,
  * fan-out child recovery and paused-run slot release. Re-exported from the
  * `./workflows` entry.
  */
@@ -17,19 +17,24 @@ import {
   EXECUTION_CLAIM_METADATA_KEY,
   FAN_OUT_CANCEL_REASONS,
   WorkflowNotResumableError,
+  WorkflowItemHeldError,
   WorkflowResourceBusyError,
+  RunLimitError,
   pauseCursorMatches,
+  requireOwnerlessLease,
   resumeCursorMatches,
   type PauseCursor,
-  type WorkflowResumeCursor,
+  type ResumeClaimCursor,
 } from '@archon/workflows/store';
-import type { SqlDialect } from './adapters/types';
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import {
   addResourceSlotHolder,
+  heldItemRefusal,
   lockResourceSlot,
+  lockResourceSlotForAdmission,
   removeResourceSlotHolder,
   resourceStartOccupancy,
+  runLimitRefusal,
   type TransactionQuery,
 } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
@@ -37,79 +42,19 @@ import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normal
 import { getLog, normalizeMetadata } from './workflow-run-shared';
 
 /**
- * Days of inactivity after which a 'running' run is treated as an orphan (its
- * executor presumed dead) and becomes eligible for resume. Bound as a query
- * parameter — never interpolated — so both dialects handle it positionally.
- */
-const ORPHAN_RESUME_STALE_DAYS = 1;
-
-/**
- * SQL fragment matching a run that may be resumed: failed/paused, or a stale
- * 'running' orphan (no activity for ORPHAN_RESUME_STALE_DAYS). `dayParamIndex`
- * is the 1-based placeholder position at which the caller MUST bind
- * ORPHAN_RESUME_STALE_DAYS. Shared by findResumableRun and resumeWorkflowRun so
- * the two predicates cannot drift — a hand-duplicated copy did drift and bound
- * the wrong placeholder, breaking resume (PR #1830 review C1).
- */
-function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
-  const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
-  return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
-}
-
-export async function findResumableRun(
-  workflowName: string,
-  workingPath: string
-): Promise<WorkflowRun | null> {
-  const dialect = getDialect();
-  try {
-    const result = await pool.query<WorkflowRunRow>(
-      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
-       WHERE workflow_name = $1
-         AND working_path = $2
-         AND ${resumableStatusClause(dialect, 3)}
-         AND (
-           status <> 'running'
-           OR NOT EXISTS (
-             SELECT 1 FROM remote_agent_resource_start_requests q
-              WHERE q.id = remote_agent_workflow_runs.id AND q.status = 'admitted'
-           )
-         )
-       ORDER BY started_at DESC
-       LIMIT 1`,
-      [workflowName, workingPath, ORPHAN_RESUME_STALE_DAYS]
-    );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, errorType: err.constructor.name, workflowName, workingPath },
-      'db.workflow_run_find_resumable_failed'
-    );
-    throw new Error(`Failed to find resumable run: ${err.message}`);
-  }
-}
-
-/**
- * Find a resumable (failed/paused) run for a workflow scoped to (parent conversation, codebase).
- * Used by the orchestrator (all platforms) to detect approved runs that need foreground resume
- * on the prior run's worktree. Codebase scope prevents cross-project resume on persistent
- * chat conversation IDs (Telegram chat_id, Slack thread, etc.).
+ * List every resumable (failed/paused) run of a workflow scoped to (parent conversation,
+ * codebase). The orchestrator (all platforms) continues one only when it is the single run a
+ * chat message could continue; with more than one it continues none and lists them. Codebase
+ * scope prevents cross-project resume on persistent chat conversation IDs (Telegram chat_id,
+ * Slack thread, etc.).
  *
- * Ordering is status-first, then recency WITHIN a status — not bare recency. The two statuses
- * are not interchangeable candidates for the caller: a `paused` run is an open gate that is
- * legitimately waiting and gets hydrated and resumed, while a `failed` one is deliberately gated
- * behind an explicit user prompt first (#1549). Ordering purely by `started_at` therefore lets a
- * newer failure shadow an older open gate, and approving that gate resumes nothing.
- *
- * Contrast with getActiveWorkflowRunByPath, which sorts the opposite way (older-wins) —
- * it answers "who took the path lock first", a different question.
+ * The order (paused first, then newest within a status) only orders that listing.
  */
-export async function findResumableRunByParentConversation(
+export async function listResumableRunsByParentConversation(
   workflowName: string,
   parentConversationId: string,
   codebaseId: string
-): Promise<WorkflowRun | null> {
+): Promise<WorkflowRun[]> {
   try {
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
@@ -117,24 +62,23 @@ export async function findResumableRunByParentConversation(
          AND parent_conversation_id = $2
          AND codebase_id = $3
          AND status IN ('failed', 'paused')
-       ORDER BY CASE WHEN status = 'paused' THEN 0 ELSE 1 END, started_at DESC
-       LIMIT 1`,
+       ORDER BY CASE WHEN status = 'paused' THEN 0 ELSE 1 END, started_at DESC`,
       [workflowName, parentConversationId, codebaseId]
     );
-    const row = result.rows[0];
-    return row ? normalizeWorkflowRun(row) : null;
+    return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
     const err = error as Error;
     getLog().error(
       { err, workflowName, parentConversationId, codebaseId },
-      'db.workflow_run_find_resumable_by_parent_failed'
+      'db.workflow_run_list_resumable_by_parent_failed'
     );
-    throw new Error(`Failed to find resumable run by parent conversation: ${err.message}`);
+    throw new Error(`Failed to list resumable runs by parent conversation: ${err.message}`);
   }
 }
 
 type PriorRunRow = Pick<WorkflowRunRow, 'status' | 'metadata'> & {
   resource_key?: string | null;
+  item_id?: string | null;
 };
 
 /** Pin the run row (and its admitted resource request, if any) for the resume transaction. */
@@ -146,7 +90,7 @@ async function lockPriorRun(query: TransactionQuery, id: string): Promise<PriorR
     await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
   }
   const priorRows = await query<PriorRunRow>(
-    `SELECT w.status, w.metadata, q.resource_key
+    `SELECT w.status, w.metadata, q.resource_key, w.item_id
        FROM remote_agent_workflow_runs w
        LEFT JOIN remote_agent_resource_start_requests q
          ON q.id = w.id AND q.status = 'admitted'
@@ -156,7 +100,7 @@ async function lockPriorRun(query: TransactionQuery, id: string): Promise<PriorR
   return priorRows.rows[0];
 }
 
-function priorMatchesCursor(prior: PriorRunRow, cursor: WorkflowResumeCursor | undefined): boolean {
+function priorMatchesCursor(prior: PriorRunRow, cursor: ResumeClaimCursor | undefined): boolean {
   return (
     cursor === undefined ||
     resumeCursorMatches(
@@ -171,18 +115,20 @@ function priorMatchesCursor(prior: PriorRunRow, cursor: WorkflowResumeCursor | u
 
 /**
  * Take a slot on the run's admitted resource before it resumes, or return the refusal when the
- * resource is busy. A run with no admitted resource, or a stale 'running' orphan, takes no slot.
+ * resource is busy. A run with no admitted resource takes no slot. A `running` run resumed
+ * with an `ownerless` cursor keeps the slot it already holds (`casResumeRun` refuses it
+ * when it holds none).
  */
 async function claimResourceSlot(
   query: TransactionQuery,
   id: string,
   prior: PriorRunRow,
-  cursor: WorkflowResumeCursor | undefined
+  cursor: ResumeClaimCursor | undefined
 ): Promise<WorkflowResourceBusyError | undefined> {
   const resourceKey = prior.resource_key ?? undefined;
   const status = prior.status;
   if (resourceKey === undefined || (status !== 'failed' && status !== 'paused')) return undefined;
-  const { capacity } = await lockResourceSlot(query, resourceKey);
+  const { capacity } = await lockResourceSlotForAdmission(query, resourceKey);
   const metadata = normalizeMetadata(prior.metadata);
   const occupancy = await resourceStartOccupancy(query, resourceKey, capacity);
   const blocker = resourceResumeBlocker(occupancy, { id, status, metadata });
@@ -206,27 +152,17 @@ async function claimResourceSlot(
 }
 
 /**
- * Refresh started_at to NOW so the resumed row competes fairly with
- * currently-active rows in getActiveWorkflowRunByPath's older-wins
- * tiebreaker. Without this, a resumed row carries its original
- * (potentially hours-old) started_at and would sort ahead of any
- * currently-running holder, slipping past the path lock and causing
- * two active workflows on the same working_path.
+ * Advance path priority on resume without changing run creation time. Otherwise an
+ * old resumer would sort ahead of a current holder and bypass checkout exclusion.
  *
- * We accept losing the original creation time here — `started_at` for
- * an active row semantically means "when did this active phase start."
- * The original creation time can be recovered from workflow_events
- * history if needed for analytics.
- *
- * Compare-and-swap guard: flip to 'running' only if the row is STILL
- * resumable (resumableStatusClause — shared with findResumableRun so the two
- * predicates can't drift). The exclusion mechanism is the atomic row-level
- * UPDATE: because it also refreshes last_activity_at, a second concurrent
- * resumer finds the row already 'running' with fresh activity, no longer
- * matches the clause, and gets rowCount 0. Without it two callers (web
- * Resume + a chat re-dispatch, or the lock-less CLI path) could both flip
- * the same run to 'running' and double-claim the worktree. The day param is
- * bound at $2 (ORPHAN_RESUME_STALE_DAYS), matching findResumableRun's bind.
+ * Compare-and-swap guard: flip to 'running' only if the row is STILL resumable. A
+ * failed or paused run is. A 'running' run is only with an `ownerless` cursor, and only
+ * while its execution claim is still the one the caller read. Every resume mints a new
+ * claim (`resumeTransition`), so of two concurrent resumers the second misses and gets
+ * rowCount 0. Without it two callers (web Resume + a chat re-dispatch, or two CLI
+ * resumes of a killed run) could both start an executor for the same run and
+ * double-claim the worktree. An admitted 'running' run must still hold its resource
+ * slot; it keeps that slot and takes no other.
  *
  * The CAS also clears `metadata.error` and `metadata.stop_reason` so a run that
  * fails, is resumed, and then completes doesn't keep rendering its old failure
@@ -246,7 +182,8 @@ async function claimResourceSlot(
 async function casResumeRun(
   query: TransactionQuery,
   id: string,
-  prior: PriorRunRow
+  prior: PriorRunRow,
+  cursor: ResumeClaimCursor | undefined
 ): Promise<WorkflowRun | undefined> {
   const dialect = getDialect();
   const { metadataPatch, events } = resumeTransition({
@@ -255,23 +192,40 @@ async function casResumeRun(
     metadata: normalizeMetadata(prior.metadata),
   });
 
-  const result = await query(
-    `UPDATE remote_agent_workflow_runs
-     SET status = 'running',
-         completed_at = NULL,
-         started_at = ${dialect.now()},
-         last_activity_at = ${dialect.now()},
-         metadata = ${dialect.jsonMerge('metadata', 3)}
-     WHERE id = $1
-       AND ${resumableStatusClause(dialect, 2)}
-       AND (
+  const params: unknown[] = [id, JSON.stringify(metadataPatch)];
+  let resumable = "status IN ('failed', 'paused')";
+  if (cursor?.kind === 'ownerless') {
+    const claim = dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY);
+    if (cursor.executionClaim === null) resumable = `status = 'running' AND ${claim} IS NULL`;
+    else {
+      params.push(cursor.executionClaim);
+      resumable = `status = 'running' AND ${claim} = $3`;
+    }
+    resumable += ` AND (
          NOT EXISTS (
            SELECT 1 FROM remote_agent_resource_start_requests q
             WHERE q.id = $1 AND q.status = 'admitted'
          )
-         OR status IN ('failed', 'paused')
-       )`,
-    [id, ORPHAN_RESUME_STALE_DAYS, JSON.stringify(metadataPatch)]
+         OR EXISTS (
+           SELECT 1 FROM remote_agent_resource_start_requests q
+             JOIN remote_agent_resource_slot_holders h
+               ON h.resource_key = q.resource_key
+              AND h.holder_kind = 'run'
+              AND h.holder_id = CAST(q.id AS TEXT)
+            WHERE q.id = $1 AND q.status = 'admitted'
+         )
+       )`;
+  }
+  const result = await query(
+    `UPDATE remote_agent_workflow_runs
+     SET status = 'running',
+         completed_at = NULL,
+         active_phase_started_at = ${dialect.now()},
+         last_activity_at = ${dialect.now()},
+         metadata = ${dialect.jsonMerge('metadata', 2)}
+     WHERE id = $1
+       AND ${resumable}`,
+    params
   );
 
   if (result.rowCount === 0) return undefined;
@@ -287,19 +241,30 @@ async function casResumeRun(
 
 export async function resumeWorkflowRun(
   id: string,
-  cursor?: WorkflowResumeCursor
+  cursor?: ResumeClaimCursor
 ): Promise<WorkflowRun> {
+  requireOwnerlessLease(id, cursor);
   let updateResult:
     | { rowCount: 0 }
-    | { busy: WorkflowResourceBusyError }
+    | { busy: WorkflowResourceBusyError | WorkflowItemHeldError | RunLimitError }
     | { admitted: WorkflowRun };
   try {
     updateResult = await getDatabase().withTransaction(async query => {
       const prior = await lockPriorRun(query, id);
       if (!prior || !priorMatchesCursor(prior, cursor)) return { rowCount: 0 };
+      // A paused or running run still holds its item; a failed one gave it up.
+      const held =
+        prior.status === 'failed' && prior.item_id != null
+          ? await heldItemRefusal(query, id, ['failed'])
+          : undefined;
+      if (held) return { busy: held };
+      // A resume needs room unless its tree still counts (`runLimitRefusal`): a failed tree's
+      // does. Checked before the slot is taken, so a refusal leaves nothing behind.
+      const full = await runLimitRefusal(query, id);
+      if (full) return { busy: full };
       const busy = await claimResourceSlot(query, id, prior, cursor);
       if (busy) return { busy };
-      const admitted = await casResumeRun(query, id, prior);
+      const admitted = await casResumeRun(query, id, prior, cursor);
       return admitted ? { admitted } : { rowCount: 0 };
     });
   } catch (error) {
@@ -352,11 +317,14 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
 
   try {
     return await getDatabase().withTransaction(async query => {
+      // A child recovered after its whole tree ended would revive the tree without room.
+      const full = await runLimitRefusal(query, id);
+      if (full) throw full;
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'running',
              completed_at = NULL,
-             started_at = ${dialect.now()},
+             active_phase_started_at = ${dialect.now()},
              last_activity_at = ${dialect.now()},
              metadata = ${dialect.jsonMerge(metadataWithoutCancelledReason, 2)}
          WHERE id = $1
@@ -392,6 +360,7 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
     });
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Workflow run ')) throw error;
+    if (error instanceof RunLimitError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_fan_out_recover_failed');
     throw new Error(`Failed to recover cancelled fan-out run: ${err.message}`);

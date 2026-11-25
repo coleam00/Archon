@@ -1,5 +1,6 @@
 /**
- * Request-shape tests for startRun's declared-inputs channel (#2554).
+ * Request-shape tests for startRun: its declared-inputs channel (#2554), and what
+ * happens to the conversation it creates when the run route refuses (#5641).
  *
  * The JSON and multipart branches carry the same map two different ways, and the
  * multipart encoding has to agree byte-for-byte with what the run route's multipart
@@ -10,14 +11,9 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { HttpError } from '../lib/http';
 import { startRun } from './startRun';
 
-interface Captured {
-  url: string;
-  init: RequestInit | undefined;
-}
-
 const originalFetch = globalThis.fetch;
 const originalWindow = globalThis.window;
-let calls: Captured[] = [];
+let calls: { url: string; init: RequestInit | undefined }[] = [];
 
 function stubFetch(
   runStatus = 200,
@@ -40,7 +36,7 @@ function stubFetch(
 }
 
 /** The run dispatch is the second call; the first creates the conversation. */
-function runCall(): Captured {
+function runCall(): (typeof calls)[number] {
   const call = calls.find(c => c.url.includes('/run'));
   if (call === undefined) throw new Error('no run dispatch captured');
   return call;
@@ -101,8 +97,17 @@ describe('startRun — declared inputs (#2554)', () => {
     const form = runCall().init?.body as FormData;
     expect(form).toBeInstanceOf(FormData);
     expect(JSON.parse(String(form.get('inputs')))).toEqual({ diff: 'D1' });
+    expect(form.get('conversationId')).toBe('web-test-1');
     expect(form.get('message')).toBe('go');
-    expect(form.getAll('files')).toHaveLength(1);
+    expect(Array.from(form.keys()).sort()).toEqual([
+      'conversationId',
+      'files',
+      'inputs',
+      'message',
+    ]);
+    expect(form.getAll('files').map(file => (typeof file === 'string' ? file : file.name))).toEqual(
+      ['a.txt']
+    );
     expect(new Headers(runCall().init?.headers).has('Content-Type')).toBe(false);
   });
 
@@ -150,48 +155,109 @@ describe('startRun — declared inputs (#2554)', () => {
       '@planner': 'codex/gpt-5.6-sol',
     });
   });
-  for (const attached of [false, true]) {
-    test(`launch preserves the full server refusal (attached: ${String(attached)})`, async () => {
-      const message = `Launch refused: ${'credential preflight detail; '.repeat(12)}TAIL-MUST-BE-VISIBLE`;
-      stubFetch(409, { error: message });
+  test('launch preserves the full server refusal', async () => {
+    const message = `Launch refused: ${'credential preflight detail; '.repeat(12)}TAIL-MUST-BE-VISIBLE`;
+    stubFetch(409, { error: message });
 
-      const launch = startRun({
+    const launch = startRun({
+      projectId: 'p1',
+      workflow: 'review-block',
+      message: 'go',
+    });
+
+    await expect(launch).rejects.toBeInstanceOf(HttpError);
+    await expect(launch).rejects.toMatchObject({
+      status: 409,
+      path: '/api/workflows/review-block/run',
+      bodySnippet: `${JSON.stringify({ error: message }).slice(0, 200)}...`,
+      serverError: message,
+    });
+  });
+
+  test('launch caps a proxy HTML refusal', async () => {
+    const html = `<html><body>${'Bad gateway '.repeat(40)}</body></html>`;
+    globalThis.fetch = ((input: RequestInfo | URL) =>
+      Promise.resolve(
+        String(input).includes('/api/conversations')
+          ? Response.json({ conversationId: 'web-test-1' })
+          : new Response(html, { status: 502 })
+      )) as typeof fetch;
+
+    await expect(
+      startRun({
         projectId: 'p1',
         workflow: 'review-block',
         message: 'go',
-        files: attached ? [new File(['x'], 'a.txt', { type: 'text/plain' })] : undefined,
-      });
-
-      await expect(launch).rejects.toBeInstanceOf(HttpError);
-      await expect(launch).rejects.toMatchObject({
-        status: 409,
-        path: '/api/workflows/review-block/run',
-        bodySnippet: `${JSON.stringify({ error: message }).slice(0, 200)}...`,
-        serverError: message,
-      });
+      })
+    ).rejects.toMatchObject({
+      status: 502,
+      bodySnippet: `${html.slice(0, 200)}...`,
+      serverError: undefined,
     });
+  });
+});
 
-    test(`launch caps a proxy HTML refusal (attached: ${String(attached)})`, async () => {
-      const html = `<html><body>${'Bad gateway '.repeat(40)}</body></html>`;
-      globalThis.fetch = ((input: RequestInfo | URL) =>
-        Promise.resolve(
-          String(input).includes('/api/conversations')
-            ? Response.json({ conversationId: 'web-test-1' })
-            : new Response(html, { status: 502 })
-        )) as typeof fetch;
+describe('startRun — a refused start discards its conversation (#5641)', () => {
+  const originalWarn = console.warn;
 
-      await expect(
-        startRun({
-          projectId: 'p1',
-          workflow: 'review-block',
-          message: 'go',
-          files: attached ? [new File(['x'], 'a.txt')] : undefined,
-        })
-      ).rejects.toMatchObject({
-        status: 502,
-        bodySnippet: `${html.slice(0, 200)}...`,
-        serverError: undefined,
-      });
-    });
+  beforeEach(() => {
+    globalThis.window = { location: { origin: 'http://localhost' } } as Window & typeof globalThis;
+    console.warn = () => undefined;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+    console.warn = originalWarn;
+  });
+
+  function deleteCalls(): string[] {
+    return calls.filter(c => c.init?.method === 'DELETE').map(c => c.url);
   }
+
+  test('a 400 refusal deletes the conversation and rethrows the refusal', async () => {
+    stubFetch(400, { error: 'Missing required input: diff' });
+
+    await expect(
+      startRun({ projectId: 'p1', workflow: 'review-block', message: 'go' })
+    ).rejects.toMatchObject({ status: 400, serverError: 'Missing required input: diff' });
+    expect(deleteCalls()).toEqual(['/api/conversations/web-test-1']);
+  });
+
+  test('a started run keeps its conversation', async () => {
+    stubFetch();
+
+    await startRun({ projectId: 'p1', workflow: 'review-block', message: 'go' });
+    expect(deleteCalls()).toEqual([]);
+  });
+
+  test('a 5xx keeps the conversation, since the start may have been accepted', async () => {
+    stubFetch(502, { error: 'Bad gateway' });
+
+    await expect(
+      startRun({ projectId: 'p1', workflow: 'review-block', message: 'go' })
+    ).rejects.toMatchObject({ status: 502 });
+    expect(deleteCalls()).toEqual([]);
+  });
+
+  test('a failed cleanup still surfaces the original refusal', async () => {
+    calls = [];
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (init?.method === 'DELETE') {
+        return Promise.resolve(Response.json({ error: 'db down' }, { status: 500 }));
+      }
+      return Promise.resolve(
+        url.includes('/api/conversations')
+          ? Response.json({ conversationId: 'web-test-1' })
+          : Response.json({ error: 'Missing required input: diff' }, { status: 400 })
+      );
+    }) as typeof fetch;
+
+    await expect(
+      startRun({ projectId: 'p1', workflow: 'review-block', message: 'go' })
+    ).rejects.toMatchObject({ status: 400, serverError: 'Missing required input: diff' });
+    expect(deleteCalls()).toEqual(['/api/conversations/web-test-1']);
+  });
 });

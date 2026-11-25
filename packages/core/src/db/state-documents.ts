@@ -2,6 +2,8 @@ import {
   applyStatePatch,
   statePutSchema,
   parseStatePatchInput,
+  stateClaimSchema,
+  stateClaimValue,
   stateDeleteSchema,
   stateDocumentNameSchema,
   stateDocumentSummarySchema,
@@ -227,6 +229,12 @@ export function createSqlStateDocumentStore(
     },
     deleteStateDocument: async (supplied): ReturnType<IStateDocumentStore['deleteStateDocument']> =>
       write(stateDeleteSchema.parse(supplied), { op: 'delete' }, () => null),
+    claimStateDocument: async (supplied): ReturnType<IStateDocumentStore['claimStateDocument']> => {
+      const input = stateClaimSchema.parse(supplied);
+      return write({ ...input, lease: 'take' }, { op: 'claim' }, prior =>
+        stateClaimValue(prior, input)
+      );
+    },
     listStateRevisions: async (
       target,
       name,

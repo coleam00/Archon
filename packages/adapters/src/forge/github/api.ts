@@ -7,6 +7,9 @@ import { parseGitHubHost, resolveGitHubHost, type GitHubHost } from '@archon/git
 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+/** The wait between repeated reads; tests replace it so they do not sleep. */
+export type Sleep = (ms: number) => Promise<unknown>;
+
 export class GitHubError extends Error {
   constructor(
     readonly detail: ForgeError,
@@ -21,12 +24,6 @@ export class GitHubError extends Error {
     super(detail.message, options);
   }
 }
-
-/**
- * A failure that says nothing about the request itself: GitHub answered 5xx, or
- * nothing answered at all. Repeating a read that hit one may succeed.
- */
-export class TransientGitHubError extends GitHubError {}
 
 export function repositoryPath(path: string): { owner: string; repo: string } | null {
   const parts = path.replace(/^\/+|\/+$/g, '').split('/');
@@ -74,6 +71,31 @@ export function location(repo: RepoRef): { root: string; graphql: string; path: 
   };
 }
 
+/** One authenticated GitHub call, answered with any status or lost in transit. */
+export async function githubSend(
+  fetchImpl: Fetch,
+  token: string,
+  url: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  try {
+    return await fetchImpl(url, {
+      ...init,
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        'x-github-api-version': '2022-11-28',
+        'user-agent': 'archon-forge-github',
+      },
+    });
+  } catch (cause) {
+    throw new GitHubError({ kind: 'unavailable', message: 'GitHub API request failed' }, false, {
+      cause,
+    });
+  }
+}
+
 /**
  * One GitHub API call.
  *
@@ -89,25 +111,7 @@ export async function githubRequest(
   acknowledge?: () => void,
   responseMode: 'json' | 'empty' = 'json'
 ): Promise<unknown> {
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      ...init,
-      headers: {
-        accept: 'application/vnd.github+json',
-        authorization: `Bearer ${token}`,
-        'content-type': 'application/json',
-        'x-github-api-version': '2022-11-28',
-        'user-agent': 'archon-forge-github',
-      },
-    });
-  } catch (cause) {
-    throw new TransientGitHubError(
-      { kind: 'forge_error', message: 'GitHub API request failed' },
-      false,
-      { cause }
-    );
-  }
+  const response = await githubSend(fetchImpl, token, url, init);
   if (!response.ok) {
     throw githubResponseError(response);
   }
@@ -173,11 +177,13 @@ export async function githubGraphql(
     const types = new Set(parsed.errors.map(error => error.type));
     throw new GitHubError(
       {
-        kind: types.has('NOT_FOUND')
-          ? 'not_found'
-          : types.has('FORBIDDEN') || types.has('INSUFFICIENT_SCOPES')
-            ? 'authorization'
-            : 'forge_error',
+        kind: types.has('RATE_LIMITED')
+          ? 'rate_limited'
+          : types.has('NOT_FOUND')
+            ? 'not_found'
+            : types.has('FORBIDDEN') || types.has('INSUFFICIENT_SCOPES')
+              ? 'authorization'
+              : 'forge_error',
         message: `GitHub GraphQL refused the request: ${parsed.errors[0]?.message ?? 'unknown error'}`,
       },
       true
@@ -238,6 +244,25 @@ export function parseRemote(remote: string | null): RepoRef | null {
   return { host: match[1].toLowerCase(), path: `${repository.owner}/${repository.repo}` };
 }
 
+/**
+ * GitHub's web URL of an issue or a pull request: `<repository>/issues/<n>` or
+ * `<repository>/pull/<n>`. A query or fragment, such as a link to one comment, is
+ * ignored; any other URL is not a subject.
+ */
+export function parseSubjectUrl(
+  value: string | null
+): { repo: RepoRef; subject: { kind: 'issue' | 'pr'; number: number } } | null {
+  const trimmed = value?.trim().replace(/[?#].*$/, '') ?? '';
+  const match = /^(https?:\/\/.+)\/(issues|pull)\/([1-9]\d*)\/?$/.exec(trimmed);
+  if (!match) return null;
+  const repo = parseUrlRemote(match[1]);
+  if (!repo) return null;
+  return {
+    repo,
+    subject: { kind: match[2] === 'pull' ? 'pr' : 'issue', number: Number(match[3]) },
+  };
+}
+
 /** Translate a thrown cause into the wire error a caller can act on. */
 export function githubErrorDetail(cause: unknown): ForgeError {
   if (cause instanceof GitHubError) return cause.detail;
@@ -253,17 +278,32 @@ export function githubErrorDetail(cause: unknown): ForgeError {
   };
 }
 
-function githubResponseError(response: Response): GitHubError {
-  return new (response.status >= 500 ? TransientGitHubError : GitHubError)(
+/**
+ * GitHub answers a rate limit with 429, or with 403 carrying `retry-after` or an
+ * exhausted `x-ratelimit-remaining`. A 403 with neither header is an authorization
+ * failure as far as its status and headers say.
+ */
+function rateLimited({ status, headers }: Response): boolean {
+  return (
+    status === 429 ||
+    (status === 403 && (headers.has('retry-after') || headers.get('x-ratelimit-remaining') === '0'))
+  );
+}
+
+function responseKind(response: Response): ForgeError['kind'] {
+  const { status } = response;
+  if (rateLimited(response)) return 'rate_limited';
+  if (status >= 500) return 'unavailable';
+  if (status === 404) return 'not_found';
+  if (status === 401 || status === 403) return 'authorization';
+  if (status === 409 || status === 422) return 'conflict';
+  return 'forge_error';
+}
+
+export function githubResponseError(response: Response): GitHubError {
+  return new GitHubError(
     {
-      kind:
-        response.status === 404
-          ? 'not_found'
-          : response.status === 401 || response.status === 403
-            ? 'authorization'
-            : response.status === 409 || response.status === 422
-              ? 'conflict'
-              : 'forge_error',
+      kind: responseKind(response),
       message: `GitHub API request failed with HTTP ${String(response.status)}`,
       status: response.status,
     },

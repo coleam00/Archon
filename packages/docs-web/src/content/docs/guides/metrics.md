@@ -14,7 +14,10 @@ of records stores them with its completion, and `archon metrics` and `GET /api/m
 aggregate those records across runs by name, time window and subject. There is no
 metric node type and no metric config file: a script node counts, a prompt node judges.
 A pack can declare [overview cards](#overview-cards-a-pack-declares) for the console, but
-they only display records; they never define a metric.
+they only display records; they never define a metric. Figures about a project's items,
+such as a merge rate, are not records at all: a pack [declares them as
+data](#item-metrics-a-pack-declares) and the engine computes them from its own record of
+the items and their runs.
 
 ## A count metric from a script node
 
@@ -219,6 +222,21 @@ affected; to use the key for something else, rename it.
           }
         ]
       }
+    },
+    "metric_dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+        },
+        "additionalProperties": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.:@/-]{1,64}$"
+        },
+        "maxProperties": 8
+      }
     }
   },
   "required": [
@@ -247,6 +265,20 @@ affected; to use the key for something else, rename it.
 Records hold only these fields. A record with any other key is refused, so a record
 cannot carry credentials, prompt contents or messages beyond its bounded `subject` and
 `instrument`.
+
+A node may also return `metric_dimensions` beside `metrics`: one entry per record, at the
+same position, naming values a query can split the metric by, such as
+`[{ "route": "plan" }, {}]`. `{}` is a record without dimensions. An entry holds up to 8
+values; a key is a letter followed by up to 31 characters of `[a-z0-9_]`, and a value is 1
+to 64 characters of `[A-Za-z0-9_.:@/-]`. An output whose `metric_dimensions` does not hold
+one entry per record fails like a malformed record. Dimensions are not part of the name's
+definition or of the record's identity: a re-measured subject whose dimension changed
+replaces its old record. See [Splitting by a dimension](#splitting-by-a-dimension).
+
+Dimensions sit beside the records rather than inside them so that a binary that predates
+them still reads every record and counts it, without its dimensions. A binary reading
+stored records also ignores a record key it does not know, so a record a newer binary
+extends still counts.
 
 ## How records are counted
 
@@ -322,8 +354,8 @@ archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
   request being merged, to resolve. Read a comparison after the after cohort has settled.
 
 A comparison is observational. The cohorts differ in the change and in everything else
-that changed around the cut, and in the work each cohort happened to run: the SDLC pack,
-for example, routes larger work to Claude and small work to Codex. The text output of
+that changed around the cut, and in the work each cohort happened to run: an install
+that sends different kinds of work to different models, for example, changes both at once. The text output of
 `archon metrics --compare` ends with a line that says so. Showing that a change caused a difference needs runs
 assigned to each side independently of the work.
 
@@ -361,12 +393,39 @@ archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.r
   existing producing run there is nothing to check the node against, and the query
   succeeds: a window with no records reports none, and records whose runs were all
   deleted are counted as `unattributed`.
-- `--by-model` and `--compare` cannot be combined in one query.
+- `--by-model` cannot be combined with `--compare` or `--by-dimension` in one query.
 
 A model split is observational, like a cohort comparison. Each model ran the work it was
-routed: the SDLC pack sends larger and riskier work to Claude and small work to Codex, so a
-difference mixes the model with the task. The text output ends with a line that says so.
+routed: an install that sends different kinds of work to different models mixes the model
+with the task in any difference it shows. The text output ends with a line that says so.
 Showing a model effect needs work assigned to each model independently of its size.
+
+## Splitting by a dimension
+
+`archon metrics <name> --by-dimension <key>` (or `byDimension=` on the API) splits each
+entry's records by the value their `metric_dimensions` entry holds for `<key>`. A pack that
+needs a metric per route, size or issue type writes each record once with that value,
+rather than once per name.
+
+```bash
+archon metrics sdlc.issues_merged --since 30d --by-dimension route
+archon metrics sdlc.issue_asks --since 60d --by-dimension route --compare 2026-10-15T09:30:00Z
+```
+
+- **Groups.** One group per value, ordered by value, then `none` for records that do not
+  carry the key. Each group reports its `value`, `n`, `interval` and `cost`, and
+  `delta_vs_rest` against the other values combined (never against `none`), with its own
+  interval and `separated`, computed the same way as `--by-model`.
+- **With `--compare`.** Each group also carries its own `compare` block, with the same
+  cohorts, `straddling` and `unattributed` counts as a whole-entry comparison. The entry
+  then has no `compare` block of its own.
+- **A key no record carries fails.** When the window holds records and none carries
+  `<key>`, the query fails and lists the dimension keys they do carry, at most 50:
+  `archon metrics` exits `2`, and the API returns 400.
+- `--by-dimension` and `--by-model` cannot be combined in one query.
+
+A dimension split is observational too: each value covers different work, so a difference
+mixes the dimension with the work. The text output ends with a line that says so.
 
 Metric names are shared by every project on the install. Pass `--project` to read one
 codebase's records; their names keep the install's definitions.
@@ -383,8 +442,9 @@ curl 'http://localhost:3090/api/metrics?name=repo.commits&since=7d'
 
 Each metric reports its `value` (the sum or the mean), `n` (the records counted), its
 `interval`, the `cost` of its producing runs, its latest record and a daily `series`, per
-instrument and `measured_by`, a `compare` block when a cut is given, and a `by_model`
-block when a node is. `archon metrics` exits `4` when it
+instrument and `measured_by`, a `compare` block when a cut is given without a dimension
+key, a `by_model` block when a node is, and a `by_dimension` block when a dimension key
+is, with a `compare` block in each of its groups instead when a cut is also given. `archon metrics` exits `4` when it
 refused a record, and prints each refusal to stderr. See
 [`archon metrics`](/reference/cli/#metrics-name) and
 [`GET /api/metrics`](/reference/api/#metrics) for every option.
@@ -473,3 +533,61 @@ declaration at a higher scope replaces a lower one's (bundled < global < project
 that is not JSON or does not match the shapes, or a scope that cannot be read, is reported by
 [`GET /api/metric-views`](/reference/api/#metrics) and on the overview, and the other packs'
 cards still show.
+
+## Item metrics a pack declares
+
+A figure about a project's items, such as lead time, review rounds, answers per item or
+the share of items that merged, comes from the engine's own record: the [items with a run
+in the window](/reference/cli/#workflow-items), each with all its runs, its answers and its
+[recorded merge](/reference/cli/#workflow-merged). A pack declares what each figure means in
+`<pack>/.shared/item-metrics.json`, and `archon metrics --project <project>` evaluates it over
+the same window as the records. No script computes it and the pack keeps no second record.
+
+```json
+{
+  "metrics": [
+    { "name": "sdlc.merge_rate", "op": "share", "where": { "merged": true } },
+    {
+      "name": "sdlc.review_rounds_per_merged_item",
+      "op": "count",
+      "of": "runs",
+      "runs": { "workflow": ["archon-review"] },
+      "items": { "merged": true }
+    },
+    {
+      "name": "sdlc.lead_time",
+      "op": "duration",
+      "from": { "run": "first", "at": "started" },
+      "to": "merged",
+      "group_by": "first_run.workflow"
+    }
+  ]
+}
+```
+
+Each definition has a `name` (a metric name), an `op`, and optionally `items`, a condition
+that narrows the population, and `group_by`. The population is the items with one of their
+own runs started in the window that match `items`. The semantics are fixed:
+
+| `op` | Figure |
+|------|--------|
+| `share` | The population items that match `where`, as a share of the population: `value`, `numerator`, `denominator`. |
+| `count` with `of: "runs"` | Per item, its runs that match `runs`: `value` is the mean per item, with `total` and `n` items. |
+| `count` with `of: "answers"` | Per item, its answers of the listed `kinds` (`attention`, `gate`, `ruling`, `ask`, `asks_settled`; all when absent), as above. |
+| `duration` | Per item, the hours from `from` to `to`: `value` is the mean over the `n` items that have both times, and `missing` counts the rest. |
+
+`value` is null when the population gives none. A run filter (`runs`, `has_run`, `last_run`,
+`of`) lists the `workflow`, `status` and `outcome` values a run must have; every field given
+must contain the run's value, and a run with no outcome matches no `outcome` list. An item
+condition holds when each given field does: `merged` (whether a merge is recorded), `has_run`
+(one of its runs matches) and `last_run` (its latest started run matches). A time is
+`"merged"`, or `{ "run": "first" | "last", "at": "started" | "completed", "of": <run filter> }`.
+`group_by` is `first_run.workflow`, `last_run.workflow` or `last_run.outcome`, and adds the
+same figures per group, with items that have no such value in a `null` group listed last.
+
+What a figure means stays the pack's: which workflow is a review round, and whether merged
+is the recorded fact or a run outcome. The engine applies the definition and decides nothing
+about it. There is no expression language: a key the schema does not know refuses the whole
+file. Declarations are found as metric views are, and a file that does not read is reported
+under `item_metrics.errors` and on stderr while the other packs still report. Every page of
+the window is read, so the figures cover every item, not one page.

@@ -1,4 +1,10 @@
 import { describe, expect, spyOn, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getRunScratchDir } from '@archon/paths/archon-paths';
+import { captureLogLines, trackTempRoots } from '@archon/paths/test-utils';
 import { OVERLAY_MODES } from '@archon/workflows/container-context';
 import * as containerModule from '../container';
 import { ContainerBackend } from '../container';
@@ -7,7 +13,56 @@ import { IsolationFailure, isKnownIsolationError } from '../../errors';
 import { CONFIG, FOLDER, fakeDocker, fakeStore, seedContainerRow } from './container-fixtures';
 
 export function registerDestroyTests() {
+  const trackTempRoot = trackTempRoots();
   describe('ContainerBackend.destroy', () => {
+    test.each(['success', 'container', 'volume'] as const)(
+      'releases scratch and tagged caches only after successful teardown (%s)',
+      async outcome => {
+        const artifactsDir = trackTempRoot(await mkdtemp(join(tmpdir(), 'container-cache-')));
+        const scratch = getRunScratchDir(artifactsDir);
+        const cache = join(artifactsDir, 'build-cache');
+        await mkdir(scratch, { recursive: true });
+        await mkdir(cache);
+        await writeFile(join(cache, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55');
+        await writeFile(join(artifactsDir, 'report.md'), 'evidence');
+        const store = fakeStore();
+        const row = seedContainerRow(store, { artifactsMount: artifactsDir });
+        const docker = fakeDocker(args => {
+          if (args[0] === 'container' && args[1] === 'ls')
+            return { stdout: 'cid-orig\tarchon-res-1\trunning', stderr: '' };
+          if (args[0] === 'volume' && args[1] === 'ls')
+            return { stdout: 'archon-res-1-upper', stderr: '' };
+          if (args[0] === 'rm' || (args[0] === 'volume' && args[1] === 'rm')) {
+            expect(existsSync(cache)).toBe(true);
+            expect(existsSync(scratch)).toBe(true);
+            if (
+              (outcome === 'container' && args[0] === 'rm') ||
+              (outcome === 'volume' && args[0] === 'volume')
+            ) {
+              throw new Error('teardown failed');
+            }
+          }
+          return { stdout: '', stderr: '' };
+        });
+        const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+        const capture = captureLogLines();
+        try {
+          if (outcome === 'success') await backend.destroy(row.id);
+          else await expect(backend.destroy(row.id)).rejects.toThrow('Failed to remove');
+          const removals = capture.lines.filter(line => line.msg === 'run_scratch.cache_removed');
+          expect(removals).toHaveLength(outcome === 'success' ? 1 : 0);
+          if (outcome === 'success')
+            expect(removals[0]).toMatchObject({ envId: row.id, artifactsDir, path: 'build-cache' });
+        } finally {
+          capture.restore();
+        }
+        expect(existsSync(cache)).toBe(outcome !== 'success');
+        expect(existsSync(scratch)).toBe(outcome !== 'success');
+        expect(existsSync(join(artifactsDir, 'report.md'))).toBe(true);
+        expect(store.rows.get(row.id)?.status).toBe(outcome === 'success' ? 'destroyed' : 'active');
+      }
+    );
+
     test('removes container + volume and marks the row destroyed', async () => {
       const store = fakeStore();
       const docker = fakeDocker(args => {

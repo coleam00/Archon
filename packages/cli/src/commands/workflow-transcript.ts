@@ -3,6 +3,10 @@ import { toolCallDisplayName } from '@archon/provider-contract';
 import { open as openFile } from 'node:fs/promises';
 import type { WorkflowEvent } from '@archon/workflows/logger';
 import {
+  describeStallMessage,
+  stallMessageEventDataSchema,
+} from '@archon/workflows/schemas/workflow-event';
+import {
   providerEventLineSchema,
   type ProviderEventLine,
 } from '@archon/workflows/schemas/provider-event';
@@ -209,7 +213,7 @@ function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): 
     case 'node_complete':
       return nodeLine.completed(step, row.duration_ms);
     case 'node_error':
-      return nodeLine.failed(step, row.error ?? '');
+      return nodeLine.failed(step, row.error ?? '', row.execution);
     case 'node_skipped':
       return formatNodeSkipped(row, step);
     case 'node_suspended':
@@ -224,6 +228,8 @@ function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): 
       return formatToolRow(row);
     case 'exec_output':
       return formatExecOutput(row, step);
+    case 'stall_message':
+      return formatStallMessage(row, step);
     // Liveness bookkeeping and a historical row: nothing a reader of the run needs.
     case 'watchdog_reset':
     case 'validation':
@@ -234,6 +240,14 @@ function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): 
       typeDecided(row.type);
       return undefined;
   }
+}
+
+/** The engine's message to a stalled session, with the text the agent received. */
+function formatStallMessage(row: WorkflowEvent, step: string): string | undefined {
+  const parsed = stallMessageEventDataSchema.safeParse(row.stall_message);
+  if (!parsed.success) return undefined;
+  const line = describeStallMessage(step, row.workflow_id, parsed.data);
+  return parsed.data.sent ? `${line}:\n${indentLines(parsed.data.text, '  ')}` : line;
 }
 
 function formatNodeStart(row: WorkflowEvent, step: string): string {

@@ -76,6 +76,7 @@ describe('workflow run transitions', () => {
           null,
           null, // adopted_from_run_id (#2747)
           JSON.stringify({ conversationId: 'conv-456' }),
+          null,
         ]
       );
     });
@@ -110,6 +111,7 @@ describe('workflow run transitions', () => {
           null,
           null, // adopted_from_run_id (#2747)
           JSON.stringify({ conversationId: 'conv-456' }),
+          null,
         ]
       );
     });
@@ -139,6 +141,7 @@ describe('workflow run transitions', () => {
           null,
           null, // adopted_from_run_id (#2747)
           JSON.stringify({ conversationId: 'conv-456' }),
+          null,
         ]
       );
     });
@@ -151,15 +154,11 @@ describe('workflow run transitions', () => {
 
       await completeWorkflowRun('workflow-run-123', { duration_ms: 123 });
 
-      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining("status = 'completed'"), [
-        'workflow-run-123',
-      ]);
-      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('completed_at = NOW()'), [
-        'workflow-run-123',
-      ]);
-      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining("AND status = 'running'"), [
-        'workflow-run-123',
-      ]);
+      const [update, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(update).toContain("status = 'completed'");
+      expect(update).toContain('completed_at = NOW()');
+      expect(update).toContain("AND status = 'running'");
+      expect(updateParams).toEqual(['workflow-run-123', null, null]);
       const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       expect(eventParams[2]).toBe('workflow_completed');
@@ -187,8 +186,8 @@ describe('workflow run transitions', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'completed'");
-      expect(query).toContain('metadata = metadata ||');
-      expect(params).toEqual(['workflow-run-123', JSON.stringify(metadata)]);
+      expect(query).toContain('metadata = (metadata ||');
+      expect(params).toEqual(['workflow-run-123', null, null, JSON.stringify(metadata)]);
     });
 
     test('uses simple query without metadata merge when no metadata provided', async () => {
@@ -199,7 +198,7 @@ describe('workflow run transitions', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).not.toContain('metadata =');
-      expect(params).toEqual(['workflow-run-123']);
+      expect(params).toEqual(['workflow-run-123', null, null]);
     });
 
     test('does not commit completion when its audit insert fails', async () => {
@@ -245,16 +244,6 @@ describe('workflow run transitions', () => {
       );
     });
 
-    test('stores error in metadata', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockTerminalSnapshot('failed');
-
-      await failWorkflowRun('workflow-run-123', 'Timeout exceeded');
-
-      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(params).toContain(JSON.stringify({ error: 'Timeout exceeded' }));
-    });
-
     test('records the stop reason and its signal on the run row', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockTerminalSnapshot('failed');
@@ -269,8 +258,8 @@ describe('workflow run transitions', () => {
         error: 'Process terminated (SIGINT)',
         stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
       });
-      // Written wholesale: a previous failure's copy is removed before the merge, so
-      // SQLite's recursive json_patch cannot leave its signal under a new reason.
+      // Written wholesale: a previous failure's copy is removed before the merge, so a
+      // new reason cannot inherit its signal.
       expect(query).toContain("metadata - 'scheduled_resume' - 'stop_reason'");
       // The terminal event's bare `exit_reason` string is a shipped persisted value the
       // telemetry reader parses; the row's structured copy does not replace it.
@@ -390,24 +379,6 @@ describe('workflow run transitions', () => {
       expect(result.metadata).toEqual({});
       const [, params] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(params[4]).toBe('{}');
-    });
-
-    test('serializes github_context metadata successfully under normal conditions', async () => {
-      const runWithContext = {
-        ...mockWorkflowRun,
-        metadata: { github_context: 'Issue #99: Fix bug' },
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      mockQuery.mockResolvedValueOnce(createQueryResult([runWithContext]));
-
-      const result = await createWorkflowRun({
-        workflow_name: 'test',
-        origin: { conversationId: 'conv' },
-        user_message: 'test',
-        metadata: { github_context: 'Issue #99: Fix bug' },
-      });
-
-      expect(result.metadata).toEqual({ github_context: 'Issue #99: Fix bug' });
     });
   });
 

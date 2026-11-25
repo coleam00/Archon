@@ -23,6 +23,9 @@ wins.
     nothing in its area to batch it with;
   - speculative, with no failure shown;
   - impossible to verify by reading the code.
+- **Wait** on a discovery whose defect is in code an open pull request adds or
+  changes, and so is not at the base yet. A later pass decides it once that pull
+  request merged or closed.
 - **A drop stays dropped** unless new evidence changes the reason it was dropped.
 - **Ask** a maintainer only when the project's documents, rulings and earlier answers
   cannot decide it, and say what you recommend. Judge scope against the project's

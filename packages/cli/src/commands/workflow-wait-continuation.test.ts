@@ -78,7 +78,9 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
             parent_conversation_id: null,
             codebase_id: null,
             outcome: null,
+            completed_outcome: null,
             user_message: 'go',
+            active_phase_started_at: null,
             started_at: new Date(),
             completed_at: null,
             last_activity_at: null,
@@ -87,6 +89,7 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
             adopted_from_run_id: null,
             output_root: null,
             checkout_baseline: null,
+            item_id: null,
           };
           wait.resumeAt = new Date(Date.now() + 20).toISOString();
           let reads = 0;
@@ -123,7 +126,6 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
             },
           });
           const resume = spyOn(host.engine, 'resume').mockResolvedValue({
-            accepted: true,
             runId: run.id,
             settled: Promise.resolve({ success: true, workflowRunId: run.id }),
           });

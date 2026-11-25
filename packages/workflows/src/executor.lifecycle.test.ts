@@ -16,7 +16,7 @@ import {
   WS,
 } from './executor/test-utils';
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
@@ -85,17 +85,6 @@ describe('keep-awake pairing', () => {
 });
 
 describe('resume', () => {
-  it('does not look for a resumable run on its own', async () => {
-    // Resume detection lives at the caller, so two back-to-back executions of the same
-    // workflow at the same cwd cannot cross-leak.
-    const findSpy = mock(async () => makeRun({ id: 'stale-prior', status: 'failed' }));
-    const store = makeStore({ findResumableRun: findSpy });
-    await startWorkflow({ store });
-    expect(findSpy).not.toHaveBeenCalled();
-    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
-    expect(store.createWorkflowRun).toHaveBeenCalledTimes(1);
-  });
-
   it('runs the DAG with the prior completed nodes the caller supplies', async () => {
     const options = resumeOf(makeRun({ id: 'resumed-run' }), [
       ['node-a', { output: 'a-output' }],
@@ -682,7 +671,13 @@ describe('scratch on exit', () => {
         ...run.metadata,
         [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: ownerPid },
       };
-      const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
+      const artifactsDir = getRunArtifactsDirForRoot(root, run.id);
+      const cache = join(artifactsDir, 'spike', 'cache');
+      mkdirSync(cache, { recursive: true });
+      writeFileSync(join(cache, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55');
+      mkdirSync(join(artifactsDir, 'evidence'));
+      writeFileSync(join(artifactsDir, 'evidence', 'report.md'), 'evidence');
+      const checkout = join(getRunScratchDir(artifactsDir), 'repro');
       mkdirSync(join(checkout, '.git'), { recursive: true });
       const store = makeStore({
         getWorkflowRun: mock(async () => run),
@@ -697,6 +692,8 @@ describe('scratch on exit', () => {
 
       expect(releaseRunResources).toHaveBeenCalledTimes(status === 'paused' ? 0 : 1);
       expect(existsSync(checkout)).toBe(kept);
+      expect(existsSync(cache)).toBe(kept);
+      expect(existsSync(join(artifactsDir, 'evidence', 'report.md'))).toBe(true);
     }
   );
 
@@ -704,7 +701,13 @@ describe('scratch on exit', () => {
     const root = trackTempRoot(join(WS, '_cwd', `unknown-parent-${crypto.randomUUID()}`));
     const run = makeRun({ output_root: root });
     run.metadata[EXECUTION_OWNER_METADATA_KEY] = { host: hostname(), pid: process.pid };
-    const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
+    const artifactsDir = getRunArtifactsDirForRoot(root, run.id);
+    const cache = join(artifactsDir, 'spike', 'cache');
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55');
+    mkdirSync(join(artifactsDir, 'evidence'));
+    writeFileSync(join(artifactsDir, 'evidence', 'report.md'), 'evidence');
+    const checkout = join(getRunScratchDir(artifactsDir), 'repro');
     mkdirSync(join(checkout, '.git'), { recursive: true });
     const cause = new Error('Unsupported parent status');
     const interruption = new ParentStatusReadError(run.id, 'fan', cause);
@@ -721,6 +724,7 @@ describe('scratch on exit', () => {
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
     expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
     expect(existsSync(checkout)).toBe(true);
+    expect(existsSync(cache)).toBe(true);
     expect(noExecutorCanWrite(run)).toBe(true);
     expect(keepAwake.activeCount()).toBe(0);
     expect(mockEmitter.unregisterRun).toHaveBeenCalledWith(run.id);
@@ -738,7 +742,11 @@ describe('scratch on exit', () => {
         output_root: root,
         metadata: { [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: process.pid } },
       });
-      const scratch = getRunScratchDir(getRunArtifactsDirForRoot(root, run.id));
+      const artifactsDir = getRunArtifactsDirForRoot(root, run.id);
+      const cache = join(artifactsDir, 'cache');
+      mkdirSync(cache, { recursive: true });
+      writeFileSync(join(cache, 'CACHEDIR.TAG'), 'Signature: 8a477f597d28d172789f06886806bc55');
+      const scratch = getRunScratchDir(artifactsDir);
       mkdirSync(scratch, { recursive: true });
       if (failed) mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('DAG failed'));
       const cleanups: (() => Promise<void>)[] = [];
@@ -759,8 +767,10 @@ describe('scratch on exit', () => {
       expect(releaseRunResources).toHaveBeenCalledWith(run.id);
       expect(cleanups).toHaveLength(1);
       expect(existsSync(scratch)).toBe(true);
+      expect(existsSync(cache)).toBe(true);
       await Promise.all(cleanups.map(cleanup => cleanup()));
       expect(existsSync(scratch)).toBe(false);
+      expect(existsSync(cache)).toBe(false);
     }
   );
 

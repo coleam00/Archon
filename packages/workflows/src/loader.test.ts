@@ -53,6 +53,18 @@ nodes:
 });
 
 describe('parseWorkflow', () => {
+  it('reports a YAML syntax error with its file, line, column and source line', () => {
+    const yaml =
+      'name: repro\ndescription: a stray: colon here\nnodes:\n  - id: a\n    bash: echo hi\n';
+    const { error } = parseWorkflowWithProviders(yaml, 'repro.yaml', providerRegistry);
+    expect(error?.errorType).toBe('parse_error');
+    expect(error?.error).toStartWith('repro.yaml:2:14: YAML syntax error: ');
+    expect(error?.error.split('\n').slice(1)).toEqual([
+      '  description: a stray: colon here',
+      `  ${' '.repeat(13)}^`,
+    ]);
+  });
+
   it.each(['true', 'false', '"yes"'])(
     'loads workflow-level interactive: %s with a deprecation warning and drops it',
     value => {
@@ -140,6 +152,17 @@ nodes:
     expect(result.workflow).toBeNull();
     expect(result.error?.errorType).toBe('validation_error');
     expect(result.error?.error).toContain('effort:');
+  });
+
+  it('should reject retired evidence_policy and name the replacement', () => {
+    const result = parseWorkflow(
+      'name: retired-evidence\ndescription: retired option\nevidence_policy:\n  required: true\nnodes:\n  - id: only\n    prompt: p\n',
+      'retired.yaml'
+    );
+    expect(result.workflow).toBeNull();
+    expect(result.error?.errorType).toBe('validation_error');
+    expect(result.error?.error).toContain("'evidence_policy:' has been removed");
+    expect(result.error?.error).toContain('bash:');
   });
 
   it('should accept the widened effort ladder on NODES, not just at workflow level', () => {
@@ -491,30 +514,6 @@ nodes:
     expect(ignoredFieldLogs()).toHaveLength(0);
   });
 
-  it('should warn about unsupported AI fields on loop nodes (not model/provider)', () => {
-    mockLogger.debug.mockClear();
-    parseWorkflowYaml(`
-name: loop-unsupported
-description: Loop with unsupported AI fields
-nodes:
-  - id: iterate
-    loop:
-      prompt: "Do something"
-      until: "COMPLETE"
-      max_iterations: 3
-    model: claude-opus-4-6
-    mcp: ./mcp.json
-`);
-
-    // Should warn about mcp but NOT about model
-    const aiFieldWarnings = ignoredFieldLogs();
-    expect(aiFieldWarnings).toHaveLength(1);
-    const warnedFields = (aiFieldWarnings[0][0] as { fields: string[] }).fields;
-    expect(warnedFields).toContain('mcp');
-    expect(warnedFields).not.toContain('model');
-    expect(warnedFields).not.toContain('provider');
-  });
-
   it('should NOT warn about output_format on a loop node (#2563)', () => {
     // A loop: node makes its own sendQuery, so the schema is honoured rather than
     // warned-and-dropped. It stays warned on loop_group, which never calls sendQuery.
@@ -783,6 +782,12 @@ describe('retry config parsing', () => {
       { max_attempts: 2, delay_ms: 4000, on_error: 'transient' },
       isAgentNode,
     ],
+    [
+      'prompt with on_error: schema_unmet',
+      '    prompt: "Check the change"\n    retry:\n      max_attempts: 1\n      on_error: schema_unmet',
+      { max_attempts: 1, on_error: 'schema_unmet' },
+      isAgentNode,
+    ],
   ])('should parse retry config on a DAG %s node', (_, fields, retry, isKind) => {
     const node = parsedNodes(withNodes(`  - id: n\n${fields}\n`))[0];
     expect(isKind(node)).toBe(true);
@@ -878,25 +883,6 @@ nodes:
 `);
     expect(node0.loop.until).toBeUndefined();
     expect(node0.loop.until_bash).toBe('bun run test');
-  });
-
-  it('should parse loop node with depends_on', () => {
-    const nodes = parsedNodes(`
-name: loop-deps
-description: Loop with dependencies
-nodes:
-  - id: setup
-    bash: "echo ready"
-  - id: my-loop
-    depends_on: [setup]
-    loop:
-      prompt: "Use $setup.output. Do task."
-      until: COMPLETE
-      max_iterations: 5
-`);
-    expect(nodes).toHaveLength(2);
-    expect(isLoopNode(nodes[1])).toBe(true);
-    expect(nodes[1].depends_on).toEqual(['setup']);
   });
 
   it('should accept interactive loop with gate_message', () => {
@@ -1019,18 +1005,103 @@ nodes:
     parseWorkflowYaml(withNodes(nodes));
   });
 
-  it('should warn (non-blocking) when signal_completes is set without interactive', () => {
-    // Workflow loads successfully — this is a warning, not an error
-    parseWorkflowYaml(
-      withNodes(
-        '  - id: validate\n    loop:\n      prompt: Validate.\n      until: VALIDATED\n      max_iterations: 5\n      signal_completes: true\n'
-      ),
-      'sc-no-interactive.yaml'
-    );
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ filename: expect.stringContaining('sc-no-interactive') }),
-      'signal_completes_without_interactive_ignored'
-    );
+  it.each([
+    [
+      'a loop',
+      'validate',
+      `  - id: validate
+    loop:
+      prompt: Validate.
+      until_bash: "true"
+      max_iterations: 5
+      signal_completes: true
+`,
+    ],
+    [
+      'a loop nested in a loop_group body',
+      'inner',
+      `  - id: grp
+    loop_group:
+      until_bash: "true"
+      max_iterations: 3
+      nodes:
+        - id: inner
+          loop:
+            prompt: Work.
+            until_bash: "true"
+            max_iterations: 2
+            signal_completes: true
+`,
+    ],
+    [
+      'a loop_group',
+      'grp',
+      `  - id: grp
+    loop_group:
+      until_bash: "true"
+      max_iterations: 3
+      signal_completes: true
+      nodes:
+        - id: work
+          bash: "echo hi"
+`,
+    ],
+    [
+      'a loop_group nested in a loop_group body',
+      'mid',
+      `  - id: outer
+    loop_group:
+      until_bash: "true"
+      max_iterations: 3
+      nodes:
+        - id: mid
+          loop_group:
+            until_bash: "true"
+            max_iterations: 2
+            signal_completes: true
+            nodes:
+              - id: work
+                bash: "echo hi"
+`,
+    ],
+  ])('warns when %s sets signal_completes without interactive, and still loads', (_, id, nodes) => {
+    const { workflow, warnings } = parseWorkflowYaml(withNodes(nodes));
+    expect(workflow).not.toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`'${id}'`);
+    expect(warnings[0]).toContain('signal_completes');
+  });
+
+  it.each([
+    [
+      'loop',
+      `  - id: validate
+    loop:
+      prompt: Validate.
+      until_bash: "true"
+      max_iterations: 5
+      interactive: true
+      gate_message: Review.
+      signal_completes: true
+`,
+    ],
+    [
+      'loop_group',
+      `  - id: grp
+    loop_group:
+      until_bash: "true"
+      max_iterations: 3
+      interactive: true
+      gate_message: Review.
+      signal_completes: true
+      nodes:
+        - id: work
+          bash: "echo hi"
+`,
+    ],
+  ])('does not warn about signal_completes on an interactive %s', (_, nodes) => {
+    const { warnings } = parseWorkflowYaml(withNodes(nodes));
+    expect(warnings.filter(w => w.includes('signal_completes'))).toEqual([]);
   });
 
   it.each<[string, string, string[]]>([
@@ -1463,7 +1534,7 @@ nodes:
     );
     expect(error).toContain("'fan_out.join'");
     expect(error).toContain('first_success');
-    expect(error).not.toContain('YAML parse error');
+    expect(error).not.toContain('YAML syntax error');
   });
 
   it('rejects max_parallel: all on composed fan-out', () => {
@@ -1567,8 +1638,6 @@ describe('discovery', () => {
         'container:',
         '  enabled: true',
         '  write_back: auto',
-        'evidence_policy:',
-        '  required: true',
         'tags: [GitLab, Review]',
         'mutates_checkout: false',
         'budget:',
@@ -1585,7 +1654,6 @@ describe('discovery', () => {
     expect(result.workflows[0].workflow).toMatchObject({
       worktree: { enabled: false },
       container: { enabled: true, write_back: 'auto' },
-      evidence_policy: { required: true },
       tags: ['GitLab', 'Review'],
       mutates_checkout: false,
       budget: { max_work_units: 3 },

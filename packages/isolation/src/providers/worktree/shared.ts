@@ -9,6 +9,12 @@ import {
 } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
 
+/**
+ * The remote a new worktree fetches its base from, or none: a local repository with no
+ * remote cuts its worktree from a local branch and fetches nothing.
+ */
+export type WorktreeRemote = { kind: 'remote'; name: string } | { kind: 'none' };
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 export function getLog(): ReturnType<typeof createLogger> {
@@ -32,6 +38,17 @@ export function getLog(): ReturnType<typeof createLogger> {
  * what older Archon versions wrote.
  */
 export const SETUP_LOCK_PREFIX = 'archon: worktree setup in progress';
+
+/** The lock reason one setup attempt holds. */
+export function setupLockReasonFor(attemptId: string): string {
+  return `${SETUP_LOCK_PREFIX}: ${attemptId}`;
+}
+
+/** The attempt id in a setup lock reason, or null for the bare prefix and any other lock. */
+export function setupAttemptOf(lockReason: string | null | undefined): string | null {
+  const prefix = setupLockReasonFor('');
+  return lockReason?.startsWith(prefix) ? lockReason.slice(prefix.length) : null;
+}
 
 /** Lock reason held while an abandoned run's checkout is being removed. */
 export const RELEASE_LOCK_REASON = 'archon: worktree release in progress';

@@ -12,12 +12,19 @@ import {
 import type { RepoPath } from '@archon/git';
 import { retainsWorkspace, unknownPlatformReason } from '../../platforms/registry';
 import * as isolationEnvDb from '../../db/isolation-environments';
-import { judgeBranchForRemoval, resolveRepoGitContext, skipReasonFor } from './merge-verdict';
+import { loadRepoConfig } from '../../config/config-loader';
+import {
+  judgeBranchForRemoval,
+  NO_MERGE_REMOTE_REASON,
+  resolveMergeRemote,
+  skipReasonFor,
+} from './merge-verdict';
 import {
   checkRemoval,
   countUnpushedCommits,
-  getLiveRunBlocker,
+  getUseBlocker,
   toUnpushedLock,
+  useBlockerLogFields,
   type ReleasedFailedRun,
   type RemovalBlocker,
 } from './run-lock';
@@ -40,7 +47,7 @@ export interface CleanupReport {
 /** State one scheduled cycle shares across every environment it sweeps. */
 export interface ScheduledSweep {
   staleDays: number;
-  /** Keyed by repo + branch (see getPrState); the cycle spans every registered repo. */
+  /** Invocation cache shared across every registered repository. */
   prStateCache: Map<string, PrLookup>;
   report: CleanupReport;
 }
@@ -88,13 +95,17 @@ export async function sweepScheduledEnvironment(
   const pathExists = await worktreeExists(toWorktreePath(env.working_path));
   if (!pathExists && (await sweepMissingPath(env, sweep))) return;
 
-  // Same merged decision the `--merged` sweep uses, PR state included: this
-  // repository squash-merges every PR, and git alone cannot see that.
   const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-  const { remoteMainRef, remote } = await resolveRepoGitContext(
+  const remote = await resolveMergeRemote(
     mainRepoPath,
-    env.codebase_default_cwd
+    await loadRepoConfig(env.codebase_default_cwd)
   );
+  // Kept, not handed to the stale sweep, as it was when the judgment below failed
+  // against an absent origin: nothing has judged this work unmerged.
+  if (!remote) {
+    sweep.report.skipped.push({ id: env.id, reason: NO_MERGE_REMOTE_REASON });
+    return;
+  }
   // A throw here reaches the caller, which records the failure and leaves the
   // environment for the next cycle. It must not fall through to the staleness
   // sweep: an unresolved merge check would then be indistinguishable from
@@ -102,15 +113,13 @@ export async function sweepScheduledEnvironment(
   const verdict = await judgeBranchForRemoval({
     repoPath: mainRepoPath,
     branchName: toBranchName(env.branch_name),
-    baseRef: remoteMainRef,
     prStateCache: sweep.prStateCache,
-    includeClosed: false,
     remote,
     worktreePath: toWorktreePath(env.working_path),
   });
 
   if (verdict === 'merged' || verdict === 'pr-closed') {
-    await sweepMerged(env, mainRepoPath, verdict, sweep);
+    await sweepMerged(env, mainRepoPath, sweep);
     return;
   }
 
@@ -138,16 +147,21 @@ export async function sweepScheduledEnvironment(
 async function sweepMissingPath(env: SweptEnvironment, sweep: ScheduledSweep): Promise<boolean> {
   // Even with the directory gone, marking the env destroyed invalidates
   // the live run's resume handle.
-  const liveRun = await getLiveRunBlocker(env.id);
-  if (liveRun && !isolationEnvDb.isSettleableRunStatus(liveRun.runStatus)) {
-    sweep.report.skipped.push({ id: env.id, reason: `path missing but ${liveRun.display}` });
+  const inUse = await getUseBlocker(env.id);
+  if (
+    inUse &&
+    (inUse.reason === 'pending_handoff' || !isolationEnvDb.isSettleableRunStatus(inUse.runStatus))
+  ) {
+    sweep.report.skipped.push({ id: env.id, reason: `path missing but ${inUse.display}` });
     getLog().info(
-      { envId: env.id, runId: liveRun.runId, runStatus: liveRun.runStatus },
-      'skip_path_missing_live_run'
+      { envId: env.id, ...useBlockerLogFields(inUse) },
+      inUse.reason === 'live_run'
+        ? 'skip_path_missing_live_run'
+        : 'skip_path_missing_pending_handoff'
     );
     return true;
   }
-  if (liveRun) return false;
+  if (inUse) return false;
   // Removal deletes a branch this environment created, so a branch holding
   // commits on no remote stays, as it does in the stale sweep.
   const commits = readWorktreeBranchCreated(env.metadata)
@@ -168,20 +182,22 @@ async function sweepMissingPath(env: SweptEnvironment, sweep: ScheduledSweep): P
 async function sweepMerged(
   env: SweptEnvironment,
   mainRepoPath: RepoPath,
-  verdict: 'merged' | 'pr-closed',
   sweep: ScheduledSweep
 ): Promise<void> {
-  const check = await checkRemoval(env, mainRepoPath, { kind: verdict });
+  const check = await checkRemoval(env, mainRepoPath, { kind: 'merged' });
   if (check.blocker) {
     const { blocker } = check;
     sweep.report.skipped.push({ id: env.id, reason: `merged but ${blocker.display}` });
-    if (blocker.reason === 'live_run') {
-      getLog().info(
-        { envId: env.id, runId: blocker.runId, runStatus: blocker.runStatus },
-        'skip_merged_live_run'
-      );
-    } else {
-      getLog().warn({ envId: env.id }, 'skip_merged_uncommitted_changes');
+    switch (blocker.reason) {
+      case 'live_run':
+      case 'pending_handoff':
+        getLog().info(
+          { envId: env.id, ...useBlockerLogFields(blocker) },
+          `skip_merged_${blocker.reason}`
+        );
+        break;
+      default:
+        getLog().warn({ envId: env.id }, 'skip_merged_uncommitted_changes');
     }
     return;
   }
@@ -218,10 +234,8 @@ async function sweepStale(
 function logStaleBlocker(envId: string, blocker: RemovalBlocker): void {
   switch (blocker.reason) {
     case 'live_run':
-      getLog().info(
-        { envId, runId: blocker.runId, runStatus: blocker.runStatus },
-        'skip_stale_live_run'
-      );
+    case 'pending_handoff':
+      getLog().info({ envId, ...useBlockerLogFields(blocker) }, `skip_stale_${blocker.reason}`);
       break;
     case 'unpushed_commits':
       getLog().warn({ envId, runId: blocker.runId }, 'skip_stale_unpushed_commits');

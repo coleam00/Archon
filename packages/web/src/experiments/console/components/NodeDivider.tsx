@@ -27,8 +27,16 @@ interface NodeDividerProps {
   skipExpr?: string | null;
   /** A fan-out node's slot record; unfinished child work qualifies a completed node. */
   fanOutOutcome?: NodeRun['fanOutOutcome'];
+  /** A `bash:` or `script:` node's stdout. */
+  output?: NodeRun['output'];
+  /** A failed node's error. */
+  error?: string | null;
+  /** A failed node's recorded failure kind, shown beside its error. */
+  failureKind?: string | null;
   /** When true, surface skip reason / stop reason inline. */
   showDetail?: boolean;
+  /** The run is paused at this node; its engine state is still `running`. */
+  waiting?: boolean;
 }
 
 type FanOutOutcome = NonNullable<NodeRun['fanOutOutcome']>;
@@ -60,7 +68,7 @@ function FanOutQualifier({ outcome }: { outcome: NodeRun['fanOutOutcome'] }): Re
     .slice(0, FAN_OUT_SLOT_DISPLAY_LIMIT);
   const more = unfinished - shown.length;
   return (
-    <details className="ml-[68px] font-mono text-[11px] text-warning">
+    <details className="ml-17 font-mono text-console-11 text-warning">
       <summary className="cursor-pointer">
         {`${String(unfinished)} of ${String(tally.total)} children did not complete (${counts.join(', ')})`}
       </summary>
@@ -122,6 +130,40 @@ function formatNodeCost(
   return ` · ${costScope === 'total' ? 'total ' : ''}${costPartial ? 'at least ' : ''}$${amount}`;
 }
 
+/** What the node left behind: a failed node's error, a `bash:` or `script:` node's stdout. */
+function NodeResult({
+  nodeName,
+  output,
+  error,
+  failureKind,
+}: Pick<NodeDividerProps, 'nodeName' | 'output' | 'error' | 'failureKind'>): ReactElement {
+  return (
+    <>
+      {error !== null && error !== undefined && error !== '' ? (
+        <pre className="ml-17 max-h-60 overflow-y-auto whitespace-pre-wrap rounded border border-error/30 bg-error/[0.06] px-3 py-2 font-mono text-console-12 text-text-primary [overflow-wrap:anywhere]">
+          {failureKind ? `(${failureKind}) ` : ''}
+          {error}
+        </pre>
+      ) : null}
+      {output !== null && output !== undefined ? (
+        <div className="ml-17">
+          <pre
+            aria-label={`Output of ${nodeName}`}
+            className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded border border-border/60 bg-surface-inset px-3 py-2 font-mono text-console-12 text-text-secondary [overflow-wrap:anywhere]"
+          >
+            {output.text}
+          </pre>
+          {output.truncated ? (
+            <p className="mt-1 font-mono text-console-10 text-text-tertiary">
+              Output truncated; this is the head the engine stored with the node.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * Thin divider heading one DAG node — exactly one per node.
  *   left gutter:  relative timestamp (mono)
@@ -145,7 +187,11 @@ export function NodeDivider({
   skipReason,
   skipExpr,
   fanOutOutcome,
+  output,
+  error,
+  failureKind,
   showDetail = false,
+  waiting = false,
 }: NodeDividerProps): ReactElement {
   const { runStartedAt } = useStreamContext();
   const displayed = formatRelativeToBaseline(timestamp, runStartedAt);
@@ -177,17 +223,19 @@ export function NodeDivider({
   return (
     <div
       id={`node-transition-${nodeId}`}
-      className="flex flex-col gap-1 border-b border-border/60 py-[11px]"
+      className="flex flex-col gap-1 border-b border-border/60 py-2.75"
     >
       <div className="flex items-center gap-4">
         <time
           dateTime={timestamp}
           title={wallClock}
-          className="w-14 shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary"
+          className="w-14 shrink-0 font-mono text-console-12 tabular-nums text-text-tertiary"
         >
           {displayed}
         </time>
-        <span className="font-mono text-[13px] font-semibold text-text-primary">{nodeName}</span>
+        <span className="font-mono text-console-13 font-semibold text-text-primary">
+          {nodeName}
+        </span>
         {/* Dashed leader line (design v3 .log-line). */}
         <div
           className="h-px flex-1"
@@ -197,8 +245,10 @@ export function NodeDivider({
           }}
           aria-hidden
         />
-        <span className={`font-mono text-[11.5px] ${STATUS_COLOR[status]}`}>
-          {STATUS_LABEL[status]}
+        <span
+          className={`font-mono text-console-12 ${waiting ? 'text-warning' : STATUS_COLOR[status]}`}
+        >
+          {waiting ? 'waiting' : STATUS_LABEL[status]}
           {dur}
           {cost}
           {turns}
@@ -212,13 +262,13 @@ export function NodeDivider({
         </span>
       </div>
       {hasStopDetail ? (
-        <div className="ml-[68px] flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-text-tertiary">
+        <div className="ml-17 flex flex-wrap items-baseline gap-x-2 font-mono text-console-10 text-text-tertiary">
           <span>stop</span>
           <span className="text-text-secondary">{stopReason}</span>
         </div>
       ) : null}
       {hasSkipDetail ? (
-        <div className="ml-[68px] flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-text-tertiary">
+        <div className="ml-17 flex flex-wrap items-baseline gap-x-2 font-mono text-console-10 text-text-tertiary">
           <span>reason</span>
           <span className="text-text-secondary">{skipReason}</span>
           {skipExpr !== null && skipExpr !== undefined && skipExpr.length > 0 ? (
@@ -229,6 +279,7 @@ export function NodeDivider({
           ) : null}
         </div>
       ) : null}
+      <NodeResult nodeName={nodeName} output={output} error={error} failureKind={failureKind} />
       <FanOutQualifier outcome={fanOutOutcome} />
     </div>
   );

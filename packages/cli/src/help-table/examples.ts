@@ -8,7 +8,7 @@ export const orderedExamples: ExampleHelp[] = [
   { text: 'archon chat "What does the orchestrator do?"', owner: { command: 'chat' } },
   { text: 'archon workflow list', owner: { command: 'workflow', subcommand: 'list' } },
   {
-    text: 'archon workflow run investigate-issue "Fix the login bug"',
+    text: 'archon workflow run archon-investigate "Why does login fail?"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
@@ -20,7 +20,7 @@ export const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run quick-fix --no-worktree "Fix typo"',
+    text: 'archon workflow run archon-implement --no-worktree "Fix the typo in the README"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
@@ -45,6 +45,7 @@ export const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'artifacts' },
   },
   { text: 'archon project list --json', owner: { command: 'project', subcommand: 'list' } },
+  { text: 'archon project add --json', owner: { command: 'project', subcommand: 'add' } },
   {
     text: 'archon project config <id|name> --json',
     owner: { command: 'project', subcommand: 'config' },
@@ -61,16 +62,29 @@ export const orderedExamples: ExampleHelp[] = [
     text: 'archon workflow wait <run-id> --json',
     owner: { command: 'workflow', subcommand: 'wait' },
   },
+  { text: 'archon workflow pause <run-id>', owner: { command: 'workflow', subcommand: 'pause' } },
   { text: 'archon workflow resume <run-id>', owner: { command: 'workflow', subcommand: 'resume' } },
   { text: 'archon workflow cancel <run-id>', owner: { command: 'workflow', subcommand: 'cancel' } },
+  {
+    text: 'archon workflow cancel --item issue-42',
+    owner: { command: 'workflow', subcommand: 'cancel' },
+  },
   { text: 'archon workflow runs --open', owner: { command: 'workflow', subcommand: 'runs' } },
   {
     text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
+  {
+    text: "archon forge <operation> --help    # that operation's request fields and an example",
+    owner: { command: 'forge' },
+  },
   { text: 'archon skill add', owner: { command: 'skill', subcommand: 'add' } },
   {
     text: 'archon skill add /path/to/project',
+    owner: { command: 'skill', subcommand: 'add' },
+  },
+  {
+    text: 'archon skill add --pack owner/repo',
     owner: { command: 'skill', subcommand: 'add' },
   },
   {

@@ -1,11 +1,12 @@
 import { resourceStartFixtures } from '../resource-start-conformance';
-import { ResourceSlotCapacityConflictError } from '../resource-start-store';
+import { DIRECT_START_HOST_ID } from '../resource-start-store';
 import type { ResourceStartIntent } from '../schemas/resource-start';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   deadlineWaitCursor,
+  ownerlessResumeCursor,
   type PauseCursor,
   type IWorkflowStore,
 } from '../store';
@@ -23,6 +24,7 @@ import {
   schedule,
   running,
   rejection,
+  testRunOwnerLease,
 } from './fixtures';
 
 export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarness): void {
@@ -34,7 +36,10 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
       store = harness.store;
     });
 
-    const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    const { launch, start } = resourceStartFixtures(
+      CONFORMANCE_CODEBASE_ID,
+      CONFORMANCE_CONVERSATION_ID
+    );
     test('admission races keep capacity and persist only admitted runs', async () => {
       const intents = Array.from({ length: 8 }, () => start());
       const decisions = await Promise.all(
@@ -48,31 +53,35 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
         );
         expect(await harness.store.admitResourceStart(intent)).toEqual(decisions[index]);
       }
-      expect(
-        await rejection(harness.store.admitResourceStart(start('queue', 'host', 2)))
-      ).toBeInstanceOf(ResourceSlotCapacityConflictError);
     });
-    for (const activity of ['null', 'stale'] as const) {
-      test(`admitted running runs cannot resume with ${activity} activity`, async () => {
-        const intent = start();
-        const id = intent.launch.run.id;
-        await store.admitResourceStart(intent);
-        await store.updateWorkflowRun(id, { status: 'running' });
-        await harness.backdate(id, {
-          last_activity_at: activity === 'null' ? null : new Date('2020-01-01T00:00:00Z'),
-        });
-        const before = await store.getWorkflowRun(id);
-        expect(before?.last_activity_at).toEqual(
-          activity === 'null' ? null : new Date('2020-01-01T00:00:00Z')
-        );
-        const events = await store.listWorkflowEvents(id);
-        expect(await rejection(store.resumeWorkflowRun(id))).toBeInstanceOf(
-          WorkflowNotResumableError
-        );
-        expect(await store.getWorkflowRun(id)).toEqual(before);
-        expect(await store.listWorkflowEvents(id)).toEqual(events);
+    test('an admitted running run resumed without its owner keeps exactly its one slot', async () => {
+      const intent = start('queue', 'host', 2);
+      const id = intent.launch.run.id;
+      await store.admitResourceStart(intent);
+      await store.updateWorkflowRun(id, { status: 'running' });
+      const before = await store.getWorkflowRun(id);
+      if (!before) throw new Error('run missing');
+      // Without a cursor, a running run is never resumable, however old its activity.
+      await harness.backdate(id, { last_activity_at: null });
+      expect(await rejection(store.resumeWorkflowRun(id))).toBeInstanceOf(
+        WorkflowNotResumableError
+      );
+      expect(
+        (
+          await store.resumeWorkflowRun(
+            id,
+            ownerlessResumeCursor(before, testRunOwnerLease(before.id))
+          )
+        ).status
+      ).toBe('running');
+      // Capacity two: the resumed run holds one slot, so one more start fits and the next queues.
+      expect(await store.admitResourceStart(start('queue', 'host', 2))).toMatchObject({
+        status: 'admitted',
       });
-    }
+      expect(await store.admitResourceStart(start('queue', 'host', 2))).toMatchObject({
+        status: 'queued',
+      });
+    });
     test('a failed admitted run cannot resume past a new holder or a queued promise', async () => {
       const first = start(),
         holder = start(),
@@ -118,6 +127,60 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
       await store.resolveApprovalGate(id, { approval: { ...approval, resolved: 'approved' } }, []);
       return store.resumeWorkflowRun(id, answeredCursor);
     };
+    test('capacity is read at each admission and a lower one ends no holder', async () => {
+      const [a, b] = [start('queue', 'host', 2), start('queue', 'host', 2)];
+      for (const intent of [a, b])
+        expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'admitted' });
+      const c = start('queue', 'host', 3);
+      expect(await store.admitResourceStart(c)).toMatchObject({ status: 'admitted' });
+      await end(c.launch.run.id);
+      const d = start('queue', 'host', 1);
+      expect(await store.admitResourceStart(d)).toMatchObject({ status: 'queued' });
+      expect(await drain()).toEqual([]);
+      for (const { launch } of [a, b])
+        expect((await store.getWorkflowRun(launch.run.id))?.status).toBe('pending');
+      await end(a.launch.run.id);
+      expect(await drain()).toEqual([]);
+      await end(b.launch.run.id);
+      expect(await drain()).toEqual([
+        { status: 'admitted', requestId: d.launch.run.id, runId: d.launch.run.id },
+      ]);
+    });
+    test('a direct start admits its pending run when a slot frees and records no refusal', async () => {
+      const holder = start();
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      const direct = launch();
+      const id = direct.run.id;
+      // The pending row holds its own checkout; that must not block its admission.
+      await store.createWorkflowRun({ ...direct.run, working_path: direct.execution.cwd });
+      const admit = () =>
+        store.admitPendingRun({ resource: 'resource', capacity: 1, launch: direct });
+      expect(await admit()).toEqual({ kind: 'run', id: holder.launch.run.id });
+      expect(await store.getResourceStartRequest(id)).toBeNull();
+      await end(holder.launch.run.id);
+      expect(await admit()).toBeNull();
+      expect(await admit()).toBeNull();
+      expect(await store.getResourceStartRequest(id)).toMatchObject({
+        status: 'admitted',
+        hostId: DIRECT_START_HOST_ID,
+      });
+      expect(await store.claimPendingWorkflowRun(id)).toMatchObject({ status: 'running' });
+      expect(await store.admitResourceStart(start())).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id },
+      });
+    });
+    test("a direct start is checked against its own capacity, not the slot's recorded one", async () => {
+      const holder = start('queue', 'host', 1);
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      const direct = launch();
+      await store.createWorkflowRun({ ...direct.run, working_path: direct.execution.cwd });
+      expect(
+        await store.admitPendingRun({ resource: 'resource', capacity: 2, launch: direct })
+      ).toBeNull();
+      // The declaration is not recorded: a binding start still sees the slot's capacity 1.
+      expect(await store.admitResourceStart(start())).toMatchObject({ status: 'queued' });
+    });
     test('a released paused run waits for capacity ahead of queued new starts', async () => {
       const a = await admitPaused(start());
       const b = start(),
@@ -142,6 +205,10 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
       const since = readCapacityWait(waiting?.metadata);
       expect(since).toBeDefined();
       await rejection(store.resumeWorkflowRun(a, answeredCursor));
+      expect((await store.getWorkflowRun(a))?.started_at).toEqual(waiting?.started_at);
+      expect((await store.getWorkflowRun(a))?.active_phase_started_at).toEqual(
+        waiting?.active_phase_started_at
+      );
       expect(readCapacityWait((await store.getWorkflowRun(a))?.metadata)).toEqual(since);
       // A release that removes nothing leaves the waiter's place intact.
       expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: false });
@@ -314,8 +381,18 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
     });
     test('capacity waiters keep their refusal order and block a failed run resume', async () => {
       const first = await admitPaused(start());
+      await claimAnswered(first);
+      await store.pauseWorkflowRun(first, approval);
+      await harness.backdate(first, {
+        started_at: new Date('2020-01-01'),
+        active_phase_started_at: new Date('2022-01-01'),
+      });
       await store.releasePausedRunSlot(first, gateCursor);
       const second = await admitPaused(start());
+      await harness.backdate(second, {
+        started_at: new Date('2019-01-01'),
+        active_phase_started_at: new Date('2021-01-01'),
+      });
       await store.releasePausedRunSlot(second, gateCursor);
       const holder = start();
       expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
@@ -538,35 +615,51 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
         { id: intents[4].launch.run.id },
       ]);
     });
-    test('admission keeps FIFO across hosts, skips overlap and withdraws queued work', async () => {
+    test('admission keeps FIFO per host, passes over another host, skips overlap and withdraws queued work', async () => {
       const store = harness.store;
       const owner = start(),
         queued = start('queue', 'other'),
         later = start(),
+        last = start(),
         skipped = start('skip');
       await store.admitResourceStart(owner);
       expect(await store.admitResourceStart(queued)).toMatchObject({
         status: 'queued',
         blocker: { kind: 'run', id: owner.launch.run.id },
       });
+      // Another host's queued start does not block this host; the full slot does.
       expect(await store.admitResourceStart(later)).toMatchObject({
         status: 'queued',
-        blocker: { kind: 'request', id: queued.launch.run.id },
+        blocker: { kind: 'run', id: owner.launch.run.id },
       });
+      // This host's own queue does.
       expect(await store.admitResourceStart(skipped)).toMatchObject({
         status: 'skipped',
-        blocker: { kind: 'request', id: queued.launch.run.id },
+        blocker: { kind: 'request', id: later.launch.run.id },
       });
       expect(await store.getWorkflowRun(skipped.launch.run.id)).toBeNull();
       await store.claimPendingWorkflowRun(owner.launch.run.id);
       await store.completeWorkflowRun(owner.launch.run.id, { duration_ms: 1 });
-      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
-      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual(queued.launch);
-      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toBeNull();
+      // The slot is free. The other host's older start waits only for its own drain, so
+      // it blocks neither this host's queue nor its new starts; this host's queue keeps
+      // its own order.
+      expect(await store.admitResourceStart(last)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'request', id: later.launch.run.id },
+      });
       expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([
         { status: 'admitted', requestId: later.launch.run.id, runId: later.launch.run.id },
       ]);
-      expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+      expect(await store.listQueuedResourceStartsForHost('other')).toMatchObject([
+        { id: queued.launch.run.id },
+      ]);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual({
+        launch: queued.launch,
+      });
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toBeNull();
+      expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+        { id: last.launch.run.id },
+      ]);
     });
   });
 }

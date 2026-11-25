@@ -14,7 +14,7 @@ import { providerRegistry } from '@archon/providers';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
-import type { IWorkflowStore } from '@archon/workflows/store';
+import { PROVIDER_EVENT_ROW_TYPES, type IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type {
   ProviderEventQuery,
@@ -130,6 +130,13 @@ export const mockFindConversationByPlatformId = mock(
 export const mockHandleMessage = mock<typeof import('@archon/core')['handleMessage']>(
   async () => {}
 );
+/** The engine's answer to a run start; `undefined` admits it. */
+export const mockWorkflowStartRefusal = mock<
+  typeof import('@archon/core/operations/workflow-start-admission')['workflowStartRefusal']
+>(async () => undefined);
+mock.module('@archon/core/operations/workflow-start-admission', () => ({
+  workflowStartRefusal: mockWorkflowStartRefusal,
+}));
 export const mockAddMessage = mock(async () => ({
   id: 'msg-1',
   conversation_id: 'conv-1',
@@ -353,8 +360,11 @@ type MockCodebase = {
 };
 export const mockGetCodebase = mock(async (_id: string) => null as null | MockCodebase);
 
+export const mockListCodebases = mock(
+  async (): Promise<unknown[]> => [{ default_cwd: '/tmp/project' }]
+);
 mock.module('@archon/core/db/codebases', () => ({
-  listCodebases: mock(async () => [{ default_cwd: '/tmp/project' }]),
+  listCodebases: mockListCodebases,
   getCodebase: mockGetCodebase,
   deleteCodebase: mock(async () => {}),
 }));
@@ -395,6 +405,8 @@ export const mockLabelAttentionWait = mock<
 >(async () => ({ labeled: false }));
 
 mock.module('@archon/core/db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   listWorkflowRuns: mockListWorkflowRuns,
@@ -416,17 +428,129 @@ mock.module('@archon/core/db/workflows', () => ({
 
 export const mockCreateWorkflowEvent = mock(async (_event: unknown) => {});
 
+export const mockListEventsForRuns = mock(
+  async (runIds: readonly string[], _types: readonly string[]) =>
+    new Map<string, MockWorkflowEvent[]>(runIds.map(id => [id, []]))
+);
+const unexpected = (name: string) => async (): Promise<never> => {
+  throw new Error(`Unexpected ${name}`);
+};
+/**
+ * A real module's exports, each function a mock that throws `Unexpected <name>`. A module
+ * this harness replaces must still provide every export the code under test imports, so
+ * a new export needs no edit here unless a test calls it.
+ */
+function unusedExports<Module extends object>(real: Module): Module {
+  // Typed as the module so the mock-module check sees every export covered.
+  return Object.fromEntries(
+    Object.entries(real).map(([name, value]) => [
+      name,
+      typeof value === 'function' ? mock(unexpected(name)) : value,
+    ])
+  ) as Module;
+}
+const unusedItems = unusedExports(await import('@archon/core/db/items'));
+const unusedItemRulings = unusedExports(await import('@archon/core/db/item-rulings'));
+const unusedItemMerges = unusedExports(await import('@archon/core/db/item-merges'));
+const unusedItemLinks = unusedExports(await import('@archon/core/db/item-links'));
+const unusedItemLandings = unusedExports(await import('@archon/core/db/item-landings'));
+const unusedItemEnds = unusedExports(await import('@archon/core/db/item-ends'));
+const unusedItemAsks = unusedExports(await import('@archon/core/db/item-asks'));
+export const mockGetItemRuns = mock<typeof import('@archon/core/db/items')['getItemRuns']>(
+  async () => null
+);
+export const mockGetItem = mock<typeof import('@archon/core/db/items')['getItem']>(
+  async () => null
+);
+export const mockListItemsInWindow = mock<
+  typeof import('@archon/core/db/items')['listItemsInWindow']
+>(async () => []);
+mock.module('@archon/core/db/items', () => ({
+  ...unusedItems,
+  getItemRuns: mockGetItemRuns,
+  listItemsInWindow: mockListItemsInWindow,
+  getItem: mockGetItem,
+}));
+// The item read lists the item's queued and skipped starts; without these it queries a
+// real database.
+const realResourceStarts = { ...(await import('@archon/core/db/resource-starts')) };
+export const mockListQueuedItemStarts = mock<
+  typeof import('@archon/core/db/resource-starts')['listQueuedItemStarts']
+>(async () => []);
+export const mockListSkippedItemStarts = mock<
+  typeof import('@archon/core/db/resource-starts')['listSkippedItemStarts']
+>(async () => []);
+mock.module('@archon/core/db/resource-starts', () => ({
+  ...realResourceStarts,
+  listQueuedItemStarts: mockListQueuedItemStarts,
+  listSkippedItemStarts: mockListSkippedItemStarts,
+  readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
+}));
+// The item read reads the install hold; no hold is set here.
+const realInstallHold = { ...(await import('@archon/core/db/install-hold')) };
+mock.module('@archon/core/db/install-hold', () => ({
+  ...realInstallHold,
+  getInstallHold: async () => null,
+}));
+type ItemRulingsDb = typeof import('@archon/core/db/item-rulings');
+export const mockListItemRulings = mock<ItemRulingsDb['listItemRulings']>(async () => []);
+export const mockRecordItemRuling = mock<ItemRulingsDb['recordItemRuling']>(
+  unexpected('recordItemRuling')
+);
+export const mockWithdrawItemRuling = mock<ItemRulingsDb['withdrawItemRuling']>(
+  unexpected('withdrawItemRuling')
+);
+mock.module('@archon/core/db/item-rulings', () => ({
+  ...unusedItemRulings,
+  listItemRulings: mockListItemRulings,
+  recordItemRuling: mockRecordItemRuling,
+  withdrawItemRuling: mockWithdrawItemRuling,
+}));
+mock.module('@archon/core/db/item-merges', () => ({
+  ...unusedItemMerges,
+  getItemMerge: mock(async () => null),
+}));
+mock.module('@archon/core/db/item-landings', () => ({
+  ...unusedItemLandings,
+  getItemLanding: mock(async () => null),
+}));
+type ItemEndsDb = typeof import('@archon/core/db/item-ends');
+export const mockRecordItemEnd = mock<ItemEndsDb['recordItemEnd']>(unexpected('recordItemEnd'));
+mock.module('@archon/core/db/item-ends', () => ({
+  ...unusedItemEnds,
+  getHoldingItemEnd: mock(async () => null),
+  recordItemEnd: mockRecordItemEnd,
+}));
+
+type ItemLinksDb = typeof import('@archon/core/db/item-links');
+mock.module('@archon/core/db/item-links', () => ({
+  ...unusedItemLinks,
+  listItemLinks: mock<ItemLinksDb['listItemLinks']>(async () => []),
+}));
+
+type ItemAsksDb = typeof import('@archon/core/db/item-asks');
+export const mockListOpenItemAsks = mock<ItemAsksDb['listOpenItemAsks']>(async () => []);
+export const mockListItemAsks = mock<ItemAsksDb['listItemAsks']>(async () => []);
+export const mockGetItemAsk = mock<ItemAsksDb['getItemAsk']>(async () => null);
+export const mockAnswerItemAsk = mock<ItemAsksDb['answerItemAsk']>(unexpected('answerItemAsk'));
+export const mockWithdrawItemAsk = mock<ItemAsksDb['withdrawItemAsk']>(
+  unexpected('withdrawItemAsk')
+);
+mock.module('@archon/core/db/item-asks', () => ({
+  ...unusedItemAsks,
+  listOpenItemAsks: mockListOpenItemAsks,
+  listItemAsks: mockListItemAsks,
+  getItemAsk: mockGetItemAsk,
+  answerItemAsk: mockAnswerItemAsk,
+  withdrawItemAsk: mockWithdrawItemAsk,
+}));
+
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mockListWorkflowEvents,
+  listEventsForRuns: mockListEventsForRuns,
   createWorkflowEvent: mockCreateWorkflowEvent,
   listProviderEvents: mockListProviderEvents,
-  PROVIDER_EVENT_ROW_TYPES: [
-    'provider_event',
-    'tool_called',
-    'tool_completed',
-    'task_activity',
-    'hook_activity',
-  ],
+  PROVIDER_EVENT_ROW_TYPES,
 }));
 
 mock.module('@archon/core/db/messages', () => ({
@@ -519,7 +643,9 @@ export const MOCK_RUNNING_RUN = {
   codebase_id: 'cb-uuid-1',
   status: 'running',
   outcome: null,
+  completed_outcome: null,
   user_message: 'Deploy to staging',
+  active_phase_started_at: null,
   started_at: NOW_DATE,
   completed_at: null,
   metadata: {},
@@ -530,6 +656,7 @@ export const MOCK_RUNNING_RUN = {
   adopted_from_run_id: null,
   output_root: null,
   checkout_baseline: null,
+  item_id: null,
 } satisfies MockWorkflowRun;
 
 export const MOCK_COMPLETED_RUN = {
@@ -626,7 +753,7 @@ export function makeApp(lockManager?: ConversationLockManager): {
   const mockLockManager = {
     acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
       await fn();
-      return { status: 'started' };
+      return { status: 'started', turnId: 'turn-1' };
     }),
     getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;

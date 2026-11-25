@@ -36,6 +36,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'skills',
   'plugins',
   'agents',
+  'tools',
   'pi',
   'effort',
   'maxBudgetUsd',
@@ -46,9 +47,6 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'sandbox',
   'persist_session',
 ];
-
-/** AI-specific fields that are meaningless on script nodes — same as bash nodes */
-export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
 
 /** Fields ignored by a loop's own provider call, derived from its authored projection. */
 export const LOOP_NODE_AI_FIELDS: readonly string[] = [

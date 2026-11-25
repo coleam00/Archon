@@ -15,6 +15,7 @@ import {
   prepareRunAiConfiguration,
   type PreparedRunAiConfiguration,
 } from './run-preflight';
+import { assertRunForgeAccess } from './run-forge-access';
 import { hydrateResumableRun, inspectResumableRun } from './run-resume';
 import {
   prepareWorkflowSource,
@@ -40,10 +41,15 @@ import {
   isSourceReadFailure,
   isSystemError,
   recordSelectedWorkflow,
+  resolveChildBaseDefinitions,
   resolveChildDiscoveryRoot,
   resolveChildInstalledPacks,
+  preparedSourceConfigRoot,
+  runProjectConfigRoot,
   type InstalledPacksRoot,
 } from './workflow-source';
+import { withChildDefinitions } from './workflow-source/child-definitions';
+import type { BaseRunDefinitions } from './schemas/run-metadata';
 
 /** Depth cap on the `workflow:` sub-run tree (D9). A node nested deeper fails fast. */
 const CHILD_WORKFLOW_DEPTH_CAP = 5;
@@ -187,22 +193,27 @@ export async function runChildWorkflow(
     if (guard.stopped) return guard.outcome;
     const inputs = resolveChildInputs(args, workflow);
     if (inputs.stopped) return inputs.outcome;
-    const prepared = await prepareChildAiConfiguration(launch, workflow);
+    const prepared = await prepareChildAiConfiguration(
+      launch,
+      workflow,
+      inputs.value,
+      source.value
+    );
     if (prepared.stopped) return prepared.outcome;
-    const placement = await resolveChildPlacement(launch, prepared.value);
+    const placement = await resolveChildPlacement(launch, prepared.value.config);
     if (placement.stopped) return placement.outcome;
     const start = await startChildRun(launch, {
       source: source.value,
       workflow,
-      inputs: inputs.value,
-      prepared: prepared.value,
+      inputs: prepared.value.inputs,
+      prepared: prepared.value.config,
       placement: placement.value,
     });
     if (start.stopped) return start.outcome;
     return executeChildRun(launch, owner, {
       workflow,
       source: workflowSource,
-      prepared: prepared.value,
+      prepared: prepared.value.config,
       cwd: placement.value.cwd,
       start: start.value,
     });
@@ -212,6 +223,8 @@ export async function runChildWorkflow(
 interface ParentSource {
   readonly root: string | undefined;
   readonly installedFrom: InstalledPacksRoot | undefined;
+  /** Set when the parent's definitions came from the base branch: `root` is its capture. */
+  readonly base: { definitions: BaseRunDefinitions; commandFolder: string | undefined } | undefined;
 }
 
 // A `workflow:` child freezes its own source AT ITS OWN START, from the parent's
@@ -221,15 +234,37 @@ interface ParentSource {
 // discovering from the capture rather than from the live directory is what stops the
 // child executing one moment's YAML against another moment's scripts.
 // Installed packs are the exception: the child takes them from the parent's capture.
+// A parent whose definitions came from the base branch has no single authoring directory:
+// its child starts from the parent's captured definitions with the parent's execution
+// checkout changes laid on top, so a child written or fixed there is still the one run.
 async function readParentSource({ args }: ChildLaunch): Promise<ParentSource> {
   try {
+    const installedFrom = await resolveChildInstalledPacks(args.parentRun.metadata);
+    const base = await resolveChildBaseDefinitions(args.parentRun.metadata);
+    if (base)
+      return {
+        root: base.projectRoot,
+        installedFrom,
+        base: { definitions: base.definitions, commandFolder: base.commandFolder },
+      };
     return {
       root: await resolveChildDiscoveryRoot(args.parentRun.metadata),
-      installedFrom: await resolveChildInstalledPacks(args.parentRun.metadata),
+      installedFrom,
+      base: undefined,
     };
   } catch (err) {
     throw parentSourceUnreadable(args.cwd, err);
   }
+}
+
+/**
+ * The commit the parent's checkout started at, which the child's layer is measured from.
+ * A parent with no recorded start reads from its definitions' commit, which a fresh
+ * worktree is cut at.
+ */
+function parentStart(parentRun: WorkflowRun, definitions: BaseRunDefinitions): string {
+  const baseline = parentRun.checkout_baseline;
+  return baseline?.kind === 'git' && baseline.commit ? baseline.commit : definitions.commit;
 }
 
 async function captureChildSource(
@@ -238,13 +273,31 @@ async function captureChildSource(
   owner: CapturedSourceOwner
 ): Promise<ChildPhase<PreparedWorkflowSource>> {
   const sourceRoot = parentSource.root ?? args.cwd;
+  const installed =
+    parentSource.installedFrom !== undefined ? { installedFrom: parentSource.installedFrom } : {};
   try {
-    const childSource = await prepareWorkflowSource(deps, {
-      sourceRoot,
-      ...(parentSource.installedFrom !== undefined
-        ? { installedFrom: parentSource.installedFrom }
-        : {}),
-    });
+    const { base } = parentSource;
+    const childSource =
+      base === undefined || parentSource.root === undefined
+        ? await prepareWorkflowSource(deps, { sourceRoot, ...installed })
+        : await withChildDefinitions(
+            {
+              parentProject: parentSource.root,
+              definitions: base.definitions,
+              checkout: args.cwd,
+              since: parentStart(args.parentRun, base.definitions),
+              commandFolder: base.commandFolder,
+              loadConfig: deps.loadConfig,
+            },
+            composed =>
+              prepareWorkflowSource(deps, {
+                sourceRoot: composed.root,
+                origin: args.cwd,
+                includeProjectConfig: true,
+                definitions: composed.definitions,
+                ...installed,
+              })
+          );
     owner.hold(childSource);
     return proceed(childSource);
   } catch (err) {
@@ -273,8 +326,10 @@ async function resolveChildWorkflow(
     // check for `workflow:` targets. Discovery runs HERE, when the node executes,
     // so a run can author a workflow mid-flight and then execute it as a governed
     // child run; a load-time check would compile, pass every existing test, and
-    // silently delete that capability. Recorded in the constitution's case-law
-    // table (.archon/workflow-language-constitution.md) and locked by
+    // silently delete that capability. A parent whose definitions came from the base
+    // branch keeps it through `withChildDefinitions`, which lays what the run wrote in its
+    // checkout on the parent's capture. Recorded in the constitution's case-law table
+    // (.archon/workflow-language-constitution.md) and locked by
     // `describe('workflow: late resolution is a deliberate affordance')` in
     // child-runs.late-resolution.test.ts.
     const { workflows, errors } = await discoverWorkflowsWithConfig(
@@ -359,12 +414,22 @@ function resolveChildInputs(
 
 async function prepareChildAiConfiguration(
   { deps, args, resolvedModelOverrides, runConfig }: ChildLaunch,
-  childWorkflow: ResolvedWorkflow
-): Promise<ChildPhase<PreparedRunAiConfiguration>> {
+  childWorkflow: ResolvedWorkflow,
+  inputs: Record<string, JsonValue> | undefined,
+  childSource: PreparedWorkflowSource
+): Promise<
+  ChildPhase<{
+    config: PreparedRunAiConfiguration;
+    inputs: Record<string, JsonValue> | undefined;
+  }>
+> {
   const { resumeChild } = args;
   const configCwd = resumeChild?.run.working_path ?? args.cwd;
   try {
     const childPrepared = await prepareRunAiConfiguration(deps, childWorkflow, configCwd, {
+      configRoot: resumeChild
+        ? runProjectConfigRoot(resumeChild.run.metadata, configCwd)
+        : preparedSourceConfigRoot(childSource, configCwd),
       codebaseId: args.codebaseId,
       userId: args.userId,
       ...(resumeChild
@@ -374,7 +439,15 @@ async function prepareChildAiConfiguration(
       ...(runConfig ? { runConfig } : {}),
     });
     await assertRunCredentials(deps, childPrepared, { cwd: configCwd });
-    return proceed(childPrepared);
+    if (resumeChild) return proceed({ config: childPrepared, inputs });
+    // A child run executes on the host; it does not inherit a parent's container.
+    const checkedInputs = await assertRunForgeAccess(deps, childWorkflow, childPrepared, {
+      cwd: configCwd,
+      settingsCwd: configCwd,
+      codebaseId: args.codebaseId,
+      supplied: inputs,
+    });
+    return proceed({ config: childPrepared, inputs: checkedInputs });
   } catch (error) {
     return refuse((error as Error).message, resumeChild?.run.id);
   }
@@ -519,16 +592,9 @@ async function resumeFailedChildRun(
   childSource: PreparedWorkflowSource
 ): Promise<ChildRunStart> {
   const hydrated = await hydrateResumableRun(launch.deps, childRun);
-  if (hydrated) {
-    return {
-      opts: { ...hydrated, ...inheritedChildOptions(launch, childSource) },
-      runId: hydrated.preCreatedRun.id,
-    };
-  }
-  const preCreatedRun = await launch.deps.store.resumeWorkflowRun(childRun.id);
   return {
-    opts: { preCreatedRun, ...inheritedChildOptions(launch, childSource) },
-    runId: preCreatedRun.id,
+    opts: { ...hydrated, ...inheritedChildOptions(launch, childSource) },
+    runId: hydrated.preCreatedRun.id,
   };
 }
 
@@ -539,7 +605,7 @@ async function recoverCancelledChildRun(
 ): Promise<ChildRunStart> {
   const { deps } = launch;
   const inspection = await inspectResumableRun(deps, childRun);
-  const completedNodeIds = new Set(inspection?.priorCompletedNodes.keys() ?? []);
+  const completedNodeIds = new Set(inspection.priorCompletedNodes.keys());
   const priorNodeSessions = (await deps.store.listWorkflowRunNodeSessions(childRun.id)).filter(
     row => completedNodeIds.has(row.node_id)
   );
@@ -547,13 +613,9 @@ async function recoverCancelledChildRun(
   return {
     opts: {
       preCreatedRun,
-      ...(inspection
-        ? {
-            priorCompletedNodes: inspection.priorCompletedNodes,
-            priorUsage: inspection.priorUsage,
-            priorNodeSessions,
-          }
-        : {}),
+      priorCompletedNodes: inspection.priorCompletedNodes,
+      priorUsage: inspection.priorUsage,
+      priorNodeSessions,
       ...inheritedChildOptions(launch, childSource),
     },
     runId: preCreatedRun.id,

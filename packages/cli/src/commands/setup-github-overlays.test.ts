@@ -7,7 +7,6 @@ import {
   selectGitHubAuthMode,
 } from '@archon/core/utils/github-auth-mode';
 import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
-import { setupCommand } from './setup';
 
 import { serializeEnv, resolveScopedEnvPath } from './setup-env';
 import * as prompts from '@clack/prompts';
@@ -290,14 +289,8 @@ describe('GitHub setup wizard', () => {
       const otherOriginal = readFileSync(otherPath, 'utf8');
       const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
       try {
-        expect(
-          await setupCommand({
-            repoPath: fixture.root,
-            scope: fixture.scope,
-            providers: [],
-            inheritedEnv,
-          })
-        ).toBe(0);
+        fixture.inheritedEnv = inheritedEnv;
+        expect(await fixture.run()).toBe(0);
         const effective = {
           ...inheritedEnv,
           ...parseDotenv(readFileSync(homePath, 'utf8')),
@@ -327,42 +320,39 @@ describe('GitHub setup wizard', () => {
         WEBHOOK_SECRET: fixture.webhookSecret,
       });
       writeFileSync(fixture.target, original);
-      const prior = process.env.GITHUB_TOKEN;
-      process.env.GITHUB_TOKEN = fixture.pat;
-      try {
-        const inheritedEnv = inheritedPat ? { GITHUB_TOKEN: fixture.pat } : {};
-        expect(
-          await setupCommand({
-            repoPath: fixture.root,
-            scope: fixture.scope,
-            providers: [],
-            inheritedEnv,
-          })
-        ).toBe(inheritedPat ? 1 : 0);
-        if (inheritedPat) {
-          expect(readFileSync(fixture.target, 'utf8')).toBe(original);
-          expect(readdirSync(dirname(fixture.target))).toEqual(['.env']);
-        } else {
-          const effective = { ...inheritedEnv, ...fixture.read() };
-          expect(selectGitHubAuthMode(effective)).toEqual({ kind: 'app' });
-          expect(loadGitHubAppConfig(effective)).toMatchObject({
-            appId: '123',
-            privateKey: fixture.privateKey,
-          });
-        }
-      } finally {
-        if (prior === undefined) delete process.env.GITHUB_TOKEN;
-        else process.env.GITHUB_TOKEN = prior;
+      fixture.inheritedEnv = inheritedPat ? { GITHUB_TOKEN: fixture.pat } : {};
+      expect(await fixture.run()).toBe(inheritedPat ? 1 : 0);
+      if (inheritedPat) {
+        expect(readFileSync(fixture.target, 'utf8')).toBe(original);
+        expect(readdirSync(dirname(fixture.target))).toEqual(['.env']);
+      } else {
+        const effective = { ...fixture.inheritedEnv, ...fixture.read() };
+        expect(selectGitHubAuthMode(effective)).toEqual({ kind: 'app' });
+        expect(loadGitHubAppConfig(effective)).toMatchObject({
+          appId: '123',
+          privateKey: fixture.privateKey,
+        });
       }
     }
   );
 
   it('rejects inherited PAT beside a proposed App before writing', async () => {
+    fixture.inheritedEnv = { GITHUB_TOKEN: fixture.pat };
+    expect(await fixture.run()).toBe(1);
+    expect(existsSync(fixture.target)).toBe(false);
+  });
+
+  // A checkout whose `.env` holds a token hands it to the test process from the repository
+  // root, where Bun loads that file; the tests above must not read it as an inherited PAT.
+  it('writes an App whatever token the process environment holds', async () => {
     const prior = process.env.GITHUB_TOKEN;
-    process.env.GITHUB_TOKEN = fixture.pat;
+    process.env.GITHUB_TOKEN = 'ghp_ambient_token';
     try {
-      expect(await fixture.run()).toBe(1);
-      expect(existsSync(fixture.target)).toBe(false);
+      expect(await fixture.run()).toBe(0);
+      expect(loadGitHubAppConfig(fixture.read())).toMatchObject({
+        appId: '123',
+        privateKey: fixture.privateKey,
+      });
     } finally {
       if (prior === undefined) delete process.env.GITHUB_TOKEN;
       else process.env.GITHUB_TOKEN = prior;

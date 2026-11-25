@@ -6,19 +6,22 @@
  * enabled AND the run was initiated by a specific user, the run's subprocess
  * env is rewritten so:
  *
- *   - User has a personal token → inject it as GH_TOKEN / GITHUB_TOKEN.
- *     COPILOT_GITHUB_TOKEN and the GitHub Enterprise token keys are always
- *     cleared (Copilot is a paid SaaS; an OAuth token does not grant equivalent
- *     access, and the host's GHES token is not the user's).
+ *   - User has a personal token → inject it as GH_TOKEN / GITHUB_TOKEN, and point
+ *     git's github.com credential helper at it (see {@link connectedGithubEnv}),
+ *     so neither the host's stored logins nor the repository's bot helper answer
+ *     git over HTTPS to github.com. COPILOT_GITHUB_TOKEN and the GitHub Enterprise
+ *     token keys are always cleared (Copilot is a paid SaaS; an OAuth token does
+ *     not grant equivalent access, and the host's GHES token is not the user's).
  *   - User has NO personal token:
  *       - ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true → keep the org token
  *         (legacy behavior — opt-in).
  *       - Otherwise (default) → scrub, so `gh` and `git` cannot authenticate as
  *         the org, the operator, or another user (see {@link scrubbedGithubEnv}).
  *
- * Server-initiated runs (no originating userId — GitHub webhooks, cron, CLI)
- * are NOT scrubbed: trusted server context. Per-user mode disabled (solo PAT
- * installs) is NEVER scrubbed — there is no "other user" to leak to.
+ * A run with no originating userId is NOT scrubbed: trusted server context. A CLI
+ * run carries the CLI user, so it is treated like any user-owned run. Per-user
+ * mode disabled (solo PAT installs) is NEVER scrubbed — there is no "other user"
+ * to leak to.
  *
  * Adapted from the #1774 donor: the KEYCLOAK_URL mode-detector is replaced by an
  * injected `perUserEnabled` flag (resolved from `isPerUserGitHubEnabled()` at
@@ -45,6 +48,32 @@ const STORED_LOGIN_KEYS = ['GH_CONFIG_DIR', 'GIT_CONFIG_PARAMETERS'] as const;
 const clearedTokens = (): Record<string, string> =>
   Object.fromEntries(SENSITIVE_KEYS.map(key => [key, '']));
 
+/** One `key=value` entry as git writes it into GIT_CONFIG_PARAMETERS: single-quoted. */
+function gitConfigParameter(key: string, value: string): string {
+  return `'${`${key}=${value}`.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Append entries to the GIT_CONFIG_PARAMETERS in `env`, keeping what is already there.
+ * Later entries win, and an empty helper resets the list built before it, so an entry
+ * appended here also overrides an inherited one.
+ */
+function appendGitConfigParameters(env: NodeJS.ProcessEnv, entries: readonly string[]): string {
+  const inherited = env.GIT_CONFIG_PARAMETERS?.trim();
+  return [...(inherited ? [inherited] : []), ...entries].join(' ');
+}
+
+const GITHUB_HELPER_KEY = 'credential.https://github.com.helper';
+
+/**
+ * A helper that serves GH_TOKEN as read when git runs; the token never enters the
+ * config. It answers only `get`, so git's `store` and `erase` never write the user's
+ * token into another helper's store, and with an empty GH_TOKEN it answers nothing,
+ * so git fails rather than falling back.
+ */
+const GH_TOKEN_HELPER =
+  '!f() { test "$1" = get && test -n "$GH_TOKEN" || exit 0; echo username=x-access-token; echo "password=$GH_TOKEN"; }; f';
+
 export function isOrgTokenFallbackAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = env.ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK;
   return v === 'true' || v === '1';
@@ -68,21 +97,46 @@ export function isOrgTokenFallbackAllowed(env: NodeJS.ProcessEnv = process.env):
  *     `gh auth git-credential`). Settings already in it are kept. GIT_CONFIG_COUNT
  *     would also work for git, but Codex drops env vars whose names contain `KEY`
  *     from its shells, which would leave a count with no `GIT_CONFIG_KEY_0` and
- *     break every git command there.
+ *     break every git command there. A connected user's env uses the same channel
+ *     ({@link connectedGithubEnv}).
  *
  * An existing GIT_CONFIG_PARAMETERS in the host environment (`env`) is kept. A
  * codebase env entry for it is replaced: it is git's internal channel, not
  * project configuration.
  */
 function scrubbedGithubEnv(env: NodeJS.ProcessEnv): Record<string, string> {
-  const gitParameters = env.GIT_CONFIG_PARAMETERS?.trim();
   // Typed by STORED_LOGIN_KEYS, so the redirects and the list `loadCliEnv` protects
   // cannot drift apart: a missing or extra key fails to compile.
   const redirects: Record<(typeof STORED_LOGIN_KEYS)[number], string> = {
     GH_CONFIG_DIR: join(tmpdir(), `archon-gh-scrubbed-${randomUUID()}`),
-    GIT_CONFIG_PARAMETERS: `${gitParameters ? `${gitParameters} ` : ''}'credential.helper='`,
+    GIT_CONFIG_PARAMETERS: appendGitConfigParameters(env, [
+      gitConfigParameter('credential.helper', ''),
+    ]),
   };
   return { ...clearedTokens(), ...redirects };
+}
+
+/**
+ * The env for a per-user run whose user has a personal token.
+ *
+ * gh reads GH_TOKEN. git does not: without a helper of its own it would ask the host's
+ * helpers (a keychain login) or the repository's bot helper first. So this resets every
+ * github.com helper and adds {@link GH_TOKEN_HELPER}, scoped to `https://github.com` so
+ * helpers for other hosts are untouched. Appended after an inherited GIT_CONFIG_PARAMETERS,
+ * it also restores git over HTTPS for a run started from a scrubbed caller, whose
+ * `credential.helper=` reset it inherits. GH_CONFIG_DIR is left as inherited: gh uses
+ * GH_TOKEN before any stored login.
+ */
+function connectedGithubEnv(env: NodeJS.ProcessEnv, userToken: string): Record<string, string> {
+  return {
+    ...clearedTokens(),
+    GH_TOKEN: userToken,
+    GITHUB_TOKEN: userToken,
+    GIT_CONFIG_PARAMETERS: appendGitConfigParameters(env, [
+      gitConfigParameter(GITHUB_HELPER_KEY, ''),
+      gitConfigParameter(GITHUB_HELPER_KEY, GH_TOKEN_HELPER),
+    ]),
+  };
 }
 
 /**
@@ -106,9 +160,7 @@ export function resolveGithubTokenOverrides(
   if (!perUserEnabled) return {};
   if (!userId) return {}; // server-initiated trusted run
 
-  if (userToken) {
-    return { ...clearedTokens(), GH_TOKEN: userToken, GITHUB_TOKEN: userToken };
-  }
+  if (userToken) return connectedGithubEnv(env, userToken);
 
   if (isOrgTokenFallbackAllowed(env)) return {};
 
@@ -119,8 +171,9 @@ export function resolveGithubTokenOverrides(
 export const GITHUB_TOKEN_KEYS: readonly string[] = SENSITIVE_KEYS;
 
 /**
- * Every key that carries a run's GitHub identity: the tokens and the scrub's
- * stored-login redirects. Inside a run, Archon's env files must not replace any of
+ * Every key that carries a run's GitHub identity: the tokens and the keys that
+ * redirect gh's and git's stored logins (the scrub's, and a connected user's git
+ * helper). Inside a run, Archon's env files must not replace any of
  * them (see `loadCliEnv`). Only the token keys are secrets.
  */
 export const RUN_GITHUB_IDENTITY_KEYS: readonly string[] = [

@@ -1,18 +1,32 @@
 import { formatDuration } from '@archon/paths/duration';
 import { toolCallDisplayName } from '@archon/provider-contract';
-import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import {
+  describeStallMessage,
+  stallMessageEventDataSchema,
+  type WorkflowEventRow,
+} from '@archon/workflows/schemas/workflow-event';
 import { providerEventEnvelopeSchema } from '@archon/workflows/schemas/provider-event';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
+import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { deadlineWaitCursor, resumeCursorMatches } from '@archon/workflows/store';
 import type { ResolvedWorkflow, WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import {
+  isApprovalContext,
+  runAttention,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
+import { isOperatorPaused } from '@archon/workflows/schemas/pause-cause';
+import { attentionAnswerLines } from '@archon/workflows/deps';
 import type { CLIAdapter } from '../adapters/cli-adapter';
+import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import { formatRunUsage } from './workflow-usage';
+import { refusedStartLines } from './workflow-attention-text';
+import { readItemStopped } from '@archon/workflows/schemas/run-metadata';
 import { formatSkipCause } from './workflow-node-summaries';
-import { getLog, type RunDestination } from './workflow-shared';
+import { getLog, NAME_ITEM_HINT, type RunDestination } from './workflow-shared';
 import { pendingDurableWait, type PendingWaitContinuation } from './workflow-wait-continuation';
 
 /**
@@ -31,7 +45,13 @@ export const nodeLine = {
   started: (name: string, detail = ''): string => `[${name}] Started${detail}`,
   completed: (name: string, durationMs?: number): string =>
     `[${name}] Completed${durationMs === undefined ? '' : ` (${formatDuration(durationMs)})`}`,
-  failed: (name: string, error: string): string => `[${name}] Failed: ${error}`,
+  // The recorded failure kind is the name a `retry.on_error` policy targets, so it is shown.
+  failed: (name: string, error: string, execution?: NodeExecutionMetadata): string => {
+    // A transcript row is unvalidated JSON, so a row without a lifecycle prints no kind.
+    const lifecycle = execution?.lifecycle as NodeExecutionMetadata['lifecycle'] | undefined;
+    const kind = lifecycle?.status === 'failed' ? lifecycle.failureKind : undefined;
+    return `[${name}] Failed${kind === undefined ? '' : ` (${kind})`}: ${error}`;
+  },
   skipped: (name: string, why: string): string => `[${name}] Skipped (${why})`,
 };
 
@@ -48,7 +68,7 @@ function nodeEventLine(event: WorkflowEmitterEvent): string | undefined {
     case 'node_completed':
       return nodeLine.completed(event.nodeName, event.duration);
     case 'node_failed':
-      return nodeLine.failed(event.nodeName, event.error);
+      return nodeLine.failed(event.nodeName, event.error, event.execution);
     case 'node_skipped':
       return nodeLine.skipped(event.nodeName, formatSkipCause(event.cause));
     case 'node_skipped_prior_success':
@@ -56,6 +76,14 @@ function nodeEventLine(event: WorkflowEmitterEvent): string | undefined {
     default:
       return undefined;
   }
+}
+
+/** What a `stall_message` row says: the engine's message to a stalled session, or why there was none. */
+export function stallMessageLine(row: WorkflowEventRow): string | undefined {
+  // A row another build wrote and this one cannot read is skipped, as provider rows are.
+  const parsed = stallMessageEventDataSchema.safeParse(row.data);
+  if (!parsed.success) return undefined;
+  return describeStallMessage(row.step_name ?? '?', row.workflow_run_id, parsed.data);
 }
 
 function containerLine(phase: string, data: Record<string, unknown>): string {
@@ -123,6 +151,8 @@ export function workflowEventLine(
       return containerLine(row.event_type, row.data);
     case 'provider_event':
       return verbose ? toolLine(row, openToolCalls) : undefined;
+    case 'stall_message':
+      return stallMessageLine(row);
     default:
       // Workflow-level, loop, artifact, and cancelled events are intentionally not rendered.
       return undefined;
@@ -151,7 +181,7 @@ export async function presentRunResult(
   const { host, workflow, result, adapter, conversationId, destination, detachedProcessOwner } =
     input;
   if ('handedOff' in result) return presentHandoff(result, detachedProcessOwner);
-  const run = await readRunForPresentation(host, workflow, result);
+  const run = await readRunForPresentation(host, result);
 
   // Check result and exit appropriately
   if ('paused' in result) {
@@ -160,9 +190,12 @@ export async function presentRunResult(
     if (result.waitCursor !== undefined) {
       return presentDurableWait(host, result.workflowRunId, result.waitCursor, destination);
     }
-    if (!printRunFacts(workflow, run, '\nWorkflow paused — waiting for approval.', 'paused')) {
-      console.log('\nWorkflow paused — waiting for approval.');
-    }
+    // A paused run has no outcome: it is written only when the run completes.
+    if (result.byOperator)
+      console.log(
+        `\nWorkflow paused by an operator. Resume: archon workflow resume ${result.workflowRunId}`
+      );
+    else printPausedRun(run, result.workflowRunId);
   } else if (result.success) {
     // Surface workflow result to Web UI as a result card (mirrors the background dispatch
     // result message in core's orchestrator/dispatch/background-run.ts).
@@ -176,17 +209,60 @@ export async function presentRunResult(
         result.summary
       );
     }
-    if (!printRunFacts(workflow, run, '\nWorkflow finished.', 'completed')) {
+    if (!printRunFacts(workflow, run, '\nWorkflow finished.')) {
       console.log('\nWorkflow completed successfully.');
     }
+    printRefusedStart(run);
     printRunUsage(run);
   } else {
-    if (result.workflowRunId !== undefined)
-      printRunFacts(workflow, run, '\nWorkflow finished.', 'failed');
     printRunUsage(run);
-    throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
+    throw new WorkflowRunFailedError(failureReason(result), detachedProcessOwner);
   }
   return undefined;
+}
+
+function printPausedRun(run: WorkflowRun | null, runId: string): void {
+  if (run !== null && isOperatorPaused(run)) {
+    console.log(`\nWorkflow paused by an operator. Resume: archon workflow resume ${runId}`);
+    return;
+  }
+  const attention = run === null ? null : runAttention(run);
+  if (attention?.kind === 'attention') {
+    console.log('\nWorkflow paused — waiting for an answer to its ask.');
+    console.log(`  Read the full question: archon workflow attention ${runId}`);
+    for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, attention))
+      console.log(`  ${line}`);
+    return;
+  }
+  if (attention?.kind === 'awaiting_response') {
+    const approval = run?.metadata.approval;
+    const interactive = isApprovalContext(approval) && approval.type === 'interactive_loop';
+    console.log(
+      interactive
+        ? '\nWorkflow paused — waiting for interactive input.'
+        : '\nWorkflow paused — waiting for approval.'
+    );
+    console.log(`  Read the gate: archon workflow attention ${runId}`);
+    console.log(
+      `  Respond: archon workflow approve ${runId} --occurrence ${attention.occurrence} ` +
+        (interactive ? '<your feedback>' : '[comment]') +
+        ', or reject or respond <decision> the same way.'
+    );
+    return;
+  }
+  // An unavailable row or unclassified pause must not invent an approval request.
+  const detail =
+    attention?.kind === 'unreadable'
+      ? ` — ${attention.detail}`
+      : run === null
+        ? ' — persisted pause details unavailable'
+        : '';
+  console.log(`\nWorkflow paused${detail}. Inspect: archon workflow get ${runId}`);
+}
+
+/** Why the run failed, with this surface's way to name an item when that was refused. */
+function failureReason(result: Extract<WorkflowExecutionResult, { success: false }>): string {
+  return 'continuedItemRefused' in result ? `${result.error} ${NAME_ITEM_HINT}` : result.error;
 }
 
 function presentHandoff(
@@ -202,10 +278,13 @@ function presentHandoff(
 
 async function readRunForPresentation(
   host: WorkflowHost,
-  workflow: ResolvedWorkflow,
   result: WorkflowExecutionResult
 ): Promise<WorkflowRun | null> {
-  if (result.success && 'paused' in result && result.paused && workflow.outcome_field === undefined)
+  if (
+    result.success &&
+    'paused' in result &&
+    (result.waitCursor !== undefined || result.byOperator)
+  )
     return null;
   const { workflowRunId } = result;
   if (workflowRunId === undefined) return null;
@@ -217,22 +296,29 @@ async function readRunForPresentation(
   }
 }
 
-function printRunFacts(
-  workflow: ResolvedWorkflow,
-  run: WorkflowRun | null,
-  lead: string,
-  executionStatus: WorkflowRunStatus
-): boolean {
-  if (workflow.outcome_field === undefined) return false;
+/** The outcome a completed run declared, which only the completing write records. */
+function printRunFacts(workflow: ResolvedWorkflow, run: WorkflowRun | null, lead: string): boolean {
+  if (workflow.result?.outcome === undefined) return false;
   if (run === null) {
     console.log(
-      `${lead}\n  Status: ${executionStatus}\n  Authored outcome: unavailable — failed to read persisted run`
+      `${lead}\n  Status: completed\n  Authored outcome: unavailable — failed to read persisted run`
     );
     return true;
   }
-  if (run.outcome == null) return false;
-  console.log(`${lead}\n  Status: ${run.status}\n  Authored outcome: ${run.outcome}`);
+  if (run.completed_outcome === null) return false;
+  console.log(`${lead}\n  Status: ${run.status}\n  Authored outcome: ${run.completed_outcome}`);
   return true;
+}
+
+/**
+ * The run completed, but a start its end caused was refused: say so, from its stop. Here and
+ * in `workflow get`, which `trigger fire` points to for a detached run.
+ */
+export function printRefusedStart(run: WorkflowRun | null): void {
+  const refused = run === null ? undefined : readItemStopped(run.metadata)?.refused;
+  if (refused === undefined) return;
+  console.log('  Next stage not started:');
+  for (const line of refusedStartLines(refused)) console.log(`    ${line}`);
 }
 
 function printRunUsage(run: WorkflowRun | null): void {

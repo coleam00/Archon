@@ -9,7 +9,7 @@
  * undefined when the invocation is allowed.
  */
 
-export const RUN_PROJECT_CONFLICT_FLAGS = ['folder', 'base-branch', 'resume', 'dry-run'] as const;
+export const RUN_PROJECT_CONFLICT_FLAGS = ['folder', 'base-branch', 'dry-run'] as const;
 
 /** Workflow subcommands that continue an existing run. */
 const CONTINUE_SUBCOMMANDS: readonly string[] = [
@@ -27,28 +27,53 @@ export function isContinueSubcommand(subcommand: string | undefined): boolean {
   return subcommand !== undefined && CONTINUE_SUBCOMMANDS.includes(subcommand);
 }
 
-export const RESUME_RUN_CONFIG_CONFLICT =
-  '--resume and --config are mutually exclusive. A resumed run keeps its original run config.';
+/** What a continuation keeps from the start of the run, for each `workflow run` flag it refuses. */
+const KEPT_ON_CONTINUE = {
+  model: 'the model bindings',
+  input: 'the inputs',
+  'input-file': 'the inputs',
+  base: 'the base branch',
+} as const;
 
 /**
- * Rejects --model on subcommands that continue an existing workflow run: the
- * run keeps the model bindings it started with.
+ * Rejects `workflow run` flags that a subcommand continuing an existing run would otherwise
+ * ignore: the run keeps what it started with, so a silently dropped value would mislead.
  */
-export function rejectModelOnContinue(
+export function rejectRunFlagsOnContinue(
   subcommand: string | undefined,
-  model: unknown
+  values: Partial<Record<keyof typeof KEPT_ON_CONTINUE, unknown>>
 ): string | undefined {
-  if (model !== undefined && isContinueSubcommand(subcommand)) {
-    return (
-      'Error: --model cannot be used when continuing an existing workflow run. ' +
-      'The run keeps the model bindings it started with.'
-    );
+  if (!isContinueSubcommand(subcommand)) return undefined;
+  for (const [flag, kept] of Object.entries(KEPT_ON_CONTINUE)) {
+    if (values[flag as keyof typeof KEPT_ON_CONTINUE] !== undefined)
+      return (
+        `Error: --${flag} cannot be used when continuing an existing workflow run. ` +
+        `The run keeps ${kept} it started with.`
+      );
   }
   return undefined;
 }
 
 /**
- * Accepts run configuration and trigger deployment configuration on their owning commands.
+ * Refuses `--input-file` on any command but `workflow run`, so `trigger fire`, whose own
+ * file form is `--inputs <file>`, cannot start work with the input silently dropped.
+ * Continuations are left to {@link rejectRunFlagsOnContinue}, which says why.
+ */
+export function rejectInputFileOutsideRun(
+  command: string | undefined,
+  subcommand: string | undefined,
+  inputFile: unknown
+): string | undefined {
+  if (inputFile === undefined) return undefined;
+  if (command === 'workflow' && (subcommand === 'run' || isContinueSubcommand(subcommand))) {
+    return undefined;
+  }
+  return 'Error: --input-file can only be used with workflow run.';
+}
+
+/**
+ * Accepts run configuration and trigger deployment configuration on their owning commands,
+ * and the run configuration `pack bindings` writes into every binding it generates.
  * `--config-from-run` names another run's run config, which only `workflow run` takes.
  */
 export function rejectConfigOutsideRun(
@@ -63,31 +88,46 @@ export function rejectConfigOutsideRun(
   }
   const triggerConfig =
     command === 'trigger' && (subcommand === 'fire' || subcommand === 'schedule');
-  if (config !== undefined && !triggerConfig && !workflowRun) {
-    return 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.';
+  const packBindings = command === 'pack' && subcommand === 'bindings';
+  if (config !== undefined && !triggerConfig && !workflowRun && !packBindings) {
+    return 'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.';
   }
   return undefined;
 }
 
 /**
- * Rejects a fresh --config or --config-from-run on `workflow run --resume`: the resumed
- * run keeps the config it started with.
+ * Refuses `--workflow-source` on every command but the ones that read their workflows from
+ * it, so a command cannot answer about the project while the operator named another source.
+ * `workflow run` covers `--dry-run` and the `--supersedes` restart, which its route handles.
  */
-export function rejectConfigOnContinue(
-  resume: boolean | undefined,
-  config: unknown,
-  configFromRun?: unknown
+export function rejectWorkflowSourceOutsideReaders(
+  command: string | undefined,
+  subcommand: string | undefined,
+  workflowSource: unknown
 ): string | undefined {
-  if (!resume) return undefined;
-  const flag =
-    config !== undefined
-      ? '--config'
-      : configFromRun !== undefined
-        ? '--config-from-run'
-        : undefined;
-  if (flag === undefined) return undefined;
+  if (workflowSource === undefined) return undefined;
+  const reads =
+    (command === 'workflow' && subcommand === 'run') ||
+    (command === 'validate' && subcommand === 'workflows') ||
+    (command === 'pack' && (subcommand === 'bindings' || subcommand === 'graph'));
+  if (reads) return undefined;
+  return 'Error: --workflow-source can only be used with workflow run, validate workflows, pack bindings, or pack graph.';
+}
+
+/** The flags another command would otherwise ignore, refused before any command runs. */
+export function rejectRunFlagsOutsideRun(
+  command: string | undefined,
+  subcommand: string | undefined,
+  values: {
+    config?: unknown;
+    'config-from-run'?: unknown;
+    'input-file'?: unknown;
+    'workflow-source'?: unknown;
+  }
+): string | undefined {
   return (
-    `Error: ${flag} cannot be used when continuing an existing workflow run. ` +
-    'The run keeps the config it started with.'
+    rejectConfigOutsideRun(command, subcommand, values.config, values['config-from-run']) ??
+    rejectInputFileOutsideRun(command, subcommand, values['input-file']) ??
+    rejectWorkflowSourceOutsideReaders(command, subcommand, values['workflow-source'])
   );
 }

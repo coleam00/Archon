@@ -42,7 +42,7 @@ export type ClaudeEffortsAreComplete = AssertNever<
 
 // ─── SDK Hooks Building (absorbed from dag-executor) ───────────────────────
 
-/** YAML hook matcher shape (matches @archon/workflows/schemas/dag-node WorkflowNodeHooks) */
+/** YAML hook matcher shape (matches @archon/workflows/schemas/hooks WorkflowNodeHooks) */
 interface YAMLHookMatcher {
   matcher?: string;
   response: unknown;
@@ -137,7 +137,7 @@ export async function applyNodeConfig(
   // narrows `options.skills`; adding it for a non-workflow caller would expose
   // the ambient catalog instead of a declared subset.
   const selectsSkills = workflowNode && (nodeConfig.skills?.length ?? 0) > 0;
-  applyToolLists(options, nodeConfig, selectsSkills);
+  applyToolLists(options, nodeConfig, workflowNode, selectsSkills);
   if (nodeConfig.hooks) mergeNodeHooks(options, nodeConfig.hooks);
   if (nodeConfig.mcp) warnings.push(...(await applyMcpConfig(options, nodeConfig.mcp, cwd)));
 
@@ -244,16 +244,29 @@ function unreachableSkillsError(
   );
 }
 
+/**
+ * Tools a workflow node never gets: they hand work to a later wake-up of an interactive
+ * session, and a node's query ends with its turn, so nothing would ever run it (#5923).
+ */
+const INTERACTIVE_ONLY_TOOLS = ['ScheduleWakeup'];
+
 /** allowed_tools → tools, denied_tools → disallowedTools. */
-function applyToolLists(options: Options, nodeConfig: NodeConfig, selectsSkills: boolean): void {
+function applyToolLists(
+  options: Options,
+  nodeConfig: NodeConfig,
+  workflowNode: boolean,
+  selectsSkills: boolean
+): void {
   if (nodeConfig.allowed_tools !== undefined) {
     options.tools = selectsSkills
       ? [...new Set([...nodeConfig.allowed_tools, 'Skill'])]
       : nodeConfig.allowed_tools;
   }
-  if (nodeConfig.denied_tools !== undefined) {
-    options.disallowedTools = nodeConfig.denied_tools;
-  }
+  const disallowed = [
+    ...(workflowNode ? INTERACTIVE_ONLY_TOOLS : []),
+    ...(nodeConfig.denied_tools ?? []),
+  ];
+  if (disallowed.length > 0) options.disallowedTools = [...new Set(disallowed)];
 }
 
 /** Node hooks run before the existing hooks (the PostToolUse capture hook) of the same event. */

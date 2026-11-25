@@ -6,7 +6,9 @@ import { getSourceWebDistDir } from '@archon/paths';
 import { serveWebUi } from './static-cache';
 import type { WebAdapter } from './adapters/web';
 import { registerApiRoutes } from './routes/api';
+import type { AppCommit } from './routes/schemas/system.schemas';
 import type { AttentionRouter } from './services/attention-router';
+import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import type { WebPushDestination } from './services/web-push';
 import {
   registerGiteaWebhookRoute,
@@ -14,7 +16,7 @@ import {
   registerGithubWebhookRoute,
   registerWebhookSourceRoutes,
 } from './routes/webhooks';
-import type { WebhookSourcePluginHost } from './services/webhook-source-plugins';
+import type { WebhookSourcePluginHost } from '@archon/core/workflows/source-plugins';
 import { parseGitCredentialPath } from './github-auth-bootstrap';
 import { getAuth, getSignupMode, isArchonOwnedAuthPath } from './auth';
 import type { PlatformAdapters } from './platform-adapters';
@@ -24,11 +26,16 @@ export interface ServerRouteDeps {
   webAdapter: WebAdapter;
   lockManager: ConversationLockManager;
   activePlatforms: readonly string[];
-  attention: { webPush: WebPushDestination; router: AttentionRouter };
+  attention: {
+    webPush: WebPushDestination;
+    router: AttentionRouter;
+    tracker: ItemTracker | undefined;
+  };
   adapters: PlatformAdapters;
   webhookSources: WebhookSourcePluginHost | undefined;
   requestResourceStartDrain: (() => void) | undefined;
   webDistPath: string | undefined;
+  commit: AppCommit | undefined;
 }
 
 /** Registers every HTTP route in precedence order; the SPA fallback comes last. */
@@ -44,9 +51,15 @@ export function registerServerRoutes(app: OpenAPIHono, deps: ServerRouteDeps): v
   mountWebAuth(app);
 
   // Register Web UI API routes
-  registerApiRoutes(app, deps.webAdapter, deps.lockManager, deps.activePlatforms, deps.attention, {
-    githubAppAuth: adapters.githubAppAuthProvider ?? undefined,
-  });
+  registerApiRoutes(
+    app,
+    deps.webAdapter,
+    deps.lockManager,
+    deps.activePlatforms,
+    deps.attention,
+    { githubAppAuth: adapters.githubAppAuthProvider ?? undefined },
+    deps.commit
+  );
 
   // GitHub webhook endpoint
   if (adapters.github) {

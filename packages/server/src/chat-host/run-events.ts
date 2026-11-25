@@ -1,5 +1,9 @@
 import { ChildRunRedirectError } from '@archon/core/operations/workflow-operations';
-import { isApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import {
+  displayedRunOutcome,
+  isApprovalContext,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowCommandSurface } from '@archon/workflows/deps';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import type { ChatRunEvent } from '@archon/chat-contract';
@@ -7,7 +11,6 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as conversationDb from '@archon/core/db/conversations';
 import { createLogger } from '@archon/paths';
@@ -23,6 +26,19 @@ type ProjectedRunEvent =
 export function runTotalCostUsd(run: WorkflowRun): number | undefined {
   const cost = run.metadata.total_cost_usd;
   return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined;
+}
+
+/**
+ * The outcome fields a chat message carries for a run, from the engine's display rule. A
+ * run that did not complete gets none. `authoredOutcome` is the boolean form, set only
+ * when the run's outcome is boolean, for plugins that read only that field.
+ */
+export function chatRunOutcome(
+  run: Pick<WorkflowRun, 'status' | 'outcome' | 'completed_outcome'>
+): { completedOutcome?: string; authoredOutcome?: NonNullable<WorkflowRun['outcome']> } {
+  const completedOutcome = displayedRunOutcome(run);
+  if (completedOutcome === null) return {};
+  return { completedOutcome, ...(run.outcome !== null ? { authoredOutcome: run.outcome } : {}) };
 }
 
 export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent | undefined {
@@ -64,6 +80,7 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
         nodeName: event.nodeName,
         state: 'failed',
         error: event.error,
+        ...failureKindOf(event.execution),
       };
     case 'node_skipped':
       return {
@@ -85,7 +102,14 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
     case 'workflow_completed':
       return { type: 'terminal', runId, status: 'completed' };
     case 'workflow_failed':
-      return { type: 'terminal', runId, status: 'failed', error: event.error };
+      // The kind travels on the event, from the terminal record of this very failure.
+      return {
+        type: 'terminal',
+        runId,
+        status: 'failed',
+        error: event.error,
+        ...(event.failureKind !== undefined ? { failureKind: event.failureKind } : {}),
+      };
     case 'workflow_cancelled':
       return { type: 'terminal', runId, status: 'cancelled', error: event.reason };
     case 'loop_iteration_started':
@@ -103,14 +127,21 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
   }
 }
 
+/** The failure kind a node's execution record carries; nothing when it recorded none. */
+function failureKindOf(execution: NodeFailedExecution): { failureKind?: string } {
+  const lifecycle = execution?.lifecycle;
+  return lifecycle?.status === 'failed' && lifecycle.failureKind !== undefined
+    ? { failureKind: lifecycle.failureKind }
+    : {};
+}
+type NodeFailedExecution = Extract<WorkflowEmitterEvent, { type: 'node_failed' }>['execution'];
+
 function applyRunDetails(
   run: WorkflowRun,
   routed: ChatRunEvent,
   platform: string,
   platforms: ReadonlyMap<string, WorkflowCommandSurface>
 ): void {
-  if (routed.type === 'approval_pending' || routed.type === 'terminal')
-    routed.authoredOutcome = run.outcome ?? undefined;
   const approval = run.metadata.approval;
   if (
     routed.type === 'approval_pending' &&
@@ -130,6 +161,9 @@ function applyRunDetails(
     ).messageFor(surface);
   }
   if (routed.type === 'terminal') {
+    // The row may be newer than the event: a failed or cancelled run resumed in place can
+    // have completed since. Only a completed event takes the completion's outcome.
+    if (routed.status === 'completed') Object.assign(routed, chatRunOutcome(run));
     const cost = runTotalCostUsd(run);
     if (cost !== undefined) routed.totalCostUsd = cost;
   }

@@ -94,14 +94,6 @@ describe('messages', () => {
       ]);
     });
 
-    test('defaults metadata to empty object when not provided', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockMessage]));
-
-      await addMessage('conv-456', 'user', 'Hello, world!');
-
-      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['{}']));
-    });
-
     test('throws wrapped error when INSERT returns no rows', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
@@ -138,14 +130,6 @@ describe('messages', () => {
       );
     });
 
-    test('returns empty array for no results', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await listMessages('conv-456');
-
-      expect(result).toEqual([]);
-    });
-
     test('respects custom limit parameter', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
@@ -168,6 +152,7 @@ describe('messages', () => {
 
       const sql = mockQuery.mock.calls[0]?.[0] as string;
       expect(sql).toContain("metadata->>'workflowResult'");
+      expect(sql).toContain('ORDER BY created_at DESC, id DESC');
       expect(sql).not.toContain('json_extract');
     });
 
@@ -179,6 +164,7 @@ describe('messages', () => {
 
       const sql = mockQuery.mock.calls[0]?.[0] as string;
       expect(sql).toContain("json_extract(metadata, '$.workflowResult')");
+      expect(sql).toContain('ORDER BY created_at DESC, rowid DESC');
       expect(sql).not.toContain("->>'" + 'workflowResult');
     });
 

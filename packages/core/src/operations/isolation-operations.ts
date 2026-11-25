@@ -5,11 +5,10 @@
  */
 import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../platforms/registry';
 import { createLogger } from '@archon/paths';
-import { lstat } from 'node:fs/promises';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import * as isolationDb from '../db/isolation-environments';
-import { cleanupMergedWorktrees, type MergedCleanupResult } from '../services/cleanup/merged-sweep';
-import { getLiveRunBlocker } from '../services/cleanup/run-lock';
+import { checkoutExists } from '../services/cleanup/checkout-presence';
+import { getUseBlocker, useBlockerLogFields } from '../services/cleanup/run-lock';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -38,8 +37,9 @@ export interface EnvironmentListData {
 }
 
 export {
+  cleanupMergedWorktrees,
   type CleanupOperationResult,
-  type MergedCleanupResult,
+  type MergedCleanupOutcome,
 } from '../services/cleanup/merged-sweep';
 
 // ---------------------------------------------------------------------------
@@ -68,23 +68,11 @@ async function reconcileGhosts(envs: readonly IsolationEnvironmentRow[]): Promis
       continue;
     }
     try {
-      const exists = await lstat(env.working_path).then(
-        () => true,
-        (error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-          throw error;
-        }
-      );
-      if (!exists) {
-        const liveRun = await getLiveRunBlocker(env.id);
-        if (liveRun) {
+      if (!(await checkoutExists(env.working_path))) {
+        const inUse = await getUseBlocker(env.id);
+        if (inUse) {
           getLog().info(
-            {
-              envId: env.id,
-              path: env.working_path,
-              runId: liveRun.runId,
-              runStatus: liveRun.runStatus,
-            },
+            { envId: env.id, path: env.working_path, ...useBlockerLogFields(inUse) },
             'isolation.ghost_kept_for_live_run'
           );
           continue;
@@ -180,16 +168,4 @@ export async function listEnvironments(): Promise<EnvironmentListData> {
   }
 
   return { codebases: result, totalEnvironments, ghostsReconciled: totalGhosts };
-}
-
-/**
- * Cleanup merged worktrees for a codebase.
- * Wraps cleanupMergedWorktrees from the merged sweep.
- */
-export async function cleanupMergedEnvironments(
-  codebaseId: string,
-  mainPath: string,
-  options: { includeClosed?: boolean } = {}
-): Promise<MergedCleanupResult> {
-  return cleanupMergedWorktrees(codebaseId, mainPath, options);
 }

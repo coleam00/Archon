@@ -4,13 +4,13 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { emit, refuse } from '../../.shared/io.ts';
+import { emit, refuse } from 'archon:script';
 import { CASES_PATH, parseCases } from '../../.shared/test-value.ts';
 
 try {
   if (!existsSync(CASES_PATH)) {
     throw new Error(
-      `no calibration labels at ${CASES_PATH} in ${process.cwd()}; label pull requests there as the SDLC pack README's "Test value" section shows`
+      `no calibration labels at ${CASES_PATH} in ${process.cwd()}; label pull requests there as https://archon.diy/guides/sdlc-metrics/#calibrate-the-judge shows`
     );
   }
   const cases = parseCases(JSON.parse(readFileSync(CASES_PATH, 'utf8')));

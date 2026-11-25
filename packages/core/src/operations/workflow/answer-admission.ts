@@ -14,6 +14,7 @@ import type {
   RunAttention,
   WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
+import type { RunActor } from '../run-authorization';
 import { getLog, type OperationContext } from './context';
 
 /**
@@ -108,6 +109,17 @@ export function assertAnswerAdmissible(run: WorkflowRun, origin: GateAnswerOrigi
     open.nodeId === (typeof expected === 'string' ? expected : expected.nodeId) &&
     (open.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId);
   if (!matches) throw staleGateError(run.id, run);
+}
+
+/**
+ * A gate's answer records its surface only, so a declared answerer is refused there
+ * rather than accepted and dropped.
+ */
+export function assertGateTakesNoAnswerer(run: WorkflowRun, actor: RunActor): void {
+  if (actor.kind === 'operator' && actor.declared !== undefined)
+    throw new Error(
+      `The answerer is recorded on attention waits only; run ${run.id} is paused at a gate. Answer it without a declared answerer.`
+    );
 }
 
 /**

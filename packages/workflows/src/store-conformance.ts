@@ -1,5 +1,9 @@
 export { resourceStartFixtures } from './resource-start-conformance';
-export { CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID } from './store-conformance/fixtures';
+export {
+  CONFORMANCE_CODEBASE_ID,
+  CONFORMANCE_CONVERSATION_ID,
+  testRunOwnerLease,
+} from './store-conformance/fixtures';
 export {
   assertWorkflowClaimRace,
   assertWorkflowEventFeedRace,
@@ -19,14 +23,21 @@ import { describePausesAndWaitsConformance } from './store-conformance/pauses-an
 import { describeResumeReductionConformance } from './store-conformance/resume-reduction';
 import { describeRunsAndClaimsConformance } from './store-conformance/runs-and-claims';
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
+import { describeOperatorPauseConformance } from './store-conformance/operator-pause';
 import { describeStartReceiptConformance } from './store-conformance/start-receipts';
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
+  /** Set the install config's `concurrency.resources.<resource>` for later admissions. */
+  setResourceCapacity(resource: string, capacity: number): Promise<void>;
   seedPersistedWait(runId: string, wait: Record<string, unknown>): Promise<void>;
   backdate(
     runId: string,
-    dates: { started_at?: Date; last_activity_at?: Date | null }
+    dates: {
+      started_at?: Date;
+      active_phase_started_at?: Date | null;
+      last_activity_at?: Date | null;
+    }
   ): Promise<void>;
   /** A snapshot: tests compare it with a later call to prove no report was emitted. */
   terminalReports(): string[];
@@ -59,6 +70,7 @@ export function describeWorkflowStoreConformance(
     describeEventFeedConformance(current);
     describePausesAndWaitsConformance(current);
     describeSourceReleaseConformance(() => harness.store);
+    describeOperatorPauseConformance(() => harness.store);
     describeAttentionConformance(current);
     describeGatesAndTerminalsConformance(current);
     describeResumeReductionConformance(current);

@@ -126,3 +126,130 @@ describe('prepared checkout guard declaration', () => {
     expect(shippedV2.parse(current)).toEqual(current);
   });
 });
+
+describe('resource start receipt origin in run metadata', () => {
+  test('a written origin reads back its receipt; a malformed one reads as no receipt', async () => {
+    const { RESOURCE_START_METADATA_KEY, readResourceStartReceiptId } = await import(
+      './schemas/resource-start'
+    );
+    const receiptId = '0b6f3c1e-4a5d-4f6e-9a7b-1c2d3e4f5a6b';
+    const read = (origin: unknown): string | undefined =>
+      readResourceStartReceiptId({ [RESOURCE_START_METADATA_KEY]: origin });
+
+    expect(read({ receiptId, bindingId: 'deploy' })).toBe(receiptId);
+    expect(readResourceStartReceiptId(undefined)).toBeUndefined();
+    for (const malformed of [
+      null,
+      'text',
+      [receiptId],
+      { bindingId: 'deploy' },
+      { receiptId: 7, bindingId: 'deploy' },
+      { receiptId: 'not-a-uuid', bindingId: 'deploy' },
+    ])
+      expect(read(malformed)).toBeUndefined();
+  });
+});
+
+describe('item mapping', () => {
+  test('makes a key of text or a number and refuses any other value, naming the field', async () => {
+    const { mappedItemKey } = await import('./schemas/resource-start');
+    const mapping = { field: 'number', prefix: 'issue-' };
+    expect(mappedItemKey(mapping, 42)).toEqual({ ok: true, key: 'issue-42' });
+    expect(mappedItemKey({ field: 'id' }, 'abc')).toEqual({ ok: true, key: 'abc' });
+    for (const [value, reason] of [
+      [undefined, "field 'number' is missing"],
+      ['', "field 'number' is empty"],
+      [true, "field 'number' is not text or a number"],
+      ['x'.repeat(200), "field 'number' makes an item key longer than 200 characters"],
+    ] as const)
+      expect(mappedItemKey(mapping, value)).toEqual({ ok: false, reason });
+  });
+
+  test("a run-ended or asks-settled file reads the item's answers; a linked one is refused", async () => {
+    const { triggerConfigSchema } = await import('./schemas/resource-start');
+    const file = (on: unknown) => ({
+      version: 1,
+      sourceInstanceId: 'source',
+      binding: {
+        bindingId: 'b',
+        bindingRevision: null,
+        hostId: 'h',
+        runAsUserId: 'u',
+        resource: 'r',
+        overlap: 'queue',
+        launch: { cwd: '/repo', workflowName: 'w', inputs: {}, isolation: { kind: 'default' } },
+      },
+      on,
+    });
+    const inputs = { decided: { item: 'answers' } };
+    const runEnded = { workflowName: 'plan', outcome: 'done', inputs };
+    for (const on of [
+      { runEnded },
+      { asksSettled: { workflowName: 'plan', settled: 'answered', inputs } },
+    ])
+      expect(triggerConfigSchema.safeParse(file(on)).success).toBe(true);
+    const linked = triggerConfigSchema.safeParse(
+      file({ runEnded: { ...runEnded, linked: { kind: 'part_of', holder: 'to' } } })
+    );
+    expect(linked.error?.issues.map(issue => issue.message)).toEqual([
+      "A linked start is on a holder item, so it cannot read the item's answers; read them in the started stage",
+    ]);
+  });
+
+  test('a trigger file reads a linked entry only beside linked.items', async () => {
+    const { triggerConfigSchema } = await import('./schemas/resource-start');
+    const file = (linked: unknown) => ({
+      version: 1,
+      sourceInstanceId: 'source',
+      binding: {
+        bindingId: 'b',
+        bindingRevision: null,
+        hostId: 'h',
+        runAsUserId: 'u',
+        resource: 'r',
+        overlap: 'queue',
+        launch: { cwd: '/repo', workflowName: 'w', inputs: {}, isolation: { kind: 'default' } },
+      },
+      on: {
+        runEnded: {
+          workflowName: 'split',
+          outcome: 'split',
+          linked,
+          inputs: { brief: { entry: '/brief' } },
+        },
+      },
+    });
+    const named = { kind: 'part_of', holder: 'from', items: '/start' };
+    expect(triggerConfigSchema.safeParse(file(named)).success).toBe(true);
+    const unnamed = triggerConfigSchema.safeParse(file({ kind: 'part_of', holder: 'from' }));
+    expect(unnamed.error?.issues.map(issue => issue.message)).toEqual([
+      'An input reads { entry }, but only a linked start with linked.items has an entry per started item',
+    ]);
+  });
+
+  test('a trigger file maps an item only when fire-only', async () => {
+    const { triggerConfigSchema } = await import('./schemas/resource-start');
+    const fireOnly = {
+      version: 1,
+      sourceInstanceId: 'source',
+      binding: {
+        bindingId: 'b',
+        bindingRevision: null,
+        hostId: 'h',
+        runAsUserId: 'u',
+        resource: 'r',
+        overlap: 'queue',
+        launch: { cwd: '/repo', workflowName: 'w', inputs: {}, isolation: { kind: 'default' } },
+      },
+      item: { field: 'number' },
+    };
+    expect(triggerConfigSchema.safeParse(fireOnly).success).toBe(true);
+    const timer = triggerConfigSchema.safeParse({
+      ...fireOnly,
+      schedule: { intervalSeconds: 60, runAtLoad: false },
+    });
+    expect(timer.error?.issues.map(issue => issue.message)).toEqual([
+      'A timer binding maps no item: a tick is about no item',
+    ]);
+  });
+});

@@ -135,9 +135,7 @@ const ofRun =
   (line: AttentionStreamLine): boolean =>
     line.type === type && 'runId' in line && line.runId === runId;
 const itemKey = (line: AttentionStreamLine): unknown =>
-  line.type === 'attention'
-    ? [line.item.runId, 'occurrence' in line.item ? line.item.occurrence : null, line.item.revision]
-    : null;
+  line.type === 'attention' ? [line.item.ref, line.item.revision] : null;
 
 describe('GET /api/runs/attention/stream', () => {
   test('a reconnect with Last-Event-ID misses no change made while disconnected', async () => {
@@ -182,15 +180,15 @@ describe('GET /api/runs/attention/stream', () => {
         .map(event => itemKey(event.line));
     expect(snapshotKeys(first)).toEqual(
       expect.arrayContaining([
-        [held.runId, held.pauseId, 1],
-        [answered.runId, answered.pauseId, 1],
+        [`${held.runId}:${held.pauseId}`, 1],
+        [`${answered.runId}:${answered.pauseId}`, 1],
       ])
     );
     expect(snapshotKeys(first)).toHaveLength(2);
     expect(snapshotKeys(second)).toEqual(
       expect.arrayContaining([
-        [held.runId, held.pauseId, 1],
-        [late.runId, late.pauseId, 1],
+        [`${held.runId}:${held.pauseId}`, 1],
+        [`${late.runId}:${late.pauseId}`, 1],
       ])
     );
     expect(snapshotKeys(second)).toHaveLength(2);
@@ -210,6 +208,76 @@ describe('GET /api/runs/attention/stream', () => {
     expect(client.events).toEqual([
       { id: undefined, line: { type: 'error', error: 'cursor_invalid' } },
     ]);
+  });
+
+  test('level selects the lines sent, and every line says what it needs', async () => {
+    const app = new OpenAPIHono();
+    const cursor = workflowEventCursor('c');
+    registerAttentionStreamRoute(app, async listener => {
+      await listener({ type: 'ready', cursor });
+      await listener({ type: 'bookmark', cursor });
+      await listener({
+        type: 'terminal',
+        cursor,
+        project: null,
+        runId: 'r',
+        workflow: 'ci',
+        parentRunId: null,
+        status: 'completed',
+        outcome: null,
+        cause: null,
+      });
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return { close: async () => undefined };
+    });
+    const linesOf = async (query: string): Promise<string[]> => {
+      const client = sseClient(await app.request(`/api/runs/attention/stream${query}`));
+      await client.done;
+      return client.events.map(event => event.line.type);
+    };
+    expect(await linesOf('?level=quiet')).toEqual(['error']);
+    expect(await linesOf('?level=notices')).toEqual(['terminal', 'error']);
+    expect(await linesOf('')).toEqual(['ready', 'bookmark', 'terminal', 'error']);
+    const sent = await (await app.request('/api/runs/attention/stream')).text();
+    expect(sent.match(/"needs":"[a-z]+"/g)).toEqual([
+      '"needs":"nothing"',
+      '"needs":"nothing"',
+      '"needs":"nothing"',
+      '"needs":"look"',
+    ]);
+    expect((await app.request('/api/runs/attention/stream?level=loud')).status).toBe(400);
+  });
+
+  test('a resumed quiet stream sends the close of an item this connection never sent', async () => {
+    const app = new OpenAPIHono();
+    const cursor = workflowEventCursor('c');
+    const closed = {
+      type: 'resolved',
+      cursor,
+      project: null,
+      ref: 'r:o',
+      runId: 'r',
+      workflow: 'ci',
+      parentRunId: null,
+      occurrence: 'o',
+      reason: 'withdrawn',
+    } as const;
+    registerAttentionStreamRoute(app, async listener => {
+      await listener(closed);
+      await listener({ type: 'bookmark', cursor });
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return { close: async () => undefined };
+    });
+    const linesOf = async (headers: Record<string, string>): Promise<string[]> => {
+      const client = sseClient(
+        await app.request('/api/runs/attention/stream?level=quiet', { headers })
+      );
+      await client.done;
+      return client.events.map(event => event.line.type);
+    };
+    // The item may have closed while the client was away; it cannot be told otherwise.
+    expect(await linesOf({ 'Last-Event-ID': 'c' })).toEqual(['resolved', 'error']);
+    expect(await linesOf({})).toEqual(['error']);
   });
 
   test('scopes the watch by project and label as the list route does', async () => {
@@ -246,11 +314,12 @@ describe('GET /api/runs/attention/stream', () => {
 test('an SSE id names the last event all of whose lines were sent', () => {
   const at = (text: string) => workflowEventCursor(text);
   const run = { project: null, runId: 'r', workflow: 'wf', parentRunId: null };
+  const closed = { ...run, ref: 'r:o', occurrence: 'o' };
   const idOf = attentionSseIds();
   const ids = [
-    idOf({ type: 'unmatched', cursor: at('S'), ...run, occurrence: 'o', revision: 1 }),
+    idOf({ type: 'unmatched', cursor: at('S'), ...closed, revision: 1 }),
     idOf({ type: 'ready', cursor: at('S') }),
-    idOf({ type: 'resolved', cursor: at('X'), ...run, occurrence: 'o', reason: 'withdrawn' }),
+    idOf({ type: 'resolved', cursor: at('X'), ...closed, reason: 'withdrawn' }),
     idOf({
       type: 'terminal',
       cursor: at('X'),
@@ -259,7 +328,7 @@ test('an SSE id names the last event all of whose lines were sent', () => {
       outcome: null,
       cause: null,
     }),
-    idOf({ type: 'resolved', cursor: at('Y'), ...run, occurrence: 'o', reason: 'withdrawn' }),
+    idOf({ type: 'resolved', cursor: at('Y'), ...closed, reason: 'withdrawn' }),
     // Position-stamped lines interleave at the cursor before the delivery in progress.
     idOf({ type: 'owner_lost', cursor: at('X'), ...run, observedStatus: 'running' }),
     idOf({ type: 'degraded', reason: 'run_unreadable', cursor: at('X') }),

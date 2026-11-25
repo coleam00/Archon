@@ -16,6 +16,13 @@ export const operatorHelp: HelpGroup = {
     },
     {
       command: 'project',
+      subcommand: 'add',
+      spec: 'project add [path]',
+      description:
+        'Register a project (this checkout, or path) before its first run; --folder for a non-git directory',
+    },
+    {
+      command: 'project',
       subcommand: 'config',
       spec: 'project config <id|name>',
       description: "Show a project's merged config with secrets removed (env key names only)",
@@ -24,6 +31,56 @@ export const operatorHelp: HelpGroup = {
       command: 'trigger',
       spec: 'trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>',
       description: 'Start configured workflows and inspect durable resource admission',
+    },
+    {
+      command: 'hold',
+      spec: 'hold <set|lift>',
+      description:
+        'Hold all new runs on this install, or lift the hold and start what it kept;\nrunning runs continue',
+    },
+    {
+      command: 'pack',
+      subcommand: 'graph',
+      spec: 'pack graph <pack>',
+      description:
+        "Show a pack's stages, their outcomes and the run-ended arrows between them,\neach active in this install or declared and inactive (--json for the read)",
+      scopedFlags: [
+        {
+          spec: '--workflow-source <dir>',
+          description: "Where the pack's workflows are found when it is not in the checkout",
+        },
+      ],
+    },
+    {
+      command: 'pack',
+      subcommand: 'bindings',
+      spec: 'pack bindings <pack>',
+      description:
+        "Write a pack's recommended trigger bindings as files for one repository;\nregisters and schedules nothing. Needs --repo, --host, --run-as and --out",
+      scopedFlags: [
+        { spec: '--repo <host>/<owner>/<name>', description: 'The repository the bindings act on' },
+        { spec: '--host <host-id>', description: 'The execution host that runs the starts' },
+        {
+          spec: '--run-as <user-id>',
+          description: 'The Archon user the runs act as (see trigger whoami)',
+        },
+        { spec: '--out <dir>', description: 'Where the binding files are written' },
+        {
+          spec: '--cwd <checkout>',
+          description: 'The checkout the runs launch in and the pack is read from',
+        },
+        {
+          spec: '--config <file>',
+          description:
+            "Default run config for the bindings' starts (model aliases); an item keeps its own",
+        },
+        {
+          spec: '--workflow-source <dir>',
+          description: "Where the pack's workflows are found when it is not in the checkout",
+        },
+        { spec: '--only <id,...>', description: 'Write only these bindings' },
+        { spec: '--force', description: 'Replace binding files that already exist' },
+      ],
     },
     { command: 'chat', spec: 'chat <message>', description: 'Send a message to the orchestrator' },
     {
@@ -67,7 +124,7 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'fire',
-      spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]',
+      spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>] [--item <key> | --no-item]',
       description: 'Record a configured start and drain its execution host',
       scopedFlags: [
         {
@@ -82,6 +139,18 @@ export const operatorHelp: HelpGroup = {
       subcommand: 'drain',
       spec: 'trigger drain --host <host-id>',
       description: 'Prepare persisted bindings and admit eligible queued work',
+    },
+    {
+      command: 'trigger',
+      subcommand: 'add',
+      spec: 'trigger add <file>',
+      description: 'Place a trigger file in ARCHON_HOME/triggers without exposing a partial copy',
+    },
+    {
+      command: 'trigger',
+      subcommand: 'check',
+      spec: 'trigger check',
+      description: 'Check every trigger binding and installed timer against the workflow it starts',
     },
     {
       command: 'trigger',
@@ -110,8 +179,8 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'schedule',
-      spec: 'trigger schedule <install|remove> --config <file>',
-      description: 'Manage the configured native macOS LaunchAgent',
+      spec: 'trigger schedule <install|remove|status> --config <file>',
+      description: "Manage the binding's OS timer (launchd, systemd user timer, Task Scheduler)",
     },
     {
       command: 'trigger',

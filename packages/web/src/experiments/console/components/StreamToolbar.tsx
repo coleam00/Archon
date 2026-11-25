@@ -1,6 +1,12 @@
 import type { ReactElement, ReactNode } from 'react';
 
-export type DetailView = 'log' | 'graph' | 'artifacts';
+export const DETAIL_VIEWS = ['log', 'graph', 'artifacts'] as const;
+export type DetailView = (typeof DETAIL_VIEWS)[number];
+export const DETAIL_VIEW_LABELS = {
+  log: 'Log',
+  graph: 'Graph',
+  artifacts: 'Artifacts',
+} satisfies Record<DetailView, string>;
 
 export interface NodeFilterOption {
   id: string;
@@ -17,26 +23,23 @@ interface StreamToolbarProps {
   toolCallCount: number;
   messageCount: number;
   artifactCount: number | null;
-  /** Distinct nodes in the run; empty hides the node filter. */
+  /** Nodes with stream transitions. */
   nodeOptions: NodeFilterOption[];
-  /** `'all'` or a nodeId. */
-  selectedNodeId: string;
-  onSelectNode: (next: string) => void;
+  /** null selects all nodes. */
+  selectedNodeId: string | null;
+  onSelectNode: (next: string | null) => void;
 }
 
 // Compact native select styled with brand tokens — mirrors AssistantConfigPanel's
 // SelectShell/SELECT_CLASS, tuned for the toolbar row height.
 const SELECT_CLASS =
-  'max-w-[180px] cursor-pointer appearance-none truncate rounded-[7px] border border-border bg-surface-elevated py-[3px] pl-2.5 pr-7 font-mono text-[11.5px] font-medium text-text-primary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
+  'max-w-45 cursor-pointer appearance-none truncate rounded-md border border-border bg-surface-elevated py-0.75 pl-2.5 pr-7 font-mono text-console-12 font-medium text-text-primary transition-all focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]';
 
 function SelectShell({ children }: { children: ReactNode }): ReactElement {
   return (
     <span className="relative inline-flex items-center">
       {children}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute right-[9px] flex text-text-tertiary"
-      >
+      <span aria-hidden className="pointer-events-none absolute right-2.25 flex text-text-tertiary">
         <svg
           width="12"
           height="12"
@@ -89,7 +92,7 @@ function Tab({ label, active, onClick, count }: TabProps): ReactElement {
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`relative px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] transition-colors ${
+      className={`relative px-3 py-1.5 font-mono text-console-11 font-semibold uppercase tracking-widest transition-colors ${
         active ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'
       }`}
     >
@@ -123,53 +126,43 @@ export function StreamToolbar({
 }: StreamToolbarProps): ReactElement {
   const isLog = view === 'log';
   return (
-    <div className="flex items-center gap-3 border-b border-border/60 bg-surface py-2 text-[11px]">
+    <div className="flex items-center gap-3 border-b border-border/60 bg-surface py-2 text-console-11">
       <div className="flex items-center gap-1">
-        <Tab
-          label="Log"
-          active={isLog}
-          onClick={() => {
-            onChangeView('log');
-          }}
-        />
-        <Tab
-          label="Graph"
-          active={view === 'graph'}
-          onClick={() => {
-            onChangeView('graph');
-          }}
-        />
-        <Tab
-          label="Artifacts"
-          count={artifactCount}
-          active={view === 'artifacts'}
-          onClick={() => {
-            onChangeView('artifacts');
-          }}
-        />
+        {DETAIL_VIEWS.map(tab => (
+          <Tab
+            key={tab}
+            label={DETAIL_VIEW_LABELS[tab]}
+            count={tab === 'artifacts' ? artifactCount : undefined}
+            active={view === tab}
+            onClick={() => onChangeView(tab)}
+          />
+        ))}
       </div>
 
       {isLog ? (
-        <span className="ml-3 font-mono text-[12px] text-text-tertiary">
+        <span className="ml-3 font-mono text-console-12 text-text-tertiary">
           {messageCount.toString()} messages · {toolCallCount.toString()} tool calls
         </span>
       ) : null}
 
       {isLog ? (
-        <div className="ml-auto flex items-center gap-[18px] font-mono text-[12px]">
-          {nodeOptions.length > 0 ? (
+        <div className="ml-auto flex items-center gap-4.5 font-mono text-console-12">
+          {nodeOptions.length > 0 || selectedNodeId !== null ? (
             <label className="flex items-center gap-1.5 text-text-secondary">
               <span className="text-text-tertiary">Node</span>
               <SelectShell>
                 <select
-                  value={selectedNodeId}
+                  value={selectedNodeId ?? ''}
                   onChange={e => {
-                    onSelectNode(e.target.value);
+                    onSelectNode(e.target.value || null);
                   }}
                   className={SELECT_CLASS}
                   aria-label="Filter stream by node"
                 >
-                  <option value="all">All nodes</option>
+                  <option value="">All nodes</option>
+                  {selectedNodeId !== null && !nodeOptions.some(o => o.id === selectedNodeId) ? (
+                    <option value={selectedNodeId}>{selectedNodeId}</option>
+                  ) : null}
                   {nodeOptions.map(o => (
                     <option key={o.id} value={o.id}>
                       {o.name}

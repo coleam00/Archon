@@ -50,8 +50,7 @@ export async function addMessage(
  * List messages for a conversation, oldest first.
  * Fetches the newest `limit` messages so that the most recent history is always
  * returned, then reverses to preserve chronological (oldest-first) order.
- * `id DESC` breaks ties between rows sharing a created_at (SQLite stores
- * 1-second granularity) so the LIMIT window is stable across refetches.
+ * SQLite timestamp ties follow insertion order; PostgreSQL retains ID order.
  * conversationId is the database UUID (not platform_conversation_id).
  */
 export async function listMessages(
@@ -59,10 +58,11 @@ export async function listMessages(
   limit = 200
 ): Promise<readonly MessageRow[]> {
   assertPublicConversation(conversationId);
+  const dialect = getDialect();
   const result = await pool.query<MessageRow>(
     `SELECT * FROM remote_agent_messages
      WHERE conversation_id = $1
-     ORDER BY created_at DESC, id DESC
+     ORDER BY created_at DESC, ${dialect.messageOrderTieBreaker} DESC
      LIMIT $2`,
     [conversationId, limit]
   );
@@ -79,14 +79,14 @@ export async function getRecentWorkflowResultMessages(
   limit = 3
 ): Promise<readonly MessageRow[]> {
   assertPublicConversation(conversationId);
-  const metadataFilter = `${getDialect().jsonText('metadata', 'workflowResult')} IS NOT NULL`;
+  const dialect = getDialect();
+  const metadataFilter = `${dialect.jsonText('metadata', 'workflowResult')} IS NOT NULL`;
   try {
     const result = await pool.query<Pick<MessageRow, 'id' | 'content' | 'metadata'>>(
       `SELECT id, content, metadata FROM remote_agent_messages
        WHERE conversation_id = $1
        AND ${metadataFilter}
-       -- id DESC tie-breaker: see listMessages() above for why.
-       ORDER BY created_at DESC, id DESC
+       ORDER BY created_at DESC, ${dialect.messageOrderTieBreaker} DESC
        LIMIT $2`,
       [conversationId, limit]
     );

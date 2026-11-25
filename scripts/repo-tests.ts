@@ -1,7 +1,8 @@
-import { existsSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
+import { discoverPackageTestFiles, selectWindowsTestFiles } from './package-test-groups';
 import { junitDestination, parseTestArguments } from './package-test-requests';
 import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
@@ -26,6 +27,11 @@ import { runReportedGroup, writeCombinedReport } from './package-test-reports';
  * runner so they finish side by side; `pack` runs only when the change touches the pack
  * (`PACK_INPUTS` in `should-run-test-suite.ts`). A workspace shard too slow
  * for one runner runs in parts across runners; `ARCHON_TEST_PART` in `package-tests.ts`.
+ *
+ * `--windows` runs only the test files that carry `WINDOWS_TEST_DIRECTIVE`
+ * (`package-test-groups.ts`), across every workspace package and root test directory. It is
+ * the Windows set CI runs for a push to `dev`; each file still runs with its own package's
+ * isolation groups.
  */
 
 /**
@@ -61,12 +67,28 @@ const TEST_SHARDS: readonly TestShard[] = [
 ];
 
 /**
+ * A root-owned run: `bun test` with the pack's preload, which gives the pack scripts these
+ * tests import and start the `archon:script` module. Only these runs get it; it asks the
+ * CLI `rootTestEnv` names, which no other `bun test` under the repository root has.
+ */
+export function rootTestCommand(selectors: readonly string[]): string[] {
+  const [bun, test, ...rest] = bunTestCommand(selectors);
+  return [
+    bun as string,
+    test as string,
+    '--preload',
+    './.archon/scripts/__tests__/archon-script-preload.ts',
+    ...rest,
+  ];
+}
+
+/**
  * The command one plan step runs. Each workspace runs its own `test` script, which owns that
  * package's group splitting and concurrency.
  */
 export function planStepCommand(step: RootTestStep): string[] {
   if (step.kind === 'workspace') return ['bun', '--filter', step.package, 'test'];
-  if (step.kind === 'root') return bunTestCommand(step.selectors);
+  if (step.kind === 'root') return rootTestCommand(step.selectors);
   // A negated filter alone already leaves out the root package, so no `'*'` goes beside it.
   const solo = ROOT_TEST_PLAN.flatMap((other: RootTestStep): string[] =>
     other.kind === 'workspace' ? ['--filter', `!${other.package}`] : []
@@ -246,7 +268,7 @@ async function runRequested(requested: string[]): Promise<number> {
   for (const { owner, args } of runs) {
     const runOwner = (ownerArgs: string[]) =>
       run(
-        owner.cwd === REPO_ROOT ? bunTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
+        owner.cwd === REPO_ROOT ? rootTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
         owner.cwd
       );
     if (destination === undefined) {
@@ -262,7 +284,112 @@ async function runRequested(requested: string[]): Promise<number> {
   return code;
 }
 
+/**
+ * Every test file that carries the Windows directive, as a repository-relative path: the
+ * workspace packages' discovered tests and the root-owned directories' tests.
+ */
+export function windowsTestFiles(root = REPO_ROOT): string[] {
+  const packageFiles = [...new Bun.Glob('packages/*/package.json').scanSync({ cwd: root })]
+    .map(manifest => normalizePath(dirname(manifest)))
+    .flatMap(packageDirectory =>
+      discoverPackageTestFiles(join(root, packageDirectory)).map(
+        file => `${packageDirectory}/${file}`
+      )
+    );
+  const rootFiles = ROOT_TEST_PLAN.flatMap((step: RootTestStep): string[] =>
+    step.kind === 'root'
+      ? step.selectors.flatMap(selector =>
+          [
+            ...new Bun.Glob('**/*.{test,spec}.{ts,tsx}').scanSync({
+              cwd: resolve(root, selector),
+              onlyFiles: true,
+            }),
+          ]
+            .filter(file => !normalizePath(file).split('/').includes('node_modules'))
+            .map(file => normalizePath(relative(root, resolve(root, selector, file))))
+        )
+      : []
+  );
+  return selectWindowsTestFiles(root, [...packageFiles, ...rootFiles]).sort();
+}
+
+/** The shared package test script: the one that reads `--windows`. */
+export const PACKAGE_TEST_RUNNER = 'bun run ../../scripts/package-tests.ts';
+
+function assertSharedPackageRunner(packageDirectory: string, label: string): void {
+  const manifest: unknown = JSON.parse(
+    readFileSync(join(packageDirectory, 'package.json'), 'utf8')
+  );
+  const scripts =
+    typeof manifest === 'object' && manifest !== null && 'scripts' in manifest
+      ? manifest.scripts
+      : undefined;
+  const script =
+    typeof scripts === 'object' && scripts !== null && 'test' in scripts ? scripts.test : undefined;
+  if (typeof script !== 'string' || script.trim() !== PACKAGE_TEST_RUNNER) {
+    throw new Error(
+      `${label} has tests in the Windows set, but its test script is not "${PACKAGE_TEST_RUNNER}", the only runner that selects them`
+    );
+  }
+}
+
+/**
+ * The runs of the Windows set. Each package with a marked file runs its own `--windows` form,
+ * which keeps its isolation groups. Root files run one plan step at a time, in that step's own
+ * process as the plan runs them, so `./scripts/` and `./.archon/scripts/` never share mocks.
+ * Every file is named by its exact `./` path, never as a substring filter that could pick up
+ * an unmarked file.
+ *
+ * Only the shared package runner reads `--windows`. A package with marked files and any other
+ * test script is refused: Bun would read the flag as nothing and run every file it has.
+ */
+export function windowsSetRuns(files: readonly string[], root = REPO_ROOT): RequestedRun[] {
+  const runs = new Map<string, RequestedRun>();
+  for (const file of files) {
+    const packageMatch = /^packages\/([^/]+)\//.exec(file);
+    if (packageMatch !== null) {
+      const label = `packages/${packageMatch[1]}`;
+      if (runs.has(label)) continue;
+      assertSharedPackageRunner(join(root, label), label);
+      runs.set(label, { owner: { label, cwd: join(root, label) }, args: ['--windows'] });
+      continue;
+    }
+    const step = ROOT_OWNED_DIRECTORIES.find(directory => file.startsWith(`${directory}/`));
+    if (step === undefined) throw new Error(`${file} belongs to no test owner`);
+    const run = runs.get(step) ?? { owner: { label: step, cwd: root }, args: [] };
+    run.args.push(`./${file}`);
+    runs.set(step, run);
+  }
+  return [...runs.values()];
+}
+
+async function runWindowsSet(): Promise<number> {
+  const files = windowsTestFiles();
+  if (files.length === 0) {
+    // A green run that tested nothing would read as "Windows is fine".
+    console.error('No test file carries the Windows directive, so there is no Windows set to run.');
+    return 1;
+  }
+  console.log(`Windows set: ${String(files.length)} files\n${files.join('\n')}`);
+  let firstFailure = 0;
+  let runs: RequestedRun[];
+  try {
+    runs = windowsSetRuns(files);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  for (const { owner, args } of runs) {
+    const command =
+      owner.cwd === REPO_ROOT ? rootTestCommand(args) : ['bun', 'run', 'test', ...args];
+    const code = await run(command, owner.cwd);
+    if (firstFailure === 0) firstFailure = code;
+  }
+  return firstFailure;
+}
+
 async function main(requested: string[]): Promise<number> {
+  if (requested.length === 1 && requested[0] === '--windows') return await runWindowsSet();
   let shard: TestShard | undefined;
   try {
     shard = planShard(requested);

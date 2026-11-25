@@ -151,6 +151,8 @@ mock.module('@archon/core/db/conversations', () => ({
 let runTranscript = false;
 const mockIsRunTranscriptConversation = mock(async (_id: string) => runTranscript);
 mock.module('@archon/core/db/workflows', () => ({
+  pauseWorkflowRunForOperator: mock(async () => ({ paused: false })),
+  requestOperatorPause: mock(async () => undefined),
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
@@ -165,6 +167,10 @@ const mockHandleMessage = mock(async (..._args: unknown[]) => {});
 const mockAddMessage = mock(async (..._args: unknown[]) => ({ id: 'msg-1' }));
 const mockListMessages = mock(async () => []);
 
+// The run route asks the engine before it dispatches; these suites test who may reach it.
+mock.module('@archon/core/operations/workflow-start-admission', () => ({
+  workflowStartRefusal: mock(async () => undefined),
+}));
 mock.module('@archon/core', () => ({
   handleMessage: mockHandleMessage,
   getDatabaseType: () => 'postgresql',
@@ -242,6 +248,8 @@ spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(async () => {
   throw new Error('aborted');
 });
 
+const mockCancel = mock((_conversationId: string) => false);
+
 function makeApp(): OpenAPIHono {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const webAdapter = {
@@ -250,6 +258,7 @@ function makeApp(): OpenAPIHono {
     emitLockEvent: mock(async () => {}),
     registerStream: mock(() => {}),
     removeStream: mock(() => {}),
+    lockSnapshotEvent: mock(() => JSON.stringify({ type: 'conversation_lock', locked: false })),
   } as unknown as WebAdapter;
   const lockManager = {
     acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
@@ -257,6 +266,7 @@ function makeApp(): OpenAPIHono {
       return { status: 'started' };
     }),
     getStats: mock(makeIdleLockStats),
+    cancel: mockCancel,
   } as unknown as ConversationLockManager;
   registerApiRoutes(app, webAdapter, lockManager);
   return app;
@@ -353,6 +363,19 @@ const INGRESSES: readonly Ingress[] = [
     effects: () => [mockHandleMessage, mockAddMessage],
   },
   {
+    name: 'cancel',
+    operation: 'post /api/conversations/{id}/cancel',
+    access: 'write',
+    web: 'only',
+    call: (app, user) =>
+      app.request(`/api/conversations/${PLATFORM_ID}/cancel`, {
+        method: 'POST',
+        headers: headersFor(user, json),
+        body: JSON.stringify({ turnId: 'turn-1' }),
+      }),
+    effects: () => [mockCancel],
+  },
+  {
     // The conversation id arrives in the body, which is why authorization is a
     // helper each handler calls rather than path middleware.
     name: 'workflow run',
@@ -381,6 +404,9 @@ const INGRESSES: readonly Ingress[] = [
   },
 ];
 
+/** Ingresses that start a turn: they persist the message and attribute it to the caller. */
+const DISPATCHES = INGRESSES.filter(i => i.name === 'send' || i.name === 'workflow run');
+
 function clearEffects(): void {
   for (const m of [
     mockListMessages,
@@ -392,6 +418,7 @@ function clearEffects(): void {
     mockListConversations,
     mockGetOrCreateConversation,
     mockIsRunTranscriptConversation,
+    mockCancel,
   ]) {
     m.mockClear();
   }
@@ -660,7 +687,7 @@ describe('dispatch to an unknown conversation id', () => {
     rows = [];
   });
 
-  for (const ingress of INGRESSES.filter(i => i.name === 'send' || i.name === 'workflow run')) {
+  for (const ingress of DISPATCHES) {
     test(`${ingress.name}: an enforced install refuses it with 404`, async () => {
       ownershipEnforced = true;
       expect((await ingress.call(makeApp(), 'alice')).status).toBe(404);
@@ -701,7 +728,7 @@ describe('conversation identity collisions', () => {
     expect((await stream.call(makeApp(), 'alice')).status).toBe(500);
   });
 
-  for (const ingress of INGRESSES.filter(i => i.web === 'only')) {
+  for (const ingress of DISPATCHES) {
     test(`${ingress.name}: solo dispatch persists into the web row on collision`, async () => {
       rows = [
         conversation({ id: 'internal-slack', platform_type: 'slack', user_id: null }),
@@ -714,7 +741,7 @@ describe('conversation identity collisions', () => {
 });
 
 describe('dispatch identity and lookup failures', () => {
-  for (const ingress of INGRESSES.filter(i => i.web === 'only')) {
+  for (const ingress of DISPATCHES) {
     test(`${ingress.name}: a transient identity failure cannot accept an unattributed action`, async () => {
       ownershipEnforced = true;
       firstIdentityLookupFails = true;

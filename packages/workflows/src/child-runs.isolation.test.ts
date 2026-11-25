@@ -8,12 +8,14 @@ import {
 } from './child-runs/test-utils';
 import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdir, writeFile, rm, cp } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
+import * as forgeAccess from './run-forge-access';
+import type { ForgeCheckRequest } from './run-forge-access';
 import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps } from './deps';
@@ -963,5 +965,98 @@ nodes:
     ]);
     const completedParent = await store.getWorkflowRun(parentRun!.id);
     expect(readRunDispatchMetadata(completedParent?.metadata)?.source).toBe('bundled');
+  });
+});
+
+describe('an isolated sub-run whose pack names its repository by settings', () => {
+  let cwd: string;
+  const saved = {
+    archonHome: process.env.ARCHON_HOME,
+    cliCommand: process.env.ARCHON_CLI_COMMAND,
+  };
+
+  function restore(name: 'ARCHON_HOME' | 'ARCHON_CLI_COMMAND', value: string | undefined): void {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+
+  async function nameRepository(checkout: string, repoPath: string): Promise<void> {
+    await mkdir(join(checkout, '.archon', 'packs'), { recursive: true });
+    await writeFile(
+      join(checkout, '.archon', 'packs', 'factory.yaml'),
+      `settings:\n  repo_host: github.com\n  repo_path: ${repoPath}\n`
+    );
+  }
+
+  beforeEach(async () => {
+    cwd = join(tmpdir(), `subrun-forge-repo-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const pack = join(cwd, '.archon', 'workflows', 'factory');
+    await mkdir(join(pack, '.pack'), { recursive: true });
+    await mkdir(join(pack, 'deliver'), { recursive: true });
+    await writeFile(
+      join(pack, '.pack', 'pack.yaml'),
+      'inputs:\n  repo_host: {}\n  repo_path: {}\n' +
+        'forge:\n  operations: [pr.view]\n  repository: { host: repo_host, path: repo_path }\n'
+    );
+    await writeFile(
+      join(pack, 'deliver', 'deliver.yaml'),
+      'name: deliver\ndescription: d\nnodes:\n  - id: work\n    bash: echo ok\n'
+    );
+    await writeFile(
+      join(cwd, '.archon', 'workflows', 'parent.yaml'),
+      'name: parent\ndescription: d\nnodes:\n  - id: sub\n    workflow: deliver\n    isolation: worktree\n'
+    );
+    process.env.ARCHON_HOME = join(cwd, 'home');
+    process.env.ARCHON_CLI_COMMAND = JSON.stringify(['archon']);
+  });
+
+  afterEach(async () => {
+    await removeTempTree(cwd);
+    restore('ARCHON_HOME', saved.archonHome);
+    restore('ARCHON_CLI_COMMAND', saved.cliCommand);
+  });
+
+  it('runs against the repository the forge check judged, not the one its worktree names', async () => {
+    await nameRepository(cwd, 'o/project');
+    const childCwd = join(cwd, 'child-worktree-0');
+    await nameRepository(childCwd, 'o/worktree');
+    const checked: ForgeCheckRequest[] = [];
+    const realAssert = forgeAccess.assertRunForgeAccess;
+    const spy = spyOn(forgeAccess, 'assertRunForgeAccess').mockImplementation(
+      (deps, workflow, prepared, site) =>
+        realAssert(deps, workflow, prepared, site, async request => {
+          checked.push(request);
+          return undefined;
+        })
+    );
+    try {
+      const { workflows } = await discoverWorkflows(cwd, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
+      const parent = workflows.find(w => w.workflow.name === 'parent')?.workflow;
+      if (!parent) throw new Error('parent not discovered');
+      const store = new InMemoryStore();
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv',
+        cwd,
+        parent,
+        'goal',
+        { conversationId: 'conv-db' },
+        { resolveChildIsolation: makeFakeResolver(childCwd).resolver }
+      );
+
+      expect(result.success).toBe(true);
+      expect(checked).toEqual([
+        { repo: { host: 'github.com', path: 'o/project' }, operations: ['pr.view'] },
+      ]);
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'deliver');
+      expect(child?.working_path).toBe(childCwd);
+      expect(child?.metadata?.inputs).toEqual({ repo_host: 'github.com', repo_path: 'o/project' });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

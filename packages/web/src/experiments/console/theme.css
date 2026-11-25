@@ -101,7 +101,7 @@
   /* Typography — Geist, with the SS01/CV11 alternates the brand uses. */
   font-family: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-feature-settings: "ss01", "cv11";
-  letter-spacing: -0.005em;
+  letter-spacing: var(--tracking-console-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -120,7 +120,7 @@
 /* Heading tightening — brand uses -0.028em for big titles. */
 .console-root h1,
 .console-root h2 {
-  letter-spacing: -0.028em;
+  letter-spacing: var(--tracking-console-heading);
 }
 
 /* Override the global `* { @apply border-border ... }` rule's effect inside
@@ -139,7 +139,7 @@
 .console-root :focus-visible {
   outline: 2px solid var(--accent-ring);
   outline-offset: 2px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 /* Brand utilities — restricted to console scope.

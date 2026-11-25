@@ -1,6 +1,13 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { ClassifiedProviderError } from '../shared/failure';
-import { applyNodeScope, type CodexInventory } from './scope';
+import { createFakeAppServer } from '../test/codex-app-server-fake';
+import { AppServerConnection } from './app-server';
+import {
+  applyNodeScope,
+  checkThreadMcpScope,
+  readThreadMcpStatuses,
+  type CodexInventory,
+} from './scope';
 
 const inventory: CodexInventory = {
   codexHome: '/home/user/.codex',
@@ -61,5 +68,52 @@ describe('applyNodeScope', () => {
       applyNodeScope({ ...base, mcp_servers: { posthog: { command: 'x' } } }, inventory, []);
     expect(scope).toThrow(ClassifiedProviderError);
     expect(scope).toThrow(/declares posthog, which your Codex config also defines/);
+  });
+});
+
+async function withStatusResponse<T>(
+  server: object,
+  check: (connection: AppServerConnection) => Promise<T>
+): Promise<T> {
+  const spawner = createFakeAppServer();
+  const connection = AppServerConnection.start(
+    { path: '/bin/codex', pathDirs: [] },
+    [],
+    {},
+    spawner
+  );
+  const request = spyOn(connection, 'request').mockResolvedValue({
+    data: [server],
+    nextCursor: null,
+  });
+  try {
+    return await check(connection);
+  } finally {
+    request.mockRestore();
+    spawner.processes[0].exit(0);
+    await connection.shutdown();
+  }
+}
+
+describe('MCP status response parsing', () => {
+  test('normalizes omitted nullable fields and permits a declared server', async () => {
+    const server = { name: 'declared', runtimeStatus: 'connected' } as const;
+    await withStatusResponse(server, async connection => {
+      expect(await readThreadMcpStatuses(connection, 'thread-1')).toEqual([
+        { ...server, pluginId: null, toolsError: null },
+      ]);
+      await checkThreadMcpScope(connection, 'thread-1', ['declared']);
+    });
+  });
+
+  test('an undeclared server with omitted nullable fields remains blocked', async () => {
+    await expect(
+      withStatusResponse({ name: 'ambient', runtimeStatus: 'connected' }, connection =>
+        checkThreadMcpScope(connection, 'thread-1', [])
+      )
+    ).rejects.toMatchObject({
+      failureClass: 'misconfigured',
+      message: expect.stringContaining('does not declare: ambient.'),
+    });
   });
 });

@@ -12,6 +12,7 @@ import type { WorktreeSetupInput } from '@archon/isolation';
 
 mock.module('../config/config-loader', () => ({
   loadConfig: async () => ({ envVars: { FILE_VALUE: 'file', PRECEDENCE: 'file' } }),
+  loadGlobalConfig: async () => ({}),
   loadRepoConfig: async () => ({}),
 }));
 mock.module('../db/env-vars', () => ({

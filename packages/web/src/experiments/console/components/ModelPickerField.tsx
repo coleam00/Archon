@@ -25,15 +25,15 @@ const PI_SUGGESTION_LIMIT = 30;
 const DROPDOWN_CLASS =
   // Same elevation recipe as ProjectRow's context menu (the console's other
   // floating dropdown).
-  'absolute left-0 right-0 top-full z-20 mt-1 max-h-60 overflow-y-auto rounded-[9px] border border-border bg-surface-elevated shadow-[0_18px_44px_-18px_rgba(0,0,0,0.85)]';
+  'absolute left-0 right-0 top-full z-20 mt-1 max-h-60 overflow-y-auto rounded-lg border border-border bg-surface-elevated shadow-[0_18px_44px_-18px_rgba(0,0,0,0.85)]';
 const OPTION_CLASS =
   // Stacked two-line row (same shape as ArtifactPanel's list rows): the model
   // name is the primary identifier and keeps the full row width; the
   // cost/context hint rides a muted second line so it can never crowd the
   // name out (#2031).
-  'flex w-full flex-col gap-0.5 px-3 py-2 text-left font-mono text-[12px] transition-colors hover:bg-surface-hover';
+  'flex w-full flex-col gap-0.5 px-3 py-2 text-left font-mono text-console-12 transition-colors hover:bg-surface-hover';
 const FOOTER_BUTTON_CLASS =
-  'w-full border-t border-border px-3 py-2 text-left font-mono text-[11px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
+  'w-full border-t border-border px-3 py-2 text-left font-mono text-console-11 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
 
 interface ModelPickerFieldProps {
   /** Agent provider id ('' renders plain free text — e.g. an unset tier row). */
@@ -43,7 +43,7 @@ interface ModelPickerFieldProps {
   disabled?: boolean;
   placeholder?: string;
   ariaLabel?: string;
-  /** Sizing classes for the field wrapper (e.g. 'min-w-[160px] flex-1'). */
+  /** Sizing classes for the field wrapper (e.g. 'min-w-40 flex-1'). */
   className?: string;
   /**
    * Label for the empty option in select-shaped pickers (Copilot). The free
@@ -100,7 +100,7 @@ function OptionRow({
     >
       <span className="truncate text-text-primary">{option.value}</span>
       {option.hint !== undefined ? (
-        <span className="truncate text-[10px] text-text-tertiary">{option.hint}</span>
+        <span className="truncate text-console-10 text-text-tertiary">{option.hint}</span>
       ) : null}
     </button>
   );
@@ -204,10 +204,10 @@ function ModelCombobox({
       ) : null}
 
       {exactPi !== undefined ? (
-        <p className="font-mono text-[10.5px] text-text-tertiary">{piModelHint(exactPi)}</p>
+        <p className="font-mono text-console-11 text-text-tertiary">{piModelHint(exactPi)}</p>
       ) : null}
       {disconnectedHint !== null ? (
-        <p className="font-mono text-[10.5px] text-warning">{disconnectedHint}</p>
+        <p className="font-mono text-console-11 text-warning">{disconnectedHint}</p>
       ) : null}
     </span>
   );
@@ -293,7 +293,7 @@ function PiDropdownFooter({
   return (
     <>
       {pi.matchTotal > optionCount ? (
-        <p className="px-3 py-1.5 font-mono text-[10.5px] text-text-tertiary">
+        <p className="px-3 py-1.5 font-mono text-console-11 text-text-tertiary">
           …{pi.matchTotal - optionCount} more — keep typing to narrow.
         </p>
       ) : null}
@@ -301,12 +301,12 @@ function PiDropdownFooter({
           loading, or the fetch failed — all panels read K.piModels
           best-effort and drop the error) is NOT "no match". */}
       {!catalogLoaded ? (
-        <p className="px-3 py-2 font-mono text-[11px] text-text-tertiary">
+        <p className="px-3 py-2 font-mono text-console-11 text-text-tertiary">
           Catalog unavailable — free text is fine.
         </p>
       ) : null}
       {catalogLoaded && pi.matchTotal === 0 && pi.hiddenByFilter === 0 ? (
-        <p className="px-3 py-2 font-mono text-[11px] text-text-tertiary">
+        <p className="px-3 py-2 font-mono text-console-11 text-text-tertiary">
           No catalog match — custom models.json refs are fine as free text.
         </p>
       ) : null}
@@ -336,13 +336,13 @@ function OpencodeDropdownFooter({
   if (phase === 'idle') {
     return (
       <div className="flex flex-col gap-1 px-3 py-2">
-        <p className="font-mono text-[10.5px] text-text-tertiary">
+        <p className="font-mono text-console-11 text-text-tertiary">
           Format: <span className="text-text-secondary">backend/model-id</span> (free text).
         </p>
         <button
           type="button"
           onClick={onLoad}
-          className="self-start rounded border border-border px-2.5 py-1 font-mono text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
+          className="self-start rounded border border-border px-2.5 py-1 font-mono text-console-11 text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
         >
           Load backend suggestions
         </button>
@@ -351,7 +351,7 @@ function OpencodeDropdownFooter({
   }
   if (phase === 'loading') {
     return (
-      <p className="px-3 py-2 font-mono text-[11px] text-text-tertiary">
+      <p className="px-3 py-2 font-mono text-console-11 text-text-tertiary">
         Loading backends… (starting the OpenCode runtime can take a moment)
       </p>
     );
@@ -359,11 +359,11 @@ function OpencodeDropdownFooter({
   if (phase === 'error') {
     return (
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-        <p className="font-mono text-[11px] text-error">{error}</p>
+        <p className="font-mono text-console-11 text-error">{error}</p>
         <button
           type="button"
           onClick={onLoad}
-          className="rounded border border-border px-2.5 py-1 font-mono text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
+          className="rounded border border-border px-2.5 py-1 font-mono text-console-11 text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
         >
           Retry
         </button>
@@ -371,7 +371,7 @@ function OpencodeDropdownFooter({
     );
   }
   return (
-    <p className="border-t border-border px-3 py-1.5 font-mono text-[10.5px] text-text-tertiary">
+    <p className="border-t border-border px-3 py-1.5 font-mono text-console-11 text-text-tertiary">
       {optionCount > 0
         ? 'Pick a backend prefix, then type the model id.'
         : 'No backend matches the typed prefix — free text is fine.'}
@@ -422,7 +422,7 @@ function CopilotModelSelect({
             if (!inList) onChange('');
           }}
           disabled={disabled}
-          className="shrink-0 rounded border border-border px-2.5 py-1.5 font-mono text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40"
+          className="shrink-0 rounded border border-border px-2.5 py-1.5 font-mono text-console-11 text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40"
         >
           List
         </button>

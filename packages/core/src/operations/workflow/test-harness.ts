@@ -82,7 +82,10 @@ export const mockLogger = {
   trace: mock(() => undefined),
 };
 export const mockCaptureApprovalResolved = mock(() => undefined);
+// The rest stays real: run scratch release loads `@archon/git`, which reads its paths here.
+const realPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...realPaths,
   captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: mock(() => mockLogger),
 }));
@@ -91,6 +94,8 @@ export const {
   createWorkflowOperations,
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
+  PauseRefusedError,
+  ResumeRefusedError,
   describeAbandonOwner,
   assertAnswerable,
   assertApprovable,
@@ -136,10 +141,14 @@ export const store: WorkflowOperationsDeps['store'] = {
   persistWorkflowEvent: mockPersistWorkflowEvent,
   signalWorkflowWait: mock(async () => ({ signaled: true })),
   deleteWorkflowRun: mock(async () => undefined),
+  getCodebase: async () => null,
   getWorkflowRun: mockGetWorkflowRun,
   listWorkflowRuns: mockListWorkflowRuns,
   findWorkflowRunsByIdPrefix: async () => [],
   cancelWorkflowRun: mockCancelWorkflowRun,
+  requestOperatorPause: async () => {
+    throw new Error('Unexpected requestOperatorPause');
+  },
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
   findChildRuns: mockFindChildRuns,
   getRunAncestry: mockGetRunAncestry,
@@ -189,6 +198,7 @@ export function makePausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun
     codebase_id: 'cb-1',
     status: 'paused',
     outcome: null,
+    completed_outcome: null,
     user_message: 'test',
     metadata: {
       approval: {
@@ -197,6 +207,7 @@ export function makePausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun
         type: 'approval',
       },
     },
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -206,6 +217,7 @@ export function makePausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     ...overrides,
   };
 }
