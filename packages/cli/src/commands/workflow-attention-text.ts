@@ -242,11 +242,19 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
         `needs a look: ${item.detail}`,
         `show more: ${command(`get ${run.id}`)}, then resume or abandon it`,
       ];
-    case 'owner_lost':
+    case 'owner_lost': {
+      // It still holds what it took: its item, and the slot of a resource it runs under.
+      const holding = item.item === undefined ? '' : `, holding item ${item.item.key}`;
+      if (item.start !== undefined)
+        return [
+          `admitted but not started, and no process runs it${holding}`,
+          `start it: archon trigger execute ${item.start.requestId} --host ${item.start.hostId}, or end it: ${command(`abandon ${run.id}`)}`,
+        ];
       return [
-        `${item.observedStatus} but its owner is gone, holding item ${item.item?.key ?? '(unread)'}: later starts of ${run.workflow} on it wait behind it`,
+        `${item.observedStatus} but its owner is gone${holding}`,
         `continue it: ${command(`resume ${run.id}`)}, or end it: ${command(`abandon ${run.id}`)}`,
       ];
+    }
   }
 }
 
@@ -384,11 +392,8 @@ export function attentionStreamText(
     case 'notice':
       return [noticeText(line)];
     case 'owner_lost': {
-      // A run on an item holds it, so the later starts of its workflow on it wait behind it.
-      const held =
-        line.item == null
-          ? ''
-          : ` It holds item ${line.item}: later starts of ${line.workflow ?? 'its workflow'} on it wait behind it.`;
+      // It still holds what it took: its item, and the slot of a resource it runs under.
+      const held = line.item == null ? '' : ` It still holds item ${line.item}.`;
       return [
         `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)}${held} ` +
           `Show more with ${command(`get ${line.runId}`)}, continue it with ${command(`resume ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,

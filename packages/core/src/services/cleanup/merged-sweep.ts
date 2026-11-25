@@ -16,6 +16,7 @@ import {
   removeEnvironment,
   type RemoveEnvironmentResult,
 } from './remove-environment';
+import { checkoutExists } from './checkout-presence';
 import { getLog } from './log';
 
 /**
@@ -48,6 +49,14 @@ export function recordCleanupRemoval(
   }
 }
 
+/** One codebase's merged cleanup: swept, or not checked because its checkout is gone. */
+export type MergedCleanupOutcome =
+  | { kind: 'swept'; result: CleanupOperationResult }
+  | {
+      kind: 'repository-gone';
+      environments: { branchName: string; workingPath: string }[];
+    };
+
 /** What every environment in one merged sweep is judged against. */
 interface MergedSweep {
   repoPath: RepoPath;
@@ -59,18 +68,35 @@ interface MergedSweep {
 }
 
 /**
- * Clean up merged worktrees for a codebase
- * Respects uncommitted changes and live workflow runs
+ * Remove a codebase's worktree environments whose branches are merged, keeping any with
+ * uncommitted changes or a live workflow run. Every route into the merged sweep calls this.
+ *
+ * A checkout directory that does not exist is reported, not swept: every Git check
+ * would fail, and whether the project was deleted or its disk is unmounted is the
+ * operator's call. A checkout that exists but cannot be read still fails the sweep.
  */
 export async function cleanupMergedWorktrees(
   codebaseId: string,
   mainRepoPath: string,
   options: { includeClosed?: boolean } = {}
-): Promise<CleanupOperationResult> {
+): Promise<MergedCleanupOutcome> {
   getRegisteredPlatformPolicies();
   const environments = (await isolationEnvDb.listByCodebase(codebaseId)).filter(
     env => env.provider === 'worktree'
   );
+  if (!(await checkoutExists(mainRepoPath))) {
+    getLog().warn(
+      { codebaseId, repoPath: mainRepoPath, environments: environments.length },
+      'isolation.merged_cleanup_repository_gone'
+    );
+    return {
+      kind: 'repository-gone',
+      environments: environments.map(env => ({
+        branchName: env.branch_name,
+        workingPath: env.working_path,
+      })),
+    };
+  }
   const repoPath = toRepoPath(mainRepoPath);
   const remote = configuredRemote(await loadRepoConfig(mainRepoPath));
   const sweep: MergedSweep = {
@@ -107,7 +133,7 @@ export async function cleanupMergedWorktrees(
     }
   }
 
-  return sweep.result;
+  return { kind: 'swept', result: sweep.result };
 }
 
 /** The environment's merge verdict, or null when the check failed and is recorded as an error. */
@@ -157,17 +183,4 @@ async function removeMergedEnvironment(
     const err = error as Error;
     sweep.result.errors.push({ branchName: env.branch_name, error: err.message });
   }
-}
-
-/**
- * Clean up to make room when limit reached (Phase 3D)
- * Attempts to remove merged branches first
- * Returns detailed results for user feedback
- */
-export async function cleanupToMakeRoom(
-  codebaseId: string,
-  mainRepoPath: string
-): Promise<CleanupOperationResult> {
-  // Reuse the merged cleanup logic
-  return cleanupMergedWorktrees(codebaseId, mainRepoPath);
 }

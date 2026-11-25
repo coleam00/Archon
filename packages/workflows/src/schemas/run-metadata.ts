@@ -42,6 +42,11 @@ import { workflowSourceSchema } from './workflow';
  * `summary_value`  — additive sibling of `summary` (#2637): the child's terminal
  *                    structured value, stamped at completion alongside the text summary
  *                    so a parent `workflow:` node threads the logical value back.
+ * `summary_value_null` — `true` when the child's terminal value is JSON null. A
+ *                    metadata patch removes a top-level key whose value is null, so a
+ *                    null result cannot be stored as `summary_value`; without this marker
+ *                    the parent would fall back to the text summary "null". Written only
+ *                    for null, so every other result is stored and read as before.
  * `summary_declared_output_paths` — additive sibling of `summary_value`: the field
  *                    paths the child's selected `returns:` node declared, so a parent
  *                    reads `$<node>.output.a.b` under the CHILD's contract — a
@@ -59,6 +64,7 @@ export const SUBRUN_METADATA_KEYS = {
   inputs: 'inputs',
   inputsValues: 'inputs_values',
   summaryValue: 'summary_value',
+  summaryValueNull: 'summary_value_null',
   summaryDeclaredFields: 'summary_declared_fields',
   summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
@@ -81,6 +87,26 @@ export function runInputsMetadata(
       ? { [SUBRUN_METADATA_KEYS.inputsValues]: inputs }
       : {}),
   };
+}
+
+/** A child's terminal value as completion stamps it; a null value becomes the null marker. */
+export function subrunSummaryMetadata(value: unknown): Record<string, unknown> {
+  return value === null
+    ? { [SUBRUN_METADATA_KEYS.summaryValueNull]: true }
+    : { [SUBRUN_METADATA_KEYS.summaryValue]: value };
+}
+
+/**
+ * The value `subrunSummaryMetadata` stamped, or undefined when none was. Presence-keyed
+ * rather than truthiness: `false`/`0` are legitimate values. A merge never keeps a null
+ * `summary_value`, so the marker restores it.
+ */
+function readSubrunSummaryValue(metadata: Record<string, unknown> | undefined): unknown {
+  if (metadata === undefined) return undefined;
+  if (Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)) {
+    return metadata[SUBRUN_METADATA_KEYS.summaryValue];
+  }
+  return metadata[SUBRUN_METADATA_KEYS.summaryValueNull] === true ? null : undefined;
 }
 
 /** Parent deletion clears the foreign key; this creation-only key preserves child provenance. */
@@ -166,11 +192,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
     fanOutItemHash: typeof fanOutItemHash === 'string' ? fanOutItemHash : undefined,
     inputs,
-    // Presence-keyed rather than truthiness: `false`/`0`/`null` are legitimate values.
-    summaryValue:
-      metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
-        ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
-        : undefined,
+    summaryValue: readSubrunSummaryValue(metadata),
     summaryDeclaredOutputPaths,
   };
 }
