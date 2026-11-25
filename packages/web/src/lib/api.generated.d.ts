@@ -8419,6 +8419,13 @@ export interface components {
         } | null;
         hasResult: boolean;
         resultCommit: string | null;
+        changeSize: {
+          base: string;
+          commit: string;
+          files: number;
+          added: number;
+          removed: number;
+        } | null;
       }[];
       queued: {
         requestId: string;
@@ -9167,6 +9174,13 @@ export interface components {
           } | null;
           hasResult: boolean;
           resultCommit: string | null;
+          changeSize: {
+            base: string;
+            commit: string;
+            files: number;
+            added: number;
+            removed: number;
+          } | null;
         }[];
         queued: {
           requestId: string;

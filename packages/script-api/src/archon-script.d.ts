@@ -2257,6 +2257,13 @@ declare module 'archon:script' {
       } | null;
       readonly hasResult: boolean;
       readonly resultCommit: string | null;
+      readonly changeSize: {
+        readonly base: string;
+        readonly commit: string;
+        readonly files: number;
+        readonly added: number;
+        readonly removed: number;
+      } | null;
     }>;
     readonly queued: ReadonlyArray<{
       readonly requestId: string;
@@ -2850,6 +2857,13 @@ declare module 'archon:script' {
         } | null;
         readonly hasResult: boolean;
         readonly resultCommit: string | null;
+        readonly changeSize: {
+          readonly base: string;
+          readonly commit: string;
+          readonly files: number;
+          readonly added: number;
+          readonly removed: number;
+        } | null;
       }>;
       readonly queued: ReadonlyArray<{
         readonly requestId: string;
