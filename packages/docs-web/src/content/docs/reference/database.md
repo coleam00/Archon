@@ -176,6 +176,8 @@ server on their own, and a `DATABASE_URL` in `.env` is not read.
 
 If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.postgres_schema_init_failed`.
 
+Prisma Postgres works with the connection string it issues. Keep `sslmode=require` in it: without the parameter the first database operation fails with `read ECONNRESET`. Point a server at the direct host (`db.prisma.io`). The pooled host (`pooled.db.prisma.io`) pools in transaction mode: schema initialization, CLI commands and the API work through it, but it does not deliver `LISTEN` notifications, so the server logs `pg_notify.listening` and the console still shows runs started from the CLI only when the dashboard poller's 10-second backstop reads them.
+
 ## Local PostgreSQL via Docker
 
 Use the `with-db` Docker Compose profile for automatic PostgreSQL setup.
