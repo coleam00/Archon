@@ -33,7 +33,7 @@ The checksum catches a corrupted download or an asset that does not belong to th
 Manage the install with:
 
 ```sh
-archon plugin list                                                 # id, kind, tag, commit, compatibility
+archon plugin list                                                 # id, kind, tag, commit, compatibility, executable
 archon plugin update coleam00/Archon/plugins/forge-github          # latest release; add @<tag> to pick one
 archon plugin remove coleam00/Archon/plugins/forge-github          # deletes only the files the receipt lists
 ```
@@ -149,7 +149,15 @@ Otherwise it exits 1 with the first reason that applies, in this order:
 
 Any other failure of the read keeps its own kind, such as `unavailable` after the read's retries.
 
-A `no_plugin_for_host`, `unsupported_op`, `no_credential`, `authorization` or `not_found` failure carries `remedy`, the operator's next step. For `unsupported_op` and `no_credential` it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step (`archon plugin update`, or the credential variables the plugin reads). The remedy for `authorization` names the credential source, never the token.
+A `no_plugin_for_host`, `unsupported_op`, `no_credential`, `authorization` or `not_found` failure carries `remedy`, the operator's next step. For `unsupported_op` and `no_credential` it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step. For `no_credential` that names the credential variables the plugin reads. For `unsupported_op` it names what runs the plugin:
+
+- **An executable file**, in `ARCHON_HOME/plugins/`, another plugin directory or on PATH: the remedy names its path.
+- **A `forge` entry in Archon's config**: the remedy names the entry by plugin, not its `command` or `args`, which may hold a secret.
+- **This Archon source checkout**: the remedy says to update Archon.
+
+Forge cannot tell who installed a file or the command an entry runs. When `archon plugin list` shows a forge receipt with that executable, run `archon plugin update <id>` with the receipt's id, or the repair command the list prints for a broken receipt. Otherwise replace the file or script with a version that supports the operation.
+
+The remedy for `authorization` names the credential source, never the token.
 
 The credential is resolved the way an operation resolves it, so for GitHub the check may run `gh auth token`. A `host` check, or one whose plugin does not advertise `pr.view`, makes no read: there a credential that resolves can still be expired or lack access to a repository, which the first operation reports.
 

@@ -235,7 +235,7 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
 
       const listed = await run(env, 'list');
       expect(listed.out).toBe(
-        `${ID}  forge  v2.0.0  ${commits.get('v2.0.0')?.slice(0, 12)}  archon any`
+        `${ID}  forge  v2.0.0  ${commits.get('v2.0.0')?.slice(0, 12)}  archon any  executable archon-forge-github`
       );
 
       expect((await run(env, 'remove', ID)).code).toBe(0);
@@ -378,7 +378,7 @@ describe('archon plugin with an unreadable receipt', () => {
     const listed = await run(env, 'list');
     expect(listed.code).toBe(0);
     expect(listed.out.split('\n')).toEqual([
-      `${OTHER}  forge  v1.0.0  ${'a'.repeat(12)}  archon any`,
+      `${OTHER}  forge  v1.0.0  ${'a'.repeat(12)}  archon any  executable archon-forge-other`,
       `${BROKEN}  unreadable  Invalid JSON in plugin receipt ${broken}. Repair it: archon plugin update ${BROKEN}, or archon plugin remove ${BROKEN}`,
     ]);
   });
