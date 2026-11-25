@@ -2479,7 +2479,8 @@ nodes:
   [run-ended binding](/guides/workflow-triggers/) starts from that outcome), and it leaves no
   ask and no wait. Nothing follows such a run, so
   [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
-  `stopped` until another run starts on the item, whatever its status. A run on no item, a run
+  `stopped` until another run starts on the item, whatever its status, unless the item's
+  [merge is recorded](/reference/cli/#workflow-merged). A run on no item, a run
   that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
   workflow that declares no `final` has none, so every unbound outcome stops its item. A run
   whose end does start a binding also stops its item when admission refuses that start at
