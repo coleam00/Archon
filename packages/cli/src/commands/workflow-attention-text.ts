@@ -20,6 +20,8 @@ import {
   type AttentionAnswerer,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowNotice } from '@archon/workflows/workflow-notice';
+import { PACK_SETTING_ORIGIN_TEXT } from '@archon/workflows/pack-settings';
+import type { FileSettingRefusal } from '@archon/workflows/schemas/pack-settings';
 import type { StoppedRefusal } from '@archon/workflows/schemas/run-metadata';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { formatAge } from './workflow-shared';
@@ -157,6 +159,7 @@ const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
   inputs_unmapped: 'an input the binding maps named nothing',
   link_refused: 'the items it links to could not be read or hold no such link',
   no_default_provider: 'no default AI provider is set',
+  file_setting_missing: 'a pack file setting it reads names no file',
   run_as_user_failed: "the binding's run-as user could not be found",
   run_configuration_failed: "the item's or the binding's run configuration could not be read",
   launch_preparation_failed: 'preparing its launch failed',
@@ -168,10 +171,36 @@ const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
  */
 export function refusedStartLines(refused: readonly StoppedRefusal[]): string[] {
   return refused.flatMap(start => [
-    `the start of ${start.workflow} (binding ${start.bindingId}) was refused before launch at ${start.refusedAt}: ${REFUSAL_REASONS[start.reason]}`,
-    ...(start.reason === 'no_default_provider' ? ['set one: archon ai default <provider>'] : []),
+    `the start of ${start.workflow} (binding ${start.bindingId}) was refused before launch at ${start.refusedAt}: ${start.fileSetting === undefined ? REFUSAL_REASONS[start.reason] : fileSettingReason(start.fileSetting)}`,
+    ...refusalFixLines(start),
     `see the refusal: archon trigger inspect ${start.receiptId}`,
   ]);
+}
+
+/** What clears a refusal, for the reasons whose fix the text can name. */
+function refusalFixLines({
+  reason,
+  fileSetting,
+}: {
+  reason: string;
+  fileSetting?: FileSettingRefusal;
+}): string[] {
+  if (reason === 'no_default_provider') return ['set one: archon ai default <provider>'];
+  return fileSetting === undefined ? [] : [fileSettingFix(fileSetting)];
+}
+
+/**
+ * A supplied value beats the project file and validate never sees it, so only the binding
+ * that supplies it can change it; any other origin the project file overrides.
+ */
+function fileSettingFix({ setting, origin }: FileSettingRefusal): string {
+  return origin === 'supplied'
+    ? `restore the file, or change the value the binding supplies for '${setting}' in its inputs`
+    : `restore the file, or set '${setting}' to an existing file under 'settings:' in the project's .archon/packs/ file; archon validate workflows checks it`;
+}
+
+function fileSettingReason(file: FileSettingRefusal): string {
+  return `pack file setting '${file.setting}' names ${file.path}, which does not exist or is not a file (value from ${PACK_SETTING_ORIGIN_TEXT[file.origin]})`;
 }
 
 /** How a stopped item's run ended: a run that settled asks may have no outcome. */
@@ -366,7 +395,7 @@ function withoutRunBody(item: AttentionQueueItem): string[] {
 function refusedStartItemLines(
   item: Extract<AttentionQueueItem, { kind: 'refused_start' }>
 ): string[] {
-  const { receiptId, bindingId, workflow, itemKey, reason, limit } = item.start;
+  const { receiptId, bindingId, workflow, itemKey, reason, limit, fileSetting } = item.start;
   const what = `the start of ${workflow ?? 'its workflow'} on item ${itemKey} (binding ${bindingId}) was refused`;
   const lines =
     limit !== undefined
@@ -374,8 +403,10 @@ function refusedStartItemLines(
           `${what} at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
           `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
         ]
-      : [`${what}: ${refusalText(reason)}`];
-  if (reason === 'no_default_provider') lines.push('set one: archon ai default <provider>');
+      : [
+          `${what}: ${fileSetting === undefined ? refusalText(reason) : fileSettingReason(fileSetting)}`,
+        ];
+  lines.push(...refusalFixLines(item.start));
   lines.push(`see the refusal: archon trigger inspect ${receiptId}`);
   return lines;
 }

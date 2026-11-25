@@ -385,6 +385,7 @@ export async function refusedStartItems(
         itemKey,
         reason: refusal.reason,
         ...(refusal.limit === undefined ? {} : { limit: refusal.limit }),
+        ...(refusal.fileSetting === undefined ? {} : { fileSetting: refusal.fileSetting }),
       },
     };
   });

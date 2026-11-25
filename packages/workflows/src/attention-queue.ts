@@ -45,6 +45,7 @@ import {
 } from './schemas/workflow-run';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import { stoppedLimitSchema, stoppedRefusalSchema } from './schemas/run-metadata';
+import { bindingRefusalSchema } from './schemas/binding-refusal';
 import { observeLostOwners, type LostOwner, type OwnerObserver } from './owner-observation';
 import { resolveRunAttention } from './run-attention-resolution';
 import { givenUpAttention } from './given-up-attention';
@@ -225,9 +226,9 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     ...itemBase,
     /**
      * A binding start that no run caused (a fire, a schedule, a webhook or a label), refused
-     * for `reason`: a start-refusal code, `start_limit` with the limit's standing in `limit`,
-     * or `rejected_by_source`. `pausedAt` is when it was refused. It takes no answer; a run on
-     * the item, or a later start of the same binding on it, closes it.
+     * as its binding row records it (`bindingRefusalSchema`). `pausedAt` is when it was
+     * refused. It takes no answer; a run on the item, or a later start of the same binding
+     * on it, closes it.
      */
     start: z.object({
       receiptId: z.string(),
@@ -235,8 +236,7 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
       hostId: z.string().nullable(),
       workflow: z.string().nullable(),
       itemKey: z.string(),
-      reason: z.string(),
-      limit: stoppedLimitSchema.optional(),
+      ...bindingRefusalSchema.shape,
     }),
   }),
   z.object({

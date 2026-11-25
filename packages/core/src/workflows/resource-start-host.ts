@@ -13,6 +13,7 @@ import {
   WorkflowCredentialPreflightError,
 } from '@archon/workflows/run-preflight';
 import { assertRunForgeAccess, ForgeRequirementError } from '@archon/workflows/run-forge-access';
+import { assertReadFileSettings, FileSettingError } from '@archon/workflows/pack-settings';
 import {
   requireTerminalStatusWrite,
   TerminalStatusWriteError,
@@ -244,6 +245,9 @@ async function prepareBinding(
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
     const bindingInputs = resolveBindingInputs(intent, workflow);
+    // Before it takes a slot, so the refusal lands on the item's stop. A start on another
+    // run's checkout opens its files there, not here, so its run's own start checks them.
+    if (!intent.checkoutFrom) await assertReadFileSettings(cwd, workflow, bindingInputs);
 
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;
@@ -339,18 +343,15 @@ async function prepareClaimedBinding(
       );
     // Unknown failures are not an implicit retry policy; the receipt stays inspectable.
     // Configuration and provider errors can contain secret values, so persist the
-    // failed boundary, not the exception text. A forge refusal is the exception: it holds
-    // only remote names, typed reasons and text written to be shown. The original cause
-    // reaches the caller.
+    // failed boundary, not the exception text. A forge refusal and a missing file setting
+    // are the exceptions: they hold only remote names, typed reasons, project configuration
+    // and text written to be shown. The original cause reaches the caller.
     try {
       await host.deps.store.failStartBindingPreparation({
         ...identity,
         retryable: false,
         error: preparationStageFailure(stage),
-        refusal:
-          error instanceof NoDefaultProviderError
-            ? 'no_default_provider'
-            : preparationStageFailure(stage),
+        ...preparationRefusal(error, stage),
         ...(error instanceof ForgeRequirementError
           ? { forgeRefusal: { pack: error.packKey, failures: error.failures } }
           : {}),
@@ -363,6 +364,14 @@ async function prepareClaimedBinding(
     }
     throw error;
   }
+}
+
+/** Why a rejected preparation refused its start, and the setting when a file names none. */
+function preparationRefusal(error: unknown, stage: PreparationStage) {
+  if (error instanceof FileSettingError)
+    return { refusal: 'file_setting_missing', fileSetting: error.fileSetting } as const;
+  if (error instanceof NoDefaultProviderError) return { refusal: 'no_default_provider' } as const;
+  return { refusal: preparationStageFailure(stage) };
 }
 
 export interface ResourceStartHost extends WorkflowHost {

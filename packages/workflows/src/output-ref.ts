@@ -188,6 +188,12 @@ export function assertSupportedOutputRefs(text: string): void {
  */
 export const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
 
+/**
+ * Every `$INPUTS.<name>` reference in a text, the name in group 1. Global, so use it with
+ * `matchAll` or `replace`; `exec` and `test` would carry `lastIndex` between calls.
+ */
+export const INPUTS_REF = new RegExp(String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})`, 'g');
+
 /** Anchored whole-value form: the ENTIRE (trimmed) string is one `$INPUTS.<name>` ref. */
 const WHOLE_INPUTS_REF_PATTERN = new RegExp(
   String.raw`^\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})$`

@@ -919,3 +919,66 @@ describe('expandWorkflowIncludes — a binding directive in with: (#5760)', () =
     );
   });
 });
+
+// A fresh run checks only the `file: true` settings its workflow reads, so expansion,
+// which sees included blocks and command bodies, records which those are.
+describe('expandWorkflowIncludes — the file settings a workflow reads', () => {
+  const pack: WorkflowPack = {
+    key: 'p',
+    source: 'project',
+    settings: {
+      brief: { type: 'string', file: true },
+      policy: { type: 'string', file: true },
+      tone: { type: 'string' },
+    },
+  };
+  const readsOf = (
+    workflows: Map<string, ReturnType<typeof wf>>,
+    commands: [string, string | null][] = []
+  ): Record<string, readonly string[] | undefined> => {
+    const result = expandWorkflowIncludes(workflows, new Map(commands));
+    expect(result.errors).toHaveLength(0);
+    return Object.fromEntries(
+      [...result.workflows].map(([name, w]) => [name, w.pack?.fileSettingReads])
+    );
+  };
+
+  const readsPolicy = (bound: Record<string, string>) => ({
+    id: 'a',
+    script: 'console.log(process.env.INPUTS_POLICY)',
+    runtime: 'bun',
+    with: bound,
+  });
+
+  test('counts prompt, bash env, command-body and same-pack include reads, and nothing else', () => {
+    expect(
+      readsOf(
+        mapOf(
+          wf('prompted', [{ id: 'a', prompt: 'follow $INPUTS.policy and $INPUTS.tone' }], { pack }),
+          wf('shelled', [{ id: 'a', bash: 'cat "${INPUTS_BRIEF:-x}"' }], { pack }),
+          wf('commanded', [{ id: 'a', command: 'land' }], { pack }),
+          wf('host', [{ id: 'blk', include: 'prompted' }], { pack }),
+          wf('silent', [{ id: 'a', bash: 'echo "$INPUTS_TONE"' }], { pack }),
+          // Its own `with:` replaces the pack value in the script's env, unless it passes it.
+          wf('shadowed', [readsPolicy({ policy: './fixed.md' })], { pack }),
+          wf('passed', [readsPolicy({ policy: '$INPUTS.policy' })], { pack })
+        ),
+        [['land', 'read $INPUTS.policy first']]
+      )
+    ).toEqual({
+      prompted: ['policy'],
+      shelled: ['brief'],
+      commanded: ['policy'],
+      host: ['policy'],
+      silent: [],
+      shadowed: [],
+      passed: ['policy'],
+    });
+  });
+
+  test('a command body it cannot read counts as reading every file setting', () => {
+    expect(
+      readsOf(mapOf(wf('commanded', [{ id: 'a', command: 'gone' }], { pack })), [['gone', null]])
+    ).toEqual({ commanded: ['brief', 'policy'] });
+  });
+});

@@ -1,7 +1,9 @@
 import type { DagNode, ExecNode, WorkflowDefinition } from './schemas';
 import { inputEnvKey, isExecNode, isIncludeDirective } from './schemas';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
-import { readComposedMeta } from './compiled-command';
+import { readComposedMeta, type IncludeCommandContent } from './compiled-command';
+import { collectFileBackedCommandNames } from './command-file';
+import { INPUTS_REF } from './output-ref';
 import { isInlineScript } from './executor-shared';
 import type { TemplateSlot } from './template-walker';
 import { visitNodeTemplateSlots } from './template-walker';
@@ -220,11 +222,8 @@ export function findUnpassedPackSettingReads(
       if (readComposedMeta(slot.owner) !== undefined) return;
       const source = packSettingReadSource(slot, namedScripts);
       if (source === undefined) return;
-      // Mirrors inputEnvVars: only a non-shell exec node's own `with:` reaches its env.
       const owner = slot.owner;
-      const bound = new Set(
-        isExecNode(owner) && owner.runtime !== 'sh' ? Object.keys(owner.with ?? {}) : []
-      );
+      const bound = ownEnvBindings(owner);
       for (const read of scanEnvironmentReads(source.text, source.runtime)) {
         const setting = settingByEnv.get(read.name);
         if (setting === undefined || passed(setting) || bound.has(setting)) continue;
@@ -239,6 +238,62 @@ export function findUnpassedPackSettingReads(
     });
   }
   return found;
+}
+
+/** Mirrors inputEnvVars: only a non-shell exec node's own `with:` reaches its env. */
+function ownEnvBindings(owner: TemplateSlot['owner']): ReadonlySet<string> {
+  return new Set(isExecNode(owner) && owner.runtime !== 'sh' ? Object.keys(owner.with ?? {}) : []);
+}
+
+/**
+ * The settings of `settingNames` that a flattened workflow reads where the engine can see
+ * it: `$INPUTS.<name>` in any template slot or command-file body, or a literal
+ * `INPUTS_<NAME>` (or `input('<name>')`) read in a bash or script body, unless the node's
+ * own `with:` binds that name (a binding that passes `$INPUTS.<name>` counts as its
+ * template). Every node of the run counts, composed ones included. A body that cannot be read (a command with no
+ * readable file, a named script discovery did not resolve) counts as reading every name:
+ * the check this feeds refuses a start, so an unknown read errs toward checking.
+ */
+export function packSettingReads(
+  nodes: readonly DagNode[],
+  settingNames: readonly string[],
+  namedScripts: ReadonlyMap<string, ExecInputSource>,
+  commandContents: ReadonlyMap<string, IncludeCommandContent>
+): Set<string> {
+  const settings = new Set(settingNames);
+  const settingByEnv = new Map(settingNames.map(name => [inputEnvKey(name), name]));
+  const reads = new Set<string>();
+  const readAll = (): void => {
+    for (const name of settingNames) reads.add(name);
+  };
+  const scanTemplate = (text: string): void => {
+    for (const match of text.matchAll(INPUTS_REF)) {
+      const name = match[1];
+      if (name !== undefined && settings.has(name)) reads.add(name);
+    }
+  };
+  for (const node of nodes) {
+    visitNodeTemplateSlots(node, slot => {
+      scanTemplate(slot.value);
+      if (slot.surface !== 'shell' && slot.surface !== 'script') return;
+      const source = packSettingReadSource(slot, namedScripts);
+      if (source === undefined) {
+        if (slot.surface === 'script' && !isInlineScript(slot.value)) readAll();
+        return;
+      }
+      const bound = ownEnvBindings(slot.owner);
+      for (const read of scanEnvironmentReads(source.text, source.runtime)) {
+        const setting = settingByEnv.get(read.name);
+        if (setting !== undefined && !bound.has(setting)) reads.add(setting);
+      }
+    });
+  }
+  for (const command of collectFileBackedCommandNames(nodes)) {
+    const body = commandContents.get(command);
+    if (typeof body === 'string') scanTemplate(body);
+    else readAll();
+  }
+  return reads;
 }
 
 function packSettingReadSource(
@@ -279,7 +334,8 @@ function scanEnvironmentReads(
     if (/(["'])archon:script\1/.test(source))
       collect(/(?<![\w.$])input\s*\(\s*(["'])([A-Za-z0-9_-]+)\1\s*\)/g, 2, inputEnvKey);
   } else {
-    collect(new RegExp(`\\$\\{(${INPUT_ENV_PREFIX}[A-Z0-9_]+)\\}`, 'g'), 1);
+    // `${NAME}` and every operator form (`${NAME:-x}`, `${NAME?}`) read the variable.
+    collect(new RegExp(`\\$\\{(${INPUT_ENV_PREFIX}[A-Z0-9_]+)(?![A-Za-z0-9_])`, 'g'), 1);
     collect(new RegExp(`\\$(${INPUT_ENV_PREFIX}[A-Z0-9_]+)\\b`, 'g'), 1);
   }
 

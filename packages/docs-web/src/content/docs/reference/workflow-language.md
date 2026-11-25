@@ -2909,10 +2909,18 @@ Two optional keys are for a reader that lists a pack's settings, such as a setti
   together, in the order the pack lists them; a setting without one belongs to a default group.
   How groups are shown is the reader's choice. The engine does not interpret the name.
 - `file: true` says the value is a path to a file, relative to the project or absolute. It is
-  allowed only on a `string` setting. [`archon validate workflows`](/reference/cli/#validate-workflows-name)
-  reports a file setting whose value, or default when the project sets none, names a path that
-  does not exist or is not a file. An empty value is not an error. A run does not check the
-  file at start; the node that reads it does.
+  allowed only on a `string` setting. A fresh run of a workflow that reads the setting is
+  refused at start when its value names a path that does not exist or is not a file, and
+  [`archon validate workflows`](/reference/cli/#validate-workflows-name) reports the same
+  value on that workflow. The value is resolved as the run resolves it: supplied, else the
+  project file, else the workflow's input default, else the pack's default. A workflow reads
+  the setting when `$INPUTS.<name>` appears anywhere in it, including its included blocks
+  and command files, or a bash or script body reads `INPUTS_<NAME>` (or `input('<name>')`)
+  by its literal name. A computed lookup is not seen. A setting no node of the workflow reads
+  does not block it, and an empty value is not an error. A start a binding makes is refused
+  before launch and [stops its item](/guides/workflow-triggers/) with reason
+  `file_setting_missing`, except a start in another run's checkout (`checkout: ended-run` or
+  `checkout: asking-run`), whose run checks the file in that checkout when it starts.
 
 An unknown key on a setting is ignored, so a pack can use a key a newer Archon adds, and
 `archon validate workflows` lists each one as a `parse_warning`. Releases before this one

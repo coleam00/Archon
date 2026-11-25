@@ -65,7 +65,8 @@ import {
   type ExpandedInclude,
   type PackIdentity,
 } from './include/inline';
-import type { ExecInputSource } from './exec-input-validation';
+import { packSettingReads, type ExecInputSource } from './exec-input-validation';
+import type { WorkflowPackMember } from './schemas/pack-settings';
 import {
   applyLoopPrevOutputRefRename,
   applyOutputRefRename,
@@ -247,6 +248,9 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
       ? { returns: expanded.renameIncludeRef(collapsed.returns) }
       : {}),
     ...(dedupedRequires.length > 0 ? { requires: dedupedRequires } : {}),
+    ...(collapsed.pack !== undefined
+      ? { pack: withFileSettingReads(expansion, expanded.nodes, collapsed.pack) }
+      : {}),
   };
   const contractError =
     validateWorkflowResultContract(authoredResult) ?? validateRunBudgetShape(authoredResult);
@@ -256,6 +260,25 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
   const result = resolveWorkflow(authoredResult);
   expansion.memo.set(name, result);
   return result;
+}
+
+/** The workflow's pack with the `file: true` settings its flattened nodes read, if it has any. */
+function withFileSettingReads(
+  expansion: IncludeExpansion,
+  nodes: readonly DagNode[],
+  pack: WorkflowPackMember
+): WorkflowPackMember {
+  const fileSettings = Object.entries(pack.settings ?? {})
+    .filter(([, spec]) => spec.file === true)
+    .map(([name]) => name);
+  if (fileSettings.length === 0) return pack;
+  const reads = packSettingReads(
+    nodes,
+    fileSettings,
+    expansion.namedScripts,
+    expansion.commandContents
+  );
+  return { ...pack, fileSettingReads: [...reads].sort() };
 }
 
 /**

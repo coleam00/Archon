@@ -16,6 +16,8 @@
  *    declaration default, then the workflow's own input default, then the project file,
  *    then the run's supplied inputs. Both defaults are the author's; the project file is
  *    the project's choice and beats them. A resume reads the row, never the files.
+ *    A `file` setting the workflow reads (`WorkflowPackMember.fileSettingReads`) must then
+ *    name a file; `archon validate` makes the same check.
  *
  * Settings belong to a run, not to a node: a run reads its root workflow's pack, and a
  * `workflow:` child, being a run of its own, reads its own. An `include:`d block from the
@@ -38,8 +40,11 @@ import {
   packForgeNeedsSchema,
   packSettingSpecSchema,
   type PackForgeNeeds,
+  type FileSettingRefusal,
+  type PackSettingOrigin,
   type PackSettingSpec,
   type WorkflowPack,
+  type WorkflowPackMember,
 } from './schemas/pack-settings';
 import { defaultRunInputs } from './workflow-inputs';
 
@@ -48,6 +53,26 @@ export class PackSettingsError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PackSettingsError';
+  }
+}
+
+/**
+ * A fresh run refused because a `file` setting its workflow reads names no file. The
+ * fields describe the first such setting; the message names every one.
+ */
+export class FileSettingError extends PackSettingsError {
+  /** The first such setting, as a refused start records it. */
+  readonly fileSetting: FileSettingRefusal;
+
+  constructor(
+    cwd: string,
+    packKey: string,
+    first: FileSettingFinding,
+    rest: readonly FileSettingFinding[]
+  ) {
+    super([first, ...rest].map(finding => fileSettingMessage(cwd, packKey, finding)).join('; '));
+    this.name = 'FileSettingError';
+    this.fileSetting = { setting: first.setting, path: first.path, origin: first.origin };
   }
 }
 
@@ -311,13 +336,16 @@ export async function readPackSettingEntries(
 
 /**
  * Check project values without requiring inputs that an invocation may supply, and that
- * each `file` setting names a file that exists. Only `archon validate` runs the file
- * check: a stage reads the file itself, so a run does not stat it at start.
+ * each `file` setting the workflow reads names a file that exists. This is the file check
+ * a fresh run makes at start ({@link resolveRunStartInputs}), on the same settings with
+ * the same resolution, so a value validate accepts starts and one it reports is refused.
  */
 export async function validateProjectPackSettings(
   cwd: string,
-  pack: WorkflowPack
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>
 ): Promise<string[]> {
+  const pack = workflow.pack;
+  if (pack === undefined) return [];
   const errors: string[] = [];
   const path = projectPackSettingsPath(cwd, pack.key);
   const refused = new Set<string>();
@@ -332,41 +360,136 @@ export async function validateProjectPackSettings(
     errors.push(error.message);
     return errors;
   }
-  for (const [name, spec] of Object.entries(pack.settings ?? {})) {
-    if (spec.file !== true || refused.has(name)) continue;
-    // An own-key lookup: a setting may be named `constructor`, which a plain object inherits.
-    const value = Object.hasOwn(values, name) ? values[name] : spec.default;
-    const problem = await fileSettingProblem(cwd, value);
-    if (problem !== undefined) {
-      errors.push(`${path}: setting '${name}' names file '${value}', which ${problem}`);
-    }
+  const layers = startValueLayers(workflow, values, undefined);
+  for (const finding of await fileSettingFindings(cwd, pack, layers)) {
+    if (!refused.has(finding.setting)) errors.push(fileSettingMessage(cwd, pack.key, finding));
   }
   return errors;
+}
+
+/** A `file` setting a workflow reads whose resolved value names no file. */
+interface FileSettingFinding {
+  readonly setting: string;
+  readonly value: string;
+  /** The path that was checked: the value joined to the project root unless absolute. */
+  readonly path: string;
+  readonly origin: PackSettingOrigin;
+  readonly problem: string;
+}
+
+/** How a message names where a setting's value came from. */
+export const PACK_SETTING_ORIGIN_TEXT: Record<PackSettingOrigin, string> = {
+  supplied: "the run's inputs",
+  project: "the project's pack settings file",
+  workflow_default: "the workflow's input default",
+  pack_default: "the pack's default",
+};
+
+/** Names the setting, the value, the checked path and where the value came from. */
+function fileSettingMessage(cwd: string, packKey: string, finding: FileSettingFinding): string {
+  return `${projectPackSettingsPath(cwd, packKey)}: setting '${finding.setting}' names file '${finding.value}', which ${finding.problem} (${finding.path}); the value comes from ${PACK_SETTING_ORIGIN_TEXT[finding.origin]}`;
+}
+
+/** Where a fresh run's values come from, highest first: the order start resolves a setting in. */
+type StartValueLayers = readonly (readonly [
+  PackSettingOrigin,
+  Readonly<Record<string, JsonValue>>,
+])[];
+
+function startValueLayers(
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
+  projectValues: Readonly<Record<string, string>>,
+  supplied: Readonly<Record<string, JsonValue>> | undefined
+): StartValueLayers {
+  return [
+    ['supplied', supplied ?? {}],
+    ['project', projectValues],
+    ['workflow_default', defaultRunInputs(workflow.inputs) ?? {}],
+    ['pack_default', packSettingDefaults(workflow.pack)],
+  ];
+}
+
+/** The `file` settings a fresh run checks: those the workflow reads, or all when discovery did not record which. */
+function checkedFileSettings(pack: WorkflowPackMember): string[] {
+  const read = pack.fileSettingReads === undefined ? undefined : new Set(pack.fileSettingReads);
+  return Object.entries(pack.settings ?? {})
+    .filter(([name, spec]) => spec.file === true && (read === undefined || read.has(name)))
+    .map(([name]) => name);
+}
+
+/** The checked `file` settings whose value, resolved as a fresh run resolves it, names no file. */
+async function fileSettingFindings(
+  cwd: string,
+  pack: WorkflowPackMember,
+  layers: StartValueLayers
+): Promise<FileSettingFinding[]> {
+  const findings: FileSettingFinding[] = [];
+  for (const setting of checkedFileSettings(pack)) {
+    // An own-key lookup: a setting may be named `constructor`, which a plain object inherits.
+    const layer = layers.find(([, values]) => Object.hasOwn(values, setting));
+    if (layer === undefined) continue;
+    const [origin, values] = layer;
+    const raw = values[setting] ?? null;
+    const value = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    const checked =
+      typeof raw === 'string'
+        ? await fileSettingProblem(cwd, value)
+        : { path: value, problem: 'is not a path' };
+    if (checked !== undefined) findings.push({ setting, value, origin, ...checked });
+  }
+  return findings;
+}
+
+/**
+ * The start check for `file` settings alone, for a host that refuses a start before it
+ * launches. Any other pack-settings failure, such as a bad project file, is left to the
+ * run's own start ({@link resolveRunStartInputs}), which fails the run with its message.
+ *
+ * @throws FileSettingError when a `file` setting the workflow reads names no file.
+ */
+export async function assertReadFileSettings(
+  cwd: string,
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
+  supplied: Readonly<Record<string, JsonValue>> | undefined
+): Promise<void> {
+  const pack = workflow.pack;
+  if (pack === undefined || checkedFileSettings(pack).length === 0) return;
+  let projectValues: Record<string, string>;
+  try {
+    projectValues = await readProjectPackSettings(cwd, pack);
+  } catch (error) {
+    if (error instanceof PackSettingsError) return;
+    throw error;
+  }
+  const layers = startValueLayers(workflow, projectValues, supplied);
+  const [first, ...rest] = await fileSettingFindings(cwd, pack, layers);
+  if (first !== undefined) throw new FileSettingError(cwd, pack.key, first, rest);
 }
 
 /** Why a file setting's value does not name a file; undefined when it does or is empty. */
 async function fileSettingProblem(
   cwd: string,
-  value: string | undefined
-): Promise<string | undefined> {
-  if (value === undefined || value === '') return undefined;
+  value: string
+): Promise<{ path: string; problem: string } | undefined> {
+  if (value === '') return undefined;
   // Joined, not resolved: normalizing would drop a trailing slash or fold `..` across a
   // symlink, so validate would check a different path than a stage opens.
-  const resolved = isAbsolute(value) ? value : `${cwd}${sep}${value}`;
+  const path = isAbsolute(value) ? value : `${cwd}${sep}${value}`;
   // A trailing separator writes a directory. Decide that from the value, not `stat`: Windows
   // drops the final separator, so a file written as `file.md/` would read as a file there.
-  if (value.endsWith('/') || value.endsWith('\\')) return `is not a file (${resolved})`;
-  return fileProblem(resolved);
+  if (value.endsWith('/') || value.endsWith('\\')) return { path, problem: 'is not a file' };
+  const problem = await fileProblem(path);
+  return problem === undefined ? undefined : { path, problem };
 }
 
 /** Why a file setting's resolved path is not a file, or undefined when it is one. */
-async function fileProblem(resolved: string): Promise<string | undefined> {
+async function fileProblem(path: string): Promise<string | undefined> {
   try {
-    return (await stat(resolved)).isFile() ? undefined : `is not a file (${resolved})`;
+    return (await stat(path)).isFile() ? undefined : 'is not a file';
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return `does not exist (${resolved})`;
-    return `could not be read (${resolved}): ${(error as Error).message}`;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return 'does not exist';
+    return `could not be read: ${(error as Error).message}`;
   }
 }
 
@@ -416,27 +539,54 @@ export interface RunStartInputs {
 }
 
 /**
- * Resolve a fresh run's inputs: its pack's settings, then the workflow's declared
- * defaults, then what the run was supplied with.
+ * Resolve a fresh run's inputs: its pack's defaults, then the workflow's declared
+ * defaults, then the project's values, then what the run was supplied with.
  *
  * @param supplied the values the run was invoked with (`--input`, a parent's `with:`).
  * @throws PackSettingsError on a bad project file or a `required` setting left unset.
+ * @throws FileSettingError when a `file` setting the workflow reads names no file.
  */
 export async function resolveRunStartInputs(
   cwd: string,
   workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
   supplied: Readonly<Record<string, JsonValue>> | undefined
 ): Promise<RunStartInputs> {
+  const { inputs, layers } = await resolveStartValues(cwd, workflow, supplied);
+  const pack = workflow.pack;
+  if (pack !== undefined) {
+    const [first, ...rest] = await fileSettingFindings(cwd, pack, layers);
+    if (first !== undefined) throw new FileSettingError(cwd, pack.key, first, rest);
+  }
+  return { inputs };
+}
+
+/**
+ * {@link resolveRunStartInputs} without the file check, for a check before the start that
+ * needs only the values, such as the repository a run names: a file is checked where the
+ * run opens it, which for a start on another run's checkout is not `cwd`.
+ */
+export async function resolveRunStartValues(
+  cwd: string,
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
+  supplied: Readonly<Record<string, JsonValue>> | undefined
+): Promise<RunStartInputs> {
+  return { inputs: (await resolveStartValues(cwd, workflow, supplied)).inputs };
+}
+
+async function resolveStartValues(
+  cwd: string,
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
+  supplied: Readonly<Record<string, JsonValue>> | undefined
+): Promise<RunStartInputs & { layers: StartValueLayers }> {
   const pack = workflow.pack;
   const projectValues = pack === undefined ? {} : await readProjectPackSettings(cwd, pack);
-  const inputs: Record<string, JsonValue> = {
-    ...packSettingDefaults(pack),
-    ...defaultRunInputs(workflow.inputs),
-    ...projectValues,
-    ...supplied,
-  };
-  if (pack !== undefined) assertRequiredSettings(cwd, pack, inputs);
-  return { inputs: Object.keys(inputs).length > 0 ? inputs : undefined };
+  const layers = startValueLayers(workflow, projectValues, supplied);
+  const merged = layers.reduceRight<Record<string, JsonValue>>(
+    (values, [, layer]) => ({ ...values, ...layer }),
+    {}
+  );
+  if (pack !== undefined) assertRequiredSettings(cwd, pack, merged);
+  return { inputs: Object.keys(merged).length > 0 ? merged : undefined, layers };
 }
 
 /**
