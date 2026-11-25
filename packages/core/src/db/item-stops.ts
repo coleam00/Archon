@@ -28,9 +28,9 @@ import { getLog } from './workflow-run-shared';
  * `IWorkflowStore.listStoppedItemRuns`). Runs on an item are ordered as `getItemRuns` orders
  * them: by start time, and on SQLite, which records it to the second, by insertion order
  * within a second. Any run after this one, in any status, ends the stop. A run that still
- * has an open ask or wait is not listed, since the ask or wait is what needs someone and the
- * stop shows once they close, unless its stop names a refused start: a future wait is in no
- * list, so the refusal beside it would show nowhere.
+ * has an open ask is not listed: the ask is in attention and is what needs someone, and the
+ * stop shows once it closes. Nor is one with an open wait, unless its stop names a refused
+ * start: a wait not yet overdue is in no list, so the refusal beside it would show nowhere.
  */
 export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]> {
   const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
@@ -45,11 +45,11 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
            AND (n.started_at > r.started_at
              OR (n.started_at = r.started_at AND n.${tie} > r.${tie}))
        )
+       AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
+                        WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)
        AND (${getDialect().jsonText('r.metadata', `${ITEM_STOPPED_METADATA_KEY}.refused`)} IS NOT NULL
-         OR (NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
-                          WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)
-             AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
-                              WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)))
+         OR NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
+                         WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL))
      ORDER BY r.started_at, r.${tie}`
   );
   const runs: AttentionRead<WorkflowRun>[] = [];
