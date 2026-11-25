@@ -273,15 +273,23 @@ export async function stoppedItems(
       items.push(run);
       continue;
     }
-    const end = run.item_id === null ? null : await readHoldingItemEnd(store, run.item_id);
-    if (end !== null && !('type' in end)) continue;
-    // An unreadable merge row, like an unreadable end, does not hide the stop.
-    const merge = run.item_id === null ? null : await store.getItemMerge(run.item_id);
-    if (merge !== null && !('type' in merge)) continue;
+    if (await isItemDone(store, run.item_id)) continue;
     const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
     if (item !== null) items.push(item);
   }
   return items;
+}
+
+/**
+ * Whether item `itemId` needs nothing more: its end holds or its merge is recorded. An
+ * unreadable end or merge row reads as not done, so it does not hide the stop.
+ */
+async function isItemDone(store: StoppedItemStore, itemId: string | null): Promise<boolean> {
+  if (itemId === null) return false;
+  const end = await readHoldingItemEnd(store, itemId);
+  if (end !== null && !('type' in end)) return true;
+  const merge = await store.getItemMerge(itemId);
+  return merge !== null && !('type' in merge);
 }
 
 /** The store reads a lost preparation's queue item needs. */
