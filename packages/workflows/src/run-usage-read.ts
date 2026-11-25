@@ -117,7 +117,12 @@ function resolveReport(
     children,
     limitations: history.limitations,
   });
-  cache.set(runId, report);
+  // A cycle cut depends on the ancestor set. Caching it would make a later root
+  // in the same request reuse a report that was built for a different cut.
+  const cut = [...children.values()].some(
+    child => 'reason' in child && child.reason === 'child_cycle'
+  );
+  if (!cut) cache.set(runId, report);
   return { report };
 }
 

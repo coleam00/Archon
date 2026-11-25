@@ -244,17 +244,16 @@ function allContributions(contributions: readonly UsageContribution[]): UsageCon
 
 function unfinishedObservations(fold: DagUsageFold): DagUsageObservation[] {
   return fold.observations.filter(
-    start =>
+    (start, startAt) =>
       start.eventType === 'node_started' &&
       aiObservation(start, fold.observations) &&
       !fold.observations.some(
-        end =>
+        (end, endAt) =>
           end.path === start.path &&
           (executedObservation(end) || end.eventType === 'node_skipped') &&
-          (start.attemptId === undefined ||
-            end.attemptId === start.attemptId ||
-            (end.eventType === DEFERRED_NODE_USAGE_EVENT_TYPE &&
-              end.invocationId === start.invocationId))
+          (end.eventType === DEFERRED_NODE_USAGE_EVENT_TYPE
+            ? endAt > startAt && end.invocationId === start.invocationId
+            : start.attemptId === undefined || end.attemptId === start.attemptId)
       )
   );
 }
@@ -389,8 +388,22 @@ function attributedContributors(
   });
 }
 
-function contradictoryTerminals(fold: DagUsageFold): UsageLimitation[] {
-  const seen = new Map<string, DagUsageObservation>();
+function metricRecord(observation: DagUsageObservation, metric: UsageMetric): string {
+  const measurement = observation.measurement;
+  if (measurement === undefined) return '';
+  if (metric === 'usd') return JSON.stringify(measurement.costUsd);
+  const tokens = measurement.tokens;
+  if (tokens.source !== 'provider') return JSON.stringify(tokens);
+  return JSON.stringify({
+    source: tokens.source,
+    value: metric === 'inputTokens' ? tokens.value.input : tokens.value.output,
+    cachePartial: tokens.value.cachePartial,
+    callsPartial: tokens.value.callsPartial,
+  });
+}
+
+function contradictoryTerminals(fold: DagUsageFold, metric: UsageMetric): UsageLimitation[] {
+  const seen = new Map<string, string>();
   const limitations: UsageLimitation[] = [];
   for (const observation of fold.observations) {
     if (
@@ -400,13 +413,11 @@ function contradictoryTerminals(fold: DagUsageFold): UsageLimitation[] {
     )
       continue;
     const key = JSON.stringify([observation.path, observation.attemptId]);
+    const record = metricRecord(observation, metric);
     const previous = seen.get(key);
-    if (
-      previous !== undefined &&
-      JSON.stringify(previous.measurement) !== JSON.stringify(observation.measurement)
-    )
+    if (previous !== undefined && previous !== record)
       limitations.push({ runId: fold.runId, path: observation.path, reason: 'record_unreadable' });
-    seen.set(key, observation);
+    seen.set(key, record);
   }
   return limitations;
 }
@@ -511,7 +522,7 @@ function buildMetricCoverage(
   const limitations = [
     ...readLimitations,
     ...populationLimitations(run, fold),
-    ...contradictoryTerminals(fold),
+    ...contradictoryTerminals(fold, metric),
     ...evidence.limitations,
     ...child.limitations,
   ];
@@ -559,6 +570,22 @@ function buildMetricCoverage(
   if (totals[metric] === null) contributors = [];
   const uniqueContributors = uniqueUsageNodes(contributors);
   const partial = [...evidence.partial, ...child.reports.flatMap(report => report.partial)];
+  if (metric === 'usd') {
+    for (const contribution of allContributions(fold.usageContributions)) {
+      if (contribution.costPartial !== true || contribution.evidence === undefined) continue;
+      const node = { ...identity(run.id, contribution.evidence), partial: true as const };
+      if (
+        !partial.some(
+          item =>
+            item.runId === node.runId &&
+            item.path === node.path &&
+            item.invocationId === node.invocationId &&
+            item.attemptId === node.attemptId
+        )
+      )
+        partial.push(node);
+    }
+  }
   const legacyRecorded = allContributions(fold.usageContributions).flatMap(contribution => {
     const observation = contribution.evidence;
     return observation !== undefined &&

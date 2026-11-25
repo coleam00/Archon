@@ -75,6 +75,22 @@ describe('recorded usage coverage', () => {
     expect(formatUsageReport(result).join('\n')).not.toContain('completeness unknown');
   });
 
+  it('keeps token coverage complete when only a duplicate terminal cost disagrees', () => {
+    const record = agent('build', measured);
+    const again = finishNodeExecution(
+      record,
+      { status: 'completed' },
+      { ...measured, costUsd: 0.5 }
+    );
+    const result = report([serializeNodeStateRecord(record), serializeNodeStateRecord(again)]);
+    expect(result.coverage.usd.limitations.some(item => item.reason === 'record_unreadable')).toBe(
+      true
+    );
+    expect(result.coverage.inputTokens.state).toBe('complete');
+    expect(result.coverage.outputTokens.state).toBe('complete');
+    expect(result.coverage.inputTokens.aiNodes).not.toBeNull();
+  });
+
   it('separates unsupported cost from complete gross-token coverage', () => {
     const record = agent('review', { tokens: measured.tokens }, { provider: 'codex' });
     record.spend.costUsd = { source: 'unavailable', reason: 'unsupported' };
