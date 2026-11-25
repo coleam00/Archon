@@ -288,7 +288,7 @@ When the run-as user has no token, the fire and the started run are scrubbed as 
 
 A binding can declare which field of its start's event names the [item](/reference/cli/#items) the run is on, so a run that an event starts belongs to the issue or pull request the event is about. `item` holds the `field` and an optional fixed `prefix`; the key is the prefix followed by the field's value, with a number written in decimal. There is no expression: the engine reads one field and gives the key no other meaning.
 
-In a fire-only file, `item` sits beside `binding`, and `field` is a key of the fire's `--inputs`:
+In a fire-only file, `item` sits beside `binding`, and `field` is a key of the fire's event inputs, from `--inputs` or `--input`:
 
 ```json
 {
@@ -305,7 +305,7 @@ In a fire-only file, `item` sits beside `binding`, and `field` is a key of the f
 2. The binding's `item` mapping. A run that fires the binding while on another item still starts on the mapped item.
 3. The item of the run that fired it, as [items](/reference/cli/#items) describe.
 
-A fire whose `--inputs` lacks the field, or holds it empty or as anything but text or a number, is refused before anything is recorded or started, and the error names the binding and the field. A redelivery of a recorded `--delivery-id` keeps the item of its first acceptance.
+A fire whose event inputs lack the field, or hold it empty or as anything but text or a number, is refused before anything is recorded or started, and the error names the binding and the field. A redelivery of a recorded `--delivery-id` keeps the item of its first acceptance.
 
 A GitHub source plugin binding declares `item` beside `inputMapping`, and `field` is one of the plugin's event fields, checked against the selector's event kind when the configuration loads:
 
@@ -1374,9 +1374,9 @@ done < "$poll_dir/items.jsonl"
 
 The final drain also advances queued work on ticks with no items. Each run's own process admits the next queued start when it ends; the drain covers queued work that waits on something else, as [described above](#choose-a-resource-capacity-and-overlap-policy).
 
-`--inputs` reads a JSON object, including from `/dev/stdin` on Unix, and treats its values as event inputs. Each name must be declared by the workflow. Event inputs override `launch.inputs` literals; literals still pass through to workflows without `inputs:`. The local operator's access to the Archon installation is the trust boundary, so `fire` needs no signature.
+`--inputs` reads a JSON object, including from `/dev/stdin` on Unix, and treats its values as event inputs. `--input <name>=<value>`, repeated per input, sets the same event inputs from the command line, as text; a name given by both flags is refused. Each name must be declared by the workflow. Event inputs override `launch.inputs` literals; literals still pass through to workflows without `inputs:`. The local operator's access to the Archon installation is the trust boundary, so `fire` needs no signature.
 
-An identical key and inputs reuse the original receipt and still drain the retained receipt's host, even if the binding's run-as user has since been removed. Editing the binding does not start that delivery again. The digest covers `JSON.stringify` of the parsed event inputs, or `{}` when omitted, excluding binding literals. Whitespace differences in the JSON file do not matter; object key order does, so produce stable JSON (the recipe uses `jq -S`). Reusing a key with different inputs exits non-zero with a delivery conflict. Without `--delivery-id`, every fire records a new receipt, including when `--inputs` is supplied.
+An identical key and inputs reuse the original receipt and still drain the retained receipt's host, even if the binding's run-as user has since been removed. Editing the binding does not start that delivery again. The digest covers `JSON.stringify` of the parsed event inputs, or `{}` when omitted, excluding binding literals. Whitespace differences in the JSON file do not matter; object key order does, so produce stable JSON (the recipe uses `jq -S`), and give `--input` flags in a stable order. Reusing a key with different inputs exits non-zero with a delivery conflict. Without `--delivery-id`, every fire records a new receipt, including when `--inputs` is supplied.
 
 ### Server host
 
@@ -1411,7 +1411,7 @@ The server drains accepted and queued work. Re-polling sends a fresh timestamp b
 
 The receipt freezes the evaluated bindings and resolved inputs. The execution host later captures the workflow source and resolves the run configuration: on an item, the config the item's most recent run was started with, else any `configSource` file (see [Items](/reference/cli/#items)). Queue admission freezes that prepared source and configuration; editing live files afterward does not change queued work.
 
-An input mapped from the event, by CLI `--inputs`, a Standard Webhooks JSON Pointer, or a GitHub `field` mapping, reaches only a workflow that declares it under `inputs:`. Preparation rejects a binding that maps event values into a workflow without that declaration. Literal inputs you write into `launch.inputs` or a GitHub `literal` mapping pass through to a workflow without `inputs:`, as they do for a direct run. A workflow that declares `inputs:` rejects any undeclared name, literal or mapped.
+An input mapped from the event, by CLI `--inputs` or `--input`, a Standard Webhooks JSON Pointer, or a GitHub `field` mapping, reaches only a workflow that declares it under `inputs:`. Preparation rejects a binding that maps event values into a workflow without that declaration. Literal inputs you write into `launch.inputs` or a GitHub `literal` mapping pass through to a workflow without `inputs:`, as they do for a direct run. A workflow that declares `inputs:` rejects any undeclared name, literal or mapped.
 
 A process that stops during preparation leaves its recorded preparation owner visible; a `trigger fire` that waits a minute on such an owner prints its owner ID. The claim also records the preparing process (host, pid and an instance token). When that process ran on this host and no longer exists, `archon workflow attention` lists the start as `preparation_lost`, with the receipt, binding, workflow, item key and owner ID and the recovery commands; a preparer on another host, or one claimed by an older Archon that records no process, cannot be proven gone and is not listed. After verifying that exact process has stopped, use `archon trigger recover-preparation <receipt-id> <binding-id> --owner <recorded-owner-id> --yes`, then drain the configured host. A failed validation is recorded as rejected and requires a corrected new request.
 
