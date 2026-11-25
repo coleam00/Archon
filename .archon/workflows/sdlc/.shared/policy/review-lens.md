@@ -13,6 +13,10 @@ file after it, and where the two conflict, the project's line wins.
   dependencies with the project's own package manager in locked mode, never updating a
   lockfile. Any other scratch file you write, such as a probe script, a note or
   captured output, goes under the run's artifacts directory, never in the checkout.
+- **Write files with your file tool.** Write your report, your discoveries file and any
+  scratch note with the tool for writing a file, not a shell redirect or heredoc. A shell
+  command that writes outside the checkout asks for a permission nobody can grant during a
+  run, so the file is silently not written and your node fails for a missing report.
 - **A finding touches the change.** A defect that touches the change, on the path it
   changed, made reachable or visible by it, or a claim it makes false, is a finding,
   even when the contract never named it.
