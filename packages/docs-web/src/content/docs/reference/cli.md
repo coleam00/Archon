@@ -2531,12 +2531,11 @@ still fails the pass.
 
 Merged cleanup judges merges against `worktree.remote`, or `origin` when that is unset. A
 repository with neither, such as one with no remote, or with only remotes under other names,
-gets no merge judgment: `--merged` and the scheduled sweep keep each of its worktree
-environments and report it as skipped, with a reason that names `worktree.remote`. These are
-not failures and do not change the exit status. `--merged` prints the reason; the scheduled
-sweep's server log records only totals. Before it looks for a remote, the scheduled sweep
-still retires a registration whose worktree directory is gone and that holds no unpushed
-commit, as `path missing`.
+gets no merge judgment. A worktree environment that reaches the merge judgment in `--merged`
+or the scheduled sweep is kept instead and reported as skipped, with a reason that names
+`worktree.remote`. Checks that come earlier still apply first: the platform, missing-path and
+run-ownership rules above. These skips are not failures and do not change the exit status.
+`--merged` prints the reason; the scheduled sweep's server log records only totals.
 
 With `--json`, `--merged` prints one document, `{ "codebases": [...] }`. Each entry carries
 `codebaseId`, `repositoryUrl`, `path`, and a `kind`: `swept` with the sweep's `result`

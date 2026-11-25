@@ -49,12 +49,18 @@ export async function resolveRepoGitContext(
   const repoConfig = await loadRepoConfig(cwd);
   const remote = await resolveMergeRemote(repoPath, repoConfig);
   if (!remote) throw new NoMergeRemoteError();
-  const configured = repoConfig.worktree?.baseBranch?.trim();
-  if (configured) {
-    return { remoteMainRef: toBranchName(`${remote}/${configured}`), remote };
-  }
-  const branch = await getDefaultBranch(repoPath, remote);
-  return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
+  return { remoteMainRef: await remoteBaseRef(repoPath, repoConfig, remote), remote };
+}
+
+/** The remote-qualified base ref on an already selected remote. */
+async function remoteBaseRef(
+  repoPath: RepoPath,
+  repoConfig: Awaited<ReturnType<typeof loadRepoConfig>>,
+  remote: string
+): Promise<BranchName> {
+  const branch =
+    repoConfig.worktree?.baseBranch?.trim() || (await getDefaultBranch(repoPath, remote));
+  return toBranchName(`${remote}/${branch}`);
 }
 
 /**
@@ -169,8 +175,8 @@ export async function judgeBranchForRemoval(input: MergeJudgmentInput): Promise<
 
 async function gitProvesMerged(input: MergeJudgmentInput, tips: LocalTips): Promise<boolean> {
   if (!tips.refExists) return false;
-  const { repoPath, branchName, worktreePath } = input;
-  const { remoteMainRef } = await resolveRepoGitContext(repoPath, repoPath);
+  const { repoPath, branchName, worktreePath, remote } = input;
+  const remoteMainRef = await remoteBaseRef(repoPath, await loadRepoConfig(repoPath), remote);
   const branchMerged =
     (await isBranchMerged(repoPath, branchName, remoteMainRef)) ||
     (await isPatchEquivalent(repoPath, branchName, remoteMainRef));
