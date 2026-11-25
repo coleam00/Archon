@@ -363,6 +363,18 @@ export function shortRunIdNeedsProject(runId: string): string {
   );
 }
 
+/** What `resolveRunIdArg` does with a prefix it cannot resolve; see there. */
+type PrefixMiss = 'pass-through' | 'require-match' | 'refuse-outside-project';
+
+/** A prefix from a cwd in no registered project: refused, or passed on to the exact lookup. */
+function prefixOutsideProject(runId: string, onPrefixMiss: PrefixMiss): string {
+  if (onPrefixMiss === 'require-match') {
+    throw new Error(`Cannot resolve run id prefix '${runId}' outside a registered project.`);
+  }
+  if (onPrefixMiss === 'refuse-outside-project') throw new Error(shortRunIdNeedsProject(runId));
+  return runId;
+}
+
 /**
  * Resolve a run-id argument that may be the 8-char short id printed by
  * `workflow runs` into the full run id. Mirrors the chat `manage_run` tool's
@@ -387,7 +399,7 @@ export async function resolveRunIdArg(
   host: WorkflowHost,
   runId: string,
   cwd?: string,
-  onPrefixMiss: 'pass-through' | 'require-match' | 'refuse-outside-project' = 'pass-through',
+  onPrefixMiss: PrefixMiss = 'pass-through',
   codebaseId?: string
 ): Promise<string> {
   const requirePrefixMatch = onPrefixMiss === 'require-match';
@@ -405,13 +417,7 @@ export async function resolveRunIdArg(
     (cwd === undefined
       ? undefined
       : (await findCodebaseForCheckoutPath(cwd, host.records.codebases))?.id);
-  if (!resolvedCodebaseId) {
-    if (requirePrefixMatch) {
-      throw new Error(`Cannot resolve run id prefix '${runId}' outside a registered project.`);
-    }
-    if (onPrefixMiss === 'refuse-outside-project') throw new Error(shortRunIdNeedsProject(runId));
-    return runId;
-  }
+  if (!resolvedCodebaseId) return prefixOutsideProject(runId, onPrefixMiss);
   const matches = await findProjectRunsByReference(host.deps.store, runId, resolvedCodebaseId);
   if (matches.length > 1) {
     const candidates = matches.map(match => `  ${match.id}`).join('\n');
