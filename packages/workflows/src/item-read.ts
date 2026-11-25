@@ -164,10 +164,11 @@ export const itemRunSchema = z.object({
    */
   resultCommit: z.string().nullable(),
   /**
-   * How large the change was when the run completed: files changed and lines added and
-   * removed from `base`, the commit the item's checkout was cut from, to `commit`, the clean
-   * commit it ended on, recorded then. Null when the checkout ended on no clean commit, no
-   * cut-from is recorded for it (an in-place run), or the run was recorded before sizes were.
+   * How large the change was when the run completed or failed: files changed and lines
+   * added and removed from `base`, the commit the item's work was cut from, to `commit`, the
+   * clean commit it ended on, recorded then. Null when the checkout ended on no clean commit,
+   * no cut-from is known for its work (an in-place run, or a checkout reused outside a
+   * hand-off), or the run was recorded before sizes were.
    */
   changeSize: changeSizeSchema.nullable(),
 });
@@ -399,7 +400,10 @@ function readResult(
   events: readonly WorkflowEventRow[]
 ): Pick<ItemRun, 'hasResult' | 'resultCommit' | 'changeSize'> {
   try {
-    const record = run.status === 'completed' ? getTerminalRecord(run.status, events) : null;
+    const record =
+      run.status === 'completed' || run.status === 'failed'
+        ? getTerminalRecord(run.status, events)
+        : null;
     return {
       hasResult: readCompletedRunResult(run, events).kind === 'result',
       resultCommit: resultCommitOf(record),
@@ -412,14 +416,19 @@ function readResult(
   }
 }
 
-/** The `workflow_completed` events of the completed runs, which hold their results. */
+/**
+ * The terminal events of the completed and failed runs: a completed run's record holds its
+ * result, and either holds the change size the run ended with.
+ */
 async function completionEvents(
   source: ItemReadSource,
   runs: readonly WorkflowRun[]
 ): Promise<ReadonlyMap<string, WorkflowEventRow[]>> {
-  const completedIds = runs.filter(run => run.status === 'completed').map(run => run.id);
-  if (completedIds.length === 0) return new Map();
-  return source.store.listEventsForRuns(completedIds, ['workflow_completed']);
+  const endedIds = runs
+    .filter(run => run.status === 'completed' || run.status === 'failed')
+    .map(run => run.id);
+  if (endedIds.length === 0) return new Map();
+  return source.store.listEventsForRuns(endedIds, ['workflow_completed', 'workflow_failed']);
 }
 
 async function itemRun(

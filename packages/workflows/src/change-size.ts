@@ -1,12 +1,16 @@
 /**
  * How large an item run's change is at the clean commit its checkout ended on (#6261),
- * measured once when the run completes. Recording it then keeps an item read free of git,
+ * measured once when the run completes or fails. Recording it then keeps an item read free of git,
  * survives a deleted worktree, and keeps an old run's size from changing when a branch moves.
  */
 import { createLogger } from '@archon/paths';
 import { runGit } from './checkout-observation';
-import { isAttentionDegraded } from './schemas/attention-degraded';
-import type { ChangeSize } from './schemas/terminal-record';
+import { readCheckoutHandoff } from './schemas/resource-start';
+import {
+  CHANGE_SIZE_METADATA_KEY,
+  type ChangeSize,
+  changeSizeSchema,
+} from './schemas/terminal-record';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 
@@ -16,23 +20,24 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-type ItemRunsStore = Pick<IWorkflowStore, 'getItem' | 'getItemRuns'>;
+type RunReader = Pick<IWorkflowStore, 'getWorkflowRun'>;
+type SizedRun = Pick<WorkflowRun, 'id' | 'checkout_baseline' | 'metadata'>;
 
 /**
- * The change at `endCommit` against the commit the run's checkout was cut from. Only a run
- * of an item is measured: nothing else reads the size. Returns undefined, never zeros, when
- * the run has no item, its checkout ended on no clean commit, or no cut-from is recorded
- * for its checkout. Never throws.
+ * The change at `endCommit` against the commit the run's work was cut from. Only a run of
+ * an item is measured: nothing else reads the size. Returns undefined, never zeros, when the
+ * run has no item, its checkout ended on no clean commit, or no cut-from is known for its
+ * work. Never throws.
  */
 export async function measureChangeSize(
-  store: ItemRunsStore,
-  run: Pick<WorkflowRun, 'id' | 'item_id' | 'working_path' | 'checkout_baseline'>,
+  store: RunReader,
+  run: SizedRun & Pick<WorkflowRun, 'item_id'>,
   cwd: string,
   endCommit: string | null
 ): Promise<ChangeSize | undefined> {
   if (run.item_id === null || endCommit === null) return undefined;
   try {
-    const base = await cutFromOf(store, run, run.item_id);
+    const base = await workBase(store, run);
     if (base === undefined) return unavailable(run.id, 'no_cut_from');
     const diff = await runGit(cwd, [
       'diff',
@@ -58,33 +63,21 @@ function unavailable(workflowRunId: string, step: string, code?: number): undefi
 }
 
 /**
- * The commit the run's checkout was cut from. Only the run that created a worktree records
- * it, so a later run of the item on the same checkout takes it from the latest run of the
- * item at that path that did: the size of a reused checkout keeps one base across rounds.
+ * The commit the run's work was cut from. A run started on another run's checkout
+ * (`checkout_handoff`) measures from the base of the run whose estate holds that branch,
+ * so a read-only check on its own copy, cut at the build's commit, and a later build on the
+ * build's branch both measure from where the first build's branch was cut. Otherwise it is
+ * the cut-from this run recorded when it created its checkout; a run that reused or adopted
+ * a checkout outside a hand-off has none.
  */
-async function cutFromOf(
-  store: ItemRunsStore,
-  run: Pick<WorkflowRun, 'id' | 'working_path' | 'checkout_baseline'>,
-  itemId: string
-): Promise<string | undefined> {
-  const own = cutFromCommit(run);
-  if (own !== undefined || run.working_path === null) return own;
-  const item = await store.getItem(itemId);
-  if (item === null) return undefined;
-  const read = await store.getItemRuns(item.projectKey, item.key);
-  const runs = (read?.runs ?? []).filter(
-    (other): other is WorkflowRun =>
-      !isAttentionDegraded(other) && other.id !== run.id && other.working_path === run.working_path
-  );
-  for (const other of runs.reverse()) {
-    const cutFrom = cutFromCommit(other);
-    if (cutFrom !== undefined) return cutFrom;
-  }
-  return undefined;
-}
-
-function cutFromCommit(run: Pick<WorkflowRun, 'checkout_baseline'>): string | undefined {
-  return run.checkout_baseline?.kind === 'git' ? run.checkout_baseline.cutFromCommit : undefined;
+async function workBase(store: RunReader, run: SizedRun): Promise<string | undefined> {
+  const handoff = readCheckoutHandoff(run);
+  if (handoff === undefined)
+    return run.checkout_baseline?.kind === 'git' ? run.checkout_baseline.cutFromCommit : undefined;
+  const source = await store.getWorkflowRun(handoff.runId);
+  if (source === null) return undefined;
+  const recorded = changeSizeSchema.safeParse(source.metadata[CHANGE_SIZE_METADATA_KEY]);
+  return recorded.success ? recorded.data.base : workBase(store, source);
 }
 
 /**

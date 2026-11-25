@@ -18,6 +18,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { itemReadSchema } from '@archon/workflows/item-read';
 
 const CLI_PATH = resolve(import.meta.dir, '..', 'cli.ts');
 const DEADLINE_MS = 60_000;
@@ -350,6 +351,21 @@ if [ "$(git rev-list --count HEAD)" -ge 3 ]; then printf '{"outcome": "pass"}'; 
       lane: 'continue',
     });
     expect(metadata(check2).checkout_handoff).toMatchObject({ runId: build2?.id, lane: 'copy' });
+
+    // Every run measures from where the first build's branch was cut: a check on its own
+    // copy, and the land after it, show the size of the build they took.
+    const read = await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']);
+    const sizes = itemReadSchema.parse(JSON.parse(read.stdout)).runs.map(run => run.changeSize);
+    const base = fixture.git('merge-base', 'main', branch);
+    const first = {
+      base,
+      commit: fixture.git('rev-parse', `${branch}~1`),
+      files: 1,
+      added: 1,
+      removed: 0,
+    };
+    const second = { base, commit: tip, files: 2, added: 2, removed: 0 };
+    expect(sizes).toEqual([first, first, second, second, second]);
   }, 120_000);
 
   test('a branch that moved after the ended run is refused, not built on', async () => {

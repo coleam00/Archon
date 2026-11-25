@@ -77,10 +77,10 @@ export type ResultCommit = z.infer<typeof resultCommitSchema>;
 export const CHANGE_SIZE_METADATA_KEY = 'change_size';
 /**
  * How large an item run's change is at the clean commit its checkout ended on (#6261): the
- * files changed and lines added and removed from `base`, the commit the checkout was cut
- * from, to `commit`. A later run on the same checkout keeps the base the creating run
- * recorded. Recorded only on a completed run of an item whose checkout ended clean at a
- * commit with a recorded cut-from, so absent means unknown, never zero. Renames are
+ * files changed and lines added and removed from `base`, the commit the item's work was cut
+ * from, to `commit`. A run started on another run's checkout keeps the base of the run whose
+ * branch it took. Recorded on a completed or failed run of an item whose checkout ended clean
+ * at a commit with a known cut-from, so absent means unknown, never zero. Renames are
  * detected, as `git diff` does by default. A binary file counts as a file with no lines.
  */
 export const changeSizeSchema = z.object({
@@ -174,8 +174,9 @@ export const terminalRecordSchema = z.object({
    */
   result_commit: resultCommitSchema.optional(),
   /**
-   * Absent on records written before #6261 and whenever no size was recorded: the run has
-   * no item, its checkout ended on no clean commit, or no cut-from is recorded for it.
+   * On a completed or failed run. Absent on records written before #6261 and whenever no size
+   * was recorded: the run has no item, its checkout ended on no clean commit, or no cut-from
+   * is known for its work.
    */
   change_size: changeSizeSchema.optional(),
 });

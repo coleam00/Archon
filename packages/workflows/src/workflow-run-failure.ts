@@ -1,6 +1,7 @@
 import type { WorkflowRun } from './schemas/workflow-run';
 import { isTerminalRunStatus } from './schemas/workflow-run';
 import { PAUSE_CAUSE_METADATA_KEY } from './schemas/pause-cause';
+import { CHANGE_SIZE_METADATA_KEY, type ChangeSize } from './schemas/terminal-record';
 import type { RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
 import { DETACHED_LAUNCH_METADATA_KEY, executionClaim } from './store';
 
@@ -13,6 +14,8 @@ export interface WorkflowRunFailureOptions {
   pendingLaunchToken?: string;
   /** Restrict failure to this running claim; null matches the initial execution. Mismatches do not write. */
   expectedExecutionClaim?: string | null;
+  /** The item run's change size at the clean commit its checkout ended on (#6261). */
+  changeSize?: ChangeSize;
 }
 
 export function prepareWorkflowRunFailure(
@@ -43,7 +46,9 @@ export function prepareWorkflowRunFailure(
   delete run.metadata.scheduled_resume;
   delete run.metadata.stop_reason;
   delete run.metadata[PAUSE_CAUSE_METADATA_KEY];
+  delete run.metadata[CHANGE_SIZE_METADATA_KEY];
   run.metadata.error = error;
+  if (options?.changeSize) run.metadata[CHANGE_SIZE_METADATA_KEY] = options.changeSize;
   if (options?.exitReason)
     run.metadata.stop_reason = {
       reason: options.exitReason,

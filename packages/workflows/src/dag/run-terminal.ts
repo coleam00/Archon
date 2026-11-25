@@ -15,11 +15,13 @@ import { keptAsksResult, stoppedItem } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import {
   CHANGE_SIZE_METADATA_KEY,
+  type ChangeSize,
   RESULT_COMMIT_METADATA_KEY,
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
 } from '../schemas/terminal-record';
-import { readCompletingResult, sampleResultCommit } from '../run-result';
+import { readCompletingResult, resultCommitFromSample, sampleResultCommit } from '../run-result';
+import { sampleCheckout } from '../checkout-observation';
 import { measureChangeSize } from '../change-size';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
@@ -361,6 +363,14 @@ async function failOnNodeOutcome(
   await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
     workflowId: workflowRun.id,
   });
+  // A build can commit before a later node fails: the failed run still ended at that commit.
+  const ended = resultCommitFromSample(await sampleCheckout(ctx.cwd, ctx.execContext));
+  const changeSize = await measureChangeSize(
+    deps.store,
+    workflowRun,
+    ctx.cwd,
+    ended.held ? ended.commit : null
+  );
   await failRun(
     deps,
     workflowRun,
@@ -368,7 +378,8 @@ async function failOnNodeOutcome(
     failMsg,
     // A first-node failure completes nothing, but it is still a node failure.
     noneCompleted && !anyFailed ? 'no_nodes_completed' : 'node_error',
-    noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail'
+    noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail',
+    changeSize
   );
 }
 
@@ -524,7 +535,8 @@ async function completeRun(
             ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
             : {}),
           [RESULT_COMMIT_METADATA_KEY]: resultCommit,
-          ...(changeSize ? { [CHANGE_SIZE_METADATA_KEY]: changeSize } : {}),
+          // Written even when absent, so a size an earlier failed pass left does not stay.
+          [CHANGE_SIZE_METADATA_KEY]: changeSize ?? null,
           // An asks-settled binding reads the result when the asks settle, by then from
           // the row alone. Gated on the asks a top-level run declares, like the asks.
           ...keptAsksResult(result, returnedValue),
@@ -714,12 +726,16 @@ export async function failRun(
   workflowName: string,
   failMsg: string,
   exitReason: RunExitReason,
-  site: string
+  site: string,
+  changeSize?: ChangeSize
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
     const { failed, failureKind } = await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason }),
+      deps.store.failWorkflowRun(workflowRun.id, failMsg, {
+        exitReason,
+        ...(changeSize ? { changeSize } : {}),
+      }),
       { workflowRunId: workflowRun.id, site }
     );
     if (failed) {

@@ -355,11 +355,14 @@ function readResultCommit(run: Pick<WorkflowRun, 'status' | 'metadata'>): Result
   return value === undefined ? undefined : resultCommitSchema.parse(value);
 }
 
-/** The change size the executor stored beside the result commit; parsed like it. */
+/**
+ * The change size the executor stored when the run completed or failed. Null is a
+ * completion that measured none. A malformed value throws, like the result commit.
+ */
 function readChangeSize(run: Pick<WorkflowRun, 'status' | 'metadata'>): ChangeSize | undefined {
-  if (run.status !== 'completed') return undefined;
+  if (run.status !== 'completed' && run.status !== 'failed') return undefined;
   const value = run.metadata?.[CHANGE_SIZE_METADATA_KEY];
-  return value === undefined ? undefined : changeSizeSchema.parse(value);
+  return value == null ? undefined : changeSizeSchema.parse(value);
 }
 
 function selectRecordedReturn(folded: NodeEventFold): TerminalRecord['returns'] {

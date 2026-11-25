@@ -29,6 +29,7 @@ import {
 } from '@archon/workflows/store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
+import { CHANGE_SIZE_METADATA_KEY } from '@archon/workflows/schemas/terminal-record';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
@@ -472,19 +473,27 @@ export async function failWorkflowRun(
   error: string,
   options: NonNullable<Parameters<IWorkflowStore['failWorkflowRun']>[2]> = {}
 ): ReturnType<IWorkflowStore['failWorkflowRun']> {
-  const { exitReason, signal, pendingLaunchToken, expectedExecutionClaim, pendingOnly } = options;
+  const {
+    exitReason,
+    signal,
+    pendingLaunchToken,
+    expectedExecutionClaim,
+    pendingOnly,
+    changeSize,
+  } = options;
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
   // ran again. A previous failure's copy is removed before the merge, since a run can
   // reach 'running' again carrying a stale stop reason (resume, or a fan-out cancel
   // recovery) and a new failure need not write one. A failed run is not paused at
-  // anything, so its last pause cause goes too.
+  // anything, so its last pause cause goes too, and so does an earlier pass's change size.
   const metadataWithoutPriorFailure = dialect.jsonRemove(
     'metadata',
     'scheduled_resume',
     RUN_STOP_REASON_METADATA_KEY,
-    PAUSE_CAUSE_METADATA_KEY
+    PAUSE_CAUSE_METADATA_KEY,
+    CHANGE_SIZE_METADATA_KEY
   );
   const claimPredicate =
     expectedExecutionClaim === undefined
@@ -511,6 +520,7 @@ export async function failWorkflowRun(
           id,
           JSON.stringify({
             error,
+            ...(changeSize !== undefined ? { [CHANGE_SIZE_METADATA_KEY]: changeSize } : {}),
             ...(exitReason !== undefined
               ? {
                   [RUN_STOP_REASON_METADATA_KEY]: {

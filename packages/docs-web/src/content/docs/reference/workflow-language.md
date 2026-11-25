@@ -1855,10 +1855,10 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
 get a value from it, `resultCommit`: the commit its result holds at, and `changeSize`: how
-large the change was when the run completed (`files`, `added`, `removed`) from `base`, the
-commit the item's checkout was cut from, to `commit`, the clean commit it ended on.
-`changeSize` is `null` when the checkout ended on no clean commit or has no recorded cut-from,
-never zeros.
+large the change was when the run completed or failed (`files`, `added`, `removed`) from
+`base`, the commit the item's work was cut from, to `commit`, the clean commit it ended on.
+A run started on another run's checkout keeps that run's base. `changeSize` is `null` when
+the checkout ended on no clean commit or no cut-from is known for its work, never zeros.
 
 ### The result that holds at this run's commit
 

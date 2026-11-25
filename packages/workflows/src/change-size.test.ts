@@ -36,13 +36,13 @@ function commit(dir: string): string {
   return git(dir, 'rev-parse', 'HEAD');
 }
 
-type Run = Pick<WorkflowRun, 'id' | 'item_id' | 'working_path' | 'checkout_baseline'>;
+type Run = Pick<WorkflowRun, 'id' | 'item_id' | 'checkout_baseline' | 'metadata'>;
 
-function itemRun(id: string, path: string, cutFromCommit?: string): Run {
+function itemRun(id: string, cutFromCommit?: string, metadata: Run['metadata'] = {}): Run {
   return {
     id,
     item_id: 'item-1',
-    working_path: path,
+    metadata,
     checkout_baseline: {
       kind: 'git',
       sampledAt: '2026-11-25T10:00:00.000Z',
@@ -54,15 +54,23 @@ function itemRun(id: string, path: string, cutFromCommit?: string): Run {
   };
 }
 
-/** A store holding the item's runs, oldest first. */
+/** A run started on `source`'s checkout, as a binding with `checkout: ended-run` starts it. */
+function handedOn(
+  id: string,
+  source: Run,
+  commit: string,
+  lane: 'copy' | 'continue',
+  cutFromCommit?: string
+): Run {
+  return itemRun(id, cutFromCommit, {
+    checkout_handoff: { runId: source.id, branch: 'archon/task-1', commit, lane },
+  });
+}
+
+/** A store that reads back the given runs. */
 function store(runs: Run[]) {
   return {
-    getItem: async () => ({ id: 'item-1', projectKey: 'acme/web', key: 'issue-1' }),
-    getItemRuns: async () => ({
-      item: { id: 'item-1', projectKey: 'acme/web', key: 'issue-1' },
-      runs: runs as WorkflowRun[],
-      descendantIds: [],
-    }),
+    getWorkflowRun: async (id: string) => (runs.find(run => run.id === id) as WorkflowRun) ?? null,
   };
 }
 
@@ -74,7 +82,7 @@ describe('measureChangeSize', () => {
     writeFileSync(join(dir, 'a.txt'), lines(40));
     writeFileSync(join(dir, 'image.bin'), Buffer.from([0, 1, 2, 0, 255]));
     const head = commit(dir);
-    const run = itemRun('run-1', dir, cutFrom);
+    const run = itemRun('run-1', cutFrom);
 
     expect(await measureChangeSize(store([run]), run, dir, head)).toEqual({
       base: cutFrom,
@@ -86,23 +94,35 @@ describe('measureChangeSize', () => {
     });
   });
 
-  test('a later run on the same checkout keeps the cut-from the creating run recorded', async () => {
+  test('a run on a handed-on checkout measures from where the build it took was cut', async () => {
     const { dir, cutFrom } = repo();
     writeFileSync(join(dir, 'a.txt'), lines(40));
     const head = commit(dir);
-    const creator = itemRun('run-1', dir, cutFrom);
-    const elsewhere = itemRun('run-2', '/elsewhere', head);
-    const later = itemRun('run-3', dir);
+    const build = itemRun('build-1', cutFrom);
+    // A read-only check works on its own copy, cut at the build's commit.
+    const check = handedOn('check-1', build, head, 'copy', head);
+    const runs = store([build, check]);
 
-    expect(
-      await measureChangeSize(store([creator, elsewhere, later]), later, dir, head)
-    ).toMatchObject({ base: cutFrom, added: 40 });
+    expect(await measureChangeSize(runs, check, dir, head)).toMatchObject({
+      base: cutFrom,
+      added: 40,
+    });
+    // A later stage takes the size the run before it recorded as its base.
+    const recorded = itemRun('build-2', undefined, {
+      change_size: { base: cutFrom, commit: head, files: 1, added: 40, removed: 0 },
+    });
+    const land = handedOn('land-1', recorded, head, 'continue');
+    expect(await measureChangeSize(store([recorded, land]), land, dir, head)).toMatchObject({
+      base: cutFrom,
+      added: 40,
+    });
   });
 
   test('records no size, not zero, without an item, a clean end commit or a cut-from', async () => {
     const { dir, cutFrom } = repo();
-    const own = itemRun('run-1', dir, cutFrom);
-    const inPlace = itemRun('run-2', dir);
+    const own = itemRun('run-1', cutFrom);
+    // A run in place, or on a checkout reused outside a hand-off, has no cut-from.
+    const inPlace = itemRun('run-2');
 
     expect(await measureChangeSize(store([own]), { ...own, item_id: null }, dir, cutFrom)).toBe(
       undefined

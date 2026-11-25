@@ -638,14 +638,15 @@ test('a land stage merges the commit its approval was read at, not where its che
   expect(await landed()).toBe(x);
 }, 240_000);
 
-// Adds `lines` lines to `file` and commits them, removing `drop` when it is set. It
-// declares no `returns:`: a run that only commits still has a size.
+// Adds `lines` lines to `file` and commits them, removing `drop` when it is set, then fails
+// when `fail` is set. It declares no `returns:`: a run that only commits still has a size.
 const BUILD = `name: build
 description: Add lines to the change.
 inputs:
   file: { required: true }
   lines: { required: true }
   drop: { default: '' }
+  fail: { default: '' }
 nodes:
   - id: write
     bash: |
@@ -653,9 +654,13 @@ nodes:
       if [ -n "$INPUTS_DROP" ]; then git rm -q "$INPUTS_DROP"; fi
       git add -A
       git -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m build
+  - id: after
+    depends_on: [write]
+    bash: |
+      if [ -n "$INPUTS_FAIL" ]; then exit 1; fi
 `;
 
-// Returns the sizes \`item()\` reads for the item's earlier runs.
+// Returns each earlier run's size as \`item()\` reads it.
 const SIZES = `name: sizes
 description: Read the item's change sizes.
 mutates_checkout: false
@@ -665,16 +670,16 @@ nodes:
     runtime: bun
     script: |
       import { emit, item } from 'archon:script';
-      emit({ added: (item()?.runs ?? []).map(run => run.changeSize?.added ?? null) });
-    output_format: { type: object, properties: { added: { type: array } }, required: [added] }
+      emit({ sizes: (item()?.runs ?? []).map(run => run.changeSize) });
+    output_format: { type: object, properties: { sizes: { type: array } }, required: [sizes] }
 `;
 
 test('each run that ended at a commit shows the size of its change from where the work was cut', async () => {
   const fixture = await makeFixture('change-size', { build: BUILD, review: REVIEW, sizes: SIZES });
-  const git = (cwd: string, ...args: string[]): string => {
+  const git = (...args: string[]): string => {
     const result = Bun.spawnSync(
       ['git', '-c', 'user.name=test', '-c', 'user.email=test@example.com', ...args],
-      { cwd }
+      { cwd: fixture.projectRoot }
     );
     if (result.exitCode !== 0) throw new Error(result.stderr.toString());
     return result.stdout.toString().trim();
@@ -682,43 +687,33 @@ test('each run that ended at a commit shows the size of its change from where th
   const root = fixture.projectRoot;
   writeFileSync(join(root, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: main\n');
   writeFileSync(join(root, 'base.txt'), 'base\n');
-  git(root, 'symbolic-ref', 'HEAD', 'refs/heads/main');
-  git(root, 'add', '-A');
-  git(root, 'commit', '-q', '-m', 'base');
-  const cutFrom = git(root, 'rev-parse', 'HEAD');
-  const item = (workflow: string, ...inputs: string[]) =>
-    fixture.cli([
-      ...run(workflow, ...inputs).filter(arg => arg !== '--no-worktree'),
-      '--branch',
-      'feature',
-    ]);
+  git('symbolic-ref', 'HEAD', 'refs/heads/main');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'base');
+  const cutFrom = git('rev-parse', 'HEAD');
+  const inWorktree = (workflow: string, ...inputs: string[]) =>
+    fixture.attempt(run(workflow, ...inputs).filter(arg => arg !== '--no-worktree'));
 
-  await item('build', 'file=a.txt', 'lines=40');
-  // The base moves on after the work was cut; the size does not count it.
-  writeFileSync(join(root, 'later-on-main.txt'), 'later\n');
-  git(root, 'add', '-A');
-  git(root, 'commit', '-q', '-m', 'main moves');
-  await item('build', 'file=b.txt', 'lines=80', 'drop=base.txt');
-  // A review changes nothing: it shows the size the build before it left.
-  await item('review');
-  await item('sizes');
-
+  // Each start cuts its own worktree from main.
+  expect((await inWorktree('build', 'file=a.txt', 'lines=40', 'drop=base.txt')).exitCode).toBe(0);
+  // A build that commits and then fails still ended at its commit.
+  expect((await inWorktree('build', 'file=b.txt', 'lines=7', 'fail=yes')).exitCode).not.toBe(0);
+  expect((await inWorktree('sizes')).exitCode).toBe(0);
   // A run in place has no cut-from to measure from, so it shows no size.
   await fixture.cli(run('review'));
 
   const runs = await itemRuns(fixture);
-  const built = { base: cutFrom, files: 3, added: 120, removed: 1 };
-  expect(runs.map(read => [read.workflow, read.changeSize])).toEqual([
-    ['build', expect.objectContaining({ base: cutFrom, files: 1, added: 40, removed: 0 })],
-    ['build', expect.objectContaining(built)],
-    ['review', expect.objectContaining(built)],
-    ['sizes', expect.objectContaining(built)],
-    ['review', null],
+  const built = { base: cutFrom, files: 2, added: 40, removed: 1 };
+  const failed = { base: cutFrom, files: 1, added: 7, removed: 0 };
+  expect(runs.map(read => [read.workflow, read.status, read.changeSize])).toEqual([
+    ['build', 'completed', { ...built, commit: expect.any(String) }],
+    ['build', 'failed', { ...failed, commit: expect.any(String) }],
+    ['sizes', 'completed', { base: cutFrom, commit: cutFrom, files: 0, added: 0, removed: 0 }],
+    ['review', 'completed', null],
   ]);
-  expect(runs[2]?.changeSize).toEqual(runs[1]?.changeSize ?? null);
   // A script's item() read carries the sizes the earlier runs recorded.
-  expect((await detail(fixture, runs[3]?.id)).terminal_record.returns.value).toEqual({
-    added: [40, 120, 120, null],
+  expect((await detail(fixture, runs[2]?.id)).terminal_record.returns.value).toEqual({
+    sizes: [runs[0]?.changeSize, runs[1]?.changeSize, null],
   });
 
   // The read takes the recorded sizes and runs no diff.
@@ -728,7 +723,12 @@ test('each run that ended at a commit shows the size of its change from where th
   });
   expect(read.exitCode).toBe(0);
   expect(existsSync(trace) ? readFileSync(trace, 'utf8') : '').not.toContain('git diff');
-  const text = read.stdout;
-  expect(text).toContain('change: 1 file, +40 -0');
-  expect(text).toContain('change: 3 files, +120 -1');
+  const lines = read.stdout.split('\n');
+  // The first `change:` line after the run's own line is its size.
+  const sizeLine = (id: string | undefined) =>
+    lines
+      .slice(lines.findIndex(line => line.includes(String(id).slice(0, 8))))
+      .find(line => line.trim().startsWith('change:')) ?? '';
+  expect(sizeLine(runs[0]?.id)).toContain('2 files, +40 -1');
+  expect(sizeLine(runs[1]?.id)).toContain('+7 -0');
 }, 240_000);
