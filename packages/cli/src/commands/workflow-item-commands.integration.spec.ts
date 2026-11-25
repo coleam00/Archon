@@ -1200,6 +1200,13 @@ test.serial(
         ['item-2', 'merged'],
       ],
     });
+    // The text read names the state and the member that keeps it open.
+    const text = await invoke(host => workflowRunsCommand(host, projectRoot, { item: 'order-1' }));
+    expect(text.exitCode, text.stderr).toBe(0);
+    const line = text.stdout.split('\n').find(row => row.startsWith('Work order'));
+    expect(line).toContain('open');
+    expect(line).toContain('item-1');
+    expect(line).not.toContain('item-2');
 
     // Ending the open member closes the order with no run on it.
     const member = (await readItemJson('item-1')).item;
@@ -1215,6 +1222,13 @@ test.serial(
     });
     expect(ended.status, ended.stderr).toBe(0);
     expect((await order()).state).toBe('done');
+    // Reading it done wrote nothing on the order.
+    expect(
+      rows(
+        `SELECT 1 FROM remote_agent_item_ends e JOIN remote_agent_items i
+           ON i.id = e.item_id WHERE i.key = 'order-1'`
+      )
+    ).toEqual([]);
 
     // A newer run on the ended member reopens it, and with it the order.
     await seedRuns(['item-1']);

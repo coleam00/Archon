@@ -950,17 +950,70 @@ describe('reading a work order', () => {
     expect(read.workOrder?.state).toBe('unknown');
   });
 
-  test('a member that is a work order follows its own members, and a cycle ends', async () => {
-    // a is part of the order; b and c are part of a; the order is part of c, a cycle.
-    const links = [partOf(a, order), partOf(b, a), partOf(c, a), partOf(order, c)];
-    expect((await readOrder({ links, merged: [b.id] })).workOrder).toEqual({
+  test('a member that is a work order follows its own members, not its own merge', async () => {
+    // b is part of a, and a is part of the order; a merge recorded on a does not close it.
+    const links = [partOf(a, order), partOf(b, a)];
+    expect((await readOrder({ links, merged: [a.id] })).workOrder).toEqual({
       state: 'open',
       members: [{ item: a, state: 'open' }],
     });
-    expect((await readOrder({ links, merged: [b.id, c.id] })).workOrder).toEqual({
+    expect((await readOrder({ links, merged: [b.id] })).workOrder).toEqual({
       state: 'done',
       members: [{ item: a, state: 'done' }],
     });
+  });
+
+  test('a part_of cycle reads unknown, whatever order its links were recorded in', async () => {
+    // a and b are part of each other and of the order; c, part of b, merged.
+    const cycle = [partOf(a, b), partOf(b, a), partOf(c, b)];
+    const one = await readOrder({
+      links: [partOf(a, order), partOf(b, order), ...cycle],
+      merged: [c.id],
+    });
+    const other = await readOrder({
+      links: [partOf(b, order), partOf(a, order), ...cycle],
+      merged: [c.id],
+    });
+    expect(one.workOrder?.state).toBe('unknown');
+    expect(other.workOrder?.state).toBe('unknown');
+    const states = (read: typeof one) =>
+      Object.fromEntries(read.workOrder?.members.map(m => [m.item.key, m.state]) ?? []);
+    expect(states(one)).toEqual(states(other));
+  });
+
+  test('only an active part_of makes a member', async () => {
+    const ended = { ...partOf(a, order), ended: { ...linkAct, by: { declared: 'alice' } } };
+    const dependsOn: ItemLink = { ...partOf(c, order), id: 'c-needs-order', kind: 'depends_on' };
+    expect(
+      (await readOrder({ links: [partOf(b, order), ended, dependsOn], merged: [b.id] })).workOrder
+    ).toEqual({ state: 'done', members: [{ item: b, state: 'merged' }] });
+  });
+
+  test('an unreadable member end or member link reads unknown, never done', async () => {
+    const lostEnd = { type: 'degraded', reason: 'end_unreadable', endId: 'end-a' } as const;
+    const endUnread = await readOrder({
+      links: [partOf(a, order), partOf(b, order)],
+      merged: [b.id],
+      store: { getHoldingItemEnd: async id => (id === a.id ? lostEnd : null) },
+    });
+    expect(endUnread.workOrder?.state).toBe('unknown');
+    expect(endUnread.degraded).toEqual([
+      { type: 'degraded', reason: 'member_unreadable', member: a, report: lostEnd },
+    ]);
+    const lostLink = { type: 'degraded', reason: 'link_unreadable', linkId: 'lost' } as const;
+    const links = [partOf(a, order)];
+    const linkUnread = await readOrder({
+      links,
+      merged: [a.id],
+      store: {
+        listItemLinks: async id =>
+          id === a.id ? [...links, lostLink] : id === order.id ? links : [],
+      },
+    });
+    expect(linkUnread.workOrder?.state).toBe('unknown');
+    expect(linkUnread.degraded).toEqual([
+      { type: 'degraded', reason: 'member_unreadable', member: a, report: lostLink },
+    ]);
   });
 
   test('an item nothing is part of is no work order', async () => {

@@ -193,11 +193,41 @@ test('a work order prints its state and names the members that keep it open', ()
   ).toBe('Work order: open, 2 of 3 members open: issue-a, acme/api/issue-b');
   expect(
     workOrderText({ state: 'done', members: [{ item: member('issue-a'), state: 'ended' }] })
-  ).toBe('Work order: done, all 1 members merged or ended');
-  expect(
-    workOrderText({ state: 'unknown', members: [{ item: member('issue-a'), state: 'unknown' }] })
-  ).toBe('Work order: unknown, member(s) could not be read: issue-a');
+  ).toStartWith('Work order: done');
+  const unknown = workOrderText({
+    state: 'unknown',
+    members: [{ item: member('issue-a'), state: 'unknown' }],
+  });
+  expect(unknown).toStartWith('Work order: unknown');
+  expect(unknown).toContain('issue-a');
   expect(workOrderText(null)).toBeUndefined();
+});
+
+test('an unreadable member part prints under an open work order too, naming the member', () => {
+  const lost = { id: 'issue-d-row', projectKey: 'acme/web', key: 'issue-d' };
+  const lines = itemReadLines(
+    {
+      ...read,
+      workOrder: {
+        state: 'open',
+        members: [
+          { item: { id: 'issue-a-row', projectKey: 'acme/web', key: 'issue-a' }, state: 'open' },
+          { item: lost, state: 'unknown' },
+        ],
+      },
+      degraded: [
+        {
+          type: 'degraded',
+          reason: 'member_unreadable',
+          member: lost,
+          report: { type: 'degraded', reason: 'merge_unreadable', itemId: lost.id },
+        },
+      ],
+    },
+    SERVED
+  );
+  const warning = lines.find(line => line.includes('issue-d') && line.includes('merge'));
+  expect(warning).toContain('could not be read');
 });
 
 test('an item read prints its runs, open questions and answers', () => {

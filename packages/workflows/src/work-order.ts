@@ -2,7 +2,8 @@
  * The one rule for a work order's state. A work order is an item other items are
  * `part_of` through an active link; it is open while any member is open, and done once
  * every member has merged (a merge on record), ended (an end that holds, `readHoldingItemEnd`)
- * or is itself a work order that is done. The state is derived on every read from the
+ * or is itself a work order that is done. A work order's own merge or end does not close it:
+ * only its members do. The state is derived on every read from the
  * links, merges and ends the store already holds, so it cannot drift from its members:
  * nothing is written, no timer decides, and no stage ends a work order.
  */
@@ -18,14 +19,17 @@ import type { IWorkflowStore } from './store';
 
 type WorkOrderStore = ItemEndStore & Pick<IWorkflowStore, 'listItemLinks' | 'getItemMerge'>;
 
-/** The walk's shared state: links are operator data and may form a cycle. */
+/**
+ * The walk's shared state. Links are operator data and may form a cycle. A member's state
+ * depends only on the member and the work orders above it on the walk, never on the order
+ * links were recorded in, so nothing read on one path is reused on another.
+ */
 interface Walk {
   store: WorkOrderStore;
-  /** The work orders being walked now; a member among them is skipped, which ends a cycle. */
+  /** The work orders being walked now; a member among them is in a cycle. */
   walking: Set<string>;
-  /** Members already read, listed again with the state they read first. */
-  read: Map<string, WorkOrderMemberState>;
-  degraded: WorkOrderMemberUnreadable[];
+  /** Keyed by member and report, so an item reached by two paths is reported once. */
+  degraded: Map<string, WorkOrderMemberUnreadable>;
 }
 
 /** The items `itemId` is the `to` of through an active `part_of`. Mirrors `parentsOf`. */
@@ -48,50 +52,56 @@ function stateOf(
   return 'done';
 }
 
-/** The work order `item` is, from its links; null when nothing is part of it. */
+/**
+ * The work order `item` is, from its links; null when nothing is part of it. A member that
+ * is already on the walk closes a cycle, which no fact resolves, so it reads `unknown`.
+ */
 async function walkWorkOrder(
   walk: Walk,
   item: WorkflowItem,
   links: readonly ItemLinkRead[]
 ): Promise<WorkOrder | null> {
-  const found = membersOf(links, item.id).filter(member => !walk.walking.has(member.id));
+  const found = membersOf(links, item.id);
   if (found.length === 0) return null;
   walk.walking.add(item.id);
   const members: WorkOrder['members'] = [];
   for (const member of found)
-    members.push({ item: member, state: await memberState(walk, member) });
+    members.push({
+      item: member,
+      state: walk.walking.has(member.id) ? 'unknown' : await memberState(walk, member),
+    });
   walk.walking.delete(item.id);
   const unreadableLink = links.some(link => 'type' in link);
   return { state: stateOf(members, unreadableLink), members };
 }
 
-/** A member's state, in order: its merge, its end that holds, its own members, else open. */
+/**
+ * A member's state. A member that is a work order itself has the state its own members
+ * give it; its merge and end stay facts of its own and do not close it. Any other member
+ * is merged, ended (an end that holds), or open. A link of the member that cannot be read
+ * may be the `part_of` that makes it a work order, so the member then reads unknown.
+ */
 async function memberState(walk: Walk, member: WorkflowItem): Promise<WorkOrderMemberState> {
-  const known = walk.read.get(member.id);
-  if (known !== undefined) return known;
-  const state = await readMemberState(walk, member);
-  walk.read.set(member.id, state);
-  return state;
-}
-
-async function readMemberState(walk: Walk, member: WorkflowItem): Promise<WorkOrderMemberState> {
   const unreadable = (report: WorkOrderMemberUnreadable['report']) =>
-    walk.degraded.push({ type: 'degraded', reason: 'member_unreadable', member, report });
+    walk.degraded.set(`${member.id}:${JSON.stringify(report)}`, {
+      type: 'degraded',
+      reason: 'member_unreadable',
+      member,
+      report,
+    });
+  const links = await walk.store.listItemLinks(member.id);
+  for (const link of links) if ('type' in link) unreadable(link);
+  const own = await walkWorkOrder(walk, member, links);
+  if (own !== null) return own.state;
+  if (links.some(link => 'type' in link)) return 'unknown';
   const merge = await walk.store.getItemMerge(member.id);
   if (merge !== null && !('type' in merge)) return 'merged';
   if (merge !== null) unreadable(merge);
   const end = await readHoldingItemEnd(walk.store, member.id);
   if (end !== null && !('type' in end)) return 'ended';
   if (end !== null) unreadable(end);
-  const links = await walk.store.listItemLinks(member.id);
-  for (const link of links) if ('type' in link) unreadable(link);
-  const own = await walkWorkOrder(walk, member, links);
-  // An unread merge or end may be the fact that closes the member, so only a readable
-  // open member of its own still says open.
-  const unread = merge !== null || end !== null;
-  if (own === null) return unread || links.some(link => 'type' in link) ? 'unknown' : 'open';
-  if (own.state === 'open') return 'open';
-  return unread ? 'unknown' : own.state;
+  // An unread merge or end may be the fact that closes the member.
+  return merge !== null || end !== null ? 'unknown' : 'open';
 }
 
 /**
@@ -105,7 +115,7 @@ export async function readWorkOrder(
   item: WorkflowItem,
   links: readonly ItemLinkRead[]
 ): Promise<{ workOrder: WorkOrder | null; degraded: WorkOrderMemberUnreadable[] }> {
-  const walk: Walk = { store, walking: new Set(), read: new Map(), degraded: [] };
+  const walk: Walk = { store, walking: new Set(), degraded: new Map() };
   const workOrder = await walkWorkOrder(walk, item, links);
-  return { workOrder, degraded: walk.degraded };
+  return { workOrder, degraded: [...walk.degraded.values()] };
 }

@@ -12,7 +12,8 @@ import { workflowItemSchema } from './workflow-run';
 /**
  * A member's state: `merged` (a merge on record), `ended` (an end that holds), `done` (it
  * is a work order itself and every one of its members is merged, ended or done), `open`, or
- * `unknown` when a part it depends on could not be read.
+ * `unknown` when a part it depends on could not be read or its membership is a cycle. A
+ * member that is a work order takes its state from its own members, not its merge or end.
  */
 export const workOrderMemberStateSchema = z.enum(['open', 'merged', 'ended', 'done', 'unknown']);
 export type WorkOrderMemberState = z.infer<typeof workOrderMemberStateSchema>;
