@@ -2,8 +2,7 @@
  * Conformance for stopped items on the SQL stores, run by the SQLite and PostgreSQL
  * integration tests: a completed run that recorded a stop (`itemStoppedMetadata`) puts its
  * item in the attention queue as `stopped` while it is the item's last run, the item takes
- * no answer, and any later run on the item, whatever its status, takes it out, even once
- * that run is deleted. The runs
+ * no answer, and any later run on the item, whatever its status, takes it out. The runs
  * follow each other at once, as fast stages do, so on SQLite they share one second.
  */
 import { expect, test } from 'bun:test';
@@ -84,11 +83,6 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       await harness.store.completeWorkflowRun(next, { duration_ms: 1 }, undefined, {
         outcome: { kind: 'enum', value: 'landed' },
       });
-      expect(await stopped()).toEqual([]);
-
-      // Deleting the run that moved the item on does not bring the stop back.
-      const { deleteWorkflowRun } = await import('./workflow-run-writes');
-      await deleteWorkflowRun(next);
       expect(await stopped()).toEqual([]);
     } finally {
       await harness.close();

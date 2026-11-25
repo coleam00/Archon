@@ -393,13 +393,15 @@ printf '{"outcome": "return"}'`
     expect(receipt?.outcome).toBe('unmatched');
     expect(receipt?.reason).toContain(runs(fixture)[0]?.id ?? 'build run');
     // The refusal stops the item on the build run, in the item read and in attention.
-    const refused = {
-      receiptId: expect.any(String),
-      bindingId: 'check-after-build',
-      workflow: 'check',
-      reason: 'checkout_refused',
-      refusedAt: expect.any(String),
-    };
+    const refused = [
+      {
+        receiptId: expect.any(String),
+        bindingId: 'check-after-build',
+        workflow: 'check',
+        reason: 'checkout_refused',
+        refusedAt: expect.any(String),
+      },
+    ];
     const read = JSON.parse(
       (await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json'])).stdout
     ) as { questions: { kind: string }[] };
@@ -577,6 +579,16 @@ describe('a stage on the checkout the asking run left', () => {
     expect(receipts[0]?.reason).toContain(`Checkout: the worktree at '${worktree}'`);
     expect(receipts[0]?.reason).toContain('is gone');
     expect(runs(fixture).map(run => run.workflow_name)).toEqual(['ask-build']);
+    // The settled asks' refused start stops the item on the run that left them.
+    const { items } = JSON.parse(
+      (await fixture.cli(['workflow', 'attention', '--json'])).stdout
+    ) as { items: { kind: string }[] };
+    expect(items.filter(item => item.kind === 'stopped')).toEqual([
+      expect.objectContaining({
+        stoppedIn: expect.objectContaining({ runId: asking.id }),
+        refused: [expect.objectContaining({ reason: 'checkout_refused' })],
+      }),
+    ]);
   }, 120_000);
 
   test('a worktree removed after the asks settled refuses the start when its host drains it', async () => {

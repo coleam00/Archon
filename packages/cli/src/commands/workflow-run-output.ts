@@ -310,8 +310,11 @@ function printRunFacts(workflow: ResolvedWorkflow, run: WorkflowRun | null, lead
   return true;
 }
 
-/** The run completed, but the start its end caused was refused: say so, from its stop. */
-function printRefusedStart(run: WorkflowRun | null): void {
+/**
+ * The run completed, but a start its end caused was refused: say so, from its stop. Here and
+ * in `workflow get`, which `trigger fire` points to for a detached run.
+ */
+export function printRefusedStart(run: WorkflowRun | null): void {
   const refused = run === null ? undefined : readItemStopped(run.metadata)?.refused;
   if (refused === undefined) return;
   console.log('  Next stage not started:');

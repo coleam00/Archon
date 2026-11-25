@@ -233,14 +233,16 @@ export type StoppedLimit = z.infer<typeof stoppedLimitSchema>;
 
 /**
  * Why a start was refused before launch. At the hand-off a run's end or settled asks make:
- * the checkout could not be handed on (`checkout_refused`) or a mapped input named nothing
- * (`inputs_unmapped`). In preparation: the cause when the engine types it
+ * the checkout could not be handed on (`checkout_refused`), a mapped input named nothing
+ * (`inputs_unmapped`), or the items it links to could not be read or hold no such link
+ * (`link_refused`). In preparation: the cause when the engine types it
  * (`no_default_provider`), else the stage that failed, as the binding's `error` stores it.
  * Never the exception text, which can hold secret values.
  */
 export const startRefusalReasonSchema = z.enum([
   'checkout_refused',
   'inputs_unmapped',
+  'link_refused',
   'no_default_provider',
   'run_as_user_failed',
   'run_configuration_failed',
@@ -271,28 +273,38 @@ export const stoppedRefusalSchema = z.object({
 export type StoppedRefusal = z.infer<typeof stoppedRefusalSchema>;
 
 /** The metadata that marks a completed run as having stopped its item. */
+/** A recorded stop: why the run stopped its item, and the starts its end caused that were refused. */
+export interface ItemStopped {
+  summary: string | null;
+  limit?: StoppedLimit;
+  /** Every start refused before launch, one per binding, in the order they were refused. */
+  refused?: StoppedRefusal[];
+}
+
+/** The metadata that marks a completed run as having stopped its item. */
 export function itemStoppedMetadata(
   summary: string | null,
-  refusal?: { limit: StoppedLimit } | { refused: StoppedRefusal }
+  refusals: Omit<ItemStopped, 'summary'> = {}
 ): Record<string, unknown> {
   const line = summary?.trim().slice(0, ITEM_STOPPED_SUMMARY_MAX) ?? '';
-  return { [ITEM_STOPPED_METADATA_KEY]: { summary: line === '' ? null : line, ...refusal } };
+  return { [ITEM_STOPPED_METADATA_KEY]: { summary: line === '' ? null : line, ...refusals } };
 }
 
 /** The stop a completed run recorded, or undefined when it stopped nothing. */
-export function readItemStopped(
-  metadata: Record<string, unknown>
-): { summary: string | null; limit?: StoppedLimit; refused?: StoppedRefusal } | undefined {
+export function readItemStopped(metadata: Record<string, unknown>): ItemStopped | undefined {
   const value = metadata[ITEM_STOPPED_METADATA_KEY];
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const { summary, limit, refused } = value as Record<string, unknown>;
   // A newer binary may add keys or reasons; an entry that does not read is dropped, not refused.
   const readLimit = stoppedLimitSchema.safeParse(limit);
-  const readRefused = stoppedRefusalSchema.safeParse(refused);
+  const readRefused = (Array.isArray(refused) ? refused : []).flatMap(entry => {
+    const read = stoppedRefusalSchema.safeParse(entry);
+    return read.success ? [read.data] : [];
+  });
   return {
     summary: typeof summary === 'string' ? summary : null,
     ...(readLimit.success ? { limit: readLimit.data } : {}),
-    ...(readRefused.success ? { refused: readRefused.data } : {}),
+    ...(readRefused.length > 0 ? { refused: readRefused } : {}),
   };
 }
 

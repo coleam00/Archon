@@ -168,8 +168,8 @@ export type StoppedItemStore = Pick<
 
 /**
  * The queue item of an item `run` stopped, or null when the run recorded no stop or has no
- * item. A run that settled asks may have no outcome; a refused start's stop dates from the
- * refusal. Nothing here changes the item. Each surface spells the commands that
+ * item. A run that settled asks may have no outcome; a refused start's stop dates from its
+ * latest refusal. Nothing here changes the item. Each surface spells the commands that
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
@@ -193,7 +193,7 @@ export async function stoppedQueueItem(
     ...(item === null ? {} : { item }),
     revision: 1,
     labels: {},
-    pausedAt: stopped.refused?.refusedAt ?? run.completed_at?.toISOString() ?? null,
+    pausedAt: stopped.refused?.at(-1)?.refusedAt ?? run.completed_at?.toISOString() ?? null,
     stoppedIn: { runId: run.id, workflow: run.workflow_name, outcome: run.completed_outcome },
     summary: stopped.summary,
     ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),

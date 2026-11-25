@@ -4,25 +4,14 @@
  * whose end or settled asks caused the start (`recordRefusedStartStop`), in the same
  * transaction, so the item read and attention show the refused start where its stage ended.
  */
-import {
-  resourceStartBindingIntentSchema,
-  type ForgeRefusal,
-} from '@archon/workflows/schemas/resource-start';
-import type { StartRefusalReason } from '@archon/workflows/schemas/run-metadata';
+import type { IResourceStartStore } from '@archon/workflows/resource-start-store';
+import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { getDatabase, getDialect } from './connection';
 import { recordRefusedStartStop } from './item-stops';
 import type { TransactionQuery as Query } from './resource-slots';
 import { getLog } from './workflow-run-shared';
 
-interface FailedPreparation {
-  receiptId: string;
-  bindingId: string;
-  ownerId: string;
-  retryable: boolean;
-  error: string;
-  forgeRefusal?: ForgeRefusal;
-  refusal?: StartRefusalReason;
-}
+type FailedPreparation = Parameters<IResourceStartStore['failStartBindingPreparation']>[0];
 
 /** See `IResourceStartStore.failStartBindingPreparation`. */
 export async function failStartBindingPreparation(input: FailedPreparation): Promise<boolean> {

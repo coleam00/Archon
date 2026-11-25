@@ -12,6 +12,7 @@ import {
 import {
   ITEM_STOPPED_METADATA_KEY,
   itemStoppedMetadata,
+  readItemStopped,
   type StoppedLimit,
   type StoppedRefusal,
 } from '@archon/workflows/schemas/run-metadata';
@@ -26,8 +27,7 @@ import { getLog } from './workflow-run-shared';
  * The completed runs that stopped their item and are still its last run (see
  * `IWorkflowStore.listStoppedItemRuns`). Runs on an item are ordered as `getItemRuns` orders
  * them: by start time, and on SQLite, which records it to the second, by insertion order
- * within a second. Any run after this one, in any status, ends the stop, and deleting that
- * later run keeps it ended (`closeStopsBeforeRun`).
+ * within a second. Any run after this one, in any status, ends the stop.
  */
 export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]> {
   const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
@@ -55,26 +55,6 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
     }
   }
   return runs;
-}
-
-/**
- * Close the stops recorded before run `runId` on its item, inside the transaction that
- * deletes it. A stop is open while its run is the item's newest, so the deleted run is the
- * only evidence that the item moved on; without this, deleting it would reopen them.
- */
-export async function closeStopsBeforeRun(query: Query, runId: string): Promise<void> {
-  const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
-  await query(
-    `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 2)}
-      WHERE id IN (
-        SELECT r.id FROM remote_agent_workflow_runs r
-          JOIN remote_agent_workflow_runs d ON d.id = $1 AND d.item_id = r.item_id
-         WHERE r.id <> d.id
-           AND ${getDialect().jsonText('r.metadata', ITEM_STOPPED_METADATA_KEY)} IS NOT NULL
-           AND (r.started_at < d.started_at
-             OR (r.started_at = d.started_at AND r.${tie} < d.${tie})))`,
-    [runId, JSON.stringify({ [ITEM_STOPPED_METADATA_KEY]: null })]
-  );
 }
 
 /**
@@ -106,17 +86,43 @@ export async function recordRefusedStartStop(
   const source = actor.success ? actor.data : undefined;
   if (source?.source !== RUN_ENDED_SOURCE_ACTOR && source?.source !== ASKS_SETTLED_SOURCE_ACTOR)
     return;
+  // Locked, so a sibling binding's refusal in another transaction adds to this stop rather
+  // than replacing it: a limit and the preparation refusals of one run's end are kept together.
+  const run = (
+    await query<{ metadata: unknown }>(
+      `SELECT metadata FROM remote_agent_workflow_runs
+        WHERE id = $1 AND status = 'completed'
+          AND EXISTS (SELECT 1 FROM remote_agent_items i
+                       WHERE i.id = remote_agent_workflow_runs.item_id AND i.key = $2)
+          AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
+                           WHERE run_id = $3 AND closed_as IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
+                           WHERE run_id = $3 AND closed_as IS NULL)${getDialect().rowLock()}`,
+      // The run id twice: the runs table keys it as a UUID on PostgreSQL, asks and waits as text.
+      [source.id, itemKey, source.id]
+    )
+  ).rows[0];
+  if (run === undefined) return;
   await query(
-    `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 3)}
-      WHERE id = $1 AND status = 'completed'
-        AND EXISTS (SELECT 1 FROM remote_agent_items i
-                     WHERE i.id = remote_agent_workflow_runs.item_id AND i.key = $2)
-        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
-                         WHERE run_id = $4 AND closed_as IS NULL)
-        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
-                         WHERE run_id = $4 AND closed_as IS NULL)`,
-    // The run id twice: the runs table keys it as a UUID on PostgreSQL, asks and waits as text.
-    [source.id, itemKey, JSON.stringify(itemStoppedMetadata(null, refusal)), source.id]
+    `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 2)} WHERE id = $1`,
+    [source.id, JSON.stringify(withRefusal(run.metadata, refusal))]
+  );
+}
+
+/** The run's stop with `refusal` added: a limit replaces the limit, a refusal is appended. */
+function withRefusal(
+  metadata: unknown,
+  refusal: { limit: StoppedLimit } | { refused: StoppedRefusal }
+): Record<string, unknown> {
+  const stored = typeof metadata === 'string' ? JSON.parse(metadata) : metadata;
+  const { summary, ...prior } = readItemStopped((stored ?? {}) as Record<string, unknown>) ?? {
+    summary: null,
+  };
+  return itemStoppedMetadata(
+    summary,
+    'limit' in refusal
+      ? { ...prior, limit: refusal.limit }
+      : { ...prior, refused: [...(prior.refused ?? []), refusal.refused] }
   );
 }
 

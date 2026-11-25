@@ -946,10 +946,12 @@ await closeDatabase();
       expect(queue.filter(item => item.kind === 'stopped')).toEqual([
         expect.objectContaining({
           stoppedIn: expect.objectContaining({ workflow: 'ask-plan', outcome: null }),
-          refused: expect.objectContaining({
-            bindingId: 'build-after-answers',
-            workflow: 'build-answers',
-          }),
+          refused: [
+            expect.objectContaining({
+              bindingId: 'build-after-answers',
+              workflow: 'build-answers',
+            }),
+          ],
         }),
       ]);
   }, 90_000);
@@ -1524,7 +1526,7 @@ describe('a start refused before launch', () => {
         items: { kind: string; ref: string }[];
       };
       return {
-        onItem: read.questions.filter(question => question.kind === 'stopped'),
+        onItem: read.questions.flatMap(question => (question.kind === 'stopped' ? [question] : [])),
         inAttention: attention.items.filter(item => item.kind === 'stopped'),
       };
     };
@@ -1536,24 +1538,37 @@ describe('a start refused before launch', () => {
       expect.objectContaining({
         item: expect.objectContaining({ key: 'issue-1' }),
         stoppedIn: { runId: planned?.id, workflow: 'stage-a', outcome: 'planned' },
-        refused: {
-          receiptId: expect.any(String),
-          bindingId: 'judge-after-plan',
-          workflow: 'stage-ai',
-          reason: 'no_default_provider',
-          refusedAt: expect.any(String),
-        },
+        refused: [
+          {
+            receiptId: expect.any(String),
+            bindingId: 'judge-after-plan',
+            workflow: 'stage-ai',
+            reason: 'no_default_provider',
+            refusedAt: expect.any(String),
+          },
+        ],
       }),
     ]);
-    const [entry] = before.onItem as {
-      pausedAt: string;
-      refused: { receiptId: string; refusedAt: string };
-    }[];
-    expect(entry?.pausedAt).toBe(entry?.refused.refusedAt);
+    const [refusal] = before.onItem[0]?.refused ?? [];
+    expect(before.onItem[0]?.pausedAt).toBe(refusal?.refusedAt);
     expect(before.inAttention.map(item => item.ref)).toEqual(before.onItem.map(item => item.ref));
-    // The stage that caused it says so: the refused workflow and its receipt.
-    expect(output).toContain('stage-ai');
-    expect(output).toContain(entry?.refused.receiptId ?? 'a receipt');
+    // Every text view names the refused start and the remedy: the stage that caused it, the
+    // run view `trigger fire` points to, the item read and attention.
+    const texts = [
+      output,
+      await cli(['workflow', 'get', planned?.id ?? '']),
+      await cli(['workflow', 'runs', '--item', 'issue-1']),
+      await cli(['workflow', 'attention']),
+    ];
+    for (const text of texts)
+      for (const fact of [
+        'judge-after-plan',
+        'stage-ai',
+        refusal?.receiptId,
+        refusal?.refusedAt,
+        'archon ai default',
+      ])
+        expect(text).toContain(fact ?? 'a recorded fact');
 
     await cli(['ai', 'default', 'claude']);
     await run('stage-ai');

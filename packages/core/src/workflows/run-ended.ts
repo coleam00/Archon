@@ -460,7 +460,7 @@ function namedLinkedStart(
     bindingReceipt(
       candidate,
       { deliveryId, sourceActor, itemKey: item.key },
-      { missing },
+      { missing, reason: 'link_refused' },
       undefined,
       now
     );
@@ -566,7 +566,8 @@ export function bindingReceipt(
     sourceActor: NonNullable<SourceReceiptInput['sourceActor']>;
     itemKey: string;
   },
-  mapped: { inputs: Record<string, JsonValue> } | { missing: string },
+  /** `link_refused` when the items the run links to could not be read or hold no such link. */
+  mapped: { inputs: Record<string, JsonValue> } | { missing: string; reason?: 'link_refused' },
   checkout: EndedCheckout | undefined,
   now: Date
 ): SourceReceiptAcceptance {
@@ -577,7 +578,7 @@ export function bindingReceipt(
       : checkout && 'refused' in checkout
         ? `Checkout: ${checkout.refused}`
         : undefined;
-  const refusal = 'missing' in mapped ? 'inputs_unmapped' : 'checkout_refused';
+  const refusal = 'missing' in mapped ? (mapped.reason ?? 'inputs_unmapped') : 'checkout_refused';
   const handoff = checkout && 'handoff' in checkout ? checkout.handoff : undefined;
   // Computed as `trigger fire` computes it, over the binding alone.
   const bindingRevision = createHash('sha256')

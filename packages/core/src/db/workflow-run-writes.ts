@@ -24,7 +24,6 @@ import {
   type DeletedWorkflowRun,
 } from '@archon/workflows/store';
 import { getDatabase, getDialect, pool } from './connection';
-import { closeStopsBeforeRun } from './item-stops';
 import { insertWorkflowEvent } from './workflow-events';
 import { getWorkflowRun } from './workflow-run-reads';
 import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
@@ -428,7 +427,6 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
           adopters.rows.map(row => ({ id: String(row.id), status: row.status }))
         );
       }
-      await closeStopsBeforeRun(query, id);
       await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
       await query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
     });

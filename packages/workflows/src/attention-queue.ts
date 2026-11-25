@@ -202,7 +202,7 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     summary: z.string().nullable(),
     /** Set when the start the run caused was refused: at its limit, or before launch. */
     limit: stoppedLimitSchema.optional(),
-    refused: stoppedRefusalSchema.optional(),
+    refused: z.array(stoppedRefusalSchema).optional(),
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),

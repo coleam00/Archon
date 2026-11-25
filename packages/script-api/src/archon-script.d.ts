@@ -2576,13 +2576,13 @@ declare module 'archon:script' {
         readonly bindingId: string;
         readonly workflow: string;
       };
-      readonly refused?: {
+      readonly refused?: ReadonlyArray<{
         readonly receiptId: string;
         readonly bindingId: string;
         readonly workflow: string;
-        readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
+        readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
         readonly refusedAt: string;
-      };
+      }>;
       readonly checkout: string | null;
     }>;
     readonly answers: ReadonlyArray<{
@@ -3169,13 +3169,13 @@ declare module 'archon:script' {
           readonly bindingId: string;
           readonly workflow: string;
         };
-        readonly refused?: {
+        readonly refused?: ReadonlyArray<{
           readonly receiptId: string;
           readonly bindingId: string;
           readonly workflow: string;
-          readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
+          readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
           readonly refusedAt: string;
-        };
+        }>;
         readonly checkout: string | null;
       }>;
       readonly answers: ReadonlyArray<{

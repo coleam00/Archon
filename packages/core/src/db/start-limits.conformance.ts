@@ -206,14 +206,51 @@ export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harn
       const run = await store.getWorkflowRun(ended);
       expect(readItemStopped(run?.metadata ?? {})).toEqual({
         summary: null,
-        refused: {
-          receiptId: identity.receiptId,
-          bindingId: 'binding',
-          workflow: 'w',
-          reason: 'no_default_provider',
-          refusedAt: expect.any(String),
-        },
+        refused: [
+          {
+            receiptId: identity.receiptId,
+            bindingId: 'binding',
+            workflow: 'w',
+            reason: 'no_default_provider',
+            refusedAt: expect.any(String),
+          },
+        ],
       });
+      // Refused for good: no host prepares it again by itself.
+      const pending = await store.listPendingStartBindings({
+        hostId: 'host',
+        receiptIds: [identity.receiptId],
+      });
+      expect(pending).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('every start one run end caused and that was refused stays on its stop', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const { claimed, start, admitted } = starts(harness);
+      const limit = { name: 'check', starts: 1 };
+      const ended = await admitted('s', { limit });
+      const source = { source: RUN_ENDED_SOURCE_ACTOR, id: ended };
+      const refuse = async () => {
+        const identity = await claimed('s', {}, source);
+        await store.failStartBindingPreparation({
+          ...identity,
+          retryable: false,
+          error: 'launch_preparation_failed',
+          refusal: 'no_default_provider',
+        });
+        return identity.receiptId;
+      };
+      const first = await refuse();
+      expect((await start('s', { limit }, source)).result?.status).toBe('refused');
+      const second = await refuse();
+      const stop = readItemStopped((await store.getWorkflowRun(ended))?.metadata ?? {});
+      expect(stop?.limit).toMatchObject({ name: 'check', used: 1 });
+      expect(stop?.refused?.map(refusal => refusal.receiptId)).toEqual([first, second]);
     } finally {
       await harness.close();
     }

@@ -7915,12 +7915,13 @@ export interface components {
             reason:
               | 'checkout_refused'
               | 'inputs_unmapped'
+              | 'link_refused'
               | 'no_default_provider'
               | 'run_as_user_failed'
               | 'run_configuration_failed'
               | 'launch_preparation_failed';
             refusedAt: string;
-          };
+          }[];
           checkout: string | null;
         };
     AttentionQueueCountsResponse: {
@@ -8297,12 +8298,13 @@ export interface components {
               reason:
                 | 'checkout_refused'
                 | 'inputs_unmapped'
+                | 'link_refused'
                 | 'no_default_provider'
                 | 'run_as_user_failed'
                 | 'run_configuration_failed'
                 | 'launch_preparation_failed';
               refusedAt: string;
-            };
+            }[];
             checkout: string | null;
           }
         | unknown;
@@ -8804,12 +8806,13 @@ export interface components {
               reason:
                 | 'checkout_refused'
                 | 'inputs_unmapped'
+                | 'link_refused'
                 | 'no_default_provider'
                 | 'run_as_user_failed'
                 | 'run_configuration_failed'
                 | 'launch_preparation_failed';
               refusedAt: string;
-            };
+            }[];
             checkout: string | null;
           }
       )[];
@@ -9557,12 +9560,13 @@ export interface components {
                 reason:
                   | 'checkout_refused'
                   | 'inputs_unmapped'
+                  | 'link_refused'
                   | 'no_default_provider'
                   | 'run_as_user_failed'
                   | 'run_configuration_failed'
                   | 'launch_preparation_failed';
                 refusedAt: string;
-              };
+              }[];
               checkout: string | null;
             }
         )[];
@@ -10193,12 +10197,13 @@ export interface components {
                   reason:
                     | 'checkout_refused'
                     | 'inputs_unmapped'
+                    | 'link_refused'
                     | 'no_default_provider'
                     | 'run_as_user_failed'
                     | 'run_configuration_failed'
                     | 'launch_preparation_failed';
                   refusedAt: string;
-                };
+                }[];
                 checkout: string | null;
               };
         }

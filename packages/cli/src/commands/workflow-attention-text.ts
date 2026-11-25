@@ -154,6 +154,7 @@ function overdueWaitLines(item: Extract<AttentionQueueItem, { kind: 'overdue_wai
 const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
   checkout_refused: 'the checkout could not be handed on',
   inputs_unmapped: 'an input the binding maps named nothing',
+  link_refused: 'the items it links to could not be read or hold no such link',
   no_default_provider: 'no default AI provider is set',
   run_as_user_failed: "the binding's run-as user could not be found",
   run_configuration_failed: "the item's or the binding's run configuration could not be read",
@@ -161,15 +162,15 @@ const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
 };
 
 /**
- * What a start refused before launch says, wherever it shows: the stage's own output, the
- * item read and attention. `trigger inspect` shows what the binding would have passed.
+ * What starts refused before launch say, wherever they show: the causing stage's own output,
+ * `workflow get`, the item read and attention. Each names its receipt for `trigger inspect`.
  */
-export function refusedStartLines(refused: StoppedRefusal): string[] {
-  return [
-    `the start of ${refused.workflow} (binding ${refused.bindingId}) was refused before launch at ${refused.refusedAt}: ${REFUSAL_REASONS[refused.reason]}`,
-    ...(refused.reason === 'no_default_provider' ? ['set one: archon ai default <provider>'] : []),
-    `see the refusal and what it would have passed: archon trigger inspect ${refused.receiptId}`,
-  ];
+export function refusedStartLines(refused: readonly StoppedRefusal[]): string[] {
+  return refused.flatMap(start => [
+    `the start of ${start.workflow} (binding ${start.bindingId}) was refused before launch at ${start.refusedAt}: ${REFUSAL_REASONS[start.reason]}`,
+    ...(start.reason === 'no_default_provider' ? ['set one: archon ai default <provider>'] : []),
+    `see the refusal: archon trigger inspect ${start.receiptId}`,
+  ]);
 }
 
 /** How a stopped item's run ended: a run that settled asks may have no outcome. */
@@ -188,15 +189,17 @@ const shellWord = (text: string): string =>
 function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
   const { runId, workflow, outcome } = item.stoppedIn;
   const { limit, refused } = item;
+  // A limit and refusals before launch can come from one run's end; each keeps its lines.
   const lines =
     limit !== undefined
       ? [
           `${ended(workflow, outcome)}; its start of ${limit.workflow} was refused at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
           `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
         ]
-      : refused !== undefined
-        ? [`${ended(workflow, outcome)}; nothing started`, ...refusedStartLines(refused)]
-        : [`${ended(workflow, outcome)}; nothing started and it left no ask`];
+      : [
+          `${ended(workflow, outcome)}; nothing started${refused === undefined ? ' and it left no ask' : ''}`,
+        ];
+  lines.push(...refusedStartLines(refused ?? []));
   if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
   lines.push(
     `show the run: ${command(`get ${runId}`)}`,

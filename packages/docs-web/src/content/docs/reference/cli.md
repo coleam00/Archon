@@ -794,7 +794,9 @@ archon workflow get <run-id> --throughput --json
 ```
 
 The text view includes the same [recorded usage summary](#workflow-run-name-message)
-for any run status. It reads stored totals without recalculating them or certifying
+for any run status. For a completed run whose end caused a start that was refused before
+launch, it also prints the refusal under `Next stage not started:`, as the foreground run
+does. It reads stored totals without recalculating them or certifying
 completeness. `--json` retains the raw usage values in `metadata`, including nulls or
 malformed historical values; it adds no formatted usage text.
 
