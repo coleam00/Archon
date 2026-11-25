@@ -171,25 +171,19 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
     }
   });
 
-  test('a second resume of an ended run opens the item, even within the same second', async () => {
+  test('a second resume of an ended run opens the item', async () => {
     const harness = await makeHarness();
     try {
+      // The run was resumed once before the end, so only its fresh claim tells the next
+      // resume from that one; times may share a second.
       const failed = await startOnItem(harness);
       await harness.store.failWorkflowRun(failed, 'boom');
       await harness.store.resumeWorkflowRun(failed);
       await harness.store.failWorkflowRun(failed, 'boom again');
       await recordItemEnd(harness.store, end, operator, 'cli');
-      const phase = await harness.db.query<{ at: unknown }>(
-        'SELECT active_phase_started_at AS at FROM remote_agent_workflow_runs WHERE id = $1',
-        [failed]
-      );
+      expect(await holding(harness)).not.toBeNull();
       await harness.store.resumeWorkflowRun(failed);
       await harness.store.failWorkflowRun(failed, 'and again');
-      // As when both resumes land in one SQLite second: the resume time reads unchanged.
-      await harness.db.query(
-        'UPDATE remote_agent_workflow_runs SET active_phase_started_at = $1 WHERE id = $2',
-        [phase.rows[0]?.at, failed]
-      );
       expect(await holding(harness)).toBeNull();
     } finally {
       await harness.close();

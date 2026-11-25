@@ -3,11 +3,12 @@
  * (`remote_agent_item_end_runs`, the item's runs and every run below them): append-only
  * facts, never updated or deleted. An end holds until work starts on the item again
  * (`schemas/item-end.ts`): a run in the item's tree the end did not see, a run resumed since
- * (its `active_phase_started_at` or execution claim changed), a live run, or a queued
- * start. The rule reads the runs that exist now and compares run identities and copied
- * values, never clocks, so a run whose transaction overlapped the end's, or a run row id
- * reused after cleanup, still opens the item. Deleting runs leaves no trace: deleting runs the end saw keeps it holding, and
- * deleting the run that opened the item makes the end hold again, as the operator left it.
+ * (its execution claim changed), a live run, or a queued start. The rule reads the runs that
+ * exist now and compares run identities and claims, never clocks, so a run whose transaction
+ * overlapped the end's, a run row id reused after cleanup, or two resumes in one second
+ * still open the item. Deleting runs leaves no trace: deleting runs the end saw keeps it
+ * holding, and deleting the run that opened the item makes the end hold again, as the
+ * operator left it.
  */
 import {
   itemEndBlockerSchema,
@@ -60,8 +61,7 @@ function runTree(itemId: string): string {
 
 /**
  * SQL true while a run in the tree of end `e`'s item is one the end did not see, or was
- * resumed since. A resume rewrites `active_phase_started_at` and a fresh execution claim; the
- * time has second precision on SQLite, so the claim tells two resumes in one second apart.
+ * resumed since: every resume writes a fresh execution claim into the run's metadata.
  */
 function opened(): string {
   const same = getDatabaseType() === 'sqlite' ? 'IS' : 'IS NOT DISTINCT FROM';
@@ -71,7 +71,6 @@ function opened(): string {
       WHERE NOT EXISTS (
         SELECT 1 FROM remote_agent_item_end_runs k
         WHERE k.end_id = e.id AND k.run_id = CAST(n.id AS TEXT)
-          AND k.active_phase_started_at ${same} n.active_phase_started_at
           AND k.execution_claim ${same} ${claim('n')}
       )
     )`;
@@ -155,8 +154,8 @@ export async function recordItemEnd(
     await query(
       `${runTree('$2')}
        INSERT INTO remote_agent_item_end_runs
-         (end_id, run_id, active_phase_started_at, execution_claim)
-       SELECT $1, CAST(r.id AS TEXT), r.active_phase_started_at, ${claim('r')}
+         (end_id, run_id, execution_claim)
+       SELECT $1, CAST(r.id AS TEXT), ${claim('r')}
        FROM remote_agent_workflow_runs r JOIN tree t ON t.id = r.id`,
       [row.id, input.itemId]
     );

@@ -604,7 +604,6 @@ export class SqliteAdapter implements IDatabase {
       CREATE TABLE IF NOT EXISTS remote_agent_item_end_runs (
         end_id TEXT NOT NULL REFERENCES remote_agent_item_ends(id),
         run_id TEXT NOT NULL,
-        active_phase_started_at TEXT,
         execution_claim TEXT,
         PRIMARY KEY (end_id, run_id)
       );

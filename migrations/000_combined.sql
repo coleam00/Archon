@@ -825,10 +825,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
 );
 
 -- The runs an end saw on its item and below its runs, copied in the transaction that records
--- it, each with what a resume rewrites: active_phase_started_at, in the run column's type so
--- the two compare exactly, and execution_claim, the run's metadata claim, fresh on every
--- resume, which tells two resumes within one second apart where the time cannot. The end holds while every run in the item's tree
--- is one it saw, unresumed since, and none is live: a run created or resumed later, even by a
+-- it, each with its execution_claim, the run's metadata claim that every resume writes fresh.
+-- The end holds while every run in the item's tree is one it saw, unresumed since, and none is live: a run created or resumed later, even by a
 -- transaction that overlapped the end's, opens the item while that run exists. The rule reads
 -- only the runs that exist, so deleting a run changes nothing stored: deleting runs the end
 -- saw leaves it holding, and deleting the run that opened the item makes it hold again.
@@ -836,7 +834,6 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
 CREATE TABLE IF NOT EXISTS remote_agent_item_end_runs (
   end_id TEXT NOT NULL REFERENCES remote_agent_item_ends(id),
   run_id TEXT NOT NULL,
-  active_phase_started_at TIMESTAMP WITH TIME ZONE,
   execution_claim TEXT,
   PRIMARY KEY (end_id, run_id)
 );
