@@ -7,7 +7,7 @@
  * store's transitions) runs as for a real producer, against a real file store.
  */
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
-import { mkdir, mkdtemp, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -125,6 +125,39 @@ describe('a failure whose outcome is unknown', () => {
     return store.resumeWorkflowRun(run.id, deadlineWaitCursor(wait)).catch((err: unknown) => err);
   }
 
+  /**
+   * A writer that fails once its sibling's pause committed: `pausing` makes the store's
+   * pause writes touch the marker after they commit, and records the row each one left.
+   */
+  const afterPause = (marker: string): string =>
+    `for i in $(seq 500); do [ -f '${marker}' ] && break; sleep 0.01; done; exit 1`;
+  function pausing(store: IWorkflowStore, marker: string, rows: WorkflowRun[]): void {
+    const committed = async (id: string): Promise<void> => {
+      const row = await store.getWorkflowRun(id);
+      if (row !== null) rows.push(row);
+      await writeFile(marker, '');
+    };
+    const pause = store.pauseWorkflowRun.bind(store);
+    spyOn(store, 'pauseWorkflowRun').mockImplementation(async (id, ...rest) => {
+      const result = await pause(id, ...rest);
+      await committed(id);
+      return result;
+    });
+    const wait = store.pauseWorkflowRunForWait.bind(store);
+    spyOn(store, 'pauseWorkflowRunForWait').mockImplementation(async (id, ...rest) => {
+      const result = await wait(id, ...rest);
+      await committed(id);
+      return result;
+    });
+  }
+  /** The writer and a sibling that pauses the run, the writer failing after the pause. */
+  const pausedSibling = (marker: string, sibling: DagNode, write: Partial<DagNode> = {}) =>
+    [
+      { id: 'write', kind: 'exec', runtime: 'sh', script: afterPause(marker), ...write },
+      sibling,
+    ] as DagNode[];
+  const timedWait = { id: 'delay', kind: 'wait', wait: { duration_ms: 60_000 } } as DagNode;
+
   it('is not retried under on_error: all, and ends the run with its stop reason', async () => {
     spy = failingWithOutcomeUnknown(['write']);
     const { store, runId } = await run('unknown-retry', [
@@ -144,17 +177,14 @@ describe('a failure whose outcome is unknown', () => {
     'ends a run that a parallel wait already paused, and no continuation is due (always_run: %s)',
     async alwaysRun => {
       spy = failingWithOutcomeUnknown(['write']);
-      const { store, runId } = await run('unknown-race', [
-        // The wait publishes its pause first; the writer fails after it.
-        {
-          id: 'write',
-          kind: 'exec',
-          runtime: 'sh',
-          script: 'sleep 0.3; exit 1',
-          ...(alwaysRun ? { always_run: true } : {}),
-        } as DagNode,
-        { id: 'delay', kind: 'wait', wait: { duration_ms: 1 } } as DagNode,
-      ]);
+      const marker = join(testDir, 'paused');
+      const rows: WorkflowRun[] = [];
+      const { store, runId } = await run(
+        'unknown-race',
+        pausedSibling(marker, timedWait, alwaysRun ? { always_run: true } : {}),
+        { prepare: store => pausing(store, marker, rows) }
+      );
+      expect(rows.map(row => row.status)).toEqual(['paused']);
       expect(await events(store, runId, 'node_started', 'write')).toHaveLength(1);
       await expectEnded(store, runId);
     }
@@ -162,25 +192,21 @@ describe('a failure whose outcome is unknown', () => {
 
   it('ends a run that a parallel approval gate already paused', async () => {
     spy = failingWithOutcomeUnknown(['write']);
-    const { store, runId } = await run('unknown-gate', [
-      { id: 'write', kind: 'exec', runtime: 'sh', script: 'sleep 0.3; exit 1' },
-      {
-        id: 'review',
-        kind: 'gate',
-        message: 'Review',
-        decisions: [{ id: 'approve' }],
-        decisionsAuthored: false,
-        captureResponse: false,
-      },
-    ] as DagNode[]);
-    const order = (await store.listWorkflowEvents(runId)).map(
-      e => `${e.event_type}:${e.step_name}`
-    );
-    // The gate published its pause before the writer failed.
-    expect(order.indexOf('approval_requested:review')).toBeGreaterThan(-1);
-    expect(order.indexOf('approval_requested:review')).toBeLessThan(
-      order.indexOf('node_failed:write')
-    );
+    const marker = join(testDir, 'paused');
+    const rows: WorkflowRun[] = [];
+    const gate = {
+      id: 'review',
+      kind: 'gate',
+      message: 'Review',
+      decisions: [{ id: 'approve' }],
+      decisionsAuthored: false,
+      captureResponse: false,
+    } as DagNode;
+    const { store, runId } = await run('unknown-gate', pausedSibling(marker, gate), {
+      prepare: store => pausing(store, marker, rows),
+    });
+    // The gate's pause committed, then the writer's failure turned the paused row failed.
+    expect(rows.map(row => row.status)).toEqual(['paused']);
     await expectEnded(store, runId);
   });
 
@@ -189,33 +215,28 @@ describe('a failure whose outcome is unknown', () => {
     spy = failingWithOutcomeUnknown(['write'], { once: true });
     let paused: WorkflowRun | undefined;
     let store: IWorkflowStore | undefined;
-    await run(
-      'unknown-read-fault',
-      [
-        { id: 'write', kind: 'exec', runtime: 'sh', script: 'sleep 0.3; exit 1' },
-        { id: 'delay', kind: 'wait', wait: { duration_ms: 60_000 } },
-      ] as DagNode[],
-      {
-        prepare: faulted => {
-          store = faulted;
-          const read = faulted.listEventsForRuns.bind(faulted);
-          spyOn(faulted, 'listEventsForRuns').mockImplementation(async (ids, types) => {
-            const current = await faulted.getWorkflowRun(ids[0] ?? '');
-            // The settle point's read, once the wait paused the run.
-            if (
-              paused === undefined &&
-              current?.status === 'paused' &&
-              types?.includes('fan_out_instances')
-            ) {
-              paused = current;
-              throw new Error('store unavailable');
-            }
-            return read(ids, types);
-          });
-        },
-      }
-    ).catch(() => undefined);
+    const marker = join(testDir, 'paused');
+    await run('unknown-read-fault', pausedSibling(marker, timedWait), {
+      prepare: faulted => {
+        store = faulted;
+        pausing(faulted, marker, []);
+        const read = faulted.listEventsForRuns.bind(faulted);
+        spyOn(faulted, 'listEventsForRuns').mockImplementation(async (ids, types) => {
+          const id = ids[0] ?? '';
+          const recorded = (await faulted.listWorkflowEvents(id)).some(
+            e => e.event_type === 'node_failed' && e.step_name === 'write'
+          );
+          // The settle point's read, once the writer's failure record is stored.
+          if (paused === undefined && recorded && types?.includes('fan_out_instances')) {
+            paused = (await faulted.getWorkflowRun(id)) ?? undefined;
+            throw new Error('store unavailable');
+          }
+          return read(ids, types);
+        });
+      },
+    }).catch(() => undefined);
     if (store === undefined || paused === undefined) throw new Error('the read never failed');
+    expect(paused.status).toBe('paused');
     const latest = (await store.listWorkflowEvents(paused.id))
       .filter(e => e.step_name === 'write')
       .at(-1);
@@ -230,27 +251,22 @@ describe('a failure whose outcome is unknown', () => {
     spy = failingWithOutcomeUnknown(['write']);
     const claims: unknown[] = [];
     let paused: WorkflowRun | undefined;
-    const { store, runId } = await run(
-      'unknown-claim',
-      [
-        { id: 'write', kind: 'exec', runtime: 'sh', script: 'sleep 0.3; exit 1' },
-        { id: 'delay', kind: 'wait', wait: { duration_ms: 60_000 } },
-      ] as DagNode[],
-      {
-        // Between the stored failure and the run's fail: the run is paused at the wait.
-        prepare: store => {
-          const fail = store.failWorkflowRun.bind(store);
-          spyOn(store, 'failWorkflowRun').mockImplementation(async (id, error, options) => {
-            const current = await store.getWorkflowRun(id);
-            if (options?.exitReason === 'outcome_unknown' && current?.status === 'paused') {
-              paused = current;
-              claims.push(await claimWait(store, current));
-            }
-            return fail(id, error, options);
-          });
-        },
-      }
-    );
+    const marker = join(testDir, 'paused');
+    const { store, runId } = await run('unknown-claim', pausedSibling(marker, timedWait), {
+      // Between the stored failure and the run's fail: the run is paused at the wait.
+      prepare: store => {
+        pausing(store, marker, []);
+        const fail = store.failWorkflowRun.bind(store);
+        spyOn(store, 'failWorkflowRun').mockImplementation(async (id, error, options) => {
+          const current = await store.getWorkflowRun(id);
+          if (options?.exitReason === 'outcome_unknown' && current?.status === 'paused') {
+            paused = current;
+            claims.push(await claimWait(store, current));
+          }
+          return fail(id, error, options);
+        });
+      },
+    });
     expect(claims).toHaveLength(1);
     expect(claims[0]).toBeInstanceOf(WorkflowNotResumableError);
     await expectEnded(store, runId);
@@ -448,8 +464,17 @@ describe('a failure whose outcome is unknown', () => {
     const fanOut = async (
       unknown: boolean,
       join_: 'all_done' | 'all_success',
-      later?: Partial<DagNode>,
-      upstream?: DagNode
+      {
+        later,
+        upstream,
+        cleanup,
+      }: {
+        later?: Partial<DagNode>;
+        /** A node the fan-out depends on. */
+        upstream?: DagNode;
+        /** A file each instance's all_done cleanup, after its writer, appends to. */
+        cleanup?: string;
+      } = {}
     ) => {
       await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
       await writeFile(
@@ -464,6 +489,14 @@ describe('a failure whose outcome is unknown', () => {
           '  - id: write',
           `    bash: "if [ $INPUTS.item = 2 ]; then echo notjson; else echo '{}'; fi"`,
           '    output_format: { type: object }',
+          ...(cleanup === undefined
+            ? []
+            : [
+                '  - id: cleanup',
+                `    bash: "echo x >> '${cleanup}'"`,
+                '    depends_on: [write]',
+                '    trigger_rule: all_done',
+              ]),
         ].join('\n')
       );
       if (unknown) spy = failingWithOutcomeUnknown(['write']);
@@ -504,37 +537,33 @@ describe('a failure whose outcome is unknown', () => {
 
     it('under all_done a later timed wait still continues by itself', async () => {
       const { store, runId } = await fanOut(true, 'all_done', {
-        kind: 'wait',
-        wait: { duration_ms: 60_000 },
-      } as Partial<DagNode>);
+        later: { kind: 'wait', wait: { duration_ms: 60_000 } } as Partial<DagNode>,
+      });
       const paused = await store.getWorkflowRun(runId);
       if (paused === null) throw new Error('run vanished');
       expect(paused.status).toBe('paused');
       expect(await claimWait(store, paused)).toMatchObject({ status: 'running' });
     });
 
-    it('under all_done a recomputed join replays the absorbed failure, not the writer', async () => {
-      const counter = join(testDir, 'count');
-      // A changed output on the always_run upstream makes the join's cache stale on resume.
-      const upstream = {
+    /** An always_run upstream whose changed output makes the join's cache stale on resume. */
+    const counter = (): DagNode =>
+      ({
         id: 'up',
         kind: 'exec',
         runtime: 'sh',
-        script: `n=$(cat '${counter}' 2>/dev/null || echo 0); echo $((n+1)) > '${counter}'; echo $n`,
+        script: `n=$(cat count 2>/dev/null || echo 0); echo $((n+1)) > count; echo $n`,
         always_run: true,
-      } as DagNode;
-      const wait = { kind: 'wait', wait: { duration_ms: 60_000 } } as Partial<DagNode>;
-      const { store, runId, deps, instances, nodes } = await fanOut(
-        true,
-        'all_done',
-        wait,
-        upstream
-      );
-      expect(instances.filter(e => e.event_type === 'node_failed')).toHaveLength(1);
+      }) as DagNode;
+    const laterWait = { kind: 'wait', wait: { duration_ms: 60_000 } } as Partial<DagNode>;
+
+    /** The continuation host's claim of the run's timed wait, then its pass. */
+    async function continueAtWait(
+      { store, runId, deps }: { store: IWorkflowStore; runId: string; deps: WorkflowDeps },
+      nodes: DagNode[]
+    ): Promise<void> {
       const paused = await store.getWorkflowRun(runId);
       const pending = paused === null ? undefined : pendingWorkflowWaitDeadline(paused);
       if (paused === null || pending === undefined) throw new Error('run is not at its wait');
-      // The continuation host's claim of the wait, then its pass.
       const hydrated = await hydrateResumableRun(deps, paused, deadlineWaitCursor(pending));
       await executeDagWorkflow(
         dagOptions({
@@ -546,14 +575,36 @@ describe('a failure whose outcome is unknown', () => {
         })
       );
       expect(await events(store, runId, 'node_started', 'up')).toHaveLength(2);
-      const writes = (await store.listWorkflowEvents(runId)).filter(e =>
-        e.step_name?.endsWith('__write')
+    }
+    const writeFailures = async (store: IWorkflowStore, runId: string) =>
+      (await store.listWorkflowEvents(runId)).filter(
+        e => e.event_type === 'node_failed' && e.step_name?.endsWith('__write')
       );
-      expect(writes.filter(e => e.event_type === 'node_failed')).toHaveLength(1);
+
+    it('under all_done a recomputed join replays the absorbed failure, not the writer', async () => {
+      const result = await fanOut(true, 'all_done', { later: laterWait, upstream: counter() });
+      await continueAtWait(result, result.nodes);
+      expect(await writeFailures(result.store, result.runId)).toHaveLength(1);
+    });
+
+    it('under all_done an instance that fails this way when its join is recomputed starts nothing after', async () => {
+      // First pass: an ordinary failure, which the join absorbs and a recompute runs again.
+      const cleaned = join(testDir, 'cleaned');
+      const result = await fanOut(false, 'all_done', {
+        later: laterWait,
+        upstream: counter(),
+        cleanup: cleaned,
+      });
+      expect((await readFile(cleaned, 'utf8')).trim().split('\n')).toHaveLength(2);
+      // Second pass: the rerun writer's outcome is unknown, recorded after the join completed.
+      spy = failingWithOutcomeUnknown(['write']);
+      await continueAtWait(result, result.nodes);
+      expect(await writeFailures(result.store, result.runId)).toHaveLength(2);
+      expect((await readFile(cleaned, 'utf8')).trim().split('\n')).toHaveLength(2);
     });
 
     it('under all_done a later ordinary failure fails the run as today', async () => {
-      const { store, runId } = await fanOut(true, 'all_done', { script: 'exit 1' });
+      const { store, runId } = await fanOut(true, 'all_done', { later: { script: 'exit 1' } });
       expect(await store.getWorkflowRun(runId)).toMatchObject({
         status: 'failed',
         metadata: { stop_reason: { reason: 'node_error' } },
@@ -613,6 +664,34 @@ describe('a failure whose outcome is unknown', () => {
       ] as DagNode[]);
       return { ...result, marker };
     };
+
+    it('starts no queued peer of the same body layer', async () => {
+      spy = failingWithOutcomeUnknown(['write']);
+      const marker = join(testDir, 'peer');
+      // A checkout-guarded writer beside an unguarded peer runs the layer one at a time.
+      const { store, runId } = await run('unknown-group-serial', [
+        {
+          id: 'refine',
+          kind: 'loop_group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            nodes: [
+              {
+                id: 'write',
+                kind: 'exec',
+                runtime: 'sh',
+                script: 'exit 1',
+                mutates_checkout: false,
+              },
+              { id: 'peer', kind: 'exec', runtime: 'sh', script: `touch '${marker}'` },
+            ],
+          },
+        },
+      ] as DagNode[]);
+      expect(existsSync(marker)).toBe(false);
+      await expectEnded(store, runId);
+    });
 
     it('starts no later body layer, fails the group, then ends the run', async () => {
       spy = failingWithOutcomeUnknown(['write']);
@@ -700,6 +779,45 @@ describe('a failure whose outcome is unknown', () => {
       },
     ] as DagNode[]);
     expect(existsSync(marker)).toBe(true);
+    expect((await store.getWorkflowRun(runId))?.metadata).toMatchObject({
+      stop_reason: { reason: 'node_error' },
+    });
+  });
+
+  it('a hand resume reaches the node again past an ordinary failure before it', async () => {
+    const workflow = {
+      name: 'unknown-resume-past',
+      nodes: [
+        { id: 'prep', kind: 'exec', runtime: 'sh', script: 'exit 1' },
+        {
+          id: 'write',
+          kind: 'exec',
+          runtime: 'sh',
+          script: 'exit 1',
+          depends_on: ['prep'],
+          trigger_rule: 'all_done',
+        },
+      ] as DagNode[],
+    };
+    spy = failingWithOutcomeUnknown(['write']);
+    const { store, runId, deps } = await run(workflow.name, workflow.nodes);
+    await expectEnded(store, runId);
+    spy.mockRestore();
+    spy = undefined;
+    const failed = await store.getWorkflowRun(runId);
+    if (failed === null) throw new Error('run vanished');
+    // `prep` fails again, as an ordinary failure; the writer's older record does not stop it.
+    const hydrated = await hydrateResumableRun(deps, failed);
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd: testDir,
+        workflow,
+        workflowRun: hydrated.preCreatedRun,
+        priorCompletedNodes: hydrated.priorCompletedNodes,
+      })
+    );
+    expect(await events(store, runId, 'node_started', 'write')).toHaveLength(2);
     expect((await store.getWorkflowRun(runId))?.metadata).toMatchObject({
       stop_reason: { reason: 'node_error' },
     });

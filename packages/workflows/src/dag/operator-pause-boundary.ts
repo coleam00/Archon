@@ -1,13 +1,12 @@
 import type { WorkflowDeps } from '../deps';
-import { isTerminalRunStatus, operatorPause } from '../schemas';
+import { operatorPause } from '../schemas';
 import { getLog } from './log';
 
 /**
- * Where the top-level walk stops for an operator's pause request (`archon workflow pause`),
- * or because the run already ended (a failure whose outcome is unknown ends it at once).
- * Only `executeDagWorkflow` creates one, so a nested walk never stops here and a `loop`,
- * `loop_group` or `workflow:` node is one unit. `reached` is set once the walk stopped for a
- * request; the caller then pauses the run.
+ * Where the top-level walk stops for an operator's pause request (`archon workflow pause`).
+ * Only `executeDagWorkflow` creates one, so a nested walk never stops for a request and a
+ * `loop`, `loop_group` or `workflow:` node is one unit. `reached` is set once the walk
+ * stopped for the request; the caller then pauses the run.
  */
 export class OperatorPauseBoundary {
   reached = false;
@@ -18,8 +17,7 @@ export class OperatorPauseBoundary {
   ) {}
 
   /**
-   * True, and `reached`, when the run carries a pending request; true without `reached` when
-   * the run already ended. A failed read never stops
+   * True, and `reached`, when the run carries a pending request. A failed read never stops
    * the walk: failing the run over it would destroy the work the pause exists to keep, and
    * the next boundary reads again.
    */
@@ -31,7 +29,6 @@ export class OperatorPauseBoundary {
       getLog().warn({ err, workflowRunId: this.runId }, 'dag.operator_pause_read_failed');
       return false;
     }
-    if (run !== null && isTerminalRunStatus(run.status)) return true;
     if (run === null || operatorPause(run)?.state !== 'requested') return false;
     getLog().info({ workflowRunId: this.runId }, 'dag.operator_pause_boundary_reached');
     this.reached = true;

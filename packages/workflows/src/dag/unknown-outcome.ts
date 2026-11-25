@@ -1,15 +1,15 @@
 /**
- * Where a failure reaches the run's top level (a top-level node settles `failed`): when the
- * run holds a live unknown outcome (`liveUnknownOutcomes`), fail the run now with stop reason
- * `outcome_unknown`, under the pass's own claim, so also a row its own parallel wait or gate
- * paused. A failure inside an aggregate is the aggregate's to judge: nested walks always
- * have a step prefix and stop here.
+ * Where a walk reaches a failure whose outcome is unknown (`liveUnknownOutcomes`): the walk
+ * starts nothing more, and at the top level the pass fails the run with stop reason
+ * `outcome_unknown`, under its own claim, so also a row its own parallel wait or gate paused.
  */
 import { spellWorkflowCommand } from '../deps';
 import { measureFailedChangeSize } from '../change-size';
 import { logWorkflowError } from '../logger';
 import { safeSendMessage } from '../platform-messages';
 import { executionClaim } from '../store';
+import { composeFanOutScopeSegment } from '../fan-out-identity';
+import { loopBodyStepNamePrefix } from '../graph-plan';
 import { readLiveUnknownOutcomes } from '../unknown-outcome';
 import { getLog } from './log';
 import type { DagNode } from '../schemas';
@@ -74,22 +74,23 @@ export async function failRunOnUnknownOutcome(
 }
 
 /**
- * After `layer` settled with a failure, whether the walk's own steps hold a live unknown
- * outcome. A walk that does dispatches no further layer: a loop body or composed instance
- * ends there and its aggregate fails over it.
+ * Called where `node` of a walk settled `failed`: whether the failure reached a live unknown
+ * outcome, read from the stored records of the node and of what runs under it (a loop body,
+ * a composed fan-out's instances). Only what this node just ran decides, never another
+ * node's older record, so a resume by hand reaches the uncertain node again. When it did,
+ * the walk starts nothing more, and the top-level walk fails the run.
  */
-export async function walkHoldsUnknownOutcome(
+export async function reachedUnknownOutcome(
   ctx: RunLayersContext,
-  layer: readonly DagNode[]
+  node: DagNode
 ): Promise<boolean> {
-  if (!layer.some(node => ctx.nodeOutputs.get(node.id)?.state === 'failed')) return false;
-  const nodes = await readLiveUnknownOutcomes(ctx.deps.store, ctx.workflowRun);
-  return nodes.some(step => step.startsWith(ctx.stepNamePrefix));
-}
-
-/** Called where a node of a walk settled `failed`; acts only at the top level. */
-export async function endRunAtUnknownOutcome(ctx: RunLayersContext): Promise<void> {
-  if (ctx.stepNamePrefix !== '') return;
-  const nodes = await readLiveUnknownOutcomes(ctx.deps.store, ctx.workflowRun);
-  if (nodes.length > 0) await failRunOnUnknownOutcome(ctx, nodes);
+  const step = ctx.stepNamePrefix + node.id;
+  const body = loopBodyStepNamePrefix(step);
+  const scope = `${ctx.stepNamePrefix}${composeFanOutScopeSegment(node.id, ctx.loopGroupPath)}__`;
+  const reached = (await readLiveUnknownOutcomes(ctx.deps.store, ctx.workflowRun)).filter(
+    path => path === step || path.startsWith(body) || path.startsWith(scope)
+  );
+  if (reached.length === 0) return false;
+  if (ctx.stepNamePrefix === '') await failRunOnUnknownOutcome(ctx, reached);
+  return true;
 }
