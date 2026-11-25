@@ -756,7 +756,7 @@ export async function completeStartBindingPreparation(
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(row.intent));
     const { limit, grants } = storedLimitFields(row.start_limit, row.grants_limit);
     const item = await namedItem(query, input, row.item_key);
-    const counted = await countStartLimits(query, item, limit, grants);
+    const counted = await countStartLimits(query, item, limit, grants, { ...input, persisted });
     if ('refused' in counted) {
       await query(
         `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'rejected', preparation_error = $4, forge_refusal = NULL, updated_at = ${getDialect().now()}

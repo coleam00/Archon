@@ -74,6 +74,7 @@ import { registerRepository } from '../handlers/clone';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { handOffAdmitted, type StartedExecutor } from './start-executor';
+import { leaveForInstalledEngine } from './installed-engine-preparation';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { assertLaneStartable, executionLane, handoffIsolation } from './resource-start-lanes';
 import { resolveBindingInputs, selectStartedWorkflow } from './binding-workflow';
@@ -306,7 +307,7 @@ async function prepareBinding(
 }
 
 async function prepareClaimedBinding(
-  host: WorkflowHost,
+  host: ResourceStartHost,
   intent: ResourceStartBindingIntent,
   identity: BindingIdentity
 ): Promise<PreparationResult> {
@@ -328,6 +329,13 @@ async function prepareClaimedBinding(
     stage = 'launch_preparation';
     return await prepareBinding(host, intent, identity, found?.item ?? null, runConfig);
   } catch (error) {
+    if (host.engineChanged?.())
+      return await leaveForInstalledEngine(
+        host.deps.store,
+        identity,
+        preparationStageFailure(stage),
+        error
+      );
     // Unknown failures are not an implicit retry policy; the receipt stays inspectable.
     // Configuration and provider errors can contain secret values, so persist the
     // failed boundary, not the exception text. A forge refusal is the exception: it holds
@@ -357,6 +365,12 @@ export interface ResourceStartHost extends WorkflowHost {
   hostId: string;
   /** Start one admitted request: the CLI detaches it, the server runs it in-process unawaited. */
   startAdmitted: (requestId: string) => Promise<StartedExecutor | null>;
+  /**
+   * Whether the installed engine changed since this process loaded its code. A failed
+   * preparation is then left pending for a current process (`leaveForInstalledEngine`).
+   * Omitted by a host that cannot tell, which rejects failures as before.
+   */
+  engineChanged?: () => boolean;
 }
 
 /**

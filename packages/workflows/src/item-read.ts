@@ -79,7 +79,7 @@ import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 import { readItemRunResult, itemCompletionEvents } from './item-run-result';
 import { runPack, runPackSchema } from './run-pack';
-import { startLimitStandingSchema } from './start-limit';
+import { itemStartLimitSchema, type LimitBindingsReader, withLimitBindings } from './start-limit';
 import { recordedSpendSchema, type RunUsageReport } from './schemas/run-usage-report';
 import { hasUnknownTokenTotal } from './schemas/run-usage';
 import { readRunUsageReports } from './run-usage-read';
@@ -325,10 +325,9 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * remote; a run does when it starts. `waits` are what the item waits for outside Archon:
  * the open waits completed runs left on it (`returns.waits`), each with when it opened and
  * fell due, and `overdue` once that time has passed. An overdue set is also among
- * `questions`. `startLimits` are the start limits of the bindings that started work on the
- * item: for each, how many starts it allows, how many are used, granted and left, and since
- * when it counts. A binding at `left: 0` is refused its next start on the item, and the
- * refusal is on its receipt (`trigger inspect`).
+ * `questions`. `startLimits` are the start limits bindings counted on the item, each with
+ * its count (`startLimitStanding`) and the trigger files under it; at `left: 0` the next
+ * start is refused, and the refusal is on its receipt (`trigger inspect`).
  */
 export const itemReadSchema = z.object({
   spend: recordedSpendSchema,
@@ -339,7 +338,7 @@ export const itemReadSchema = z.object({
   hold: installHoldSchema.nullable(),
   held: z.array(itemHeldStartSchema),
   runLimit: runLimitSchema.nullable(),
-  startLimits: z.array(startLimitStandingSchema),
+  startLimits: z.array(itemStartLimitSchema),
   waits: z.array(itemOpenWaitSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
@@ -382,6 +381,7 @@ export interface ItemReadSource extends AttentionQueueSource {
     >;
   /** Observes an awaiting start's executor; without it, the start reads `unknown`. */
   startExecutor?: StartExecutorObserver;
+  limitBindings?: LimitBindingsReader;
 }
 
 async function itemRun(
@@ -780,7 +780,7 @@ export async function assembleItemRead(
     hold,
     held,
     runLimit: runLimit && { limit: runLimit.limit, live: runLimit.live },
-    startLimits: startLimits.limits,
+    startLimits: await withLimitBindings(startLimits.limits, source.limitBindings),
     waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
       event: wait.event,
       about: wait.about,

@@ -11,12 +11,7 @@ import type { RunPhase } from './executor-shared';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { readCheckoutMark } from './checkout-mark';
 import { sampleCheckout, type CheckoutSample } from './checkout-observation';
-import type {
-  ResolvedWorkflow,
-  WorkflowExecutionResult,
-  WorkflowInputSpec,
-  WorkflowRun,
-} from './schemas';
+import type { ResolvedWorkflow, WorkflowInputSpec, WorkflowRun } from './schemas';
 import type { ResultCommit, TerminalRecord } from './schemas/terminal-record';
 import { readSubrunMetadata, runInputsMetadata, SUBRUN_METADATA_KEYS } from './schemas';
 import { splitAttentionRead } from './schemas/attention-degraded';
@@ -377,35 +372,6 @@ export function unsuppliedResultInputs(
         : []
     )
   );
-}
-
-/**
- * A run whose `result_of` inputs were not supplied reads them from its item, so with no
- * item it is refused before it does any work. A `workflow:` child carries no item, so its
- * parent must pass such an input through `with:`.
- */
-export async function refuseResultInputsWithoutItem(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  workflow: ResolvedWorkflow,
-  workflowRun: WorkflowRun,
-  resultInputs: ReadonlyMap<string, ResultInputSpec>
-): Promise<WorkflowExecutionResult | undefined> {
-  const [first] = resultInputs;
-  if (first === undefined || workflowRun.item_id !== null) return undefined;
-  const [input, { workflow: source }] = first;
-  const reason = `Workflow '${workflow.name}' reads input '${input}' from result_of '${source}', which resolves from the run's item: start it with --item <key>, or supply '${input}'`;
-  await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
-  await requireTerminalStatusWrite(
-    deps.store.cancelWorkflowRun(
-      workflowRun.id,
-      { cancel_reason: 'precondition_failed' },
-      { pendingOnly: true }
-    ),
-    { workflowRunId: workflowRun.id, site: 'workflow.result_inputs_without_item_refused' }
-  );
-  return { success: false, workflowRunId: workflowRun.id, error: reason };
 }
 
 /** A commit as the start message names it. */

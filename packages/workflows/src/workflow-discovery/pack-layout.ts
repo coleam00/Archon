@@ -110,6 +110,18 @@ export async function readScopePacks(
   return { packs, errors };
 }
 
+/**
+ * Whether an entry of a workflows root is project data, never a pack. `defaults` is the
+ * flat-defaults convention: loadWorkflowsFromDir reads its files. Captures taken by builds
+ * that still bundled flat defaults hold `defaults/legacy/`, which packaged scanning would
+ * misread and fail with "must contain exactly one .yaml" on every discovery pass.
+ * `fixtures` holds dry-run stub data. Every reader that maps a workflows root to its packs
+ * asks this, so a pack-folder source and script discovery agree with discovery.
+ */
+export function isReservedScopeDirName(name: string): boolean {
+  return name === 'defaults' || name === FIXTURES_DIR;
+}
+
 async function readScopePack(
   name: string,
   packPath: string
@@ -119,11 +131,7 @@ async function readScopePack(
   } catch (error) {
     return pathReadError(name, { packPath }, error);
   }
-  // `defaults` is the flat-defaults convention, not a pack: loadWorkflowsFromDir
-  // reads its files. Captures taken by builds that still bundled flat defaults
-  // hold `defaults/legacy/`, which packaged scanning would misread and fail with
-  // "must contain exactly one .yaml" on every discovery pass.
-  if (name === 'defaults' || name === FIXTURES_DIR) return undefined;
+  if (isReservedScopeDirName(name)) return undefined;
   if (!isValidWorkflowFolderSegment(name)) {
     return {
       filename: name,
