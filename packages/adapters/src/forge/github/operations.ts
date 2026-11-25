@@ -23,6 +23,7 @@ import {
   handleGithubRepoLabelsList,
   handleGithubWorkItemLabelAdded,
   handleGithubWorkItemList,
+  handleGithubWorkItemOpened,
   handleGithubWorkItemView,
 } from './workitems';
 import { handleGithubPrThreads } from './review-threads';
@@ -51,6 +52,7 @@ export const githubPluginMetadata = {
     'workitem.edit-body',
     'workitem.list',
     'workitem.label.added',
+    'workitem.opened',
     'workitem.search',
     'repo.labels.list',
     'repo.label.ensure',
@@ -112,6 +114,7 @@ const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'workitem.view': handleGithubWorkItemView,
   'workitem.list': handleGithubWorkItemList,
   'workitem.label.added': handleGithubWorkItemLabelAdded,
+  'workitem.opened': handleGithubWorkItemOpened,
   'workitem.search': handleGithubWorkItemSearch,
   'workitem.comments': handleGithubWorkItemComments,
   'repo.labels.list': handleGithubRepoLabelsList,

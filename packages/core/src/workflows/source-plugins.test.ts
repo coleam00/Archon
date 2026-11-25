@@ -417,6 +417,9 @@ function forgeReader() {
     labelAdded: async (): Promise<never> => {
       throw new Error('no label read expected');
     },
+    issuesOpened: async (): Promise<never> => {
+      throw new Error('no opened-issue read expected');
+    },
   };
 }
 
@@ -437,6 +440,7 @@ describe('observing open item waits', () => {
         sourceInstanceId: 'source-1',
         everySeconds: 60,
         labels: [],
+        openedIssues: [],
         unservedBindings: [],
         wakes: [{ workflow: 'host', wait: 'checks' }],
       },
@@ -1357,6 +1361,7 @@ describe('observing label bindings', () => {
         source: 'source-1',
         waits: 0,
         labels: 0,
+        openedIssues: 0,
         reads: 0,
         receipts: [],
         replayed: [],
@@ -1392,5 +1397,125 @@ describe('observing label bindings', () => {
     expect(reads).toBeGreaterThan(0);
     await observer?.pass(new Date(start + 15_000));
     expect(forge.reads).toHaveLength(reads);
+  });
+});
+
+describe('observing opened issues', () => {
+  const READ = { bindingId: 'triage', repo: LABEL_REPO };
+  const MARKER = 'observe:issue-opened-seen:triage:github.com/owner/repo';
+
+  /**
+   * A source with one opened-issue read whose plugin lists from the `since` it is handed,
+   * or from `askSince` when set, and records each `since` it was handed.
+   */
+  async function openedFixture(askSince?: string) {
+    const root = await mkdtemp(join(tmpdir(), 'archon-webhook-source-'));
+    roots.push(root);
+    const modulePath = join(root, 'source.ts');
+    const configPath = join(root, 'sources.json');
+    await writeFile(
+      modulePath,
+      `export const handed = [];
+export default ({ config }) => ({
+  receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
+  observedOpenedIssues: { reads: [config.read] },
+  observe: async ({ openedIssues, forge }) => {
+    const openedIssueFailures = [];
+    for (const read of openedIssues ?? []) {
+      handed.push(read.since);
+      try {
+        await forge.issuesOpened({ repo: read.repo, since: config.askSince ?? read.since });
+      } catch (error) {
+        openedIssueFailures.push({ bindingId: read.bindingId, reason: error.message });
+      }
+    }
+    return { acceptances: [], unserved: [], failed: [], labelAcceptances: [], labelFailures: [], openedIssueFailures };
+  },
+});\n`,
+      'utf8'
+    );
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sources: [
+          {
+            sourceInstanceId: 'source-1',
+            module: modulePath,
+            config: { read: READ, ...(askSince === undefined ? {} : { askSince }) },
+            observe: { everySeconds: 15 },
+          },
+        ],
+      }),
+      'utf8'
+    );
+    const { handed } = (await import(modulePath)) as { handed: string[] };
+    return { configPath, handed };
+  }
+
+  function openedForge() {
+    const asked: string[] = [];
+    return {
+      ...forgeReader(),
+      asked,
+      issuesOpened: async ({ repo, since }: { repo: typeof LABEL_REPO; since: string }) => {
+        asked.push(since);
+        return { repo, since, items: [] };
+      },
+    };
+  }
+
+  test('the first pass only records the cutoff; later passes list from it, then from the last clean pass', async () => {
+    const { configPath, handed } = await openedFixture();
+    const store = receiptStore();
+    const sources = await loadWebhookSourcePlugins(configPath, store.dependencies);
+    const forge = openedForge();
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    const start = Date.parse('2026-01-01T00:00:00.000Z');
+
+    const before = Date.now();
+    const [first] = (await observer?.pass(new Date(start))) ?? [];
+    expect(first).toMatchObject({ openedIssues: 1, reads: 0 });
+    expect(handed).toEqual([]);
+    const cutoff = store.receipts.get(MARKER)?.receipt.occurredAt ?? '';
+    expect(Date.parse(cutoff)).toBeGreaterThanOrEqual(before - 1000);
+
+    // A pass soon after lists from the cutoff: the last clean pass less the overlap is older.
+    await observer?.pass(new Date(start + 15_000));
+    expect(handed).toEqual([cutoff]);
+    expect(forge.asked).toEqual([cutoff]);
+
+    // With a cutoff long past, a clean pass moves the next one up to its own start, less
+    // ten minutes.
+    store.receipts.set(MARKER, {
+      ...(store.receipts.get(MARKER) as SourceReceiptAcceptance),
+      receipt: {
+        ...(store.receipts.get(MARKER) as SourceReceiptAcceptance).receipt,
+        occurredAt: '2025-01-01T00:00:00.000Z',
+      },
+    });
+    forge.asked.length = 0;
+    const cleanAt = Date.now();
+    await observer?.pass(new Date(start + 30_000));
+    await observer?.pass(new Date(start + 45_000));
+    expect(forge.asked[0]).toBe('2025-01-01T00:00:00.000Z');
+    const moved = Date.parse(forge.asked[1] ?? '');
+    expect(moved).toBeGreaterThanOrEqual(cleanAt - 600_000 - 1000);
+    expect(moved).toBeLessThanOrEqual(Date.now() - 600_000);
+  });
+
+  test('a source that lists from another time than it was handed is refused', async () => {
+    const { configPath } = await openedFixture('2000-01-01T00:00:00.000Z');
+    const store = receiptStore();
+    const sources = await loadWebhookSourcePlugins(configPath, store.dependencies);
+    const forge = openedForge();
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    const start = Date.parse('2026-01-01T00:00:00.000Z');
+    await observer?.pass(new Date(start));
+    const [second] = (await observer?.pass(new Date(start + 15_000))) ?? [];
+    expect(second?.error).toContain(
+      "binding 'triage' opened issues: No opened-issue read of 'github.com/owner/repo' lists from 2000-01-01T00:00:00.000Z in this pass"
+    );
+    expect(forge.asked).toEqual([]);
   });
 });

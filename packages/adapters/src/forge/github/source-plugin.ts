@@ -19,7 +19,9 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import type {
   ObservedLabels,
+  ObservedOpenedIssues,
   SourceObservation,
+  UnservedBinding,
   WebhookSourcePlugin,
   WebhookSourcePluginFactory,
   WebhookSourceResult,
@@ -219,7 +221,7 @@ async function observeWaits(
   sourceInstanceId: string,
   config: GitHubSourceConfig,
   { waits, forge }: ObserveInput
-): Promise<Omit<SourceObservation, 'labelAcceptances' | 'labelFailures'>> {
+): Promise<Omit<SourceObservation, 'labelAcceptances' | 'labelFailures' | 'openedIssueFailures'>> {
   const { targets, unserved } = planTargets(config, waits);
   const failed: SourceObservation['failed'] = [];
   const acceptances: SourceReceiptAcceptance[] = [];
@@ -364,6 +366,131 @@ function labelReadsOf(config: GitHubSourceConfig): ObservedLabels {
     else for (const label of new Set(names)) reads.push({ bindingId, repo: read.repo, label });
   }
   return { reads, unserved };
+}
+
+/**
+ * The opened-issue reads this source's `issue.lifecycle` bindings name, one per binding,
+ * with the opened-issue bindings it cannot observe; and, apart from those, the bindings of
+ * a kind no observe read serves. A binding with `wake` is the wait observation's, which
+ * reports per wait.
+ */
+function openedIssueReadsOf(config: GitHubSourceConfig): {
+  opened: ObservedOpenedIssues;
+  other: UnservedBinding[];
+} {
+  const reads: ObservedOpenedIssues['reads'] = [];
+  const unserved: UnservedBinding[] = [];
+  const other: UnservedBinding[] = [];
+  for (const binding of config.bindings) {
+    const { selector, bindingId } = binding;
+    if (selector.kind === 'label.changed' || binding.wake !== undefined) continue;
+    if (selector.kind !== 'issue.lifecycle') {
+      // A source that receives webhooks gets these events by webhook.
+      if (config.webhookSecretEnv === undefined)
+        other.push({ bindingId, reason: `a ${selector.kind} event is not observed` });
+      continue;
+    }
+    if (config.webhookSecretEnv !== undefined)
+      unserved.push({
+        bindingId,
+        reason: 'this source receives webhooks; issue events arrive by webhook',
+      });
+    else if (!selector.actions.includes('opened'))
+      unserved.push({ bindingId, reason: 'only an opened issue is observed' });
+    else if (selector.repository === undefined)
+      unserved.push({ bindingId, reason: 'the selector names no repository to list' });
+    else if (selector.repository.host !== config.host)
+      unserved.push({ bindingId, reason: `the selector's repository is not on ${config.host}` });
+    else reads.push({ bindingId, repo: { host: config.host, path: selector.repository.path } });
+  }
+  return { opened: { reads, unserved }, other };
+}
+
+/**
+ * The `issue.lifecycle` opened event a webhook would have carried for each issue an
+ * opened-issue read lists. The engine hands a read on only after its first sight, from the
+ * `since` it keeps, so every issue listed is new and starts its binding once. An issue
+ * opened and closed between two passes is not listed. Without `openedIssues` (an engine
+ * that predates them) nothing is read and the result has no `openedIssueFailures`, which
+ * that engine would refuse.
+ */
+async function observeOpenedIssues(
+  sourceInstanceId: string,
+  config: GitHubSourceConfig,
+  { openedIssues, forge }: ObserveInput
+): Promise<
+  Pick<SourceObservation, 'acceptances'> & Partial<Pick<SourceObservation, 'openedIssueFailures'>>
+> {
+  if (openedIssues === undefined) return { acceptances: [] };
+  const acceptances: SourceReceiptAcceptance[] = [];
+  const openedIssueFailures: SourceObservation['openedIssueFailures'] = [];
+  const receivedAt = new Date().toISOString();
+  for (const { bindingId, repo, since } of openedIssues) {
+    const binding = config.bindings.find(entry => entry.bindingId === bindingId);
+    if (binding === undefined) continue;
+    let listed: Awaited<ReturnType<ObserveInput['forge']['issuesOpened']>>;
+    try {
+      listed = await forge.issuesOpened({ repo, since });
+    } catch (error) {
+      openedIssueFailures.push({ bindingId, reason: errorText(error) });
+      continue;
+    }
+    for (const issue of listed.items) {
+      const result = openedIssueAcceptance(sourceInstanceId, receivedAt, binding, repo, issue);
+      if (result === undefined) continue;
+      if (result.kind === 'failed') openedIssueFailures.push({ bindingId, reason: result.reason });
+      else acceptances.push(result.acceptance);
+    }
+  }
+  return { acceptances, openedIssueFailures };
+}
+
+type OpenedIssue = Awaited<ReturnType<ObserveInput['forge']['issuesOpened']>>['items'][number];
+
+/**
+ * The acceptance one opened issue makes for one binding; why the binding rejects it; or
+ * nothing, when the binding does not select the event.
+ */
+function openedIssueAcceptance(
+  sourceInstanceId: string,
+  receivedAt: string,
+  binding: GitHubSourceBinding,
+  repo: { host: string; path: string },
+  issue: OpenedIssue
+):
+  | { kind: 'accepted'; acceptance: SourceReceiptAcceptance }
+  | { kind: 'failed'; reason: string }
+  | undefined {
+  const event = {
+    kind: 'issue.lifecycle',
+    action: 'opened',
+    issue: { repo, number: issue.ref.number },
+    state: issue.state,
+  } satisfies ForgeEvent;
+  const evaluated = evaluateBinding(binding, event);
+  if ('skipped' in evaluated)
+    return evaluated.skipped.status === 'rejected'
+      ? {
+          kind: 'failed',
+          reason: `issue ${String(issue.ref.number)}: the binding rejects the event: ${evaluated.skipped.reason}`,
+        }
+      : undefined;
+  const acceptance: SourceReceiptAcceptance = {
+    receipt: {
+      id: randomUUID(),
+      sourceInstanceId,
+      // A persisted contract: one delivery per issue and binding, so an issue listed again,
+      // by a later pass or a restarted process, is a replay and starts once.
+      deliveryId: `observe:issue-opened:${repo.host}/${repo.path}#${String(issue.ref.number)}:${binding.bindingId}`,
+      contentDigest: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
+      receivedAt,
+      occurredAt: issue.createdAt,
+      sourceActor: issue.author == null ? null : { source: sourceInstanceId, id: issue.author.id },
+    },
+    outcome: 'matched',
+    bindings: [evaluated.start],
+  };
+  return { kind: 'accepted', acceptance };
 }
 
 /** The repository a label binding lists, or why it cannot be observed. */
@@ -555,12 +682,21 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
     config.webhookSecretEnv === undefined ? undefined : process.env[config.webhookSecretEnv];
   if (config.webhookSecretEnv !== undefined && !secret)
     throw new Error('GitHub source plugin webhook secret is unavailable');
+  const { opened, other } = openedIssueReadsOf(config);
   return {
     observedLabels: labelReadsOf(config),
+    observedOpenedIssues: opened,
+    unservedBindings: other,
     async observe(input) {
       const waits = await observeWaits(sourceInstanceId, config, input);
       const labels = await observeLabels(sourceInstanceId, config, input);
-      return { ...waits, ...labels };
+      const issues = await observeOpenedIssues(sourceInstanceId, config, input);
+      return {
+        ...waits,
+        ...labels,
+        ...issues,
+        acceptances: [...waits.acceptances, ...issues.acceptances],
+      };
     },
     async receive(request): Promise<WebhookSourceResult> {
       if (
