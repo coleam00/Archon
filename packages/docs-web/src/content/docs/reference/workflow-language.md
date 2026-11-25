@@ -1137,23 +1137,24 @@ Plain `archon workflow run` never resumes implicitly.
 
 A node failure can record the kind `outcome_unknown`: the node may have had a side effect (a write, a call that timed out after sending) and Archon cannot know whether it happened. No built-in node records this kind yet; a node that writes through a tool is the intended first use.
 
-The rule: while a run holds a live unknown outcome, nothing continues it by itself. A node's failure is live while its latest stored record is that failure, unless it sits in a composed fan-out whose join completed (`join: all_done` absorbs a failed instance, as today).
+The rule: while a run holds a live unknown outcome, nothing continues it by itself. A node's failure is live while its latest stored record is that failure, unless it sits in a composed fan-out whose join completed in that occurrence, that is, in that loop round (`join: all_done` absorbs a failed instance, as today).
 
 - The node is never retried, whatever its `retry.on_error` says.
-- Where a failure reaches the run's top level (a top-level node settles `failed`) and the run holds a live unknown outcome, Archon fails the run right then with stop reason `outcome_unknown`. No later layer starts, an `always_run` node or one with `trigger_rule: all_done` included. Nodes already running in parallel finish.
+- Where a failure reaches the run's top level (a top-level node settles `failed`) and the run holds a live unknown outcome, Archon fails the run right then with stop reason `outcome_unknown`. No later layer starts, an `always_run` node or one with `trigger_rule: all_done` included. Nodes still running beside it are stopped, as at any run end.
+- Inside a `loop_group` body or a composed fan-out instance, the body or instance starts no later layer once it holds such a failure; it ends there and its aggregate fails over it.
 - A pause that a parallel `wait:` or gate of the same pass published does not survive: the pass fails the run, not leaves it paused.
 - Every continuation that would run by itself is refused while the run holds a live unknown outcome: a timed or event wait coming due, an answered gate or wait, a source release, and a parent continued after its child. A run whose sibling's source is unreadable is failed instead of released. A run held at a provider usage limit is failed before it waits.
 - `archon workflow attention` lists the failed run as `stopped`, naming the nodes whose outcome is unknown, also when it is a child run or has no item, until it is resumed or abandoned. A new run on its item does not close it.
 
-The operator decides what happens next: check what the node did, then resume the run with `archon workflow resume <run-id>`, which runs the failed node again, or discard it with `archon workflow abandon <run-id>`. A resume by hand is never refused. Do not rely on a replay after a continuation to be safe for such a node: nothing replays it by itself.
+The operator decides what happens next: check what the node did, then resume the run with `archon workflow resume <run-id>`, which runs the failed node again, or discard it with `archon workflow abandon <run-id>`. The unknown outcome never refuses a resume by hand; the usual admission checks (the item, the run limit, a busy resource) still apply. Do not rely on a replay after a continuation to be safe for such a node: nothing replays it by itself.
 
 What each aggregate does with a node or instance that fails this way:
 
 | Where it fails | What happens |
 |---|---|
 | A composed fan-out instance under `join: all_success` | The fan-out node fails once its instances finish, and the run ends with the reason |
-| A composed fan-out instance under `join: all_done` | A failed instance, as today: the other instances run, the join completes with the `archon_failed` marker in that slot, and the run goes on. A later failure is reported as any failure |
-| A `loop_group` body node | The group fails, as for any failed body node, and the run ends with the reason. A loop group that completes over the failure still holds it |
+| A composed fan-out instance under `join: all_done` | A failed instance, as today: the other instances run, the join completes with the `archon_failed` marker in that slot, and the run goes on. When a later pass recomputes the join, the instance gets its recorded failure back and is not run again. A later failure is reported as any failure |
+| A `loop_group` body node | The body starts no later layer, the group fails, and the run ends with the reason. A loop group that completes over the failure still holds it |
 | A child run of a `workflow:` node or fan-out | The child run ends with the reason, and attention lists the child. The parent treats it as any failed child |
 
 This is separate from `retryable: false`, which a `bash:`/`script:` contract failure records and which only stops the immediate retry of that node. A failure with `retryable: false` keeps the later layers, usage-limit wait, source release and stop reason of any other failure.

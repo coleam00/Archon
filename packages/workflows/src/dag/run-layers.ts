@@ -30,7 +30,7 @@ import { getLog } from './log';
 import { incrementalLoopUsage, sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settleSequentially, settledValuesOrThrow } from './node-source';
 import type { OperatorPauseBoundary } from './operator-pause-boundary';
-import { endRunAtUnknownOutcome } from './unknown-outcome';
+import { endRunAtUnknownOutcome, walkHoldsUnknownOutcome } from './unknown-outcome';
 import {
   beginExecution,
   ownsBodySessionCursor,
@@ -51,7 +51,8 @@ import { getStaleCachedDependencies } from './stale-dependencies';
  * Walk the topological `layers` of a DAG (or subgraph), executing each layer's nodes
  * concurrently within each admission phase, aggregating results into `ctx.nodeOutputs` and usage into
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
- * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
+ * state (paused/cancelled/deleted), or once a layer failed and the walk's own steps hold a
+ * live unknown outcome — the caller always proceeds to its own terminal tally.
  * The top-level walk also stops at `pause`: before each layer dispatches, or before the
  * next node of a layer it runs one node at a time.
  *
@@ -73,6 +74,7 @@ export async function runLayers(
     await runLayer(ctx, layer, layerIdx, pause);
 
     if (pause?.reached || (await stopsBetweenLayers(ctx, layerIdx))) break;
+    if (await walkHoldsUnknownOutcome(ctx, layer)) break;
   }
 }
 
@@ -153,6 +155,7 @@ async function runLayerPhase(
           guardedLayerSnapshots,
           nodeInvocation: invocation,
         };
+        let settled: LayerNodeResult;
         try {
           const admitted = await admitNode(nodeCtx, node);
           if (admitted !== undefined) mayRun?.delete(node.id);
@@ -176,19 +179,19 @@ async function runLayerPhase(
           if (admitted === undefined)
             await observeReturnsCheckout(nodeCtx, node.id, result.output, mayRun);
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
-          if (result.output.state === 'failed') await endRunAtUnknownOutcome(ctx);
-          return result;
+          settled = result;
         } catch (error) {
           if (isWorkflowExecutionInterruption(error)) throw error;
           nodeCtx.interactionAdmission?.failed(node.id);
           // A failed admission settles an invocation a prior pass may have left scratch for.
           await releaseInvocationScratch(nodeCtx, node, invocation.id);
-          const failed = await recordPreExecutionFailure(nodeCtx, node, error);
-          await endRunAtUnknownOutcome(ctx);
-          return failed;
+          settled = await recordPreExecutionFailure(nodeCtx, node, error);
         } finally {
           peers?.[index].finished();
         }
+        // Outside the handler: a failure here is the pass's, never recorded over the node's.
+        if (settled.output.state === 'failed') await endRunAtUnknownOutcome(ctx);
+        return settled;
       }
   );
   const layerResults = sequential

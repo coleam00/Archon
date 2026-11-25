@@ -51,15 +51,14 @@ export function composeFanOutScopeSegment(
 }
 
 /**
- * The join step a stored fan-out scope name belongs to: the inverse of prefixing
- * `composeFanOutScopeSegment`. Node ids may not contain the marker, so its last occurrence
- * is this fan-out's; the text before it is the outer step prefix, and the last `__` segment
- * after it is the loop identity.
+ * The outer step prefix and fan-out node id a stored scope name was made from: the inverse
+ * of prefixing `composeFanOutScopeSegment`. Node ids may not contain the marker, so its last
+ * occurrence is this fan-out's, and the last `__` segment after it is the loop identity.
  */
-export function composeFanOutJoinStep(scopeName: string): string {
+export function composeFanOutScopeParts(scopeName: string): { prefix: string; nodeId: string } {
   const marker = scopeName.lastIndexOf(COMPOSE_FAN_OUT_STEP_MARKER);
   const rest = scopeName.slice(marker + COMPOSE_FAN_OUT_STEP_MARKER.length);
-  return scopeName.slice(0, marker) + rest.slice(0, rest.lastIndexOf('__'));
+  return { prefix: scopeName.slice(0, marker), nodeId: rest.slice(0, rest.lastIndexOf('__')) };
 }
 
 /**

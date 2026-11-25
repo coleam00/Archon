@@ -16,7 +16,8 @@ import {
   RUN_DISPATCH_METADATA_KEY,
 } from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
+import * as nodeEventWrite from './node-event-write';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -1705,6 +1706,63 @@ nodes:
     expect(aggregate[0]).toBe('ok:a');
     // The failed child is represented as the marked error object, not dropped.
     expect(aggregate[1]).toMatchObject({ archon_failed: true, status: 'failed' });
+  });
+
+  it('all_done: a child that fails with an unknown outcome stops itself; the parent completes', async () => {
+    await writeWorkflow('fan-child-cond', fanChildCond);
+    await writeWorkflow(
+      'fan-alldone',
+      `
+name: fan-alldone
+description: all_done over a child whose outcome is unknown
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["a","boom"]'
+  - id: work
+    workflow: fan-child-cond
+    depends_on: [plan]
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 2
+      join: all_done
+`
+    );
+    // The child's failing node records its failure as an unknown outcome.
+    const realRecord = nodeEventWrite.recordNodeState;
+    const spy = spyOn(nodeEventWrite, 'recordNodeState').mockImplementation(
+      (sinks, record, continuation) =>
+        realRecord(
+          sinks,
+          !('cache' in record) && record.lifecycle.status === 'failed' && record.node.id === 'run'
+            ? { ...record, lifecycle: { ...record.lifecycle, failureKind: 'outcome_unknown' } }
+            : record,
+          continuation
+        )
+    );
+    try {
+      const store = new InMemoryStore();
+      const failing: Pick<IWorkflowStore, 'failWorkflowRun'> = store;
+      const fail = spyOn(failing, 'failWorkflowRun');
+      const deps = makeDeps(store);
+      const parent = await discover('fan-alldone');
+      const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+        conversationId: 'conv-db',
+      });
+      expect(result.success).toBe(true);
+      const runs = [...store.runs.values()];
+      expect(runs.find(r => r.workflow_name === 'fan-alldone')?.status).toBe('completed');
+      const children = runs.filter(r => r.workflow_name === 'fan-child-cond');
+      expect(children.map(r => r.status).sort()).toEqual(['completed', 'failed']);
+      // The engine failed the child with the stop reason attention lists it by (this test
+      // store keeps no stop reason; the store conformance suite proves the stores do).
+      const failed = children.find(r => r.status === 'failed');
+      expect(
+        fail.mock.calls.filter(([id]) => id === failed?.id).map(([, , o]) => o?.exitReason)
+      ).toEqual(['outcome_unknown']);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('bounds concurrency to max_parallel (sliding window over the children)', async () => {

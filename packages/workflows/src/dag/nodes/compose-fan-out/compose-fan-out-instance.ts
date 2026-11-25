@@ -29,6 +29,7 @@ import { aggregateProviderFailure, rootFailures } from '../../../executor-shared
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { RunSourceUnreadableError } from '../../node-source';
+import { readLiveUnknownOutcomes } from '../../../unknown-outcome';
 import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { type RunLayersContext } from '../../run-context';
 import { expandComposeInstance } from './compose-fan-out-expansion';
@@ -449,6 +450,32 @@ async function settleInstance(
 }
 
 /**
+ * An instance whose node failed with an unknown outcome that the join's completed
+ * occurrence absorbed (`liveUnknownOutcomes`): a recomputed join gets the recorded failure
+ * back rather than running the uncertain node again. A live one runs again, which only a
+ * resume by hand reaches.
+ */
+async function absorbedUnknownOutcome(
+  scope: ComposeInstanceScope,
+  scopeName: string,
+  stepNamePrefix: string
+): Promise<ComposeInstanceOutcome | undefined> {
+  const failed = scope.resumeSnapshot.failedNodes;
+  const holds = [...failed].some(
+    ([step, failure]) =>
+      step.startsWith(stepNamePrefix) && failure.failureKind === 'outcome_unknown'
+  );
+  if (!holds) return undefined;
+  const live = await readLiveUnknownOutcomes(scope.ctx.deps.store, scope.ctx.workflowRun);
+  if (live.some(step => step.startsWith(stepNamePrefix))) return undefined;
+  return {
+    status: 'failed',
+    output: '',
+    error: failed.get(scopeName)?.error ?? `instance ${scopeName} failed with an unknown outcome`,
+  };
+}
+
+/**
  * Execute one composed fan-out instance: thread it whole when it already completed,
  * otherwise run the composed body via runLayers in its own context, threading inner
  * nodes that already completed. The authored node ids remain ordinary DAG ids inside
@@ -494,6 +521,8 @@ export async function runComposeInstance(
   if (prior !== undefined) return threadedOutcome(prior);
 
   const stepNamePrefix = `${scopeName}__`;
+  const absorbed = await absorbedUnknownOutcome(scope, scopeName, stepNamePrefix);
+  if (absorbed !== undefined) return absorbed;
   const threaded = threadCompletedInnerNodes(expanded.nodes, priorOutputs, stepNamePrefix);
   let priorUsage: InstanceRun['priorUsage'];
   try {

@@ -12,6 +12,7 @@ import { safeSendMessage } from '../platform-messages';
 import { executionClaim } from '../store';
 import { readLiveUnknownOutcomes } from '../unknown-outcome';
 import { getLog } from './log';
+import type { DagNode } from '../schemas';
 import type { RunLayersContext } from './run-context';
 import { failRun } from './run-terminal';
 
@@ -70,6 +71,20 @@ export async function failRunOnUnknownOutcome(
       ownClaim: executionClaim(workflowRun.metadata),
     }
   );
+}
+
+/**
+ * After `layer` settled with a failure, whether the walk's own steps hold a live unknown
+ * outcome. A walk that does dispatches no further layer: a loop body or composed instance
+ * ends there and its aggregate fails over it.
+ */
+export async function walkHoldsUnknownOutcome(
+  ctx: RunLayersContext,
+  layer: readonly DagNode[]
+): Promise<boolean> {
+  if (!layer.some(node => ctx.nodeOutputs.get(node.id)?.state === 'failed')) return false;
+  const nodes = await readLiveUnknownOutcomes(ctx.deps.store, ctx.workflowRun);
+  return nodes.some(step => step.startsWith(ctx.stepNamePrefix));
 }
 
 /** Called where a node of a walk settled `failed`; acts only at the top level. */

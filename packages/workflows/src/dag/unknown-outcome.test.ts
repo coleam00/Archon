@@ -36,20 +36,26 @@ import {
 const roots = trackTempRoots();
 const realRecordNodeState = nodeEventWrite.recordNodeState;
 
-/** Record a failure of each named node as `outcome_unknown`, as a writing tool would. */
-function failingWithOutcomeUnknown(nodeIds: readonly string[]) {
+/**
+ * Record a failure of each named node as `outcome_unknown`, as a writing tool would; with
+ * `once`, only the first such failure.
+ */
+function failingWithOutcomeUnknown(nodeIds: readonly string[], { once = false } = {}) {
+  let marked = false;
   return spyOn(nodeEventWrite, 'recordNodeState').mockImplementation(
-    (sinks, record, continuation) =>
-      realRecordNodeState(
-        sinks,
-        !('cache' in record) &&
-          record.lifecycle.status === 'failed' &&
-          // A composed instance's inner node carries the instance prefix.
-          nodeIds.some(id => record.node.id === id || record.node.id.endsWith(`__${id}`))
-          ? { ...record, lifecycle: { ...record.lifecycle, failureKind: 'outcome_unknown' } }
-          : record,
-        continuation
+    (sinks, record, continuation) => {
+      if (
+        'cache' in record ||
+        record.lifecycle.status !== 'failed' ||
+        (once && marked) ||
+        // A composed instance's inner node carries the instance prefix.
+        !nodeIds.some(id => record.node.id === id || record.node.id.endsWith(`__${id}`))
       )
+        return realRecordNodeState(sinks, record, continuation);
+      marked = true;
+      const lifecycle = { ...record.lifecycle, failureKind: 'outcome_unknown' as const };
+      return realRecordNodeState(sinks, { ...record, lifecycle }, continuation);
+    }
   );
 }
 
@@ -153,6 +159,72 @@ describe('a failure whose outcome is unknown', () => {
       await expectEnded(store, runId);
     }
   );
+
+  it('ends a run that a parallel approval gate already paused', async () => {
+    spy = failingWithOutcomeUnknown(['write']);
+    const { store, runId } = await run('unknown-gate', [
+      { id: 'write', kind: 'exec', runtime: 'sh', script: 'sleep 0.3; exit 1' },
+      {
+        id: 'review',
+        kind: 'gate',
+        message: 'Review',
+        decisions: [{ id: 'approve' }],
+        decisionsAuthored: false,
+        captureResponse: false,
+      },
+    ] as DagNode[]);
+    const order = (await store.listWorkflowEvents(runId)).map(
+      e => `${e.event_type}:${e.step_name}`
+    );
+    // The gate published its pause before the writer failed.
+    expect(order.indexOf('approval_requested:review')).toBeGreaterThan(-1);
+    expect(order.indexOf('approval_requested:review')).toBeLessThan(
+      order.indexOf('node_failed:write')
+    );
+    await expectEnded(store, runId);
+  });
+
+  it('keeps the record and refuses the claim when the run-failing read fails', async () => {
+    // Only the writer's own failure: a record written over it must not read as unknown.
+    spy = failingWithOutcomeUnknown(['write'], { once: true });
+    let paused: WorkflowRun | undefined;
+    let store: IWorkflowStore | undefined;
+    await run(
+      'unknown-read-fault',
+      [
+        { id: 'write', kind: 'exec', runtime: 'sh', script: 'sleep 0.3; exit 1' },
+        { id: 'delay', kind: 'wait', wait: { duration_ms: 60_000 } },
+      ] as DagNode[],
+      {
+        prepare: faulted => {
+          store = faulted;
+          const read = faulted.listEventsForRuns.bind(faulted);
+          spyOn(faulted, 'listEventsForRuns').mockImplementation(async (ids, types) => {
+            const current = await faulted.getWorkflowRun(ids[0] ?? '');
+            // The settle point's read, once the wait paused the run.
+            if (
+              paused === undefined &&
+              current?.status === 'paused' &&
+              types?.includes('fan_out_instances')
+            ) {
+              paused = current;
+              throw new Error('store unavailable');
+            }
+            return read(ids, types);
+          });
+        },
+      }
+    ).catch(() => undefined);
+    if (store === undefined || paused === undefined) throw new Error('the read never failed');
+    const latest = (await store.listWorkflowEvents(paused.id))
+      .filter(e => e.step_name === 'write')
+      .at(-1);
+    expect(latest).toMatchObject({
+      event_type: 'node_failed',
+      data: { failure_kind: 'outcome_unknown' },
+    });
+    expect(await claimWait(store, paused)).toBeInstanceOf(WorkflowNotResumableError);
+  });
 
   it('refuses the automatic claim of a parallel wait, before the run fails and after', async () => {
     spy = failingWithOutcomeUnknown(['write']);
@@ -323,9 +395,21 @@ describe('a failure whose outcome is unknown', () => {
         new WorkflowSourceUnavailableError(join(testDir, 'capture'), new Error('read denied'))
       );
       try {
+        // Inside a loop body: the writer's record is nested, and the group has not settled
+        // when the sibling's source read fails.
         return await run(
           'unknown-source',
-          [write, { id: 'check', kind: 'exec', runtime: 'bun', script: 'check' }] as DagNode[],
+          [
+            {
+              id: 'refine',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 2,
+                nodes: [write, { id: 'check', kind: 'exec', runtime: 'bun', script: 'check' }],
+              },
+            },
+          ] as DagNode[],
           { workflowSourceRoots: capturedSourceRoots(capture.anchor) }
         );
       } finally {
@@ -352,7 +436,9 @@ describe('a failure whose outcome is unknown', () => {
         runtime: 'sh',
         ...contractFailure,
       } as DagNode);
-      expect(await events(store, runId, 'source_released')).toHaveLength(1);
+      expect((await events(store, runId, 'source_released'))[0]?.data).toMatchObject({
+        node_id: 'refine.check',
+      });
       expect((await store.getWorkflowRun(runId))?.status).toBe('paused');
     });
   });
@@ -362,7 +448,8 @@ describe('a failure whose outcome is unknown', () => {
     const fanOut = async (
       unknown: boolean,
       join_: 'all_done' | 'all_success',
-      later?: Partial<DagNode>
+      later?: Partial<DagNode>,
+      upstream?: DagNode
     ) => {
       await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
       await writeFile(
@@ -381,13 +468,15 @@ describe('a failure whose outcome is unknown', () => {
       );
       if (unknown) spy = failingWithOutcomeUnknown(['write']);
       const marker = join(testDir, 'later');
-      const result = await run('unknown-fan', [
+      const nodes = [
+        ...(upstream === undefined ? [] : [upstream]),
         {
           id: 'fan',
           kind: 'compose_fan_out',
           include: 'writer',
           // One at a time: the failing slot comes first, and the queued one still runs.
           fan_out: { items: '[2,1]', as: 'item', max_parallel: 1, join: join_ },
+          ...(upstream === undefined ? {} : { depends_on: [upstream.id] }),
         },
         {
           id: 'later',
@@ -398,11 +487,12 @@ describe('a failure whose outcome is unknown', () => {
           trigger_rule: 'all_done',
           ...later,
         },
-      ] as DagNode[]);
+      ] as DagNode[];
+      const result = await run('unknown-fan', nodes);
       const instances = (await result.store.listWorkflowEvents(result.runId)).filter(e =>
         e.step_name?.endsWith('__write')
       );
-      return { ...result, marker, instances };
+      return { ...result, marker, instances, nodes };
     };
 
     it('under all_done the queued instance runs, the join completes and the run goes on as today', async () => {
@@ -421,6 +511,45 @@ describe('a failure whose outcome is unknown', () => {
       if (paused === null) throw new Error('run vanished');
       expect(paused.status).toBe('paused');
       expect(await claimWait(store, paused)).toMatchObject({ status: 'running' });
+    });
+
+    it('under all_done a recomputed join replays the absorbed failure, not the writer', async () => {
+      const counter = join(testDir, 'count');
+      // A changed output on the always_run upstream makes the join's cache stale on resume.
+      const upstream = {
+        id: 'up',
+        kind: 'exec',
+        runtime: 'sh',
+        script: `n=$(cat '${counter}' 2>/dev/null || echo 0); echo $((n+1)) > '${counter}'; echo $n`,
+        always_run: true,
+      } as DagNode;
+      const wait = { kind: 'wait', wait: { duration_ms: 60_000 } } as Partial<DagNode>;
+      const { store, runId, deps, instances, nodes } = await fanOut(
+        true,
+        'all_done',
+        wait,
+        upstream
+      );
+      expect(instances.filter(e => e.event_type === 'node_failed')).toHaveLength(1);
+      const paused = await store.getWorkflowRun(runId);
+      const pending = paused === null ? undefined : pendingWorkflowWaitDeadline(paused);
+      if (paused === null || pending === undefined) throw new Error('run is not at its wait');
+      // The continuation host's claim of the wait, then its pass.
+      const hydrated = await hydrateResumableRun(deps, paused, deadlineWaitCursor(pending));
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflow: { name: 'unknown-fan', nodes },
+          workflowRun: hydrated.preCreatedRun,
+          priorCompletedNodes: hydrated.priorCompletedNodes,
+        })
+      );
+      expect(await events(store, runId, 'node_started', 'up')).toHaveLength(2);
+      const writes = (await store.listWorkflowEvents(runId)).filter(e =>
+        e.step_name?.endsWith('__write')
+      );
+      expect(writes.filter(e => e.event_type === 'node_failed')).toHaveLength(1);
     });
 
     it('under all_done a later ordinary failure fails the run as today', async () => {
@@ -457,23 +586,104 @@ describe('a failure whose outcome is unknown', () => {
     });
   });
 
-  it('inside a loop group body fails the group, then ends the run', async () => {
-    spy = failingWithOutcomeUnknown(['write']);
-    const { store, runId } = await run('unknown-group', [
-      {
-        id: 'refine',
-        kind: 'loop_group',
-        loop_group: {
-          until: 'DONE',
-          max_iterations: 3,
-          nodes: [{ id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1' }],
+  describe('inside a loop group body', () => {
+    /** A body writer and an all_done cleanup after it, which an ordinary failure still runs. */
+    const loopRun = async (write: Partial<DagNode>) => {
+      const marker = join(testDir, 'cleaned');
+      const result = await run('unknown-group', [
+        {
+          id: 'refine',
+          kind: 'loop_group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            nodes: [
+              { id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1', ...write },
+              {
+                id: 'cleanup',
+                kind: 'exec',
+                runtime: 'sh',
+                script: `touch '${marker}'`,
+                depends_on: ['write'],
+                trigger_rule: 'all_done',
+              },
+            ],
+          },
         },
-      },
-    ] as DagNode[]);
-    expect((await events(store, runId, 'node_failed', 'refine'))[0]?.data?.failure_kind).toBe(
-      'child_failed'
-    );
-    await expectEnded(store, runId);
+      ] as DagNode[]);
+      return { ...result, marker };
+    };
+
+    it('starts no later body layer, fails the group, then ends the run', async () => {
+      spy = failingWithOutcomeUnknown(['write']);
+      const { store, runId, marker } = await loopRun({});
+      expect(existsSync(marker)).toBe(false);
+      expect((await events(store, runId, 'node_failed', 'refine'))[0]?.data?.failure_kind).toBe(
+        'child_failed'
+      );
+      await expectEnded(store, runId);
+    });
+
+    it('runs the cleanup and keeps node_error after a script contract failure (retryable: false)', async () => {
+      const { store, runId, marker } = await loopRun(contractFailure as Partial<DagNode>);
+      expect((await events(store, runId, 'node_failed', 'refine.write'))[0]?.data?.retryable).toBe(
+        false
+      );
+      expect(existsSync(marker)).toBe(true);
+      expect((await store.getWorkflowRun(runId))?.metadata).toMatchObject({
+        stop_reason: { reason: 'node_error' },
+      });
+    });
+
+    it('keeps node_error when a later round fails a join that absorbed an earlier round', async () => {
+      await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(testDir, '.archon', 'workflows', 'writer.yaml'),
+        [
+          'name: writer',
+          'description: block',
+          'mutates_checkout: false',
+          'inputs:',
+          '  item: { required: true }',
+          'nodes:',
+          '  - id: write',
+          `    bash: "if [ $INPUTS.item = 2 ]; then exit 1; fi"`,
+        ].join('\n')
+      );
+      spy = failingWithOutcomeUnknown(['write']);
+      const seen = join(testDir, 'seen');
+      // Round one fans out over two items; round two's items are not a list.
+      const { store, runId } = await run('unknown-rounds', [
+        {
+          id: 'refine',
+          kind: 'loop_group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 2,
+            nodes: [
+              {
+                id: 'plan',
+                kind: 'exec',
+                runtime: 'sh',
+                script: `if [ -f '${seen}' ]; then echo notjson; else touch '${seen}'; echo '[2,1]'; fi`,
+              },
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'writer',
+                depends_on: ['plan'],
+                fan_out: { items: '$plan.output', as: 'item', join: 'all_done' },
+              },
+            ],
+          },
+        },
+      ] as DagNode[]);
+      expect(await events(store, runId, 'node_completed', 'refine.fan')).toHaveLength(1);
+      expect(await store.getWorkflowRun(runId)).toMatchObject({
+        status: 'failed',
+        metadata: { stop_reason: { reason: 'node_error' } },
+      });
+    });
   });
 
   it('a later layer still runs after a script contract failure (retryable: false)', async () => {
