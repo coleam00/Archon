@@ -1,4 +1,3 @@
-import { basename, extname } from 'node:path';
 import { z } from 'zod';
 import {
   forgeAuditResponse,
@@ -604,31 +603,23 @@ function remedy(
 }
 
 /**
- * How the operator gets a plugin version that serves a missing operation. Only a
- * receipt `archon plugin add` wrote can be updated, and forge reads no receipts: a file
- * in Archon's plugin directory may have been copied there by hand. `archon plugin list`
- * names a forge receipt's executable, so the operator matches the refusing file to its
- * id, and the remedy says what to do when no row matches.
+ * How the operator gets a plugin version that serves a missing operation. Forge reads
+ * no receipts, so it cannot tell whether `archon plugin add` owns what runs; it names
+ * what runs and leaves ownership to `archon plugin list`, which shows each forge
+ * receipt's executable. A configured entry's args are not echoed: they may hold a secret.
  */
-function replacePluginStep({ metadata, origin, command, args }: DiscoveredPlugin): string {
+function replacePluginStep({ metadata, origin, command }: DiscoveredPlugin): string {
   const plugin = `plugin ${metadata.name} ${metadata.version}`;
-  const replace = 'with a version that supports the operation';
+  const owned =
+    "if `archon plugin list` shows a forge receipt for it, run `archon plugin update <id>` with that receipt's id, or the repair command the list prints for it; otherwise replace it with a version that supports the operation.";
   switch (origin) {
-    case 'installed':
-      return `Update ${plugin} (${command}): find the forge row in \`archon plugin list\` whose executable is ${executableName(command)}, then run \`archon plugin update <id>\` with that row's id. If no row names it, the file was copied in by hand: replace it ${replace}.`;
     case 'scanned':
-      return `Replace ${command} (${plugin}), which Archon found on PATH or in a configured plugin directory and did not install, ${replace}.`;
+      return `Update ${command}, which runs ${plugin}: ${owned}`;
     case 'configured':
-      return `Update what the \`forge\` entry in Archon's config runs for ${plugin} (${[command, ...args].join(' ')}): replace the executable or script it names ${replace}.`;
+      return `Update the executable or script that the \`forge\` entry for ${plugin} in Archon's config runs: ${owned}`;
     case 'source':
-      return `Update this Archon source checkout, which runs ${plugin}, to a revision whose plugin supports the operation.`;
+      return `Update Archon: this source checkout runs ${plugin}, so a newer revision is where a version that supports the operation comes from.`;
   }
-}
-
-/** An executable's file name, without the `.exe` a Windows install adds. */
-function executableName(command: string): string {
-  const file = basename(command);
-  return extname(file).toLowerCase() === '.exe' ? file.slice(0, -4) : file;
 }
 
 async function runOperation(

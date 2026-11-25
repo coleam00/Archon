@@ -149,12 +149,13 @@ Otherwise it exits 1 with the first reason that applies, in this order:
 
 Any other failure of the read keeps its own kind, such as `unavailable` after the read's retries.
 
-A `no_plugin_for_host`, `unsupported_op`, `no_credential`, `authorization` or `not_found` failure carries `remedy`, the operator's next step. For `unsupported_op` and `no_credential` it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step. For `no_credential` that names the credential variables the plugin reads. For `unsupported_op` it depends on where the plugin's executable came from:
+A `no_plugin_for_host`, `unsupported_op`, `no_credential`, `authorization` or `not_found` failure carries `remedy`, the operator's next step. For `unsupported_op` and `no_credential` it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step. For `no_credential` that names the credential variables the plugin reads. For `unsupported_op` it names what runs the plugin:
 
-- **In `ARCHON_HOME/plugins/`**: the remedy names the file. Find the forge row in `archon plugin list` whose executable matches it and run `archon plugin update <id>` with that row's id. No row matches a file copied in by hand; replace that file.
-- **Found on PATH or in a configured plugin directory**: Archon did not install it, so the remedy names the executable to replace.
-- **Run by a `forge` entry in Archon's config**: the remedy names the entry's `command` and `args`; replace the executable or script they run.
-- **Run from an Archon source checkout**: update the checkout.
+- **An executable file**, in `ARCHON_HOME/plugins/`, another plugin directory or on PATH: the remedy names its path.
+- **A `forge` entry in Archon's config**: the remedy names the entry by plugin, not its `command` or `args`, which may hold a secret.
+- **This Archon source checkout**: the remedy says to update Archon.
+
+Forge cannot tell who installed a file or the command an entry runs. When `archon plugin list` shows a forge receipt with that executable, run `archon plugin update <id>` with the receipt's id, or the repair command the list prints for a broken receipt. Otherwise replace the file or script with a version that supports the operation.
 
 The remedy for `authorization` names the credential source, never the token.
 

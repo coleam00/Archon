@@ -13,12 +13,11 @@ import {
 import { runPluginProcess, type PluginArgv } from './plugin-process';
 
 /**
- * Where a plugin's executable came from, which decides how the operator replaces it:
- * `installed` is in the directory `archon plugin add` writes, `scanned` is in a
- * configured plugin directory or on PATH, `configured` is a command in Archon's
- * config, and `source` runs from this Archon checkout.
+ * What launches a plugin, which decides how the operator replaces it: `scanned` is an
+ * executable file found in a plugin directory or on PATH, `configured` is a `forge`
+ * entry in Archon's config, and `source` runs from this Archon checkout.
  */
-export type PluginOrigin = 'installed' | 'scanned' | 'configured' | 'source';
+export type PluginOrigin = 'scanned' | 'configured' | 'source';
 
 export interface PluginCandidate extends PluginArgv {
   source: string;
@@ -81,11 +80,7 @@ function executableName(entry: string): string | undefined {
   return match[1].toLowerCase();
 }
 
-async function scanDirectory(
-  directory: string,
-  source: string,
-  origin: PluginOrigin
-): Promise<CandidateInspection[]> {
+async function scanDirectory(directory: string, source: string): Promise<CandidateInspection[]> {
   let entries: string[];
   try {
     entries = await readdir(directory);
@@ -109,7 +104,7 @@ async function scanDirectory(
   }
   const candidates: CandidateInspection[] = [];
   for (const entry of entries.sort()) {
-    const candidate = await scannedCandidate(directory, source, origin, entry);
+    const candidate = await scannedCandidate(directory, source, entry);
     if (candidate) candidates.push(candidate);
   }
   return candidates;
@@ -118,7 +113,6 @@ async function scanDirectory(
 async function scannedCandidate(
   directory: string,
   source: string,
-  origin: PluginOrigin,
   entry: string
 ): Promise<CandidateInspection | undefined> {
   const name = executableName(entry);
@@ -131,7 +125,7 @@ async function scannedCandidate(
   const command = resolve(directory, entry);
   const candidate: PluginCandidate = {
     source: `${source}:${name}`,
-    origin,
+    origin: 'scanned',
     configured: false,
     command,
     args: [],
@@ -287,15 +281,10 @@ async function discoverCandidates(
     ...(config.scanPath ? (envPath(env) ?? '').split(delimiter).filter(Boolean) : []),
   ];
   const configuredDirs = new Set(config.pluginDirs.map(dir => resolve(dir)));
-  const installedDir = options.pluginsDir !== undefined ? resolve(options.pluginsDir) : undefined;
   const scanned = (
     await Promise.all(
       [...new Set(dirs.map(dir => resolve(dir)))].map(dir =>
-        scanDirectory(
-          dir,
-          configuredDirs.has(dir) ? 'plugin-dir' : 'discovery',
-          dir === installedDir ? 'installed' : 'scanned'
-        )
+        scanDirectory(dir, configuredDirs.has(dir) ? 'plugin-dir' : 'discovery')
       )
     )
   ).flat();
