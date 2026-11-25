@@ -166,6 +166,7 @@ const read: ItemRead = {
     by: { declared: 'alice' },
     fromRun: null,
   },
+  workOrder: null,
   merged: {
     change: 'https://github.com/acme/web/pull/12',
     commit: null,
@@ -175,6 +176,59 @@ const read: ItemRead = {
     fromRun: null,
   },
 };
+
+test('a work order prints its state and names the members that keep it open', () => {
+  const member = (key: string, projectKey = 'acme/web') => ({ id: `${key}-row`, projectKey, key });
+  const workOrderText = (workOrder: ItemRead['workOrder']) =>
+    itemReadLines({ ...read, workOrder }, SERVED).find(line => line.startsWith('Work order'));
+  expect(
+    workOrderText({
+      state: 'open',
+      members: [
+        { item: member('issue-a'), state: 'open' },
+        { item: member('issue-b', 'acme/api'), state: 'open' },
+        { item: member('issue-c'), state: 'merged' },
+      ],
+    })
+  ).toBe('Work order: open, 2 of 3 members open: issue-a, acme/api/issue-b');
+  expect(
+    workOrderText({ state: 'done', members: [{ item: member('issue-a'), state: 'ended' }] })
+  ).toStartWith('Work order: done');
+  const unknown = workOrderText({
+    state: 'unknown',
+    members: [{ item: member('issue-a'), state: 'unknown' }],
+  });
+  expect(unknown).toStartWith('Work order: unknown');
+  expect(unknown).toContain('issue-a');
+  expect(workOrderText(null)).toBeUndefined();
+});
+
+test('an unreadable member part prints under an open work order too, naming the member', () => {
+  const lost = { id: 'issue-d-row', projectKey: 'acme/web', key: 'issue-d' };
+  const lines = itemReadLines(
+    {
+      ...read,
+      workOrder: {
+        state: 'open',
+        members: [
+          { item: { id: 'issue-a-row', projectKey: 'acme/web', key: 'issue-a' }, state: 'open' },
+          { item: lost, state: 'unknown' },
+        ],
+      },
+      degraded: [
+        {
+          type: 'degraded',
+          reason: 'member_unreadable',
+          member: lost,
+          report: { type: 'degraded', reason: 'merge_unreadable', itemId: lost.id },
+        },
+      ],
+    },
+    SERVED
+  );
+  const warning = lines.find(line => line.includes('issue-d') && line.includes('merge'));
+  expect(warning).toContain('could not be read');
+});
 
 test('an item read prints its runs, open questions and answers', () => {
   const lines = itemReadLines(read, SERVED);

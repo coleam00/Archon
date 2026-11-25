@@ -9488,6 +9488,19 @@ export interface components {
           nodePath: string;
         } | null;
       } | null;
+      workOrder: {
+        /** @enum {string} */
+        state: 'open' | 'done' | 'unknown';
+        members: {
+          item: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          /** @enum {string} */
+          state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+        }[];
+      } | null;
       degraded: (
         | {
             /** @enum {string} */
@@ -9530,6 +9543,39 @@ export interface components {
             /** @enum {string} */
             reason: 'end_unreadable';
             endId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'member_unreadable';
+            member: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            report:
+              | {
+                  /** @enum {string} */
+                  type: 'degraded';
+                  /** @enum {string} */
+                  reason: 'merge_unreadable';
+                  itemId: string;
+                }
+              | {
+                  /** @enum {string} */
+                  type: 'degraded';
+                  /** @enum {string} */
+                  reason: 'end_unreadable';
+                  endId: string;
+                }
+              | {
+                  /** @enum {string} */
+                  type: 'degraded';
+                  /** @enum {string} */
+                  reason: 'link_unreadable';
+                  linkId: string;
+                };
           }
       )[];
     };
@@ -10392,6 +10438,19 @@ export interface components {
             nodePath: string;
           } | null;
         } | null;
+        workOrder: {
+          /** @enum {string} */
+          state: 'open' | 'done' | 'unknown';
+          members: {
+            item: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            /** @enum {string} */
+            state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+          }[];
+        } | null;
         degraded: (
           | {
               /** @enum {string} */
@@ -10434,6 +10493,39 @@ export interface components {
               /** @enum {string} */
               reason: 'end_unreadable';
               endId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'member_unreadable';
+              member: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              report:
+                | {
+                    /** @enum {string} */
+                    type: 'degraded';
+                    /** @enum {string} */
+                    reason: 'merge_unreadable';
+                    itemId: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    type: 'degraded';
+                    /** @enum {string} */
+                    reason: 'end_unreadable';
+                    endId: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    type: 'degraded';
+                    /** @enum {string} */
+                    reason: 'link_unreadable';
+                    linkId: string;
+                  };
             }
         )[];
       }[];
