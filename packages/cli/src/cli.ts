@@ -148,6 +148,10 @@ interface ParsedCliArgs {
  */
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
+  // Every path, including help, the version shortcuts and a rejected parse, logs under
+  // the same output policy, set before anything below can log.
+  const flags = readOutputFlags(args);
+  applyOutputPolicy(flags.values, flags.positionals[0], flags.positionals[1]);
 
   // Anonymous startup event (self-gates on opt-out, sent once per day). Emitted
   // before any early return so every invocation — including bare `archon`,
@@ -170,7 +174,6 @@ async function main(): Promise<number> {
 
 /** Bare `archon`: show the help index and exit successfully. */
 async function printIndexHelp(): Promise<number> {
-  logCwdEnvStrip(cwdEnvStrip);
   refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
   await printUsageFor();
   await shutdownTelemetry();
@@ -179,7 +182,6 @@ async function printIndexHelp(): Promise<number> {
 
 async function runVersionRequest(): Promise<number> {
   try {
-    logCwdEnvStrip(cwdEnvStrip);
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
     const { versionCommand } = await import('./commands/version');
     await versionCommand();
@@ -203,10 +205,9 @@ async function parseCliArgs(args: string[]): Promise<ParsedCliArgs | 1> {
     });
   } catch (error) {
     const err = error as Error;
-    // parseArgs rejected before values.json was bound, so derive the flag
-    // from raw argv to honor the --json stdout contract.
+    // parseArgs rejected before values.json was bound, so derive the flag from raw
+    // argv to honor the --json stdout contract; main already applied the log policy.
     const json = args.includes('--json');
-    if (json) setLogLevel('silent');
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
     await fail(json, `Error parsing arguments: ${err.message}`);
     if (!json) await printUsageFor();
@@ -216,10 +217,26 @@ async function parseCliArgs(args: string[]): Promise<ParsedCliArgs | 1> {
 }
 
 /**
+ * The output flags and command for {@link applyOutputPolicy}, read leniently so an
+ * invocation that will fail strict parsing, or never reaches it, still gets a policy.
+ * A bare `-v` is the version alias, not --verbose (see isVersionRequest).
+ */
+function readOutputFlags(args: string[]): {
+  values: Record<string, unknown>;
+  positionals: string[];
+} {
+  if (args.length === 1 && args[0] === '-v') return { values: {}, positionals: [] };
+  return parseArgs({ args, options: cliArgOptions, allowPositionals: true, strict: false });
+}
+
+/**
  * Commands default to warn: info records are engine internals that bury the
  * command's own output, even on stderr. `serve` is the exception: its logs are
  * its output, so they stay at info on stdout, as when the server runs directly.
  * Lazy loggers pick up this level at first creation.
+ *
+ * Also the one place the CLI logs what the boot strip removed, so that record follows
+ * the same level and destination.
  */
 function applyOutputPolicy(
   values: Record<string, unknown>,
@@ -238,6 +255,8 @@ function applyOutputPolicy(
   } else if (values.verbose) {
     setLogLevel('debug');
   }
+  // `serve` hands logging to the server it launches, which logs its own strip record.
+  if (!isServe) logCwdEnvStrip(cwdEnvStrip);
 }
 
 /**
@@ -259,11 +278,6 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
     await shutdownTelemetry();
     return 1;
   }
-  // Apply output policy before install discovery: its best-effort debug logs
-  // must never prefix a machine-readable response.
-  applyOutputPolicy(values, command, subcommand);
-  // Logged here, not at boot, so the record follows --verbose, --quiet and --json.
-  logCwdEnvStrip(cwdEnvStrip);
   refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
 
   // Handle help flag — route through the scoped renderer using the already-

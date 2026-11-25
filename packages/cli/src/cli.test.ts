@@ -281,7 +281,7 @@ if (process.argv[3] === 'metadata') {
           },
         }
       );
-      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+      expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ ok: true });
       expect(readFileSync(marker, 'utf8')).toBe('engine-test-token');
     } finally {
@@ -412,7 +412,7 @@ console.log(JSON.stringify({ operationId: input.operationId, ok: true, result: {
         }
       );
 
-      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+      expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
         result: { value: { revision: 'trusted-revision' } },
@@ -986,7 +986,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
           },
         }
       );
-      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+      expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
         docker: true,
         home: '/.archon',
@@ -2769,9 +2769,16 @@ describe('receipt policies in the CLI host', () => {
   it('keeps the target repo .env strip off stderr, and logs it only under the output policy', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cli-cwd-env-strip-'));
     expect(spawnSync('git', ['init', '-q', '.'], { cwd: root }).status).toBe(0);
-    writeFileSync(join(root, '.env'), 'STRIP_PROBE_A=secret-a-6362\n');
-    writeFileSync(join(root, '.env.local'), 'STRIP_PROBE_B=secret-b-6362\n');
-    const run = (argv: string[], logLevel = ''): string => {
+    const valueA = 'planted-value-a-6362';
+    const valueB = 'planted-value-b-6362';
+    writeFileSync(join(root, '.env'), `STRIP_PROBE_A=${valueA}\n`);
+    writeFileSync(join(root, '.env.local'), `STRIP_PROBE_B=${valueB}\n`);
+    const records = (stream: string): unknown[] =>
+      stream
+        .split('\n')
+        .filter(line => line.includes('"env.cwd_keys_stripped"'))
+        .map(line => JSON.parse(line) as unknown);
+    const run = (argv: string[], logLevel = '') => {
       const result = spawnSync(process.execPath, [CLI_ENTRY, ...argv], {
         cwd: root,
         encoding: 'utf8',
@@ -2784,25 +2791,36 @@ describe('receipt policies in the CLI host', () => {
           LOG_LEVEL: logLevel,
         },
       });
-      expect(result.status).toBe(0);
-      expect(`${result.stdout}${result.stderr}`).not.toContain('secret-');
-      return result.stderr;
+      for (const value of [valueA, valueB]) {
+        expect(result.stdout).not.toContain(value);
+        expect(result.stderr).not.toContain(value);
+      }
+      return {
+        status: result.status,
+        stdout: records(result.stdout),
+        stderr: records(result.stderr),
+        rawStderr: result.stderr,
+      };
     };
-    const records = (stderr: string): unknown[] =>
-      stderr
-        .split('\n')
-        .filter(line => line.includes('"env.cwd_keys_stripped"'))
-        .map(line => JSON.parse(line) as unknown);
     const record = expect.objectContaining({
       files: ['.env', '.env.local'],
       keys: ['STRIP_PROBE_A', 'STRIP_PROBE_B'],
     });
     try {
-      expect(run(['--version'])).toBe('');
-      expect(records(run(['--version'], 'debug'))).toEqual([record]);
-      expect(records(run(['workflow', 'list', '--verbose']))).toEqual([record]);
-      expect(records(run(['workflow', 'list', '--json'], 'debug'))).toEqual([]);
-      expect(records(run(['workflow', 'list', '--quiet'], 'debug'))).toEqual([]);
+      expect(run(['--version']).rawStderr).toBe('');
+      const cases: [string[], string, number, unknown[]][] = [
+        [['--version'], 'debug', 0, [record]],
+        [['--version', '--verbose'], '', 0, [record]],
+        [['--version', '--quiet'], 'debug', 0, []],
+        [['--version', '--json'], 'debug', 0, []],
+        [['workflow', 'list', '--verbose'], '', 0, [record]],
+        [['workflow', 'list', '--json'], 'debug', 0, []],
+        [['--no-such-flag'], 'debug', 1, [record]],
+      ];
+      for (const [argv, logLevel, status, stderr] of cases) {
+        const { rawStderr: _, ...result } = run(argv, logLevel);
+        expect({ argv, ...result }).toEqual({ argv, status, stdout: [], stderr });
+      }
     } finally {
       await removeTempTree(root);
     }

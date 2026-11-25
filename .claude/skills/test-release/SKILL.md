@@ -305,31 +305,38 @@ If you *do* have `claudeBinaryPath` set globally, skip this test or temporarily 
 
 ### Test 4 — Env-leak guard strips sensitive keys from .env
 
-Create a second throwaway repo with a fake sensitive key:
+Create a second throwaway repo with a fake sensitive key and a one-node workflow that
+reports what the run sees for that key:
 
 ```bash
 LEAKREPO=/tmp/archon-test-leak-$(date +%s)
-mkdir -p "$LEAKREPO"
+mkdir -p "$LEAKREPO/.archon/workflows"
 cd "$LEAKREPO"
 git init -q
 git commit -q --allow-empty -m init
 printf 'ANTHROPIC_API_KEY=sk-ant-test-fake\n' > .env
+cat > .archon/workflows/env-leak-probe.yaml <<'YAML'
+name: env-leak-probe
+description: Reports whether the target repo's ANTHROPIC_API_KEY reached the run
+nodes:
+  - id: probe
+    bash: 'echo "probe: ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-unset}"'
+YAML
 ```
 
 **Pass criteria** (current behaviour — the guard **strips** silently, it does not refuse):
 
-- The workflow proceeds and completes normally, with no `[archon] stripped` line on
-  stderr: the guard no longer prints on every command
-- `archon doctor` in the repo reports the strip, naming this repo's `.env` and the
-  planted key: `Target repo .env: 1 key from <repo>/.env is kept out of runs, …: ANTHROPIC_API_KEY`
-- The key count equals the number of keys planted (1 for the `.env` above)
+- The probe workflow completes and its output line shows the run did **not** get
+  `sk-ant-test-fake`. It shows `unset`, or your own key if `~/.archon/.env` sets one
+- No `[archon] stripped` line on stderr: the guard no longer prints on every command
+- `archon doctor` in the repo names this repo's `.env` and the planted key:
+  `Target repo .env: 1 key from <repo>/.env is kept out of runs, …: ANTHROPIC_API_KEY`
 
-Assert on the doctor line pinned to **this** repo, **this** count and **this** key, so
-a strip from some other directory cannot produce a false pass. Capture the workflow's
-exit status too: under the strip design it is expected to succeed.
+The probe is the security check: it observes the run itself. The doctor line only
+checks the operator-facing report.
 
 ```bash
-"$BINARY" workflow run archon-investigate --no-worktree "hello" > /tmp/archon-test-leak.log 2>&1
+"$BINARY" workflow run env-leak-probe --no-worktree > /tmp/archon-test-leak.log 2>&1
 leak_exit=$?
 "$BINARY" doctor > /tmp/archon-test-leak-doctor.log 2>&1
 
@@ -340,20 +347,23 @@ expected="Target repo .env: 1 key from ${resolved_repo}/.env is kept out of runs
 
 if [ "$leak_exit" -ne 0 ]; then
   echo "FAIL: workflow exited $leak_exit — the guard strips and proceeds, it should not abort"
+elif ! grep -qF 'probe: ANTHROPIC_API_KEY=' /tmp/archon-test-leak.log; then
+  echo "FAIL: the probe node printed nothing. Got:"; tail -20 /tmp/archon-test-leak.log
+elif grep -qF 'sk-ant-test-fake' /tmp/archon-test-leak.log; then
+  echo "FAIL: the target repo's key reached the run"
 elif grep -qF '[archon] stripped' /tmp/archon-test-leak.log; then
   echo "FAIL: the per-command strip line is back on stderr"
 elif grep -F "$expected" /tmp/archon-test-leak-doctor.log | grep -qF ': ANTHROPIC_API_KEY'; then
-  echo "PASS: env-leak guard strips exactly the planted key from this repo"
+  echo "PASS: the planted key stayed out of the run, and doctor reports it for this repo"
 else
   echo "FAIL: expected doctor line absent. Got:"
   grep -F 'Target repo .env' /tmp/archon-test-leak-doctor.log || echo "  (no doctor line at all)"
 fi
 ```
 
-A pinned assertion is deliberate here. A looser pattern such as
-`[1-9][0-9]* keys .*\.env` passes on **any** positive count from **any** path, so a
-strip belonging to a different repository — or a count inflated by an unrelated
-`.env` — reads as success while the regression it is meant to catch goes unnoticed.
+The doctor assertion is pinned to **this** repo, **this** count and **this** key. A
+looser pattern such as `[1-9][0-9]* keys .*\.env` passes on **any** positive count
+from **any** path, so a report belonging to a different repository reads as success.
 
 > **History — do not re-assert the old criteria.** This test previously expected a
 > *refusal* (`Cannot add codebase` / `Cannot run workflow`, non-zero exit), which
@@ -366,6 +376,7 @@ strip belonging to a different repository — or a count inflated by an unrelate
 
 **Common failures:**
 
+- The probe prints `sk-ant-test-fake` → the guard is not active; the `.env` reaches runs
 - Doctor reports `skip` (no `.env` keys) → the file was not found or not parsed
 - Doctor names the wrong file or repo → path resolution regression
 
