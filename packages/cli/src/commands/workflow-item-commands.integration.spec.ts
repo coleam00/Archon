@@ -1,7 +1,8 @@
 // @archon-test-isolated
 /**
  * The item commands against a real SQLite store, in-process: `workflow run --item` and
- * `--supersedes`, `workflow runs --item` and `--item-of`, `workflow rule`, `workflow merged`,
+ * `--supersedes`, `workflow runs --item` and `--item-of`, `workflow rule`, `workflow end`,
+ * `workflow merged`,
  * the merge record an applied forge `pr.merge` writes,
  * `workflow items` and `workflow link`. The store's conformance tests prove what is
  * recorded; these prove each command's request, refusal codes and JSON and text output.
@@ -31,6 +32,8 @@ import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
 import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
+import { itemEndSchema } from '@archon/workflows/schemas/item-end';
+import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
 import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
 import { recordRunMerge } from './forge-merge-record';
@@ -41,6 +44,9 @@ import { workflowLandingCommand } from './workflow-landing';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
+import { runWorkflowEnd } from '../routes/workflow';
+import * as workflowCommands from './workflow';
+import { workflowAttentionCommand } from './workflow-attention';
 import { workflowRunCommand } from './workflow-run-owned';
 
 mock.module('@archon/core/services/title-generator', () => ({
@@ -305,6 +311,127 @@ test.serial(
         .filter(row => row.continues !== null)
         .map(({ continues, item_key }) => ({ continues, item_key }))
     ).toEqual([{ continues: bare.id, item_key: 'item-2' }]);
+  }
+);
+
+/** A run of `item-proof` on `key`: still running, or ended at once, stopping the item or failed. */
+async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Promise<string> {
+  let id = '';
+  const result = await captureWorkflowCommand(archonHome, async host => {
+    const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
+    if (!codebase) throw new Error('The seed run did not register the project');
+    const seeded = await host.deps.store.createWorkflowRun({
+      workflow_name: 'item-proof',
+      user_message: 'go',
+      codebase_id: codebase.id,
+      working_path: projectRoot,
+      item_key: key,
+    });
+    id = seeded.id;
+    await host.deps.store.claimPendingWorkflowRun(seeded.id, projectRoot);
+    if (end === 'failed') await host.deps.store.failWorkflowRun(seeded.id, 'boom');
+    else if (end === 'stopped')
+      await host.deps.store.completeWorkflowRun(
+        seeded.id,
+        { duration_ms: 1 },
+        itemStoppedMetadata('Folded into another item.'),
+        { outcome: { kind: 'enum', value: 'fold' } }
+      );
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return id;
+}
+
+test.serial(
+  'workflow end takes a stopped item out of attention, and the item read says who ended it and why',
+  async () => {
+    const attention = async () =>
+      (
+        await invoke(host =>
+          workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+        )
+      ).stdout;
+    // `archon workflow end --item <key> [--as <name>] --json -- <reason>`, as argv routes it.
+    const end = (key: string, as: string | undefined, env: NodeJS.ProcessEnv = callerEnv) =>
+      invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'A duplicate of item-2.'],
+          values: { item: key, ...(as === undefined ? {} : { as }), json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: env,
+          forgeTrustedEnv: env,
+        })
+      );
+    const stopped = await seedEnded('item-stop', 'stopped');
+    expect(await attention()).toContain(`stopped:${stopped}`);
+    // The real command, through the CLI's own dispatch and argument parsing.
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, '..', 'cli.ts'),
+        ...['workflow', 'end', '--item', 'item-stop', '--as', 'triage-agent', '--json'],
+        ...['--', 'A duplicate of item-2.'],
+      ],
+      {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          ...callerEnv,
+          ARCHON_HOME: archonHome,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const [code, out, err] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(code, err || out).toBe(0);
+    itemEndSchema.parse(JSON.parse(out));
+    expect(await attention()).not.toContain(`stopped:${stopped}`);
+    expect((await readItemJson('item-stop')).ended).toMatchObject({
+      reason: 'A duplicate of item-2.',
+      by: { declared: 'triage-agent' },
+      via: 'cli',
+    });
+
+    // A failed item is ended by its key alone, and without --as the CLI identity says who.
+    await seedEnded('item-fail', 'failed');
+    succeeded(await end('item-fail', undefined, { ...callerEnv, ARCHON_USER_ID: 'ops' }));
+    expect((await readItemJson('item-fail')).ended).toMatchObject({
+      by: { declared: 'ops' },
+    });
+
+    // Refusals exit 1 with a code: a live run named, nobody named, an unknown key.
+    const running = await seedEnded('item-live', 'running');
+    const refusal = async (result: Promise<{ exitCode: number; stdout: string }>) => {
+      const { exitCode, stdout } = await result;
+      expect(exitCode).toBe(1);
+      return JSON.parse(stdout) as unknown;
+    };
+    expect(await refusal(end('item-live', 'triage-agent'))).toMatchObject({
+      error: 'run',
+      blocker: { kind: 'run', runId: running, status: 'running' },
+    });
+    const nobody = { ...callerEnv, ARCHON_USER_ID: '', USER: '', USERNAME: '' };
+    expect(await refusal(end('item-stop', undefined, nobody))).toMatchObject({
+      error: 'unattributed',
+    });
+    expect(await refusal(end('item-none', 'triage-agent'))).toEqual({
+      ok: false,
+      error: 'not_found',
+    });
   }
 );
 
