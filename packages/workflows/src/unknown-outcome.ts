@@ -23,6 +23,8 @@ import { readNodeRecordEvent } from './node-record-reader';
 import { buildRunNodeStates, type TerminalRecordEvent } from './terminal-record';
 
 /** The stored events the rule reads: node states, and the composed fan-out scopes. */
+const NODE_STATE_TYPES: ReadonlySet<string> = new Set(NODE_STATE_EVENT_TYPES);
+
 export const UNKNOWN_OUTCOME_EVENT_TYPES = [
   ...NODE_STATE_EVENT_TYPES,
   'fan_out_instances',
@@ -46,7 +48,9 @@ export function liveUnknownOutcomes(
   const lastRecord = new Map<string, number>();
   const joinedAt = new Map<string, number>();
   for (const [index, event] of events.entries()) {
-    if (!event.step_name || event.event_type === 'fan_out_instances') continue;
+    // Only node records order a failure against its join: an audit event on the same step
+    // (a session note, say) is not one, whatever events the caller passes.
+    if (!event.step_name || !NODE_STATE_TYPES.has(event.event_type)) continue;
     lastRecord.set(event.step_name, index);
     if (event.event_type !== 'node_completed') continue;
     const record = readNodeRecordEvent({ ...event, workflow_run_id: run.id });

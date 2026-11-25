@@ -662,18 +662,33 @@ describe('a failure whose outcome is unknown', () => {
     };
 
     it('a peer whose ordinary failure settles last does not clear the stop', async () => {
-      spy = failingWithOutcomeUnknown(['write']);
       const marker = join(testDir, 'cleaned');
-      const go = join(testDir, 'go');
-      // `other` fails first and decides "no unknown outcome yet"; only then may `write` fail.
-      // `other`'s decision is handed back after `write`'s stop is set, so it settles last.
+      // `other` decides first, before `write`'s failure record exists, so its answer is no.
+      // `write`'s record is held until then, and `other`'s answer is handed back only after
+      // `write` set the stop: the ordinary failure settles last.
+      const otherDecided = Promise.withResolvers<void>();
       const writerStopped = Promise.withResolvers<void>();
+      const decisions: [string, boolean][] = [];
+      spy = spyOn(nodeEventWrite, 'recordNodeState').mockImplementation(
+        async (sinks, record, continuation) => {
+          if (
+            'cache' in record ||
+            record.lifecycle.status !== 'failed' ||
+            record.node.id !== 'write'
+          )
+            return realRecordNodeState(sinks, record, continuation);
+          await otherDecided.promise;
+          const lifecycle = { ...record.lifecycle, failureKind: 'outcome_unknown' as const };
+          return realRecordNodeState(sinks, { ...record, lifecycle }, continuation);
+        }
+      );
       const decide = spyOn(settle, 'reachedUnknownOutcome').mockImplementation(
         async (ctx, settled) => {
           const reached = await realReachedUnknownOutcome(ctx, settled);
+          decisions.push([settled.nodeId, reached]);
           if (settled.nodeId === 'write') writerStopped.resolve();
           if (settled.nodeId !== 'other') return reached;
-          await writeFile(go, '');
+          otherDecided.resolve();
           await writerStopped.promise;
           await new Promise(resolve => setTimeout(resolve, 0));
           return reached;
@@ -688,7 +703,7 @@ describe('a failure whose outcome is unknown', () => {
               until: 'DONE',
               max_iterations: 3,
               nodes: [
-                { id: 'write', kind: 'exec', runtime: 'sh', script: afterPause(go) },
+                { id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1' },
                 { id: 'other', kind: 'exec', runtime: 'sh', script: 'exit 1' },
                 {
                   id: 'cleanup',
@@ -702,6 +717,11 @@ describe('a failure whose outcome is unknown', () => {
             },
           },
         ] as DagNode[]);
+        // Both peers decided, `other` first and without an unknown outcome to see.
+        expect(decisions.filter(([id]) => id === 'other' || id === 'write')).toEqual([
+          ['other', false],
+          ['write', true],
+        ]);
         expect(existsSync(marker)).toBe(false);
         await expectEnded(store, runId);
       } finally {

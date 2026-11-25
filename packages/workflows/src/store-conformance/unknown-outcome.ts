@@ -134,6 +134,13 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
         step_name: 'refine.fan',
         data: { node_output: '' },
       });
+      // An audit event on the absorbed step after the join completed is not a node record.
+      await store.persistWorkflowEvent({
+        workflow_run_id: absorbed.id,
+        event_type: 'node_session_resumed',
+        step_name: `${scope}__abc__write`,
+        data: {},
+      });
       for (const run of [absorbed, live])
         await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'started', stepName: 'wait' });
       expect((await store.resumeWorkflowRun(absorbed.id, deadlineWaitCursor(wait))).status).toBe(
