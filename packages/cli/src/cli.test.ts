@@ -1927,7 +1927,17 @@ describe('pre-dispatch gates --json error envelope', () => {
     const transcriptLine = '{"type":"by-id-marker"}';
     // Scratch directories: `project` is a registered folder project and `retired` a
     // registered repository checkout whose `.git` is gone; the others are in no project.
-    const dirs = { home: '', plain: '', bare: '', checkout: '', project: '', retired: '' };
+    const dirs = {
+      home: '',
+      plain: '',
+      bare: '',
+      checkout: '',
+      project: '',
+      retired: '',
+      repo: '',
+    };
+    // A run in the registered git checkout `repo`, read by the prefix `workflow runs` shows.
+    const repoRunId = '5c50458b-0000-4000-8000-000000000000';
 
     beforeAll(async () => {
       for (const key of Object.keys(dirs) as (keyof typeof dirs)[]) {
@@ -1943,7 +1953,11 @@ describe('pre-dispatch gates --json error envelope', () => {
       writeFileSync(getRunLogPathForRoot(outputRoot, runId), `${transcriptLine}\n`);
       const bare = spawnSync('git', ['init', '-q', '--bare', '.'], { cwd: dirs.bare });
       const checkout = spawnSync('git', ['init', '-q', '.'], { cwd: dirs.checkout });
-      if (bare.status !== 0 || checkout.status !== 0) throw new Error('git init failed');
+      const repo = spawnSync('git', ['init', '-q', '.'], { cwd: dirs.repo });
+      if (bare.status !== 0 || checkout.status !== 0 || repo.status !== 0) {
+        throw new Error('git init failed');
+      }
+      mkdirSync(join(dirs.repo, 'src'));
       // A private copy of the seeded registry, so the run stays out of other cases.
       copyFileSync(join(jsonEnvelopeHome, 'archon.db'), join(dirs.home, 'archon.db'));
       const db = new Database(join(dirs.home, 'archon.db'));
@@ -1958,8 +1972,20 @@ describe('pre-dispatch gates --json error envelope', () => {
           ['retired', 'fixture/retired', await canonicalizeProjectPath(dirs.retired), 'repo']
         );
         db.run(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd, kind) VALUES (?, ?, ?, ?)',
+          ['repo', 'fixture/repo', await canonicalizeProjectPath(dirs.repo), 'repo']
+        );
+        db.run(
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
           ['conversation', 'cli', 'by-id-test', 'codebase']
+        );
+        db.run(
+          'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
+          ['repo-conversation', 'cli', 'by-id-repo', 'repo']
+        );
+        db.run(
+          'INSERT INTO remote_agent_workflow_runs (id, conversation_id, codebase_id, workflow_name, user_message, status) VALUES (?, ?, ?, ?, ?, ?)',
+          [repoRunId, 'repo-conversation', 'repo', 'by-id-test', '', 'completed']
         );
         db.run(
           'INSERT INTO remote_agent_workflow_runs (id, conversation_id, codebase_id, workflow_name, user_message, status, output_root) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -2026,13 +2052,24 @@ describe('pre-dispatch gates --json error envelope', () => {
     it.each([
       ['a plain directory', 'plain'],
       ['an unregistered checkout', 'checkout'],
-      ['a bare repository', 'bare'],
     ] as const)('refuses a short prefix from %s and names the full id', (_, dir) => {
       for (const subcommand of reads) {
         const { status, text } = read(dirs[dir], [subcommand, prefix]);
         expect({ subcommand, status }).toEqual({ subcommand, status: 1 });
         expect(text).toContain('pass the full run id');
       }
+    });
+
+    it('resolves a prefix listed by workflow runs from a subdirectory of the git checkout', () => {
+      const src = join(dirs.repo, 'src');
+      const runs = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'runs', '--json'], {
+        cwd: src,
+        encoding: 'utf8',
+        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: dirs.home },
+      });
+      expect(runs.stdout).toContain(repoRunId);
+      const { status, answer } = read(src, ['get', repoRunId.slice(0, 8)]);
+      expect({ status, answer }).toMatchObject({ status: 0, answer: { id: repoRunId } });
     });
 
     it("resolves a short prefix from a subdirectory of the run's folder project", () => {
