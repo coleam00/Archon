@@ -1,7 +1,7 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import {
@@ -11,7 +11,7 @@ import {
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import type { StartedExecutor } from '@archon/core/workflows/start-executor';
-import { getTriggersPath } from '@archon/core/workflows/run-ended';
+import { getTriggersPath, triggerRevision } from '@archon/core/workflows/run-ended';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
@@ -30,7 +30,8 @@ import {
   type SourceReceiptInput,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
-import { assertItemKey, readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
+import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
+import { releaseQueuedLaunchSource } from '@archon/core/workflows/queued-launch-source';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { drainFailureReasons } from '../utils/install-hosts';
@@ -326,7 +327,7 @@ async function triggerFire(
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
-    bindingRevision: createHash('sha256').update(JSON.stringify(config.binding)).digest('hex'),
+    bindingRevision: triggerRevision(config),
   };
   const receipt = await host.deps.store
     .acceptStartReceipt({
@@ -641,12 +642,11 @@ async function withdrawTrigger(host: WorkflowHost, args: string[]): Promise<void
     await writeJsonLine({ requestId: args[0], withdrawn: true, launch: 'unreadable' });
     return;
   }
-  const source = readWorkflowSourceState(launch.run.metadata);
-  if (source.kind === 'recorded') await rm(source.record.root, { recursive: true, force: true });
-  if (source.kind === 'unreadable')
-    throw new Error(
-      'Request withdrawn, but its source record is unreadable; inspect storage before cleanup.'
-    );
+  try {
+    await releaseQueuedLaunchSource(launch);
+  } catch (error) {
+    throw new Error(`Request withdrawn, but ${(error as Error).message}`, { cause: error });
+  }
   await writeJsonLine({ requestId: args[0], withdrawn: true });
 }
 
