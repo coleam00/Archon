@@ -1,11 +1,13 @@
 /**
- * A project's staged packs at a glance: what the pack says it is, how much is moving, what
- * waits on the operator, and where the items sit in the pack's flow.
+ * A project's staged packs at a glance: what the pack says it is, how much is moving, how many
+ * asks wait on the operator, and where the items sit in the pack's flow.
  *
- * The page decides nothing and names no pack. The pack's name, document, groups, arrows and
- * metric cards come from the pack graph read; where an item is comes from the item read's
- * `standing`, the same placement the board draws; the asks are the attention list's. Its
- * numbers are `packBoard`'s over the board's own every-item read, so they match the board.
+ * The page decides nothing and names no pack. The pack's name, document, groups and arrows come
+ * from the pack graph read; where an item is comes from the item read's `standing`, the same
+ * placement the board draws. Its numbers are `packBoard`'s over the board's own every-item read,
+ * so they match the board. Of the asks it shows only their count, as one link to the project's
+ * Needs you tab: Needs you is drawn on that tab and on Archon's platform-wide Needs you page,
+ * nowhere else (#218).
  *
  * The map is `factory/PackMap.tsx`'s: the pack's curated map when it ships a view file, else the
  * flow derived from the graph.
@@ -13,7 +15,7 @@
 import type { ReactElement, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Link, useParams } from 'react-router';
-import { ItemAsksSection, useItemAsks } from '../components/ItemAsksSection';
+import { useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { FactoryNumbers } from '../factory/FactoryNumbers';
 import { packBoard } from '../factory/lib/board-numbers';
@@ -26,7 +28,31 @@ import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import { MOVING } from './BoardPage';
 
-const TOP_ASKS = 3;
+/**
+ * The project's open asks as one line linking to its Needs you tab. Nothing while the asks are
+ * read, so it never claims nothing waits before it knows, and nothing when none is open (the
+ * need-you tile beside it already says 0).
+ */
+export function NeedsYouLine({
+  projectId,
+  count,
+}: {
+  projectId: string;
+  /** The project's open asks; undefined until the attention list answers. */
+  count: number | undefined;
+}): ReactElement | null {
+  if (count === undefined || count === 0) return null;
+  return (
+    <p data-needs-you>
+      <Link
+        to={`/console/p/${projectId}/needs-you`}
+        className="text-console-13 text-accent-bright underline"
+      >
+        {String(count)} {count === 1 ? 'needs you' : 'need you'}
+      </Link>
+    </p>
+  );
+}
 
 export function PackOverview({
   projectId,
@@ -43,7 +69,7 @@ export function PackOverview({
   itemsError: Error | undefined;
   /** The project's open asks; undefined until the attention list answers. */
   needYou: number | undefined;
-  /** The top asks, drawn under the tiles and above the map (DESIGN.md, Overview page). */
+  /** The Needs you line, drawn under the tiles and above the map (DESIGN.md, Overview page). */
   children?: ReactNode;
 }): ReactElement {
   const { data: graph, error } = useEntity<PackGraph>(K.packGraph(projectId, pack), () =>
@@ -90,28 +116,7 @@ export function OverviewPage(): ReactElement {
   );
   const itemAsks = useItemAsks(attention, projectId);
   const every = useBoardItems(projectId);
-  const topAsks =
-    itemAsks.asks.length + itemAsks.answered.length > 0 ? (
-      <section data-needs-you>
-        <h2 className="text-sm font-medium text-text-primary">Needs you</h2>
-        <div className="mt-3 flex flex-col gap-3">
-          <ItemAsksSection
-            {...itemAsks}
-            asks={itemAsks.asks.slice(0, TOP_ASKS)}
-            showProject={false}
-            compact={{ openAt: `/console/p/${projectId}/needs-you` }}
-          />
-        </div>
-        {itemAsks.asks.length > TOP_ASKS ? (
-          <Link
-            to={`/console/p/${projectId}/needs-you`}
-            className="mt-2 inline-block text-console-12 text-accent-bright underline"
-          >
-            {itemAsks.asks.length - TOP_ASKS} more on Needs you
-          </Link>
-        ) : null}
-      </section>
-    ) : null;
+  const needYou = attention === undefined ? undefined : itemAsks.asks.length;
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex flex-col gap-3 border-b border-border px-4 py-4 md:px-6">
@@ -137,9 +142,10 @@ export function OverviewPage(): ReactElement {
             pack={pack}
             items={every.data}
             itemsError={every.error}
-            needYou={attention === undefined ? undefined : itemAsks.asks.length}
+            needYou={needYou}
           >
-            {index === 0 ? topAsks : null}
+            {/* The count is the project's, so it is drawn once, under the first pack's tiles. */}
+            {index === 0 ? <NeedsYouLine projectId={projectId} count={needYou} /> : null}
           </PackOverview>
         ))}
       </div>

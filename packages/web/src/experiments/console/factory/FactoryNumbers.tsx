@@ -2,7 +2,8 @@
  * A pack's number tiles on the Overview (v1's `FactoryNumbers.tsx`): in flight, need you,
  * merged today, "N of M" merged and the median time to merged. Every figure but "need you" is
  * `packBoard`'s, the function the Board's columns and Merged column count with, so the two
- * pages cannot disagree. "Need you" is the project's open asks, as the Board's Needs you lists.
+ * pages cannot disagree. "Need you" is the project's open asks, the same count the project's
+ * Needs you tab badge and the Overview's Needs you line show.
  */
 import type { ReactElement, ReactNode } from 'react';
 import {

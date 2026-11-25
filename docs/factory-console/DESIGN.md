@@ -538,7 +538,7 @@ One 4/8 px grid: Tailwind's 4 px scale, every value a multiple of 4.
 
 **The ask** is Archon's own ask section and answer panel (`ItemAsksSection`,
 `AttentionAnswerPanel`, `ApprovalPanel`), exactly as on Archon dev, wherever the factory section
-answers an ask (the board popover, which the Overview's Needs you rows open too, and the item page)
+answers an ask (the board popover and the item page)
 (v2 direction).
 The factory section does not restyle, wrap, replace or parse it: its options, recommendation,
 confidence and cost come from what the ask's workflow declares (#6139), never from the ask's
@@ -585,7 +585,7 @@ puts a card's accent on its left edge; ours is the top bar of rule 2).
   lines; a loop drawn as one labelled dashed line ("another round (max 2)"); a dotted line down to
   the card that asks you.
 
-**Layout.** At 1440x900 the Overview shows its newest asks as compact rows and the top of the map in the first screen.
+**Layout.** At 1440x900 the Overview shows its tiles, its one Needs you line and the top of the map in the first screen.
 At 390x844 columns stack and the map pans.
 
 **No token yet.** Spacing, motion (duration, easing), skeleton colour and icon size have no
@@ -627,7 +627,7 @@ The section has **two separate things**, each with its own file:
    and views); under `prefers-reduced-motion` neither the dots nor the control are drawn. Each dot
   is 10 px across with a faint halo 20 px across, in the kind colour of the card it travels to ("Visual
   identity, 2026-11-19").
-2. **The live factory view** (what the Factory tab shows: Overview numbers, the newest asks, the live
+2. **The live factory view** (what the Factory tab shows: Overview numbers, the Needs you line, the live
    map, Board, items, stages). Driven by the pack's **view file** (`factory-view.json`, below), which
    grows to carry, per stage, a curated drill-down (numbered phase columns of a few plain cards, each
    card `covers` the real step ids it stands for) and display names for steps. The check (The factory
@@ -735,7 +735,7 @@ documents through Neon live queries.
 
   | Route | Page |
   |---|---|
-  | `factory` | Overview: one paragraph saying what this factory does, the numbers strip, the newest asks of three items (through Archon's ask section), then the map. `?stage=<id>` opens that stage as a modal over the map (The map, Click) |
+  | `factory` | Overview: one paragraph saying what this factory does, the numbers strip, the one Needs you line linking to the Needs you tab, then the map. `?stage=<id>` opens that stage as a modal over the map (The map, Click) |
   | `factory/board` | The board (default view Pipeline, with a Table alternative) |
   | `factory/items/:key` | One item: its story (header band, journey strip, a panel per stage with its rounds grid and asks), links and change. A key with no item and no work order says "There is no item <key> in this project" (rule 6) with "Open the board" and a search by key or title listing the closest items; a read that failed says why, with a Retry |
   | `factory/*` | Any other path: "No page here" inside the section, with links to Overview and Board |
@@ -922,20 +922,12 @@ panel). Port the logic and ideas, not the styling: Mission Control used its own 
    change 3 of 2026-11-23); each counts with the board's own show (`?show=`, one spec per show in
    `lib/board-show.ts`), so a number and the board agree. Only the unknown line under the tiles
    links (`?show=unknown`). The median tile's tooltip says what the figure means.
-3. **Needs you:** at most three compact rows (#180), one per board item that asked last: its key
-   and title, its stage and how long its newest ask has waited, the question in one line and the
-   recommended option, drawn with the board card's own ask pieces. A row opens Archon's own ask
-   section for the item as the board card does, answered there: from md up a box over the page,
-   beside the row where the window has room for it and otherwise at the window's left edge, over
-   the left of the rows (a row is as wide as the text measure, so at 1440 it does not fit
-   beside one); under md a sheet from the bottom. A row narrower than its one-line layout needs
-   (a phone, the md band beside the sidebar) gives the title a line of its own, so a work
-   order's long key never squeezes it out; the key never breaks inside itself. Never a second
-   ask design (v2 direction). Then "N more on the board" (the board's `?show=needs-you`): the
-   open asks of the cards that show lists and are not rows, and one per card waiting on you with
-   no ask open, so the link finds every one of them. An ask on an item that show does not list
-   (set aside, with no position, merged, or not a factory item) is counted by the Need you tile
-   only. Nothing shows when nothing waits, and the map follows right after.
+3. **Needs you:** one line, "N need you" ("1 needs you"): the project's open asks, the same count
+   as the need-you tile and the Needs you tab badge, linking to the project's Needs you tab
+   (`--text-console-13`, accent, underlined). No questions, recommendations or answering on the
+   Overview: Needs you is drawn in two places only, Archon's platform-wide Needs you page and
+   the project's Needs you tab (owner and Rasmus, 2026-11-25, #218). Nothing shows while the
+   asks are read or when nothing waits, and the map follows right after.
 4. **The map.**
 
 ## The map
