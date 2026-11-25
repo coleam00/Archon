@@ -495,12 +495,6 @@ async function resolveRegisteredCwd(
     }
     return codebase?.kind === 'folder' ? codebase.default_cwd : (repoRoot ?? realCwd);
   } catch (error) {
-    // A bare repository has no work tree, so the lookup fails there; for a prefix read that
-    // means no project, read from git's structured answer. Other failures stay visible.
-    if (isByIdRead(ctx)) {
-      const { isBareRepository } = await import('@archon/git');
-      if (await isBareRepository(realCwd)) return await refuseShortRunId(ctx);
-    }
     return await fallBackToRepoRoot(ctx, realCwd, error as Error);
   }
 }

@@ -2115,12 +2115,6 @@ describe('pre-dispatch gates --json error envelope', () => {
       expect({ status, answer }).toMatchObject({ status: 0, answer: { id: parentRunId } });
     });
 
-    it('refuses a short prefix from an unregistered bare repository and names the full id', () => {
-      const { status, text } = read(dirs.bare, ['get', prefix]);
-      expect(status).toBe(1);
-      expect(text).toContain('pass the full run id');
-    });
-
     it("resolves a short prefix from a subdirectory of the run's folder project", () => {
       const { status, answer } = read(join(dirs.project, 'sub'), ['get', prefix]);
       expect({ status, answer }).toMatchObject({ status: 0, answer: { id: runId } });
