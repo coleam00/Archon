@@ -383,6 +383,24 @@ function replaceLoopBaseline(
   );
 }
 
+function replaceInstanceSegment(
+  fold: DagUsageFold,
+  stepName: string
+): readonly UsageContribution[] {
+  const prefix = `${stepName}__`;
+  for (const [childRunId, paths] of fold.childUsagePaths) {
+    const replaced = [...paths].filter(path => path.startsWith(prefix));
+    if (replaced.length > 0) fold.opaqueChildUsagePaths.set(childRunId, new Set(replaced));
+  }
+  const covered = fold.usageContributions.filter(contribution =>
+    contribution.stepName.startsWith(prefix)
+  );
+  fold.usageContributions = fold.usageContributions.filter(
+    contribution => !contribution.stepName.startsWith(prefix)
+  );
+  return covered;
+}
+
 function foldNodeUsage(
   fold: DagUsageFold,
   row: DagUsageRow,
@@ -394,20 +412,9 @@ function foldNodeUsage(
   const isAuthoritativeInstanceUsage =
     record.data.type === 'compose_fan_out_instance' &&
     (row.event_type === 'node_completed' || row.event_type === 'node_failed');
-  let coveredContributions: readonly UsageContribution[] | undefined;
-  if (isAuthoritativeInstanceUsage) {
-    const prefix = `${row.step_name}__`;
-    for (const [childRunId, paths] of fold.childUsagePaths) {
-      const replaced = [...paths].filter(path => path.startsWith(prefix));
-      if (replaced.length > 0) fold.opaqueChildUsagePaths.set(childRunId, new Set(replaced));
-    }
-    coveredContributions = fold.usageContributions.filter(contribution =>
-      contribution.stepName.startsWith(prefix)
-    );
-    fold.usageContributions = fold.usageContributions.filter(
-      contribution => !contribution.stepName.startsWith(prefix)
-    );
-  }
+  const coveredContributions = isAuthoritativeInstanceUsage
+    ? replaceInstanceSegment(fold, row.step_name)
+    : undefined;
   // Other aggregate rows merely restate usage already carried by their leaves.
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
   if (row.event_type !== 'node_skipped_prior_success') {

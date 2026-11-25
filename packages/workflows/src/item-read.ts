@@ -48,7 +48,6 @@ import { itemEndDegradedSchema, itemEndSchema } from './schemas/item-end';
 import { readHoldingItemEnd } from './item-end';
 import { ItemLandingUnresolvedError, resolveItemLanding } from './item-landing';
 import { recordSurfaceSchema } from './schemas/record-surface';
-import { parseRunUsage } from './schemas/run-usage';
 import { chosenAskOption, type StoredItemAsk } from './schemas/item-ask';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import {
@@ -87,18 +86,11 @@ import { readChangeSize } from './change-size';
 import { runPack, runPackSchema } from './run-pack';
 import { itemStartLimitSchema, type LimitBindingsReader, withLimitBindings } from './start-limit';
 import { recordedSpendSchema, type RunUsageReport } from './schemas/run-usage-report';
-import { hasUnknownTokenTotal } from './schemas/run-usage';
-import { readRunUsageReports } from './run-usage-read';
-import {
-  aggregateUsageReports,
-  itemRunUsageReport,
-  unknownRunUsageReport,
-} from './run-usage-report';
+import { readItemUsage } from './run-usage-read';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('workflow.item-read');
-  return cachedLog;
+  return (cachedLog ??= createLogger('workflow.item-read'));
 }
 
 /**
@@ -422,7 +414,6 @@ function readResult(
   }
 }
 
-/** The `workflow_completed` events of the completed runs, which hold their results. */
 async function completionEvents(
   source: ItemReadSource,
   runs: readonly WorkflowRun[]
@@ -455,10 +446,7 @@ async function itemRun(
     cause: receipt ? startCause(receipt) : null,
     awaitingExecution: await awaitingExecution(request, run, source.startExecutor),
     startLimit,
-    spend: {
-      ...report.totals,
-      coverage: report.coverage,
-    },
+    spend: { ...report.totals, coverage: report.coverage },
     heldBehind,
     operatorPause: operatorPause(run),
     ...readResult(run, terminalEvents.get(run.id) ?? []),
@@ -776,20 +764,11 @@ export async function assembleItemRead(
       : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
   const facts = await readItemFacts(source, found.item);
   const terminalEvents = await completionEvents(source, own.values);
-  const reports = await readRunUsageReports(source.store, own.values);
-  const usageReports = own.values.map(run =>
-    itemRunUsageReport(
-      run,
-      reports.get(run.id) ?? unknownRunUsageReport(run, 'history_unavailable')
-    )
+  const usage = await readItemUsage(
+    source.store,
+    own.values,
+    own.degraded.map(report => report.runId)
   );
-  const aggregate = aggregateUsageReports(usageReports, {
-    missingRunIds: own.degraded.map(report => report.runId),
-    unknownTokens: own.values.some(
-      run =>
-        hasUnknownTokenTotal(run.metadata) || parseRunUsage(run.metadata).tokensUnknown === true
-    ),
-  });
   const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
   const answers = [
     ...[...events.values()].flat().map(itemAnswer),
@@ -819,7 +798,7 @@ export async function assembleItemRead(
     });
   return {
     item: found.item,
-    spend: { ...aggregate.totals, coverage: aggregate.coverage },
+    spend: { ...usage.aggregate.totals, coverage: usage.aggregate.coverage },
     runs: await Promise.all(
       own.values.map(async (run, index) =>
         itemRun(
@@ -829,7 +808,7 @@ export async function assembleItemRead(
           (await holds.runHeldBehind(run)) ?? null,
           terminalEvents,
           startLimits.countedUnder[run.id] ?? null,
-          usageReports[index]
+          usage.reports[index]
         )
       )
     ),

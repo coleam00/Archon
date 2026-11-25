@@ -8,10 +8,13 @@ import {
 import { readNodeRecordEvent } from './node-record-reader';
 import { DEFERRED_NODE_USAGE_EVENT_TYPE } from './node-record-serialization';
 import {
+  aggregateUsageReports,
   buildRunUsageReport,
+  itemRunUsageReport,
   unknownRunUsageReport,
   type ChildUsageReport,
 } from './run-usage-report';
+import { hasUnknownTokenTotal, parseRunUsage } from './schemas/run-usage';
 import type { RunUsageReport, UsageLimitation } from './schemas/run-usage-report';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowRun } from './schemas/workflow-run';
@@ -188,4 +191,23 @@ export async function readRunUsageReport(
 ): Promise<RunUsageReport> {
   const reports = await readRunUsageReports(store, [run]);
   return reports.get(run.id) ?? unknownRunUsageReport(run, 'history_unavailable');
+}
+
+export async function readItemUsage(
+  store: RunUsageReadStore,
+  runs: readonly WorkflowRun[],
+  missingRunIds: readonly string[]
+): Promise<{ reports: RunUsageReport[]; aggregate: RunUsageReport }> {
+  const read = await readRunUsageReports(store, runs);
+  const reports = runs.map(run =>
+    itemRunUsageReport(run, read.get(run.id) ?? unknownRunUsageReport(run, 'history_unavailable'))
+  );
+  const aggregate = aggregateUsageReports(reports, {
+    missingRunIds,
+    unknownTokens: runs.some(
+      run =>
+        hasUnknownTokenTotal(run.metadata) || parseRunUsage(run.metadata).tokensUnknown === true
+    ),
+  });
+  return { reports, aggregate };
 }
