@@ -11,13 +11,16 @@ function isSchema(value: unknown): value is Record<string, unknown> {
 
 /**
  * The smallest value `schema` admits, built deterministically: only required properties,
- * the first alternative, the first enum value, and a `<name>` placeholder for each string.
+ * the first alternative, the first enum value, the schema's own first `examples` value, and
+ * a `<name>` placeholder for any other string.
  * Throws on a schema shape it cannot build from rather than printing a wrong example.
  */
 export function exampleRequest(schema: unknown, name = 'value'): unknown {
   if (!isSchema(schema)) throw new Error(`request schema at '${name}' is not an object`);
   if ('const' in schema) return schema.const;
   if (Array.isArray(schema.enum)) return schema.enum[0];
+  // A field whose pattern or cross-field rule a placeholder cannot meet names its own example.
+  if (Array.isArray(schema.examples) && schema.examples.length > 0) return schema.examples[0];
   const alternatives = schema.anyOf ?? schema.oneOf;
   if (Array.isArray(alternatives)) return exampleRequest(alternatives[0], name);
   switch (schema.type) {

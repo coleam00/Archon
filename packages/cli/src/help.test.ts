@@ -2,7 +2,11 @@ import { describe, it, expect } from 'bun:test';
 import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { cliForgeJsonSchemas } from '@archon/forge';
+import {
+  cliForgeCheckRequestSchema,
+  cliForgeJsonSchemas,
+  cliForgeMetadataRequestSchema,
+} from '@archon/forge';
 import { forgeRequestSchema } from '@archon/forge/operations';
 import { convertOutputSchema } from '@archon/workflows/output-types/schema-to-ts';
 import { formatSpecLine, helpEntries, renderHelp, renderHelpFor } from './help';
@@ -129,32 +133,38 @@ describe('CLI help output', () => {
     expect(scoped).not.toContain('--follow');
   });
 
-  // Every operation's request type and example come from its schema.
+  // The parser `archon forge <op>` reads each request with, once the host adds op and id.
+  const hostParsers: Record<string, { safeParse(value: unknown): { success: boolean } }> = {
+    metadata: cliForgeMetadataRequestSchema,
+    check: cliForgeCheckRequestSchema,
+  };
+
+  // Every operation's request type and example come from its schema, and the example is a
+  // request the host accepts once the placeholders are filled in. `checks` is an alias.
   for (const { op, request } of cliForgeJsonSchemas().operations) {
-    const subcommand = op === 'checks.state' ? 'checks' : op;
-    it(`renders the request and an example in forge ${subcommand} --help`, () => {
-      const scoped = renderHelp('forge', subcommand);
-      expect(scopedHelpOptions(['forge', subcommand])).toContain('--data <json>');
-      expect(scoped).toContain(
-        `Request (--data):\n${indentType(convertOutputSchema(request).type)}`
-      );
-      expect(exampleData(scoped, subcommand)).toBeObject();
-    });
+    for (const subcommand of op === 'checks.state' ? [op, 'checks'] : [op]) {
+      it(`renders the request and an accepted example in forge ${subcommand} --help`, () => {
+        const scoped = renderHelp('forge', subcommand);
+        expect(scopedHelpOptions(['forge', subcommand])).toContain('--data <json>');
+        expect(scoped).toContain(
+          `Request (--data):\n${indentType(convertOutputSchema(request).type)}`
+        );
+        const example = { ...(exampleData(scoped, subcommand) as object), op, operationId: 'help' };
+        expect((hostParsers[op] ?? forgeRequestSchema).safeParse(example).success).toBe(true);
+      });
+    }
   }
 
-  // Placeholders cannot satisfy every pattern a field narrows to, so only the merge
-  // example, the one the item is about, is held to the host's parser.
-  it('shows the pull request and the head pr.merge is pinned to, in an example the host admits', () => {
+  it('shows the pull request and the head pr.merge is pinned to, and only what it needs', () => {
     const scoped = renderHelp('forge', 'pr.merge');
     expect(scoped).toMatch(/readonly ref: \{\n\s+readonly repo: \{/);
     expect(scoped).toContain('readonly number: number;');
     expect(scoped).toContain('readonly head: string;');
-    const example = exampleData(scoped, 'pr.merge');
-    expect(example).toMatchObject({ conditions: { head: '<head>' } });
-    expect(
-      forgeRequestSchema.safeParse({ ...(example as object), op: 'pr.merge', operationId: 'help' })
-        .success
-    ).toBe(true);
+    expect(exampleData(scoped, 'pr.merge')).toEqual({
+      ref: { repo: { host: '<host>', path: '<path>' }, number: 1 },
+      method: 'merge',
+      conditions: { head: '<head>' },
+    });
   });
 
   it('states a field added to a request schema in both the type and the example', () => {
@@ -182,7 +192,7 @@ describe('CLI help output', () => {
     const forge = renderHelp('forge');
     expect(forge).toContain('archon forge <operation> --help');
     expect(forge).not.toContain('Request (--data):');
-    expect(forge).not.toContain('github');
+    expect(forge).not.toMatch(/github|gitlab|gitea|bitbucket|\.(com|org|io)\b/i);
   });
 
   const EXPECTED_GLOBAL_HELP = `

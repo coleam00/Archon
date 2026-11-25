@@ -104,23 +104,26 @@ export const prCloseRequestSchema = requestBase.extend({
 });
 // The marker identifies the one canonical comment, so it has to survive a
 // first-line comparison against a body the forge may have re-wrapped.
-const commentMarker = text.refine(
-  value => !/[\r\n]/.test(value),
-  'comment marker must be one line'
-);
+// The help examples of a marker and its body agree, so an example request is accepted.
+const MARKER_EXAMPLE = '<!-- marker -->';
+const commentMarker = text
+  .refine(value => !/[\r\n]/.test(value), 'comment marker must be one line')
+  .meta({ examples: [MARKER_EXAMPLE] });
+/** A body whose first line is its request's marker. */
+const markedBody = text.meta({ examples: [`${MARKER_EXAMPLE}\n<body>`] });
 /** The pull-request form, kept for callers and installed plugins that predate subjects. */
 export const commentUpsertRequestSchema = requestBase.extend({
   op: z.literal('comment.upsert'),
   ref: prRefSchema,
   marker: commentMarker,
-  body: text,
+  body: markedBody,
 });
 /** The canonical marked comment on an issue or a pull request. */
 export const workItemCommentUpsertRequestSchema = requestBase.extend({
   op: z.literal('workitem.comment.upsert'),
   subject: forgeSubjectRefSchema,
   marker: commentMarker,
-  body: text,
+  body: markedBody,
 });
 
 export const labelNamesSchema = z
@@ -139,8 +142,10 @@ export const workItemCreateRequestSchema = requestBase
     op: z.literal('workitem.create'),
     repo: repoRefSchema,
     title: text,
-    body: text,
-    marker: text.refine(value => !/[\r\n]/.test(value), 'marker must be one line'),
+    body: markedBody,
+    marker: text
+      .refine(value => !/[\r\n]/.test(value), 'marker must be one line')
+      .meta({ examples: [MARKER_EXAMPLE] }),
   })
   .refine(
     value => value.body.split(/\r?\n/, 1)[0] === value.marker,
@@ -214,6 +219,7 @@ export const repoLabelEnsureRequestSchema = requestBase.extend({
   color: z
     .string()
     .regex(/^[0-9a-fA-F]{6}$/)
+    .meta({ examples: ['ededed'] })
     .transform(value => value.toLowerCase()),
   description: z.string(),
 });
@@ -256,7 +262,10 @@ export const prReviewsRequestSchema = requestBase.extend({
  * The caller's identity for a review posted through `pr.review.submit`, such as its run
  * id. One line with no `>`, so a plugin can carry it inside an HTML comment.
  */
-export const reviewKeySchema = z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/);
+export const reviewKeySchema = z
+  .string()
+  .regex(/^[A-Za-z0-9._:-]{1,128}$/)
+  .meta({ examples: ['run-1'] });
 /**
  * `submitKey` is the key a review was posted with through `pr.review.submit`; on a
  * `review_comment` it is that of the review the comment belongs to. Absent means the
@@ -446,7 +455,8 @@ export const attachmentPutRequestSchema = requestBase.extend({
         return bytes > 0 && bytes <= ATTACHMENT_MAX_BYTES;
       },
       `content must decode to between 1 byte and ${String(ATTACHMENT_MAX_BYTES)} bytes`
-    ),
+    )
+    .meta({ examples: ['iVBORw0KGgo='] }),
 });
 /** Replace an issue's body. */
 export const workItemEditBodyRequestSchema = requestBase.extend({
