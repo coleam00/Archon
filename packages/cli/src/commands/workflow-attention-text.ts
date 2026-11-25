@@ -223,6 +223,29 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
   return lines;
 }
 
+/** A stopped item's lines: a failed run's, or a stop's. */
+function stoppedItemLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
+  return item.failed === undefined ? stoppedLines(item) : failedLines(item, item.failed.error);
+}
+
+/**
+ * A failed run that is the newest on its item: its error, and the restarts. A restart from
+ * the run's record repeats its inputs; naming the workflow passes others.
+ */
+function failedLines(
+  item: Extract<AttentionQueueItem, { kind: 'stopped' }>,
+  error: string | null
+): string[] {
+  const { runId, workflow } = item.stoppedIn;
+  return [
+    `${workflow} failed${error === null ? '' : `: ${oneLine(error)}`}`,
+    `start it again from its record, which closes this: ${command(`run --supersedes ${runId}`)}`,
+    `or with other inputs: ${command(`run ${shellWord(workflow)} --supersedes ${runId} --input <name>=<value>`)}`,
+    `show the run: ${command(`get ${runId}`)}`,
+    `read the item: ${command(`runs --item-of ${runId}`)}`,
+  ];
+}
+
 /** What an item a paused run holds says under its heading line. */
 function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): string[] {
   const { run } = item;
@@ -308,7 +331,7 @@ export function attentionItemLines(
     : item.kind === 'overdue_wait'
       ? overdueWaitLines(item)
       : item.kind === 'stopped'
-        ? stoppedLines(item)
+        ? stoppedItemLines(item)
         : refItemLines(item);
   for (const line of body) lines.push(`    ${line}`);
   return lines;

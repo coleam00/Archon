@@ -89,6 +89,48 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
     }
   });
 
+  test('a failed run that is the newest on its item is listed as stopped with why it failed', async () => {
+    const harness = await makeHarness();
+    try {
+      const deps = itemDeps(harness);
+      const stopped = async () =>
+        (await listAttentionQueue(deps.queue)).filter(
+          item => 'kind' in item && item.kind === 'stopped'
+        );
+      const failed = await createOnItem(harness, 'check');
+      await harness.store.claimPendingWorkflowRun(failed);
+      await harness.store.failWorkflowRun(failed, 'no pr input given');
+      expect(await stopped()).toMatchObject([
+        {
+          ref: `stopped:${failed}`,
+          item: { key: 'pr-7' },
+          stoppedIn: { runId: failed, workflow: 'check', outcome: null },
+          failed: { error: 'no pr input given' },
+          summary: null,
+        },
+      ]);
+
+      // Any later run on the item closes it, as its restart does.
+      await createOnItem(harness, 'check');
+      expect(await stopped()).toEqual([]);
+
+      // A cancelled run is an operator's decision, and a failed run with a scheduled resume
+      // moves on by itself: neither is listed.
+      const cancelled = await createOnItem(harness, 'check');
+      await harness.store.cancelWorkflowRun(cancelled);
+      expect(await stopped()).toEqual([]);
+      const scheduled = await createOnItem(harness, 'check');
+      await harness.store.claimPendingWorkflowRun(scheduled);
+      await harness.store.failWorkflowRun(scheduled, 'usage limit');
+      await harness.store.updateWorkflowRun(scheduled, {
+        metadata: { scheduled_resume: { resumeAt: new Date(Date.now() + 60_000).toISOString() } },
+      });
+      expect(await stopped()).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('a refused start is listed beside an open wait; a stop with nothing refused waits for it', async () => {
     const harness = await makeHarness();
     try {

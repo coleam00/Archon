@@ -222,6 +222,8 @@ function withText(chosen: string, said: string | undefined): string {
 /** What the tool says of a stopped item: how its run ended, what was refused, what moves it. */
 function stoppedText(ref: string, item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string {
   const { runId, workflow, outcome } = item.stoppedIn;
+  if (item.failed !== undefined)
+    return `attention: item '${ref}' stopped: run ${runId} (${workflow}) failed${item.failed.error === null ? '' : `: ${item.failed.error}`}. It takes no answer: start it again with archon workflow run --supersedes ${runId}, which closes this.`;
   const count = item.refused?.length ?? 0;
   // A refusal says only what was refused: other starts the run's end caused may have started.
   const after =

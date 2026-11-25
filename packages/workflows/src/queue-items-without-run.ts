@@ -5,9 +5,10 @@
  * `AttentionQueueSource.itemsWithoutRun`. A wait's deadline raises attention and wakes
  * nothing; the set stays open until an event meets it, a newer run of its workflow replaces
  * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
- * `readItemStopped`) is listed while it is the newest run on the item and the item's end
- * does not hold (`item-end.ts`); it takes no answer.
+ * `readItemStopped`), or a failed top-level run, is listed while it is the newest run on the
+ * item and the item's end does not hold (`item-end.ts`); it takes no answer.
  */
+import { createLogger } from '@archon/paths';
 import { askItemRef, stoppedItemRef, waitItemRef } from './attention-item-refs';
 import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
 import {
@@ -22,7 +23,9 @@ import {
   type StoppedQueueItem,
 } from './attention-queue';
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
-import { readItemStopped } from './schemas/run-metadata';
+import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
+import type { WorkflowEventRow } from './schemas/workflow-event';
+import { getTerminalRecord, terminalReason } from './terminal-record';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { StoredItemWait } from './schemas/item-wait';
@@ -165,22 +168,28 @@ export async function overdueWaitItems(
 /** The store reads a stopped item's queue item needs. */
 export type StoppedItemStore = Pick<
   IWorkflowStore,
-  'listStoppedItemRuns' | 'getItem' | 'getCodebase'
+  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase'
 > &
   ItemEndStore;
 
 /**
- * The queue item of an item `run` stopped, or null when the run recorded no stop or has no
- * item. A run that settled asks may have no outcome; a refused start's stop dates from its
+ * The queue item of an item `run` stopped, or null when the run has no item, or completed
+ * and recorded no stop. A failed run stopped its item by failing: nothing moves it on by
+ * itself. A run that settled asks may have no outcome; a refused start's stop dates from its
  * latest refusal. Nothing here changes the item. Each surface spells the commands that
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
-  store: Omit<StoppedItemStore, 'listStoppedItemRuns'>,
+  store: Omit<StoppedItemStore, 'listStoppedItemRuns' | 'listEventsForRuns'>,
   run: WorkflowRun,
-  codebases: CodebaseCache = new Map()
+  codebases: CodebaseCache = new Map(),
+  /** A failed run's `workflow_failed` events, which carry what failed first. */
+  failedEvents: readonly WorkflowEventRow[] = []
 ): Promise<StoppedQueueItem | null> {
-  const stopped = readItemStopped(run.metadata);
+  const failed = run.status === 'failed';
+  const stopped: ItemStopped | undefined = failed
+    ? { summary: null }
+    : readItemStopped(run.metadata);
   if (stopped === undefined || run.item_id === null) return null;
   const item = await store.getItem(run.item_id);
   let codebase: AttentionQueueItemSources['codebase'] = null;
@@ -201,27 +210,57 @@ export async function stoppedQueueItem(
     summary: stopped.summary,
     ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
     ...(stopped.refused === undefined ? {} : { refused: stopped.refused }),
+    ...(failed ? { failed: { error: failureReason(run, failedEvents) } } : {}),
     checkout: codebase?.default_cwd ?? null,
   };
 }
 
 /**
- * The items completed runs stopped, for `AttentionQueueSource.itemsWithoutRun`, but for an
- * item whose end holds (`readHoldingItemEnd`): an operator said nothing more happens on it.
+ * Why a failed run failed, as `workflow get` says it: the first failed node's error from the
+ * terminal record. A run whose record is missing or unreadable falls back to the error the
+ * run recorded (`metadata.error`), which `workflow get` shows too; null when it has neither.
+ */
+function failureReason(run: WorkflowRun, events: readonly WorkflowEventRow[]): string | null {
+  let reason: string | undefined;
+  try {
+    reason = terminalReason(getTerminalRecord('failed', events))[0];
+  } catch (error) {
+    reason = undefined;
+    createLogger('workflow.attention_queue').warn(
+      { err: error as Error, runId: run.id },
+      'workflow.stopped_item_terminal_record_unreadable'
+    );
+  }
+  const error = run.metadata.error;
+  if (reason !== undefined && reason.trim() !== '') return reason;
+  return typeof error === 'string' && error.trim() !== '' ? error : null;
+}
+
+/**
+ * The items runs stopped, for `AttentionQueueSource.itemsWithoutRun`, but for an item whose
+ * end holds (`readHoldingItemEnd`): an operator said nothing more happens on it.
  */
 export async function stoppedItems(
   store: StoppedItemStore
 ): Promise<AttentionRead<StoppedQueueItem>[]> {
   const codebases: CodebaseCache = new Map();
   const items: AttentionRead<StoppedQueueItem>[] = [];
-  for (const run of await store.listStoppedItemRuns()) {
+  const runs = await store.listStoppedItemRuns();
+  const failedIds = runs.flatMap(run =>
+    !isAttentionDegraded(run) && run.status === 'failed' ? [run.id] : []
+  );
+  const failedEvents =
+    failedIds.length === 0
+      ? new Map<string, WorkflowEventRow[]>()
+      : await store.listEventsForRuns(failedIds, ['workflow_failed']);
+  for (const run of runs) {
     if (isAttentionDegraded(run)) {
       items.push(run);
       continue;
     }
     const end = run.item_id === null ? null : await readHoldingItemEnd(store, run.item_id);
     if (end !== null && !('type' in end)) continue;
-    const item = await stoppedQueueItem(store, run, codebases);
+    const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
     if (item !== null) items.push(item);
   }
   return items;
