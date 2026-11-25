@@ -235,12 +235,15 @@ export async function createFileWorkflowStore(
     claimPendingWorkflowRun: (id, path) =>
       write([id], async (view, admission) => {
         const run = await view.getWorkflowRun(id);
-        if (run?.status !== 'pending') return null;
-        // Refusals no claimant gets past: the one that tried fails the run with the reason.
-        if (await options.isCheckoutReleased?.(run, path))
-          throw new PendingClaimRefusedError(id, 'checkout_released');
-        if (!(await admission.canClaim(id)))
-          throw new PendingClaimRefusedError(id, 'admission_revoked');
+        if (!run) return null;
+        // A still-pending run refused by its own state: the claimant that tried fails it with
+        // the reason. Any other run is the view's compare-and-set to refuse.
+        if (run.status === 'pending') {
+          if (await options.isCheckoutReleased?.(run, path))
+            throw new PendingClaimRefusedError(id, 'checkout_released');
+          if (!(await admission.canClaim(id)))
+            throw new PendingClaimRefusedError(id, 'admission_revoked');
+        }
         return view.claimPendingWorkflowRun(id, path);
       }),
     updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
