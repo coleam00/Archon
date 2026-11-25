@@ -48,7 +48,7 @@ export function CuratedMap({
       {arrows === undefined ? (
         <GraphPending structure={structure} />
       ) : (
-        <MapCanvas projectId={projectId} view={view} arrows={arrows} live={live} board={board} />
+        <MapCanvas projectId={projectId} view={view} arrows={arrows} live={live} />
       )}
       <StageModal
         projectId={projectId}
@@ -82,13 +82,11 @@ function MapCanvas({
   view,
   arrows,
   live,
-  board,
 }: {
   projectId: string;
   view: CuratedView;
   arrows: readonly MapArrow[];
   live: MapLive | Unread;
-  board: string;
 }): ReactElement {
   const layout = useMemo(() => layoutMap(view, arrows), [view, arrows]);
   const { cards, bounds } = layout;
@@ -157,7 +155,6 @@ function MapCanvas({
           <MapDetails
             projectId={projectId}
             view={view}
-            board={board}
             title={selectedCard.label}
             stages={stagesOf(selectedCard.stages).map(stage => ({
               stage,

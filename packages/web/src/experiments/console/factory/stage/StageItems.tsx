@@ -42,22 +42,18 @@ export function ItemLink({ projectId, read }: { projectId: string; read: ItemRea
  * What sits on a map stage now, each item linking to its run log: the map's details panel and
  * the stage's "Items here now" both draw it from the one `StageRead` the map's chips draw from,
  * so the two never disagree. Skeleton lines until the items are read (rule 6), never `empty`
- * early, and "Could not be read." once the first read failed. Where the stage counts more than
- * it lists (the landed stage lists only the newest done items), it points at the board.
+ * early, and "Could not be read." once the first read failed.
  */
 export function ItemsHere({
   projectId,
   view,
   live,
-  board,
   empty,
 }: {
   projectId: string;
   /** The view file's words for stages and outcomes. */
   view: Pick<CuratedView, 'stageLabels' | 'outcomeLabels'>;
   live: StageRead;
-  /** The project's board, which lists every item. */
-  board: string;
   /** What it says when nothing is in the stage. */
   empty: ReactNode;
 }): ReactElement {
@@ -77,11 +73,10 @@ export function ItemsHere({
         )}
       </section>
     );
-  const unlisted = live.total - live.items.length;
   return (
     <section data-items-here className="flex flex-col gap-1.5">
-      <h6 className={HEADING}>Items here · {live.total}</h6>
-      {live.total === 0 ? (
+      <h6 className={HEADING}>Items here · {live.items.length}</h6>
+      {live.items.length === 0 ? (
         empty
       ) : (
         <ul className="flex flex-col gap-1">
@@ -95,11 +90,6 @@ export function ItemsHere({
             />
           ))}
         </ul>
-      )}
-      {unlisted <= 0 ? null : (
-        <Link to={board} className="text-console-12 text-accent-bright hover:underline">
-          {unlisted} more, on the board
-        </Link>
       )}
     </section>
   );

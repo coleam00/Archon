@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { FIT_PAD, fitCamera, MIN_ZOOM, READABLE_K, reveal, zoomAt } from './map-camera';
+import {
+  cappedHeight,
+  FIT_PAD,
+  fitCamera,
+  MIN_FRAME_HEIGHT,
+  MIN_ZOOM,
+  READABLE_K,
+  reveal,
+  zoomAt,
+} from './map-camera';
 import { LIVE_FITTING } from '../map/useMapCamera';
 import { layoutMap } from './map-layout';
 import { shippedArrows, shippedView } from '../curated.test-fixtures';
@@ -61,5 +70,12 @@ describe('the map camera', () => {
       ...camera,
       x: 50,
     });
+  });
+
+  test('a capped frame stops at its share of the window, never under the least frame; a shorter one stands', () => {
+    // The Overview's Full workflow at 1440x900: fitted to its width it would be 853 tall.
+    expect(cappedHeight(853, 900, 0.8)).toBe(720);
+    expect(cappedHeight(400, 900, 0.8)).toBe(400);
+    expect(cappedHeight(853, 200, 0.8)).toBe(MIN_FRAME_HEIGHT);
   });
 });

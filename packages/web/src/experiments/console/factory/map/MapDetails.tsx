@@ -16,8 +16,6 @@ interface StageDetails {
 
 interface MapDetailsProps {
   projectId: string;
-  /** The project's board, which lists what a stage's newest items leave out. */
-  board: string;
   /** The view file's words for stages and outcomes. */
   view: CuratedView;
   /** The card's label. */
@@ -35,7 +33,6 @@ const HEADING = 'text-console-12 font-medium uppercase tracking-console-label te
  */
 export function MapDetails({
   projectId,
-  board,
   view,
   title,
   stages,
@@ -63,7 +60,6 @@ export function MapDetails({
           <StageSection
             key={entry.stage.id}
             projectId={projectId}
-            board={board}
             view={view}
             entry={entry}
             named={stages.length > 1}
@@ -77,13 +73,11 @@ export function MapDetails({
 /** One stage of the card: its label when the card has several, its blurb, items, workflows. */
 function StageSection({
   projectId,
-  board,
   view,
   entry,
   named,
 }: {
   projectId: string;
-  board: string;
   view: CuratedView;
   entry: StageDetails;
   named: boolean;
@@ -117,7 +111,6 @@ function StageSection({
         projectId={projectId}
         view={view}
         live={live}
-        board={board}
         empty={<p className="text-console-13 text-text-tertiary">Nothing here now.</p>}
       />
       <section className="flex flex-col gap-1.5">

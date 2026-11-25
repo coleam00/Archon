@@ -3,7 +3,7 @@
  * run working it, or the board's ... label"). It takes the Board's own words: a running item's
  * line is the board card's (`cardProgress`'s running stage and step, in the view's words), and
  * every other state is the board chip's label (`CHIP`, `chipOf`). A merged item reads "Merged",
- * as the Board's Done column says it. The view file only adds where: the label of the stage the
+ * as the Board's Merged column says it. The view file only adds where: the label of the stage the
  * item stands at, or, for an item at rest, its outcome's label.
  */
 import { CHIP, chipOf, standingRun } from '../../routes/board/standing';

@@ -409,7 +409,11 @@ Geist for everything a person reads; Geist Mono for workflow, step and key names
   canvas text at 12 px or more, that zoom is 1.0. Where the drawing does not fit at that zoom,
   the canvas pans. A person may still zoom out by hand. The Overview's map is the exception
   (owner ruling 33a557aa, 2026-11-25): it opens fitted to its frame, down to a scale of 0.75
-  (`LIVE_MIN_K`), so the whole row shows at 1440; a person zooms in to read closer.
+  (`LIVE_MIN_K`), so the whole row shows at 1440; a person zooms in to read closer. The
+  derived map's Full workflow and the stage modal's real-workflow graphs are exceptions too
+  (#219, 2026-11-25): each opens fitted to its frame, so every stage or step shows at once,
+  the Full workflow down to a scale of 0.4 with its zoom and Fit, a stage graph never enlarged
+  and with each step's name in its tooltip.
 
 ### 2. Cards
 
@@ -1004,9 +1008,8 @@ Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row,
 - Pan by drag, zoom by scroll or buttons, Fit button; opens fitted.
 - **Click** a card or a stage's row: the stage opens as a modal over the Overview (owner
   change of 2026-11-19, point 5). From md up it is centred and sized to its content by CSS: as
-  wide as its phases (at least 640 px), The real workflow as wide as the graph it draws (so a
-  one-step workflow stays compact; while the graph loads it is at its narrowest, then resizes
-  once), as tall as what it shows, each at most 90% of the window. Its title and tabs stay put
+  wide as its phases (at least 640 px), The real workflow at that least width with each graph
+  fitted to it, as tall as what it shows, each at most 90% of the window. Its title and tabs stay put
   while the body scrolls under them. A size change snaps: CSS does not animate a size that
   follows the content. Under md it is the whole screen. The URL says which (`?stage=<id>`, pushed,
   so it can be linked and Back closes it). Esc, the close button and a press on the backdrop close it too;
@@ -1034,7 +1037,10 @@ Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row,
   - **The real workflow** (first when the stage has no drill-down), with the line "Read from
     the pack's graph; shows every step.": the steps of each workflow the stage lists, from the
     pack graph, drawn by the section's one graph renderer (Archon's existing one where it can, v2
-    direction) or as a plain list. A retired workflow still places its old runs in the stage,
+    direction) or as a plain list. Each workflow's graph opens fitted to the modal's width and
+    to the height the modal leaves under its heading, never enlarged, so every step shows with
+    no scrolling inside it; the body scrolls between workflows when a stage has several. A
+    retired workflow still places its old runs in the stage,
     but the graph has nothing to draw for it. A step that is running now for any item is marked,
     and each item running the workflow is named, linking to its item page. A step is plain text;
     there is no step page. A failed read says which workflow could not be read and why, with a

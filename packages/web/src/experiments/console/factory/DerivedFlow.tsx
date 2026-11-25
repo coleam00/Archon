@@ -26,8 +26,6 @@ import { GraphSkeleton } from './GraphSkeleton';
 import { MERGED_DAYS, type BoardNumbers } from './lib/board-numbers';
 import { fullWorkflowLayout, MERGED } from './lib/full-workflow-layout';
 import type { ColumnTone } from './lib/map-columns';
-import { PILL_LINE } from './lib/map-sizes';
-import { PILL_H, pillWidth } from './lib/overview-layout';
 import { MapLegend } from './map/MapLegend';
 import { LIVE_FITTING, useMapCamera, type Fitting } from './map/useMapCamera';
 import { usePackGraph } from './map-structure';
@@ -89,8 +87,12 @@ const CARD =
   'factory-card relative flex size-full flex-col gap-1.5 overflow-hidden rounded-console-12 border px-3 pb-3 pt-4';
 const CONTROL =
   'rounded px-2 py-0.5 text-console-12 text-text-secondary hover:bg-surface-hover hover:text-text-primary';
-/** The whole graph fits its frame, down to a scale a card still reads at. */
-const FULL_FITTING: Fitting = { ...LIVE_FITTING, minK: 0.4 };
+/**
+ * The whole graph fits its frame, down to a scale a card still reads at. The frame is at most
+ * 80% of the window tall, so the graph opens fitted to both its width and its height rather
+ * than in a frame grown taller than the window.
+ */
+const FULL_FITTING: Fitting = { ...LIVE_FITTING, minK: 0.4, maxFrameVh: 0.8 };
 const COUNT = 'text-console-13 tabular-nums text-text-primary';
 const STAGE_TONES: readonly ColumnTone[] = ['intake', 'build', 'check', 'land'];
 
@@ -171,21 +173,13 @@ export function DerivedFlow({
                 markerEnd={`url(#${arrow.back ? 'fw-back' : 'fw-head'})`}
               />
             ))}
-            {layout.arrows.map(arrow => {
-              const shown =
-                arrow.labels.length > 3
-                  ? [...arrow.labels.slice(0, 2), `+${String(arrow.labels.length - 2)} more`]
-                  : arrow.labels;
-              const w = Math.max(...shown.map(pillWidth));
-              const h = PILL_H + (shown.length - 1) * PILL_LINE;
-              return (
-                <LinePill
-                  key={`${arrow.from}>${arrow.to}`}
-                  pill={{ x: arrow.pill.x - w / 2, y: arrow.pill.y - h / 2, w, h }}
-                  lines={shown}
-                />
-              );
-            })}
+            {layout.arrows.map(arrow => (
+              <LinePill
+                key={`${arrow.from}>${arrow.to}`}
+                pill={arrow.pillBox}
+                lines={arrow.lines}
+              />
+            ))}
           </svg>
           {layout.columns.map((column, index) => {
             const tone = TONES[toneOf(index)];

@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from 'react';
 import {
+  cappedHeight,
   FIT_PAD,
   type FitPad,
   fitCamera,
@@ -62,6 +63,12 @@ export interface Fitting {
   minK: number;
   maxK: number;
   reserveBottom: number;
+  /**
+   * The most of the window's height the frame takes, as a fraction. Where the drawing fitted to
+   * the row's width would be taller, the frame stops there and the fit shrinks the drawing to
+   * its height too. Unset, the frame is as tall as the width-fitted drawing.
+   */
+  maxFrameVh?: number;
 }
 /**
  * The live map: opens fitted to its frame down to `LIVE_MIN_K`, else at its start sideways,
@@ -92,7 +99,7 @@ export function useMapCamera(
   focus: Box | null,
   fitting: Fitting = LIVE_FITTING
 ): MapCamera {
-  const { pad, minK, maxK, reserveBottom } = fitting;
+  const { pad, minK, maxK, reserveBottom, maxFrameVh } = fitting;
   /** The part of the frame a fit fills. */
   const fitFrame = useCallback(
     (el: HTMLElement): Frame => ({
@@ -123,11 +130,14 @@ export function useMapCamera(
     // border. Adding the border makes the client box the fitted height, so the drawing sits
     // centred with the whole pad above and below it rather than top-aligned and short.
     const border = el.offsetHeight - el.clientHeight;
-    setHeight(fittedHeight(bounds, row.clientWidth, pad, minK, maxK) + border);
+    const fitted = fittedHeight(bounds, row.clientWidth, pad, minK, maxK) + border;
+    setHeight(
+      maxFrameVh === undefined ? fitted : cappedHeight(fitted, window.innerHeight, maxFrameVh)
+    );
     const target = focused.current;
     if (target !== null) put(reveal(current.current, target, frameOf(el)));
     else if (!moved.current) put(fitCamera(bounds, fitFrame(el), pad, minK, maxK));
-  }, [bounds, pad, minK, maxK, fitFrame, put]);
+  }, [bounds, pad, minK, maxK, maxFrameVh, fitFrame, put]);
 
   useEffect(() => {
     focused.current = focus;
@@ -141,8 +151,14 @@ export function useMapCamera(
     const observer = new ResizeObserver(() => place());
     observer.observe(el);
     if (el.parentElement !== null) observer.observe(el.parentElement);
-    return () => observer.disconnect();
-  }, [place]);
+    // A frame capped to the window's height follows the window, which neither box tracks.
+    const onWindow = (): void => place();
+    if (maxFrameVh !== undefined) window.addEventListener('resize', onWindow);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', onWindow);
+    };
+  }, [place, maxFrameVh]);
 
   const zoomAround = useCallback(
     (factor: number, at: { x: number; y: number }) => {

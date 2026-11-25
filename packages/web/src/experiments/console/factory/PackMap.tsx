@@ -168,9 +168,8 @@ function Curated({
   const live: MapLive | Unread = useMemo(() => {
     if (view === undefined || board === undefined)
       return itemsError === undefined ? 'loading' : 'failed';
-    // The Merged card is the Board's Merged column: its count and its newest items.
-    const merged = { total: board.numbers.mergedRecent, items: board.merged.recent };
-    return stageLive(view, board.moving, merged, graph.data?.stages);
+    // The Merged card is the Board's Merged column: the items it lists, so the same count.
+    return stageLive(view, board.moving, board.merged.recent, graph.data?.stages);
   }, [view, board, itemsError, graph.data]);
   if (view === undefined)
     return graph.error === undefined ? (

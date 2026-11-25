@@ -15,8 +15,10 @@ const { PackMap } = await import('./PackMap');
 
 const PROJECT = 'cb-1';
 const PACK = 'Wirasm.archon-software-factory';
-/** The newest done items the board's Done column shows, of its 92. */
-const DONE_ITEMS = [itemOn('m1', 'landed', 'done'), itemOn('m2', null, 'done')];
+/** The items the board's Merged column lists: those merged in its last days. */
+const MERGED_RECENT = [itemOn('m1', 'landed', 'done'), itemOn('m2', null, 'done')];
+/** One merged before those days: the Table lists it, the Merged column and the map do not. */
+const MERGED_EARLIER = [itemOn('m3', 'landed', 'done')];
 const PATH = '/packs/Wirasm/archon-software-factory/b62ec7b/.shared/factory-view.json';
 
 let unmount: (() => Promise<void>) | undefined;
@@ -27,21 +29,21 @@ afterEach(async () => {
 });
 
 /**
- * The pack's board as `packBoard` groups it: the moving items, and a Merged column counting 92
- * of which the two newest are listed (the column lists more; the map shows only its count and
- * what the stage modal is given).
+ * The pack's board as `packBoard` groups it: the moving items, two merged in the Merged column's
+ * days and one before them. Its all-time merged count (3) differs from the recent one (2), so a
+ * map counting the wrong one fails.
  */
 const BOARD: PackBoardGroups = {
   moving: MOVING_ITEMS,
   decide: [],
-  merged: { recent: DONE_ITEMS, earlier: [] },
-  onBoard: [...MOVING_ITEMS, ...DONE_ITEMS],
+  merged: { recent: MERGED_RECENT, earlier: MERGED_EARLIER },
+  onBoard: [...MOVING_ITEMS, ...MERGED_RECENT, ...MERGED_EARLIER],
   numbers: {
     inFlight: MOVING_ITEMS.length,
     mergedToday: 1,
-    mergedRecent: 92,
-    merged: 92,
-    total: MOVING_ITEMS.length + 92,
+    mergedRecent: MERGED_RECENT.length,
+    merged: MERGED_RECENT.length + MERGED_EARLIER.length,
+    total: MOVING_ITEMS.length + MERGED_RECENT.length + MERGED_EARLIER.length,
     medianToMergedMs: null,
   },
 };
@@ -97,14 +99,15 @@ describe('the one check where the map is drawn', () => {
     expect(page.querySelector('div[data-flow]')).toBeNull();
   });
 
-  test("its cards count the board's items and its Done", async () => {
+  test("its cards count the board's items and its Merged column", async () => {
     const page = await mount(CURATED);
     const chip = (stage: string): string =>
       page.querySelector(`[data-stage="${stage}"]`)?.getAttribute('aria-label') ?? '';
     const numbers = (stage: string): string[] => chip(stage).match(/\d+/g) ?? [];
-    // Build: 2 here, 1 of them worked, 1 needing you. Merged: the Board's Done.
+    // Build: 2 here, 1 of them worked, 1 needing you. Landed: the Board's Merged column, the
+    // two merged in its days, not the three merged in all.
     expect(numbers('build')).toEqual(['2', '1', '1']);
-    expect(numbers('landed')).toEqual(['92']);
+    expect(numbers('landed')).toEqual(['2']);
     expect(page.querySelector('[aria-label="Not on the map"]')?.textContent).toContain('d1');
   });
 
@@ -132,6 +135,11 @@ describe('the one check where the map is drawn', () => {
     await click(full);
     expect(page.querySelector('div[data-flow]')).not.toBeNull();
     expect(cards(page)).toEqual([]);
+  });
+
+  test("the Full workflow's Merged heading counts the Board's Merged column, not every merge", async () => {
+    const page = await mount(CURATED, '?map=full');
+    expect(page.querySelector('[data-flow-group="merged"] [data-count]')?.textContent).toBe('2');
   });
 });
 
@@ -214,15 +222,13 @@ describe('the stage modal', () => {
     expect(texts('[data-step]', 'data-step')).toEqual(steps);
   });
 
-  test("the landed stage lists the board's newest done items and points at the board for the rest", async () => {
+  test("the landed stage lists and counts the board's Merged column", async () => {
     await mount(CURATED, '?stage=landed');
     await openTab('Items here now');
     expect(texts('[data-item]', 'data-item')).toEqual(['m1', 'm2']);
-    // 92 done in all, 2 listed, the other 90 on the board.
     const numbersIn = (selector: string): string[] =>
       dialog().querySelector(selector)?.textContent?.match(/\d+/g) ?? [];
-    expect(numbersIn('[data-items-here] h6')).toEqual(['92']);
-    expect(numbersIn('[data-items-here] a[href$="/board"]')).toEqual(['90']);
+    expect(numbersIn('[data-items-here] h6')).toEqual(['2']);
     expect(dialog().querySelector('[data-items-here]')?.textContent).not.toContain('landed');
   });
 });

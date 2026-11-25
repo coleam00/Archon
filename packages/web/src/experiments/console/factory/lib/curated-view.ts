@@ -9,7 +9,7 @@
  * - A **column** is a document group of the graph (as the board's columns are), holding the
  *   cards whose first graph stage it holds, in card order. A card whose stages no group holds
  *   is a column of its own. The file's last card is where items leave the map: it is a column
- *   of its own, and the board's Done is counted on it (`map-live.ts`). The pack names no stage
+ *   of its own, and the board's Merged column is counted on it (`map-live.ts`). The pack names no stage
  *   that items leave by, so the map's reading order stands for it.
  * - A card's **drill-down** is the drill-downs of its graph stages, phase after phase, in the
  *   card's order; each card of it covers steps of the graph stage it was written under.
@@ -53,7 +53,7 @@ export interface CuratedView {
   /** One per map card, in the file's drawing order. */
   stages: CuratedStage[];
   columns: CuratedColumn[];
-  /** The card the board's Done is counted on: the file's last. */
+  /** The card the board's Merged column is counted on: the file's last. */
   landed: { stage: string };
   /** Step names by graph stage and step id. */
   steps: Record<string, Record<string, string>>;

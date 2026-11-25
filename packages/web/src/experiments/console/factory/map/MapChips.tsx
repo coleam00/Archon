@@ -19,7 +19,7 @@ const CHIP =
 export function chipWords(live: StageRead): string {
   if (live === 'loading') return 'loading';
   if (live === 'failed') return 'items could not be read';
-  const parts = [`${live.total.toString()} here`];
+  const parts = [`${live.items.length.toString()} here`];
   if (live.working > 0) parts.push(`${live.working.toString()} being worked`);
   if (live.needYou.length > 0) parts.push(needYouWords(live.needYou.length));
   return parts.join(', ');
@@ -45,7 +45,7 @@ export function HereChip({ live }: { live: StageRead }): ReactElement | null {
         <span className="sr-only">Loading</span>
       </span>
     );
-  const here = live.total;
+  const here = live.items.length;
   if (here === 0) return null;
   const running = live.working > 0;
   return (

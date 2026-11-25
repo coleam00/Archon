@@ -6,8 +6,8 @@ import type { ItemRead } from '../../skills/items';
 import { itemOn, MOVING_ITEMS } from '../items.test-fixtures';
 import { stageLive } from './map-live';
 
-/** The board's Merged column: 92 in the last week, the newest two listed. */
-const MERGED = { total: 92, items: [itemOn('m1', 'landed', 'done'), itemOn('m2', null, 'done')] };
+/** The items the board's Merged column lists. */
+const MERGED = [itemOn('m1', 'landed', 'done'), itemOn('m2', null, 'done')];
 
 /** A run from an older build recorded no workflow name: the graph stage's name places it. */
 const older: ItemRead = (() => {
@@ -32,8 +32,10 @@ describe("the map's live chips", () => {
   });
 
   test("a running item is worked, and one waiting on an ask needs you, as the board's chip says", () => {
-    expect(at('build')).toMatchObject({ total: 2, working: 1 });
-    expect(at('triage')).toMatchObject({ total: 2, working: 0 });
+    expect(at('build')?.items).toHaveLength(2);
+    expect(at('build')?.working).toBe(1);
+    expect(at('triage')?.items).toHaveLength(2);
+    expect(at('triage')?.working).toBe(0);
     expect(at('build')?.needYou.map(read => read.item.key)).toEqual(['b2']);
     expect(at('ready')?.needYou.map(read => read.item.key)).toEqual(['g1']);
   });
@@ -42,8 +44,7 @@ describe("the map's live chips", () => {
     expect(at('checks')?.items.map(read => read.item.key)).toEqual(['c1', 'o1']);
   });
 
-  test("the board's Merged column is counted on the landed card, its newest items listed there", () => {
-    expect(at('landed')?.total).toBe(92);
+  test("the board's Merged column's items are listed, and so counted, on the landed card", () => {
     expect(at('landed')?.items.map(read => read.item.key)).toEqual(['m1', 'm2']);
   });
 

@@ -1,8 +1,8 @@
 /**
  * The map's columns in their colours. A column is a document group of the pack, or one card
  * (`curated-view.ts`). The pack names no colours: the columns take the console's stage colours
- * in order (taking work in, building, checking, merging), the column the board's Done is
- * counted on takes the merged colour, and a column past the fourth is `other`.
+ * in order (taking work in, building, checking, merging), the column the board's Merged
+ * column is counted on takes the merged colour, and a column past the fourth is `other`.
  */
 import type { CuratedColumn, CuratedView } from './curated-view';
 

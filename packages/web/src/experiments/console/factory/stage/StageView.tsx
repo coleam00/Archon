@@ -227,7 +227,6 @@ function StageItemsTab({
       projectId={projectId}
       view={view}
       live={live}
-      board={board}
       empty={
         <EmptyNote
           icon={Inbox}

@@ -1,4 +1,4 @@
-import { useMemo, type CSSProperties, type ReactElement } from 'react';
+import { useMemo, useRef, type CSSProperties, type ReactElement } from 'react';
 import dagre from '@dagrejs/dagre';
 import { useEntity } from '../store/cache';
 import * as skill from '../skills';
@@ -10,6 +10,7 @@ import {
   type WorkflowNodeStatus,
 } from '../primitives/workflow-graph';
 import type { RunNodeState } from '../primitives/event';
+import { useGraphFit } from './useGraphFit';
 
 interface RunGraphPanelProps {
   workflowName: string;
@@ -29,6 +30,8 @@ const NODE_H = 46;
 const RANK_SEP = 58;
 const NODE_SEP = 32;
 const PADDING = 30;
+/** The canvas frame's padding (`p-6`), kept round a fitted graph. */
+const FRAME_PAD = 24;
 
 interface LaidOutNode extends WorkflowGraphNodeWithStatus {
   x: number;
@@ -236,7 +239,10 @@ interface WorkflowGraphCanvasProps {
   detailed?: boolean;
   /** Leave a node the run has not reached at full strength (a static picture of a workflow). */
   plain?: boolean;
-  /** Fill the parent's height and centre in it (the run page); otherwise size to the graph. */
+  /**
+   * Fill the parent's height and centre in it (the run page); otherwise open fitted to the
+   * frame's width and the height its scroller leaves it (`useGraphFit`), never enlarged.
+   */
   fill?: boolean;
 }
 
@@ -257,68 +263,90 @@ export function WorkflowGraphCanvas({
 }: WorkflowGraphCanvasProps): ReactElement {
   const laid = useMemo(() => layout([...withStatus]), [withStatus]);
   const { nodes, edges, width, height } = laid;
-  const svgStyle: CSSProperties = {
+  const svgStyle = {
     width: Math.max(width, NODE_W + PADDING * 2),
     height: Math.max(height, NODE_H + PADDING * 2),
   };
+  const frame = useRef<HTMLDivElement>(null);
+  const k = useGraphFit(frame, svgStyle, FRAME_PAD, !fill);
+
+  const drawing = (
+    <div
+      className={fill ? 'relative mt-7' : 'relative'}
+      style={
+        fill ? svgStyle : { ...svgStyle, transform: `scale(${String(k)})`, transformOrigin: '0 0' }
+      }
+    >
+      <svg
+        className="absolute inset-0 overflow-visible"
+        width={svgStyle.width}
+        height={svgStyle.height}
+        aria-hidden
+      >
+        {detailed ? (
+          <defs>
+            <marker
+              id="wg-head"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="7"
+              markerHeight="7"
+              orient="auto-start-reverse"
+            >
+              <path d="M0,1 L9,5 L0,9 z" fill="color-mix(in oklch, white, transparent 45%)" />
+            </marker>
+          </defs>
+        ) : null}
+        {edges.map(e => (
+          <path
+            key={`${e.from}→${e.to}`}
+            d={e.d}
+            fill="none"
+            stroke="color-mix(in oklch, white, transparent 84%)"
+            strokeWidth={1.5}
+            markerEnd={detailed ? 'url(#wg-head)' : undefined}
+          />
+        ))}
+      </svg>
+      {nodes.map(n => (
+        <GraphNode
+          key={n.id}
+          node={n}
+          live={live}
+          selected={n.id === selectedNodeId}
+          label={labelOf?.(n.id) ?? n.id}
+          detailed={detailed}
+          plain={plain}
+          onClick={() => {
+            onNodeSelect?.(n.id);
+          }}
+        />
+      ))}
+    </div>
+  );
 
   return (
     <div
-      className={`flex w-full overflow-auto p-6 ${fill ? 'h-full justify-center' : 'max-h-[60vh]'}`}
+      ref={frame}
+      className={`flex w-full overflow-auto p-6 ${fill ? 'h-full justify-center' : ''}`}
       // Dotted canvas (design v3 .rd-graph).
       style={{
         background:
           'radial-gradient(circle at 1px 1px, color-mix(in oklch, white, transparent 95%) 1px, transparent 0) 0 0 / 26px 26px',
       }}
     >
-      <div className={`relative ${fill ? 'mt-7' : 'm-auto shrink-0'}`} style={svgStyle}>
-        <svg
-          className="absolute inset-0 overflow-visible"
-          width={svgStyle.width}
-          height={svgStyle.height}
-          aria-hidden
+      {fill ? (
+        drawing
+      ) : (
+        // The fitted drawing's own size, so the frame holds it with no empty band.
+        <div
+          className="m-auto shrink-0"
+          style={{ width: svgStyle.width * k, height: svgStyle.height * k }}
         >
-          {detailed ? (
-            <defs>
-              <marker
-                id="wg-head"
-                viewBox="0 0 10 10"
-                refX="9"
-                refY="5"
-                markerWidth="7"
-                markerHeight="7"
-                orient="auto-start-reverse"
-              >
-                <path d="M0,1 L9,5 L0,9 z" fill="color-mix(in oklch, white, transparent 45%)" />
-              </marker>
-            </defs>
-          ) : null}
-          {edges.map(e => (
-            <path
-              key={`${e.from}→${e.to}`}
-              d={e.d}
-              fill="none"
-              stroke="color-mix(in oklch, white, transparent 84%)"
-              strokeWidth={1.5}
-              markerEnd={detailed ? 'url(#wg-head)' : undefined}
-            />
-          ))}
-        </svg>
-        {nodes.map(n => (
-          <GraphNode
-            key={n.id}
-            node={n}
-            live={live}
-            selected={n.id === selectedNodeId}
-            label={labelOf?.(n.id) ?? n.id}
-            detailed={detailed}
-            plain={plain}
-            onClick={() => {
-              onNodeSelect?.(n.id);
-            }}
-          />
-        ))}
-      </div>
+          {drawing}
+        </div>
+      )}
     </div>
   );
 }
@@ -364,7 +392,7 @@ function GraphNode({
       onClick={onClick}
       aria-pressed={selected}
       data-step={node.id}
-      title={`${node.id} · ${node.kind}${plain ? '' : ` · ${node.status}`}`}
+      title={`${label} · ${node.kind}${plain ? '' : ` · ${node.status}`}`}
       className={`absolute flex items-center gap-2.5 overflow-hidden rounded-lg border px-3.5 text-left transition-colors hover:brightness-110 ${
         running && live ? 'animate-pulse' : ''
       } ${dimmed && !selected ? 'opacity-60' : ''} ${selected ? 'ring-2 ring-accent-bright ring-offset-2 ring-offset-surface' : ''}`}

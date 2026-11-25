@@ -112,6 +112,14 @@ export function fittedHeight(
   return Math.max(MIN_FRAME_HEIGHT, Math.ceil(bounds.h * k + 2 * padOf(fitPad).y));
 }
 
+/**
+ * A frame `fitted` tall held to `maxVh` of a window `viewport` tall, never under
+ * `MIN_FRAME_HEIGHT` for the cap; a shorter `fitted` stands.
+ */
+export function cappedHeight(fitted: number, viewport: number, maxVh: number): number {
+  return Math.min(fitted, Math.max(MIN_FRAME_HEIGHT, Math.floor(viewport * maxVh)));
+}
+
 /** Zoom by `factor` keeping the frame point `at` over the same world point. */
 export function zoomAt(camera: Camera, at: Point, factor: number): Camera {
   const k = clampK(camera.k * factor);
