@@ -1247,3 +1247,90 @@ test.serial(
     expect(recovered.landing?.branch).toBe('release/1');
   }
 );
+
+test.serial(
+  'a work order reads open while a member is open, done once every member merged or ended, and open again when one reopens',
+  async () => {
+    for (const member of ['item-1', 'item-2'])
+      succeeded(
+        await invoke(host =>
+          workflowLinkCommand(
+            host,
+            projectRoot,
+            { item: member, kind: 'part_of', to: 'order-1' },
+            true,
+            callerEnv
+          )
+        )
+      );
+    succeeded(
+      await invoke(host =>
+        workflowMergedCommand(
+          host,
+          projectRoot,
+          {
+            item: 'item-2',
+            change: 'https://github.com/acme/web/pull/2',
+            at: '2026-11-02T10:00:00Z',
+          },
+          true,
+          callerEnv
+        )
+      )
+    );
+    const order = async () => {
+      const read = await readItemJson('order-1');
+      expect(read.runs).toEqual([]);
+      return {
+        state: read.workOrder?.state,
+        members: read.workOrder?.members.map(({ item, state }) => [item.key, state]),
+      };
+    };
+    expect(await order()).toEqual({
+      state: 'open',
+      members: [
+        ['item-1', 'open'],
+        ['item-2', 'merged'],
+      ],
+    });
+    // The text read names the state and the member that keeps it open.
+    const text = await invoke(host => workflowRunsCommand(host, projectRoot, { item: 'order-1' }));
+    expect(text.exitCode, text.stderr).toBe(0);
+    const line = text.stdout.split('\n').find(row => row.startsWith('Work order'));
+    expect(line).toContain('open');
+    expect(line).toContain('item-1');
+    expect(line).not.toContain('item-2');
+
+    // Ending the open member closes the order with no run on it.
+    const member = (await readItemJson('item-1')).item;
+    const ended = await captureWorkflowCommand(archonHome, async host => {
+      await host.deps.store.recordItemEnd({
+        itemId: member.id,
+        key: member.key,
+        reason: 'Folded into item-2.',
+        via: 'cli',
+        by: null,
+        fromRun: null,
+      });
+    });
+    expect(ended.status, ended.stderr).toBe(0);
+    expect((await order()).state).toBe('done');
+    // Reading it done wrote nothing on the order.
+    expect(
+      rows(
+        `SELECT 1 FROM remote_agent_item_ends e JOIN remote_agent_items i
+           ON i.id = e.item_id WHERE i.key = 'order-1'`
+      )
+    ).toEqual([]);
+
+    // A newer run on the ended member reopens it, and with it the order.
+    await seedRuns(['item-1']);
+    expect(await order()).toEqual({
+      state: 'open',
+      members: [
+        ['item-1', 'open'],
+        ['item-2', 'merged'],
+      ],
+    });
+  }
+);

@@ -291,7 +291,49 @@ function waitLines(read: ItemRead): string[] {
   );
 }
 
-/** The facts under the item's name: its end, its merge and the branch it lands on. */
+/**
+ * A work order's state and the members it names: those open, or those whose state cannot be
+ * told. Each member part that could not be read gets its own line, whatever the state.
+ */
+function workOrderLines(read: ItemRead): string[] {
+  const order = read.workOrder;
+  if (order === null) return [];
+  const name = (item: ItemRead['item']) =>
+    item.projectKey === read.item.projectKey ? item.key : `${item.projectKey}/${item.key}`;
+  const keys = (state: (typeof order.members)[number]['state']) =>
+    order.members.filter(member => member.state === state).map(({ item }) => name(item));
+  const total = String(order.members.length);
+  const lines: string[] = [];
+  switch (order.state) {
+    case 'open': {
+      const open = keys('open');
+      lines.push(
+        `Work order: open, ${String(open.length)} of ${total} members open: ${open.join(', ')}`
+      );
+      break;
+    }
+    case 'done':
+      lines.push(`Work order: done, all ${total} members merged, ended or done`);
+      break;
+    case 'unknown': {
+      const unknown = keys('unknown');
+      lines.push(
+        unknown.length > 0
+          ? `Work order: unknown, the state of member(s) cannot be told: ${unknown.join(', ')}`
+          : 'Work order: unknown, a link of this item could not be read'
+      );
+    }
+  }
+  const part = { merge_unreadable: 'merge', end_unreadable: 'end', link_unreadable: 'link' };
+  for (const report of read.degraded)
+    if (report.reason === 'member_unreadable')
+      lines.push(
+        `  The ${part[report.report.reason]} recorded on member ${name(report.member)} could not be read.`
+      );
+  return lines;
+}
+
+/** The facts under the item's name: its end, its merge, its work order and the branch it lands on. */
 function itemFactLines(read: ItemRead): string[] {
   const lines: string[] = [];
   if (read.ended !== null)
@@ -303,6 +345,7 @@ function itemFactLines(read: ItemRead): string[] {
   if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
   if (read.degraded.some(report => report.reason === 'merge_unreadable'))
     lines.push('The merge recorded on this item could not be read.');
+  lines.push(...workOrderLines(read));
   if (read.landing !== null)
     lines.push(`Lands on: ${read.landing.branch} (${landingSourceText(read.landing)})`);
   for (const report of read.degraded)
