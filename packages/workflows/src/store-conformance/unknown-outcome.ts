@@ -20,7 +20,7 @@ async function claimOf(store: IWorkflowStore, id: string): Promise<string | null
 /** A run the automatic claim of `kind` could take, holding the failure `kind` of `write`. */
 async function heldFor(
   store: IWorkflowStore,
-  kind: 'wait' | 'answered' | 'source' | 'child' | 'quota',
+  kind: 'wait' | 'answered' | 'source' | 'child' | 'redrive' | 'quota',
   failureKind: string
 ): Promise<{ id: string; cursor: ResumeClaimCursor }> {
   const run = await running(store);
@@ -67,6 +67,11 @@ async function heldFor(
     });
     return { id: run.id, cursor: { kind: 'child', childRunId: 'child-1' } };
   }
+  if (kind === 'redrive') {
+    // A failed child its parent drives again by itself.
+    await store.failWorkflowRun(run.id, 'failed');
+    return { id: run.id, cursor: { kind: 'redrive' } };
+  }
   await failWithSchedule(store, run.id);
   return {
     id: run.id,
@@ -81,7 +86,7 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
       store = getHarness().store;
     });
 
-    for (const kind of ['wait', 'answered', 'source', 'child', 'quota'] as const) {
+    for (const kind of ['wait', 'answered', 'source', 'child', 'redrive', 'quota'] as const) {
       test(`refuses the automatic ${kind} claim and admits a resume by hand`, async () => {
         const held = await heldFor(store, kind, 'outcome_unknown');
         const before = await store.getWorkflowRun(held.id);
@@ -112,14 +117,20 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
 
     test('admits the automatic claim when a completed fan-out join absorbed the instance', async () => {
       const scope = 'refine.__archon_fan_out__fan__root';
+      // `fan__root__writer` is a legal node id: its scope's name starts with `fan`'s plus `__`.
+      const sibling = 'refine.__archon_fan_out__fan__root__writer__root';
+      const plan = (identity: string) => ({
+        instances: [{ ordinal: 0, identity, item: 1, inputs: {} }],
+      });
       const absorbed = await running(store);
       const live = await running(store);
+      const beside = await running(store);
       for (const run of [absorbed, live]) {
         await store.persistWorkflowEvent({
           workflow_run_id: run.id,
           event_type: 'fan_out_instances',
           step_name: scope,
-          data: {},
+          data: plan('abc'),
         });
         await store.persistWorkflowEvent({
           workflow_run_id: run.id,
@@ -128,12 +139,29 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
           data: { error: 'timed out', failure_kind: 'outcome_unknown' },
         });
       }
+      for (const [step, data] of [
+        [scope, plan('abc')],
+        [sibling, plan('def')],
+      ] as const)
+        await store.persistWorkflowEvent({
+          workflow_run_id: beside.id,
+          event_type: 'fan_out_instances',
+          step_name: step,
+          data,
+        });
       await store.persistWorkflowEvent({
-        workflow_run_id: absorbed.id,
-        event_type: 'node_completed',
-        step_name: 'refine.fan',
-        data: { node_output: '' },
+        workflow_run_id: beside.id,
+        event_type: 'node_failed',
+        step_name: `${sibling}__def__write`,
+        data: { error: 'timed out', failure_kind: 'outcome_unknown' },
       });
+      for (const run of [absorbed, beside])
+        await store.persistWorkflowEvent({
+          workflow_run_id: run.id,
+          event_type: 'node_completed',
+          step_name: 'refine.fan',
+          data: { node_output: '' },
+        });
       // An audit event on the absorbed step after the join completed is not a node record.
       await store.persistWorkflowEvent({
         workflow_run_id: absorbed.id,
@@ -141,14 +169,16 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
         step_name: `${scope}__abc__write`,
         data: {},
       });
-      for (const run of [absorbed, live])
+      for (const run of [absorbed, live, beside])
         await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'started', stepName: 'wait' });
       expect((await store.resumeWorkflowRun(absorbed.id, deadlineWaitCursor(wait))).status).toBe(
         'running'
       );
-      expect(
-        await rejection(store.resumeWorkflowRun(live.id, deadlineWaitCursor(wait)))
-      ).toBeInstanceOf(WorkflowNotResumableError);
+      // Neither an unfinished join nor the join of a sibling whose name it extends absorbs it.
+      for (const run of [live, beside])
+        expect(
+          await rejection(store.resumeWorkflowRun(run.id, deadlineWaitCursor(wait)))
+        ).toBeInstanceOf(WorkflowNotResumableError);
     });
 
     test('a failure under the pass own claim also fails the row it paused, and no other', async () => {

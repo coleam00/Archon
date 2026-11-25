@@ -29,7 +29,7 @@ import { aggregateProviderFailure, rootFailures } from '../../../executor-shared
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { RunSourceUnreadableError } from '../../node-source';
-import { readUnknownOutcomes } from '../../../unknown-outcome';
+import type { UnknownOutcome } from '../../../unknown-outcome';
 import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { type RunLayersContext } from '../../run-context';
 import { expandComposeInstance } from './compose-fan-out-expansion';
@@ -55,6 +55,8 @@ export interface ComposeInstanceScope {
   node: ComposeFanOutNode;
   fanOutScopeName: string;
   resumeSnapshot: DagResumeSnapshot;
+  /** The run's unknown outcomes, read once for the pass (`readUnknownOutcomes`). */
+  unknownOutcomes: readonly UnknownOutcome[];
   definition: ResolvedWorkflow;
   commandContents: ReadonlyMap<string, IncludeCommandContent>;
 }
@@ -456,26 +458,24 @@ async function settleInstance(
  * again, so its other failures are retried; a live one runs again, which only a resume by
  * hand reaches.
  */
-async function absorbedUnknownOutcome(
+function absorbedUnknownOutcome(
   scope: ComposeInstanceScope,
-  scopeName: string,
-  stepNamePrefix: string
-): Promise<ComposeInstanceOutcome | undefined> {
-  const failed = scope.resumeSnapshot.failedNodes;
-  const holds = [...failed].some(
-    ([step, failure]) =>
-      step.startsWith(stepNamePrefix) && failure.failureKind === 'outcome_unknown'
-  );
-  if (!holds) return undefined;
-  const under = (await readUnknownOutcomes(scope.ctx.deps.store, scope.ctx.workflowRun)).filter(
-    outcome => outcome.path.startsWith(stepNamePrefix)
+  identity: string,
+  scopeName: string
+): ComposeInstanceOutcome | undefined {
+  const under = scope.unknownOutcomes.filter(outcome =>
+    outcome.instances.some(
+      instance => instance.scope === scope.fanOutScopeName && instance.identity === identity
+    )
   );
   const own = under.some(outcome => outcome.absorbedBy === scope.fanOutScopeName);
   if (!own || under.some(outcome => outcome.absorbedBy === undefined)) return undefined;
   return {
     status: 'failed',
     output: '',
-    error: failed.get(scopeName)?.error ?? `instance ${scopeName} failed with an unknown outcome`,
+    error:
+      scope.resumeSnapshot.failedNodes.get(scopeName)?.error ??
+      `instance ${scopeName} failed with an unknown outcome`,
   };
 }
 
@@ -525,7 +525,7 @@ export async function runComposeInstance(
   if (prior !== undefined) return threadedOutcome(prior);
 
   const stepNamePrefix = `${scopeName}__`;
-  const absorbed = await absorbedUnknownOutcome(scope, scopeName, stepNamePrefix);
+  const absorbed = absorbedUnknownOutcome(scope, snapshot.identity, scopeName);
   if (absorbed !== undefined) return absorbed;
   const threaded = threadCompletedInnerNodes(expanded.nodes, priorOutputs, stepNamePrefix);
   let priorUsage: InstanceRun['priorUsage'];

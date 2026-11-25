@@ -84,3 +84,62 @@ export function buildInstanceSnapshots(
     };
   });
 }
+
+function isFanOutItem(value: unknown): value is FanOutInstanceSnapshot['item'] {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) return value.every(isFanOutItem);
+  if (typeof value !== 'object') return false;
+  return Object.values(value).every(isFanOutItem);
+}
+
+function isFanOutInputs(value: unknown): value is Record<string, FanOutInstanceSnapshot['item']> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.values(value).every(isFanOutItem)
+  );
+}
+
+/**
+ * A stored `fan_out_instances` plan's instances, or `undefined` when it is malformed. The
+ * first plan stored for a scope owns its instance set.
+ */
+export function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const identities = new Set<string>();
+  const snapshots: FanOutInstanceSnapshot[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (
+      typeof entry !== 'object' ||
+      entry === null ||
+      !('ordinal' in entry) ||
+      !('identity' in entry) ||
+      !('item' in entry) ||
+      !('inputs' in entry) ||
+      entry.ordinal !== index ||
+      typeof entry.identity !== 'string' ||
+      entry.identity.length === 0 ||
+      identities.has(entry.identity) ||
+      !isFanOutItem(entry.item) ||
+      !isFanOutInputs(entry.inputs)
+    ) {
+      return undefined;
+    }
+    identities.add(entry.identity);
+    snapshots.push({
+      ordinal: index,
+      identity: entry.identity,
+      item: entry.item,
+      inputs: entry.inputs,
+    });
+  }
+  return snapshots;
+}

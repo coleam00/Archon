@@ -7,7 +7,7 @@
  * the walk, the store's transitions) runs as for a real producer, against a real file store.
  */
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
-import { mkdir, mkdtemp, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -488,10 +488,13 @@ describe('a failure whose outcome is unknown', () => {
       {
         later,
         upstream,
+        cleanup,
       }: {
         later?: Partial<DagNode>;
         /** A node the fan-out depends on. */
         upstream?: DagNode;
+        /** A file each instance's all_done cleanup, after its writer, appends to. */
+        cleanup?: string;
       } = {}
     ) => {
       await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
@@ -507,6 +510,14 @@ describe('a failure whose outcome is unknown', () => {
           '  - id: write',
           `    bash: "if [ $INPUTS.item = 2 ]; then echo notjson; else echo '{}'; fi"`,
           '    output_format: { type: object }',
+          ...(cleanup === undefined
+            ? []
+            : [
+                '  - id: cleanup',
+                `    bash: "echo x >> '${cleanup}'"`,
+                '    depends_on: [write]',
+                '    trigger_rule: all_done',
+              ]),
         ].join('\n')
       );
       if (unknown) spy = failingWithOutcomeUnknown(['write']);
@@ -591,13 +602,33 @@ describe('a failure whose outcome is unknown', () => {
         e => e.event_type === 'node_failed' && e.step_name?.endsWith('__write')
       );
 
+    it('under all_done a failure recorded after its join last completed stays live', async () => {
+      // First pass: an ordinary failure, which the join absorbs and a recompute runs again.
+      const cleaned = join(testDir, 'cleaned');
+      const result = await fanOut(false, 'all_done', {
+        later: laterWait,
+        upstream: counter(),
+        cleanup: cleaned,
+      });
+      expect((await readFile(cleaned, 'utf8')).trim().split('\n')).toHaveLength(2);
+      // Second pass: the rerun writer's outcome is unknown, recorded after the join completed.
+      spy = failingWithOutcomeUnknown(['write']);
+      await continueAtWait(result, result.nodes);
+      expect(await writeFailures(result.store, result.runId)).toHaveLength(2);
+      expect((await readFile(cleaned, 'utf8')).trim().split('\n')).toHaveLength(2);
+    });
+
     it('under all_done a recomputed join gets the absorbed failure back and does not run the writer again', async () => {
       const result = await fanOut(true, 'all_done', { later: laterWait, upstream: counter() });
       expect(await writeFailures(result.store, result.runId)).toHaveLength(1);
       await continueAtWait(result, result.nodes);
       expect(await writeFailures(result.store, result.runId)).toHaveLength(1);
-      // The recomputed join completed over the replayed failure.
-      expect(await events(result.store, result.runId, 'node_completed', 'fan')).toHaveLength(2);
+      // The recomputed join completed over the replayed failure, its slot still marked failed.
+      const joins = await events(result.store, result.runId, 'node_completed', 'fan');
+      expect(joins).toHaveLength(2);
+      const slots = JSON.parse(String(joins[1]?.data?.node_output)) as unknown[];
+      expect(slots).toHaveLength(2);
+      expect(slots[0]).toMatchObject({ archon_failed: true });
     });
 
     it('a hand resume runs an outer instance again when only an inner join absorbed the uncertain write', async () => {
@@ -659,68 +690,79 @@ describe('a failure whose outcome is unknown', () => {
       expect((await result.store.getWorkflowRun(result.runId))?.status).toBe('completed');
     });
 
-    it('an ordinary failure beside the running fan-out, before its join absorbs the write, keeps node_error', async () => {
-      // Item 2's writer records the unknown outcome; item 1's waits until `other` has decided.
-      const decided = join(testDir, 'decided');
-      await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
-      await writeFile(
-        join(testDir, '.archon', 'workflows', 'writer.yaml'),
-        [
-          'name: writer',
-          'description: block',
-          'mutates_checkout: false',
-          'inputs:',
-          '  item: { required: true }',
-          'nodes:',
-          '  - id: write',
-          `    bash: "if [ $INPUTS.item = 2 ]; then exit 1; fi; for i in $(seq 500); do [ -f '${decided}' ] && break; sleep 0.01; done"`,
-        ].join('\n')
-      );
-      const recorded = Promise.withResolvers<void>();
-      spy = spyOn(nodeEventWrite, 'recordNodeState').mockImplementation(
-        async (sinks, record, continuation) => {
-          if (
-            'cache' in record ||
-            record.lifecycle.status !== 'failed' ||
-            !record.node.id.endsWith('__write')
-          )
-            return realRecordNodeState(sinks, record, continuation);
-          const lifecycle = { ...record.lifecycle, failureKind: 'outcome_unknown' as const };
-          const written = await realRecordNodeState(sinks, { ...record, lifecycle }, continuation);
-          recorded.resolve();
-          return written;
+    it.each([
+      ['a disjoint id', 'other', 'fan'],
+      // The fan-out's scope name starts with the scope `fan` would have, plus `__`.
+      ['an id the fan-out scope extends', 'fan', 'fan__root__writer'],
+    ])(
+      'an ordinary failure beside a running all_done fan-out keeps node_error (%s)',
+      async (_case, beside, fanId) => {
+        await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+        await writeFile(
+          join(testDir, '.archon', 'workflows', 'writer.yaml'),
+          [
+            'name: writer',
+            'description: block',
+            'mutates_checkout: false',
+            'inputs:',
+            '  item: { required: true }',
+            'nodes:',
+            '  - id: write',
+            '    bash: "if [ $INPUTS.item = 2 ]; then exit 1; fi"',
+          ].join('\n')
+        );
+        // Item 2's writer records the unknown outcome. The beside node is judged only after
+        // that record, and item 1's writer completes (the join can absorb) only after that.
+        const recorded = Promise.withResolvers<void>();
+        const judged = Promise.withResolvers<void>();
+        spy = spyOn(nodeEventWrite, 'recordNodeState').mockImplementation(
+          async (sinks, record, continuation) => {
+            if ('cache' in record || !record.node.id.endsWith('__write'))
+              return realRecordNodeState(sinks, record, continuation);
+            if (record.lifecycle.status === 'completed') await judged.promise;
+            if (record.lifecycle.status !== 'failed')
+              return realRecordNodeState(sinks, record, continuation);
+            const lifecycle = { ...record.lifecycle, failureKind: 'outcome_unknown' as const };
+            const written = await realRecordNodeState(
+              sinks,
+              { ...record, lifecycle },
+              continuation
+            );
+            recorded.resolve();
+            return written;
+          }
+        );
+        const decisions: [string, boolean][] = [];
+        const decide = spyOn(settle, 'reachedUnknownOutcome').mockImplementation(
+          async (ctx, node, settled) => {
+            if (node.id === beside) await recorded.promise;
+            const reached = await realReachedUnknownOutcome(ctx, node, settled);
+            decisions.push([node.id, reached]);
+            if (node.id === beside) judged.resolve();
+            return reached;
+          }
+        );
+        try {
+          const { store, runId } = await run('unknown-beside', [
+            {
+              id: fanId,
+              kind: 'compose_fan_out',
+              include: 'writer',
+              fan_out: { items: '[2,1]', as: 'item', max_parallel: 1, join: 'all_done' },
+            },
+            { id: beside, kind: 'exec', runtime: 'sh', script: 'exit 1' },
+          ] as DagNode[]);
+          expect(decisions).toContainEqual([beside, false]);
+          expect(await events(store, runId, 'node_completed', fanId)).toHaveLength(1);
+          expect(await store.getWorkflowRun(runId)).toMatchObject({
+            status: 'failed',
+            metadata: { stop_reason: { reason: 'node_error' } },
+          });
+        } finally {
+          decide.mockRestore();
         }
-      );
-      const decisions: [string, boolean][] = [];
-      const decide = spyOn(settle, 'reachedUnknownOutcome').mockImplementation(
-        async (ctx, node, settled) => {
-          if (node.id === 'other') await recorded.promise;
-          const reached = await realReachedUnknownOutcome(ctx, node, settled);
-          decisions.push([node.id, reached]);
-          if (node.id === 'other') await writeFile(decided, '');
-          return reached;
-        }
-      );
-      try {
-        const { store, runId } = await run('unknown-beside', [
-          {
-            id: 'fan',
-            kind: 'compose_fan_out',
-            include: 'writer',
-            fan_out: { items: '[2,1]', as: 'item', max_parallel: 1, join: 'all_done' },
-          },
-          { id: 'other', kind: 'exec', runtime: 'sh', script: 'exit 1', mutates_checkout: false },
-        ] as DagNode[]);
-        expect(decisions).toContainEqual(['other', false]);
-        expect(await events(store, runId, 'node_completed', 'fan')).toHaveLength(1);
-        expect(await store.getWorkflowRun(runId)).toMatchObject({
-          status: 'failed',
-          metadata: { stop_reason: { reason: 'node_error' } },
-        });
-      } finally {
-        decide.mockRestore();
       }
-    });
+    );
 
     it('under all_done a later ordinary failure fails the run as today', async () => {
       const { store, runId } = await fanOut(true, 'all_done', { later: { script: 'exit 1' } });

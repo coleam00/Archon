@@ -83,8 +83,8 @@ export async function failRunOnUnknownOutcome(
  *
  * A loop body is told by the record's loop frame, not by a `<step>.` prefix: node ids may
  * contain dots (see `dag-structure`), so a top-level `prep.write` is not the body of a loop
- * group `prep`. A composed scope can be told by its prefix, since its marker cannot occur in
- * a node id.
+ * group `prep`. A composed instance is told by its scope's stored plan (`instances`), not by
+ * the scope name's prefix: `fan` and `fan__root__writer` are both legal ids.
  */
 export async function reachedUnknownOutcome(
   ctx: RunLayersContext,
@@ -107,7 +107,7 @@ export async function reachedUnknownOutcome(
 function ownedBy(
   { stepNamePrefix, loopGroupPath }: Pick<RunLayersContext, 'stepNamePrefix' | 'loopGroupPath'>,
   nodeId: string,
-  { path, loopPath }: UnknownOutcome
+  { path, loopPath, instances }: UnknownOutcome
 ): boolean {
   const step = stepNamePrefix + nodeId;
   if (path === step) return true;
@@ -118,8 +118,6 @@ function ownedBy(
     loopPath[depth]?.groupId === nodeId &&
     loopGroupPath.every((frame, index) => loopPath[index]?.groupId === frame.groupId) &&
     path.startsWith(loopBodyStepNamePrefix(step));
-  return (
-    inBody ||
-    path.startsWith(`${stepNamePrefix}${composeFanOutScopeSegment(nodeId, loopGroupPath)}__`)
-  );
+  const scope = stepNamePrefix + composeFanOutScopeSegment(nodeId, loopGroupPath);
+  return inBody || instances.some(instance => instance.scope === scope);
 }

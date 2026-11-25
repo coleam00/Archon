@@ -230,9 +230,9 @@ export async function runChildWorkflow(
 /**
  * A child that holds a live unknown outcome is re-driven only by a parent pass an operator
  * resumed by hand; a parent continued by itself gets the child's settled outcome back, as
- * for any terminal child, so its `trigger_rule` or `join` decides. Reading and then deciding
- * is enough: the child is terminal, and only a claim changes its records, which a hand
- * resume of the child would make.
+ * for any terminal child, so its `trigger_rule` or `join` decides. This read settles the
+ * common case; the failed child's claim (`resumeFailedChildRun`) refuses one that came to
+ * hold an unknown outcome after it.
  */
 async function heldByUnknownOutcome({
   deps,
@@ -616,15 +616,15 @@ async function resumeFailedChildRun(
   childRun: WorkflowRun,
   childSource: PreparedWorkflowSource
 ): Promise<ChildRunStart> {
-  const hydrated = await hydrateResumableRun(launch.deps, childRun);
+  // A parent continued by itself claims the child as an automatic continuation, so the
+  // store refuses it if the child holds an unknown outcome by the time of the claim.
+  const hydrated = await hydrateResumableRun(
+    launch.deps,
+    childRun,
+    launch.parentClaimedByHand ? undefined : { kind: 'redrive' }
+  );
   return {
-    // The child's pass is by hand only as far as the parent's is: its own grandchildren
-    // follow the parent's claim, not the claim the parent made of the child.
-    opts: {
-      ...hydrated,
-      claimedByHand: launch.parentClaimedByHand,
-      ...inheritedChildOptions(launch, childSource),
-    },
+    opts: { ...hydrated, ...inheritedChildOptions(launch, childSource) },
     runId: hydrated.preCreatedRun.id,
   };
 }
