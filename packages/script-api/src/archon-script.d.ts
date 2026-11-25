@@ -2583,6 +2583,9 @@ declare module 'archon:script' {
         readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
         readonly refusedAt: string;
       }>;
+      readonly failed?: {
+        readonly error: string | null;
+      };
       readonly checkout: string | null;
     }>;
     readonly answers: ReadonlyArray<{
@@ -3176,6 +3179,9 @@ declare module 'archon:script' {
           readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
           readonly refusedAt: string;
         }>;
+        readonly failed?: {
+          readonly error: string | null;
+        };
         readonly checkout: string | null;
       }>;
       readonly answers: ReadonlyArray<{

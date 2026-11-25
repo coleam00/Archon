@@ -188,7 +188,8 @@ const shellWord = (text: string): string =>
  */
 function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
   const { runId, workflow, outcome } = item.stoppedIn;
-  const { limit, refused } = item;
+  const { limit, refused, failed } = item;
+  if (failed !== undefined) return failedLines(item, failed.error);
   // A limit and refusals before launch can come from one run's end; each keeps its lines.
   const lines =
     limit !== undefined
@@ -218,6 +219,24 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
     );
   }
   return lines;
+}
+
+/**
+ * A failed run that is the newest on its item: its error, and the restarts. A restart from
+ * the run's record repeats its inputs; naming the workflow passes others.
+ */
+function failedLines(
+  item: Extract<AttentionQueueItem, { kind: 'stopped' }>,
+  error: string | null
+): string[] {
+  const { runId, workflow } = item.stoppedIn;
+  return [
+    `${workflow} failed${error === null ? '' : `: ${oneLine(error)}`}`,
+    `start it again from its record, which closes this: ${command(`run --supersedes ${runId}`)}`,
+    `or with other inputs: ${command(`run ${shellWord(workflow)} --supersedes ${runId} --input <name>=<value>`)}`,
+    `show the run: ${command(`get ${runId}`)}`,
+    `read the item: ${command(`runs --item-of ${runId}`)}`,
+  ];
 }
 
 /** What an item a paused run holds says under its heading line. */

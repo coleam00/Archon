@@ -7922,6 +7922,9 @@ export interface components {
               | 'launch_preparation_failed';
             refusedAt: string;
           }[];
+          failed?: {
+            error: string | null;
+          };
           checkout: string | null;
         };
     AttentionQueueCountsResponse: {
@@ -8305,6 +8308,9 @@ export interface components {
                 | 'launch_preparation_failed';
               refusedAt: string;
             }[];
+            failed?: {
+              error: string | null;
+            };
             checkout: string | null;
           }
         | unknown;
@@ -8813,6 +8819,9 @@ export interface components {
                 | 'launch_preparation_failed';
               refusedAt: string;
             }[];
+            failed?: {
+              error: string | null;
+            };
             checkout: string | null;
           }
       )[];
@@ -9567,6 +9576,9 @@ export interface components {
                   | 'launch_preparation_failed';
                 refusedAt: string;
               }[];
+              failed?: {
+                error: string | null;
+              };
               checkout: string | null;
             }
         )[];
@@ -10204,6 +10216,9 @@ export interface components {
                     | 'launch_preparation_failed';
                   refusedAt: string;
                 }[];
+                failed?: {
+                  error: string | null;
+                };
                 checkout: string | null;
               };
         }

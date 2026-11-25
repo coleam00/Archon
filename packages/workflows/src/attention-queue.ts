@@ -192,7 +192,7 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('stopped'),
     ...itemBase,
-    /** The completed run that stopped the item and its outcome; `pausedAt` is when it ended. */
+    /** The run that stopped the item and its outcome; `pausedAt` is when it ended. */
     stoppedIn: z.object({
       runId: z.string(),
       workflow: z.string(),
@@ -203,6 +203,8 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** Set when the start the run caused was refused: at its limit, or before launch. */
     limit: stoppedLimitSchema.optional(),
     refused: z.array(stoppedRefusalSchema).optional(),
+    /** Set when the run failed: its recorded error, or null when it recorded none. */
+    failed: z.object({ error: z.string().nullable() }).optional(),
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),

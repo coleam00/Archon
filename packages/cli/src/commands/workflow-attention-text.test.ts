@@ -249,6 +249,20 @@ test('a stopped item names its stage and outcome, and its commands work from any
     "archon workflow run <workflow> --item 'release 1' --cwd '/srv/acme web'"
   );
 
+  // A failed run: its error, and the restart from its record that closes it.
+  const failed = attentionItemLines(
+    {
+      ...stopped,
+      stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
+      summary: null,
+      failed: { error: '(exec_failed) no pr input given' },
+    },
+    'brief'
+  ).join('\n');
+  expect(failed).toContain('check failed: (exec_failed) no pr input given');
+  expect(failed).toContain('archon workflow run --supersedes run-9');
+  expect(failed).toContain('archon workflow run check --supersedes run-9 --input');
+
   // Stopped by a start refused at its limit: it names the limit and starts that workflow.
   const limited = attentionItemLines(
     {
