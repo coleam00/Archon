@@ -457,6 +457,7 @@ export async function createFileWorkflowStore(
     labelAttentionWait: (id, labelWrite) =>
       write([id], view => view.labelAttentionWait(id, labelWrite)),
     listAttentionQueueRows: () => query('all', view => view.listAttentionQueueRows()),
+    listUnfinishedRuns: () => query('all', view => view.listUnfinishedRuns()),
     signalWorkflowWait: (id, wait, payload) =>
       write([id], view => view.signalWorkflowWait(id, wait, payload)),
     // Cleanup archives logs without hydrating current-state events.

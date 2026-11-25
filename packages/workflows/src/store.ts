@@ -355,6 +355,13 @@ export interface IWorkflowStore
    * run started on the item after one ends its stop. A store without items has none.
    */
   listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]>;
+  /**
+   * The top-level runs that need an owner to move: `pending`, `running` or `paused`, oldest
+   * first, on any item or none. The attention queue observes each one's owner and lists
+   * those it can prove gone (`owner_lost`). A row the store cannot read is reported
+   * `run_unreadable`.
+   */
+  listUnfinishedRuns(): Promise<AttentionRead<WorkflowRun>[]>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ runs: DeletedWorkflowRun[] }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(

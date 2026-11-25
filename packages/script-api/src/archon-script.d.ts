@@ -2521,6 +2521,10 @@ declare module 'archon:script' {
         };
       };
       readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      readonly start?: {
+        readonly requestId: string;
+        readonly hostId: string;
+      };
     } | {
       readonly kind: 'overdue_wait';
       readonly ref: string;
@@ -3107,6 +3111,10 @@ declare module 'archon:script' {
           };
         };
         readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly start?: {
+          readonly requestId: string;
+          readonly hostId: string;
+        };
       } | {
         readonly kind: 'overdue_wait';
         readonly ref: string;
