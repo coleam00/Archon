@@ -16,11 +16,14 @@ Place `archon-plugin.json` in your plugin root, either the repository root or a 
   "name": "review-kit",
   "description": "Review workflows",
   "compatibility": { "archon": ">=0.11.0" },
-  "entrypoints": { "review": "review/review.yaml" }
+  "entrypoints": { "review": "review/review.yaml" },
+  "skill": { "name": "review-kit", "path": "skill" }
 }
 ```
 
 Use lowercase words joined by hyphens for `name` and entrypoint names. Each entrypoint path is `<workflow folder>/<file>.yaml` (or `.yml`), relative to the plugin root. Other workflows are support workflows and cannot be dispatched directly. See the [pack layout and runtime identity](/guides/global-workflows/#installed-workflow-packs).
+
+`skill` is optional. It names a folder in the pack, holding a `SKILL.md` and any reference files, that teaches an operator's agent how to use the pack. Installing the pack refuses it when that folder has no `SKILL.md`, and tells the operator the pack ships a skill; `archon skill add --pack <id>` then copies the folder into a project as `.claude/skills/<name>/` and `.agents/skills/<name>/`. The names `archon-cli`, `archon` and `manage-run` are refused. A release from 0.15.0 that predates `skill` installs the pack and ignores the field; a release before 0.15.0 refuses the pack. See [`skill add --pack`](/reference/cli/#skill-add---pack-id-path).
 
 From Archon 0.15.0, Archon ignores a manifest key it does not know, so a manifest that uses a field from a newer Archon still installs on 0.15.0 or later. Releases before 0.15.0 refuse a manifest with any key they do not know, so a pack that must install on them can use only the fields they read. `archon validate workflows` run in the plugin root lists unknown keys as warnings, which catches a misspelled key. An unknown `schemaVersion` is refused. Do not add version, credentials, install scripts, dependencies, or permission grants: none of them is read. `compatibility.archon` is optional; when supplied, installation checks it. Put prerequisites and usage instructions in a `README.md` alongside the manifest. The index links to the README on GitHub; it does not execute plugin code or embed author-supplied HTML.
 
