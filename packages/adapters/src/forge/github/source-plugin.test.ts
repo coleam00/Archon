@@ -572,6 +572,9 @@ describe('GitHub source plugin observing open waits', () => {
         labelAdded: async (): Promise<never> => {
           throw new Error('no label read expected');
         },
+        issuesOpened: async (): Promise<never> => {
+          throw new Error('no opened-issue read expected');
+        },
       },
     };
   }
@@ -742,6 +745,9 @@ describe('GitHub source plugin observing open waits', () => {
       async labelAdded(): Promise<never> {
         throw new Error('no label read expected');
       },
+      async issuesOpened(): Promise<never> {
+        throw new Error('no opened-issue read expected');
+      },
     };
     const first = await observe({ labels: [], waits: [wait], forge });
     const second = await observe({ labels: [], waits: [wait], forge });
@@ -824,6 +830,9 @@ describe('GitHub source plugin observing open waits', () => {
         },
         labelAdded: async () => {
           throw new Error('no label read expected');
+        },
+        issuesOpened: async () => {
+          throw new Error('no opened-issue read expected');
         },
       },
     });
@@ -973,9 +982,27 @@ describe('GitHub source plugin observing label bindings', () => {
                 : null,
           };
         },
+        issuesOpened: async (): Promise<never> => {
+          throw new Error('no opened-issue read expected');
+        },
       },
     };
   }
+
+  test('called as an engine without opened-issue reads calls it, the result has no new field', async () => {
+    const plugin = await labelSource([
+      intake({
+        bindingId: 'triage',
+        selector: { kind: 'issue.lifecycle', actions: ['opened'], repository: repo },
+        inputMapping: { number: { source: 'field', field: 'subject.number' } },
+      }),
+    ]);
+    const { forge } = labelReader();
+    const observed = await plugin.observe?.({ waits: [], labels: [], forge });
+    // An older engine parses the observation strictly; a key it does not know fails the pass.
+    expect(observed).toBeDefined();
+    expect(Object.keys(observed ?? {})).not.toContain('openedIssueFailures');
+  });
 
   test('declares one read per labelled binding, and names each it cannot observe', async () => {
     const plugin = await labelSource([
@@ -1252,6 +1279,8 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
   function install() {
     const receipts = new Map<string, SourceReceiptAcceptance>();
     const issues = new Map<number, { id: string; at: string; kind?: 'pr' }>();
+    // Open issues by when they were created, for opened-issue reads.
+    const opened = new Map<number, string>();
     const reads: string[] = [];
     // Items whose label events the forge cannot read.
     const failing = new Set<number>();
@@ -1288,6 +1317,22 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
           subject: { kind: input.kind, ref: { repo, number: input.number } },
           name: input.label,
           added: added ? { id: added.id, at: added.at, actor: null } : null,
+        };
+      },
+      async issuesOpened(input: { repo: typeof repo; since: string }) {
+        reads.push(`opened since ${input.since}`);
+        return {
+          ...input,
+          items: [...opened]
+            .filter(([, createdAt]) => Date.parse(createdAt) >= Date.parse(input.since))
+            .map(([number, createdAt]) => ({
+              ref: { repo, number },
+              kind: 'issue' as const,
+              url: `https://github.com/owner/repo/issues/${String(number)}`,
+              state: 'open' as const,
+              createdAt,
+              author: { host: 'github.com', id: '77', login: 'reporter', type: 'user' as const },
+            })),
         };
       },
     };
@@ -1340,7 +1385,7 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
       [...receipts.values()]
         .filter(receipt => receipt.outcome === 'matched')
         .map(receipt => receipt.receipt.deliveryId);
-    return { receipts, issues, failing, reads, known, pass, matched };
+    return { receipts, issues, opened, failing, reads, known, pass, matched };
   }
 
   test('an issue reopened after the first sight does not start the label it already had', async () => {
@@ -1367,6 +1412,54 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
     observed.failing.clear();
     expect((await observed.pass([intake()]))?.error).toBeUndefined();
     expect(observed.matched()).toEqual(['observe:label:github.com/owner/repo#7:event-7:intake']);
+  });
+
+  const triage = (overrides: Record<string, unknown> = {}) =>
+    binding({
+      bindingId: 'triage',
+      selector: { kind: 'issue.lifecycle', actions: ['opened'], repository: repo },
+      inputMapping: { number: { source: 'field', field: 'subject.number' } },
+      item: { field: 'subject.number', prefix: 'issue-' },
+      ...overrides,
+    });
+
+  test('an issue opened after the binding is first seen starts once, also after a restart', async () => {
+    const observed = install();
+    // Issue 3 is open before the binding is first seen. The first pass reads no issues.
+    observed.opened.set(3, '2020-01-01T00:00:00Z');
+    expect((await observed.pass([triage()]))?.error).toBeUndefined();
+    expect(observed.reads).toEqual([]);
+
+    // Each pass is a new process, so the second one is also a restarted watch.
+    observed.opened.set(9, later());
+    expect((await observed.pass([triage()]))?.receipts).toEqual([
+      'observe:issue-opened:github.com/owner/repo#9:triage',
+    ]);
+    const receipt = observed.receipts.get('observe:issue-opened:github.com/owner/repo#9:triage');
+    expect(receipt?.bindings).toMatchObject([{ bindingId: 'triage', itemKey: 'issue-9' }]);
+    expect(receipt?.receipt.sourceActor).toEqual({ source: 'github-primary', id: '77' });
+
+    // Listed again, it is a replay and starts nothing; issue 3 never starts.
+    expect((await observed.pass([triage()]))?.receipts).toEqual([]);
+    expect(observed.matched()).toEqual(['observe:issue-opened:github.com/owner/repo#9:triage']);
+  });
+
+  test('every binding the source cannot observe is reported, with why', async () => {
+    const observed = install();
+    const comments = binding({
+      bindingId: 'comments',
+      selector: { kind: 'comment.changed', actions: ['created'], repository: repo },
+      inputMapping: { number: { source: 'field', field: 'subject.number' } },
+      item: { field: 'subject.number', prefix: 'issue-' },
+    });
+    const closing = triage({
+      bindingId: 'closing',
+      selector: { kind: 'issue.lifecycle', actions: ['closed'], repository: repo },
+    });
+    expect((await observed.pass([triage(), closing, comments]))?.unservedBindings).toEqual([
+      { bindingId: 'closing', reason: 'only an opened issue is observed' },
+      { bindingId: 'comments', reason: 'a comment.changed event is not observed' },
+    ]);
   });
 
   test('changing the item mapping does not start an add already recorded', async () => {

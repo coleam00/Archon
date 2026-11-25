@@ -712,7 +712,6 @@ test.each(['execContext', 'container', 'both'] as const)(
       });
       if (field === 'both') {
         const admission = await pending;
-        if (!admission.accepted) throw new Error('Expected admission');
         expect(await admission.settled).toMatchObject({ success: true });
         expect(f.execute).not.toHaveBeenCalled();
         expect(f.apply).toHaveBeenCalledTimes(1);
@@ -723,7 +722,7 @@ test.each(['execContext', 'container', 'both'] as const)(
       } else {
         await expect(
           pending.then(async admission => {
-            if (admission.accepted) await admission.settled;
+            await admission.settled;
             return admission;
           })
         ).rejects.toThrow(

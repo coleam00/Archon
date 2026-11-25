@@ -8,7 +8,7 @@
  * the server.
  */
 import { readFile } from 'node:fs/promises';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from '@hono/zod-openapi';
@@ -17,19 +17,23 @@ import type { StartReceiptInspection } from '@archon/workflows/resource-start-st
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
+import { configProblems, declaredReads } from './declared-reads';
+import { guardedOpenedLists, openedIssueReads, openedSeenMarker } from './opened-issue-reads';
+import { labelSeenMarker, seenMarkerAcceptance, seenMarkerId } from './seen-markers';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import {
   type ObservedItemWait,
   type ObservedLabelRead,
+  type ObservedOpenedIssueRead,
   type SourceForgeReader,
   type SourceObservation,
+  type UnservedBinding,
   type WebhookSourcePlugin,
   type WebhookSourcePluginFactory,
   type WebhookSourceRequest,
 } from '@archon/workflows/webhook-source-plugin';
 import { declaredWakes, freshOverdue, isTemporaryForgeFailure, nextBackoff } from './observe-read';
 import {
-  observedLabelsSchema,
   sourceObservationSchema,
   webhookSourceResultSchema,
 } from '@archon/workflows/webhook-source-plugin';
@@ -58,43 +62,20 @@ const sourceConfigSchema = z
 
 export type WebhookSourceOutcome = 'accepted' | 'malformed' | 'unauthenticated' | 'conflict';
 
-/** A label binding a source cannot observe, with why. */
-export interface UnservedBinding {
-  bindingId: string;
-  reason: string;
-}
+export type { UnservedBinding };
 
 /**
- * A source that observes, how often, and the label reads its bindings name. The reads are
- * fixed when the plugin loads; a pass lists only these.
+ * A source that observes, how often, and the label and opened-issue reads its bindings
+ * name. The reads are fixed when the plugin loads; a pass lists only these.
+ * `unservedBindings` is every binding the source declared it cannot observe, of any kind.
  */
 export interface ObservingSource {
   sourceInstanceId: string;
   everySeconds: number;
   labels: readonly ObservedLabelRead[];
+  openedIssues: readonly ObservedOpenedIssueRead[];
   unservedBindings: readonly UnservedBinding[];
   wakes: readonly { workflow: string; wait: string }[];
-}
-
-/**
- * The delivery id of the receipt that says a label read has been observed once, so the
- * labels already on issues then are recorded as seen and only a later add starts. A
- * persisted contract: changing it makes every label binding a first sight again.
- */
-function labelSeenMarker(read: ObservedLabelRead): string {
-  return `observe:label-seen:${read.bindingId}:${read.repo.host}/${read.repo.path}:${read.label}`;
-}
-
-/**
- * The receipt id of a read's seen marker, derived from the source and the marker's delivery
- * id so a pass can read the marker, and its time, by id. A persisted contract as the
- * delivery id is. Shaped as a version 8 UUID, the version for ids built this way.
- */
-function labelSeenMarkerId(sourceInstanceId: string, read: ObservedLabelRead): string {
-  const hex = createHash('sha256')
-    .update(`${sourceInstanceId}\n${labelSeenMarker(read)}`)
-    .digest('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 /**
@@ -138,15 +119,6 @@ function isWebhookSourcePlugin(value: unknown): value is WebhookSourcePlugin {
     'receive' in value &&
     typeof value.receive === 'function'
   );
-}
-
-/** What is wrong with a source configuration, by field for a schema failure. */
-function configProblems(error: unknown): string {
-  if (error instanceof z.ZodError)
-    return error.issues
-      .map(issue => `${issue.path.length ? issue.path.join('.') : '(root)'}: ${issue.message}`)
-      .join('; ');
-  return error instanceof Error ? error.message : String(error);
 }
 
 type SourceEntry = z.infer<typeof sourceConfigSchema>['sources'][number];
@@ -210,19 +182,6 @@ async function loadSourcePlugin(source: SourceEntry): Promise<WebhookSourcePlugi
   return plugin;
 }
 
-/** The label reads a loaded plugin declares, checked once so a malformed one fails the load. */
-function declaredLabels(
-  sourceInstanceId: string,
-  plugin: WebhookSourcePlugin
-): Pick<ObservingSource, 'labels' | 'unservedBindings'> {
-  const parsed = observedLabelsSchema.safeParse(plugin.observedLabels ?? { reads: [] });
-  if (!parsed.success)
-    throw new Error(
-      `Webhook source '${sourceInstanceId}' declares invalid label reads: ${configProblems(parsed.error)}`
-    );
-  return { labels: parsed.data.reads, unservedBindings: parsed.data.unserved };
-}
-
 /**
  * The configured sources' plugins. `observingOnly` loads just the sources that declare
  * `observe`, for a host that receives no webhooks: a source it would never call cannot
@@ -249,10 +208,12 @@ export async function loadWebhookSourcePlugins(
       observing.push({
         sourceInstanceId: source.sourceInstanceId,
         everySeconds: source.observe.everySeconds,
-        ...declaredLabels(source.sourceInstanceId, plugin),
+        ...declaredReads(source.sourceInstanceId, plugin),
         wakes: declaredWakes(source.config),
       });
   }
+
+  const opened = openedIssueReads();
 
   const pluginFor = (sourceInstanceId: string): WebhookSourcePlugin => {
     const plugin = plugins.get(sourceInstanceId);
@@ -352,12 +313,31 @@ export async function loadWebhookSourcePlugins(
       const passStartedAt = new Date().toISOString();
       const labels = [];
       for (const read of source.labels) {
-        const marker = await dependencies.getReceipt(labelSeenMarkerId(sourceInstanceId, read));
+        const marker = await dependencies.getReceipt(
+          seenMarkerId(sourceInstanceId, labelSeenMarker(read))
+        );
         labels.push({ ...read, seenSince: marker === null ? null : marker.occurredAt });
       }
+      // An opened-issue read's first sight is the engine's: it records the marker and hands
+      // the read on from the next pass, so an issue opened before that starts nothing.
+      const openedPass = await opened.pass({
+        sourceInstanceId,
+        reads: source.openedIssues,
+        passStartedAt,
+        forge,
+        marker: read =>
+          dependencies.getReceipt(seenMarkerId(sourceInstanceId, openedSeenMarker(read))),
+      });
       let observation: SourceObservation;
       try {
-        observation = sourceObservationSchema.parse(await plugin.observe({ waits, labels, forge }));
+        observation = sourceObservationSchema.parse(
+          await plugin.observe({
+            waits,
+            labels,
+            openedIssues: openedPass.handed,
+            forge: openedPass.forge,
+          })
+        );
       } catch (error) {
         log.error(
           { err: error as Error, sourceInstanceId, stage: 'observe' },
@@ -380,6 +360,9 @@ export async function loadWebhookSourcePlugins(
             ({ bindingId, label, number, reason }) =>
               `binding '${bindingId}' label '${label}'${number === undefined ? '' : ` on issue ${String(number)}`}: ${reason}`
           ),
+          ...observation.openedIssueFailures.map(
+            ({ bindingId, reason }) => `binding '${bindingId}' opened issues: ${reason}`
+          ),
         ],
       };
       const record = async (acceptance: SourceReceiptAcceptance): Promise<void> => {
@@ -397,25 +380,22 @@ export async function loadWebhookSourcePlugins(
       // marker's time is the cutoff, and a label added after it starts on a later pass. An
       // issue whose read failed is compared with the same cutoff when it reads, so a label
       // it already carried still starts nothing.
-      for (const read of labels) {
-        if (read.seenSince !== null) continue;
-        const deliveryId = labelSeenMarker(read);
-        await record({
-          receipt: {
-            id: labelSeenMarkerId(sourceInstanceId, read),
-            sourceInstanceId,
-            deliveryId,
-            contentDigest: createHash('sha256').update(deliveryId).digest('hex'),
-            receivedAt: new Date().toISOString(),
-            // The cutoff later passes compare a label's add with: when this pass began.
-            occurredAt: passStartedAt,
-            sourceActor: null,
-          },
-          outcome: 'unmatched',
-          reason: 'label binding first observed',
-          bindings: [],
-        });
-      }
+      const markers = [
+        ...labels
+          .filter(read => read.seenSince === null)
+          .map(read => ({
+            deliveryId: labelSeenMarker(read),
+            reason: 'label binding first observed',
+          })),
+        ...openedPass.unseen.map(read => ({
+          deliveryId: openedSeenMarker(read),
+          reason: 'opened-issue binding first observed',
+        })),
+      ];
+      for (const marker of markers)
+        await record(seenMarkerAcceptance(sourceInstanceId, marker, passStartedAt));
+      // A clean pass read every issue opened since each read's `since`.
+      openedPass.settle(result.failures.length === 0);
       return result;
     },
   };
@@ -444,9 +424,11 @@ export interface ObservedSourceReport {
   waits: number;
   /** The label reads passed to the source: one repository and label each. */
   labels: number;
+  /** The opened-issue reads the source declares: one binding and repository each. */
+  openedIssues: number;
   /**
    * The forge reads the source made: a commit's checks, a pull request's reviews, a label's
-   * open items, or when a label was added to one issue, each. An add answered from what this
+   * open items, when a label was added to one issue, or a repository's opened issues, each. An add answered from what this
    * process remembers of an unchanged issue is not a read.
    */
   reads: number;
@@ -460,7 +442,7 @@ export interface ObservedSourceReport {
   replayed: string[];
   conflicts: number;
   unserved: SourceObservation['unserved'];
-  /** The label bindings the source declared it cannot observe. */
+  /** The bindings the source declared it cannot observe, of any kind. */
   unservedBindings: readonly UnservedBinding[];
   error?: string;
 }
@@ -468,10 +450,10 @@ export interface ObservedSourceReport {
 export interface ItemWaitObserver {
   readonly observing: readonly ObservingSource[];
   /**
-   * Observe the open waits and the declared label reads through each source whose interval
-   * has passed since it last observed. Calls no source, so reads nothing from the forge for
-   * it, when no wait is open and it declares no label read; such a source is reported only
-   * when it has label bindings it cannot observe. A pass started while another runs
+   * Observe the open waits and the declared label and opened-issue reads through each source
+   * whose interval has passed since it last observed. Calls no source, so reads nothing from
+   * the forge for it, when no wait is open and it declares no read; such a source is
+   * reported only when it has bindings it cannot observe. A pass started while another runs
    * returns nothing.
    */
   pass(now: Date): Promise<ObservedSourceReport[]>;
@@ -687,6 +669,7 @@ export function createItemWaitObserver(input: {
         }
         return answer;
       },
+      issuesOpened: guardedOpenedLists(source.openedIssues, forge, key => read.add(key)),
     };
     const report = (
       admitted: SourceObservationAdmitted | undefined,
@@ -695,6 +678,7 @@ export function createItemWaitObserver(input: {
       source: source.sourceInstanceId,
       waits: waits.length,
       labels: source.labels.length,
+      openedIssues: source.openedIssues.length,
       reads: read.size,
       receipts: (admitted?.admitted ?? [])
         .filter(receipt => !receipt.replay)
@@ -731,13 +715,14 @@ export function createItemWaitObserver(input: {
     return { report: result, temporary };
   };
 
-  /** The report of a source that is not called: only the label bindings it cannot observe. */
+  /** The report of a source that is not called: only the bindings it cannot observe. */
   const unobserved = (source: ObservingSource): ObservedSourceReport => {
     warnUnserved(source.sourceInstanceId, source.unservedBindings);
     return {
       source: source.sourceInstanceId,
       waits: 0,
       labels: 0,
+      openedIssues: 0,
       reads: 0,
       receipts: [],
       replayed: [],
@@ -760,7 +745,8 @@ export function createItemWaitObserver(input: {
       wait,
       reason: `deadline passed at ${deadlineAt}; polling stopped`,
     }));
-    const idle = waits.length === 0 && source.labels.length === 0;
+    const idle =
+      waits.length === 0 && source.labels.length === 0 && source.openedIssues.length === 0;
     if (idle && source.unservedBindings.length === 0 && fresh.length === 0) return undefined;
     lastObserved.set(source.sourceInstanceId, now.getTime());
     if (idle) {

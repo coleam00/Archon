@@ -38,8 +38,6 @@ interface Fixture {
 /**
  * A repo, a scratch `ARCHON_HOME`, and a workflow the interrupt can land in the middle of.
  *
- * `settle` must complete before the signal arrives: a resume is refused outright for a run
- * with no completed node, so a single-node fixture would prove nothing about resumability.
  * `hold` blocks until it is signalled on the first pass and exits 0 on the second, which is
  * what makes the resumed run reach `completed` rather than stall again.
  */
@@ -60,10 +58,7 @@ function makeFixture(): Fixture {
       `name: ${WORKFLOW_NAME}`,
       'description: interrupt and resume a foreground run',
       'nodes:',
-      '  - id: settle',
-      '    bash: echo settled',
       '  - id: hold',
-      '    depends_on: [settle]',
       '    bash: |',
       `      if [ -f '${marker}' ]; then echo resumed; exit 0; fi`,
       `      touch '${marker}'`,
@@ -102,30 +97,30 @@ interface ForegroundOwner {
 
 /** Start `workflow run` as a real foreground owner and keep its handle. */
 function startForegroundRun(fixture: Fixture, setup = false): ForegroundOwner {
-  const child = Bun.spawn(
-    [
-      process.execPath,
-      CLI_ENTRY,
-      'workflow',
-      'run',
-      WORKFLOW_NAME,
-      '--cwd',
-      fixture.repo,
-      ...(setup ? [] : ['--no-worktree']),
-    ],
-    {
-      cwd: fixture.repo,
-      env: {
-        ...process.env,
-        ARCHON_HOME: fixture.archonHome,
-        ARCHON_TELEMETRY_DISABLED: '1',
-        DATABASE_URL: '',
-      },
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'pipe',
-    }
-  );
+  return startOwner(fixture, [
+    'workflow',
+    'run',
+    WORKFLOW_NAME,
+    '--cwd',
+    fixture.repo,
+    ...(setup ? [] : ['--no-worktree']),
+  ]);
+}
+
+/** Start a CLI command as a real foreground owner and keep its handle. */
+function startOwner(fixture: Fixture, args: string[]): ForegroundOwner {
+  const child = Bun.spawn([process.execPath, CLI_ENTRY, ...args], {
+    cwd: fixture.repo,
+    env: {
+      ...process.env,
+      ARCHON_HOME: fixture.archonHome,
+      ARCHON_TELEMETRY_DISABLED: '1',
+      DATABASE_URL: '',
+    },
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
   const drain = async (stream: ReadableStream<Uint8Array>): Promise<string> => {
     const decoder = new TextDecoder();
     let text = '';
@@ -154,18 +149,24 @@ function openDatabase(fixture: Fixture): Database {
 interface RunRow {
   id: string;
   status: string;
+  item_id: string | null;
 }
 
-/** The fixture's one run, or undefined while the database or row is not readable yet. */
-function readRun(fixture: Fixture): RunRow | undefined {
+/** A workflow's latest run, or undefined while the database or row is not readable yet. */
+function readRun(fixture: Fixture, workflow = WORKFLOW_NAME): RunRow | undefined {
+  return readRuns(fixture, workflow)?.[0];
+}
+
+/** Every run of a workflow, newest first. */
+function readRuns(fixture: Fixture, workflow: string): RunRow[] | undefined {
   if (!existsSync(join(fixture.archonHome, 'archon.db'))) return undefined;
   const database = openDatabase(fixture);
   try {
     return database
       .query<RunRow, [string]>(
-        'SELECT id, status FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC LIMIT 1'
+        'SELECT id, status, item_id FROM remote_agent_workflow_runs WHERE workflow_name = ? ORDER BY started_at DESC'
       )
-      .get(WORKFLOW_NAME) as RunRow | undefined;
+      .all(workflow);
   } catch {
     // The owner creates archon.db before applying the schema, so an early read throws
     // `no such table` rather than returning nothing. The caller polls.
@@ -305,8 +306,8 @@ describe.skipIf(process.platform === 'win32')('an interrupted foreground run', (
     const owner = startForegroundRun(fixture);
 
     try {
-      // The pidfile exists only once `hold` is executing, which is also the point at which
-      // `settle` has completed and the owner's signal handlers are installed.
+      // The pidfile exists only once `hold` is executing, by which point the owner's signal
+      // handlers are installed.
       const holdPid = await waitFor(
         'the hold node to start',
         () => {
@@ -366,5 +367,174 @@ describe.skipIf(process.platform === 'win32')('an interrupted foreground run', (
       if (owner.child.exitCode === null) owner.child.kill('SIGKILL');
       await owner.settled;
     }
+  }, 180_000);
+});
+
+/** The pid a node's background `sleep` wrote, once the node is executing. */
+function readPid(pidFile: string): number | undefined {
+  if (!existsSync(pidFile)) return undefined;
+  const pid = Number(readFileSync(pidFile, 'utf8').trim());
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+/** Kill a foreground owner outright and wait until the node tree it ran has gone too. */
+async function killOwner(owner: ForegroundOwner, nodePid: number): Promise<void> {
+  owner.child.kill('SIGKILL');
+  await owner.settled;
+  await waitFor(
+    'the orphaned node tree to exit',
+    () => (!processExists(nodePid) ? true : undefined),
+    undefined,
+    3000
+  );
+}
+
+// A run stopped in its first node has nothing to skip, and resume still continues that
+// same run: its first node runs again, on what the run was started with.
+describe.skipIf(process.platform === 'win32')('a run stopped in its first node', () => {
+  for (const stop of ['failed', 'killed'] as const) {
+    test(`resumes in place after its owner ${stop === 'failed' ? 'recorded a failure' : 'was killed'}`, async () => {
+      const fixture = makeFixture();
+      const root = join(fixture.repo, '..');
+      const record = join(root, 'first.record');
+      const pidFile = join(root, 'first.pid');
+      const workflowFile = join(fixture.repo, '.archon', 'workflows', 'first-node.yaml');
+      const configFile = join(fixture.repo, 'run-config.yaml');
+      const writeWorkflow = (graph: string): void =>
+        writeFileSync(
+          workflowFile,
+          [
+            'name: first-node',
+            'description: stop in the first node, then resume',
+            'inputs:',
+            '  label:',
+            '    required: true',
+            'nodes:',
+            '  - id: work',
+            '    bash: |',
+            `      echo "graph=${graph} input=$INPUTS_LABEL docs=$DOCS_DIR" >> '${record}'`,
+            `      if [ -f '${fixture.marker}' ]; then exit 0; fi`,
+            `      touch '${fixture.marker}'`,
+            ...(stop === 'failed'
+              ? ['      exit 1']
+              : ['      sleep 60 &', `      echo $! > '${pidFile}'`, '      wait']),
+            '',
+          ].join('\n')
+        );
+      writeWorkflow('started');
+      writeFileSync(configFile, 'docs:\n  path: started-docs\n');
+      const runArgs = [
+        'workflow',
+        'run',
+        'first-node',
+        '--cwd',
+        fixture.repo,
+        '--no-worktree',
+        '--item',
+        'first-node-item',
+        '--input',
+        'label=started-input',
+        '--config',
+        configFile,
+      ];
+
+      if (stop === 'failed') {
+        expect(runCli(fixture, runArgs).status).not.toBe(0);
+      } else {
+        const owner = startOwner(fixture, runArgs);
+        try {
+          const nodePid = await waitFor('the first node to start', () => readPid(pidFile), owner);
+          await killOwner(owner, nodePid);
+        } finally {
+          if (owner.child.exitCode === null) owner.child.kill('SIGKILL');
+          await owner.settled;
+        }
+      }
+      const stopped = readRun(fixture, 'first-node');
+      if (!stopped) throw new Error('no run was recorded');
+      expect(stopped.status).toBe(stop === 'failed' ? 'failed' : 'running');
+      expect(stopped.item_id).not.toBeNull();
+      const firstPass = readFileSync(record, 'utf8');
+      expect(firstPass).toContain('graph=started input=started-input');
+      expect(firstPass).toContain('started-docs');
+
+      // What the run started with must win over what is on disk at resume time.
+      writeWorkflow('edited');
+      writeFileSync(configFile, 'docs:\n  path: edited-docs\n');
+
+      const resumed = runCli(fixture, ['workflow', 'resume', stopped.id, '--cwd', fixture.repo]);
+      if (resumed.status !== 0) throw new Error(`resume failed: ${resumed.output}`);
+
+      const runs = readRuns(fixture, 'first-node') ?? [];
+      expect(runs).toEqual([{ id: stopped.id, status: 'completed', item_id: stopped.item_id }]);
+      // Two passes of the first node, both on the run's own graph, input and config.
+      expect(readFileSync(record, 'utf8')).toBe(firstPass.repeat(2));
+    }, 180_000);
+  }
+
+  test('a parent killed in its first sub-run names the command that recovers it', async () => {
+    const fixture = makeFixture();
+    const pidFile = join(fixture.repo, '..', 'child.pid');
+    const workflowDir = join(fixture.repo, '.archon', 'workflows');
+    writeFileSync(
+      join(workflowDir, 'first-child.yaml'),
+      [
+        'name: first-child',
+        'description: the sub-run the parent is killed in',
+        'nodes:',
+        '  - id: hold',
+        '    bash: |',
+        `      if [ -f '${fixture.marker}' ]; then echo child-resumed; exit 0; fi`,
+        `      touch '${fixture.marker}'`,
+        '      sleep 60 &',
+        `      echo $! > '${pidFile}'`,
+        '      wait',
+        '',
+      ].join('\n')
+    );
+    writeFileSync(
+      join(workflowDir, 'first-parent.yaml'),
+      [
+        'name: first-parent',
+        'description: a parent whose first node is a sub-run',
+        'nodes:',
+        '  - id: sub',
+        '    workflow: first-child',
+        '',
+      ].join('\n')
+    );
+    const owner = startOwner(fixture, [
+      'workflow',
+      'run',
+      'first-parent',
+      '--cwd',
+      fixture.repo,
+      '--no-worktree',
+    ]);
+    try {
+      const nodePid = await waitFor('the sub-run node to start', () => readPid(pidFile), owner);
+      await killOwner(owner, nodePid);
+    } finally {
+      if (owner.child.exitCode === null) owner.child.kill('SIGKILL');
+      await owner.settled;
+    }
+    const parent = readRun(fixture, 'first-parent');
+    const child = readRun(fixture, 'first-child');
+    if (!parent || !child) throw new Error('the parent or its sub-run was not recorded');
+    expect(child.status).toBe('running');
+
+    const resumed = runCli(fixture, ['workflow', 'resume', parent.id, '--cwd', fixture.repo]);
+    expect(readRun(fixture, 'first-parent')?.status).toBe('paused');
+    // The parent waits on its sub-run, so it must name the command that moves the sub-run.
+    // `approve` is refused for a sub-run that is still marked running.
+    expect(resumed.output).toContain(`resume ${child.id}`);
+    expect(resumed.output).not.toContain(`approve ${child.id}`);
+
+    const recovered = runCli(fixture, ['workflow', 'resume', child.id, '--cwd', fixture.repo]);
+    if (recovered.status !== 0) throw new Error(`sub-run resume failed: ${recovered.output}`);
+    await waitFor('the parent to complete', () =>
+      readRun(fixture, 'first-parent')?.status === 'completed' ? true : undefined
+    );
+    expect(readRun(fixture, 'first-child')?.status).toBe('completed');
   }, 180_000);
 });

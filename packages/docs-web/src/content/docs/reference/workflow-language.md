@@ -3337,7 +3337,9 @@ when the child declares named `inputs:` or when its `command:` bodies need named
 - **Failure & recovery.** A failed child fails the node and the parent run. Recovery is
   resume-through-parent: `/workflow resume <parentRunId>` re-drives the failed child once.
   `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
-  run).
+  run). When the parent's process died while the child was running, the child is left
+  `running`: resuming the parent pauses it blocked on that child and names
+  `archon workflow resume <childRunId>`, which continues the child and then the parent.
 - **Cancel cascade.** Abandoning the parent attempts to cancel discovered descendants except completed
   and cancelled runs, within the [500-parent expansion bound](#max_parallel-bounds-concurrency-not-count).
   Cancellation is cooperative: their executors abort at the next status check, within ~10s. A running

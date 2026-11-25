@@ -878,6 +878,7 @@ function observation(receipts: string[]) {
       source: 'github',
       waits: 2,
       labels: 1,
+      openedIssues: 0,
       reads: 1,
       receipts,
       replayed: [] as string[],
@@ -898,6 +899,7 @@ function observation(receipts: string[]) {
             sourceInstanceId: 'github',
             everySeconds: 60,
             labels: [],
+            openedIssues: [],
             unservedBindings,
             wakes: [],
           },
@@ -939,6 +941,7 @@ test('watch says what it observes, and starts what an observed wait admitted on 
     source: 'github',
     waits: 2,
     labels: 1,
+    openedIssues: 0,
     reads: 1,
     started: 1,
     conflicts: 0,
@@ -966,6 +969,7 @@ test('a host whose drain failed is drained again on the next pass, with no new o
         source: 'github',
         waits: 1,
         labels: 0,
+        openedIssues: 0,
         reads: 1,
         receipts: ['woken'],
         replayed: [],
@@ -1016,7 +1020,14 @@ test('a host whose start is still queued is drained again while its label is obs
     originalTimeout(callback, 0)
   );
   const observed = observation([]);
-  const report = { source: 'github', waits: 0, labels: 1, reads: 1, conflicts: 0 };
+  const report = {
+    source: 'github',
+    waits: 0,
+    labels: 1,
+    openedIssues: 0,
+    reads: 1,
+    conflicts: 0,
+  };
   const quiet = { unserved: [], unservedBindings: [] };
   // The label start is recorded, then the same label is observed again: a replay. Each
   // drain returns with the start still queued at capacity.

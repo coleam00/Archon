@@ -138,7 +138,6 @@ async function wake(
       legacyWorkflow: continued,
       cursor,
     });
-    if (!admission.accepted) return { kind: 'not-accepted' };
     settled.push(admission.settled);
     return { kind: 'accepted', run, settled: admission.settled };
   });
@@ -293,7 +292,6 @@ test('a rate-limit pause resumed by hand continues before its deadline', async (
     userMessage: run.user_message,
     legacyWorkflow: setupThenImplement,
   });
-  if (!admission.accepted) throw new Error('resume not accepted');
   await admission.settled;
 
   const finished = await store.getWorkflowRun(runId);

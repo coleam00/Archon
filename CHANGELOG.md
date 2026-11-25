@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.15.0] - 2026-11-24
+## [0.15.0] - 2026-11-25
 
 Runs belong to items, a stage hands off to the next through a binding instead of pausing, and an install with no server or webhooks can run the whole loop.
 
@@ -41,6 +41,7 @@ Runs belong to items, a stage hands off to the next through a binding instead of
 
 ### Added
 
+- An install with no webhooks can start a workflow on every newly opened issue. An observing GitHub source starts a binding on `issue.lifecycle` with the `opened` action once for each issue opened after the binding was first observed, on its next pass; issues already open at the first pass, and pull requests, start nothing. The forge contract gains the operation `workitem.opened`. (#6163)
 - A workflow pack can ship its own agent skill. Its manifest declares `"skill": { "name": "<name>", "path": "<folder>" }`, and `archon skill add --pack <id> [path]` copies that folder from the installed pack into the project's `.claude/skills/<name>/` and `.agents/skills/<name>/`, replacing both whole on a rerun. It refuses a pack that is not installed or ships no skill, the names `archon-cli`, `archon` and `manage-run`, a name another installed pack's skill uses, and a project folder of that name it did not install (each installed folder holds a `.archon-pack` file naming its pack). Installing the pack names the skill and the command but writes nothing into a project. `archon plugin add` and `archon validate workflows` refuse a declared skill folder with no `SKILL.md`. `archon skill add` without `--pack` is unchanged. (#6152)
 - An agent node can offer its model named scripts as tools with `tools:`. Each tool declares a `description`, a `script`, an `input_schema` and an `output_schema`, plus optional `timeout` and `deps`. A call runs the way a `script:` node runs, with the arguments as JSON on stdin; Archon validates the arguments before the script starts and the output after it, and a failed call is an error the agent reads, not a failed node. Each call records one `script_tool_call` event. Claude, Codex and Pi; on another provider the run fails before it starts. A tool must be safe to rerun, because a retried attempt starts the node over, and tools that write are not supported yet. Designed and first built by @Jack-mi. (#6187)
 - A node's `skills:` entry can be `{ name, optional: true }`. On an agent node, an optional skill the provider cannot load, or that Archon finds in no known skill root, is skipped and the reason recorded; a required one keeps failing as before.
@@ -146,6 +147,7 @@ Runs belong to items, a stage hands off to the next through a binding instead of
 
 ### Changed
 
+- `archon workflow resume <run-id>` resumes a failed or killed run in which no node completed, under the same run id and with the inputs, workflow source, run configuration and item it started with, from its first node. It used to refuse and print a `--supersedes` command that started a different run without them. A run with a live owner is still refused. (#5720)
 - Bun is 1.4.5 across development, CI and Docker images. (#6006)
 - The bundled Codex is 0.171.0, so a Codex node can select `gpt-6.2-sol` on a ChatGPT login. A model Codex reports as not found (`modelNotFound`) now fails as `misconfigured` and is not retried. (#6123)
 - Claude nodes run on Claude Agent SDK 0.3.327. A Claude node that starts background work gives its structured result after that work finishes, and `ScheduleWakeup` is no longer offered to a workflow node. (#5956, #5966)
@@ -244,6 +246,7 @@ Runs belong to items, a stage hands off to the next through a binding instead of
 - The console's workflow builder parses previous-loop output references in `when:` as the engine does. (#5437)
 - Re-running a run from the Web UI fills in the inputs it was started with. Runs started before this release restore no inputs. (#5624)
 - A run start the console refuses no longer leaves an empty conversation behind. (#5641)
+- Saving a setting to `~/.archon/config.yaml` (`archon ai default --scope install`, `archon ai tier`, `archon ai alias`, `archon setup` and the Web UI settings) changes only the saved keys and keeps the file's comments, key order, layout and line endings. It used to rewrite the whole file as one flow-style line. A save that the file's YAML cannot take in place without changing another setting, such as unsetting a key that comes through a `<<` merge key, is refused with a message naming the file, and nothing is written; the Web UI shows it as a 400. (#5438)
 
 ## [0.14.0] - 2026-11-07
 

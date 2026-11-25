@@ -189,6 +189,15 @@ export const workItemLabelAddedRequestSchema = requestBase.extend({
   subject: forgeSubjectRefSchema,
   name: text,
 });
+/**
+ * The open issues of one repository created at or after `since`, never pull requests. An
+ * install with no webhooks reads it to start work on newly opened issues.
+ */
+export const workItemOpenedRequestSchema = requestBase.extend({
+  op: z.literal('workitem.opened'),
+  repo: repoRefSchema,
+  since: z.iso.datetime({ offset: true }),
+});
 /** The most matches one `workitem.search` returns, and the count it returns when none is asked for. */
 export const WORKITEM_SEARCH_MAX_LIMIT = 100;
 export const WORKITEM_SEARCH_DEFAULT_LIMIT = 30;
@@ -479,6 +488,7 @@ export const lifecycleReadRequestSchemas = [
   prThreadsRequestSchema,
   workItemListRequestSchema,
   workItemLabelAddedRequestSchema,
+  workItemOpenedRequestSchema,
   workItemSearchRequestSchema,
   workItemCommentsRequestSchema,
   prMergeStateRequestSchema,
@@ -569,6 +579,17 @@ export const workItemListSchema = z.object({
   label: text,
   items: z.array(workItemListItemSchema),
 });
+/** Each issue with when it was created and, when the plugin reports one, who opened it. */
+export const workItemOpenedSchema = z.object({
+  repo: repoRefSchema,
+  since: z.iso.datetime({ offset: true }),
+  items: z.array(
+    workItemRecordSchema.extend({
+      createdAt: z.iso.datetime({ offset: true }),
+      author: sourceActorSchema.nullable().optional(),
+    })
+  ),
+});
 /** `added` is null when the forge records no add of the label, such as one never added. */
 export const workItemLabelAddedSchema = z.object({
   subject: forgeSubjectRefSchema,
@@ -654,6 +675,7 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
   z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
   z.object({ op: workItemLabelAddedRequestSchema.shape.op, value: workItemLabelAddedSchema }),
+  z.object({ op: workItemOpenedRequestSchema.shape.op, value: workItemOpenedSchema }),
   z.object({ op: workItemSearchRequestSchema.shape.op, value: workItemSearchSchema }),
   z.object({ op: workItemCommentsRequestSchema.shape.op, value: workItemCommentsSchema }),
   z.object({ op: prMergeStateRequestSchema.shape.op, value: prMergeStateSchema }),

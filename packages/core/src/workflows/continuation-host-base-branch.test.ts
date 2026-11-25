@@ -6,6 +6,7 @@ import type {
   WorkflowResumeOptions,
 } from '@archon/workflows/engine-port';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { WorkflowNotResumableError } from '@archon/workflows/store';
 import type { IIsolationProvider, IIsolationStore } from '@archon/isolation';
 import { toBranchName } from '@archon/git';
 import { HeadlessPlatform } from './headless-platform';
@@ -92,7 +93,7 @@ async function resumeAndResolveChild(
     },
     async resume(input) {
       captured = input;
-      return { accepted: false, reason: 'nothing-to-resume' };
+      throw new WorkflowNotResumableError(input.run.id, 'running');
     },
     async subscribe() {
       throw new Error('not invoked');

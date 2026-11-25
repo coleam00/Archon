@@ -352,7 +352,6 @@ describe('InProcessWorkflowEngine', () => {
         run: failed,
         legacyWorkflow: parent,
       });
-      if (!admission.accepted) throw new Error('expected resume');
       await expect(admission.settled).rejects.toBe(cause);
       expect(failRun).toHaveBeenCalledTimes(1);
       expect(await store.getWorkflowRun(run.id)).toMatchObject({
@@ -401,7 +400,6 @@ describe('InProcessWorkflowEngine', () => {
       if (phase === 'preparation') await expect(admission).rejects.toThrow('preparation refused');
       else {
         const accepted = await admission;
-        if (!accepted.accepted) throw new Error('expected resume');
         await expect(accepted.settled).rejects.toThrow(
           phase === 'configuration'
             ? 'Invalid recorded run AI configuration'
@@ -442,7 +440,6 @@ describe('InProcessWorkflowEngine', () => {
       if (phase === 'preparation') await expect(admission).rejects.toBe(cause);
       else {
         const accepted = await admission;
-        if (!accepted.accepted) throw new Error('expected resume');
         await expect(accepted.settled).rejects.toThrow('Invalid recorded continuation metadata');
       }
       expect(await store.getWorkflowRun(run.id)).toMatchObject({
@@ -499,7 +496,6 @@ describe('InProcessWorkflowEngine', () => {
               return { cwd: '/tmp/ops' };
             },
           });
-          if (!admission.accepted) throw new Error('expected resume');
           const refusal =
             phase === 'stamp' ? 'Invalid recorded continuation metadata' : "node 'child'";
           await expect(admission.settled).rejects.toThrow(refusal);
@@ -553,7 +549,6 @@ describe('InProcessWorkflowEngine', () => {
         run: failed,
         legacyWorkflow: parent,
       });
-      if (!accepted.accepted) throw new Error('expected resume');
       const result = await accepted.settled;
       expect(result).toMatchObject({ success: false, error: expect.stringContaining('CLI') });
       if (claim === 'replaced') {
@@ -605,7 +600,6 @@ describe('InProcessWorkflowEngine', () => {
           run: failed,
           legacyWorkflow: parent,
         });
-        if (!admission.accepted) throw new Error('expected resume');
         expect(await admission.settled).toEqual({
           success: false,
           workflowRunId: run.id,
@@ -647,7 +641,6 @@ describe('InProcessWorkflowEngine', () => {
         run: failed,
         legacyWorkflow: parent,
       });
-      if (!admission.accepted) throw new Error('expected resume');
       await expect(admission.settled).rejects.toMatchObject({
         name: 'TerminalStatusWriteError',
         cause: persistError,
@@ -731,7 +724,6 @@ describe('InProcessWorkflowEngine', () => {
           run: failed,
           legacyWorkflow: parent,
         });
-        if (!admission.accepted) throw new Error('expected resume');
         if (kind === 'pre-publication') {
           expect(await admission.settled).toMatchObject({ success: false, error: cause.message });
         } else {
@@ -775,7 +767,6 @@ describe('InProcessWorkflowEngine', () => {
           nodes: [{ id: 'child', kind: 'workflow', workflow: 'child' }],
         }),
       });
-      if (!admission.accepted) throw new Error('expected resume');
       await expect(admission.settled).rejects.toMatchObject({
         name: 'TerminalStatusWriteError',
         cause: persistError,
@@ -819,7 +810,6 @@ describe('InProcessWorkflowEngine', () => {
       legacyWorkflow: parent,
       options: { deferScratchCleanup: cleanup => cleanups.push(cleanup) },
     });
-    if (!admission.accepted) throw new Error('expected resume');
     const result = await admission.settled;
 
     expect(result).toMatchObject({ success: true, workflowRunId: run.id });
@@ -929,7 +919,6 @@ describe('InProcessWorkflowEngine', () => {
       legacyWorkflow: parent,
       options: { onExecutionClaimed },
     });
-    if (!admission.accepted) throw new Error('expected resume');
     await admission.settled;
     expect(claims[0]).toBeNull();
     expect(typeof claims[1]).toBe('string');

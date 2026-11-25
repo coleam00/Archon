@@ -256,9 +256,8 @@ async function prepareParentResume(
   childRunId: string | undefined
 ): Promise<Awaited<ReturnType<typeof hydrateResumableRun>> | undefined> {
   const parentRunId = parent.id;
-  let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
   try {
-    hydrated = await hydrateResumableRun(deps, parent);
+    return await hydrateResumableRun(deps, parent);
   } catch (err) {
     // Nothing has been mutated yet on a pre-CAS throw (resumeWorkflowRun's CAS is
     // hydrate's last step; a lost CAS throws WorkflowNotResumableError instead) —
@@ -273,14 +272,6 @@ async function prepareParentResume(
     }
     return undefined;
   }
-  if (!hydrated) {
-    // A parent paused on a child_workflow or fan_out gate is always resumable (see
-    // reRunsOwnNodeOnResume), so null here is unexpected.
-    getLog().warn({ parentRunId }, 'workflow.parent_resume_nothing_to_resume');
-    await notifyStuck('the parent had no resumable state');
-    return undefined;
-  }
-  return hydrated;
 }
 
 async function resolveParentResumeWorkflow(

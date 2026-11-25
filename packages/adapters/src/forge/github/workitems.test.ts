@@ -631,6 +631,57 @@ test('the latest add of the exact label is read across pages; a label never adde
   expect(await read('missing')).toMatchObject({ ok: true, result: { value: { added: null } } });
 });
 
+test('opened issues are read newest first down to the cutoff, without pull requests', async () => {
+  const row = (number: number, createdAt: string, pr = false) => ({
+    number,
+    repository_url: 'https://api.github.com/repos/owner/repo',
+    labels: [],
+    html_url: `https://github.com/owner/repo/issues/${String(number)}`,
+    title: 'new',
+    body: null,
+    state: 'open',
+    created_at: createdAt,
+    user: { id: 7, login: 'reporter', type: 'User' },
+    ...(pr ? { pull_request: {} } : {}),
+  });
+  // A full first page, all at or after the cutoff and one a pull request; the second page
+  // reaches an issue created before it, so no third page is read.
+  const pageOne = Array.from({ length: 100 }, (_, index) =>
+    row(300 - index, '2026-11-23T12:00:00Z', index === 1)
+  );
+  const pageTwo = [row(200, '2026-11-23T10:00:00Z'), row(199, '2026-11-23T09:00:00Z')];
+  const urls: URL[] = [];
+  const fake = {
+    fetch: async (input: string | URL | Request): Promise<Response> => {
+      const url = new URL(String(input));
+      urls.push(url);
+      return Response.json(url.searchParams.get('page') === '1' ? pageOne : pageTwo);
+    },
+  };
+  const since = '2026-11-23T10:00:00Z';
+  const response = await runOn({ operationId: 'opened', op: 'workitem.opened', repo, since }, fake);
+  if (!response.ok || response.result.op !== 'workitem.opened') throw new Error('read failed');
+  const { items } = response.result.value;
+  expect(items.map(item => item.ref.number)).not.toContain(299);
+  expect(items).toHaveLength(100);
+  expect(items.at(-1)).toEqual({
+    ref: { repo, number: 200 },
+    kind: 'issue',
+    url: 'https://github.com/owner/repo/issues/200',
+    state: 'open',
+    createdAt: since,
+    author: { host: 'github.com', id: '7', login: 'reporter', type: 'user' },
+  });
+  expect(urls.map(url => url.searchParams.get('page'))).toEqual(['1', '2']);
+  for (const url of urls) {
+    expect(url.pathname).toBe('/repos/owner/repo/issues');
+    expect(url.searchParams.get('state')).toBe('open');
+    expect(url.searchParams.get('sort')).toBe('created');
+    expect(url.searchParams.get('direction')).toBe('desc');
+    expect(url.searchParams.get('since')).toBe(since);
+  }
+});
+
 test('an item view returns its author, and a response without one reports none', async () => {
   const fake = labelForge({ kind: 'pr' });
   expect(await runOn({ operationId: 'view', op: 'workitem.view', ref }, fake)).toMatchObject({

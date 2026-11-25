@@ -47,6 +47,7 @@ import { workflowRunStatusSchema } from './schemas/run-status';
 import { stoppedLimitSchema, stoppedRefusalSchema } from './schemas/run-metadata';
 import { observeLostOwners, type LostOwner, type OwnerObserver } from './owner-observation';
 import { resolveRunAttention } from './run-attention-resolution';
+import { givenUpAttention } from './given-up-attention';
 import { stateProjectKeySchema } from './state-document-store';
 import type { AttentionQueueCounts } from './attention-counts';
 import type { IWorkflowStore } from './store';
@@ -546,6 +547,8 @@ async function ownQueuedAttention(
   source: AttentionQueueSource,
   run: WorkflowRun
 ): Promise<QueuedRunAttention | undefined> {
+  const givenUp = givenUpAttention(run);
+  if (givenUp !== undefined) return givenUp;
   const own = queuedRunAttention(run);
   if (own !== undefined) return own;
   const resolution = await resolveRunAttention(source.store, run);

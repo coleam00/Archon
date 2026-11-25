@@ -15,6 +15,7 @@ const forgeOperationDescriptions = {
   'workitem.label.remove': 'Remove one label from an issue or pull request, keeping the rest',
   'workitem.list': 'List open issues and pull requests that carry one label',
   'workitem.label.added': 'Read when a label was last added to an issue or pull request',
+  'workitem.opened': 'List the open issues created since a time, without pull requests',
   'workitem.search': 'Search issues and pull requests in a repository by text',
   'workitem.comment.upsert': 'Write the one marked comment on an issue or pull request',
   'workitem.close': 'Close an issue with a reason and verify the result',
