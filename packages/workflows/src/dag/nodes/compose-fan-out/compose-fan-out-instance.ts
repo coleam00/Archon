@@ -225,6 +225,10 @@ function instanceRunContext(
     totalTokensUnknown: false,
     stepNamePrefix: instance.stepNamePrefix,
     loopGroupPath: ctx.loopGroupPath,
+    fanOutPath: [
+      ...ctx.fanOutPath,
+      { scope: instance.scope.fanOutScopeName, identity: instance.snapshot.identity },
+    ],
     // A composed instance is its own workflow: its prompts never took the enclosing
     // loop's substitution pass, so its command bodies don't either.
     loopBodyScopes: [],
@@ -464,8 +468,8 @@ function absorbedUnknownOutcome(
   scopeName: string
 ): ComposeInstanceOutcome | undefined {
   const under = scope.unknownOutcomes.filter(outcome =>
-    outcome.instances.some(
-      instance => instance.scope === scope.fanOutScopeName && instance.identity === identity
+    outcome.invocation?.fanOutPath?.some(
+      frame => frame.scope === scope.fanOutScopeName && frame.identity === identity
     )
   );
   const own = under.some(outcome => outcome.absorbedBy === scope.fanOutScopeName);

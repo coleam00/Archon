@@ -15,11 +15,7 @@
  * replays it rather than running the instance again. A loop group that completes over a
  * body failure keeps it live (issue 6327).
  */
-import {
-  composeFanOutScopeParts,
-  composeFanOutScopeSegment,
-  parseFanOutSnapshots,
-} from './fan-out-identity';
+import { composeFanOutScopeParts, composeFanOutScopeSegment } from './fan-out-identity';
 import type { NodeInvocation } from './schemas/node-execution';
 import { readRunStopReason } from './schemas/run-metadata';
 import type { WorkflowRun } from './schemas/workflow-run';
@@ -28,40 +24,25 @@ import type { ResumeClaimCursor } from './store/continuation-cursors';
 import { readNodeRecordEvent } from './node-record-reader';
 import { buildRunNodeStates, type TerminalRecordEvent } from './terminal-record';
 
-/** The stored events the rule reads: node states, and the composed fan-out scopes. */
 const NODE_STATE_TYPES: ReadonlySet<string> = new Set(NODE_STATE_EVENT_TYPES);
 
-export const UNKNOWN_OUTCOME_EVENT_TYPES = [
-  ...NODE_STATE_EVENT_TYPES,
-  'fan_out_instances',
-] as const;
-
-/** One instance of a composed fan-out: its scope name and its identity in the scope's plan. */
-export interface ComposedInstance {
-  scope: string;
-  identity: string;
-}
+/** The stored events the rule reads: node records, each naming the invocation that wrote it. */
+export const UNKNOWN_OUTCOME_EVENT_TYPES = NODE_STATE_EVENT_TYPES;
 
 /** One step whose latest record is a failure of kind `outcome_unknown`. */
 export interface UnknownOutcome {
   path: string;
   /**
-   * The loop frames of the invocation that recorded it (`invocation.loopPath`): which loop
-   * group, if any, ran it. `undefined` for a record without node metadata.
+   * Where the invocation that recorded it ran: its loop frames (`loopPath`) and the composed
+   * fan-out instances around it (`fanOutPath`). `undefined` for a record without node
+   * metadata; `fanOutPath` is absent on a record written before that field existed.
    */
-  loopPath: NodeInvocation['loopPath'] | undefined;
+  invocation: Pick<NodeInvocation, 'loopPath' | 'fanOutPath'> | undefined;
   /**
-   * The composed fan-out instances the record ran in, outermost first: each one's fan-out
-   * scope and instance identity, as that scope's stored plan names them. A step whose name
-   * only looks like it is under a scope (node ids may contain `__`) is in none of its
-   * instances.
-   */
-  instances: readonly ComposedInstance[];
-  /**
-   * The innermost composed fan-out scope whose own join occurrence (its loop round)
-   * completed after the record: that join absorbed the failure. `undefined` when the failure
-   * is live; one recorded after the join's last completion, as when a recomputed join ran
-   * the instance again, is live too.
+   * The innermost composed fan-out scope of `fanOutPath` whose own join occurrence (its loop
+   * round) completed after the record: that join absorbed the failure. `undefined` when the
+   * failure is live; one recorded after the join's last completion, as when a recomputed
+   * join ran the instance again, is live too.
    */
   absorbedBy: string | undefined;
 }
@@ -71,59 +52,39 @@ export function unknownOutcomes(
   run: Pick<WorkflowRun, 'id' | 'metadata'>,
   events: readonly TerminalRecordEvent[]
 ): UnknownOutcome[] {
-  // Each scope's plan: the first `fan_out_instances` stored for it owns its instance set.
-  const plans = new Map<string, ReadonlySet<string>>();
-  for (const { event_type, step_name, data } of events) {
-    if (event_type !== 'fan_out_instances' || !step_name || plans.has(step_name)) continue;
-    const instances =
-      typeof data === 'object' && data !== null && 'instances' in data
-        ? parseFanOutSnapshots(data.instances)
-        : undefined;
-    plans.set(step_name, new Set(instances?.map(instance => instance.identity)));
-  }
-  const scopes = [...plans.keys()].map(scope => ({ scope, ...composeFanOutScopeParts(scope) }));
-  // A nested scope's name extends its outer instance's, so sorting by length puts outer first.
-  const instancesOf = (path: string): ComposedInstance[] =>
-    [...plans]
-      .flatMap(([scope, identities]) => {
-        if (!path.startsWith(`${scope}__`)) return [];
-        const rest = path.slice(scope.length + 2);
-        const end = rest.indexOf('__');
-        const identity = end === -1 ? rest : rest.slice(0, end);
-        return identities.has(identity) ? [{ scope, identity }] : [];
-      })
-      .sort((a, b) => a.scope.length - b.scope.length);
+  const invocationOf = (event: TerminalRecordEvent | undefined) =>
+    event && readNodeRecordEvent({ ...event, workflow_run_id: run.id })?.metadata?.invocation;
   const lastRecord = new Map<string, number>();
-  const joinedAt = new Map<string, number>();
-  const loopPathOf = (event: TerminalRecordEvent | undefined) =>
-    event &&
-    readNodeRecordEvent({ ...event, workflow_run_id: run.id })?.metadata?.invocation.loopPath;
+  const completions = new Map<string, number[]>();
   for (const [index, event] of events.entries()) {
     // Only node records order a failure against its join: an audit event on the same step
     // (a session note, say) is not one, whatever events the caller passes.
     if (!event.step_name || !NODE_STATE_TYPES.has(event.event_type)) continue;
     lastRecord.set(event.step_name, index);
-    if (event.event_type !== 'node_completed') continue;
-    const round = loopPathOf(event) ?? [];
-    for (const { scope, prefix, nodeId } of scopes)
-      if (
-        prefix + nodeId === event.step_name &&
-        prefix + composeFanOutScopeSegment(nodeId, round) === scope
-      )
-        joinedAt.set(scope, index);
+    if (event.event_type === 'node_completed')
+      completions.set(event.step_name, [...(completions.get(event.step_name) ?? []), index]);
   }
+  // A scope's join occurrence is its fan-out node's completion in the scope's loop round.
+  const joinedAfter = (scope: string, at: number): boolean => {
+    const { prefix, nodeId } = composeFanOutScopeParts(scope);
+    return (completions.get(prefix + nodeId) ?? []).some(
+      index =>
+        index > at &&
+        prefix + composeFanOutScopeSegment(nodeId, invocationOf(events[index])?.loopPath ?? []) ===
+          scope
+    );
+  };
   return buildRunNodeStates(run, events)
     .filter(node => node.state === 'failed' && node.failure_kind === 'outcome_unknown')
     .map(node => {
       const at = lastRecord.get(node.node_id) ?? Number.POSITIVE_INFINITY;
-      const instances = instancesOf(node.node_id);
+      const invocation = invocationOf(events[at]);
       return {
         path: node.node_id,
-        loopPath: loopPathOf(events[lastRecord.get(node.node_id) ?? -1]),
-        instances,
-        absorbedBy: instances
-          .filter(({ scope }) => (joinedAt.get(scope) ?? -1) > at)
-          .map(({ scope }) => scope)
+        invocation,
+        absorbedBy: (invocation?.fanOutPath ?? [])
+          .map(frame => frame.scope)
+          .filter(scope => joinedAfter(scope, at))
           .at(-1),
       };
     });

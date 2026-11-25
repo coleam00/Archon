@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
+import { finishNodeExecution, newNodeInvocation, startNodeExecution } from '../node-execution';
+import { serializeNodeStateRecord } from '../node-record-serialization';
 import { readSourceRelease } from '../schemas';
+import type { FanOutFrame } from '../schemas/node-execution';
 import {
   WorkflowNotResumableError,
   deadlineWaitCursor,
@@ -117,51 +120,49 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
 
     test('admits the automatic claim when a completed fan-out join absorbed the instance', async () => {
       const scope = 'refine.__archon_fan_out__fan__root';
-      // `fan__root__writer` is a legal node id: its scope's name starts with `fan`'s plus `__`.
-      const sibling = 'refine.__archon_fan_out__fan__root__writer__root';
-      const plan = (identity: string) => ({
-        instances: [{ ordinal: 0, identity, item: 1, inputs: {} }],
-      });
+      // A sibling fan-out whose id is `fan__root__abc`, where `abc` is an instance of `fan`:
+      // its writer's step name reads as if it ran in that instance.
+      const sibling = `${scope}__abc__root`;
+      const record = (
+        runId: string,
+        path: string,
+        fanOutPath: FanOutFrame[],
+        lifecycle: Parameters<typeof finishNodeExecution>[1]
+      ) =>
+        serializeNodeStateRecord(
+          finishNodeExecution(
+            startNodeExecution({
+              runId,
+              path,
+              node: { id: path, kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+              invocation: { ...newNodeInvocation(), fanOutPath },
+              provider: 'claude',
+            }),
+            lifecycle
+          )
+        );
+      const uncertain = {
+        status: 'failed',
+        error: 'timed out',
+        failureKind: 'outcome_unknown',
+      } as const;
       const absorbed = await running(store);
       const live = await running(store);
       const beside = await running(store);
-      for (const run of [absorbed, live]) {
-        await store.persistWorkflowEvent({
-          workflow_run_id: run.id,
-          event_type: 'fan_out_instances',
-          step_name: scope,
-          data: plan('abc'),
-        });
-        await store.persistWorkflowEvent({
-          workflow_run_id: run.id,
-          event_type: 'node_failed',
-          step_name: `${scope}__abc__write`,
-          data: { error: 'timed out', failure_kind: 'outcome_unknown' },
-        });
-      }
-      for (const [step, data] of [
-        [scope, plan('abc')],
-        [sibling, plan('def')],
-      ] as const)
-        await store.persistWorkflowEvent({
-          workflow_run_id: beside.id,
-          event_type: 'fan_out_instances',
-          step_name: step,
-          data,
-        });
-      await store.persistWorkflowEvent({
-        workflow_run_id: beside.id,
-        event_type: 'node_failed',
-        step_name: `${sibling}__def__write`,
-        data: { error: 'timed out', failure_kind: 'outcome_unknown' },
-      });
+      for (const run of [absorbed, live])
+        await store.persistWorkflowEvent(
+          record(run.id, `${scope}__abc__write`, [{ scope, identity: 'abc' }], uncertain)
+        );
+      await store.persistWorkflowEvent(
+        record(
+          beside.id,
+          `${sibling}__def__write`,
+          [{ scope: sibling, identity: 'def' }],
+          uncertain
+        )
+      );
       for (const run of [absorbed, beside])
-        await store.persistWorkflowEvent({
-          workflow_run_id: run.id,
-          event_type: 'node_completed',
-          step_name: 'refine.fan',
-          data: { node_output: '' },
-        });
+        await store.persistWorkflowEvent(record(run.id, 'refine.fan', [], { status: 'completed' }));
       // An audit event on the absorbed step after the join completed is not a node record.
       await store.persistWorkflowEvent({
         workflow_run_id: absorbed.id,
@@ -174,7 +175,7 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
       expect((await store.resumeWorkflowRun(absorbed.id, deadlineWaitCursor(wait))).status).toBe(
         'running'
       );
-      // Neither an unfinished join nor the join of a sibling whose name it extends absorbs it.
+      // Neither an unfinished join nor the join of a fan-out the record did not run in absorbs it.
       for (const run of [live, beside])
         expect(
           await rejection(store.resumeWorkflowRun(run.id, deadlineWaitCursor(wait)))

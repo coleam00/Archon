@@ -9,7 +9,7 @@ import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { peerAdmissions } from '../interaction-admission';
 import { findFanOutChildRuns } from './nodes/workflow/fan-out-children';
 import { nodeInvocationKey } from '../node-record-reader';
-import { finishNodeExecution, newNodeInvocation, describeExecutionNode } from '../node-execution';
+import { finishNodeExecution, describeExecutionNode } from '../node-execution';
 import { NodeEventWriteError, recordNodeState } from '../node-event-write';
 import type { DagNode, SessionCursor, SkipCause } from '../schemas';
 import {
@@ -33,6 +33,7 @@ import type { OperatorPauseBoundary } from './operator-pause-boundary';
 import { reachedUnknownOutcome } from './unknown-outcome';
 import {
   beginExecution,
+  newWalkInvocation,
   ownsBodySessionCursor,
   type LayerNodeResult,
   type RunLayersContext,
@@ -146,7 +147,7 @@ async function runLayerPhase(
         const invocation =
           ctx.unfinishedInvocations?.get(
             nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
-          )?.invocation ?? newNodeInvocation(ctx.loopGroupPath);
+          )?.invocation ?? newWalkInvocation(ctx);
         const nodeCtx: RunLayersContext = {
           ...ctx,
           currentExecution: undefined,

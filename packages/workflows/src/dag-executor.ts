@@ -613,6 +613,7 @@ async function createRunContext(
     stepNamePrefix: '',
     returnsCheckout: await returnsCheckout(options, execContext),
     loopGroupPath: [],
+    fanOutPath: [],
     loopBodyScopes: [],
   };
 }

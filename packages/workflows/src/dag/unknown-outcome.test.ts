@@ -14,6 +14,7 @@ import { tmpdir } from 'os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import * as nodeEventWrite from '../node-event-write';
 import * as settle from './unknown-outcome';
+import * as unknownOutcomeRule from '../unknown-outcome';
 import { executeDagWorkflow } from '../dag-executor';
 import { createFileWorkflowStore } from '../file-store/store';
 import { hydrateResumableRun } from '../run-resume';
@@ -23,6 +24,7 @@ import { WorkflowSourceUnavailableError } from '../workflow-source';
 import * as sourceLoader from '../workflow-source/load';
 import { pendingWorkflowWaitDeadline, type DagNode, type WorkflowRun } from '../schemas';
 import { WorkflowNotResumableError, deadlineWaitCursor } from '../store';
+import { composeInstanceIdentity } from '../fan-out-identity';
 import type { WorkflowDeps } from '../deps';
 import type { IWorkflowStore } from '../store';
 import {
@@ -237,25 +239,29 @@ describe('a failure whose outcome is unknown', () => {
     let paused: WorkflowRun | undefined;
     let store: IWorkflowStore | undefined;
     const marker = join(testDir, 'paused');
+    let fault: { mockRestore(): void } | undefined;
     await run('unknown-read-fault', pausedSibling(marker, timedWait), {
       prepare: faulted => {
         store = faulted;
         pausing(faulted, marker, []);
-        const read = faulted.listEventsForRuns.bind(faulted);
-        spyOn(faulted, 'listEventsForRuns').mockImplementation(async (ids, types) => {
-          const id = ids[0] ?? '';
-          const recorded = (await faulted.listWorkflowEvents(id)).some(
-            e => e.event_type === 'node_failed' && e.step_name === 'write'
-          );
-          // The settle point's read, once the writer's failure record is stored.
-          if (paused === undefined && recorded && types?.includes('fan_out_instances')) {
-            paused = (await faulted.getWorkflowRun(id)) ?? undefined;
-            throw new Error('store unavailable');
+        const read = unknownOutcomeRule.readUnknownOutcomes;
+        fault = spyOn(unknownOutcomeRule, 'readUnknownOutcomes').mockImplementation(
+          async (from, run) => {
+            const recorded = (await faulted.listWorkflowEvents(run.id)).some(
+              e => e.event_type === 'node_failed' && e.step_name === 'write'
+            );
+            // The settle point's read, once the writer's failure record is stored.
+            if (paused === undefined && recorded) {
+              paused = (await faulted.getWorkflowRun(run.id)) ?? undefined;
+              throw new Error('store unavailable');
+            }
+            return read(from, run);
           }
-          return read(ids, types);
-        });
+        );
       },
-    }).catch(() => undefined);
+    })
+      .catch(() => undefined)
+      .finally(() => fault?.mockRestore());
     if (store === undefined || paused === undefined) throw new Error('the read never failed');
     expect(paused.status).toBe('paused');
     const latest = (await store.listWorkflowEvents(paused.id))
@@ -690,14 +696,45 @@ describe('a failure whose outcome is unknown', () => {
       expect((await result.store.getWorkflowRun(result.runId))?.status).toBe('completed');
     });
 
+    /** A block whose one step fails ordinarily. */
+    const failerBlock = () =>
+      writeFile(
+        join(testDir, '.archon', 'workflows', 'failer.yaml'),
+        [
+          'name: failer',
+          'description: block',
+          'mutates_checkout: false',
+          'inputs:',
+          '  item: { required: true }',
+          'nodes:',
+          '  - id: step',
+          '    bash: "exit 1"',
+        ].join('\n')
+      );
+    // `fan` over item 1, beside a fan-out whose id is `fan`'s scope segment plus item 1's
+    // identity: every step under the second reads as if it ran in `fan`'s instance.
+    const overlappingId = `fan__root__${composeInstanceIdentity(1, 0)}`;
+    const failingFan = (join_: 'all_done' | 'all_success'): DagNode =>
+      ({
+        id: 'fan',
+        kind: 'compose_fan_out',
+        include: 'failer',
+        fan_out: { items: '[1]', as: 'item', join: join_ },
+      }) as DagNode;
+
     it.each([
-      ['a disjoint id', 'other', 'fan'],
-      // The fan-out's scope name starts with the scope `fan` would have, plus `__`.
-      ['an id the fan-out scope extends', 'fan', 'fan__root__writer'],
+      [
+        'a disjoint id',
+        'fan',
+        { id: 'other', kind: 'exec', runtime: 'sh', script: 'exit 1' } as DagNode,
+      ],
+      ['a fan-out whose instance the other id contains', overlappingId, failingFan('all_success')],
     ])(
       'an ordinary failure beside a running all_done fan-out keeps node_error (%s)',
-      async (_case, beside, fanId) => {
+      async (_case, fanId, besideNode) => {
+        const beside = besideNode.id;
         await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+        await failerBlock();
         await writeFile(
           join(testDir, '.archon', 'workflows', 'writer.yaml'),
           [
@@ -750,7 +787,7 @@ describe('a failure whose outcome is unknown', () => {
               include: 'writer',
               fan_out: { items: '[2,1]', as: 'item', max_parallel: 1, join: 'all_done' },
             },
-            { id: beside, kind: 'exec', runtime: 'sh', script: 'exit 1' },
+            besideNode,
           ] as DagNode[]);
           expect(decisions).toContainEqual([beside, false]);
           expect(await events(store, runId, 'node_completed', fanId)).toHaveLength(1);

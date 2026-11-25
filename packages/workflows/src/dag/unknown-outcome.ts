@@ -83,8 +83,8 @@ export async function failRunOnUnknownOutcome(
  *
  * A loop body is told by the record's loop frame, not by a `<step>.` prefix: node ids may
  * contain dots (see `dag-structure`), so a top-level `prep.write` is not the body of a loop
- * group `prep`. A composed instance is told by its scope's stored plan (`instances`), not by
- * the scope name's prefix: `fan` and `fan__root__writer` are both legal ids.
+ * group `prep`. A composed instance is told by the invocation's recorded `fanOutPath`, not
+ * by a step name: a sibling's id can contain another fan-out's scope and item identity.
  */
 export async function reachedUnknownOutcome(
   ctx: RunLayersContext,
@@ -107,17 +107,19 @@ export async function reachedUnknownOutcome(
 function ownedBy(
   { stepNamePrefix, loopGroupPath }: Pick<RunLayersContext, 'stepNamePrefix' | 'loopGroupPath'>,
   nodeId: string,
-  { path, loopPath, instances }: UnknownOutcome
+  { path, invocation }: UnknownOutcome
 ): boolean {
   const step = stepNamePrefix + nodeId;
   if (path === step) return true;
-  // A record without node metadata cannot say what ran it: err toward stopping.
-  if (loopPath === undefined) return true;
+  // A record that cannot say where it ran is owned by any failing node: err toward stopping.
+  const loopPath = invocation?.loopPath;
+  const fanOutPath = invocation?.fanOutPath;
+  if (loopPath === undefined || fanOutPath === undefined) return true;
   const depth = loopGroupPath.length;
   const inBody =
     loopPath[depth]?.groupId === nodeId &&
     loopGroupPath.every((frame, index) => loopPath[index]?.groupId === frame.groupId) &&
     path.startsWith(loopBodyStepNamePrefix(step));
   const scope = stepNamePrefix + composeFanOutScopeSegment(nodeId, loopGroupPath);
-  return inBody || instances.some(instance => instance.scope === scope);
+  return inBody || fanOutPath.some(frame => frame.scope === scope);
 }
