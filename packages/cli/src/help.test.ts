@@ -329,10 +329,10 @@ Options:
 Examples:
   archon chat "What does the orchestrator do?"
   archon workflow list
-  archon workflow run investigate-issue "Fix the login bug"
+  archon workflow run archon-investigate "Why does login fail?"
   archon workflow run archon-plan --cwd /path/to/repo "Add dark mode"
   archon workflow run archon-implement --branch feature-auth "Implement auth"
-  archon workflow run quick-fix --no-worktree "Fix typo"
+  archon workflow run archon-implement --no-worktree "Fix the typo in the README"
   archon workflow run archon-investigate --folder "Explain how the repos under this root fit together"
   archon workflow run archon-investigate --detach "Investigate the flaky test"
   archon workflow run archon-investigate --dry-run --stubs ./stubs.yaml --json
