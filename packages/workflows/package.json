@@ -37,6 +37,8 @@
     "./item-hold": "./src/item-hold.ts",
     "./start-limit": "./src/start-limit.ts",
     "./pack-graph": "./src/pack-graph.ts",
+    "./pack-declarations": "./src/pack-declarations.ts",
+    "./factory-view-check": "./src/factory-view-check.ts",
     "./pack-document": "./src/pack-document.ts",
     "./pack-settings": "./src/pack-settings.ts",
     "./workflow-notice": "./src/workflow-notice.ts",

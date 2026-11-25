@@ -4,10 +4,11 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
+import { readPackView } from '@archon/core/workflows/pack-view';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
-import { registerPackGraphRoute } from './api.packs';
-import { packGraphResponseSchema } from './schemas/workflow.schemas';
+import { registerPackGraphRoute, registerPackViewRoute } from './api.packs';
+import { packGraphResponseSchema, packViewResponseSchema } from './schemas/workflow.schemas';
 
 const track = trackTempRoots();
 
@@ -32,20 +33,25 @@ async function graphApp(
   for (const [name, body] of Object.entries(triggers))
     await writeFile(join(triggersDirectory, name), body);
   const app = new OpenAPIHono();
+  const deps = {
+    loadConfig: async () => ({
+      assistant: undefined,
+      commands: {},
+      assistants: { claude: {}, codex: {} },
+    }),
+    providers: providerRegistry,
+    triggersDirectory: () => triggersDirectory,
+    projectKeyOf: async () => null,
+    projectOf: async () => null,
+  };
+  const codebaseCwd = async (id: string) => (id === 'cb-1' ? project : null);
   registerPackGraphRoute(app, {
-    codebaseCwd: async id => (id === 'cb-1' ? project : null),
-    readPackGraph: (cwd, pack) =>
-      readPackGraph(cwd, pack, {
-        loadConfig: async () => ({
-          assistant: undefined,
-          commands: {},
-          assistants: { claude: {}, codex: {} },
-        }),
-        providers: providerRegistry,
-        triggersDirectory: () => triggersDirectory,
-        projectKeyOf: async () => null,
-        projectOf: async () => null,
-      }),
+    codebaseCwd,
+    readPackGraph: (cwd, pack) => readPackGraph(cwd, pack, deps),
+  });
+  registerPackViewRoute(app, {
+    codebaseCwd,
+    readPackView: (cwd, pack) => readPackView(cwd, pack, deps),
   });
   return app;
 }
@@ -101,5 +107,24 @@ describe('GET /api/packs/{pack}/graph', () => {
     const app = await graphApp();
     expect((await app.request('/api/packs/chain/graph?codebaseId=missing')).status).toBe(404);
     expect((await app.request('/api/packs/nope/graph?codebaseId=cb-1')).status).toBe(404);
+  });
+});
+
+describe('GET /api/packs/{pack}/view', () => {
+  test('a pack that ships no view is 200 with a null view, a null path and no problems', async () => {
+    const response = await (await graphApp()).request('/api/packs/chain/view?codebaseId=cb-1');
+    expect(response.status).toBe(200);
+    expect(packViewResponseSchema.parse(await response.json())).toEqual({
+      path: null,
+      view: null,
+      problems: [],
+    });
+  });
+
+  test('an unknown pack is 404 and a relative workflowSource is 400, as for the graph', async () => {
+    const app = await graphApp();
+    expect((await app.request('/api/packs/nope/view?codebaseId=cb-1')).status).toBe(404);
+    const relative = await app.request('/api/packs/chain/view?codebaseId=cb-1&workflowSource=src');
+    expect(relative.status).toBe(400);
   });
 });

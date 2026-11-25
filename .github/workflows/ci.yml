@@ -1,6 +1,6 @@
 # CI for the factory-console proof of concept. Upstream Archon's full CI (release, docs, e2e,
 # Windows and macOS legs) is not run here; this covers what the console work can break: the
-# static checks and the console reopen-asks test in `check` (the factory-view checks return with the curated view on `combined`), the suites of the packages the console
+# static checks and the console reopen-asks and factory-view check tests in `check`, the suites of the packages the console
 # touches in `package-tests`, and every store test that runs on Postgres in `postgres`.
 name: ci
 on:
@@ -37,6 +37,10 @@ jobs:
         run: bun test ./scripts/console-reopen-asks.test.ts
       - name: Web build
         run: bun run build:web
+      # The factory view check's script; its validator and read run in the workflows, core and
+      # server suites below.
+      - name: Factory view check tests
+        run: bun test ./scripts/check-factory-view.test.ts
 
   # Each package's suite on its own runner, through the package's `test` script
   # (scripts/package-tests.ts), as upstream's CI did. A private repository's runner has 7 GB and

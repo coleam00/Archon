@@ -18,6 +18,7 @@ import {
   registeredProjectKeyForPath,
 } from '@archon/core/services/codebase-checkout-resolver';
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
+import { readPackView } from '@archon/core/workflows/pack-view';
 import { getTriggersPath, launchProjectKey } from '@archon/core/workflows/run-ended';
 import { providerRegistry } from '@archon/providers';
 import type { WebAdapter } from '../adapters/web';
@@ -40,7 +41,7 @@ import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
 import { registerObservingRoute } from './api.observing';
 import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
-import { registerPackGraphRoute } from './api.packs';
+import { registerPackGraphRoute, registerPackViewRoute } from './api.packs';
 import { registerProviderKeyRoutes } from './api.provider-keys';
 import { registerProviderRoutes } from './api.providers';
 import { registerAttentionStreamRoute, registerRunAttentionRoutes } from './api.run-attention';
@@ -167,22 +168,27 @@ export function registerApiRoutes(
     changeMergeState: (lookup, branches) => changeMergeState(lookup, branches, forgeOptions),
     viewWorkItem: (number, remote) => viewWorkItem(number, remote, forgeOptions),
   });
+  const packCodebaseCwd = async (id: string): Promise<string | null> =>
+    (await codebaseDb.getCodebase(id))?.default_cwd ?? null;
+  const packGraphDeps = {
+    loadConfig,
+    providers: providerRegistry,
+    triggersDirectory: getTriggersPath,
+    slotOccupancy: listSlotOccupancy,
+    projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
+    projectOf: (path: string) => registeredProjectForPath(path, codebaseDb),
+  };
+  const packSource = (workflowSource?: string) =>
+    workflowSource === undefined ? {} : { workflowSource };
   registerPackGraphRoute(app, {
-    codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
+    codebaseCwd: packCodebaseCwd,
     readPackGraph: (cwd, pack, workflowSource) =>
-      readPackGraph(
-        cwd,
-        pack,
-        {
-          loadConfig,
-          providers: providerRegistry,
-          triggersDirectory: getTriggersPath,
-          slotOccupancy: listSlotOccupancy,
-          projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
-          projectOf: path => registeredProjectForPath(path, codebaseDb),
-        },
-        workflowSource === undefined ? {} : { workflowSource }
-      ),
+      readPackGraph(cwd, pack, packGraphDeps, packSource(workflowSource)),
+  });
+  registerPackViewRoute(app, {
+    codebaseCwd: packCodebaseCwd,
+    readPackView: (cwd, pack, workflowSource) =>
+      readPackView(cwd, pack, packGraphDeps, packSource(workflowSource)),
   });
   registerWorkflowDefinitionRoutes(app);
   registerArtifactRoutes(app);

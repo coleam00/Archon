@@ -4209,6 +4209,86 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/packs/{pack}/view': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The factory view a pack ships (.shared/factory-view.json), or null, with what is wrong with it against the pack's graph */
+    get: {
+      parameters: {
+        query: {
+          /** @description The codebase whose project the pack is discovered from and its arrows launch in */
+          codebaseId: string;
+          /** @description An absolute directory the pack's workflows are discovered from instead of the codebase, as a binding's launch.discoveryCwd names it */
+          workflowSource?: string;
+        };
+        header?: never;
+        path: {
+          /** @description The pack key: its folder name */
+          pack: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['PackView'];
+          };
+        };
+        /** @description workflowSource is not an absolute path */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found, or no workflow of the pack was found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description A trigger file in the install cannot be read, or the store cannot hold run-ended bindings; the error names the file */
+        422: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/workflows/validate': {
     parameters: {
       query?: never;
@@ -12176,6 +12256,168 @@ export interface components {
         filename: string;
         workflowName: string | null;
         error: string;
+      }[];
+    };
+    PackView: {
+      path: string | null;
+      view: {
+        /** @enum {number} */
+        version: 1;
+        title: string;
+        summary: string;
+        groups?: {
+          [key: string]: {
+            blurb: string;
+          };
+        };
+        stages: {
+          [key: string]: {
+            label: string;
+            short?: string;
+            blurb: string;
+            steps?: {
+              [key: string]: string;
+            };
+            drilldown?: {
+              phases: {
+                label: string;
+                cards: {
+                  title: string;
+                  text: string;
+                  /** @enum {string} */
+                  icon:
+                    | 'inbox'
+                    | 'scale'
+                    | 'link'
+                    | 'ruler'
+                    | 'scissors'
+                    | 'database'
+                    | 'clipboard-list'
+                    | 'pencil'
+                    | 'wrench'
+                    | 'git-branch'
+                    | 'search-code'
+                    | 'flask-conical'
+                    | 'monitor-check'
+                    | 'gavel'
+                    | 'message-square'
+                    | 'circle-alert'
+                    | 'git-pull-request'
+                    | 'flag'
+                    | 'send'
+                    | 'shield-check'
+                    | 'git-merge';
+                  /** @enum {string} */
+                  kind: 'agent' | 'check' | 'script' | 'you';
+                  covers: string[];
+                }[];
+              }[];
+            };
+          };
+        };
+        outcomes?: {
+          [key: string]: {
+            label?: string;
+            story?:
+              | string
+              | {
+                  withChange: string;
+                  withoutChange: string;
+                };
+            /** @enum {string} */
+            reads?: 'ended' | 'parked' | 'awaits' | 'returned';
+            next?: string;
+          };
+        };
+        answers?: {
+          [key: string]: {
+            starts: string;
+          };
+        };
+        words?: {
+          round?: string;
+          rounds?: string;
+          sentBack?: string;
+          parked?: string;
+          workOrder?: string;
+          workOrders?: string;
+        };
+        map: {
+          cards: {
+            id: string;
+            label?: string;
+            short?: string;
+            blurb?: string;
+            stages: string[];
+          }[];
+          edges?: {
+            from: string;
+            to: string;
+            label: string;
+          }[];
+          notes?: {
+            text: string;
+            near: string;
+          }[];
+        };
+        howItWorks: {
+          title: string;
+          caption: string;
+          root: string;
+          views: {
+            [key: string]: {
+              caption?: string;
+              groups?: {
+                id: string;
+                label: string;
+              }[];
+              cards: {
+                id: string;
+                title: string;
+                text: string;
+                /** @enum {string} */
+                icon:
+                  | 'inbox'
+                  | 'issue'
+                  | 'order'
+                  | 'search'
+                  | 'scale'
+                  | 'map'
+                  | 'list'
+                  | 'hammer'
+                  | 'git-pull-request'
+                  | 'check'
+                  | 'flask'
+                  | 'eye'
+                  | 'sparkles'
+                  | 'gavel'
+                  | 'users'
+                  | 'flag'
+                  | 'rotate';
+                /** @enum {string} */
+                kind: 'input' | 'stage' | 'check' | 'person' | 'gate' | 'outcome';
+                col: number;
+                row: number;
+                group?: string;
+                opens?: string;
+                stages?: string[];
+              }[];
+              edges: {
+                from: string;
+                to: string;
+                /** @enum {string} */
+                kind: 'feeds' | 'calls' | 'loops-back';
+                label?: string;
+              }[];
+            };
+          };
+        };
+      } | null;
+      problems: {
+        /** @enum {string} */
+        severity: 'error' | 'warning';
+        path: (string | number)[];
+        message: string;
       }[];
     };
     ValidateWorkflowResponse: {

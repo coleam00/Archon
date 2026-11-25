@@ -42,10 +42,17 @@ The factory building this repository runs Archon from another checkout, on the h
   file. No new pack-specific read model in `packages/workflows`, `packages/core` or
   `packages/server`: nothing there knows rounds, returns, shadows, parked items, discoveries,
   work orders, item stories or stage groups. The web composes those.
-- The view schema (`packages/workflows/src/schemas/factory-view.ts` and `factory-overview.ts`,
-  found through the generic `pack-declarations.ts` reader, today via `factory-pack-files.ts`) is
-  presentation only: words, grouping, order, layout. It holds
-  no step lists, outcome lists, arrows, ask flags, shadow flags, settings or stage-group enum.
+- The view file is one file a pack ships, `<pack>/.shared/factory-view.json`, with one schema
+  (`packages/workflows/src/schemas/factory-view.ts`, its How it works picture in
+  `factory-view-how-it-works.ts`), read through the generic `pack-declarations.ts` reader from
+  the copy of the pack the graph was read from (`packages/core/src/workflows/pack-view.ts`) and
+  served by `GET /api/packs/{pack}/view`. It is presentation only: words, layout, drill-down
+  cards and story wording. It holds no step lists, outcome lists, arrows, ask flags, shadow flags,
+  settings or stage-group enum; it names the graph's stages, steps, outcomes and groups, and
+  `checkFactoryView` (`factory-view-check.ts`) fails a name the graph lacks and warns on an
+  in-flow stage it leaves unplaced, when the file is read and in
+  `bun run check:factory-view <pack dir>`. The Wirasm pack's file is kept at
+  `docs/factory-console/pack-view/` until the owner's pack ships it.
 - Factory web code stays under `packages/web/src/experiments/console/factory/` (components, pure
   `lib/`, the page routes), and nothing outside that folder imports from it, except the three
   files that mount it: `ConsoleApp.tsx` (its routes and `factory.css`), `ProjectRail.tsx` (the
@@ -53,8 +60,8 @@ The factory building this repository runs Archon from another checkout, on the h
   (`scripts/check-factory-imports.ts`). Every other file under `packages/web/src` (the answer
   panel, the ask card, the project tabs apart from that one tab, every generic page and
   component, `theme.css`) stays as it is on Archon dev.
-- Server code is `packages/server/src/routes/api.factory.ts`, kept to the view-file reads, and
-  two generic reads with no pack words that the web cannot get from older routes:
+- Server code is the view-file read (`GET /api/packs/{pack}/view` in `api.packs.ts`, beside the
+  graph route), and two generic reads with no pack words that the web cannot get from older routes:
   `GET /api/workflows/runs/records` (`api.run-records.ts`, run records without events) and
   `GET /api/forge/subjects` (`api.forge.ts`, issue titles and change merge state). The server
   asks the change host through `packages/adapters/src/forge-host.ts`, which finds plugins
