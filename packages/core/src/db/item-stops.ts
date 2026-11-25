@@ -32,10 +32,10 @@ import { getLog } from './workflow-run-shared';
  * item are ordered as `getItemRuns` orders them: by start time, and on SQLite, which records
  * it to the second, by insertion order within a second. Any step after this one, in any
  * status, ends the stop, and so does one deleted since (`moved_on_at` on the item, recorded
- * by the delete). A stage the run's end started on its item is such a step once its run
- * exists; while it waits to be prepared (an install hold included) or queued for a resource,
- * the stop is held back, and once its run exists a run that observes the item leaves the
- * stop listed. Whether the run's end started anything is never decided at completion. A run that still
+ * by the delete). A stage the run's end, settled asks or nodes started on its item is such a
+ * step once its run exists; until then the store adapter holds the stop back while that start
+ * is a step or unprepared (`listItemStarts`), so whether anything followed is never decided at
+ * completion, and a run that observes the item leaves the stop listed. A run that still
  * has an open ask is not listed: the ask is in attention and is what needs someone, and the
  * stop shows once it closes. Nor is one with an open wait, unless its stop names a refused
  * start: a wait not yet overdue is in no list, so the refusal beside it would show nowhere.
@@ -69,10 +69,8 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
                          WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL))
      ORDER BY r.started_at, r.${tie}`
   );
-  const owed = await owedStarts(result.rows);
   const runs: AttentionRead<WorkflowRun>[] = [];
   for (const row of result.rows) {
-    if (owed.has(String(row.id))) continue;
     try {
       runs.push(normalizeWorkflowRun(row));
     } catch {
@@ -98,61 +96,6 @@ export function causingRun(stored: unknown): string | undefined {
   return source?.source === RUN_ENDED_SOURCE_ACTOR || source?.source === ASKS_SETTLED_SOURCE_ACTOR
     ? source.id
     : undefined;
-}
-
-/**
- * The candidate runs a start of theirs on their own item still holds back: one the run
- * caused (`causingRun`) on the run's item key, still waiting to be prepared (an install hold
- * included) or in a resource queue. Once its run exists it is a later run on the item, and
- * the step rule decides. A linked start the run caused names another item and holds nothing.
- */
-async function owedStarts(
-  candidates: readonly Pick<WorkflowRunRow, 'id' | 'item_id'>[]
-): Promise<Set<string>> {
-  const owed = new Set<string>();
-  if (candidates.length === 0) return owed;
-  const pending = await pool.query<{ source_actor: unknown; item_key: string | null }>(
-    `SELECT r.source_actor, COALESCE(b.item_key, r.item_key) AS item_key
-       FROM remote_agent_start_receipts r
-       JOIN remote_agent_start_receipt_bindings b ON b.receipt_id = r.id
-      WHERE r.outcome = 'matched'
-        AND (b.preparation_status IN ('pending', 'preparing')
-          OR EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q
-                      WHERE q.receipt_id = b.receipt_id AND q.binding_id = b.binding_id
-                        AND q.status = 'queued'))`
-  );
-  const causedOn = new Set<string>();
-  for (const row of pending.rows) {
-    let run: string | undefined;
-    try {
-      run = causingRun(row.source_actor);
-    } catch {
-      // An actor that does not read names no run, so its start holds no stop back; the
-      // stop shows rather than the whole queue failing.
-      continue;
-    }
-    if (run !== undefined && row.item_key !== null)
-      causedOn.add(JSON.stringify([run, row.item_key]));
-  }
-  if (causedOn.size === 0) return owed;
-  const itemIds = [
-    ...new Set(candidates.flatMap(run => (run.item_id === null ? [] : [String(run.item_id)]))),
-  ];
-  const placeholders = itemIds.map((_, index) => '$' + String(index + 1)).join(', ');
-  const keys = new Map(
-    (
-      await pool.query<{ id: string; key: string }>(
-        `SELECT CAST(id AS TEXT) AS id, key FROM remote_agent_items WHERE id IN (${placeholders})`,
-        itemIds
-      )
-    ).rows.map(row => [row.id, row.key])
-  );
-  for (const run of candidates) {
-    const key = run.item_id === null ? undefined : keys.get(String(run.item_id));
-    if (key !== undefined && causedOn.has(JSON.stringify([String(run.id), key])))
-      owed.add(String(run.id));
-  }
-  return owed;
 }
 
 /**

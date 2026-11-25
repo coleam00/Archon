@@ -34,6 +34,7 @@ import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { itemEndSchema } from '@archon/workflows/schemas/item-end';
 import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
+import { RUN_ENDED_SOURCE_ACTOR } from '@archon/workflows/schemas/resource-start';
 import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
 import { recordRunMerge } from './forge-merge-record';
@@ -497,6 +498,105 @@ nodes:
   await runOn('shadow');
   expect(await stopsOnItem()).toMatchObject([{ stoppedIn: { workflow: 'review' } }]);
 });
+
+/** A binding start on `key` not yet prepared, as a fire or a run's end writes it. */
+async function unpreparedStart(
+  key: string,
+  launch: { cwd: string; workflowName: string },
+  sourceActor: { source: string; id: string } | null = null
+): Promise<void> {
+  const result = await captureWorkflowCommand(archonHome, async host => {
+    const receiptId = crypto.randomUUID();
+    await host.deps.store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: `start-${receiptId}`,
+        deliveryId: null,
+        contentDigest: receiptId,
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: sourceActor as never,
+        itemKey: key,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: launch.workflowName,
+          bindingRevision: null,
+          hostId: 'host',
+          runAsUserId: 'operator',
+          resource: 'pool',
+          overlap: 'queue',
+          launch: { ...launch, inputs: {}, isolation: { kind: 'in-place' } },
+        },
+      ],
+    });
+  });
+  expect(result.status, result.stderr).toBe(0);
+}
+
+test.serial(
+  'a start not yet prepared neither reopens an ended item nor refuses its end, as during a hold',
+  async () => {
+    const end = () =>
+      invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'Done by hand.'],
+          values: { item: 'item-held', as: 'triage-agent', json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
+      );
+    const stopped = await seedEnded('item-held', 'stopped');
+    succeeded(await end());
+    // What the install hold keeps waiting: a fire of an observing workflow onto the item.
+    await unpreparedStart('item-held', { cwd: projectRoot, workflowName: 'shadow' });
+
+    expect((await readItemJson('item-held')).ended).toMatchObject({ reason: 'Done by hand.' });
+    const attention = succeeded(
+      await invoke(host =>
+        workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+      )
+    ) as { items: { ref?: string }[] };
+    expect(attention.items.map(item => item.ref)).not.toContain(`stopped:${stopped}`);
+    succeeded(await end());
+  }
+);
+
+test.serial(
+  "a start not yet prepared that a run's end caused on its item holds that run's stop back",
+  async () => {
+    const stoppedRefs = async () =>
+      (
+        succeeded(
+          await invoke(host =>
+            workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+          )
+        ) as { items: { kind: string; ref: string }[] }
+      ).items.flatMap(item => (item.kind === 'stopped' ? [item.ref] : []));
+    const stopped = await seedEnded('item-next', 'stopped');
+    expect(await stoppedRefs()).toContain(`stopped:${stopped}`);
+    const endedBy = { source: RUN_ENDED_SOURCE_ACTOR, id: stopped };
+
+    // The same key launched from a checkout outside the item's project is another item.
+    const elsewhere = join(root, 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    await unpreparedStart('item-next', { cwd: elsewhere, workflowName: 'build' }, endedBy);
+    expect(await stoppedRefs()).toContain(`stopped:${stopped}`);
+
+    // In the item's project, the stage its end started has not been prepared: the stop waits.
+    await unpreparedStart('item-next', { cwd: projectRoot, workflowName: 'build' }, endedBy);
+    expect(await stoppedRefs()).not.toContain(`stopped:${stopped}`);
+  }
+);
 
 test.serial(
   'workflow end takes a stopped item out of attention, and the item read says who ended it and why',

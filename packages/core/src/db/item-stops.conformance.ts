@@ -10,7 +10,7 @@ import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { listAttentionQueue, readAttentionQueueItemByRef } from '@archon/workflows/attention-queue';
 import { itemStoppedMetadata, observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
-import { RUN_ENDED_SOURCE_ACTOR } from '@archon/workflows/schemas/resource-start';
+import { RUN_ENDED_SOURCE_ACTOR, RUN_SOURCE_ACTOR } from '@archon/workflows/schemas/resource-start';
 import {
   CONFORMANCE_CODEBASE_ID,
   CONFORMANCE_CONVERSATION_ID,
@@ -132,7 +132,7 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
     }
   });
 
-  test('a stop is held back while a stage its end started on the item has no run yet', async () => {
+  test('a stop is held back while a start the run caused on its item is queued, unless it observes', async () => {
     const harness = await makeHarness();
     try {
       const { store } = harness;
@@ -144,79 +144,85 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
         CONFORMANCE_CODEBASE_ID,
         CONFORMANCE_CONVERSATION_ID
       );
-      // A start the end of `ended` caused on its item, as the completing write records it, or
-      // with `as`, one delivered under the run's id that it did not cause on that item.
-      const caused = async (
-        ended: string,
+      const binding = (bindingId: string) => ({
+        bindingId,
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        // One resource for every start, held below, so each start stays queued.
+        resource: 'busy',
+        overlap: 'queue' as const,
+        launch: {
+          cwd: '/c',
+          workflowName: bindingId,
+          inputs: {},
+          isolation: { kind: 'in-place' as const },
+        },
+      });
+      // A prepared start on `itemKey` whose receipt names `sourceActor` and `deliveryId`.
+      const queue = async (
         bindingId: string,
-        as: { actor?: null; itemKey?: string } = {}
+        receipt: { deliveryId: string | null; sourceActor: unknown; itemKey: string },
+        observes = false
       ) => {
         const receiptId = crypto.randomUUID();
         await store.acceptStartReceipt({
           receipt: {
             id: receiptId,
             sourceInstanceId: bindingId,
-            deliveryId: ended,
             contentDigest: receiptId,
             receivedAt: new Date().toISOString(),
             occurredAt: null,
-            sourceActor:
-              'actor' in as
-                ? null
-                : { source: RUN_ENDED_SOURCE_ACTOR, id: ended, display: 'planned' },
-            itemKey: as.itemKey ?? 'pr-7',
-          },
+            ...receipt,
+          } as Parameters<typeof store.acceptStartReceipt>[0]['receipt'],
           outcome: 'matched',
-          bindings: [
-            {
-              bindingId,
-              bindingRevision: null,
-              hostId: 'host',
-              runAsUserId: 'operator',
-              resource: bindingId,
-              overlap: 'queue',
-              launch: {
-                cwd: '/c',
-                workflowName: bindingId,
-                inputs: {},
-                isolation: { kind: 'in-place' },
-              },
-            },
-          ],
+          bindings: [binding(bindingId)],
         });
-        return { receiptId, bindingId, ownerId: 'owner' };
+        const identity = { receiptId, bindingId, ownerId: 'owner' };
+        await store.claimStartBindingPreparation(identity);
+        const base = launch();
+        return store.completeStartBindingPreparation({
+          ...identity,
+          launch: {
+            ...base,
+            run: { ...base.run, metadata: observesItemMetadata({ observes }) },
+          },
+        });
       };
-
-      // The only stage its end started observes the item: held back while it waits to be
-      // prepared, listed once its run exists.
-      const planned = await completeOnItem(harness, 'plan', 'planned', 'Planned.');
-      // A start that only reuses the run's id as its delivery id, or that the run caused on
-      // another item (a linked start), holds nothing back.
-      await caused(planned, 'fired', { actor: null, itemKey: 'pr-8' });
-      await caused(planned, 'linked', { itemKey: 'pr-8' });
-      expect(await stopped()).toEqual([`stopped:${planned}`]);
-      const shadow = await caused(planned, 'shadow');
-      expect(await stopped()).toEqual([]);
-      await store.claimStartBindingPreparation(shadow);
-      const base = launch();
-      const observing = await store.completeStartBindingPreparation({
-        ...shadow,
-        launch: {
-          ...base,
-          run: { ...base.run, metadata: observesItemMetadata({ observes: true }) },
-        },
+      const holder = await queue('holder', {
+        deliveryId: null,
+        sourceActor: null,
+        itemKey: 'pr-9',
       });
-      expect(observing?.status).toBe('admitted');
+      expect(holder?.status).toBe('admitted');
+
+      const planned = await completeOnItem(harness, 'plan', 'planned', 'Planned.');
+      const endedBy = { source: RUN_ENDED_SOURCE_ACTOR, id: planned, display: 'planned' };
+      // A start that only reuses the run's id as its delivery id, one the run caused on
+      // another item (a linked start), and an observer it caused on its own item hold
+      // nothing back.
+      await queue('fired', { deliveryId: planned, sourceActor: null, itemKey: 'pr-7' });
+      await queue('linked', { deliveryId: 'x', sourceActor: endedBy, itemKey: 'pr-8' });
+      const shadow = await queue(
+        'shadow',
+        { deliveryId: planned, sourceActor: endedBy, itemKey: 'pr-7' },
+        true
+      );
+      expect(shadow?.status).toBe('queued');
       expect(await stopped()).toEqual([`stopped:${planned}`]);
 
-      // A start queued for its resource holds the stop back too: here it waits behind the
-      // observing run, which holds the item for its workflow.
-      const again = await completeOnItem(harness, 'plan', 'planned', 'Planned again.');
-      const build = await caused(again, 'build');
+      // A step its end started on the item holds the stop back while it waits in the queue.
+      await queue('build', { deliveryId: 'y', sourceActor: endedBy, itemKey: 'pr-7' });
       expect(await stopped()).toEqual([]);
-      await store.claimStartBindingPreparation(build);
-      const step = await store.completeStartBindingPreparation({ ...build, launch: launch() });
-      expect(step?.status).toBe('queued');
+
+      // So does a step one of its nodes fired onto the item.
+      const again = await completeOnItem(harness, 'review', 'not_ready', 'Not ready.');
+      expect(await stopped()).toEqual([`stopped:${again}`]);
+      await queue('fix', {
+        deliveryId: 'z',
+        sourceActor: { source: RUN_SOURCE_ACTOR, id: again, display: 'fire' },
+        itemKey: 'pr-7',
+      });
       expect(await stopped()).toEqual([]);
     } finally {
       await harness.close();

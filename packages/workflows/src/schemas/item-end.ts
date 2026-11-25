@@ -2,9 +2,11 @@
  * An end: the statement that nothing more will happen on an item, made by an operator or, for
  * an outcome a workflow lists in `returns.ends`, by the engine as the run completes (`via:
  * engine`, from that run). It is a fact about the item, like a ruling; nothing records one by
- * age. It holds until work starts on the item again: a new step or a queued start on the
- * item, or a resume of one of its steps. Opening the item writes nothing; the rule reads the runs that exist now. While it
- * holds, the item is at rest and its stop is not in the attention queue.
+ * age. It holds until work starts on the item again: a new step, a start of a step queued on
+ * the item, or a resume of one of its steps. A run of a workflow that observes the item is no
+ * step, and a binding not yet prepared opens the end only once it is prepared as a step.
+ * Opening the item writes nothing; the rule reads the runs and starts that exist now. While
+ * it holds, the item is at rest and its stop is not in the attention queue.
  */
 import { z } from 'zod';
 import { itemActFields } from './item-act';
@@ -28,7 +30,7 @@ export type ItemEndDegraded = z.infer<typeof itemEndDegradedSchema>;
 
 /**
  * What keeps an item from being ended: work on it that is still active or waiting. `run`
- * is one of the item's runs or a run below one of them.
+ * is one of the item's steps or a run below one of them; `queued_start` a start of a step.
  */
 export const itemEndBlockerSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -37,7 +39,6 @@ export const itemEndBlockerSchema = z.discriminatedUnion('kind', [
     status: workflowRunStatusSchema,
   }),
   z.object({ kind: z.literal('queued_start'), requestId: z.string() }),
-  z.object({ kind: z.literal('held_start'), receiptId: z.string() }),
   z.object({ kind: z.literal('open_ask'), ref: z.string() }),
   z.object({ kind: z.literal('open_wait'), runId: z.string() }),
 ]);
@@ -49,8 +50,6 @@ function blockerText(key: string, blocker: ItemEndBlocker): string {
       return `Run ${blocker.runId} on item ${key} is ${blocker.status}; let it end, or cancel or abandon it first.`;
     case 'queued_start':
       return `Start ${blocker.requestId} on item ${key} is queued; \`archon trigger withdraw ${blocker.requestId}\` withdraws it.`;
-    case 'held_start':
-      return `Trigger start ${blocker.receiptId} on item ${key} is held and not yet prepared.`;
     case 'open_ask':
       return `Ask ${blocker.ref} on item ${key} is open; answer or withdraw it in \`archon workflow attention\`.`;
     case 'open_wait':

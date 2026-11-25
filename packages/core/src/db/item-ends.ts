@@ -5,8 +5,10 @@
  * finishing outcome a workflow declares (`returns.ends`), which the engine records in the
  * write that completes the run. An end holds until work starts on the item again
  * (`schemas/item-end.ts`): a step in the item's tree the end did not see, a run resumed since
- * (its execution claim changed), a live run, or a queued start. A run that observes the item
- * (`stepRun`) is not in that tree, so it neither opens an end nor keeps one from holding. The
+ * (its execution claim changed), or a live run, read here (`getHoldingItemEnd`), or a start of
+ * a step that has no run yet, read with the item's other starts (`listItemStarts`,
+ * `readHoldingItemEnd`). A run that observes the item (`stepRun`) is not in that tree, so it
+ * neither opens an end nor keeps one from holding; nor does a queued start of one. The
  * rule reads the runs that exist now and compares run identities and claims, never clocks, so
  * a run whose transaction overlapped the end's, a run row id reused after cleanup, or two
  * resumes in one second still open the item. Deleting runs leaves no trace: deleting runs the
@@ -26,7 +28,7 @@ import type { ItemAct } from '@archon/workflows/schemas/item-act';
 import { EXECUTION_CLAIM_METADATA_KEY } from '@archon/workflows/store';
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import { actColumns, actRead, type ActColumns } from './item-act';
-import { launchRunsStep, stepRun } from './item-step';
+import { queuedItemStarts, stepRun } from './item-step';
 import type { TransactionQuery } from './resource-slots';
 import { getLog } from './workflow-run-shared';
 
@@ -93,7 +95,7 @@ function opened(): string {
 
 /**
  * SQL true while no step in the tree of end `e`'s item opened it and none is live. An end
- * holds while this is true and no step is queued on the item (`queuedStep`).
+ * holds while this is true and no start of a step is waiting on the item (`listItemStarts`).
  */
 function holdsOverRuns(): string {
   return `NOT ${opened()}
@@ -105,22 +107,9 @@ function holdsOverRuns(): string {
 }
 
 /**
- * The oldest start queued on item `itemId` that will run a step, by request id, or undefined.
- * A queued start has no run row yet; whether it observes is in the run its prepared launch
- * will create (`launchRunsStep`).
- */
-async function queuedStep(query: TransactionQuery, itemId: string): Promise<string | undefined> {
-  const queued = await query<{ id: string; launch: unknown }>(
-    `SELECT CAST(id AS TEXT) AS id, launch FROM remote_agent_resource_start_requests
-     WHERE item_id = $1 AND status = 'queued' ORDER BY created_at`,
-    [itemId]
-  );
-  return queued.rows.find(row => launchRunsStep(row.launch))?.id;
-}
-
-/**
  * The first work on item `itemId` that is still active or waiting: a live step on it or below
- * one of its steps, a queued start, an open ask, an open wait. Null when there is none.
+ * one of its steps, a queued start of a step (`queuedItemStarts`), an open ask, an open wait.
+ * Null when there is none. A binding not yet prepared has no role, so it blocks nothing.
  */
 async function blockerOf(query: TransactionQuery, itemId: string): Promise<ItemEndBlocker | null> {
   const run = await query<{ id: string; status: string }>(
@@ -131,8 +120,8 @@ async function blockerOf(query: TransactionQuery, itemId: string): Promise<ItemE
   );
   const live = run.rows[0];
   if (live) return itemEndBlockerSchema.parse({ kind: 'run', runId: live.id, status: live.status });
-  const queued = await queuedStep(query, itemId);
-  if (queued !== undefined) return { kind: 'queued_start', requestId: queued };
+  const queued = (await queuedItemStarts(query, itemId)).find(start => start.role === 'step');
+  if (queued !== undefined) return { kind: 'queued_start', requestId: queued.requestId };
   const ask = await query<{ id: string }>(
     'SELECT id FROM remote_agent_item_asks WHERE item_id = $1 AND closed_as IS NULL LIMIT 1',
     [itemId]
@@ -227,7 +216,10 @@ export async function recordItemEnd(
   });
 }
 
-/** The newest end on item `itemId` while it holds, or null. */
+/**
+ * The newest end on item `itemId` while it holds over the item's runs, or null. Starts that
+ * have no run yet are read with the item's other starts (`readHoldingItemEnd`).
+ */
 export async function getHoldingItemEnd(itemId: string): Promise<ItemEnd | ItemEndDegraded | null> {
   const result = await pool.query<EndRow>(
     `SELECT e.* FROM remote_agent_item_ends e
@@ -236,8 +228,5 @@ export async function getHoldingItemEnd(itemId: string): Promise<ItemEnd | ItemE
     [itemId]
   );
   const row = result.rows[0];
-  if (row === undefined) return null;
-  if ((await queuedStep((sql, params) => pool.query(sql, params), itemId)) !== undefined)
-    return null;
-  return endRead(row);
+  return row === undefined ? null : endRead(row);
 }

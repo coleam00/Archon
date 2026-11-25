@@ -2496,10 +2496,12 @@ nodes:
   [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
   `stopped` until another step starts on the item, whatever its status, unless the item's
   [merge is recorded](/reference/cli/#workflow-merged). A stage the run's end starts on the
-  item through a [run-ended binding](/guides/workflow-triggers/) is such a step once its
-  run exists; while the start waits to be prepared (during an install hold too) or in its
-  resource's queue, the stop is held back. A stage that declares `observes: true` is no
-  step, so the stop shows once its run exists. A `linked` binding starts on other items and
+  item through a [run-ended binding](/guides/workflow-triggers/), its settled asks or one of
+  its nodes is such a step once its run exists; while the start waits to be prepared (during
+  an install hold too) or in its resource's queue, the stop is held back. A queued start of a
+  stage that declares `observes: true` holds nothing back, and its run is no step, so the
+  stop shows. A start not yet prepared has no role, so it opens an end only once it is
+  prepared as a step. A `linked` binding starts on other items and
   moves nothing here. A
   run on no item, an observing run, a run that ended its item, and a run that left an ask or
   a wait stop nothing. A run whose end does start a binding also stops its item when

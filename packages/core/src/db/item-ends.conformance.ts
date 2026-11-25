@@ -8,6 +8,7 @@
 import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
+import { readHoldingItemEnd } from '@archon/workflows/item-end';
 import { ItemEndRefusedError } from '@archon/workflows/schemas/item-end';
 import { itemStoppedMetadata, observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import {
@@ -84,10 +85,11 @@ async function stoppedRefs(harness: Harness): Promise<string[]> {
   );
 }
 
+/** The end that holds on `pr-7`, read as every surface reads it: runs and starts together. */
 async function holding(harness: Harness) {
   const found = await harness.store.getItemRuns(projectKey, 'pr-7');
   if (found === null) throw new Error('No item pr-7');
-  return harness.store.getHoldingItemEnd(found.item.id);
+  return readHoldingItemEnd(harness.store, found.item.id);
 }
 
 async function refusal(promise: Promise<unknown>): Promise<ItemEndRefusedError> {

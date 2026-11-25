@@ -10614,11 +10614,6 @@ export interface components {
           }
         | {
             /** @enum {string} */
-            kind: 'held_start';
-            receiptId: string;
-          }
-        | {
-            /** @enum {string} */
             kind: 'open_ask';
             ref: string;
           }
