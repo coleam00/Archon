@@ -136,16 +136,20 @@ test('a start refused at its limit lists its item with the limit until a run sta
   expect(await refused()).toEqual([]);
 });
 
-test('a start refused in preparation names its reason until the binding starts on the item', async () => {
+test('a start refused in preparation names its reason and detail until the binding starts on the item', async () => {
   const failed = await claimed(intent());
+  const fileSetting = { setting: 'policy', path: '/p/docs/policy.md', origin: 'project' } as const;
   await store().failStartBindingPreparation({
     ...failed,
     error: 'launch_preparation_failed',
     retryable: false,
-    refusal: 'no_default_provider',
+    refusal: 'file_setting_missing',
+    fileSetting,
   });
   expect(await refused()).toEqual([
-    expect.objectContaining({ start: expect.objectContaining({ reason: 'no_default_provider' }) }),
+    expect.objectContaining({
+      start: expect.objectContaining({ reason: 'file_setting_missing', fileSetting }),
+    }),
   ]);
 
   // The same binding starting on the item later closes it.

@@ -6,6 +6,7 @@
  */
 import { storedBindingRefusal } from '@archon/workflows/schemas/binding-refusal';
 import type { IResourceStartStore } from '@archon/workflows/resource-start-store';
+import type { FileSettingRefusal } from '@archon/workflows/schemas/pack-settings';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { getDatabase, getDialect } from './connection';
 import { recordRefusedStartStop } from './item-stops';
@@ -49,6 +50,7 @@ export async function failStartBindingPreparation(input: FailedPreparation): Pro
         workflow,
         reason: refusal,
         refusedAt: new Date().toISOString(),
+        ...fileSettingDetail(input),
       },
     });
     return true;
@@ -66,8 +68,17 @@ async function markFailed(query: Query, input: FailedPreparation): Promise<boole
       input.retryable ? 'failed' : 'rejected',
       input.error,
       input.forgeRefusal ? JSON.stringify(input.forgeRefusal) : null,
-      !input.retryable && input.refusal !== undefined ? storedBindingRefusal(input.refusal) : null,
+      !input.retryable && input.refusal !== undefined
+        ? storedBindingRefusal(input.refusal, fileSettingDetail(input))
+        : null,
     ]
   );
   return result.rowCount === 1;
+}
+
+/** The setting a `file_setting_missing` refusal names, on the binding row and the stop alike. */
+function fileSettingDetail({ fileSetting }: FailedPreparation): {
+  fileSetting?: FileSettingRefusal;
+} {
+  return fileSetting === undefined ? {} : { fileSetting };
 }

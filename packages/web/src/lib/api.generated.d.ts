@@ -8012,10 +8012,17 @@ export interface components {
               | 'inputs_unmapped'
               | 'link_refused'
               | 'no_default_provider'
+              | 'file_setting_missing'
               | 'run_as_user_failed'
               | 'run_configuration_failed'
               | 'launch_preparation_failed';
             refusedAt: string;
+            fileSetting?: {
+              setting: string;
+              path: string;
+              /** @enum {string} */
+              origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+            };
           }[];
           failed?: {
             error: string | null;
@@ -8056,6 +8063,12 @@ export interface components {
               used: number;
               bindingId: string;
               workflow: string;
+            };
+            fileSetting?: {
+              setting: string;
+              path: string;
+              /** @enum {string} */
+              origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
             };
           };
         }
@@ -8496,10 +8509,17 @@ export interface components {
                 | 'inputs_unmapped'
                 | 'link_refused'
                 | 'no_default_provider'
+                | 'file_setting_missing'
                 | 'run_as_user_failed'
                 | 'run_configuration_failed'
                 | 'launch_preparation_failed';
               refusedAt: string;
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+              };
             }[];
             failed?: {
               error: string | null;
@@ -8540,6 +8560,12 @@ export interface components {
                 used: number;
                 bindingId: string;
                 workflow: string;
+              };
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
               };
             };
           }
@@ -9113,10 +9139,17 @@ export interface components {
                 | 'inputs_unmapped'
                 | 'link_refused'
                 | 'no_default_provider'
+                | 'file_setting_missing'
                 | 'run_as_user_failed'
                 | 'run_configuration_failed'
                 | 'launch_preparation_failed';
               refusedAt: string;
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+              };
             }[];
             failed?: {
               error: string | null;
@@ -9157,6 +9190,12 @@ export interface components {
                 used: number;
                 bindingId: string;
                 workflow: string;
+              };
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
               };
             };
           }
@@ -10004,10 +10043,17 @@ export interface components {
                   | 'inputs_unmapped'
                   | 'link_refused'
                   | 'no_default_provider'
+                  | 'file_setting_missing'
                   | 'run_as_user_failed'
                   | 'run_configuration_failed'
                   | 'launch_preparation_failed';
                 refusedAt: string;
+                fileSetting?: {
+                  setting: string;
+                  path: string;
+                  /** @enum {string} */
+                  origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+                };
               }[];
               failed?: {
                 error: string | null;
@@ -10048,6 +10094,12 @@ export interface components {
                   used: number;
                   bindingId: string;
                   workflow: string;
+                };
+                fileSetting?: {
+                  setting: string;
+                  path: string;
+                  /** @enum {string} */
+                  origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
                 };
               };
             }
@@ -10828,10 +10880,17 @@ export interface components {
                     | 'inputs_unmapped'
                     | 'link_refused'
                     | 'no_default_provider'
+                    | 'file_setting_missing'
                     | 'run_as_user_failed'
                     | 'run_configuration_failed'
                     | 'launch_preparation_failed';
                   refusedAt: string;
+                  fileSetting?: {
+                    setting: string;
+                    path: string;
+                    /** @enum {string} */
+                    origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+                  };
                 }[];
                 failed?: {
                   error: string | null;
@@ -10872,6 +10931,12 @@ export interface components {
                     used: number;
                     bindingId: string;
                     workflow: string;
+                  };
+                  fileSetting?: {
+                    setting: string;
+                    path: string;
+                    /** @enum {string} */
+                    origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
                   };
                 };
               }

@@ -368,6 +368,37 @@ if [ "$(git rev-list --count HEAD)" -ge 3 ]; then printf '{"outcome": "pass"}'; 
     expect(sizes).toEqual([first, first, second, second, second]);
   }, 120_000);
 
+  test('a stage reading a file setting that names a file only the ended run committed starts on its checkout', async () => {
+    const fixture = await makeFixture('file-setting', 'true');
+    const pack = join(fixture.repo, '.archon', 'workflows', 'chain');
+    mkdirSync(join(pack, '.pack'), { recursive: true });
+    mkdirSync(join(pack, 'read-build'), { recursive: true });
+    writeFileSync(join(pack, '.pack', 'pack.yaml'), 'inputs:\n  brief:\n    file: true\n');
+    writeFileSync(
+      join(pack, 'read-build', 'read-build.yaml'),
+      'name: read-build\ndescription: Read what the build wrote.\nnodes:\n  - id: read\n    bash: cat "$INPUTS_BRIEF"\n'
+    );
+    // The build names its file by the commit count it sees, one more than main has now.
+    const built = `build-${String(Number(fixture.git('rev-list', '--count', 'HEAD')) + 1)}.txt`;
+    mkdirSync(join(fixture.repo, '.archon', 'packs'));
+    writeFileSync(
+      join(fixture.repo, '.archon', 'packs', 'chain.yaml'),
+      `settings:\n  brief: ${built}\n`
+    );
+    fixture.git('add', '.');
+    fixture.git('commit', '-qm', 'pack');
+    fixture.git('push', '-q', 'origin', 'main');
+    fixture.bind('read-after-build', 'build', 'built', 'read-build');
+
+    await startBuild(fixture);
+    expect((await waitForRuns(fixture, 2)).map(run => [run.workflow_name, run.status])).toEqual([
+      ['build', 'completed'],
+      ['read-build', 'completed'],
+    ]);
+    // The project checkout never had the file: only the handed-on checkout does.
+    expect(existsSync(join(fixture.repo, built))).toBe(false);
+  }, 90_000);
+
   test('a branch that moved after the ended run is refused, not built on', async () => {
     // The check moves the build branch past the commit the build ended on, then returns it.
     const fixture = await makeFixture(

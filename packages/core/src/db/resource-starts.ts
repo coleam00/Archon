@@ -722,7 +722,7 @@ export async function completeStartBindingPreparation(
           input.bindingId,
           input.ownerId,
           counted.refused,
-          storedBindingRefusal('start_limit', counted.limit),
+          storedBindingRefusal('start_limit', { limit: counted.limit }),
         ]
       );
       return { status: 'refused', reason: counted.refused };
