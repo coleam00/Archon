@@ -490,6 +490,11 @@ export function readRunStopReason(
   return parsed.success ? parsed.data : undefined;
 }
 
+/** Failed with stop reason `outcome_unknown`: listed in attention until resumed or abandoned. */
+export function isOutcomeUnknownRun(run: { status: string; metadata?: Record<string, unknown> }) {
+  return run.status === 'failed' && readRunStopReason(run.metadata)?.reason === 'outcome_unknown';
+}
+
 /**
  * Key under which a paused run that gave back its resource slot records that its
  * continuation was refused for capacity (#4045): `{ since }`, the first refusal. The run

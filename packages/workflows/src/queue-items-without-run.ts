@@ -35,9 +35,10 @@ import {
   type UnreadableStartQueueItem,
 } from './attention-queue';
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
-import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
+import { isOutcomeUnknownRun, readItemStopped, type ItemStopped } from './schemas/run-metadata';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { getTerminalRecord, terminalReason } from './terminal-record';
+import type { TerminalRecord } from './schemas/terminal-record';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { StoredItemWait } from './schemas/item-wait';
@@ -187,8 +188,9 @@ export type StoppedItemStore = Pick<
 /**
  * The queue item of an item `run` stopped, or null when the run has no item, or completed
  * and recorded no stop. A failed run stopped its item by failing: nothing moves it on by
- * itself. A run that settled asks may have no outcome; a refused start's stop dates from its
- * latest refusal. Nothing here changes the item. Each surface spells the commands that
+ * itself. A run that failed with stop reason `outcome_unknown` is listed with no item and as
+ * a child too. A run that settled asks may have no outcome; a refused start's stop dates from
+ * its latest refusal. Nothing here changes the item. Each surface spells the commands that
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
@@ -202,8 +204,8 @@ export async function stoppedQueueItem(
   const stopped: ItemStopped | undefined = failed
     ? { summary: null }
     : readItemStopped(run.metadata);
-  if (stopped === undefined || run.item_id === null) return null;
-  const item = await store.getItem(run.item_id);
+  if (stopped === undefined || (run.item_id === null && !isOutcomeUnknownRun(run))) return null;
+  const item = run.item_id === null ? null : await store.getItem(run.item_id);
   let codebase: AttentionQueueItemSources['codebase'] = null;
   if (run.codebase_id !== null) {
     const read = codebases.get(run.codebase_id) ?? store.getCodebase(run.codebase_id);
@@ -222,7 +224,7 @@ export async function stoppedQueueItem(
     summary: stopped.summary,
     ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
     ...(stopped.refused === undefined ? {} : { refused: stopped.refused }),
-    ...(failed ? { failed: { error: failureReason(run, failedEvents) } } : {}),
+    ...(failed ? { failed: failedStop(run, failedEvents) } : {}),
     checkout: codebase?.default_cwd ?? null,
   };
 }
@@ -231,21 +233,35 @@ export async function stoppedQueueItem(
  * Why a failed run failed, as `workflow get` says it: the first failed node's error from the
  * terminal record. A run whose record is missing or unreadable falls back to the error the
  * run recorded (`metadata.error`), which `workflow get` shows too; null when it has neither.
+ * A run that failed with stop reason `outcome_unknown` also names, from the same record, the
+ * nodes whose outcome is unknown: an instance's or loop body's own step path.
  */
-function failureReason(run: WorkflowRun, events: readonly WorkflowEventRow[]): string | null {
-  let reason: string | undefined;
+function failedStop(
+  run: WorkflowRun,
+  events: readonly WorkflowEventRow[]
+): NonNullable<StoppedQueueItem['failed']> {
+  let record: TerminalRecord | null = null;
   try {
-    reason = terminalReason(getTerminalRecord('failed', events))[0];
+    record = getTerminalRecord('failed', events);
   } catch (error) {
-    reason = undefined;
     createLogger('workflow.attention_queue').warn(
       { err: error as Error, runId: run.id },
       'workflow.stopped_item_terminal_record_unreadable'
     );
   }
-  const error = run.metadata.error;
-  if (reason !== undefined && reason.trim() !== '') return reason;
-  return typeof error === 'string' && error.trim() !== '' ? error : null;
+  const reason = terminalReason(record)[0];
+  const recorded = run.metadata.error;
+  const error =
+    reason !== undefined && reason.trim() !== ''
+      ? reason
+      : typeof recorded === 'string' && recorded.trim() !== ''
+        ? recorded
+        : null;
+  if (!isOutcomeUnknownRun(run)) return { error };
+  const outcomeUnknown = (record?.nodes ?? [])
+    .filter(node => node.state === 'failed' && node.failure_kind === 'outcome_unknown')
+    .map(node => node.node_id);
+  return { error, outcomeUnknown };
 }
 
 /**
@@ -270,7 +286,11 @@ export async function stoppedItems(
       items.push(run);
       continue;
     }
-    const end = run.item_id === null ? null : await readHoldingItemEnd(store, run.item_id);
+    // A run whose outcome is unknown stays until resumed or abandoned, even past an item end.
+    const end =
+      run.item_id === null || isOutcomeUnknownRun(run)
+        ? null
+        : await readHoldingItemEnd(store, run.item_id);
     if (end !== null && !('type' in end)) continue;
     const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
     if (item !== null) items.push(item);

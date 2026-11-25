@@ -500,7 +500,7 @@ export async function completeWorkflowRun(
  * a freshly inserted `pending` row — and a `running`-only guard left those rows pending
  * forever: no terminal state, no error recorded, and nothing to tell the operator the run
  * is dead. Both are non-terminal states owned by this process, so failing either is the
- * same decision. Terminal rows still never transition.
+ * same decision; `includePaused` adds `paused` (see the option). Terminal rows never transition.
  *
  * `exitReason` is the run's categorical cause, recorded on the terminal event and — with
  * `signal`, when a signal arriving at the owning process is what stopped the run — on the
@@ -552,7 +552,7 @@ export async function failWorkflowRun(
          WHERE id = $1 AND ${
            pendingLaunchToken !== undefined
              ? `status = 'pending' AND ${dialect.jsonText('metadata', DETACHED_LAUNCH_METADATA_KEY)} = $3`
-             : "status IN ('running', 'pending')"
+             : `status IN (${options.includePaused ? "'running', 'pending', 'paused'" : "'running', 'pending'"})`
          }${pendingOnly ? " AND status = 'pending'" : ''}${claimPredicate}`,
         [
           id,

@@ -5,6 +5,35 @@ import type { WorkflowRunFailureOptions } from '../workflow-run-failure';
 import { approval } from './fixtures';
 
 export function describeExecutionFailureConformance(getHarness: () => WorkflowStoreHarness): void {
+  test('a paused run fails only with includePaused, and a terminal run never moves', async () => {
+    const { store } = getHarness();
+    const run = await store.createWorkflowRun({ workflow_name: 'paused-fail', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.pauseWorkflowRun(run.id, approval);
+    // Without the option a paused row is not this caller's to fail.
+    await expect(store.failWorkflowRun(run.id, 'boom')).rejects.toThrow();
+    expect((await store.getWorkflowRun(run.id))?.status).toBe('paused');
+    expect(
+      await store.failWorkflowRun(run.id, 'write unknown', {
+        exitReason: 'outcome_unknown',
+        includePaused: true,
+      })
+    ).toMatchObject({ failed: true });
+    expect(await store.getWorkflowRun(run.id)).toMatchObject({
+      status: 'failed',
+      metadata: { stop_reason: { reason: 'outcome_unknown' } },
+    });
+    expect(
+      await store.failWorkflowRun(run.id, 'again', {
+        exitReason: 'node_error',
+        includePaused: true,
+      })
+    ).toEqual({ failed: false });
+    expect((await store.getWorkflowRun(run.id))?.metadata).toMatchObject({
+      stop_reason: { reason: 'outcome_unknown' },
+    });
+  });
+
   for (const condition of ['detached', 'pending', 'combined'] as const) {
     const options: WorkflowRunFailureOptions = {
       exitReason: 'launch_failed',

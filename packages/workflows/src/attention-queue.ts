@@ -128,9 +128,9 @@ const itemBase = {
  * item and its resource slot among them, and the engine never ends it by itself;
  * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
  * open past their deadline, which the awaited event, another run of the waiting workflow
- * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
- * an outcome that is not final (`returns.final`), started nothing and left no ask or wait,
- * so nothing moves it: it takes no answer, and any newer run on the item closes it;
+ * on the item, or a withdrawal closes; `stopped`, which takes no answer, is an item whose newest
+ * run failed, or completed with an outcome not final (`returns.final`) and left nothing to move
+ * it, until a newer run; or a failed run whose outcome is unknown, until resumed or abandoned;
  * `refused_start` is a start no run caused that was refused and is its item's newest step;
  * `preparation_lost` is a binding start whose preparer this process can prove gone, which
  * `archon trigger recover-preparation` returns to pending.
@@ -215,8 +215,10 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** Set when the start the run caused was refused: at its limit, or before launch. */
     limit: stoppedLimitSchema.optional(),
     refused: z.array(stoppedRefusalSchema).optional(),
-    /** Set when the run failed: its recorded error, or null when it recorded none. */
-    failed: z.object({ error: z.string().nullable() }).optional(),
+    /** Set when the run failed: its error or null; `outcomeUnknown` names uncertain nodes. */
+    failed: z
+      .object({ error: z.string().nullable(), outcomeUnknown: z.array(z.string()).optional() })
+      .optional(),
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),

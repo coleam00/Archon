@@ -5572,7 +5572,8 @@ export interface components {
                 | 'max_iterations'
                 | 'child_failed'
                 | 'cancelled'
-                | 'config';
+                | 'config'
+                | 'outcome_unknown';
               providerFailure?: {
                 /** @enum {string} */
                 class:
@@ -7329,7 +7330,8 @@ export interface components {
                   | 'max_iterations'
                   | 'child_failed'
                   | 'cancelled'
-                  | 'config';
+                  | 'config'
+                  | 'outcome_unknown';
                 providerFailure?: {
                   /** @enum {string} */
                   class:
@@ -7692,7 +7694,8 @@ export interface components {
         | 'not_finalized'
         | 'process_terminated'
         | 'launch_failed'
-        | 'run_not_created';
+        | 'run_not_created'
+        | 'outcome_unknown';
       /** @enum {string} */
       signal?: 'SIGINT' | 'SIGTERM';
     };
@@ -8019,6 +8022,7 @@ export interface components {
           }[];
           failed?: {
             error: string | null;
+            outcomeUnknown?: string[];
           };
           checkout: string | null;
         }
@@ -8503,6 +8507,7 @@ export interface components {
             }[];
             failed?: {
               error: string | null;
+              outcomeUnknown?: string[];
             };
             checkout: string | null;
           }
@@ -9120,6 +9125,7 @@ export interface components {
             }[];
             failed?: {
               error: string | null;
+              outcomeUnknown?: string[];
             };
             checkout: string | null;
           }
@@ -10011,6 +10017,7 @@ export interface components {
               }[];
               failed?: {
                 error: string | null;
+                outcomeUnknown?: string[];
               };
               checkout: string | null;
             }
@@ -10835,6 +10842,7 @@ export interface components {
                 }[];
                 failed?: {
                   error: string | null;
+                  outcomeUnknown?: string[];
                 };
                 checkout: string | null;
               }
@@ -11065,6 +11073,7 @@ export interface components {
               | 'child_failed'
               | 'cancelled'
               | 'config'
+              | 'outcome_unknown'
               | null;
           } | null;
           reason?: string[];
@@ -11392,7 +11401,8 @@ export interface components {
               | 'max_iterations'
               | 'child_failed'
               | 'cancelled'
-              | 'config';
+              | 'config'
+              | 'outcome_unknown';
             /** @enum {string} */
             reason?:
               | 'prior_success'
@@ -11614,7 +11624,8 @@ export interface components {
             | 'max_iterations'
             | 'child_failed'
             | 'cancelled'
-            | 'config';
+            | 'config'
+            | 'outcome_unknown';
           /** @enum {string} */
           reason?:
             | 'prior_success'
@@ -11744,7 +11755,8 @@ export interface components {
               | 'max_iterations'
               | 'child_failed'
               | 'cancelled'
-              | 'config';
+              | 'config'
+              | 'outcome_unknown';
             /** @enum {string} */
             reason?:
               | 'prior_success'

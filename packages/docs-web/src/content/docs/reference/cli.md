@@ -1270,7 +1270,11 @@ Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_lim
 continues automatically after reset, and `unreadable` needs inspection. `stopped` is an
 item whose last run ended in an outcome nothing starts from and left no ask; it takes no
 answer, and a new run on the item, or [ending the item](#workflow-end), closes it
-([kinds](/getting-started/operate/)). Read-only.
+([kinds](/getting-started/operate/)). A run that failed with stop reason
+[`outcome_unknown`](/reference/workflow-language/#a-failure-whose-outcome-is-unknown) is a
+`stopped` item too, also as a child run or with no item; it names the nodes whose outcome is
+unknown, offers `resume` and `abandon`, and closes only when the run is resumed or abandoned.
+Read-only.
 
 ```bash
 archon workflow attention --json                                   # this project

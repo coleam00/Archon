@@ -375,7 +375,7 @@ async function failOnNodeOutcome(
     // A first-node failure completes nothing, but it is still a node failure.
     noneCompleted && !anyFailed ? 'no_nodes_completed' : 'node_error',
     noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail',
-    changeSize
+    { changeSize }
   );
 }
 
@@ -711,11 +711,10 @@ async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
 }
 
 /**
- * The engine's terminal failure write. The live `workflow_failed` event is published only
- * when this call committed the failure: a run another writer already finished (a
- * cancellation during the failure notification, or a competing failure) keeps that
- * writer's outcome and announcement. A rejected write throws the typed marker, which the
- * outer executor catch rethrows without emitting.
+ * The engine's terminal failure write. It publishes the live `workflow_failed` event only when
+ * this call committed the failure: a run another writer finished first (a cancel during the
+ * failure notification, a competing failure) keeps that writer's outcome and announcement.
+ * A rejected write throws the typed marker, which the executor catch rethrows without emitting.
  */
 export async function failRun(
   deps: WorkflowDeps,
@@ -724,7 +723,7 @@ export async function failRun(
   failMsg: string,
   exitReason: RunExitReason,
   site: string,
-  changeSize: ChangeSize | null = null
+  { changeSize, includePaused }: { changeSize?: ChangeSize | null; includePaused?: true } = {}
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
@@ -732,6 +731,7 @@ export async function failRun(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, {
         exitReason,
         ...(changeSize && { changeSize }),
+        ...(includePaused && { includePaused }),
       }),
       { workflowRunId: workflowRun.id, site }
     );

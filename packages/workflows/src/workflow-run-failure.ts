@@ -16,6 +16,21 @@ export interface WorkflowRunFailureOptions {
   expectedExecutionClaim?: string | null;
   /** The item run's change size at the clean commit its checkout ended on (#6261). */
   changeSize?: ChangeSize | null;
+  /**
+   * Also fail a `paused` run. Only a pass still holding the run's live owner passes it: one
+   * of its own parallel waits or gates may have paused the row, and no continuation can
+   * claim the row until the pass releases its owner.
+   */
+  includePaused?: true;
+}
+
+/** A pending or running run can fail; a paused one too with `includePaused`. */
+function failable(status: WorkflowRun['status'], options?: WorkflowRunFailureOptions): boolean {
+  return (
+    status === 'running' ||
+    status === 'pending' ||
+    (options?.includePaused === true && status === 'paused')
+  );
 }
 
 export function prepareWorkflowRunFailure(
@@ -40,8 +55,7 @@ export function prepareWorkflowRunFailure(
   if (!current) throw new Error(`Run missing: ${id}`);
   const run = structuredClone(current);
   if (isTerminalRunStatus(run.status)) return null;
-  if (run.status !== 'running' && run.status !== 'pending')
-    throw new Error('Run not in pending/running state');
+  if (!failable(run.status, options)) throw new Error('Run not in pending/running state');
   run.status = 'failed';
   delete run.metadata.scheduled_resume;
   delete run.metadata.stop_reason;
