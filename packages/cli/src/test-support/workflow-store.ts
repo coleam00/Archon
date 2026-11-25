@@ -277,6 +277,8 @@ export function createInMemoryWorkflowStore(
     ),
     failStartBindingPreparation: admit(admission.failStartBindingPreparation.bind(admission)),
     resetStartBindingPreparation: admit(admission.resetStartBindingPreparation.bind(admission)),
+    replaceStartBindingIntent: admit(admission.replaceStartBindingIntent.bind(admission)),
+    returnQueuedStartToPreparation: admit(admission.returnQueuedStartToPreparation.bind(admission)),
     setResourceCapacity: admit(admission.setResourceCapacity.bind(admission)),
     backdate: (id, dates) =>
       serialize(async () => {

@@ -26,9 +26,19 @@ import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas
 import {
   preparedWorkflowLaunchSchema,
   type PreparedWorkflowLaunch,
+  type ResourceStartBindingIntent,
   type ResourceStartDisposition,
   type ResourceStartIntent,
 } from '@archon/workflows/schemas/resource-start';
+
+/** A binding's intent replaced by a rebuilt one, keeping the recorded hand-off. */
+function replaceIntent(item: StartBindingInspection, next: ResourceStartBindingIntent): void {
+  const checkoutFrom = item.intent?.checkoutFrom;
+  const { checkoutFrom: _replaced, ...intent } = structuredClone(next);
+  item.intent = checkoutFrom ? { ...intent, checkoutFrom } : intent;
+  item.bindingRevision = next.bindingRevision;
+  item.hostId = next.hostId;
+}
 
 export function createInMemoryResourceStartStore(
   createRun: IWorkflowStore['createWorkflowRun'],
@@ -411,6 +421,33 @@ export function createInMemoryResourceStartStore(
       item.status = 'pending';
       item.ownerId = null;
       return true;
+    },
+    replaceStartBindingIntent: async (
+      input
+    ): ReturnType<IResourceStartStore['replaceStartBindingIntent']> => {
+      const item = owned(input);
+      if (!item?.intent) return false;
+      replaceIntent(item, input.intent);
+      return true;
+    },
+    returnQueuedStartToPreparation: async (
+      input
+    ): ReturnType<IResourceStartStore['returnQueuedStartToPreparation']> => {
+      const request = requests.get(input.requestId);
+      const item = binding(input);
+      if (request?.status !== 'queued' || item?.disposition?.requestId !== request.id) return null;
+      request.status = 'withdrawn';
+      item.ownerId = null;
+      item.disposition = null;
+      item.requestStatus = null;
+      if ('intent' in input.next) {
+        replaceIntent(item, input.next.intent);
+        item.status = 'pending';
+      } else {
+        item.status = 'rejected';
+        item.error = 'launch_preparation_failed';
+      }
+      return structuredClone(request.launch);
     },
   };
 }

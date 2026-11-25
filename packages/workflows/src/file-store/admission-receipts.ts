@@ -12,6 +12,7 @@ import type { WorkflowRun } from '../schemas/workflow-run';
 import {
   sourceReceiptAcceptanceSchema,
   startBindingInspectionSchema,
+  type ResourceStartBindingIntent,
 } from '../schemas/resource-start';
 import {
   SourceReceiptDigestConflictError,
@@ -43,7 +44,18 @@ type ReceiptOperations = Pick<
   | 'completeStartBindingPreparation'
   | 'failStartBindingPreparation'
   | 'resetStartBindingPreparation'
+  | 'replaceStartBindingIntent'
+  | 'returnQueuedStartToPreparation'
 >;
+
+/** A binding's intent replaced by a rebuilt one; the recorded hand-off is kept, as the database store keeps its column. */
+function replaceIntent(item: Binding, next: ResourceStartBindingIntent): void {
+  const checkoutFrom = item.intent?.checkoutFrom;
+  const { checkoutFrom: _replaced, ...intent } = next;
+  item.intent = checkoutFrom ? { ...intent, checkoutFrom } : intent;
+  item.bindingRevision = next.bindingRevision;
+  item.hostId = next.hostId;
+}
 
 /** The file admission store's source receipts and the start bindings each one records. */
 export function createReceiptOperations(
@@ -257,6 +269,39 @@ export function createReceiptOperations(
         item.status = 'pending';
         item.ownerId = null;
         return true;
+      }),
+    replaceStartBindingIntent: input =>
+      write(async tx => {
+        const item = await tx.owned(input);
+        if (!item?.intent) return false;
+        replaceIntent(item, input.intent);
+        return true;
+      }),
+    returnQueuedStartToPreparation: input =>
+      write(async tx => {
+        const row = await tx.request(input.requestId);
+        const item = await tx.binding(input);
+        if (row?.status !== 'queued' || !item?.requestIds.includes(row.id)) return null;
+        if (item.status !== 'complete')
+          throw new Error(
+            `Binding '${input.bindingId}' of receipt '${input.receiptId}' is not complete; request '${input.requestId}' stays queued`
+          );
+        // Withdrawn and dropped from the binding, so its next preparation is its one disposition.
+        row.status = 'withdrawn';
+        tx.documents[pathFor('requests', row.id)] = row;
+        const slot = await tx.slot(row.resource);
+        slot.queue = slot.queue.filter(id => id !== row.id);
+        item.requestIds = item.requestIds.filter(id => id !== row.id);
+        item.ownerId = null;
+        if ('intent' in input.next) {
+          replaceIntent(item, input.next.intent);
+          item.status = 'pending';
+        } else {
+          // This store records no stop, as `failStartBindingPreparation` records none.
+          item.status = 'rejected';
+          item.error = 'launch_preparation_failed';
+        }
+        return row.launch;
       }),
   };
 }

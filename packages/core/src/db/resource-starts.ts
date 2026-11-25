@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { storedBindingRefusal } from '@archon/workflows/schemas/binding-refusal';
 import { WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import { insertWorkflowEvent } from './workflow-events';
@@ -11,6 +12,7 @@ import {
 } from '@archon/workflows/resource-start-store';
 import type {
   HeldPreparation,
+  IResourceStartStore,
   PreparedBindingInput,
   RefusedPreparation,
   StartBindingInspection,
@@ -62,6 +64,7 @@ import { insertWorkflowRun } from './workflows';
 import { ensureItem } from './items';
 import { currentProcessOwner } from '@archon/paths/process-owner';
 import { readableLaunch, unreadableQueued } from './unreadable-queue';
+import { storableIntent } from './start-receipt-writes';
 export { listUnreadableQueuedStarts } from './unreadable-queue';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { toHydratedTimestamp } from './timestamps';
@@ -762,6 +765,93 @@ async function namedItem(
 }
 
 export { failStartBindingPreparation } from './refused-preparation';
+import { rejectPreparation } from './refused-preparation';
+
+/** See `IResourceStartStore.replaceStartBindingIntent`. */
+export async function replaceStartBindingIntent(
+  input: {
+    receiptId: string;
+    bindingId: string;
+    ownerId: string;
+    intent: ResourceStartBindingIntent;
+  },
+  query: Query = (sql, params) => getDatabase().query(sql, params)
+): Promise<boolean> {
+  const { intent } = input;
+  // The hand-off column is kept: a rebuilt intent carries the hand-off it was recorded with.
+  const [stored, eventInputNames] = storableIntent(intent);
+  const result = await query(
+    `UPDATE remote_agent_start_receipt_bindings
+        SET intent = $4, event_input_names = $5, item_key = $6, start_limit = $7, grants_limit = $8,
+            binding_revision = $9, host_id = $10, updated_at = ${getDialect().now()}
+      WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
+    [
+      input.receiptId,
+      input.bindingId,
+      input.ownerId,
+      stored,
+      eventInputNames,
+      intent.itemKey ?? null,
+      intent.limit ? JSON.stringify(intent.limit) : null,
+      intent.grants ?? null,
+      intent.bindingRevision,
+      intent.hostId,
+    ]
+  );
+  return result.rowCount === 1;
+}
+
+/** See `IResourceStartStore.returnQueuedStartToPreparation`. */
+export async function returnQueuedStartToPreparation(
+  input: Parameters<IResourceStartStore['returnQueuedStartToPreparation']>[0]
+): Promise<PreparedWorkflowLaunch | null> {
+  return getDatabase().withTransaction(async query => {
+    // See withdrawQueuedResourceStart: acquire SQLite's writer lock before the read.
+    if (getDatabase().dialect === 'sqlite')
+      await query('UPDATE remote_agent_resource_start_requests SET id = id WHERE id = $1', [
+        input.requestId,
+      ]);
+    await lockAdmission(query);
+    const selected = await query<{ launch: unknown }>(
+      `SELECT launch FROM remote_agent_resource_start_requests
+        WHERE id = $1 AND status = 'queued' AND receipt_id = $2 AND binding_id = $3${getDialect().rowLock()}`,
+      [input.requestId, input.receiptId, input.bindingId]
+    );
+    const launch = selected.rows[0] && readableLaunch(selected.rows[0].launch);
+    if (!launch) return null;
+    // Withdrawn, so `trigger inspect <request>` still finds it, and detached from its
+    // binding: a binding's requests are joined on its receipt and binding.
+    await query(
+      `UPDATE remote_agent_resource_start_requests SET status = 'withdrawn', receipt_id = NULL, binding_id = NULL
+        WHERE id = $1 AND status = 'queued'`,
+      [input.requestId]
+    );
+    // The binding is taken back under an owner of this write, then given its next state by
+    // the writes preparation itself uses.
+    const owned = { receiptId: input.receiptId, bindingId: input.bindingId, ownerId: randomUUID() };
+    const claimed = await query(
+      `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'preparing', preparation_owner = $3, updated_at = ${getDialect().now()}
+        WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'complete'`,
+      [owned.receiptId, owned.bindingId, owned.ownerId]
+    );
+    // Thrown, so the request stays queued rather than vanish beside a binding it cannot move.
+    if (claimed.rowCount !== 1)
+      throw new Error(
+        `Binding '${input.bindingId}' of receipt '${input.receiptId}' is not complete; request '${input.requestId}' stays queued`
+      );
+    if ('intent' in input.next) {
+      await replaceStartBindingIntent({ ...owned, intent: input.next.intent }, query);
+      await resetStartBindingPreparation(owned, query);
+    } else
+      await rejectPreparation(query, {
+        ...owned,
+        retryable: false,
+        error: 'launch_preparation_failed',
+        refusal: input.next.refused,
+      });
+    return launch;
+  });
+}
 
 export async function resetStartBindingPreparation(
   input: { receiptId: string; bindingId: string; ownerId: string },

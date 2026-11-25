@@ -22,39 +22,50 @@ export async function failStartBindingPreparation(input: FailedPreparation): Pro
     const db = getDatabase();
     return markFailed((sql, params) => db.query(sql, params), input);
   }
-  return getDatabase().withTransaction(async query => {
-    if (!(await markFailed(query, input))) return false;
-    const row = (
-      await query<{ intent: unknown }>(
-        'SELECT intent FROM remote_agent_start_receipt_bindings WHERE receipt_id = $1 AND binding_id = $2',
-        [input.receiptId, input.bindingId]
-      )
-    ).rows[0];
-    const intent = resourceStartBindingIntentSchema.safeParse(
-      typeof row?.intent === 'string' ? JSON.parse(row.intent) : row?.intent
+  return getDatabase().withTransaction(query => rejectPreparation(query, { ...input, refusal }));
+}
+
+/**
+ * Reject a binding this owner prepares and record its refusal as a stop on the run that
+ * caused it, inside the caller's transaction: the one way a refusal is written, for a
+ * failed preparation and for a queued start its trigger file no longer starts.
+ */
+export async function rejectPreparation(
+  query: Query,
+  input: FailedPreparation & { refusal: NonNullable<FailedPreparation['refusal']> }
+): Promise<boolean> {
+  const { refusal } = input;
+  if (!(await markFailed(query, input))) return false;
+  const row = (
+    await query<{ intent: unknown }>(
+      'SELECT intent FROM remote_agent_start_receipt_bindings WHERE receipt_id = $1 AND binding_id = $2',
+      [input.receiptId, input.bindingId]
+    )
+  ).rows[0];
+  const intent = resourceStartBindingIntentSchema.safeParse(
+    typeof row?.intent === 'string' ? JSON.parse(row.intent) : row?.intent
+  );
+  if (!intent.success) {
+    // The rejection stands; only the stop that would show it on the item is lost.
+    getLog().error(
+      { receiptId: input.receiptId, bindingId: input.bindingId },
+      'resource_start.refusal_stop_unreadable_intent'
     );
-    if (!intent.success) {
-      // The rejection stands; only the stop that would show it on the item is lost.
-      getLog().error(
-        { receiptId: input.receiptId, bindingId: input.bindingId },
-        'resource_start.refusal_stop_unreadable_intent'
-      );
-      return true;
-    }
-    const { receiptId, bindingId } = input;
-    const workflow = intent.data.launch.workflowName;
-    await recordRefusedStartStop(query, receiptId, {
-      refused: {
-        receiptId,
-        bindingId,
-        workflow,
-        reason: refusal,
-        refusedAt: new Date().toISOString(),
-        ...fileSettingDetail(input),
-      },
-    });
     return true;
+  }
+  const { receiptId, bindingId } = input;
+  const workflow = intent.data.launch.workflowName;
+  await recordRefusedStartStop(query, receiptId, {
+    refused: {
+      receiptId,
+      bindingId,
+      workflow,
+      reason: refusal,
+      refusedAt: new Date().toISOString(),
+      ...fileSettingDetail(input),
+    },
   });
+  return true;
 }
 
 async function markFailed(query: Query, input: FailedPreparation): Promise<boolean> {
