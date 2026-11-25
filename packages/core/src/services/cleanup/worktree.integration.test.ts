@@ -54,6 +54,7 @@ const { cleanupStaleWorktrees, onConversationClosed, runScheduledCleanup } = awa
   '../cleanup-service'
 );
 const { cleanupMergedWorktrees } = await import('./merged-sweep');
+const { NO_MERGE_REMOTE_REASON } = await import('./merge-verdict');
 /** The merged sweep on a checkout that exists: what it swept. */
 async function sweepMerged(
   ...args: Parameters<typeof cleanupMergedWorktrees>
@@ -766,6 +767,20 @@ describe('completed run worktree release', () => {
     });
   });
 
+  test('in a repository with no remote, a commit keeps the checkout with no git error', async () => {
+    await rm(join(repo, '.archon'), { recursive: true });
+    await git(repo, 'remote', 'remove', 'upstream');
+    await commitInWorktree();
+    // With no remote, the base commit is on no remote either.
+    expect(await assess()).toEqual({
+      disposition: 'retained',
+      reason: 'unpushed_commits',
+      detail: '2 commit(s) on no remote',
+    });
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
   test('a commit made after a push that left tracking refs stale keeps the checkout', async () => {
     await commitInWorktree();
     await pushByUrl();
@@ -950,6 +965,32 @@ describe('completed run worktree release', () => {
     expect(await readFile(join(env.working_path, 'late'), 'utf8')).toBe('late work');
     expect(await status()).toBe('active');
   });
+});
+
+test('both sweeps keep a worktree in a repository with no remote, reporting why', async () => {
+  await git(repo, 'remote', 'remove', 'upstream');
+  await writeFile(join(env.working_path, 'work'), 'work');
+  await git(env.working_path, 'add', 'work');
+  await git(env.working_path, 'commit', '-qm', 'work');
+  await db.query(
+    `UPDATE remote_agent_isolation_environments SET created_at = datetime('now', '-30 days') WHERE id = $1`,
+    [env.id]
+  );
+
+  const manual = await sweepMerged(codebaseId, repo);
+  expect(manual).toMatchObject({
+    errors: [],
+    removed: [],
+    skipped: [{ branchName: env.branch_name, reason: NO_MERGE_REMOTE_REASON }],
+  });
+  // The scheduled sweep also sees earlier tests' environments, so assert on this one.
+  const scheduled = await runScheduledCleanup();
+  expect(scheduled.errors.filter(entry => entry.id === env.id)).toEqual([]);
+  expect(scheduled.skipped.filter(entry => entry.id === env.id)).toEqual([
+    { id: env.id, reason: NO_MERGE_REMOTE_REASON },
+  ]);
+  expect(await status()).toBe('active');
+  expect(existsSync(env.working_path)).toBe(true);
 });
 
 describe('the age sweep keeps work that exists nowhere else', () => {

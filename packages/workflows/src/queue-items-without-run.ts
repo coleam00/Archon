@@ -16,6 +16,7 @@ import {
   preparingItemRef,
   refusedStartRef,
   stoppedItemRef,
+  unreadableStartRef,
   waitItemRef,
 } from './attention-item-refs';
 import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
@@ -31,6 +32,7 @@ import {
   type PreparationLostQueueItem,
   type RefusedStartQueueItem,
   type StoppedQueueItem,
+  type UnreadableStartQueueItem,
 } from './attention-queue';
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
@@ -310,6 +312,42 @@ export async function preparationLostItems(
       labels: {},
       pausedAt: start.claimedAt,
       start: { receiptId, bindingId, hostId, workflow, itemKey, ownerId },
+    });
+  }
+  return items;
+}
+
+/** The store reads an unreadable queued request's queue item needs. */
+export type UnreadableStartItemStore = Pick<
+  IWorkflowStore,
+  'listUnreadableQueuedStarts' | 'getItem'
+>;
+
+/**
+ * The queued requests whose stored launch does not read, as queue items, for
+ * `AttentionQueueSource.itemsWithoutRun`: each holds the queue behind it, and only a
+ * withdrawal moves it. On its item, and in that item's project, when its item reads.
+ */
+export async function unreadableStartItems(
+  store: UnreadableStartItemStore
+): Promise<UnreadableStartQueueItem[]> {
+  const items: UnreadableStartQueueItem[] = [];
+  for (const start of await store.listUnreadableQueuedStarts()) {
+    const item = start.itemId === null ? null : await store.getItem(start.itemId);
+    items.push({
+      kind: 'unreadable_start',
+      ref: unreadableStartRef(start.requestId),
+      project: item === null ? null : projectRef(item.projectKey, null),
+      ...(item === null ? {} : { item }),
+      revision: 1,
+      labels: {},
+      pausedAt: start.queuedAt,
+      start: {
+        requestId: start.requestId,
+        resource: start.resource,
+        hostId: start.hostId,
+        behind: start.behind,
+      },
     });
   }
   return items;

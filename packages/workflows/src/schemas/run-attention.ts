@@ -11,6 +11,7 @@ import {
 import { pauseContextsAreHistory, readPauseCause } from './pause-cause';
 import { attentionOccurrence, gateOccurrence } from './pause-occurrence';
 import { isContainerRun, readSourceRelease } from './run-metadata';
+import { readContinuationGiveUp } from './continuation-give-up';
 import {
   isTerminalRunStatus,
   terminalWorkflowRunStatusSchema,
@@ -79,6 +80,7 @@ export const runAttentionUnreadableReasonSchema = z.enum([
   'child_run_missing',
   'child_chain_too_deep',
   'source_release_not_continued',
+  'continuation_given_up',
 ]);
 export type RunAttentionUnreadableReason = z.infer<typeof runAttentionUnreadableReasonSchema>;
 
@@ -429,6 +431,8 @@ export function isAttentionQueueRow(run: RunAttentionInput): boolean {
   const attention = runAttention(run);
   return (
     queuedRunAttention(run, attention) !== undefined ||
+    // A host that gave up on it records why; the queue lists it while it applies.
+    (run.status === 'paused' && readContinuationGiveUp(run.metadata ?? {}) !== undefined) ||
     (run.status === 'paused' &&
       (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children'))
   );

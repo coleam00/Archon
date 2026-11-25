@@ -428,6 +428,7 @@ describe('reading an item', () => {
       hostId: 'host',
       queuedAt: '2026-11-01T09:35:00.000Z',
       ahead: 0,
+      blockedBy: null,
     });
     const limited: ItemReadSource = {
       ...source,
@@ -604,6 +605,7 @@ describe('reading an item', () => {
                     hostId: 'host',
                     queuedAt: '2026-11-01T11:05:00.000Z',
                     ahead: 0,
+                    blockedBy: null,
                   },
                 ]
           ),
@@ -776,6 +778,7 @@ describe('reading an item', () => {
       hostId: 'host',
       queuedAt: '2026-11-01T12:02:00.000Z',
       ahead: 0,
+      blockedBy: null,
     });
     const held: ItemReadSource = {
       ...source,
