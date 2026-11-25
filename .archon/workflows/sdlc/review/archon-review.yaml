@@ -52,7 +52,10 @@ returns:
   node: verdict
   outcome: outcome
   asks: asks
-  final: [ready, not_ready]
+  # not_ready is not final: in delivery nothing starts after it and no one is told, so an
+  # item that ends there must show as stopped in attention. A review by hand that ends
+  # not_ready shows there too, which is what its operator needs to see.
+  final: [ready]
   summary: findings_summary
   # One option set for every ask; the asks-settled bindings in .pack/pack.yaml route on these ids.
   options:
