@@ -262,7 +262,8 @@ export interface GlobalConfig {
     /**
      * Opt-in install-wide cap on simultaneous provider attempts, keyed by provider
      * registration ID (e.g. `claude: 4`). Pi also honors `assistants.pi.maxConcurrent`.
-     * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`.
+     * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`; a settings
+     * write refuses a value that read would refuse.
      */
     providers?: Record<string, number>;
   };
