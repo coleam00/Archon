@@ -714,6 +714,15 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_waits_open ON remote_agent_item_waits(workflow_name, event, about) WHERE closed_as IS NULL;
       CREATE INDEX IF NOT EXISTS idx_item_waits_run_id ON remote_agent_item_waits(run_id);
+      -- What may resume a due continuation; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_continuation_wakers (
+        id TEXT PRIMARY KEY,
+        host TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        pid INTEGER,
+        instance TEXT,
+        recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
 
       CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
         project_key TEXT NOT NULL,

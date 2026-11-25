@@ -2542,6 +2542,9 @@ declare module 'archon:script' {
         readonly requestId: string;
         readonly hostId: string;
       };
+      readonly continuation?: {
+        readonly wakers: 'none_recorded' | 'all_gone';
+      };
     } | {
       readonly kind: 'overdue_wait';
       readonly ref: string;
@@ -3224,6 +3227,9 @@ declare module 'archon:script' {
         readonly start?: {
           readonly requestId: string;
           readonly hostId: string;
+        };
+        readonly continuation?: {
+          readonly wakers: 'none_recorded' | 'all_gone';
         };
       } | {
         readonly kind: 'overdue_wait';

@@ -334,6 +334,8 @@ export interface OwnerLostHolder {
   itemKey: string | null;
   /** Set for a pending admitted start no process runs: what starts it once. */
   start: { requestId: string; hostId: string } | null;
+  /** A due continuation (an expired wait, an answered gate) that no waker can resume. */
+  dueWithoutWaker: boolean;
   /** The run's stored status, unchanged: the engine never ends it by itself. */
   observedStatus: Extract<AttentionQueueItem, { kind: 'owner_lost' }>['observedStatus'];
 }
@@ -361,6 +363,7 @@ export function toOwnerLostHolders(items: AttentionQueueItem[]): OwnerLostHolder
             itemKey: item.item?.key ?? null,
             observedStatus: item.observedStatus,
             start: item.start ?? null,
+            dueWithoutWaker: item.continuation !== undefined,
           },
         ]
       : []

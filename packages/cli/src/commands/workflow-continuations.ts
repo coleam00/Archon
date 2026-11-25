@@ -2,6 +2,7 @@ import type { WorkflowResumeOptions } from '@archon/workflows/engine-port';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { stat } from 'node:fs/promises';
+import { currentProcessOwner } from '@archon/paths/process-owner';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
 import {
@@ -702,6 +703,7 @@ async function wake(
   await announceObserving(observation, values.watch === true, json);
   const loaded = await loadedEngine(values.watch === true, json);
   const job = followedWakeJob(values.watch === true);
+  await recordWaker(host, values.watch === true, job !== undefined);
   const record = lastPassRecorder(job);
   const { control, stop } = wakeControl(loaded, job, json);
   process.on('SIGINT', stop);
@@ -725,10 +727,48 @@ async function wake(
     // The observation loop ends with this one, after the pass it is in.
     stop();
     observedOk = await observing;
+    // `wake schedule remove` opens no store; the watcher it stopped forgets the schedule.
+    if (job !== undefined && wakeJobChange(job)?.reason === 'job removed')
+      await forgetSchedule(host);
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
   }
   return wakeExitCode(control.moved(), [ok, observedOk]);
+}
+
+/**
+ * Record what this wake is as a waker, so the attention queue can tell when nothing will
+ * resume a due continuation: a watch the installed job started stands for the `schedule`,
+ * which restarts it; another watch is a `process`; a one-shot wake is a `pass`, which
+ * something outside Archon may run again. A failed record only risks listing one this wake
+ * resumes, so it warns and the wake goes on.
+ */
+async function recordWaker(host: WorkflowHost, watch: boolean, scheduled: boolean): Promise<void> {
+  const self = currentProcessOwner;
+  try {
+    await host.deps.store.recordContinuationWaker(
+      !watch
+        ? { kind: 'pass', host: self.host }
+        : scheduled
+          ? { kind: 'schedule', host: self.host }
+          : { kind: 'process', ...self }
+    );
+  } catch (error) {
+    warnWaker(error);
+  }
+}
+
+async function forgetSchedule(host: WorkflowHost): Promise<void> {
+  try {
+    await host.deps.store.removeContinuationSchedule(currentProcessOwner.host);
+  } catch (error) {
+    warnWaker(error);
+  }
+}
+
+/** On stderr, so a `--json` reader's lines stay the passes'. */
+function warnWaker(error: unknown): void {
+  console.error(`wake: could not record this waker: ${errorMessage(error)}`);
 }
 
 /** 75 when the engine changed under the watch, so its supervisor restarts it; else 0 or 1. */

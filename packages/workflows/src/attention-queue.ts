@@ -189,6 +189,12 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
      * host `archon trigger execute <requestId> --host <hostId>` runs it once with.
      */
     start: z.object({ requestId: z.string(), hostId: z.string() }).optional(),
+    /**
+     * Set when the run is due to continue (a wait past its deadline, an answered gate, a
+     * released source) and no waker can resume it: `none_recorded` when no waker ever ran
+     * on this install, `all_gone` when every recorded one is a process provably gone.
+     */
+    continuation: z.object({ wakers: z.enum(['none_recorded', 'all_gone']) }).optional(),
   }),
   z.object({
     kind: z.literal('overdue_wait'),
@@ -575,6 +581,17 @@ async function ownerLostItem(
   };
 }
 
+/** What proves `run` a due continuation no waker can resume, or null. */
+async function dueContinuationLost(
+  source: AttentionQueueSource,
+  run: WorkflowRun
+): Promise<LostOwner | null> {
+  const due = await source.ownerLost?.dueWithoutWaker?.();
+  return due?.runs.some(candidate => candidate.id === run.id)
+    ? { continuation: { wakers: due.wakers } }
+    : null;
+}
+
 /** The `owner_lost` items, in the store's order; a run already in `reported` is not repeated. */
 async function ownerLostItems(
   source: AttentionQueueSource,
@@ -590,6 +607,19 @@ async function ownerLostItems(
   );
   for (const [index, run] of top.entries()) {
     const item = await ownerLostItem(source, run, lost[index], codebases);
+    if (item !== null) items.push(item);
+  }
+  // A due continuation no waker can resume, listed once even when its owner is gone too.
+  const due = await source.ownerLost.dueWithoutWaker?.();
+  if (due == null) return items;
+  const listed = new Set([...reported, ...top.filter((_, i) => lost[i] != null).map(r => r.id)]);
+  for (const run of due.runs.filter(candidate => !listed.has(candidate.id))) {
+    const item = await ownerLostItem(
+      source,
+      run,
+      { continuation: { wakers: due.wakers } },
+      codebases
+    );
     if (item !== null) items.push(item);
   }
   return items;
@@ -676,7 +706,12 @@ export async function readAttentionQueueItem(
   // A run whose owner is gone reads as the list lists it, by the same rule.
   const [owner] =
     source.ownerLost === undefined ? [] : await observeLostOwners(source.ownerLost, [run]);
-  const lost = await ownerLostItem(source, run, owner, new Map());
+  const lost = await ownerLostItem(
+    source,
+    run,
+    owner ?? (await dueContinuationLost(source, run)),
+    new Map()
+  );
   if (lost !== null) return lost;
   const resolution = await resolveRunAttention(source.store, run);
   if (resolution.kind !== 'attention') return null;

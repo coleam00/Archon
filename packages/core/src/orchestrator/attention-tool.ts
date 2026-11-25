@@ -252,9 +252,11 @@ function notAnswered(
         case 'unreadable':
           return `attention: item '${ref}' cannot be read (${result.item.reason}: ${result.item.detail}). Someone has to look at its run; it takes no answer.`;
         case 'owner_lost':
-          return result.item.start === undefined
-            ? `attention: run ${result.item.run.id} lost its owner and still holds what it took (its item, its resource slot). It takes no answer: resume or abandon the run.`
-            : `attention: run ${result.item.run.id} was admitted but no process runs it, and it still holds what it took. It takes no answer: start it once with archon trigger execute ${result.item.start.requestId} --host ${result.item.start.hostId}, or abandon the run.`;
+          if (result.item.start !== undefined)
+            return `attention: run ${result.item.run.id} was admitted but no process runs it, and it still holds what it took. It takes no answer: start it once with archon trigger execute ${result.item.start.requestId} --host ${result.item.start.hostId}, or abandon the run.`;
+          if (result.item.continuation !== undefined)
+            return `attention: run ${result.item.run.id} is due to continue, but no waker runs on this install to resume it. It takes no answer: start archon serve or archon workflow wake --watch, or abandon the run.`;
+          return `attention: run ${result.item.run.id} lost its owner and still holds what it took (its item, its resource slot). It takes no answer: resume or abandon the run.`;
         case 'overdue_wait':
           return `attention: item '${ref}' waits for ${result.item.waits.map(wait => `'${wait.event}' about ${wait.about}`).join(' or ')}, due ${result.item.deadline}. It takes no answer: the event meets it, a new run of ${result.item.waitingIn.workflow} on the item replaces it, or \`archon workflow answer --withdraw ${ref}\` closes it.`;
         case 'stopped':

@@ -4,6 +4,7 @@
  */
 import type { AttentionRead } from './schemas/attention-degraded';
 import type { AwaitingExecution } from './schemas/start-executor';
+import type { noLiveWaker } from './schemas/continuation-waker';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { RunOwnerObservation } from './schemas/workflow-run-listing';
 
@@ -17,11 +18,26 @@ export interface OwnerObserver {
   runs(): Promise<AttentionRead<WorkflowRun>[]>;
   observe(run: WorkflowRun): Promise<RunOwnerObservation | null>;
   awaitingExecution?(run: WorkflowRun): Promise<AwaitingExecution | null>;
+  /**
+   * The due continuations (`IWorkflowStore.listDueWorkflowContinuations`) when no waker can
+   * resume them (`noLiveWaker`), with why; null while a waker may. Without it, none is listed.
+   */
+  dueWithoutWaker?(): Promise<DueWithoutWaker | null>;
 }
 
-/** What proves a run's owner gone; `start` is set for a pending start no process runs. */
+/** Due continuations no recorded waker can resume, and why (`noLiveWaker`). */
+export interface DueWithoutWaker {
+  wakers: NonNullable<ReturnType<typeof noLiveWaker>>;
+  runs: WorkflowRun[];
+}
+
+/**
+ * What proves a run's owner gone; `start` is set for a pending start no process runs, and
+ * `continuation` for a due continuation no waker can resume.
+ */
 export interface LostOwner {
   start?: { requestId: string; hostId: string };
+  continuation?: { wakers: DueWithoutWaker['wakers'] };
 }
 
 /**

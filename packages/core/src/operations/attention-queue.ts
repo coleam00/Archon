@@ -31,6 +31,7 @@ import {
   type StartExecutorObserver,
 } from '@archon/workflows/resource-start-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
+import { noLiveWaker } from '@archon/workflows/schemas/continuation-waker';
 import type { IWorkflowHostStore } from '../workflows/host-store';
 import { getTriggersPath, readOnBindings } from '../workflows/run-ended';
 
@@ -59,7 +60,13 @@ export function attentionQueueSource<
     StoppedItemStore &
     PreparingItemStore &
     RefusedStartItemStore &
-    Pick<IWorkflowStore, 'listUnfinishedRuns' | 'getResourceStartRequest'>,
+    Pick<
+      IWorkflowStore,
+      | 'listUnfinishedRuns'
+      | 'getResourceStartRequest'
+      | 'listContinuationWakers'
+      | 'listDueWorkflowContinuations'
+    >,
 >(
   store: Store,
   isolation: Pick<IWorkflowHostStore['isolation'], 'findLatestByCodebaseAndWorkingPath'>
@@ -94,6 +101,16 @@ export function attentionQueueSource<
         awaitingExecution(await store.getResourceStartRequest(run.id), run, {
           observe: pending => observeStartExecutor(store, pending),
         }),
+      dueWithoutWaker: async () => {
+        const wakers = await store.listContinuationWakers();
+        const none = wakers === null ? null : noLiveWaker(wakers);
+        return none === null
+          ? null
+          : {
+              wakers: none,
+              runs: await store.listDueWorkflowContinuations(new Date(), DUE_LISTED),
+            };
+      },
     },
     startExecutor: { observe: run => observeStartExecutor(store, run) },
     // A broken trigger file already fails the run end that reads it; an item read reports
@@ -122,6 +139,9 @@ export function attentionQueueSource<
     },
   };
 }
+
+/** How many due continuations with no waker one read lists, oldest due first. */
+const DUE_LISTED = 200;
 
 /** What the attention watch takes from a host's queue source: everything but the store. */
 export function watchSource(

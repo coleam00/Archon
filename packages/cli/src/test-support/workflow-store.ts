@@ -432,6 +432,10 @@ export function createInMemoryWorkflowStore(
     labelAttentionWait: (id, labelWrite) => write(view => view.labelAttentionWait(id, labelWrite)),
     listAttentionQueueRows: () => write(view => view.listAttentionQueueRows()),
     listUnfinishedRuns: () => write(view => view.listUnfinishedRuns()),
+    // As in the file store, which keeps no waker record.
+    recordContinuationWaker: async () => undefined,
+    removeContinuationSchedule: async () => undefined,
+    listContinuationWakers: async () => null,
     signalWorkflowWait: (id, wait, payload) =>
       write(view => view.signalWorkflowWait(id, wait, payload)),
     deleteOldWorkflowRuns: days => write(view => view.deleteOldWorkflowRuns(days)),

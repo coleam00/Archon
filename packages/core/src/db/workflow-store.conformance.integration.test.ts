@@ -16,6 +16,7 @@ import { describeSqlItemAskStartConformance } from './item-ask-starts.conformanc
 import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { describeSqlRunDeleteConformance } from './workflow-run-delete.conformance';
 import { describeSqlItemStopConformance } from './item-stops.conformance';
+import { describeSqlContinuationWakerConformance } from './continuation-wakers.conformance';
 import { describeSqlItemEndConformance } from './item-ends.conformance';
 import { describeSqlStartLimitConformance } from './start-limits.conformance';
 import { describeSqlItemWaitConformance } from './item-waits.conformance';
@@ -47,6 +48,7 @@ describeLinkedStartConformance(makeHarness);
 describeSqlItemAskConformance(makeHarness);
 describeSqlItemWaitConformance(makeHarness);
 describeSqlItemStopConformance(makeHarness);
+describeSqlContinuationWakerConformance(makeHarness);
 describeSqlItemEndConformance(makeHarness);
 describeSqlItemAskStartConformance(makeHarness);
 describeSqlRunDeleteConformance(makeHarness);
