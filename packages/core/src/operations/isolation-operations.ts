@@ -5,13 +5,9 @@
  */
 import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../platforms/registry';
 import { createLogger } from '@archon/paths';
-import { lstat } from 'node:fs/promises';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import * as isolationDb from '../db/isolation-environments';
-import {
-  cleanupMergedWorktrees,
-  type CleanupOperationResult,
-} from '../services/cleanup/merged-sweep';
+import { checkoutExists } from '../services/cleanup/checkout-presence';
 import { getUseBlocker, useBlockerLogFields } from '../services/cleanup/run-lock';
 
 // Lazy logger — NEVER at module scope
@@ -40,30 +36,15 @@ export interface EnvironmentListData {
   ghostsReconciled: number;
 }
 
-export type { CleanupOperationResult } from '../services/cleanup/merged-sweep';
-
-/** One codebase's merged cleanup: swept, or not checked because its checkout is gone. */
-export type MergedCleanupOutcome =
-  | { kind: 'swept'; result: CleanupOperationResult }
-  | {
-      kind: 'repository-gone';
-      environments: { branchName: string; workingPath: string }[];
-    };
+export {
+  cleanupMergedWorktrees,
+  type CleanupOperationResult,
+  type MergedCleanupOutcome,
+} from '../services/cleanup/merged-sweep';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** False only when nothing exists at `path`; any other lstat failure propagates. */
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
-}
 
 /**
  * Reconcile DB state with filesystem — mark environments as destroyed
@@ -87,7 +68,7 @@ async function reconcileGhosts(envs: readonly IsolationEnvironmentRow[]): Promis
       continue;
     }
     try {
-      if (!(await pathExists(env.working_path))) {
+      if (!(await checkoutExists(env.working_path))) {
         const inUse = await getUseBlocker(env.id);
         if (inUse) {
           getLog().info(
@@ -187,29 +168,4 @@ export async function listEnvironments(): Promise<EnvironmentListData> {
   }
 
   return { codebases: result, totalEnvironments, ghostsReconciled: totalGhosts };
-}
-
-/**
- * Cleanup merged worktrees for a codebase.
- *
- * A checkout directory that does not exist is reported, not swept: every Git check
- * would fail, and whether the project was deleted or its disk is unmounted is the
- * operator's call. A checkout that exists but cannot be read still fails the sweep.
- */
-export async function cleanupMergedEnvironments(
-  codebaseId: string,
-  mainPath: string,
-  options: { includeClosed?: boolean } = {}
-): Promise<MergedCleanupOutcome> {
-  if (!(await pathExists(mainPath))) {
-    const environments = (await isolationDb.listByCodebase(codebaseId))
-      .filter(env => env.provider === 'worktree')
-      .map(env => ({ branchName: env.branch_name, workingPath: env.working_path }));
-    getLog().warn(
-      { codebaseId, repoPath: mainPath, environments: environments.length },
-      'isolation.merged_cleanup_repository_gone'
-    );
-    return { kind: 'repository-gone', environments };
-  }
-  return { kind: 'swept', result: await cleanupMergedWorktrees(codebaseId, mainPath, options) };
 }

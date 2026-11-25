@@ -23,7 +23,10 @@ import { createMockLogger } from '../../test/mocks/logger';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../../schemas/workflow-run';
-import type { CleanupOperationResult } from '../../services/cleanup/merged-sweep';
+import type {
+  CleanupOperationResult,
+  MergedCleanupOutcome,
+} from '../../services/cleanup/merged-sweep';
 import {
   WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
@@ -480,7 +483,9 @@ export const emptyCleanup = (): CleanupOperationResult => ({
   releasedFailedRuns: [],
   warnings: [],
 });
-export const mockCleanupMergedWorktrees = mock(() => Promise.resolve(emptyCleanup()));
+export const mockCleanupMergedWorktrees = mock(
+  (): Promise<MergedCleanupOutcome> => Promise.resolve({ kind: 'swept', result: emptyCleanup() })
+);
 export const mockCleanupStaleWorktrees = mock(() => Promise.resolve(emptyCleanup()));
 // Capture the real class before mock.module replaces the module, so the mock
 // re-exports it rather than a hand-declared copy that could drift.
@@ -537,7 +542,6 @@ mock.module('../../services/cleanup/containers', () => ({
 }));
 mock.module('../../services/cleanup/merged-sweep', () => ({
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
-  cleanupToMakeRoom: mock(),
   recordCleanupRemoval: mock(),
 }));
 
