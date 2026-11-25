@@ -126,7 +126,7 @@ export class NativeScheduleUnsupportedError extends Error {
 const execFileAsync = promisify(execFile);
 const OWNED_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 
-function scheduleLabel(id: string): string {
+export function scheduleLabel(id: string): string {
   if (!OWNED_ID.test(id)) {
     throw new Error(
       'Native schedule id must start and end with a letter or digit and contain only letters, digits, dots, underscores, or hyphens'
