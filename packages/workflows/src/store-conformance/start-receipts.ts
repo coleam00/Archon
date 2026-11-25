@@ -441,6 +441,81 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       ).toBe(true);
       expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
     });
+    test("a binding's intent is replaced only by its preparing owner, and read back with its event inputs", async () => {
+      const input = acceptance();
+      await store.acceptStartReceipt(input);
+      const identity = { receiptId: input.receipt.id, bindingId: binding.bindingId, ownerId: 'o' };
+      const intent: ResourceStartBindingIntent = {
+        ...binding,
+        bindingRevision: 'v2',
+        resource: 'other',
+        eventInputs: { issue: 'fix the login page' },
+      };
+      expect(await store.replaceStartBindingIntent({ ...identity, intent })).toBe(false);
+      expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+      expect(await store.replaceStartBindingIntent({ ...identity, ownerId: 'stale', intent })).toBe(
+        false
+      );
+      expect(await store.replaceStartBindingIntent({ ...identity, intent })).toBe(true);
+      expect((await store.getStartReceipt(input.receipt.id))?.bindings).toMatchObject([
+        { bindingRevision: 'v2', intent: { resource: 'other', eventInputs: intent.eventInputs } },
+      ]);
+      const prepared = launch();
+      expect(
+        await store.completeStartBindingPreparation({ ...identity, launch: prepared })
+      ).toMatchObject({ status: 'admitted' });
+      expect((await store.getResourceStartRequest(prepared.run.id))?.resource).toBe('other');
+    });
+    test('a queued start goes back to preparation once, and then has one disposition', async () => {
+      const queue = async () => {
+        const input = acceptance();
+        input.receipt.deliveryId = crypto.randomUUID();
+        input.bindings[0] = { ...binding, capacity: 1 };
+        await store.acceptStartReceipt(input);
+        const identity = {
+          receiptId: input.receipt.id,
+          bindingId: binding.bindingId,
+          ownerId: 'o',
+        };
+        expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+        const prepared = launch();
+        const result = await store.completeStartBindingPreparation({
+          ...identity,
+          launch: prepared,
+        });
+        return { identity, prepared, result };
+      };
+      const first = await queue();
+      const second = await queue();
+      expect(first.result?.status).toBe('admitted');
+      expect(second.result?.status).toBe('queued');
+      const returnOf = ({ identity, prepared }: typeof first) =>
+        store.returnQueuedStartToPreparation({
+          requestId: prepared.run.id,
+          receiptId: identity.receiptId,
+          bindingId: identity.bindingId,
+        });
+      expect(await returnOf(first)).toBeNull();
+      expect((await returnOf(second))?.run.id).toBe(second.prepared.run.id);
+      expect(await returnOf(second)).toBeNull();
+      expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+      expect(
+        await store.listPendingStartBindings({
+          hostId: 'host',
+          receiptIds: [second.identity.receiptId],
+        })
+      ).toMatchObject([{ status: 'pending', disposition: null }]);
+
+      const again = { ...second.identity, ownerId: 'next' };
+      expect(await store.claimStartBindingPreparation(again)).toBe(true);
+      const prepared = launch();
+      expect(
+        await store.completeStartBindingPreparation({ ...again, launch: prepared })
+      ).toMatchObject({ status: 'queued' });
+      expect((await store.getStartReceipt(second.identity.receiptId))?.bindings).toMatchObject([
+        { status: 'complete', disposition: { status: 'queued', requestId: prepared.run.id } },
+      ]);
+    });
     test('a forge refusal is stored with the failure and read back on the receipt', async () => {
       const store = harness.store,
         refused = acceptance(),

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A start that a run's end or settled asks caused, still waiting when its trigger file is registered again, starts with the binding as the file is now. A start not yet prepared is rebuilt from the file when it is prepared, with its inputs mapped again from what the run recorded; one already queued is taken from its queue and prepared again, behind the starts already queued. A file that is gone or no longer binds that end refuses the start on its item. Updating Archon and a pack with runs in flight and starts waiting no longer needs the install hold. A queued start whose workflow changed but whose trigger file did not still runs as it was prepared. (#6225)
+
 ## [0.15.0] - 2026-11-25
 
 Runs belong to items, a stage hands off to the next through a binding instead of pausing, and an install with no server or webhooks can run the whole loop.

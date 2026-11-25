@@ -493,7 +493,7 @@ function namedLinkedStart(
  * The entries of the list `pointer` holds in the run's result, each with its item key: an
  * entry is the key itself or an object with a string `key`. Or why the list cannot be read.
  */
-function linkedEntries(
+export function linkedEntries(
   result: JsonValue | undefined,
   pointer: string
 ): { key: string; entry: JsonValue }[] | string {
@@ -560,7 +560,7 @@ export async function bindingProjectKey(
  * checkout (`checkout: "ended-run"` or `checkout: "asking-run"`).
  */
 export function bindingReceipt(
-  candidate: OnBindingFile,
+  candidate: OnBinding,
   delivery: {
     deliveryId: string;
     sourceActor: NonNullable<SourceReceiptInput['sourceActor']>;
@@ -580,10 +580,7 @@ export function bindingReceipt(
         : undefined;
   const refusal = 'missing' in mapped ? (mapped.reason ?? 'inputs_unmapped') : 'checkout_refused';
   const handoff = checkout && 'handoff' in checkout ? checkout.handoff : undefined;
-  // Computed as `trigger fire` computes it, over the binding alone.
-  const bindingRevision = createHash('sha256')
-    .update(JSON.stringify(candidate.binding))
-    .digest('hex');
+  const bindingRevision = onBindingRevision(candidate);
   const content = refused ?? inputs;
   const receipt = {
     id: randomUUID(),
@@ -631,6 +628,22 @@ export function bindingReceipt(
       : {}),
   };
   return sourceReceiptAcceptanceSchema.parse({ receipt, outcome: 'matched', bindings: [binding] });
+}
+
+/**
+ * The revision of a trigger file's start config: its binding and its `on`, since `on` holds
+ * the input mapping. A waiting start whose file's revision moved is rebuilt from the file
+ * before it runs (`rebuilt-binding.ts`). A fire or timer file has no `on`, and `trigger
+ * fire` hashes its binding alone.
+ */
+export function onBindingRevision(candidate: OnBinding): string {
+  const on =
+    'runEnded' in candidate
+      ? { runEnded: candidate.runEnded }
+      : { asksSettled: candidate.asksSettled };
+  return createHash('sha256')
+    .update(JSON.stringify({ binding: candidate.binding, on }))
+    .digest('hex');
 }
 
 /** The input names a workflow declares: its own `inputs:` and its pack's settings. */

@@ -785,4 +785,27 @@ export interface IResourceStartStore {
     bindingId: string;
     ownerId: string;
   }): Promise<boolean>;
+  /**
+   * Replace the intent of a binding this owner is preparing, with the fields stored beside
+   * it (its revision, host, item key, start limit and event inputs); the recorded checkout
+   * hand-off is kept. False when the owner no longer prepares it. Preparation then reads
+   * the new intent, and so does admission.
+   */
+  replaceStartBindingIntent(input: {
+    receiptId: string;
+    bindingId: string;
+    ownerId: string;
+    intent: ResourceStartBindingIntent;
+  }): Promise<boolean>;
+  /**
+   * Take a queued request of this receipt's binding out of its queue and put the binding
+   * back to pending, in one write under admission, so it is prepared again. The launch the
+   * request held, whose captured source the caller releases, or null when the request is
+   * no longer queued (another process admitted or withdrew it) or its launch does not read.
+   */
+  returnQueuedStartToPreparation(input: {
+    requestId: string;
+    receiptId: string;
+    bindingId: string;
+  }): Promise<PreparedWorkflowLaunch | null>;
 }

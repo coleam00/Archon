@@ -127,11 +127,7 @@ export function createAsksSettledStarts(
               itemAnswers: onItem,
             };
       return candidates
-        .filter(({ asksSettled: { settled, option } }) =>
-          option === undefined
-            ? settled === 'any' || settled === settledAs
-            : choseOption(rows, option)
-        )
+        .filter(({ asksSettled }) => settlementStarts(asksSettled, rows, settledAs))
         .map(candidate =>
           bindingReceipt(
             candidate,
@@ -149,6 +145,20 @@ export function createAsksSettledStarts(
         );
     };
   };
+}
+
+/**
+ * Whether a set that settled as `settledAs` starts this binding: by how it settled, or with
+ * `option`, by the option every answer chose.
+ */
+export function settlementStarts(
+  { settled, option }: AsksSettledTrigger,
+  rows: readonly StoredItemAsk[],
+  settledAs: 'answered' | 'withdrawn'
+): boolean {
+  return option === undefined
+    ? settled === 'any' || settled === settledAs
+    : choseOption(rows, option);
 }
 
 /**
