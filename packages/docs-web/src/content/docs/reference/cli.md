@@ -1927,7 +1927,7 @@ A second pause of a run that already has one pending changes nothing and reports
 
 ### `workflow resume`
 
-Resume a run by id: a failed or paused run, or a run its killed process left `running`. Nodes that completed in the earlier attempt are skipped. A run [paused by an operator](#workflow-pause) continues at the next node, as if it had not stopped. Resume never picks a run for you; find the id with `archon workflow runs` (`--item <key>` narrows it to one item).
+Resume a run by id: a failed or paused run, or a run its killed process left `running`. Nodes that completed in the earlier attempt are skipped. A run in which no node completed runs again from its first node, under the same run id, in the same checkout and with the inputs, source and configuration it started with. A run [paused by an operator](#workflow-pause) continues at the next node, as if it had not stopped. Resume never picks a run for you; find the id with `archon workflow runs` (`--item <key>` narrows it to one item).
 
 ```bash
 archon workflow resume <run-id>

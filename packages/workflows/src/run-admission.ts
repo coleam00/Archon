@@ -204,7 +204,7 @@ async function notifyResumingRun(
   const resumeMsg =
     priorCompletedNodes.size > 0
       ? `▶️ **Resuming** workflow \`${workflowName}\` — skipping ${String(priorCompletedNodes.size)} already-completed node(s).`
-      : `▶️ **Resuming** workflow \`${workflowName}\` — continuing interactive loop.`;
+      : `▶️ **Resuming** workflow \`${workflowName}\`.`;
   await safeSendMessage(platform, conversationId, resumeMsg);
 }
 

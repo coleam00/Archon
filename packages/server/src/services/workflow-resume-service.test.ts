@@ -47,7 +47,9 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
 }));
 const mockHydrateResumableRun = mock<
   typeof import('@archon/workflows/run-resume')['hydrateResumableRun']
->(async () => null);
+>(async () => {
+  throw new Error('unused');
+});
 const mockExecuteWorkflow = mock<typeof import('@archon/workflows/executor')['executeWorkflow']>(
   async () => ({
     success: true,
@@ -184,7 +186,9 @@ describe('workflow continuation scanner', () => {
     mockResolveRunWorkflow.mockReset();
     mockResolveRunWorkflow.mockResolvedValue({ ok: false, message: 'unused' });
     mockHydrateResumableRun.mockReset();
-    mockHydrateResumableRun.mockResolvedValue(null);
+    mockHydrateResumableRun.mockImplementation(async () => {
+      throw new Error('unused');
+    });
     mockExecuteWorkflow.mockReset();
     mockExecuteWorkflow.mockResolvedValue({
       success: true,

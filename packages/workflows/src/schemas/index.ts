@@ -260,7 +260,6 @@ export {
   isFanOutBlockReleased,
   suspendReasonSchema,
   isRecognizedSuspendReason,
-  reRunsOwnNodeOnResume,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
   runInputsMetadata,

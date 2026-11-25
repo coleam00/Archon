@@ -128,7 +128,6 @@ test('a background dispatch pauses at a gate and an attention wait and continues
       cwd: project,
       userMessage: 'go',
     });
-    if (!admission.accepted) throw new Error('resume was not accepted');
     await admission.settled;
   };
 

@@ -36,7 +36,6 @@ export interface ForegroundLaunch {
   preparedAiConfiguration: PreparedAiConfiguration | undefined;
   resolvedInputs: Record<string, string> | undefined;
   deferredInputError: Error | undefined;
-  prepareLaunchAiConfiguration: (definition: ResolvedWorkflow) => Promise<PreparedAiConfiguration>;
 }
 
 /**
@@ -114,9 +113,7 @@ export async function dispatchForeground(
         workflow,
         resumableRun,
         resumableWorkingPath: resumableRun.working_path,
-        resolvedInputs: launch.resolvedInputs,
         deferredInputError: launch.deferredInputError,
-        prepareLaunchAiConfiguration: launch.prepareLaunchAiConfiguration,
       });
     } else {
       await submitFreshForeground(scope, {

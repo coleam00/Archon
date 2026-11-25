@@ -40,9 +40,8 @@ export function unverifiableSourceGuidance(
 ): string {
   return `frozen workflow source cannot be verified (${error.path ?? 'path unavailable: invalid recorded source metadata'}). Resume on the owning host with archon workflow resume ${runId}, or abandon with archon workflow abandon ${runId}.`;
 }
-type Accepted = Extract<WorkflowResumeAdmission, { accepted: true }>;
 export type ContinuationAdmission =
-  | { kind: 'accepted'; run: WorkflowRun; settled: Accepted['settled'] }
+  | { kind: 'accepted'; run: WorkflowRun; settled: WorkflowResumeAdmission['settled'] }
   | { kind: 'not-accepted' }
   /** The run's resource is full; it stays paused and keeps its place as a capacity waiter. */
   | {
@@ -168,7 +167,6 @@ async function resumeWithLiveOwner(
         ...input,
         cursor: leasedResumeCursor(input.cursor, owner.lease),
       });
-      if (!admission.accepted) return { kind: 'not-accepted' };
       accepted = true;
       const settled = admission.settled.finally(close);
       // Hosts may attach their settlement handler after other admissions finish.
