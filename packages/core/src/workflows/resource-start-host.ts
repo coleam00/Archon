@@ -592,14 +592,13 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
     startAdmittedRequest(host, failures, requestId, receiptId);
 
   const entries = triggerEntriesReader();
-  // A resource holding a start not known to follow its trigger file is not drained this pass.
-  const failed = new Set<string>();
   const queued = await returnStaleQueuedStarts(
     host,
     entries,
     await host.deps.store.listQueuedResourceStartsForHost(host.hostId),
-    { failures, failed }
+    failures
   );
+  const failed = new Set<string>();
   const drain = async (resource: string): Promise<boolean> => {
     let decisions: ResourceStartDisposition[];
     try {
@@ -647,18 +646,16 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
 }
 
 /**
- * The queued requests left once those whose trigger file changed or is gone
+ * The queued requests left once those whose trigger file changed, is gone or does not read
  * (`waitingStartFreshness`) are taken from the queue, their bindings back to pending; the
- * pass's own preparation then rebuilds or refuses each, behind the queue. A request whose
- * own file does not read adds its resource to `failed`: the store admits a host's queue by
- * resource, so the pass drains none of it rather than admit a launch its file may no
- * longer say.
+ * pass's own preparation then rebuilds, refuses or holds each, behind the queue, so a
+ * problem with one start's file never holds the requests around it.
  */
 async function returnStaleQueuedStarts(
   host: ResourceStartHost,
   entries: () => Promise<readonly TriggerEntry[]>,
   queued: QueuedResourceStartInspection[],
-  pass: { failures: ResourceStartDrainFailure[]; failed: Set<string> }
+  failures: ResourceStartDrainFailure[]
 ): Promise<QueuedResourceStartInspection[]> {
   const { store } = host.deps;
   const kept: QueuedResourceStartInspection[] = [];
@@ -681,15 +678,14 @@ async function returnStaleQueuedStarts(
               phase: 'queued',
             })
           : { fresh: true as const };
-      if ('wait' in freshness) throw freshness.wait;
       if (!('stale' in freshness)) {
         kept.push(request);
         continue;
       }
       launch = await store.returnQueuedStartToPreparation({ requestId: request.id, ...origin });
     } catch (error) {
-      pass.failures.push({ receiptId: origin.receiptId, error });
-      pass.failed.add(request.resource);
+      // A store or directory read failed: the request stays as it was, and the drain reports it.
+      failures.push({ receiptId: origin.receiptId, error });
       kept.push(request);
       continue;
     }
@@ -697,7 +693,7 @@ async function returnStaleQueuedStarts(
     if (!launch) continue;
     log.info({ requestId: request.id, ...origin }, 'resource_start.queued_start_returned');
     await releaseQueuedLaunchSource(launch).catch((error: unknown) => {
-      pass.failures.push({ receiptId: origin.receiptId, error });
+      failures.push({ receiptId: origin.receiptId, error });
     });
   }
   return kept;

@@ -402,7 +402,18 @@ async function bindingMatches(
   const problems = runEndedBindingProblems(candidate.runEnded, ended);
   if (problems.length > 0)
     throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
-  return candidate.runEnded.outcome === ended.outcome.value;
+  return bindsRunEnd(candidate.runEnded, {
+    workflowName: ended.run.workflow_name,
+    outcome: ended.outcome.value,
+  });
+}
+
+/** Whether a run-ended binding is about the end of a run of `workflowName` with `outcome`. */
+export function bindsRunEnd(
+  runEnded: RunEndedTrigger,
+  end: { workflowName: string; outcome: string }
+): boolean {
+  return runEnded.workflowName === end.workflowName && runEnded.outcome === end.outcome;
 }
 
 /** The receipt a matched binding writes for the end of `ended` on `item`. */
@@ -648,9 +659,16 @@ export function startConfigRevision(candidate: OnBinding): string {
   return `${START_CONFIG_REVISION_PREFIX}${createHash('sha256').update(JSON.stringify(config)).digest('hex')}`;
 }
 
-/** Whether `startConfigRevision` wrote `revision`, rather than an older Archon. */
-export function isStartConfigRevision(revision: string | null): boolean {
-  return revision?.startsWith(START_CONFIG_REVISION_PREFIX) === true;
+/**
+ * Whether `revision` is the one `candidate` records now, compared in the format it was
+ * written in: an older Archon hashed the binding alone, so for such a receipt only a change
+ * to `binding` counts. A receipt with no revision matches nothing.
+ */
+export function isRevisionOf(candidate: OnBinding, revision: string | null): boolean {
+  if (revision === null) return false;
+  return revision.startsWith(START_CONFIG_REVISION_PREFIX)
+    ? revision === startConfigRevision(candidate)
+    : revision === createHash('sha256').update(JSON.stringify(candidate.binding)).digest('hex');
 }
 
 /** One file of the trigger directory: its parsed JSON, or why it is not JSON. */
@@ -683,35 +701,23 @@ export async function readTriggerEntries(directory: string): Promise<TriggerEntr
   return entries;
 }
 
-/** A waiting start's own trigger file, as the directory that serves its host reads now. */
-export type StartTriggerFile =
-  | { found: OnBinding }
-  | { gone: string }
-  | { unread: Error }
-  | { notServed: true };
+/** A waiting start's own trigger file, in the trigger directory of the host that drains it. */
+export type StartTriggerFile = { found: OnBinding } | { gone: string } | { unread: Error };
 
 /**
- * The trigger file a start of `sourceInstanceId` on `hostId` was written from. A file that
- * names another source or host never affects the answer; only the file naming both is read
- * strictly, and when it does not read, the start's own file is unread. A directory with no
- * file naming `hostId` does not serve the host (`install-hosts.ts`), so it cannot say the
- * file was removed. A file that is not JSON could be the start's own.
+ * The trigger file a start of `sourceInstanceId` on `hostId` was written from, in the
+ * directory of the process draining that host: the host's registry. Only the file naming
+ * both is read strictly; any other file, readable or not, never affects the answer.
  */
 export function findStartTriggerFile(
   entries: readonly TriggerEntry[],
   start: { sourceInstanceId: string; hostId: string }
 ): StartTriggerFile {
-  let served = false;
-  let unparsed: Error | undefined;
   for (const entry of entries) {
-    if ('unparsed' in entry) {
-      unparsed ??= entry.unparsed;
-      continue;
-    }
+    if ('unparsed' in entry) continue;
     const named = rawStartNames(entry.value);
-    if (named.hostId !== start.hostId) continue;
-    served = true;
-    if (named.sourceInstanceId !== start.sourceInstanceId) continue;
+    if (named.hostId !== start.hostId || named.sourceInstanceId !== start.sourceInstanceId)
+      continue;
     try {
       const found = parseOnFile(entry.file, entry.value);
       return found
@@ -721,10 +727,7 @@ export function findStartTriggerFile(
       return { unread: error as Error };
     }
   }
-  if (unparsed) return { unread: unparsed };
-  return served
-    ? { gone: `trigger file for '${start.sourceInstanceId}' on host '${start.hostId}' is gone` }
-    : { notServed: true };
+  return { gone: `trigger file for '${start.sourceInstanceId}' on host '${start.hostId}' is gone` };
 }
 
 /** The source and host a parsed file names, read without its schema. */

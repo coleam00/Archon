@@ -2,10 +2,10 @@
  * Whether a waiting start a run's end or settled asks caused still follows its trigger file.
  * The receipt records the revision of the file's start config it was written from
  * (`startConfigRevision`); freshness is that one comparison against the file as the
- * directory serving the start's host holds it now. A stale start is rebuilt from the file
- * by the matcher's own pieces (`mappedInputs`, `startIntent`, `settledSources`), or refused
- * when it cannot be. Which items start, and over which link, stays as the completing write
- * matched it.
+ * trigger directory of the host that drains the start holds it now. A stale start is
+ * rebuilt from the file by the matcher's own pieces (`bindsRunEnd`, `bindsSettlement`,
+ * `mappedInputs`, `startIntent`, `settledSources`), or refused when it cannot be. Which
+ * items start, and over which link, stays as the completing write matched it.
  */
 import { createLogger } from '@archon/paths';
 import type { StartReceiptInspection } from '@archon/workflows/resource-start-store';
@@ -22,18 +22,18 @@ import {
 import type { StartRefusalReason } from '@archon/workflows/schemas/run-metadata';
 import { readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
-import { settledSources } from './asks-settled';
+import { bindsSettlement, settledSources } from './asks-settled';
 import type { WorkflowHost } from './host-store';
 import { itemAnswers } from './item-answers';
 import {
+  bindsRunEnd,
   findStartTriggerFile,
   getTriggersPath,
-  isStartConfigRevision,
+  isRevisionOf,
   launchProjectKey,
   linkedEntries,
   mappedInputs,
   readTriggerEntries,
-  startConfigRevision,
   startIntent,
   type MappedSources,
   type OnBinding,
@@ -49,11 +49,11 @@ export function triggerEntriesReader(): () => Promise<readonly TriggerEntry[]> {
 }
 
 export type WaitingStartFreshness =
-  /** Run it as it is: unchanged, or not a start that follows a file this install serves. */
+  /** Run it as it is: its file is unchanged, or it is not a start that follows a file. */
   | { fresh: true }
-  /** Its own trigger file does not read; it waits for the operator to fix it. */
+  /** Pending: its own trigger file does not read; it waits for the operator to fix it. */
   | { wait: Error }
-  /** Queued from a file that changed or is gone: back to preparation. */
+  /** Queued, and its file changed, is gone or does not read: back to preparation. */
   | { stale: true }
   /** Pending: the intent its file builds now. */
   | { intent: ResourceStartBindingIntent }
@@ -63,10 +63,11 @@ export type WaitingStartFreshness =
 type CausingActor = NonNullable<SourceReceiptInput['sourceActor']>;
 
 /**
- * The freshness of one waiting start. `entries` reads the trigger directory, once per pass,
- * and only for a start a run's end or settled asks caused. A start recorded before revisions covered the whole start config (no prefix)
- * keeps its queued launch; a pending one is rebuilt, and kept as frozen when the rebuild
- * cannot map, so it is never lost for that reason alone.
+ * The freshness of one waiting start: its recorded revision against its trigger file as
+ * registered now on its host (`isRevisionOf`). `entries` reads the drainer's trigger
+ * directory, once per pass and only for a start a run's end or settled asks caused. A
+ * start recorded with no revision is rebuilt once, and kept as frozen when its file cannot
+ * rebuild it, so it is never lost for that reason alone.
  */
 export async function waitingStartFreshness(
   host: WorkflowHost,
@@ -85,20 +86,19 @@ export async function waitingStartFreshness(
     sourceInstanceId: receipt.sourceInstanceId,
     hostId: binding.intent.hostId,
   });
-  if ('notServed' in lookup) return { fresh: true };
-  if ('unread' in lookup) return { wait: lookup.unread };
-  const legacy = !isStartConfigRevision(binding.bindingRevision);
-  if ('found' in lookup && !legacy && startConfigRevision(lookup.found) === binding.bindingRevision)
+  if ('found' in lookup && isRevisionOf(lookup.found, binding.bindingRevision))
     return { fresh: true };
-  if (phase === 'queued') return legacy ? { fresh: true } : { stale: true };
+  // A queued start is checked again when it is prepared, with the rest of this rule.
+  if (phase === 'queued') return { stale: true };
+  if ('unread' in lookup) return { wait: lookup.unread };
   const rebuilt =
     'found' in lookup
       ? await rebuild(host, lookup.found, actor, receipt.itemKey, binding.intent)
       : refuse(lookup.gone);
-  if ('refused' in rebuilt && legacy) {
+  if ('refused' in rebuilt && binding.bindingRevision === null) {
     log.info(
       { sourceInstanceId: receipt.sourceInstanceId, detail: rebuilt.refused.detail },
-      'resource_start.legacy_start_kept'
+      'resource_start.unrevised_start_kept'
     );
     return { fresh: true };
   }
@@ -127,8 +127,8 @@ async function rebuild(
     return refuse(`${file.file}: its binding is now '${file.binding.bindingId}'`);
   const sources =
     'runEnded' in file
-      ? await runEndedSources(host, file, actor.id, itemKey)
-      : await asksSettledSources(host, actor.id, itemKey, stored);
+      ? await runEndedSources(host, file, actor, itemKey)
+      : await asksSettledSources(host, file, actor.id, itemKey, stored);
   if ('refused' in sources) return sources;
   const mapped = mappedInputs(
     'runEnded' in file ? file.runEnded.inputs : file.asksSettled.inputs,
@@ -140,17 +140,25 @@ async function rebuild(
   return { intent: stored.itemKey === undefined ? intent : { ...intent, itemKey: stored.itemKey } };
 }
 
-/** What a run-ended binding maps from, read again from the ended run's record. */
+/**
+ * What a run-ended binding maps from, read again from the ended run's record. The run is
+ * needed: the file must still bind its workflow and outcome (`bindsRunEnd`).
+ */
 async function runEndedSources(
   host: WorkflowHost,
   file: Extract<OnBinding, { runEnded: unknown }>,
-  runId: string,
+  actor: CausingActor,
   startedItemKey: string | null
-): Promise<MappedSources> {
+): Promise<MappedSources | ReturnType<typeof refuse>> {
   const { store } = host.deps;
-  const run = await store.getWorkflowRun(runId);
+  const run = await store.getWorkflowRun(actor.id);
   const item = run?.item_id ? await store.getItem(run.item_id) : null;
-  if (!run || !item) return { gone: `run '${runId}', which caused this start, no longer exists` };
+  if (!run || !item) return refuse(`run '${actor.id}', which caused this start, is gone`);
+  const end = { workflowName: run.workflow_name, outcome: actor.display ?? '' };
+  if (!bindsRunEnd(file.runEnded, end))
+    return refuse(
+      `${file.file}: it no longer binds '${end.workflowName}' completing with '${end.outcome}'`
+    );
   const { inputs: sources, linked } = file.runEnded;
   const readsResult =
     linked?.items !== undefined || Object.values(sources ?? {}).some(source => 'result' in source);
@@ -180,6 +188,7 @@ async function runEndedSources(
  */
 async function asksSettledSources(
   host: WorkflowHost,
+  file: Extract<OnBinding, { asksSettled: unknown }>,
   runId: string,
   itemKey: string | null,
   stored: ResourceStartBindingIntent
@@ -199,6 +208,8 @@ async function asksSettledSources(
     rows.push(row);
   }
   if (rows.length === 0) return refuse(`the asks run '${runId}' left are gone`);
+  if (!bindsSettlement(file.asksSettled, rows))
+    return refuse(`${file.file}: it no longer starts on the asks run '${runId}' left`);
   const run = await store.getWorkflowRun(runId);
   return settledSources(runId, rows, run, itemAsks);
 }

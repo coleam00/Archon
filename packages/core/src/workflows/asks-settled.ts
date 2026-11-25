@@ -111,14 +111,10 @@ export function createAsksSettledStarts(
     return (rows, run, itemAsks) => {
       const runId = rows[0]?.runId;
       if (runId === undefined) return [];
-      const settledAs = rows.some(row => row.closed?.as === 'answered') ? 'answered' : 'withdrawn';
+      const settledAs = settlement(rows);
       const from = settledSources(runId, rows, run, itemAsks);
       return candidates
-        .filter(({ asksSettled: { settled, option } }) =>
-          option === undefined
-            ? settled === 'any' || settled === settledAs
-            : choseOption(rows, option)
-        )
+        .filter(({ asksSettled }) => bindsSettlement(asksSettled, rows))
         .map(candidate =>
           bindingReceipt(
             candidate,
@@ -136,6 +132,26 @@ export function createAsksSettledStarts(
         );
     };
   };
+}
+
+/** How a settled set settled: answered when any ask of it was answered. */
+function settlement(rows: readonly StoredItemAsk[]): 'answered' | 'withdrawn' {
+  return rows.some(row => row.closed?.as === 'answered') ? 'answered' : 'withdrawn';
+}
+
+/**
+ * Whether an asks-settled binding starts on this settled set: the asks were left by a run
+ * of its workflow, and they settled as `settled` says, or with `option`, every answer
+ * chose it. The settling write and the rebuild of a waiting start both decide it here.
+ */
+export function bindsSettlement(
+  { workflowName, settled, option }: AsksSettledTrigger,
+  rows: readonly StoredItemAsk[]
+): boolean {
+  if (rows[0]?.workflowName !== workflowName) return false;
+  return option === undefined
+    ? settled === 'any' || settled === settlement(rows)
+    : choseOption(rows, option);
 }
 
 /**
