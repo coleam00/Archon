@@ -6,8 +6,8 @@ import { getRegisteredPlatformPolicies, unknownPlatformReason } from '../../plat
 import * as isolationEnvDb from '../../db/isolation-environments';
 import {
   judgeBranchForRemoval,
-  NO_REMOTE_REASON,
-  resolveCleanupRemote,
+  NO_MERGE_REMOTE_REASON,
+  resolveMergeRemote,
   skipReasonFor,
   type MergeVerdict,
 } from './merge-verdict';
@@ -75,7 +75,7 @@ interface MergedSweep {
  * A checkout directory that does not exist is reported, not swept: every Git check
  * would fail, and whether the project was deleted or its disk is unmounted is the
  * operator's call. A checkout that exists but cannot be read still fails the sweep.
- * A repository with no remote keeps every environment: nothing remote can prove a merge.
+ * A repository with no merge remote (see resolveMergeRemote) keeps every environment.
  */
 export async function cleanupMergedWorktrees(
   codebaseId: string,
@@ -99,8 +99,6 @@ export async function cleanupMergedWorktrees(
       })),
     };
   }
-  const repoPath = toRepoPath(mainRepoPath);
-  const remote = await resolveCleanupRemote(repoPath, await loadRepoConfig(mainRepoPath));
   const result: CleanupOperationResult = {
     errors: [],
     removed: [],
@@ -108,30 +106,34 @@ export async function cleanupMergedWorktrees(
     skipped: [],
     releasedFailedRuns: [],
   };
+  // No worktree to judge: a folder project with only containers has no Git to ask.
+  if (environments.length === 0) return { kind: 'swept', result };
+  const repoPath = toRepoPath(mainRepoPath);
+  const remote = await resolveMergeRemote(repoPath, await loadRepoConfig(mainRepoPath));
   if (!remote) {
     getLog().info(
       { codebaseId, repoPath: mainRepoPath, environments: environments.length },
       'isolation.merged_cleanup_no_remote'
     );
-    for (const env of environments) {
-      const reason = unknownPlatformReason(env.created_by_platform) ?? NO_REMOTE_REASON;
-      result.skipped.push({ branchName: env.branch_name, reason });
-    }
-    return { kind: 'swept', result };
   }
-  const sweep: MergedSweep = {
-    repoPath,
-    mainRepoPath,
-    remote,
-    includeClosed: options.includeClosed ?? false,
-    prStateCache: new Map<string, PrLookup>(),
-    result,
-  };
+  const sweep: MergedSweep | null = remote
+    ? {
+        repoPath,
+        mainRepoPath,
+        remote,
+        includeClosed: options.includeClosed ?? false,
+        prStateCache: new Map<string, PrLookup>(),
+        result,
+      }
+    : null;
 
   for (const env of environments) {
     const reason = unknownPlatformReason(env.created_by_platform);
-    if (reason) {
-      result.skipped.push({ branchName: env.branch_name, reason });
+    if (reason || !sweep) {
+      result.skipped.push({
+        branchName: env.branch_name,
+        reason: reason ?? NO_MERGE_REMOTE_REASON,
+      });
       continue;
     }
     const verdict = await judgeMergedEnvironment(env, sweep);

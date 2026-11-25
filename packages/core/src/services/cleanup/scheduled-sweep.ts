@@ -15,8 +15,8 @@ import * as isolationEnvDb from '../../db/isolation-environments';
 import { loadRepoConfig } from '../../config/config-loader';
 import {
   judgeBranchForRemoval,
-  NO_REMOTE_REASON,
-  resolveCleanupRemote,
+  NO_MERGE_REMOTE_REASON,
+  resolveMergeRemote,
   skipReasonFor,
 } from './merge-verdict';
 import {
@@ -96,14 +96,14 @@ export async function sweepScheduledEnvironment(
   if (!pathExists && (await sweepMissingPath(env, sweep))) return;
 
   const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-  const remote = await resolveCleanupRemote(
+  const remote = await resolveMergeRemote(
     mainRepoPath,
     await loadRepoConfig(env.codebase_default_cwd)
   );
-  // Kept, not handed to the stale sweep: with no remote every local commit counts
-  // as unpushed, and nothing remote can settle the rest.
+  // Kept, not handed to the stale sweep, as it was when the judgment below failed
+  // against an absent origin: nothing has judged this work unmerged.
   if (!remote) {
-    sweep.report.skipped.push({ id: env.id, reason: NO_REMOTE_REASON });
+    sweep.report.skipped.push({ id: env.id, reason: NO_MERGE_REMOTE_REASON });
     return;
   }
   // A throw here reaches the caller, which records the failure and leaves the

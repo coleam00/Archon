@@ -1,12 +1,12 @@
 import { GitFailure } from '@archon/git';
 import { InvalidConfigError } from '../../config/config-validation';
-import { NoRemoteError } from './merge-verdict';
+import { NoMergeRemoteError } from './merge-verdict';
 
 export function statusDiagnostic(error: unknown): string {
   // Git/config errors can echo transformed remotes and arbitrary config values.
   // Only structured failure categories are safe to publish, never their prose.
   if (error instanceof InvalidConfigError) return 'Invalid repository configuration';
-  if (error instanceof NoRemoteError) return error.message;
+  if (error instanceof NoMergeRemoteError) return error.message;
   if (error instanceof GitFailure) {
     let reason = 'Git operation failed';
     if (error.kind === 'default_branch_missing') reason = 'Remote default branch is unavailable';

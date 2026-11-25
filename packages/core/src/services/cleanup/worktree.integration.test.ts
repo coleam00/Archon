@@ -54,7 +54,7 @@ const { cleanupStaleWorktrees, onConversationClosed, runScheduledCleanup } = awa
   '../cleanup-service'
 );
 const { cleanupMergedWorktrees } = await import('./merged-sweep');
-const { NO_REMOTE_REASON } = await import('./merge-verdict');
+const { NO_MERGE_REMOTE_REASON } = await import('./merge-verdict');
 /** The merged sweep on a checkout that exists: what it swept. */
 async function sweepMerged(
   ...args: Parameters<typeof cleanupMergedWorktrees>
@@ -767,6 +767,20 @@ describe('completed run worktree release', () => {
     });
   });
 
+  test('in a repository with no remote, a commit keeps the checkout with no git error', async () => {
+    await rm(join(repo, '.archon'), { recursive: true });
+    await git(repo, 'remote', 'remove', 'upstream');
+    await commitInWorktree();
+    // With no remote, the base commit is on no remote either.
+    expect(await assess()).toEqual({
+      disposition: 'retained',
+      reason: 'unpushed_commits',
+      detail: '2 commit(s) on no remote',
+    });
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+  });
+
   test('a commit made after a push that left tracking refs stale keeps the checkout', async () => {
     await commitInWorktree();
     await pushByUrl();
@@ -967,13 +981,13 @@ test('both sweeps keep a worktree in a repository with no remote, reporting why'
   expect(manual).toMatchObject({
     errors: [],
     removed: [],
-    skipped: [{ branchName: env.branch_name, reason: NO_REMOTE_REASON }],
+    skipped: [{ branchName: env.branch_name, reason: NO_MERGE_REMOTE_REASON }],
   });
   // The scheduled sweep also sees earlier tests' environments, so assert on this one.
   const scheduled = await runScheduledCleanup();
   expect(scheduled.errors.filter(entry => entry.id === env.id)).toEqual([]);
   expect(scheduled.skipped.filter(entry => entry.id === env.id)).toEqual([
-    { id: env.id, reason: NO_REMOTE_REASON },
+    { id: env.id, reason: NO_MERGE_REMOTE_REASON },
   ]);
   expect(await status()).toBe('active');
   expect(existsSync(env.working_path)).toBe(true);

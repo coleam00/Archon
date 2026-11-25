@@ -22,6 +22,7 @@ import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registr
 import { getWorktreeStatusBreakdown } from './cleanup-service';
 import { getLog } from './cleanup/log';
 import { statusDiagnostic } from './cleanup/status-diagnostic';
+import { NO_MERGE_REMOTE_REASON } from './cleanup/merge-verdict';
 import { InvalidConfigError } from '../config/config-validation';
 
 const omitted = 'Operation failed (unstructured diagnostic omitted to protect credentials)';
@@ -150,6 +151,7 @@ test.each(['config', 'default branch'])(
     spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
     spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
     spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
+    spyOn(git, 'getDefaultRemote').mockResolvedValue('origin');
     spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
       statusEnvironment(codebase.default_cwd),
     ]);
@@ -204,6 +206,7 @@ test('status keeps both inspection failure categories without exposing secrets',
   spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
   spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
   spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
+  spyOn(git, 'getDefaultRemote').mockResolvedValue('origin');
   spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
     statusEnvironment(codebase.default_cwd),
   ]);
@@ -338,6 +341,6 @@ test('status names a repository with no remote as the reason classification is u
   });
 
   expect(result.message).toContain(
-    'Merge/stale classification unavailable (base ref resolution failed: Repository has no remote to judge merges against)'
+    `Merge/stale classification unavailable (base ref resolution failed: ${NO_MERGE_REMOTE_REASON})`
   );
 });
