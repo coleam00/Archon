@@ -789,6 +789,16 @@ ${
         '    trigger_rule: all_done',
       ],
     ],
+    [
+      'and a codex all_done node hit the same limit',
+      [
+        '  - id: record',
+        "    prompt: 'record $work.output'",
+        '    provider: codex',
+        '    depends_on: [work]',
+        '    trigger_rule: all_done',
+      ],
+    ],
   ])(
     'waits on the quota reset when a composed instance node reports quota_exhausted %s',
     async (_, reader) => {
@@ -848,7 +858,8 @@ ${
         expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
         { kind: 'started', stepName: 'fan' }
       );
-      // The fan-out is bound to no provider; its records still name the instance's.
+      // The fan-out is bound to no provider and no record says whose limit it forwarded, so
+      // its wait names none: never the provider of another node that hit an equal limit.
       const failedRecords = persistedEvents(store)
         .filter(event => event.event_type === 'node_failed')
         .map(event => ({ step_name: event.step_name ?? null, data: event.data ?? {} }));
@@ -858,7 +869,7 @@ ${
           'compose-quota-run',
           'fan'
         )
-      ).toBe('claude');
+      ).toBeUndefined();
     }
   );
 

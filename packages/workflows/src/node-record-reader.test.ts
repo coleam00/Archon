@@ -257,35 +257,29 @@ describe('limitFailureProvider', () => {
           failed('implement', { provider: 'claude', provider_failure: quota }),
           failed('review', { provider: 'pi', provider_failure: quota }),
           failed('implement', { provider: 'codex', provider_failure: quota }),
+          // An unrelated node that fails later does not change it.
+          failed('report', { provider: 'pi', provider_failure: quota }),
         ],
       ],
     ]);
     expect(limitFailureProvider(events, 'run', 'implement')).toBe('codex');
-    // A record bound to no provider, with no failure to trace, names none.
+    // A record bound to no provider names none.
     expect(
       limitFailureProvider(new Map([['run', [failed('implement', {})]]]), 'run', 'implement')
     ).toBeUndefined();
   });
 
-  it("names an aggregate's provider by the descendant record holding the failure it forwarded", () => {
-    const other = { ...quota, resetAt: '2026-11-26T10:00:00.000Z' };
+  it('names no provider for an aggregate, even when another record holds an equal limit', () => {
     const events = new Map([
       [
         'run',
         [
           failed('fan__a__work', { provider: 'claude', provider_failure: quota }),
-          failed('fan__b__work', { provider: 'codex', provider_failure: other }),
           failed('fan', { provider_failure: quota }),
+          failed('report', { provider: 'codex', provider_failure: quota }),
         ],
       ],
     ]);
-    expect(limitFailureProvider(events, 'run', 'fan')).toBe('claude');
-    expect(
-      limitFailureProvider(
-        new Map([['run', [failed('fan', { provider_failure: quota })]]]),
-        'run',
-        'fan'
-      )
-    ).toBeUndefined();
+    expect(limitFailureProvider(events, 'run', 'fan')).toBeUndefined();
   });
 });

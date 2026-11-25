@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import { modelCallUsageSchema } from '@archon/provider-contract';
@@ -118,15 +117,11 @@ export function readableRequestEvidence(
 
 const recordUsageKeys = { tokens: ['tokens'], spend: ['spend', 'loopBaseline'] };
 
-/** The two fields of a `node_failed` record the usage-limit provider is read from. */
-const limitRecordSchema = serializedNodeDataSchema.pick({ provider: true, provider_failure: true });
-
 /**
- * The provider whose limit a usage-limit wait on `nodeId` waits for, from a run's
- * `node_failed` records: the provider the node's latest failure was bound to. An aggregate
- * node (a loop group, a composed fan-out) is bound to none; it records the limit failure of
- * the descendant it selected unchanged, so the provider is the one that descendant's
- * record with that same failure was bound to. Undefined when no record names one.
+ * The provider a usage-limit wait on `nodeId` waits for: the provider the node's latest
+ * `node_failed` record was bound to. A loop group or composed fan-out is bound to none, and
+ * no record says which descendant's limit it forwarded, so its wait names no provider
+ * rather than a guessed one.
  */
 export function limitFailureProvider(
   events: ReadonlyMap<
@@ -136,21 +131,8 @@ export function limitFailureProvider(
   runId: string,
   nodeId: string
 ): string | undefined {
-  const failed = (events.get(runId) ?? []).map(event => ({
-    step: event.step_name,
-    record: limitRecordSchema.safeParse(event.data).data,
-  }));
-  const own = failed.filter(({ step }) => step === nodeId).at(-1)?.record;
-  if (own?.provider !== undefined) return own.provider;
-  if (own?.provider_failure === undefined) return undefined;
-  return failed
-    .filter(
-      ({ step, record }) =>
-        step !== nodeId &&
-        record?.provider !== undefined &&
-        isDeepStrictEqual(record.provider_failure, own.provider_failure)
-    )
-    .at(-1)?.record?.provider;
+  const latest = (events.get(runId) ?? []).filter(event => event.step_name === nodeId).at(-1);
+  return serializedNodeDataSchema.shape.provider.safeParse(latest?.data.provider).data;
 }
 
 export function readNodeRecordData(value: unknown): Record<string, unknown> {
