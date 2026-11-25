@@ -48,6 +48,7 @@ import {
   closedWithoutRun,
 } from './attention-watch-events';
 import { recordSurfaceSchema } from './schemas/record-surface';
+import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
   attentionAnswererSchema,
   attentionAnsweringRunSchema,
@@ -65,8 +66,8 @@ import {
   type IWorkflowStore,
   type WorkflowEventCursor,
 } from './store';
-import { nodeFailureKindSchema } from './schemas/node-execution';
-import { terminalCause } from './attention-terminal-cause';
+import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
+import { firstFailedNodeEvent, recordedFailureKind } from './terminal-record';
 import { workflowNoticeDataSchema } from './workflow-notice';
 
 function getLog(): ReturnType<typeof createLogger> {
@@ -173,11 +174,8 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     outcome: z.string().min(1).nullable(),
     /**
      * Where a failed run failed: its terminal record's first failed node and the failure
-     * kind that node's `node_failed` event recorded (null when it recorded none). A node
-     * whose failure recorded `outcome_unknown` is named before any other, and for a
-     * completed run too, where an `all_done` aggregate let the run go on past it. Null
-     * otherwise: for any other status, and when the record names no failed node or there
-     * is no record.
+     * kind that node's `node_failed` event recorded (null when it recorded none), or on any
+     * terminal run a node the record holds as failed with `outcome_unknown`. Null otherwise.
      */
     cause: z.object({ node: z.string(), errorClass: nodeFailureKindSchema.nullable() }).nullable(),
     /**
@@ -701,6 +699,28 @@ export async function watchAttentionQueue(
       if (!isDeepStrictEqual(open.get(item.ref), item)) await emitOpen(item, cursor, false);
   };
 
+  // Only the events before the delivered terminal event count, so a replayed line keeps
+  // its cause after the run resumed and failed again. A read failure fails the delivery,
+  // which the follower retries.
+  const failureCause = async (
+    event: WorkflowEventRow,
+    node: string | null
+  ): Promise<{ node: string; errorClass: NodeFailureKind | null } | null> => {
+    if (node === null) return null;
+    const runId = event.workflow_run_id;
+    const rows =
+      (await store.listEventsForRuns([runId], ['node_failed', 'workflow_failed'])).get(runId) ?? [];
+    const end = rows.findIndex(row => row.id === event.id);
+    const failed = firstFailedNodeEvent(
+      { first_failed_node: node },
+      end === -1 ? rows : rows.slice(0, end)
+    );
+    return {
+      node,
+      errorClass: failed === undefined ? null : (recordedFailureKind(failed) ?? null),
+    };
+  };
+
   const emitUnmatched = async (
     { cursor, event }: WorkflowRunDelivery,
     view: RunView | null
@@ -732,16 +752,13 @@ export async function watchAttentionQueue(
     const { event } = delivery;
     const status = terminalRunStatusForEventType(event.event_type);
     if (status !== undefined) {
-      const { outcome, firstFailedNode, reason } = terminalFacts(event, status);
+      const { outcome, firstFailedNode, unknown, reason } = terminalFacts(event, status);
       await emit({
         type: 'terminal',
         ...lifecycleFields(delivery, view),
         status,
         outcome,
-        cause:
-          status === 'failed' || status === 'completed'
-            ? await terminalCause(store, event, status, firstFailedNode)
-            : null,
+        cause: unknown ?? (status === 'failed' ? await failureCause(event, firstFailedNode) : null),
         ...(reason.length > 0 ? { reason } : {}),
       });
     }

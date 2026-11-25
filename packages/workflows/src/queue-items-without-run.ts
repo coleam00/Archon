@@ -36,6 +36,7 @@ import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { getTerminalRecord, terminalReason } from './terminal-record';
+import { isOutcomeUnknownRun } from './outcome-unknown';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { StoredItemWait } from './schemas/item-wait';
@@ -220,7 +221,14 @@ export async function stoppedQueueItem(
     summary: stopped.summary,
     ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
     ...(stopped.refused === undefined ? {} : { refused: stopped.refused }),
-    ...(failed ? { failed: { error: failureReason(run, failedEvents) } } : {}),
+    ...(failed
+      ? {
+          failed: {
+            error: failureReason(run, failedEvents),
+            ...(isOutcomeUnknownRun(run) ? { outcomeUnknown: true as const } : {}),
+          },
+        }
+      : {}),
     checkout: codebase?.default_cwd ?? null,
   };
 }

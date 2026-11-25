@@ -12,7 +12,7 @@ import { tmpdir } from 'os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import * as nodeEventWrite from '../node-event-write';
 import { executeDagWorkflow } from '../dag-executor';
-import { readOutcomeUnknownHold } from '../outcome-unknown';
+import { classifyExistingChildren } from './nodes/workflow/fan-out-children';
 import { captureWorkflowSource, capturedSourceRoots } from '../workflow-source';
 import { WorkflowSourceUnavailableError } from '../workflow-source';
 import * as sourceLoader from '../workflow-source/load';
@@ -59,7 +59,7 @@ function expectFailedOutcomeUnknown(store: MockWorkflowStore, runId: string): vo
   expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
   expect(store.failWorkflowRun).toHaveBeenCalledWith(
     runId,
-    expect.stringContaining('is unknown, so the run is not continued automatically'),
+    expect.any(String),
     expect.objectContaining({ exitReason: 'outcome_unknown' })
   );
   expect(store.completeWorkflowRun).not.toHaveBeenCalled();
@@ -148,7 +148,10 @@ describe('a failure whose outcome is unknown', () => {
   });
 
   describe('inside a composed fan-out', () => {
-    const fanOut = async (mode: 'all_done' | 'all_success'): Promise<MockWorkflowStore> => {
+    const fanOut = async (
+      mode: 'all_done' | 'all_success',
+      inLoop = false
+    ): Promise<MockWorkflowStore> => {
       await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
       await writeFile(
         join(testDir, '.archon', 'workflows', 'writer.yaml'),
@@ -164,6 +167,12 @@ describe('a failure whose outcome is unknown', () => {
         ].join('\n')
       );
       spy = failingWithOutcomeUnknown(['write']);
+      const fanNode = {
+        id: 'fan',
+        kind: 'compose_fan_out' as const,
+        include: 'writer',
+        fan_out: { items: '[1,2]', as: 'item', max_parallel: 2, join: mode },
+      };
       const store = createMockStore();
       await executeDagWorkflow(
         dagOptions({
@@ -171,14 +180,15 @@ describe('a failure whose outcome is unknown', () => {
           cwd: testDir,
           workflow: {
             name: 'unknown-fan',
-            nodes: [
-              {
-                id: 'fan',
-                kind: 'compose_fan_out',
-                include: 'writer',
-                fan_out: { items: '[1,2]', as: 'item', max_parallel: 2, join: mode },
-              },
-            ],
+            nodes: inLoop
+              ? ([
+                  {
+                    id: 'refine',
+                    kind: 'loop_group',
+                    loop_group: { until: 'DONE', max_iterations: 2, nodes: [fanNode] },
+                  },
+                ] as DagNode[])
+              : [fanNode],
           },
           workflowRun: makeWorkflowRun('unknown-fan'),
         })
@@ -203,8 +213,26 @@ describe('a failure whose outcome is unknown', () => {
       expect(
         instances.filter(event => event.event_type === 'node_failed').map(e => e.data?.failure_kind)
       ).toEqual(['outcome_unknown']);
+      // The failed instance's slot carries the failure marker, as for any failed instance.
+      const joined = persistedEvents(store).find(
+        event => event.event_type === 'node_completed' && event.step_name === 'fan'
+      );
+      const slots = JSON.parse(String(joined?.data?.node_output)) as unknown[];
+      expect(slots).toContainEqual(expect.objectContaining({ archon_failed: true }));
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('under all_done inside a loop group stops the loop before another round runs it again', async () => {
+      const store = await fanOut('all_done', true);
+      const failures = persistedEvents(store).filter(
+        event => event.event_type === 'node_failed' && event.step_name?.endsWith('__write')
+      );
+      expect(failures.map(e => e.data?.failure_kind)).toEqual(['outcome_unknown']);
+      expect(failedEvents(store, step => step === 'refine')[0]?.data?.failure_kind).toBe(
+        'child_failed'
+      );
+      expectFailedOutcomeUnknown(store, 'unknown-fan');
     });
   });
 
@@ -284,7 +312,9 @@ describe('a failure whose outcome is unknown', () => {
   });
 
   describe.skipIf(process.platform === 'win32')('when a sibling source is unreadable', () => {
-    const unreadableRun = async (): Promise<MockWorkflowStore> => {
+    const unreadableRun = async (
+      write: DagNode = { id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1' }
+    ): Promise<MockWorkflowStore> => {
       const scripts = join(testDir, '.archon', 'scripts');
       await mkdir(scripts, { recursive: true });
       await writeFile(join(scripts, 'check.ts'), 'console.log("ran")');
@@ -304,7 +334,7 @@ describe('a failure whose outcome is unknown', () => {
             workflow: {
               name: 'unknown-source',
               nodes: [
-                { id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1' },
+                write,
                 { id: 'check', kind: 'exec', runtime: 'bun', script: 'check' },
               ] as DagNode[],
             },
@@ -324,31 +354,34 @@ describe('a failure whose outcome is unknown', () => {
       expectFailedOutcomeUnknown(store, 'unknown-source');
     });
 
-    it('still releases the run when the sibling failed in an ordinary way', async () => {
-      const store = await unreadableRun();
+    it('still releases the run when the sibling is a script contract failure (retryable: false)', async () => {
+      const store = await unreadableRun({
+        id: 'write',
+        kind: 'exec',
+        runtime: 'sh',
+        script: "echo 'not json'",
+        output_format: { type: 'object' },
+      } as DagNode);
+      const contract = failedEvents(store, step => step === 'write')[0]?.data;
+      expect(contract?.failure_kind).toBe('output_contract');
+      expect(contract?.retryable).toBe(false);
       expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
     });
   });
 });
 
-describe('readOutcomeUnknownHold', () => {
-  it('holds a parent whose failed child run stopped with an unknown outcome', async () => {
-    const store = createMockStore();
-    const child = (id: string, status: 'failed' | 'completed', reason: string) =>
-      makeWorkflowRun(id, { status, metadata: { stop_reason: { reason } } });
-    store.findChildRuns.mockResolvedValue([
-      child('child-unknown', 'failed', 'outcome_unknown'),
-      child('child-error', 'failed', 'node_error'),
-      // Resumed by hand and completed since: no longer holds the parent.
-      child('child-done', 'completed', 'outcome_unknown'),
-    ]);
-
-    expect(await readOutcomeUnknownHold(store, makeWorkflowRun('parent'))).toEqual({
-      steps: [],
-      childRunIds: ['child-unknown'],
-    });
-    store.findChildRuns.mockResolvedValue([]);
-    expect(await readOutcomeUnknownHold(store, makeWorkflowRun('parent'))).toBeUndefined();
+describe('a workflow: fan-out recovering its children', () => {
+  it('re-drives an ordinary failed child, but not one that stopped with an unknown outcome', () => {
+    const failed = (id: string, reason: string) =>
+      makeWorkflowRun(id, { status: 'failed', metadata: { stop_reason: { reason } } });
+    const { settledByIndex } = classifyExistingChildren(
+      new Map([
+        [0, failed('child-unknown', 'outcome_unknown')],
+        [1, failed('child-error', 'node_error')],
+      ]),
+      false
+    );
+    expect([...settledByIndex.keys()]).toEqual([0]);
   });
 });

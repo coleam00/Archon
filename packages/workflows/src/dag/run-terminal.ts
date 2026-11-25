@@ -32,7 +32,7 @@ import { safeSendMessage } from '../platform-messages';
 import type { ContainerRunContext } from '../container-context';
 import { getLog } from './log';
 import { pauseForUsageLimit } from './usage-limit-wait';
-import { outcomeUnknownText, readOutcomeUnknownHold } from '../outcome-unknown';
+import { outcomeUnknownText, readOutcomeUnknownSteps } from '../outcome-unknown';
 import type { RunLayersContext } from './run-context';
 import { runContainerWriteBackGate } from './container-gate';
 import { type ContainerPauseReceipt } from './pause';
@@ -307,9 +307,9 @@ async function failAtCompletion(
   site: string
 ): Promise<void> {
   const { deps, platform, conversationId, workflow, workflowRun, logDir } = ctx;
-  const hold = await readOutcomeUnknownHold(deps.store, workflowRun);
+  const held = await readOutcomeUnknownSteps(deps.store, workflowRun);
   const failMsg =
-    hold === undefined ? completionMsg : `${completionMsg} ${outcomeUnknownText(hold)}`;
+    held.length === 0 ? completionMsg : `${completionMsg} ${outcomeUnknownText(held)}`;
   await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
     (logErr: Error) => {
       getLog().error(
@@ -326,7 +326,7 @@ async function failAtCompletion(
     workflowRun,
     workflow.name,
     failMsg,
-    hold === undefined ? 'node_error' : 'outcome_unknown',
+    held.length === 0 ? 'node_error' : 'outcome_unknown',
     site
   );
 }
@@ -354,13 +354,13 @@ async function failOnNodeOutcome(
   const noneCompleted = nodeCounts.completed === 0;
   const anyFailed = nodeCounts.failed > 0;
   if (await skipIfStatusChanged(deps, workflowRun, 'dag.skip_fail_status_changed')) return;
-  const hold = await readOutcomeUnknownHold(deps.store, workflowRun);
-  if ((!noneCompleted || anyFailed) && (await pauseForUsageLimit(ctx, hold))) return;
+  const held = await readOutcomeUnknownSteps(deps.store, workflowRun);
+  if ((!noneCompleted || anyFailed) && (await pauseForUsageLimit(ctx, held))) return;
 
   const nodesMsg = noneCompleted
     ? noSuccessfulNodesMessage(workflow.name, nodeOutputs, nodeCounts.skipped)
     : partialFailureMessage(workflow.name, nodeOutputs);
-  const failMsg = hold === undefined ? nodesMsg : `${nodesMsg} ${outcomeUnknownText(hold)}`;
+  const failMsg = held.length === 0 ? nodesMsg : `${nodesMsg} ${outcomeUnknownText(held)}`;
   await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
     (logErr: Error) => {
       getLog().error(
@@ -383,7 +383,7 @@ async function failOnNodeOutcome(
     workflowRun,
     workflow.name,
     failMsg,
-    hold !== undefined
+    held.length > 0
       ? 'outcome_unknown'
       : // A first-node failure completes nothing, but it is still a node failure.
         noneCompleted && !anyFailed

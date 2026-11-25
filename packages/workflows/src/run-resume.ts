@@ -1,3 +1,4 @@
+import { isOutcomeUnknownRun } from './outcome-unknown';
 import { createLogger } from '@archon/paths';
 import type { PriorRunUsage } from './dag-executor';
 import type { WorkflowDeps } from './deps';
@@ -104,8 +105,11 @@ export async function inspectResumableRun(
         execution.node.fanOut === true &&
         execution.lifecycle.status === 'failed'
     );
+  // A run that failed holding an unknown outcome is resumed by its operator, never started
+  // fresh, even when that node was its first: a fresh run loses the record of what ran.
   if (
     priorCompletedNodes.size === 0 &&
+    !isOutcomeUnknownRun(candidate) &&
     !hasReRunGateState &&
     !hasWaitState &&
     !hasScheduledResume &&
@@ -130,7 +134,8 @@ export async function inspectResumableRun(
 /**
  * Hydrate an already-located resumable `WorkflowRun` candidate into the form
  * `executeWorkflow` expects. Returns `null` when the candidate has no
- * completed nodes, durable fan-out/source-release recovery, or resumable gate/wait state.
+ * completed nodes, durable fan-out/source-release recovery, resumable gate/wait state, or
+ * unknown outcome.
  *
  * The return shape is spread-compatible with `ExecuteWorkflowOptions`
  * so callers can write `executeWorkflow(..., { ...hydrated, codebaseId })`.

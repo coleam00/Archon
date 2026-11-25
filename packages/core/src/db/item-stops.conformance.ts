@@ -147,6 +147,16 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
         metadata: { scheduled_resume: { resumeAt: new Date(Date.now() + 60_000).toISOString() } },
       });
       expect(await stopped()).toEqual([]);
+
+      // A run that stopped with an unknown outcome says so: it is resumed, not restarted.
+      const unknown = await createOnItem(harness, 'check');
+      await harness.store.claimPendingWorkflowRun(unknown);
+      await harness.store.failWorkflowRun(unknown, 'write timed out', {
+        exitReason: 'outcome_unknown',
+      });
+      expect(await stopped()).toMatchObject([
+        { stoppedIn: { runId: unknown }, failed: { outcomeUnknown: true } },
+      ]);
     } finally {
       await harness.close();
     }

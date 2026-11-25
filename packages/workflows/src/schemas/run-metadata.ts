@@ -294,7 +294,12 @@ export const stoppedRefusalSchema = z.object({
 });
 export type StoppedRefusal = z.infer<typeof stoppedRefusalSchema>;
 
-/** The metadata that marks a completed run as having stopped its item. */
+/** Why a failed run stopped its item; `outcomeUnknown` means resume it, not restart it. */
+export const failedStopSchema = z.object({
+  error: z.string().nullable(),
+  outcomeUnknown: z.literal(true).optional(),
+});
+
 /** A recorded stop: why the run stopped its item, and the starts its end caused that were refused. */
 export interface ItemStopped {
   summary: string | null;

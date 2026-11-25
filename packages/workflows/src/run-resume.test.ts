@@ -372,6 +372,36 @@ describe('hydrateResumableRun', () => {
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('admits a first-node failure with an unknown outcome, so the operator resumes it', async () => {
+    const snapshot = mock(async () => ({
+      completedNodeOutputs: new Map(),
+      fanOutSnapshots: new Map(),
+      failedNodes: new Map([
+        ['write', { error: 'timed out', failureKind: 'outcome_unknown' as const }],
+      ]),
+      unresolvedNodeStarts: new Set<string>(),
+      budget: { workUnits: 0, spendUsd: 0 },
+      costUsd: 0,
+    }));
+    const unknown = makeRun({
+      status: 'failed',
+      metadata: { stop_reason: { reason: 'outcome_unknown' } },
+    });
+    const inspection = await inspectResumableRun(
+      makeDeps(makeStore({ getDagResumeSnapshot: snapshot })),
+      unknown
+    );
+    expect(inspection?.priorFailedNodes.get('write')?.failureKind).toBe('outcome_unknown');
+    // An ordinary first-node failure still starts fresh.
+    const ordinary = makeRun({
+      status: 'failed',
+      metadata: { stop_reason: { reason: 'node_error' } },
+    });
+    expect(
+      await inspectResumableRun(makeDeps(makeStore({ getDagResumeSnapshot: snapshot })), ordinary)
+    ).toBeNull();
+  });
+
   it('hydrates fan-out-only recovery state before any inner node completed', async () => {
     const fanOutSnapshots = new Map([
       [

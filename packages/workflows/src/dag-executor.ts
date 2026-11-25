@@ -45,7 +45,7 @@ import { OperatorPauseBoundary } from './dag/operator-pause-boundary';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
-import { outcomeUnknownText, readOutcomeUnknownHold } from './outcome-unknown';
+import { outcomeUnknownText, readOutcomeUnknownSteps } from './outcome-unknown';
 import { readCheckoutMark } from './checkout-mark';
 import type { ReturnsCheckout } from './run-result';
 import {
@@ -280,11 +280,11 @@ export async function executeDagWorkflow(
   const releaseRunForUnreadableSource = async (
     error: RunSourceUnreadableError
   ): Promise<boolean> => {
-    const hold = await readOutcomeUnknownHold(deps.store, workflowRun);
-    if (hold !== undefined) {
+    const held = await readOutcomeUnknownSteps(deps.store, workflowRun);
+    if (held.length > 0) {
       if (await skipIfStatusChanged(deps, workflowRun, 'dag.source_release_status_changed'))
         return false;
-      const failMsg = `Workflow '${workflow.name}' could not read the source of node '${error.nodeId}' and was not released to another host. ${outcomeUnknownText(hold)}`;
+      const failMsg = `Workflow '${workflow.name}' could not read the source of node '${error.nodeId}' and was not released to another host. ${outcomeUnknownText(held)}`;
       await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
         workflowId: workflowRun.id,
       });

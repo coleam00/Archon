@@ -363,6 +363,19 @@ test('a stopped item names its stage and outcome, and its commands work from any
   expect(failed).toContain('check failed: (exec_failed) no pr input given');
   expect(failed).toContain('archon workflow run --supersedes run-9');
   expect(failed).toContain('archon workflow run check --supersedes run-9 --input');
+  expect(failed).not.toContain('archon workflow resume run-9');
+  // One that stopped with an unknown outcome is resumed once its operator checked it.
+  const unknown = attentionItemLines(
+    {
+      ...stopped,
+      stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
+      summary: null,
+      failed: { error: '(outcome_unknown) push timed out', outcomeUnknown: true },
+    },
+    'brief'
+  ).join('\n');
+  expect(unknown).toContain('archon workflow resume run-9');
+  expect(unknown).toContain('archon workflow abandon run-9');
 
   // Stopped by a start refused at its limit: it names the limit and starts that workflow.
   const limited = attentionItemLines(

@@ -5,7 +5,6 @@
 import { randomUUID } from 'node:crypto';
 import type { WorkflowUsageLimitWaitContext } from '../schemas';
 import { isProviderLimit, rootFailures, type ProviderLimitFailure } from '../executor-shared';
-import type { OutcomeUnknownHold } from '../outcome-unknown';
 import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
 import { statusAfterPauseFailure } from './pause';
@@ -26,7 +25,7 @@ import type { RunTerminalContext } from './run-terminal';
  */
 async function usageLimitWait(
   ctx: RunTerminalContext,
-  hold: OutcomeUnknownHold | undefined
+  outcomeUnknownSteps: readonly string[]
 ): Promise<
   { wait: WorkflowUsageLimitWaitContext; cause: ProviderLimitFailure['class'] } | undefined
 > {
@@ -61,7 +60,7 @@ async function usageLimitWait(
       latest = { nodeId, resumeAt, cause: failure.class };
   }
   if (latest === undefined) return undefined;
-  if (hold !== undefined) return skip(latest.nodeId, 'outcome_unknown');
+  if (outcomeUnknownSteps.length > 0) return skip(latest.nodeId, 'outcome_unknown');
   if (config.workflows?.autoResumeOnQuotaReset === false) return skip(latest.nodeId, 'disabled');
   if (latest.resumeAt <= now) return skip(latest.nodeId, 'reset_passed');
   if (execContext.kind === 'container') return skip(latest.nodeId, 'container_unsupported');
@@ -81,10 +80,10 @@ async function usageLimitWait(
 /** Pause the run on a provider-limit wait. False when the pass must fail instead. */
 export async function pauseForUsageLimit(
   ctx: RunTerminalContext,
-  hold: OutcomeUnknownHold | undefined
+  outcomeUnknownSteps: readonly string[]
 ): Promise<boolean> {
   const { deps, workflowRun, workflow, platform, conversationId } = ctx;
-  const limit = await usageLimitWait(ctx, hold);
+  const limit = await usageLimitWait(ctx, outcomeUnknownSteps);
   if (limit === undefined) return false;
   const { wait, cause } = limit;
   try {

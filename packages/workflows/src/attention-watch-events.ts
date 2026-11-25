@@ -21,7 +21,8 @@ import {
 } from './schemas/workflow-run';
 import type { IWorkflowStore, WorkflowEventPage } from './store';
 import type { StoredItemAsk } from './schemas/item-ask';
-import { failedOutcomeReason, getTerminalRecord } from './terminal-record';
+import { failedOutcomeReason, getTerminalRecord, outcomeUnknownNodes } from './terminal-record';
+import type { TerminalRecord } from './schemas/terminal-record';
 
 function getLog(): ReturnType<typeof createLogger> {
   return createLogger('workflow.attention_watch');
@@ -89,11 +90,25 @@ export function indexAnswers(page: WorkflowEventPage): Map<string, AnswerOrigin>
   return answers;
 }
 
+/** An `outcome_unknown` cause for the first node `record` holds as failed that way. */
+function outcomeUnknownCause(
+  record: TerminalRecord | null
+): { node: string; errorClass: 'outcome_unknown' } | null {
+  const node = record === null ? undefined : outcomeUnknownNodes(record.nodes)[0];
+  return node === undefined ? null : { node: node.node_id, errorClass: 'outcome_unknown' };
+}
+
 /** What the terminal record riding on `event` says, or nulls when it cannot be read. */
 export function terminalFacts(
   event: WorkflowEventRow,
   status: RunTerminalStatus
-): { outcome: string | null; firstFailedNode: string | null; reason: string[] } {
+): {
+  outcome: string | null;
+  firstFailedNode: string | null;
+  /** The cause naming the first node the record holds as failed with `outcome_unknown`. */
+  unknown: { node: string; errorClass: 'outcome_unknown' } | null;
+  reason: string[];
+} {
   try {
     const record = getTerminalRecord(status, [event]);
     return {
@@ -107,6 +122,7 @@ export function terminalFacts(
           })
         : null,
       firstFailedNode: record?.first_failed_node ?? null,
+      unknown: outcomeUnknownCause(record),
       reason:
         status === 'failed' && event.data.exit_reason === 'launch_failed'
           ? ['launch failed before the first node']
@@ -119,7 +135,7 @@ export function terminalFacts(
       { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
       'workflow.attention_watch_terminal_record_unreadable'
     );
-    return { outcome: null, firstFailedNode: null, reason: [] };
+    return { outcome: null, firstFailedNode: null, unknown: null, reason: [] };
   }
 }
 

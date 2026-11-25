@@ -944,7 +944,16 @@ describe('watchAttentionQueue', () => {
         step_name: step,
         data: { error: 'boom', failure_kind: failureKind },
       });
-    const failed = await running(store);
+    // A child run: the ruling has attention show the child, which holds the records.
+    const parentId = await running(store);
+    const failed = (
+      await store.createWorkflowRun({
+        workflow_name: 'child-wf',
+        user_message: '',
+        parent_run_id: parentId,
+      })
+    ).id;
+    await store.claimPendingWorkflowRun(failed);
     await nodeFailed(failed, 'lint', 'exec_failed');
     await nodeFailed(failed, 'fan__b__write', 'outcome_unknown');
     await store.failWorkflowRun(failed, 'node failed', { exitReason: 'outcome_unknown' });
@@ -960,6 +969,8 @@ describe('watchAttentionQueue', () => {
     await store.completeWorkflowRun(completed, { duration_ms: 1 });
 
     expect(await stream.next(ofRun(failed, 'terminal'))).toMatchObject({
+      workflow: 'child-wf',
+      parentRunId: parentId,
       status: 'failed',
       cause: { node: 'fan__b__write', errorClass: 'outcome_unknown' },
     });

@@ -83,6 +83,33 @@ describe('executeDagWorkflow -- failures before a pause', () => {
     );
   });
 
+  it.each([
+    ['outcome_unknown', false],
+    ['exec_failed', true],
+  ] as const)(
+    'an always_run node whose failure was %s re-runs after the pause: %s',
+    async (failureKind, reruns) => {
+      const marker = join(testDir, 'flaky-ran');
+      const base = workflow(marker);
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(createMockStore()),
+          cwd: testDir,
+          workflow: {
+            ...base,
+            nodes: base.nodes.map(node =>
+              node.id === 'flaky' ? { ...node, always_run: true } : node
+            ),
+          },
+          workflowRun: makeWorkflowRun(`replay-always-${failureKind}`),
+          priorCompletedNodes: new Map([['report', { output: 'saw' }]]),
+          replayedFailures: new Map([['flaky', { error: 'exit 1', failureKind }]]),
+        })
+      );
+      expect(existsSync(marker)).toBe(reruns);
+    }
+  );
+
   it('re-runs a failed node when the resume retries a failed run', async () => {
     const store = createMockStore();
     const marker = join(testDir, 'flaky-ran');

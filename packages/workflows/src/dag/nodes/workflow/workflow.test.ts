@@ -82,7 +82,7 @@ describe('executeDagWorkflow -- workflow: node', () => {
       };
       const snapshot = await foldDagResumeSnapshot([historical], 'parent');
       store.getDagResumeSnapshot.mockResolvedValue(snapshot);
-      const children = [
+      store.findChildRuns.mockResolvedValue([
         makeWorkflowRun('b', {
           status: 'failed',
           metadata: {
@@ -92,15 +92,7 @@ describe('executeDagWorkflow -- workflow: node', () => {
             total_tokens_out: 6,
           },
         }),
-      ];
-      // Whether `sub` had already failed at each read of the children.
-      const childReadsAfterFailure: boolean[] = [];
-      store.findChildRuns.mockImplementation(async () => {
-        childReadsAfterFailure.push(
-          eventsOf(store).some(e => e.event_type === 'node_failed' && e.step_name === 'sub')
-        );
-        return children;
-      });
+      ]);
       const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
         status: 'completed',
         childRunId: 'b',
@@ -128,8 +120,7 @@ describe('executeDagWorkflow -- workflow: node', () => {
       });
       await executeDagWorkflow(options);
       expect(runChildWorkflow).not.toHaveBeenCalled();
-      // The node never reads its children; the run end reads them once, after it failed.
-      expect(childReadsAfterFailure).toEqual([true]);
+      expect(store.findChildRuns).not.toHaveBeenCalled();
       expect(eventsOf(store)).toContainEqual({
         event_type: 'node_failed',
         step_name: 'sub',
@@ -516,4 +507,43 @@ describe('executeDagWorkflow -- workflow: node', () => {
     expect(errorRow).toBeDefined();
     expect(errorRow?.error).toBe('child failed deliberately');
   });
+
+  it.each([
+    ['outcome_unknown', false],
+    ['node_error', true],
+  ] as const)(
+    'a failed child whose stop reason is %s is re-driven on re-entry: %s',
+    async (reason, redriven) => {
+      const store = createMockStore();
+      store.findChildRuns.mockResolvedValue([
+        makeWorkflowRun('child-1', {
+          status: 'failed',
+          metadata: { parent_node_id: 'sub', stop_reason: { reason } },
+        }),
+      ]);
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+        status: 'completed',
+        childRunId: 'child-1',
+        output: 'done',
+      }));
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('parent'),
+          workflow: { name: 'parent', nodes: [{ id: 'sub', kind: 'workflow', workflow: 'child' }] },
+          runChildWorkflow,
+        })
+      );
+      expect(runChildWorkflow).toHaveBeenCalledTimes(redriven ? 1 : 0);
+      if (!redriven)
+        expect(eventsOf(store)).toContainEqual(
+          expect.objectContaining({
+            event_type: 'node_failed',
+            step_name: 'sub',
+            data: expect.objectContaining({ failure_kind: 'child_failed' }),
+          })
+        );
+    }
+  );
 });

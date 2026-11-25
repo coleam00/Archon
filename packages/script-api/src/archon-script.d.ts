@@ -2606,6 +2606,7 @@ declare module 'archon:script' {
       }>;
       readonly failed?: {
         readonly error: string | null;
+        readonly outcomeUnknown?: true;
       };
       readonly checkout: string | null;
     } | {
@@ -3289,6 +3290,7 @@ declare module 'archon:script' {
         }>;
         readonly failed?: {
           readonly error: string | null;
+          readonly outcomeUnknown?: true;
         };
         readonly checkout: string | null;
       } | {

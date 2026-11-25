@@ -46,6 +46,7 @@ import {
   type LoopGroupState,
 } from './loop-group-state';
 import { runGroupUntilBash } from './until-bash';
+import { stopOnOutcomeUnknown } from './outcome-unknown-stop';
 
 /** One iteration's body run: its scoped outputs and the context it ran in. */
 interface BodyRun {
@@ -159,7 +160,7 @@ export async function runLoopGroupIteration(
     );
     return pauseAtGroupGate(run, state, i, { honestMessage, completionDetected });
   }
-  return undefined;
+  return stopOnOutcomeUnknown(run, state, i);
 }
 
 async function readParentStatus({ ctx, node }: LoopGroupRun) {

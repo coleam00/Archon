@@ -8020,6 +8020,8 @@ export interface components {
           }[];
           failed?: {
             error: string | null;
+            /** @enum {boolean} */
+            outcomeUnknown?: true;
           };
           checkout: string | null;
         }
@@ -8476,6 +8478,8 @@ export interface components {
             }[];
             failed?: {
               error: string | null;
+              /** @enum {boolean} */
+              outcomeUnknown?: true;
             };
             checkout: string | null;
           }
@@ -9064,6 +9068,8 @@ export interface components {
             }[];
             failed?: {
               error: string | null;
+              /** @enum {boolean} */
+              outcomeUnknown?: true;
             };
             checkout: string | null;
           }
@@ -9926,6 +9932,8 @@ export interface components {
               }[];
               failed?: {
                 error: string | null;
+                /** @enum {boolean} */
+                outcomeUnknown?: true;
               };
               checkout: string | null;
             }
@@ -10722,6 +10730,8 @@ export interface components {
                 }[];
                 failed?: {
                   error: string | null;
+                  /** @enum {boolean} */
+                  outcomeUnknown?: true;
                 };
                 checkout: string | null;
               }

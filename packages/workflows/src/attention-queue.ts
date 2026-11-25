@@ -44,7 +44,7 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { workflowRunStatusSchema } from './schemas/run-status';
-import { stoppedLimitSchema, stoppedRefusalSchema } from './schemas/run-metadata';
+import { failedStopSchema, stoppedLimitSchema, stoppedRefusalSchema } from './schemas/run-metadata';
 import { observeLostOwners, type LostOwner, type OwnerObserver } from './owner-observation';
 import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
@@ -214,8 +214,8 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** Set when the start the run caused was refused: at its limit, or before launch. */
     limit: stoppedLimitSchema.optional(),
     refused: z.array(stoppedRefusalSchema).optional(),
-    /** Set when the run failed: its recorded error, or null when it recorded none. */
-    failed: z.object({ error: z.string().nullable() }).optional(),
+    /** Set when the run failed: why, and whether its outcome is unknown. */
+    failed: failedStopSchema.optional(),
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),

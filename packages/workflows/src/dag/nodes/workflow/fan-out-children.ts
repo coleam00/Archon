@@ -6,6 +6,7 @@ import { FAN_OUT_CANCEL_REASONS } from '../../../store';
 import { canonicalValueText } from '../../../output-ref';
 import { getLog } from '../../log';
 import { childOutcomeFromRun, type ChildWorkflowOutcome } from '../../child-run';
+import { isOutcomeUnknownRun } from '../../../outcome-unknown';
 
 /**
  * `metadata.cancelled_reason` values the fan-out path stamps on children it cancels
@@ -231,7 +232,8 @@ export interface FanOutChildState {
 /**
  * Sort existing children into settled and held. A continuation threads every settled
  * child as it is; a recovery leaves failed and fan-out-cancelled children unsettled so
- * they are re-driven. A non-terminal child is held in either mode.
+ * they are re-driven, except a child whose outcome is unknown, which only its operator
+ * resumes. A non-terminal child is held in either mode.
  */
 export function classifyExistingChildren(
   existingByIndex: ReadonlyMap<number, WorkflowRun>,
@@ -250,7 +252,8 @@ export function classifyExistingChildren(
         settledByIndex.set(index, childOutcomeFromRun(child));
         break;
       case 'failed':
-        if (continuing) settledByIndex.set(index, childOutcomeFromRun(child));
+        if (continuing || isOutcomeUnknownRun(child))
+          settledByIndex.set(index, childOutcomeFromRun(child));
         break;
       case 'cancelled':
         // A user-cancelled child (no fan-out tag) is terminal in either mode — it fails

@@ -1131,25 +1131,30 @@ Plain `archon workflow run` never resumes implicitly.
 
 **Session context on resume**: Handles required by an explicit `context: { resume: node-id }` selector are restored for completed nodes. The ambient sequential cursor is not reconstructed; a downstream node that relies on implicit inherited context should use an explicit selector or re-read durable artifacts.
 
-**Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip).
+**Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip). A run that stopped with an [unknown outcome](#a-failure-whose-outcome-is-unknown) is resumed instead, even when its first node failed.
 
 ### A failure whose outcome is unknown
 
 A node failure can record the kind `outcome_unknown`: the node may have had a side effect (a write, a call that timed out after sending) and Archon cannot know whether it happened. Nothing may run such a node again by itself. No built-in node records this kind yet; a node that writes through a tool is the intended first use.
 
 - The node is never retried, whatever its `retry.on_error` says.
-- The run ends `failed` with stop reason `outcome_unknown`. This holds when the node sits inside a loop group or a composed fan-out instance, whose node records `child_failed`, and when it sits in a `workflow:` child run: the child records the stop reason, and so does its parent when it fails.
+- The run ends `failed` with stop reason `outcome_unknown`. This holds when the node sits inside a loop group or a composed fan-out instance, whose node records `child_failed`.
+- A node in a `workflow:` child run fails the child with that stop reason. The parent never re-drives such a child, on a resume or a wake: its `workflow:` node fails with `child_failed`, or under `join: all_done` counts the child as a failed instance. Resume the child itself.
 - The run does not wait out a provider usage limit, even when the limit hit another node first. A `quota_resume_skipped` event with reason `outcome_unknown` records the refusal.
 - A run whose source this host cannot read is failed instead of released to another host, since the host that continues a released run runs its failed nodes again.
-- In `archon workflow attention --watch`, the run's terminal line names the node with `(outcome_unknown)` and gives the resume and abandon commands.
+- When a run continues after a wait, an `always_run` node that failed this way is replayed as failed instead of running again.
+- A loop group does not start another round after a round that left such a failure, which an `all_done` fan-out in its body can let complete. The group fails with `child_failed`.
+- In `archon workflow attention --watch`, the run's terminal line names the node with `(outcome_unknown)` and gives the resume and abandon commands. A failed run that is the newest on its item is also listed by `archon workflow attention`, with the same commands.
 
-The operator decides what happens next: check what the node did, then continue with `archon workflow resume <run-id>`, which runs the node again, or discard the run with `archon workflow abandon <run-id>`.
+The operator decides what happens next: check what the node did, then continue with `archon workflow resume <run-id>`, which runs the node again, or discard the run with `archon workflow abandon <run-id>`. Resume works even when the node was the run's first.
+
+A downstream node's [`trigger_rule`](#trigger_rule-values) treats such a failure as any failed dependency: `all_success` skips the node, and `all_done` still runs it.
 
 What each join does with a node or instance that fails this way:
 
 | Join | What happens |
 |------|--------------|
-| `trigger_rule`, or `join: all_success` on a fan-out | Same as any failure: the downstream node is skipped, or the fan-out node fails |
+| `join: all_success` on a `workflow:` or composed fan-out | Same as any failed instance: the fan-out node fails |
 | `join: all_done` on a `workflow:` or composed fan-out | Same as any failed instance: the other instances finish and the node completes with the `archon_failed` marker in that slot. The attention line names the instance that failed this way, including when the run then completes. If the run fails for any reason, its stop reason is `outcome_unknown` |
 | A `loop_group:` body node | Same as any body failure: the group fails at that iteration, and the iteration is not retried |
 

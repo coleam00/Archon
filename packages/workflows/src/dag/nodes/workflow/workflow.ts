@@ -37,6 +37,7 @@ import { RunSourceUnreadableError } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
 import { resolveRunInputs, nodeTemplateReferences, type ShellInputContext } from '../../references';
 import { resolveChildRunInputs } from '../fan-out-shared';
+import { isOutcomeUnknownRun } from '../../../outcome-unknown';
 
 const LIVE_CHILD_STATUSES: readonly WorkflowRunStatus[] = workflowRunStatusSchema.exclude(
   terminalWorkflowRunStatusSchema.options
@@ -280,7 +281,7 @@ export async function executeWorkflowNode(
     if (existing === undefined) {
       return await interpret(await ctx.runChildWorkflow(childArgs));
     }
-    if (existing.status === 'failed') {
+    if (isRedrivable(existing)) {
       // Resume-through-parent recovery (D5/#1764): re-drive the failed child once.
       return await interpret(
         await ctx.runChildWorkflow({ ...childArgs, resumeChild: { kind: 'failed', run: existing } })
@@ -291,8 +292,8 @@ export async function executeWorkflowNode(
       // parent; NEVER resume a paused child.
       return await pauseParentOnChild(existing.id);
     }
-    // completed / cancelled — thread the outcome through the same state table a
-    // freshly-run child uses (interpret handles both).
+    // completed / cancelled / failed with an unknown outcome — thread the outcome through
+    // the same state table a freshly-run child uses (interpret handles each).
     return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
     if (isWorkflowExecutionInterruption(err) || err instanceof NodeEventWriteError) throw err;
@@ -370,6 +371,11 @@ function resolveChildArguments(
     ...(resolvedInputs !== undefined ? { inputs: resolvedInputs } : {}),
   };
   return { args };
+}
+
+/** A failed child is re-driven once, unless its outcome is unknown: its operator resumes it. */
+function isRedrivable(child: WorkflowRun): boolean {
+  return child.status === 'failed' && !isOutcomeUnknownRun(child);
 }
 
 async function findExistingChild(
