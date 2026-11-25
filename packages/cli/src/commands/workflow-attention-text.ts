@@ -188,8 +188,7 @@ const shellWord = (text: string): string =>
  */
 function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
   const { runId, workflow, outcome } = item.stoppedIn;
-  const { limit, refused, failed } = item;
-  if (failed !== undefined) return failedLines(item, failed.error);
+  const { limit, refused } = item;
   // A limit and refusals before launch can come from one run's end; each keeps its lines.
   const lines =
     limit !== undefined
@@ -222,6 +221,11 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
     );
   }
   return lines;
+}
+
+/** A stopped item's lines: a failed run's, or a stop's. */
+function stoppedItemLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
+  return item.failed === undefined ? stoppedLines(item) : failedLines(item, item.failed.error);
 }
 
 /**
@@ -327,7 +331,7 @@ export function attentionItemLines(
     : item.kind === 'overdue_wait'
       ? overdueWaitLines(item)
       : item.kind === 'stopped'
-        ? stoppedLines(item)
+        ? stoppedItemLines(item)
         : refItemLines(item);
   for (const line of body) lines.push(`    ${line}`);
   return lines;
