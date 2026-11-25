@@ -42,7 +42,9 @@ export function ItemCard({
   stage,
   progress,
   lit,
+  accent,
 }: {
+  accent?: string;
   read: ItemRead;
   projectId: string;
   /** The exact stage, shown when the card's column holds more than one. */
@@ -71,8 +73,15 @@ export function ItemCard({
       data-item={read.item.key}
       data-state={read.standing.state}
       data-dimmed={shade.dimmed}
-      className={`relative flex flex-col gap-2 rounded-console-12 border ${shade.border} bg-surface p-3 ${open === undefined ? '' : 'motion-safe:transition-colors motion-safe:duration-150 motion-safe:ease-out hover:border-border-bright hover:bg-surface-elevated'}`}
+      className={`relative flex shrink-0 flex-col gap-2 overflow-hidden rounded-console-12 border ${shade.border} bg-surface p-3 ${open === undefined ? '' : 'motion-safe:transition-colors motion-safe:duration-150 motion-safe:ease-out hover:border-border-bright hover:bg-surface-elevated'}`}
     >
+      {accent === undefined ? null : (
+        <span
+          aria-hidden="true"
+          className="absolute inset-x-0 top-0 h-0.75"
+          style={{ background: accent }}
+        />
+      )}
       {open === undefined ? null : (
         <Link
           data-card-link
@@ -128,7 +137,9 @@ export function CardList({
   stageOf,
   className,
   lit,
+  accent,
 }: {
+  accent?: string;
   reads: ItemRead[];
   projectId: string;
   stageOf?: (read: ItemRead) => string | undefined;
@@ -146,6 +157,7 @@ export function CardList({
           stage={stageOf?.(read)}
           progress={progressOf(read)}
           lit={lit}
+          accent={accent}
         />
       ))}
     </ul>

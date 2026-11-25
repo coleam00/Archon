@@ -10,6 +10,7 @@ import { CardList } from '../routes/board/ItemCard';
 import { ColumnHeader } from './ColumnHeader';
 import { MERGED_DAYS } from './lib/board-numbers';
 import { boardViewSearch } from './BoardToolbar';
+import { TONES } from './tones';
 
 export function MergedColumn({
   projectId,
@@ -30,7 +31,7 @@ export function MergedColumn({
   lit: ReadonlySet<string> | null;
 }): ReactElement {
   return (
-    <div data-merged className="md:w-64 md:shrink-0">
+    <div data-merged className="flex flex-col md:min-h-0 md:w-0 md:min-w-44 md:flex-1">
       <ColumnHeader
         label="Merged"
         subtitle={`last ${String(MERGED_DAYS)} days`}
@@ -51,7 +52,8 @@ export function MergedColumn({
           reads={recent}
           projectId={projectId}
           lit={lit}
-          className="mt-3 flex flex-col gap-3"
+          accent={TONES.merged.color}
+          className="mt-3 flex flex-col gap-3 md:min-h-0 md:flex-1 md:overflow-y-auto md:pb-2 md:pr-1"
         />
       )}
       {earlier === 0 ? null : (

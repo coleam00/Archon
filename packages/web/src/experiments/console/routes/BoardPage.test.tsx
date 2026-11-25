@@ -208,8 +208,9 @@ test('each open item is under the stage it stands at, in the order the pack grap
   // Until every item is read, the work orders are a skeleton: no total that may be wrong.
   expect(page.querySelector('[data-work-orders-loading]')).not.toBeNull();
   expect(page.querySelector('[data-work-order]')).toBeNull();
-  // The project's asks are on the page, and the item that has one opens them over its card.
-  expect(page.querySelector('[data-needs-you] [data-ask-ref="ask:a1"]')).not.toBeNull();
+  // The Board has no Needs you section (that is its own tab); the item that has an ask opens it
+  // over its card.
+  expect(page.querySelector('[data-needs-you]')).toBeNull();
   const asks = page.querySelector('[data-item="issue-2"] [data-card-asks]');
   expect(asks?.textContent).toContain('1 open ask');
   // The ask declares no recommendation, which the card says without reading its text.

@@ -12,11 +12,13 @@
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { ItemAsksSection, useItemAsks } from '../components/ItemAsksSection';
+import { useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { BoardTable } from '../factory/BoardTable';
 import { BoardToolbar, useBoardView, type BoardView } from '../factory/BoardToolbar';
 import { ColumnHeader } from '../factory/ColumnHeader';
+import { TONES } from '../factory/tones';
+import type { ColumnTone } from '../factory/lib/map-columns';
 import { FactoryCardsProvider, useForgeTitles } from '../factory/FactoryCards';
 import { MergedColumn } from '../factory/MergedColumn';
 import { SetAsideStrip } from '../factory/SetAsideStrip';
@@ -42,6 +44,12 @@ import { CardList } from './board/ItemCard';
 import { isMoving, MOVING, stageAt } from './board/standing';
 
 export { chipOf, MOVING } from './board/standing';
+
+// console-token-exception md:min-h-[34rem] -- the board area's floor in a short window: the toolbar, the work orders and room for a card or two.
+const BOARD_AREA = 'flex flex-col md:h-full md:min-h-[34rem] md:shrink-0';
+
+/** The columns' colours by position (taking work in, building, checking, merging), as v1's. */
+const STAGE_TONES: readonly ColumnTone[] = ['intake', 'build', 'check', 'land'];
 
 /** A column: a group the pack declares, or one stage, with its stages by their names in the pack. */
 export type StageGroup = PackGraph['groups'][number];
@@ -72,8 +80,11 @@ function Column({
   stageOf,
   focus = false,
   lit = null,
+  accent,
 }: {
   name: string;
+  /** The column's colour, as the bar on its header and on each card (Visual standard, rule 2). */
+  accent?: string;
   /** The column's stages, by their names in the pack: its header's subtitle. */
   stages: readonly string[];
   items: ItemRead[];
@@ -94,16 +105,17 @@ function Column({
       ref={column}
       data-stage={name}
       data-empty={empty ? '' : undefined}
-      className={empty ? 'md:w-28 md:shrink-0' : 'md:w-64 md:shrink-0'}
+      className={`flex flex-col md:min-h-0 ${empty ? 'md:w-28 md:shrink-0' : 'md:w-0 md:min-w-44 md:flex-1'}`}
     >
-      <ColumnHeader label={name} subtitle={stages.join(', ')} items={items} />
+      <ColumnHeader label={name} subtitle={stages.join(', ')} items={items} bar={accent} />
       {empty ? null : (
         <CardList
           reads={items}
           projectId={projectId}
           stageOf={stageOf}
           lit={lit}
-          className="mt-3 flex flex-col gap-3"
+          accent={accent}
+          className="mt-3 flex flex-col gap-3 md:min-h-0 md:flex-1 md:overflow-y-auto md:pb-2 md:pr-1"
         />
       )}
     </div>
@@ -305,7 +317,7 @@ export function PackBoard({
   };
   const table = tableRows(board, columns, columnOf);
   return (
-    <section data-pack={pack} className="mb-6">
+    <section data-pack={pack} className="mb-4 flex flex-col md:min-h-80 md:flex-1">
       <h2 className="flex flex-wrap items-baseline gap-x-3 text-sm font-medium text-text-primary">
         {pack}
         <span data-pack-links className="text-console-11 font-normal text-text-tertiary">
@@ -337,8 +349,11 @@ export function PackBoard({
           showEarlier={earlier}
         />
       ) : (
-        <div className="mt-3 flex flex-col gap-3 md:flex-row md:overflow-x-auto md:pb-2">
-          {columns.map(column => (
+        <div
+          data-board-columns
+          className="mt-3 flex flex-col gap-3 md:min-h-0 md:flex-1 md:flex-row md:overflow-x-auto md:overflow-y-hidden"
+        >
+          {columns.map((column, position) => (
             <Column
               key={column.name}
               name={column.name}
@@ -348,6 +363,7 @@ export function PackBoard({
               stageOf={column.stages.length > 1 ? stageOf : undefined}
               focus={focus === column.name}
               lit={lit}
+              accent={TONES[STAGE_TONES[position] ?? 'other'].color}
             />
           ))}
           {offStage.length > 0 ? (
@@ -463,28 +479,32 @@ export function BoardPage(): ReactElement {
         packs={project === undefined ? null : packs}
         itemAsks={itemAsks}
       >
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-4 md:px-6">
-          <BoardToolbar filter={filter} onFilter={setFilter} view={view} onView={setView} />
-          <WorkOrdersStrip
-            orders={orders}
-            counted={every.data !== undefined}
-            error={every.error}
-            lit={lit === undefined ? null : lit.item.id}
-            onLight={setOrder}
-          />
-          {packs.map(pack => (
-            <PackBoard
-              key={pack}
-              projectId={projectId}
-              pack={pack}
-              board={packBoard(items, pack, now)}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4 pt-4 md:px-6">
+          {/* The board area fills the window's height, so each column scrolls on its own; what
+              follows it runs on below, in the page's scroll. */}
+          <div className={BOARD_AREA}>
+            <BoardToolbar filter={filter} onFilter={setFilter} view={view} onView={setView} />
+            <WorkOrdersStrip
+              orders={orders}
               counted={every.data !== undefined}
-              view={view}
-              earlier={earlier}
-              lit={litIds}
-              itemsError={every.error}
+              error={every.error}
+              lit={lit === undefined ? null : lit.item.id}
+              onLight={setOrder}
             />
-          ))}
+            {packs.map(pack => (
+              <PackBoard
+                key={pack}
+                projectId={projectId}
+                pack={pack}
+                board={packBoard(items, pack, now)}
+                counted={every.data !== undefined}
+                view={view}
+                earlier={earlier}
+                lit={litIds}
+                itemsError={every.error}
+              />
+            ))}
+          </div>
           <DecisionStrip projectId={projectId} />
           <SetAsideStrip
             projectId={projectId}
@@ -496,14 +516,6 @@ export function BoardPage(): ReactElement {
             projectId={projectId}
             outside={moving.filter(read => packOf(read) === undefined)}
           />
-          {itemAsks.asks.length + itemAsks.answered.length > 0 ? (
-            <section data-needs-you className="mt-8">
-              <h2 className="text-sm font-medium text-text-primary">Needs you</h2>
-              <div className="mt-3 flex flex-col gap-3">
-                <ItemAsksSection {...itemAsks} showProject={false} />
-              </div>
-            </section>
-          ) : null}
         </div>
       </FactoryCardsProvider>
     </section>
