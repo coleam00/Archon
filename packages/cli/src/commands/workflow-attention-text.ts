@@ -208,7 +208,7 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
   if (item.item !== undefined) {
     const cwd = item.checkout === null ? '' : ` --cwd ${shellWord(item.checkout)}`;
     // Not a refused start's workflow: a bare run lacks the inputs and checkout its binding
-    // would have passed, which `trigger inspect` shows.
+    // would have passed.
     const next = limit?.workflow;
     const start = command(
       `run ${next === undefined ? '<workflow>' : shellWord(next)} --item ${shellWord(item.item.key)}${cwd}`

@@ -195,7 +195,7 @@ export async function countStartLimits(
       bindingId,
       workflow: persisted.launch.workflowName,
     };
-    await recordRefusedStartStop(query, start.receiptId, item.key, { limit: stop });
+    await recordRefusedStartStop(query, start.receiptId, { limit: stop, itemKey: item.key });
     return { refused: startLimitRefusal(standing, item.key) };
   }
   return { startLimit: JSON.stringify(limit), grantsLimit };

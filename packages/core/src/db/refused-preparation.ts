@@ -1,8 +1,8 @@
 /**
  * A binding preparation that failed: the binding is marked `failed` (to be prepared again)
- * or `rejected` (terminal). A rejection with a `refusal` also stops the item on the run
- * whose end or settled asks caused the start (`recordRefusedStartStop`), in the same
- * transaction, so the item read and attention show the refused start where its stage ended.
+ * or `rejected` (terminal). A rejection with a `refusal` is also recorded on the stop of the
+ * run whose end or settled asks caused the start (`recordRefusedStartStop`), in the same
+ * transaction, so that run, the item read and attention show the refused start.
  */
 import type { IResourceStartStore } from '@archon/workflows/resource-start-store';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
@@ -23,17 +23,11 @@ export async function failStartBindingPreparation(input: FailedPreparation): Pro
   return getDatabase().withTransaction(async query => {
     if (!(await markFailed(query, input))) return false;
     const row = (
-      await query<{ intent: unknown; item_key: string | null; receipt_item_key: string | null }>(
-        `SELECT b.intent, b.item_key, r.item_key AS receipt_item_key
-           FROM remote_agent_start_receipt_bindings b
-           JOIN remote_agent_start_receipts r ON r.id = b.receipt_id
-          WHERE b.receipt_id = $1 AND b.binding_id = $2`,
+      await query<{ intent: unknown }>(
+        'SELECT intent FROM remote_agent_start_receipt_bindings WHERE receipt_id = $1 AND binding_id = $2',
         [input.receiptId, input.bindingId]
       )
     ).rows[0];
-    // The binding's own item, else its receipt's, as admission names it.
-    const itemKey = row?.item_key ?? row?.receipt_item_key;
-    if (!itemKey) return true;
     const intent = resourceStartBindingIntentSchema.safeParse(
       typeof row?.intent === 'string' ? JSON.parse(row.intent) : row?.intent
     );
@@ -47,7 +41,7 @@ export async function failStartBindingPreparation(input: FailedPreparation): Pro
     }
     const { receiptId, bindingId } = input;
     const workflow = intent.data.launch.workflowName;
-    await recordRefusedStartStop(query, receiptId, itemKey, {
+    await recordRefusedStartStop(query, receiptId, {
       refused: {
         receiptId,
         bindingId,

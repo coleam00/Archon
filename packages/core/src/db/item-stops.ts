@@ -27,7 +27,9 @@ import { getLog } from './workflow-run-shared';
  * The completed runs that stopped their item and are still its last run (see
  * `IWorkflowStore.listStoppedItemRuns`). Runs on an item are ordered as `getItemRuns` orders
  * them: by start time, and on SQLite, which records it to the second, by insertion order
- * within a second. Any run after this one, in any status, ends the stop.
+ * within a second. Any run after this one, in any status, ends the stop. A run that still
+ * has an open ask or wait is not listed: the ask or wait is what needs someone, and the stop
+ * shows once they close.
  */
 export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]> {
   const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
@@ -42,6 +44,10 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
            AND (n.started_at > r.started_at
              OR (n.started_at = r.started_at AND n.${tie} > r.${tie}))
        )
+       AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
+                        WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
+                        WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)
      ORDER BY r.started_at, r.${tie}`
   );
   const runs: AttentionRead<WorkflowRun>[] = [];
@@ -60,18 +66,17 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
 /**
  * Record that a refused start stopped its item, inside the refusing transaction: on the
  * completed run whose end (a run-ended binding) or settled asks (an asks-settled binding)
- * caused the start, which is then the item's last step. Admission refuses at a start limit
- * (`limit`); preparation refuses before launch (`refused`). The attention queue lists the
- * item as `stopped` while that run is the item's newest, and any later run on the item ends
- * it. A start caused by anything else (a fire, a schedule, a node) has no such run; a start
- * on another item than the run's (a linked start) and a run with an open ask or wait on the
- * item stop nothing.
+ * caused the start. A start caused by anything else (a fire, a schedule, a node) has no
+ * such run. Admission refuses at a start limit (`limit`), which stops the item only when the
+ * start was on the run's own item (`itemKey`, not a linked start) and the run left no open
+ * ask or wait: then it is the item's last step. A start refused before launch (`refused`)
+ * is always recorded, so the causing run says what it failed to start; whether the item
+ * needs someone is `listStoppedItemRuns`'s to decide.
  */
 export async function recordRefusedStartStop(
   query: Query,
   receiptId: string,
-  itemKey: string,
-  refusal: { limit: StoppedLimit } | { refused: StoppedRefusal }
+  refusal: { limit: StoppedLimit; itemKey: string } | { refused: StoppedRefusal }
 ): Promise<void> {
   const receipt = (
     await query<{ source_actor: unknown }>(
@@ -88,18 +93,22 @@ export async function recordRefusedStartStop(
     return;
   // Locked, so a sibling binding's refusal in another transaction adds to this stop rather
   // than replacing it: a limit and the preparation refusals of one run's end are kept together.
+  const limited =
+    'limit' in refusal
+      ? `AND EXISTS (SELECT 1 FROM remote_agent_items i
+                      WHERE i.id = remote_agent_workflow_runs.item_id AND i.key = $2)
+         AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
+                          WHERE run_id = $3 AND closed_as IS NULL)
+         AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
+                          WHERE run_id = $3 AND closed_as IS NULL)`
+      : '';
   const run = (
     await query<{ metadata: unknown }>(
       `SELECT metadata FROM remote_agent_workflow_runs
-        WHERE id = $1 AND status = 'completed'
-          AND EXISTS (SELECT 1 FROM remote_agent_items i
-                       WHERE i.id = remote_agent_workflow_runs.item_id AND i.key = $2)
-          AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
-                           WHERE run_id = $3 AND closed_as IS NULL)
-          AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
-                           WHERE run_id = $3 AND closed_as IS NULL)${getDialect().rowLock()}`,
+        WHERE id = $1 AND status = 'completed' AND item_id IS NOT NULL
+          ${limited}${getDialect().rowLock()}`,
       // The run id twice: the runs table keys it as a UUID on PostgreSQL, asks and waits as text.
-      [source.id, itemKey, source.id]
+      'limit' in refusal ? [source.id, refusal.itemKey, source.id] : [source.id]
     )
   ).rows[0];
   if (run === undefined) return;
@@ -128,19 +137,17 @@ function withRefusal(
 
 /**
  * Record the stops of the bindings `receipts` refused at the hand-off (`refused` on their
- * evaluated bindings), inside the transaction that writes them. On a run's completion call
- * it after the run's asks and waits are opened: a run that leaves one stops nothing.
+ * evaluated bindings), inside the transaction that writes them.
  */
 export async function recordRefusedHandoffStops(
   query: Query,
   receipts: readonly SourceReceiptAcceptance[]
 ): Promise<void> {
   for (const { receipt, evaluatedBindings } of receipts) {
-    const { id: receiptId, itemKey, receivedAt } = receipt;
-    if (itemKey === undefined) continue;
+    const { id: receiptId, receivedAt } = receipt;
     for (const { bindingId, refused } of evaluatedBindings ?? [])
       if (refused !== undefined)
-        await recordRefusedStartStop(query, receiptId, itemKey, {
+        await recordRefusedStartStop(query, receiptId, {
           refused: { receiptId, bindingId, ...refused, refusedAt: receivedAt },
         });
   }

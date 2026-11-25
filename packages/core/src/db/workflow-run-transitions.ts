@@ -438,7 +438,7 @@ export async function completeWorkflowRun(
         // And the waits, replacing its workflow's open set of waits on the item.
         if (result?.waits !== undefined)
           await openItemWaitsForCompletedRun(query, id, result.waits);
-        // A start refused at the hand-off stops the item here, now that its asks are known.
+        // A start refused at the hand-off is recorded on this run, as the stop it causes.
         await recordRefusedHandoffStops(query, started);
       }
       return { update, started };

@@ -709,8 +709,8 @@ export interface IResourceStartStore {
     forgeRefusal?: ForgeRefusal;
     /**
      * Why a rejected start was refused. When the start was caused by a run's end or settled
-     * asks on the same item, the SQL store records it as a stop on that run in the same write,
-     * so the item and attention show it; the file store records no stop.
+     * asks, the SQL store records it as a stop on that run in the same write, so the run, its
+     * item and attention show it; the file store records no stop.
      */
     refusal?: StartRefusalReason;
   }): Promise<boolean>;

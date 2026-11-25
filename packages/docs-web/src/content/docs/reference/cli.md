@@ -368,7 +368,7 @@ Except on an execution handoff, foreground completion and failure output prints 
 
 These are stored figures, not a certified bill, so the completeness warning is always printed. Provider usage metadata is optional: a missing or malformed value prints `unknown`, and a recorded zero prints `0` (or `$0`). An unknown or malformed token-uncertainty marker makes both token counts unknown. If the persisted run cannot be read, the output shows `Usage: unavailable (persisted run unavailable)` and the execution result is unchanged. [`workflow get`](#workflow-get) shows the same summary for any run.
 
-When the completed run's end caused a start that was refused before launch, the completion output also prints that refusal, under `Next stage not started:`, naming the refused workflow, its binding, the reason and `archon trigger inspect <receipt-id>`; the item is then [`stopped`](/guides/workflow-triggers/#when-nothing-follows-a-run). The exit status stays `0`: the run itself completed. A start that a later drain by another process refuses shows only on the item.
+When the completed run's end caused a start that was refused before launch, the completion output also prints that refusal, under `Next stage not started:`, naming the refused workflow, its binding, the reason and `archon trigger inspect <receipt-id>`; the item is then [`stopped`](/guides/workflow-triggers/#when-nothing-follows-a-run). The exit status stays `0`: the run itself completed. A start that a later drain by another process refuses is recorded on the run too; [`workflow get <run-id>`](#workflow-get) and the item show it.
 
 If another execution takes ownership before the foreground command returns, it prints:
 
