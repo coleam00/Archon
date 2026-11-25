@@ -449,6 +449,11 @@ describe('validateProjectPackSettings file settings', () => {
     await onlyError(policy, 'policy', 'docs');
     await writeProject('settings:\n  policy: docs/review.md/\n');
     await onlyError(policy, 'policy', 'docs/review.md/');
+    // Without the as-written check this value names a file everywhere: Windows `stat` drops the
+    // `\` and finds review.md; on POSIX `\` is a filename character, so give it a file to find.
+    if (process.platform !== 'win32') await writeFile(join(cwd, 'docs', 'review.md\\'), 'x\n');
+    await writeProject('settings:\n  policy: docs/review.md\\\n');
+    await onlyError(policy, 'policy', 'docs/review.md\\');
   });
 
   // POSIX only: there `..` applies after the link is followed, which is what tells a
