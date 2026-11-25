@@ -46,6 +46,7 @@ installations operate without an identity.
 | `archon.console.detailView`      | `log`   | Run-detail tab                         |
 | `archon.console.showToolCalls`   | `1`     | Show tool calls in the stream          |
 | `archon.console.showSystem`      | `0`     | Show system events                     |
+| `archon.console.showFullPaths`   | `0`     | Show tool calls with full paths        |
 | `archon.console.runNodeSelection` | empty   | Filter the run stream by node ID       |
 | `archon.console.railWidth`       | unset   | Project rail width                     |
 | `archon.console.lastWorkflow`    | unset   | Last selected workflow                 |

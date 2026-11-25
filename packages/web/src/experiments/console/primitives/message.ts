@@ -5,8 +5,8 @@ type RawMessage = Pick<
 >;
 /**
  * Conversation message primitive. Runs have both `workflow_events` (structured)
- * and chat `messages` (the AI's and user's text). The Run detail page merges
- * both into a single timeline keyed by timestamp.
+ * and chat `messages` (the AI's and user's text). The Run detail page places
+ * messages between a run's nodes (lib/run-log.ts).
  */
 
 import type { ProviderEvent } from '../lib/provider-events';

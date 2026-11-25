@@ -7,6 +7,7 @@ import {
   mockListProviderEvents,
   mockGetConversationById,
   mockObserveRunOwner,
+  mockArchonHome,
   type MockWorkflowRun,
   type MockWorkflowEvent,
   NOW_DATE,
@@ -36,6 +37,8 @@ import {
 } from '@archon/workflows/node-execution';
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import { describe, test, expect, beforeEach } from 'bun:test';
+import { dirname, join, sep } from 'path';
+import { getRunArtifactsDirForRoot } from '@archon/paths/archon-paths';
 import { z } from '@hono/zod-openapi';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import type { ProviderEventRecord } from '@archon/workflows/schemas/provider-event';
@@ -402,6 +405,48 @@ describe('GET /api/workflows/runs/:runId', () => {
       const body = (await response.json()) as { run: { terminal_record: unknown } };
       expect(body.run.terminal_record).toEqual(status === 'failed' ? terminalRecord : null);
     }
+  });
+
+  test("serves the directories the run's record names, and only those", async () => {
+    // Joined by hand: the harness matches the home prefix as written, and `join` would
+    // respell a POSIX-style home on Windows.
+    const root = [mockArchonHome, 'workspaces', 'acme', 'app'].join(sep);
+    const sourceRoot = join(root, 'workflow-source', 'runs', MOCK_RUNNING_RUN.id, 'source');
+    const recorded = {
+      ...MOCK_RUNNING_RUN,
+      output_root: root,
+      metadata: {
+        workflow_source: {
+          version: 1,
+          root: sourceRoot,
+          origin: MOCK_RUNNING_RUN.working_path,
+          captured_at: NOW_DATE.toISOString(),
+          digest: 'sha256:0',
+          file_count: 1,
+          byte_count: 1,
+        },
+      },
+    };
+    const knownPaths = async (run: MockWorkflowRun): Promise<unknown> => {
+      mockGetWorkflowRun.mockImplementationOnce(async () => run);
+      mockListWorkflowEvents.mockImplementationOnce(async () => []);
+      const response = await makeApp().app.request(`/api/workflows/runs/${run.id}`);
+      expect(response.status).toBe(200);
+      return workflowRunDetailSchema.parse(await response.json()).run.known_paths;
+    };
+
+    const artifacts = getRunArtifactsDirForRoot(root, recorded.id);
+    expect(await knownPaths(recorded)).toEqual([
+      { kind: 'checkout', path: recorded.working_path },
+      { kind: 'run_artifacts', path: artifacts },
+      { kind: 'artifact_runs', path: dirname(artifacts) },
+      { kind: 'workflow_source', path: sourceRoot },
+    ]);
+    // A storage root outside Archon home is not this install's to name.
+    expect(await knownPaths({ ...MOCK_RUNNING_RUN, output_root: '/elsewhere/acme/app' })).toEqual([
+      { kind: 'checkout', path: MOCK_RUNNING_RUN.working_path },
+    ]);
+    expect(await knownPaths({ ...MOCK_RUNNING_RUN, working_path: null })).toEqual([]);
   });
 
   test('historical terminal runs have no fabricated record', async () => {

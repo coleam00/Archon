@@ -1,31 +1,30 @@
-import { useMemo, type ReactElement } from 'react';
+import { Fragment, useMemo, type ReactElement } from 'react';
 import { MessageItem } from './MessageItem';
-import { ToolCallItem } from './ToolCallItem';
+import { PathTokenChip, ToolCallItem, toolCallRow } from './ToolCallItem';
 import { HookEventItem } from './HookEventItem';
 import { NodeDivider } from './NodeDivider';
 import { ArtifactItem } from './ArtifactItem';
-import type { InlineToolCall, Message } from '../primitives/message';
-import { isSystemCategory } from '../primitives/message';
-import { foldNodeRuns } from '../primitives/event';
-import type {
-  RunEvent,
-  RunNodeState,
-  NodeRun,
-  ArtifactEvent,
-  SystemEvent,
-  ErrorEvent,
-  TextEvent,
-} from '../primitives/event';
-import type { ProviderEvent, ProviderEventRecord, RunProviderEvents } from '../lib/provider-events';
+import type { TextEvent, ArtifactEvent } from '../primitives/event';
+import type { PathToken } from '../lib/run-paths';
+import {
+  foldSections,
+  quietFoldSummary,
+  visibleRunLog,
+  type BlindEntry,
+  type LogSection,
+  type RunLog,
+  type Turn,
+  type TurnItem,
+} from '../lib/run-log';
 import { StreamCard } from './StreamCard';
 
 interface RunStreamProps {
-  messages: Message[];
-  events: RunEvent[];
-  /** The engine's node states (`run.nodes`); the only source of node status. */
-  nodes: readonly RunNodeState[];
-  /** The run's provider events by node (lib/provider-events.ts). */
-  providerEvents: RunProviderEvents;
+  /** The run's log model (lib/run-log.ts), before the toggles below are applied. */
+  log: RunLog;
+  /** The run's known paths, longest first (lib/run-paths.ts). */
+  pathTokens: readonly PathToken[];
+  /** Show every tool call exactly as recorded instead of shortening known paths. */
+  fullPaths: boolean;
   showToolCalls: boolean;
   showSystem: boolean;
   /** null shows every node; otherwise restrict the stream to one node's entries. */
@@ -36,345 +35,63 @@ interface RunStreamProps {
   waitingNodeId: string | null;
 }
 
-/**
- * Drop messages that carry no signal — no prose, no tool calls, no error.
- * These are usually workflow-plumbing artifacts that render as "(no content)"
- * cards otherwise.
- */
-function isMeaningful(m: Message): boolean {
-  if (m.content.trim().length > 0) return true;
-  if (m.toolCalls.length > 0) return true;
-  if (m.error !== null) return true;
-  return false;
+interface RowDisplay {
+  /** The paths rows shorten: none when the stream shows full paths. */
+  paths: readonly PathToken[];
+  fullPaths: boolean;
+  showSystem: boolean;
+  waitingNodeId: string | null;
 }
 
-interface SystemRow {
-  label: string;
-  detail: string;
-  timestamp: string;
-}
-
-type TimelineEntry =
-  | { kind: 'message'; key: string; at: number; message: Message }
-  // `nodeId` carries the owning node (provider-event tools) or null (message-inline
-  // tools are node-blind) — used only by the node filter, not for display.
-  | {
-      kind: 'tool';
-      key: string;
-      at: number;
-      call: InlineToolCall;
-      timestamp: string;
-      nodeId: string | null;
-    }
-  | {
-      kind: 'node';
-      key: string;
-      at: number;
-      node: NodeRun;
-      showDetail: boolean;
-      waiting: boolean;
-    }
-  | {
-      kind: 'hook';
-      key: string;
-      at: number;
-      event: Extract<ProviderEvent, { type: 'hook' }>;
-      timestamp: string;
-      nodeId: string;
-    }
-  | { kind: 'text'; key: string; at: number; event: TextEvent }
-  | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent }
-  | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent }
-  | { kind: 'system_row'; key: string; at: number; row: SystemRow };
-
-interface PairedToolCall {
-  record: ProviderEventRecord;
-  id: string;
-  timestamp: string;
-  /** The node that made the call: the record's `stepName`. */
-  nodeId: string;
-  call: InlineToolCall;
-}
+const NO_PATHS: readonly PathToken[] = [];
 
 /**
- * One entry per `tool_call`, in emission order, completed by the `tool_call_update`
- * with the same `toolCallId` in the same attempt. Concurrent calls of one tool pair
- * correctly because the id, not the name or the order, joins them. A call with no
- * update yet is still running.
+ * The path tokens a section puts on screen. `checkout` is set when a row left out its
+ * `cd <checkout> && `, which the section then says once, under its divider.
  */
-export function pairProviderToolCalls(providerEvents: RunProviderEvents): PairedToolCall[] {
-  const paired: PairedToolCall[] = [];
-  for (const [stepName, records] of providerEvents) {
-    const byId = new Map<string, PairedToolCall>();
-    for (const record of records) {
-      const { event } = record;
-      const key = JSON.stringify([record.attemptId, 'toolCallId' in event ? event.toolCallId : '']);
-      if (event.type === 'tool_call') {
-        const entry = openedToolCall(record, event, stepName, key);
-        byId.set(key, entry);
-        paired.push(entry);
-      } else if (event.type === 'tool_call_update') {
-        const entry = byId.get(key);
-        if (entry !== undefined) entry.call = completedToolCall(entry, record, event);
-      }
-    }
-  }
-  return paired;
-}
-
-function openedToolCall(
-  record: ProviderEventRecord,
-  event: Extract<ProviderEvent, { type: 'tool_call' }>,
-  stepName: string,
-  key: string
-): PairedToolCall {
+function sectionPaths(
+  section: LogSection,
+  paths: readonly PathToken[]
+): { checkout: PathToken | undefined; tokens: PathToken[] } {
+  const rows = section.turns.flatMap(turn =>
+    turn.items.flatMap(item => (item.kind === 'tool' ? [toolCallRow(item.call, paths)] : []))
+  );
+  const checkout = rows.some(row => row.droppedCheckoutPrefix)
+    ? paths.find(token => token.kind === 'checkout')
+    : undefined;
   return {
-    record,
-    id: `${stepName}:${key}`,
-    timestamp: record.observedAt,
-    nodeId: stepName,
-    call: {
-      name: event.title || event.name,
-      input: event.rawInput === undefined ? {} : event.rawInput,
-    },
-  };
-}
-
-function completedToolCall(
-  entry: PairedToolCall,
-  record: ProviderEventRecord,
-  event: Extract<ProviderEvent, { type: 'tool_call_update' }>
-): InlineToolCall {
-  return {
-    ...entry.call,
-    status: event.status,
-    ...(event.output !== undefined ? { output: event.output } : {}),
-    ...(event.outputTruncated === true ? { outputTruncated: true } : {}),
-    ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
-    // A translated legacy row's time is its row's `created_at`, 1 s apart on
-    // SQLite, so it cannot time a call.
-    ...(record.attemptId !== null
-      ? { durationMs: Date.parse(record.observedAt) - Date.parse(entry.timestamp) }
-      : {}),
+    checkout,
+    tokens: [...rows.flatMap(row => row.tokens), ...(checkout !== undefined ? [checkout] : [])],
   };
 }
 
 /**
- * The tool calls a run view shows. Provider events record every provider's calls with
- * their node; message-inline calls (`message.metadata.toolCalls`) carry no node and are
- * shown only for a run that recorded no tool events, so no call is shown twice.
- */
-export function runToolCalls(
-  messages: readonly Message[],
-  providerEvents: RunProviderEvents
-): { fromProviderEvents: PairedToolCall[]; showInline: boolean; count: number } {
-  const fromProviderEvents = pairProviderToolCalls(providerEvents);
-  const showInline = fromProviderEvents.length === 0;
-  return {
-    fromProviderEvents,
-    showInline,
-    count: showInline
-      ? messages.reduce((acc, m) => acc + m.toolCalls.length, 0)
-      : fromProviderEvents.length,
-  };
-}
-
-function messageEntries(messages: readonly Message[], showInline: boolean): TimelineEntry[] {
-  const entries: TimelineEntry[] = [];
-  for (const m of messages) {
-    const base = new Date(m.timestamp).getTime();
-    const meaningful = isMeaningful(m);
-    const isSystemy = isSystemCategory(m.category) || m.role === 'system';
-
-    if (isSystemy) {
-      // Framework chatter — surface as a compact system row instead of
-      // rendering as agent prose. Dispatch metadata gets its own row when
-      // present so the workflow name shows up explicitly.
-      if (m.dispatch !== null) {
-        entries.push({
-          kind: 'system_row',
-          key: `sm:dispatch:${m.id}`,
-          at: base,
-          row: {
-            label: 'Workflow dispatch',
-            detail: m.dispatch.workflowName,
-            timestamp: m.timestamp,
-          },
-        });
-      } else {
-        entries.push({
-          kind: 'system_row',
-          key: `sm:${m.id}`,
-          at: base,
-          row: {
-            label: m.category ?? 'System',
-            detail: m.content.split('\n')[0]?.slice(0, 160) ?? '',
-            timestamp: m.timestamp,
-          },
-        });
-      }
-      continue;
-    }
-
-    if (!meaningful) {
-      // Empty / no-signal messages — usually plumbing the SDK emits. Hide
-      // by default; behind System the user gets a noise row to see the
-      // gap that would otherwise be invisible.
-      entries.push({
-        kind: 'system_row',
-        key: `sm:noise:${m.id}`,
-        at: base,
-        row: {
-          label: 'Noise',
-          detail: `${m.role} · no content`,
-          timestamp: m.timestamp,
-        },
-      });
-      continue;
-    }
-
-    entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
-    if (!showInline) continue;
-    m.toolCalls.forEach((call, idx) => {
-      entries.push({
-        kind: 'tool',
-        key: `t:${m.id}:${idx.toString()}`,
-        // Place tool calls just after the parent message so they appear right
-        // below it but don't collide across sibling messages.
-        at: base + idx + 1,
-        call,
-        timestamp: m.timestamp,
-        // Message-inline tools are node-blind — messages carry no step.
-        nodeId: null,
-      });
-    });
-  }
-  return entries;
-}
-
-function providerEntries(
-  providerEvents: RunProviderEvents,
-  nodeRuns: readonly NodeRun[],
-  toolCalls: readonly PairedToolCall[]
-): TimelineEntry[] {
-  const entries: TimelineEntry[] = [];
-
-  const nodeStatus = new Map(nodeRuns.map(r => [r.nodeId, r.status]));
-  const pairedTools = new Map(toolCalls.map(t => [t.record, t]));
-  for (const [stepName, records] of providerEvents) {
-    for (const record of records) {
-      const t = pairedTools.get(record);
-      if (t !== undefined) {
-        const status = nodeStatus.get(t.nodeId);
-        const unrecorded =
-          t.call.status === undefined && status !== undefined && status !== 'running';
-        entries.push({
-          kind: 'tool',
-          key: `pt:${t.id}`,
-          at: Date.parse(t.timestamp),
-          call: unrecorded ? { ...t.call, outcomeUnrecorded: true } : t.call,
-          timestamp: t.timestamp,
-          nodeId: t.nodeId,
-        });
-      } else if (record.event.type === 'hook') {
-        entries.push({
-          kind: 'hook',
-          key: `ph:${JSON.stringify([stepName, record.attemptId, record.seq])}`,
-          at: Date.parse(record.observedAt),
-          event: record.event,
-          timestamp: record.observedAt,
-          nodeId: stepName,
-        });
-      }
-    }
-  }
-  return entries;
-}
-
-/**
- * Merges conversation messages + workflow events into a single timeline. Tool calls
- * come from {@link runToolCalls}.
- *
- * What we deliberately skip here:
- *   - `approval` events — RunDetailPage renders an inline ApprovalPanel
- *     below the stream instead.
- *   - `text` / `error` events — messages are the source of truth for text;
- *     errors surface via the run status + action bar.
+ * The run log: one section per node, in start order. A section is the node's divider,
+ * then each block of agent text with the tool calls the engine recorded after it, then
+ * whatever carries no node (the user's messages, artifacts, run-level events) from that
+ * node's stretch of the run. Runs of quiet nodes fold into one line.
  */
 export function RunStream({
-  messages,
-  events,
-  nodes,
-  providerEvents,
+  log,
+  pathTokens,
+  fullPaths,
   showToolCalls,
   showSystem,
   selectedNodeId,
   live,
   waitingNodeId,
 }: RunStreamProps): ReactElement | null {
-  // Single source for the folded nodes — consumed by both the timeline (one
-  // divider per node) and the node-filter window so they can't drift.
-  const nodeRuns = useMemo(() => foldNodeRuns(events, nodes), [events, nodes]);
-  const toolCalls = useMemo(
-    () => runToolCalls(messages, providerEvents),
-    [messages, providerEvents]
+  const visible = useMemo(
+    () => visibleRunLog(log, { showToolCalls, showSystem, selectedNodeId }),
+    [log, showToolCalls, showSystem, selectedNodeId]
   );
+  const paths = fullPaths ? NO_PATHS : pathTokens;
+  const usedTokens = useMemo(() => {
+    const used = new Set(visible.sections.flatMap(section => sectionPaths(section, paths).tokens));
+    return paths.filter(token => used.has(token));
+  }, [visible, paths]);
 
-  const timeline = useMemo<TimelineEntry[]>(() => {
-    const entries: TimelineEntry[] = [
-      ...messageEntries(messages, toolCalls.showInline),
-      ...providerEntries(providerEvents, nodeRuns, toolCalls.fromProviderEvents),
-    ];
-
-    // One divider per node, positioned at its first transition so it heads that
-    // node's events in the stream.
-    for (const nr of nodeRuns) {
-      entries.push({
-        kind: 'node',
-        key: `n:${nr.nodeId}`,
-        at: new Date(nr.startedAt).getTime(),
-        node: nr,
-        showDetail: showSystem,
-        waiting: nr.nodeId === waitingNodeId && nr.status === 'running',
-      });
-    }
-
-    entries.push(...runEventEntries(events));
-    entries.sort((a, b) => a.at - b.at);
-    return entries;
-  }, [messages, events, nodeRuns, toolCalls, providerEvents, showSystem, waitingNodeId]);
-
-  // The selected node's execution slice `[startedAt, nextNode.startedAt)`. Used as
-  // a positional fallback so node-blind entries (prose, artifacts, system rows, and
-  // message-inline tools of a run with no recorded tool events) still resolve to a
-  // node when filtering.
-  const nodeWindow = useMemo<{ start: number; end: number } | null>(() => {
-    if (selectedNodeId === null) return null;
-    const idx = nodeRuns.findIndex(r => r.nodeId === selectedNodeId);
-    if (idx === -1) return null;
-    const start = new Date(nodeRuns[idx].startedAt).getTime();
-    const next = nodeRuns[idx + 1];
-    return { start, end: next !== undefined ? new Date(next.startedAt).getTime() : Infinity };
-  }, [nodeRuns, selectedNodeId]);
-
-  const visible = timeline.filter(e => {
-    if (e.kind === 'tool' && !showToolCalls) return false;
-    if (e.kind === 'system' && !showSystem) return false;
-    if (e.kind === 'system_row' && !showSystem) return false;
-    // Node filter: isolate one node. Node markers, hooks and tools from provider events
-    // match by identity; every node-blind entry (prose, artifacts, system rows,
-    // legacy message-inline tools) falls back to the node's time window so a
-    // node's whole slice of the timeline stays visible.
-    if (selectedNodeId !== null) {
-      if (e.kind === 'node') return e.node.nodeId === selectedNodeId;
-      if (e.kind === 'hook') return e.nodeId === selectedNodeId;
-      if (e.kind === 'tool' && e.nodeId !== null) return e.nodeId === selectedNodeId;
-      return nodeWindow !== null && e.at >= nodeWindow.start && e.at < nodeWindow.end;
-    }
-    return true;
-  });
-
-  if (visible.length === 0) {
+  if (visible.leading.length === 0 && visible.sections.length === 0) {
     // Only a live run is still waiting for anything; a finished one has its
     // outcome in the lifecycle line below the stream.
     if (!live) return null;
@@ -388,22 +105,150 @@ export function RunStream({
     );
   }
 
-  return <div className="flex flex-col">{visible.map(renderTimelineEntry)}</div>;
+  const display: RowDisplay = { paths, fullPaths, showSystem, waitingNodeId };
+  return (
+    <div className="flex flex-col">
+      <PathKey tokens={usedTokens} />
+      {visible.leading.map(entry => renderBlindEntry(entry, fullPaths))}
+      {foldSections(visible.sections).map(item =>
+        'fold' in item ? (
+          <details key={`fold:${item.key}`} className="group border-b border-border/60">
+            <summary className="flex cursor-pointer list-none items-center gap-4 py-2.75 font-mono text-console-12 text-text-tertiary hover:text-text-secondary">
+              <span className="w-14 shrink-0 text-console-11" aria-hidden>
+                <span className="inline-block transition-transform group-open:rotate-90">▸</span>
+              </span>
+              {quietFoldSummary(item.fold)}
+            </summary>
+            {item.fold.map(section => (
+              <Section key={section.stepName} section={section} display={display} />
+            ))}
+          </details>
+        ) : (
+          <Section key={item.stepName} section={item} display={display} />
+        )
+      )}
+    </div>
+  );
 }
 
-function runEventEntries(events: RunEvent[]): TimelineEntry[] {
-  const entries: TimelineEntry[] = [];
-  for (const e of events) {
-    const at = new Date(e.timestamp).getTime();
-    if (e.kind === 'artifact') {
-      entries.push({ kind: 'artifact', key: `a:${e.id}`, at, event: e });
-    } else if (e.kind === 'text') {
-      entries.push({ kind: 'text', key: `text:${e.id}`, at, event: e });
-    } else if (e.kind === 'system' || e.kind === 'error') {
-      entries.push({ kind: 'system', key: `s:${e.id}`, at, event: e });
-    }
+/** What each token on the page stands for. */
+function PathKey({ tokens }: { tokens: readonly PathToken[] }): ReactElement | null {
+  if (tokens.length === 0) return null;
+  return (
+    <dl
+      aria-label="Path tokens"
+      className="mb-2 grid grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1 rounded border border-border bg-surface-inset px-3 py-2 text-console-11"
+    >
+      {tokens.map(token => (
+        <Fragment key={token.kind}>
+          <dt>
+            <PathTokenChip token={token} />
+          </dt>
+          <dd className="text-text-secondary">{token.description}</dd>
+          <dd className="font-mono text-text-tertiary [overflow-wrap:anywhere]">{token.path}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  );
+}
+
+function Section({ section, display }: { section: LogSection; display: RowDisplay }): ReactElement {
+  const { node } = section;
+  const { checkout } = sectionPaths(section, display.paths);
+  return (
+    <>
+      {node !== null ? (
+        <NodeDivider
+          nodeId={node.nodeId}
+          nodeName={node.nodeName}
+          status={node.status}
+          durationMs={node.durationMs}
+          timestamp={node.startedAt}
+          costUsd={node.costUsd}
+          costPartial={node.costPartial}
+          costScope={node.costScope}
+          numTurns={node.numTurns}
+          tokens={node.tokens}
+          stopReason={node.stopReason}
+          skipReason={node.skipReason}
+          skipExpr={node.skipExpr}
+          fanOutOutcome={node.fanOutOutcome}
+          output={node.output}
+          error={node.error}
+          failureKind={node.failureKind}
+          showDetail={display.showSystem}
+          waiting={node.nodeId === display.waitingNodeId && node.status === 'running'}
+        />
+      ) : null}
+      {checkout !== undefined ? (
+        <p className="ml-18 py-1.5 text-console-11 text-text-tertiary">
+          Commands run in <PathTokenChip token={checkout} /> unless they say otherwise
+        </p>
+      ) : null}
+      {section.turns.map(turn => (
+        <TurnBlock key={turn.key} turn={turn} display={display} />
+      ))}
+      {section.trailing.map(entry => renderBlindEntry(entry, display.fullPaths))}
+    </>
+  );
+}
+
+function TurnBlock({ turn, display }: { turn: Turn; display: RowDisplay }): ReactElement {
+  return (
+    <>
+      {turn.text !== null ? (
+        <div className="py-4">
+          <MessageItem
+            variant="log"
+            message={{
+              id: turn.key,
+              role: 'assistant',
+              content: turn.text.text,
+              timestamp: turn.text.timestamp,
+              toolCalls: [],
+              error: null,
+              category: null,
+              dispatch: null,
+              workflowResult: null,
+            }}
+          />
+        </div>
+      ) : null}
+      {turn.items.length > 0 ? (
+        <div className="mb-2 ml-4 border-l-2 border-border pl-3">
+          {turn.items.map(item => (
+            <TurnItemRow key={item.key} item={item} display={display} />
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function TurnItemRow({ item, display }: { item: TurnItem; display: RowDisplay }): ReactElement {
+  switch (item.kind) {
+    case 'tool':
+      return (
+        <ToolCallItem
+          call={item.call}
+          timestamp={item.timestamp}
+          paths={display.paths}
+          exact={display.fullPaths}
+        />
+      );
+    case 'hook':
+      return <HookEventItem event={item.event} timestamp={item.timestamp} />;
+    case 'warning':
+      return (
+        <div className="py-1">
+          <StreamCard timestamp={item.timestamp} kind="system" compact label="Warning">
+            <p className="mt-1 whitespace-pre-wrap font-mono text-console-11 text-text-secondary [overflow-wrap:anywhere]">
+              {item.message}
+            </p>
+          </StreamCard>
+        </div>
+      );
   }
-  return entries;
 }
 
 function ContentEventItem({ event }: { event: TextEvent | ArtifactEvent }): ReactElement {
@@ -414,89 +259,83 @@ function ContentEventItem({ event }: { event: TextEvent | ArtifactEvent }): Reac
   );
 }
 
-function renderTimelineEntry(entry: TimelineEntry): ReactElement {
+function SystemLine({
+  timestamp,
+  kind,
+  label,
+  detail,
+}: {
+  timestamp: string;
+  kind: 'system' | 'error';
+  label: string;
+  detail: string;
+}): ReactElement {
+  return (
+    <div className="py-1">
+      <StreamCard
+        timestamp={timestamp}
+        kind={kind}
+        compact
+        label={label}
+        headerRight={
+          detail.length > 0 ? (
+            <span className="truncate font-mono text-console-11 text-text-secondary">{detail}</span>
+          ) : null
+        }
+      />
+    </div>
+  );
+}
+
+function renderBlindEntry(entry: BlindEntry, fullPaths: boolean): ReactElement {
   switch (entry.kind) {
-    case 'message': {
+    case 'message':
       return (
         <div key={entry.key} className="py-4">
           <MessageItem message={entry.message} variant="log" />
         </div>
       );
-    }
-    case 'tool': {
-      return <ToolCallItem key={entry.key} call={entry.call} timestamp={entry.timestamp} />;
-    }
-    case 'hook': {
-      return <HookEventItem key={entry.key} event={entry.event} timestamp={entry.timestamp} />;
-    }
-    case 'node': {
+    // A message-inline call carries no node, so no node line can say where it ran:
+    // its paths stay as recorded.
+    case 'tool':
       return (
-        <NodeDivider
+        <ToolCallItem
           key={entry.key}
-          nodeId={entry.node.nodeId}
-          nodeName={entry.node.nodeName}
-          status={entry.node.status}
-          durationMs={entry.node.durationMs}
-          timestamp={entry.node.startedAt}
-          costUsd={entry.node.costUsd}
-          costPartial={entry.node.costPartial}
-          costScope={entry.node.costScope}
-          numTurns={entry.node.numTurns}
-          tokens={entry.node.tokens}
-          stopReason={entry.node.stopReason}
-          skipReason={entry.node.skipReason}
-          skipExpr={entry.node.skipExpr}
-          fanOutOutcome={entry.node.fanOutOutcome}
-          output={entry.node.output}
-          error={entry.node.error}
-          failureKind={entry.node.failureKind}
-          showDetail={entry.showDetail}
-          waiting={entry.waiting}
+          call={entry.call}
+          timestamp={entry.timestamp}
+          exact={fullPaths}
+        />
+      );
+    case 'system': {
+      const ev = entry.event;
+      return ev.kind === 'error' ? (
+        <SystemLine
+          key={entry.key}
+          timestamp={ev.timestamp}
+          kind="error"
+          label="Error"
+          detail={ev.message}
+        />
+      ) : (
+        <SystemLine
+          key={entry.key}
+          timestamp={ev.timestamp}
+          kind="system"
+          label={ev.label}
+          detail={ev.detail}
         />
       );
     }
-    case 'system': {
-      const ev = entry.event;
-      const isError = ev.kind === 'error';
-      const label = isError ? 'Error' : ev.label;
-      const detail = isError ? ev.message : ev.detail;
+    case 'system_row':
       return (
-        <div key={entry.key} className="py-1">
-          <StreamCard
-            timestamp={ev.timestamp}
-            kind={isError ? 'error' : 'system'}
-            compact
-            label={label}
-            headerRight={
-              detail.length > 0 ? (
-                <span className="truncate font-mono text-console-11 text-text-secondary">
-                  {detail}
-                </span>
-              ) : null
-            }
-          />
-        </div>
+        <SystemLine
+          key={entry.key}
+          timestamp={entry.row.timestamp}
+          kind="system"
+          label={entry.row.label}
+          detail={entry.row.detail}
+        />
       );
-    }
-    case 'system_row': {
-      return (
-        <div key={entry.key} className="py-1">
-          <StreamCard
-            timestamp={entry.row.timestamp}
-            kind="system"
-            compact
-            label={entry.row.label}
-            headerRight={
-              entry.row.detail.length > 0 ? (
-                <span className="truncate font-mono text-console-11 text-text-secondary">
-                  {entry.row.detail}
-                </span>
-              ) : null
-            }
-          />
-        </div>
-      );
-    }
     default:
       return (
         <div key={entry.key} className="py-1">

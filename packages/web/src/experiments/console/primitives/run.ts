@@ -64,6 +64,8 @@ export interface Run {
   finishedAt: WorkflowRun['completed_at'];
   /** workflow_runs.working_path — used to join against worktrees. */
   workingPath: WorkflowRun['working_path'];
+  /** Directories the run's record names; only the run detail carries them. */
+  knownPaths?: DetailRun['known_paths'];
   userMessage: NonNullable<WorkflowRun['user_message']>;
   /** The inputs the run was invoked with, by name; a re-run restores these. */
   suppliedInputs?: Readonly<WorkflowRun['supplied_inputs']>;
@@ -162,7 +164,7 @@ type RawWorkflowRun = Pick<
       | 'owner_observation'
     >
   > &
-  Partial<Pick<DetailRun, 'conversation_platform_id' | 'terminal_record'>>;
+  Partial<Pick<DetailRun, 'conversation_platform_id' | 'terminal_record' | 'known_paths'>>;
 
 function normalizeStatus(status: WorkflowRun['status']): RunStatus {
   return status === 'pending' ? 'running' : status;
@@ -293,6 +295,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     activePhaseStartedAt: raw.active_phase_started_at ?? null,
     finishedAt: raw.completed_at ?? null,
     workingPath: raw.working_path ?? null,
+    knownPaths: raw.known_paths ?? [],
     userMessage: raw.user_message ?? '',
     suppliedInputs: raw.supplied_inputs ?? {},
     activeNodes,

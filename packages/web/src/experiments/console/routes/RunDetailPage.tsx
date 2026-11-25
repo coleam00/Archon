@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
 import { useRunDetailSelection } from '../lib/use-run-detail-selection';
 import { RunDetailHeader } from '../components/RunDetailHeader';
-import { RunStream, runToolCalls } from '../components/RunStream';
+import { RunStream } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
@@ -15,6 +15,8 @@ import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useRunStreamSSE } from '../lib/sse';
 import { providerEventStore, useRunProviderEvents } from '../lib/provider-events';
+import { buildRunLog, countLogMessages } from '../lib/run-log';
+import { pathTokens as toPathTokens } from '../lib/run-paths';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
@@ -35,9 +37,12 @@ type RunDetailView = Awaited<ReturnType<typeof skill.getRun>>;
  *   - skill.listMessages() → conversation messages (assistant text, user input,
  *                            persisted tool calls in metadata)
  *
- * RunStream merges both into one timeline. Paused runs render the
- * ApprovalContext + ApprovalPanel at the bottom of the stream so the user can
- * answer the gate in place.
+ *   - provider events      → each node's agent text and tool calls, in the
+ *                            engine's recorded order (lib/provider-events.ts)
+ *
+ * lib/run-log.ts builds one log from the three and RunStream renders it. Paused
+ * runs render the ApprovalContext + ApprovalPanel at the bottom of the stream so
+ * the user can answer the gate in place.
  *
  * Updates flow through SSE (lib/sse.ts) with a 30s safety-net refetch
  * for runs that are still running/paused.
@@ -45,6 +50,7 @@ type RunDetailView = Awaited<ReturnType<typeof skill.getRun>>;
 const TOGGLE_KEYS = {
   toolCalls: 'archon.console.showToolCalls',
   system: 'archon.console.showSystem',
+  fullPaths: 'archon.console.showFullPaths',
 } as const;
 
 const NEAR_BOTTOM_PX = 120;
@@ -331,6 +337,9 @@ export function RunDetailPage(): ReactElement {
   const [showSystem, setShowSystem] = useState<boolean>(() =>
     readToggle(TOGGLE_KEYS.system, false)
   );
+  const [showFullPaths, setShowFullPaths] = useState<boolean>(() =>
+    readToggle(TOGGLE_KEYS.fullPaths, false)
+  );
 
   // Hoisted above any early returns so the hook order stays stable.
   const scrollToNode = useCallback((nodeId: string): boolean => {
@@ -358,15 +367,15 @@ export function RunDetailPage(): ReactElement {
   const { detail, detailError, projectId, project, projectError, messages, artifactFiles } =
     useRunDetailData(runId);
 
-  // Distinct nodes drive the node-filter dropdown — derived from the same fold
-  // the stream renders, so the options match the dividers exactly.
-  const nodeOptions = useMemo(
-    () =>
-      foldNodeRuns(detail?.events ?? [], detail?.nodes ?? []).map(r => ({
-        id: r.nodeId,
-        name: r.nodeName,
-      })),
+  // One fold feeds the node-filter dropdown and the stream, so the options match
+  // the dividers exactly.
+  const nodeRuns = useMemo(
+    () => foldNodeRuns(detail?.events ?? [], detail?.nodes ?? []),
     [detail?.events, detail?.nodes]
+  );
+  const nodeOptions = useMemo(
+    () => nodeRuns.map(r => ({ id: r.nodeId, name: r.nodeName })),
+    [nodeRuns]
   );
 
   // Each node's provider events load once, when the node first appears; live frames
@@ -376,6 +385,20 @@ export function RunDetailPage(): ReactElement {
     if (runId === undefined) return;
     for (const node of nodeOptions) providerEventStore.load(runId, node.id);
   }, [runId, nodeOptions]);
+  const log = useMemo(
+    () =>
+      buildRunLog({
+        messages: messages ?? [],
+        events: detail?.events ?? [],
+        nodeRuns,
+        providerEvents,
+      }),
+    [messages, detail?.events, nodeRuns, providerEvents]
+  );
+  const pathTokens = useMemo(
+    () => toPathTokens(detail?.run.knownPaths ?? []),
+    [detail?.run.knownPaths]
+  );
 
   const { view, selectedNodeId, select } = useRunDetailSelection(
     nodeOptions,
@@ -510,9 +533,7 @@ export function RunDetailPage(): ReactElement {
     );
   }
 
-  const { run, events, nodes } = detail;
-  const messageList = messages ?? [];
-  const toolCallCount = runToolCalls(messageList, providerEvents).count;
+  const { run, nodes } = detail;
 
   const toolbar = (
     <StreamToolbar
@@ -528,8 +549,13 @@ export function RunDetailPage(): ReactElement {
         setShowSystem(next);
         writeToggle(TOGGLE_KEYS.system, next);
       }}
-      toolCallCount={toolCallCount}
-      messageCount={messageList.length}
+      showFullPaths={showFullPaths}
+      onToggleFullPaths={next => {
+        setShowFullPaths(next);
+        writeToggle(TOGGLE_KEYS.fullPaths, next);
+      }}
+      toolCallCount={log.toolCallCount}
+      messageCount={countLogMessages(log)}
       artifactCount={artifactFiles?.length ?? null}
       nodeOptions={nodeOptions}
       selectedNodeId={selectedNodeId}
@@ -554,10 +580,9 @@ export function RunDetailPage(): ReactElement {
 
               <div className="mt-2">
                 <RunStream
-                  messages={messageList}
-                  events={events}
-                  nodes={nodes}
-                  providerEvents={providerEvents}
+                  log={log}
+                  pathTokens={pathTokens}
+                  fullPaths={showFullPaths}
                   showToolCalls={showToolCalls}
                   showSystem={showSystem}
                   selectedNodeId={selectedNodeId}
