@@ -289,6 +289,31 @@ export async function wakeDueWorkflowContinuations(
   );
 }
 
+/** Record on the run that this host gave up on it, so attention shows it after a restart. */
+async function recordGiveUp(
+  store: Pick<ContinuationStore, 'updateWorkflowRun'>,
+  runId: string,
+  attempts: number,
+  path: string | null,
+  cursor: WorkflowResumeCursor
+): Promise<void> {
+  try {
+    await store.updateWorkflowRun(runId, {
+      metadata: {
+        [CONTINUATION_GIVEN_UP_METADATA_KEY]: {
+          at: new Date().toISOString(),
+          attempts,
+          path,
+          cursor,
+        },
+      },
+    });
+  } catch (error) {
+    // The host still stops resuming it; only the record attention reads is missing.
+    log.error({ err: error, runId }, 'workflow_continuation_give_up_record_failed');
+  }
+}
+
 async function sourceFailureLimitReached(
   store: Pick<ContinuationStore, 'updateWorkflowRun'>,
   outcome: ContinuationWakeOutcome,
@@ -311,21 +336,7 @@ async function sourceFailureLimitReached(
           { err: sourceError, runId, path: sourceError.path, attempts: count },
           `This host stopped automatically resuming run ${runId}: ${unverifiableSourceGuidance(runId, sourceError)}`
         );
-        // On the run, so attention shows it and it outlives this host's memory.
-        try {
-          await store.updateWorkflowRun(runId, {
-            metadata: {
-              [CONTINUATION_GIVEN_UP_METADATA_KEY]: {
-                at: new Date().toISOString(),
-                attempts: count,
-                path: sourceError.path ?? null,
-                cursor,
-              },
-            },
-          });
-        } catch (error) {
-          log.error({ err: error, runId }, 'workflow_continuation_give_up_record_failed');
-        }
+        await recordGiveUp(store, runId, count, sourceError.path ?? null, cursor);
       }
       return true;
     }
