@@ -49,10 +49,16 @@ function escapeAttribute(value: string): string {
     .replaceAll("'", '&apos;');
 }
 
+/**
+ * The suite this runner adds when a group's process exits non-zero. Its one test case is named
+ * by the group's selectors, space-separated, since Bun's report may hold no file for the error.
+ */
+export const RUNNER_SUITE = 'runner';
+
 export function runnerErrorReport(message: string, name: string): TestReport {
   return {
     counts: { tests: 1, assertions: 0, failures: 0, skipped: 0, errors: 1, time: 0 },
-    suites: `<testsuite name="runner" tests="1" errors="1"><testcase name="${escapeAttribute(name)}"><error message="${escapeAttribute(message)}" /></testcase></testsuite>`,
+    suites: `<testsuite name="${RUNNER_SUITE}" tests="1" errors="1"><testcase name="${escapeAttribute(name)}"><error message="${escapeAttribute(message)}" /></testcase></testsuite>`,
   };
 }
 
