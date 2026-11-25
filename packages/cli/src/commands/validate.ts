@@ -280,9 +280,9 @@ function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, Validat
           field: 'stops',
           message:
             unless.length === 0
-              ? `outcome '${outcome}' starts nothing, leaves no ask or wait and ends nothing: a run that ends with it stops its item`
-              : `outcome '${outcome}' starts nothing and ends nothing: a run that ends with it and leaves no ${unless.map(part => LEFT[part]).join(' or ')} stops its item`,
-          hint: 'List it in returns.ends when it finishes the item, bind a stage on it, or declare observes: true when the workflow is not a step of its item. A stop is listed in `archon workflow attention`.',
+              ? `outcome '${outcome}' starts no step on the item, leaves no ask or wait and ends nothing: a run that ends with it stops its item`
+              : `outcome '${outcome}' starts no step on the item and ends nothing: a run that ends with it and leaves no ${unless.map(part => LEFT[part]).join(' or ')} stops its item`,
+          hint: 'List it in returns.ends when it finishes the item, bind a step on it (a stage that observes its item does not move it on), or declare observes: true when the workflow is not a step of its item. A stop is listed in `archon workflow attention`.',
         },
       ]);
   }

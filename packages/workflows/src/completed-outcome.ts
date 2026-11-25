@@ -129,37 +129,41 @@ export function readCompletedOutcome(
  * - `observes`: the workflow declares `observes: true`; its runs act on the item without
  *   being one of its steps, so its ending neither moves, ends nor stops the item.
  * - `ends`: the outcome is one the workflow lists in `returns.ends`. The engine records an
- *   end on the item, even when the run leaves an ask or a wait, and the item rests. A
- *   start the ending causes does not keep the end from being written: a start of an
- *   observing workflow (a check after a merge) leaves it holding, and a step started on the
- *   item opens it, as a run after `archon workflow end` does.
- * - `moves`: the ending left an ask or a wait, or started a stage on the item itself.
- * - `stops`: anything else, a run that completed with no outcome included. Nothing follows
- *   the run, whatever the outcome is called. A start on a linked item moves that item, not
- *   this one, so it is not a start here.
+ *   end on the item, even when the run leaves an ask or a wait. A start the ending causes
+ *   does not keep the end from being written: a start of an observing workflow (a check
+ *   after a merge) leaves it holding, and a step started on the item opens it, as a run
+ *   after `archon workflow end` does.
+ * - `moves`: the ending left an ask or a wait.
+ * - `stops`: anything else, a run that completed with no outcome included, whatever the
+ *   outcome is called. The completing write records the stop. A stage the ending starts on
+ *   the item moves it on when its run exists, as any later step does; until then the stop
+ *   reader holds the stop back (`listStoppedItemRuns`). A run of an observing workflow
+ *   moves nothing, so the stop then shows.
  */
 export type ItemFate = 'observes' | 'moves' | 'ends' | 'stops';
 
 export function itemFate(
   workflow: Pick<WorkflowDefinition, 'result' | 'observes'>,
   outcome: string | undefined,
-  leaves: { readonly asks: boolean; readonly waits: boolean; readonly starts: boolean }
+  leaves: { readonly asks: boolean; readonly waits: boolean }
 ): ItemFate {
   if (workflow.observes === true) return 'observes';
   if (outcome !== undefined && workflow.result?.ends?.includes(outcome) === true) return 'ends';
-  return leaves.asks || leaves.waits || leaves.starts ? 'moves' : 'stops';
+  return leaves.asks || leaves.waits ? 'moves' : 'stops';
 }
 
 /**
- * `itemFate` read before any run, for an ending that leaves no ask or wait: `starts` is
- * whether a usable binding starts a stage on the item for the outcome. A workflow that
- * declares `returns.asks` or `returns.waits` can still leave none, so a reader that reports
- * such a stop says it holds only then.
+ * `itemFate` read before any run, for an ending that leaves no ask or wait, given whether
+ * a usable binding starts a step (a workflow that does not observe) on the item for the
+ * outcome: such a start moves the item on. A workflow that declares `returns.asks` or
+ * `returns.waits` can still leave none, so a reader that reports such a stop says it holds
+ * only then.
  */
 export function declaredItemFate(
   workflow: Pick<WorkflowDefinition, 'result' | 'observes'>,
   outcome: string,
-  starts: boolean
+  startsStep: boolean
 ): ItemFate {
-  return itemFate(workflow, outcome, { asks: false, waits: false, starts });
+  const fate = itemFate(workflow, outcome, { asks: false, waits: false });
+  return fate === 'stops' && startsStep ? 'moves' : fate;
 }

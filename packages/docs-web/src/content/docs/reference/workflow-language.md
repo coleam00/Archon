@@ -2490,13 +2490,17 @@ nodes:
 
   Every other ending of a step stops its item. A top-level run on an item, of a workflow that
   does not declare `observes: true`, stops the item when it completes with an outcome that
-  is not in `returns.ends`, or with no outcome at all, its end starts nothing on the item (no
-  [run-ended binding](/guides/workflow-triggers/) starts a stage on the item from that
-  outcome; a `linked` binding starts on other items), and it leaves no ask and no wait. What
-  the outcome is called does not matter, and no timer is involved.
-  Nothing follows such a run, so [`archon workflow attention`](/reference/cli/#workflow-attention)
-  lists the item as `stopped` until another step starts on the item, whatever its status,
-  unless the item's [merge is recorded](/reference/cli/#workflow-merged). A
+  is not in `returns.ends`, or with no outcome at all, and leaves no ask and no wait. What
+  the outcome is called does not matter, and no timer is involved. The write that completes
+  the run records the stop, and
+  [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
+  `stopped` until another step starts on the item, whatever its status, unless the item's
+  [merge is recorded](/reference/cli/#workflow-merged). A stage the run's end starts on the
+  item through a [run-ended binding](/guides/workflow-triggers/) is such a step once its
+  run exists; while the start waits to be prepared (during an install hold too) or in its
+  resource's queue, the stop is held back. A stage that declares `observes: true` is no
+  step, so the stop shows once its run exists. A `linked` binding starts on other items and
+  moves nothing here. A
   run on no item, an observing run, a run that ended its item, and a run that left an ask or
   a wait stop nothing. A run whose end does start a binding also stops its item when
   admission refuses that start at its
@@ -2504,7 +2508,7 @@ nodes:
   when that start is refused before launch, once the run's own asks and waits are closed; the
   listing then names the limit or the refusal. `archon validate workflows` warns for each
   outcome of a step workflow that does not end the item and that no binding its pack
-  declares starts a stage on, saying when an ask or wait the workflow can leave would keep
+  declares starts a step on (a binding that starts only an observing stage counts for none), saying when an ask or wait the workflow can leave would keep
   the item moving instead.
 
   `returns.final`, which marked an outcome as never stopping its item, was removed. A

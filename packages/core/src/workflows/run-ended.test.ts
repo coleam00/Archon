@@ -706,12 +706,12 @@ describe('the hosts trigger files name', () => {
 });
 
 describe('the outcomes after which an item stops', () => {
-  test('are those of a named step workflow that neither end the item nor start a stage on it', async () => {
+  test('are those of a named step workflow that neither end the item nor start a step on it', async () => {
     const root = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-stops-')));
     const workflows = join(root, '.archon', 'workflows');
     await mkdir(workflows, { recursive: true });
     const stage = (name: string, returns: string, observes = false): string =>
-      `name: ${name}\ndescription: ${name}\n${observes ? 'observes: true\n' : ''}returns: ${returns}\nnodes:\n  - id: result\n    bash: echo '{}'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [approve, replan, landed] }\n      required: [stage]\n`;
+      `name: ${name}\ndescription: ${name}\n${observes ? 'observes: true\n' : ''}returns: ${returns}\nnodes:\n  - id: result\n    bash: echo '{}'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [approve, replan, landed, advise] }\n      required: [stage]\n`;
     await writeFile(
       join(workflows, 'deliver.yaml'),
       stage('deliver', '{ node: result, outcome: stage, ends: [landed] }')
@@ -775,7 +775,7 @@ describe('the outcomes after which an item stops', () => {
             bindingId: 's',
             launch: { ...binding.launch, workflowName: 'shadow' },
           },
-          runEnded: { workflowName: 'deliver', outcome: 'approve' },
+          runEnded: { workflowName: 'deliver', outcome: 'advise' },
         },
       ],
       {
@@ -790,14 +790,16 @@ describe('the outcomes after which an item stops', () => {
       }
     );
 
-    // `deliver:approve` is bound and `landed` ends the item; `replan` is bound only to a start
-    // on linked items. `review:approve` is bound by a file that starts a missing workflow, so
+    // `deliver:approve` is bound to a step and `landed` ends the item; `replan` is bound only
+    // to a start on linked items, and `advise` only to `shadow`, which observes its item and
+    // starts no step. `review:approve` is bound by a file that starts a missing workflow, so
     // its runs start nothing, and `review` stops its item only when a run leaves no ask.
     // `shadow` observes its item, so none of its outcomes stops it.
     const project = 'acme/widgets';
     expect(stops).toEqual([
       { project, workflow: 'deliver', outcome: 'replan', unless: [] },
-      ...['approve', 'replan', 'landed'].map(outcome => ({
+      { project, workflow: 'deliver', outcome: 'advise', unless: [] },
+      ...['approve', 'replan', 'landed', 'advise'].map(outcome => ({
         project,
         workflow: 'review',
         outcome,

@@ -582,6 +582,42 @@ describe('a run-ended binding', () => {
     expect(runs.map(run => run.workflow_name)).toEqual(['stage-a', 'stage-b']);
   }, 90_000);
 
+  test('the end of a step that starts only an observing stage stops its item; one that starts a step does not', async () => {
+    const fixture = await makeFixture('observer-only');
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'workflows', 'shadow-b.yaml'),
+      STAGE_B.replace('name: stage-b', 'name: shadow-b\nobserves: true')
+    );
+    fixture.bind('shadow-after-plan', RUN_ENDED, { workflowName: 'shadow-b' });
+    const stopped = async () =>
+      (
+        JSON.parse(await fixture.cli(['workflow', 'attention', '--json'])) as {
+          items: { kind: string; item?: { key: string }; stoppedIn?: { workflow: string } }[];
+        }
+      ).items
+        .filter(item => item.kind === 'stopped')
+        .map(item => [item.item?.key, item.stoppedIn?.workflow]);
+    const runA = (issue: string) =>
+      fixture.cli([
+        ...['workflow', 'run', 'stage-a', '--no-worktree', '--item', issue],
+        ...['--input', 'plan=p1', '--input', `issue=${issue}`],
+      ]);
+
+    await runA('issue-1');
+    await waitFor(() => completedRuns(fixture, 2), 'A and the observing stage its end started');
+    expect(await stopped()).toEqual([['issue-1', 'stage-a']]);
+
+    // Bound to a step instead, the started stage moves the item on. That stage declares no
+    // outcome and starts nothing, so it stops the item in its turn.
+    fixture.bind('shadow-after-plan', RUN_ENDED);
+    await runA('issue-2');
+    await waitFor(() => completedRuns(fixture, 4), 'A and the step its end started');
+    expect(await stopped()).toEqual([
+      ['issue-1', 'stage-a'],
+      ['issue-2', 'stage-b'],
+    ]);
+  }, 90_000);
+
   test('a hand run starts the stage its end caused even behind a page of older pending work on the host', async () => {
     const fixture = await makeFixture('backlog');
     fixture.bind('build-after-plan', RUN_ENDED);

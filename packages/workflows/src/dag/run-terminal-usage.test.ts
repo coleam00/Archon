@@ -2225,6 +2225,17 @@ describe('executeDagWorkflow -- what a run on an item records about it as it com
     expect(completedMetadata(store)?.item_stopped).toEqual({ summary: null });
   });
 
+  it('records the stop even when its end starts a stage, which moves the item on once it runs', async () => {
+    const store = createMockStore();
+    await run(
+      store,
+      { stage: 'replan', why: 'Started the build.' },
+      { receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance] }
+    );
+
+    expect(completedMetadata(store)?.item_stopped).toEqual({ summary: 'Started the build.' });
+  });
+
   it('records the stop with its declared summary when the outcome starts nothing and ends nothing', async () => {
     const store = createMockStore();
     await run(store, { stage: 'replan', why: '  The plan missed the schema change.  ' });
@@ -2245,11 +2256,6 @@ describe('executeDagWorkflow -- what a run on an item records about it as it com
         waits: [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 60 }],
       },
       { waits: true },
-    ],
-    [
-      'started the next stage',
-      { stage: 'replan', why: 'x' },
-      { receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance] },
     ],
     ['is on no item', { stage: 'landed', why: 'x' }, { workflowRun: makeWorkflowRun('stop-run') }],
   ] as const)('records neither a stop nor an end for a run that %s', async (_, value, options) => {

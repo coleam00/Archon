@@ -130,7 +130,7 @@ const itemBase = {
  * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
  * open past their deadline, which the awaited event, another run of the waiting workflow
  * on the item, or a withdrawal closes; `stopped` is an item whose newest step completed
- * with an ending that started nothing, left no ask or wait and ended nothing, or failed, so
+ * with an ending that started no step, left no ask or wait and ended nothing, or failed, so
  * nothing moves it: it takes no answer, and a newer step, its end or its merge closes it (a
  * run that observes the item, `observes: true`, is not a step);
  * `refused_start` is a start no run caused that was refused and is its item's newest step;

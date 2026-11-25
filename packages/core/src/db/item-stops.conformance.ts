@@ -10,7 +10,12 @@ import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { listAttentionQueue, readAttentionQueueItemByRef } from '@archon/workflows/attention-queue';
 import { itemStoppedMetadata, observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
-import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
+import { RUN_ENDED_SOURCE_ACTOR } from '@archon/workflows/schemas/resource-start';
+import {
+  CONFORMANCE_CODEBASE_ID,
+  CONFORMANCE_CONVERSATION_ID,
+  resourceStartFixtures,
+} from '@archon/workflows/store-conformance';
 import { answerAttentionItem } from '../operations/attention-items';
 import { itemDeps, operator, type Harness } from './item-asks.conformance';
 
@@ -122,6 +127,84 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       expect(await stopped()).toEqual([]);
       // Nothing about the stop was erased: its run still records it.
       expect((await harness.store.getWorkflowRun(stop))?.metadata).toHaveProperty('item_stopped');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a stop is held back while a stage its end started on the item has no run yet', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const stopped = async () =>
+        (await listAttentionQueue(itemDeps(harness).queue)).flatMap(item =>
+          'kind' in item && item.kind === 'stopped' ? [item.ref] : []
+        );
+      const { launch } = resourceStartFixtures(
+        CONFORMANCE_CODEBASE_ID,
+        CONFORMANCE_CONVERSATION_ID
+      );
+      // A start the end of `ended` caused on its item, as the completing write records it.
+      const caused = async (ended: string, bindingId: string) => {
+        const receiptId = crypto.randomUUID();
+        await store.acceptStartReceipt({
+          receipt: {
+            id: receiptId,
+            sourceInstanceId: bindingId,
+            deliveryId: ended,
+            contentDigest: receiptId,
+            receivedAt: new Date().toISOString(),
+            occurredAt: null,
+            sourceActor: { source: RUN_ENDED_SOURCE_ACTOR, id: ended, display: 'planned' },
+            itemKey: 'pr-7',
+          },
+          outcome: 'matched',
+          bindings: [
+            {
+              bindingId,
+              bindingRevision: null,
+              hostId: 'host',
+              runAsUserId: 'operator',
+              resource: bindingId,
+              overlap: 'queue',
+              launch: {
+                cwd: '/c',
+                workflowName: bindingId,
+                inputs: {},
+                isolation: { kind: 'in-place' },
+              },
+            },
+          ],
+        });
+        return { receiptId, bindingId, ownerId: 'owner' };
+      };
+
+      // The only stage its end started observes the item: held back while it waits to be
+      // prepared, listed once its run exists.
+      const planned = await completeOnItem(harness, 'plan', 'planned', 'Planned.');
+      const shadow = await caused(planned, 'shadow');
+      expect(await stopped()).toEqual([]);
+      await store.claimStartBindingPreparation(shadow);
+      const base = launch();
+      const observing = await store.completeStartBindingPreparation({
+        ...shadow,
+        launch: {
+          ...base,
+          run: { ...base.run, metadata: observesItemMetadata({ observes: true }) },
+        },
+      });
+      expect(observing?.status).toBe('admitted');
+      expect(await stopped()).toEqual([`stopped:${planned}`]);
+
+      // A start queued for its resource holds the stop back too: here it waits behind the
+      // observing run, which holds the item for its workflow.
+      const again = await completeOnItem(harness, 'plan', 'planned', 'Planned again.');
+      const build = await caused(again, 'build');
+      expect(await stopped()).toEqual([]);
+      await store.claimStartBindingPreparation(build);
+      const step = await store.completeStartBindingPreparation({ ...build, launch: launch() });
+      expect(step?.status).toBe('queued');
+      expect(await stopped()).toEqual([]);
     } finally {
       await harness.close();
     }

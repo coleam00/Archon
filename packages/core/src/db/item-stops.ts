@@ -31,7 +31,11 @@ import { getLog } from './workflow-run-shared';
  * observes its item (`stepRun`) is no step: it is never listed and ends no stop. Runs on an
  * item are ordered as `getItemRuns` orders them: by start time, and on SQLite, which records
  * it to the second, by insertion order within a second. Any step after this one, in any
- * status, ends the stop, and so does one deleted since (`moved_on_at` on the item, recorded by the delete). A run that still
+ * status, ends the stop, and so does one deleted since (`moved_on_at` on the item, recorded
+ * by the delete). A stage the run's end started on its item is such a step once its run
+ * exists; while it waits to be prepared (an install hold included) or queued for a resource,
+ * the stop is held back, and once its run exists a run that observes the item leaves the
+ * stop listed. Whether the run's end started anything is never decided at completion. A run that still
  * has an open ask is not listed: the ask is in attention and is what needs someone, and the
  * stop shows once it closes. Nor is one with an open wait, unless its stop names a refused
  * start: a wait not yet overdue is in no list, so the refusal beside it would show nowhere.
@@ -52,6 +56,19 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
          WHERE n.item_id = r.item_id AND n.id <> r.id AND ${stepRun('n')}
            AND (n.started_at > r.started_at
              OR (n.started_at = r.started_at AND n.${tie} > r.${tie}))
+       )
+       -- A stage this run's end started on its item moves it on once that stage's run exists;
+       -- until then, while the start waits to be prepared or in the resource queue, the stop
+       -- is held back. A run-ended start on the run's own item is delivered under the run's
+       -- id; a linked one, on another item, is not.
+       AND NOT EXISTS (
+         SELECT 1 FROM remote_agent_start_receipts sr
+         JOIN remote_agent_start_receipt_bindings sb ON sb.receipt_id = sr.id
+         WHERE sr.delivery_id = CAST(r.id AS TEXT) AND sr.outcome = 'matched'
+           AND (sb.preparation_status IN ('pending', 'preparing')
+             OR EXISTS (SELECT 1 FROM remote_agent_resource_start_requests sq
+                         WHERE sq.receipt_id = sb.receipt_id AND sq.binding_id = sb.binding_id
+                           AND sq.status = 'queued'))
        )
        -- A later run that was deleted still moved the item on.
        AND NOT EXISTS (SELECT 1 FROM remote_agent_items i

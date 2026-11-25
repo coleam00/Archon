@@ -2,7 +2,7 @@
  * What the write that completes a top-level run records about its item beside the status:
  * the result its asks-settled bindings will read, and the stop or end its ending causes.
  */
-import type { RunEndedStarts, WorkflowDeps } from '../deps';
+import type { WorkflowDeps } from '../deps';
 import { itemFate } from '../completed-outcome';
 import type { JsonValue } from '../output-ref';
 import { asksResultMetadata, itemStoppedMetadata } from '../schemas/run-metadata';
@@ -22,26 +22,22 @@ export type ItemCompletion =
   | { readonly end: { readonly reason: string; readonly node: string } };
 
 /**
- * What this completion records about its item, by `itemFate`: the stop when nothing follows
- * the run, so the attention queue lists the item until a newer step starts on it; the end
- * when its outcome finishes the item (`returns.ends`); undefined when the item moves on, the
- * run observes it, or the run is not a top-level run on an item. A run with no outcome (none
- * declared, or its returns node skipped) causes no start, so when it leaves no ask or wait
- * it stops its item. A declared `returns.summary` is read from the result, which is read
- * for it.
+ * What this completion records about its item, by `itemFate`: the stop when the run left no
+ * ask or wait and its outcome does not end the item, so the attention queue lists the item
+ * until a newer step starts on it (a stage its end started is such a step once its run
+ * exists); the end when its outcome finishes the item (`returns.ends`); undefined when the
+ * run left an ask or a wait, observes the item, or is not a top-level run on an item. A
+ * declared `returns.summary` is read from the result, which is read for it.
  */
 export function itemCompletion(
   { workflow, workflowRun }: Pick<RunTerminalContext, 'workflow' | 'workflowRun'>,
   { outcome, asks, waits }: ReturnedResult,
-  starts: RunEndedStarts,
   result: JsonValue | undefined
 ): ItemCompletion | undefined {
   if (workflowRun.parent_run_id !== null || workflowRun.item_id === null) return undefined;
   const fate = itemFate(workflow, outcome?.value, {
     asks: (asks?.length ?? 0) > 0,
     waits: (waits?.length ?? 0) > 0,
-    // Linked starts start on other items; only a receipt is a start on this one.
-    starts: starts.receipts.length > 0,
   });
   const field = workflow.result?.summary;
   const value =

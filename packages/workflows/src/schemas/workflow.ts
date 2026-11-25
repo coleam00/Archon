@@ -328,7 +328,7 @@ export const workflowResultContractSchema = z.strictObject({
   ends: z.array(z.string().min(1)).min(1).optional(),
   /**
    * A string property of the returns node's output, as one line: the attention queue shows
-   * it when the run's item stops (its ending started nothing, left no ask or wait and ended
+   * it when the run's item stops (its ending started no step, left no ask or wait and ended
    * nothing), and an end the run records gives it as its reason. Declared, never read from
    * a property by its name.
    */

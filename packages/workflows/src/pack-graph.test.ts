@@ -525,8 +525,8 @@ describe('a pack graph', () => {
     });
   });
 
-  test('an outcome stops its item unless it ends it, its stage observes, or a stage starts on it', () => {
-    const review = wf('review', [decide(['close', 'not_ready', 'ready'])], {
+  test('an outcome stops its item unless it ends it, its stage observes, or a step starts on it', () => {
+    const review = wf('review', [decide(['close', 'not_ready', 'ready', 'advise'])], {
       returns: 'decide',
       result: { outcome: 'outcome', ends: ['close'] },
     });
@@ -543,6 +543,8 @@ describe('a pack graph', () => {
     );
     const declared = {
       'build-after-review': runEnded('build', 'review', 'ready'),
+      // Starts only an observing stage, which moves nothing on.
+      'shadow-after-review': runEnded('shadow', 'review', 'advise'),
       // Starts on linked items, so it starts nothing on the ended run's own item.
       'build-linked': packRunEndedBindingSchema.parse({
         workflow: 'build',
@@ -553,7 +555,10 @@ describe('a pack graph', () => {
     };
     const graph = graphOf(staged, {
       declared,
-      installed: [installed('review', 'ready', 'build', 'file-build')],
+      installed: [
+        installed('review', 'ready', 'build', 'file-build'),
+        installed('review', 'advise', 'shadow', 'file-shadow'),
+      ],
     });
 
     const [reviewed, shadowed] = graph.stages;
@@ -561,6 +566,7 @@ describe('a pack graph', () => {
       { value: 'close', startsNothing: true, ends: true, stops: false },
       { value: 'not_ready', startsNothing: true, ends: false, stops: true },
       { value: 'ready', startsNothing: false, ends: false, stops: false },
+      { value: 'advise', startsNothing: false, ends: false, stops: true },
     ]);
     expect(shadowed?.observes).toBe(true);
     expect(shadowed?.outcome?.values.map(v => v.stops)).toEqual([false, false]);
@@ -569,6 +575,7 @@ describe('a pack graph', () => {
     expect(graph.stages[3]?.outcome?.values.map(v => v.stops)).toEqual([true]);
     expect(declaredStops('chain', staged, declared)).toEqual([
       { stage: 'review', outcome: 'not_ready', unless: [] },
+      { stage: 'review', outcome: 'advise', unless: [] },
       { stage: 'build', outcome: 'done', unless: [] },
       { stage: 'host', outcome: 'open', unless: ['waits'] },
     ]);

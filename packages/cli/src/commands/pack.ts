@@ -775,12 +775,13 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
   }
   lines.push('', `Arrows: ${String(graph.arrows.length)}`);
   for (const arrow of graph.arrows) lines.push(arrowText(arrow));
+  // An outcome whose only arrows start observing stages starts something but no step.
   const nothing = graph.stages.flatMap(stage =>
     (stage.outcome?.values ?? [])
-      .filter(v => v.startsNothing && !v.ends)
+      .filter(v => v.stops || (v.startsNothing && !v.ends))
       .map(v => `  ${stage.name}:${v.value}${v.stops ? stopsNote(stage) : ''}`)
   );
-  if (nothing.length > 0) lines.push('', 'Outcomes that start nothing:', ...nothing);
+  if (nothing.length > 0) lines.push('', 'Outcomes that start no step:', ...nothing);
   if (graph.discoveryErrors.length > 0)
     lines.push(
       '',

@@ -74,9 +74,9 @@ const packGraphStageSchema = z.object({
           ends: z.boolean(),
           /**
            * A run that ends with this outcome and leaves no ask or wait stops its item
-           * (`itemFate`): no active arrow without problems starts a stage on the item itself
-           * (a linked arrow starts on other items), it does not end the item, and the stage
-           * is a step. For a stage with `asks` or `waits`, it stops only when the run leaves
+           * (`itemFate`): no active arrow without problems starts a step on the item itself
+           * (a linked arrow starts on other items, and a stage that observes its item is no
+           * step), it does not end the item, and the stage is a step. For a stage with `asks` or `waits`, it stops only when the run leaves
            * none.
            */
           stops: z.boolean(),
@@ -616,7 +616,7 @@ export function buildPackGraph(input: GraphInput): Omit<PackGraph, 'loaded' | 'o
   // Only an outcome arrow starts something for an outcome; an asks arrow starts on answers.
   const usable = arrows.filter(arrow => arrow.active && arrow.installed.problems.length === 0);
   const started = new Set(usable.map(arrow => arrowKey(arrow.from, '')));
-  const startedOnItem = itemStarts(usable);
+  const startedOnItem = itemStepStarts(usable, input.stages);
   return {
     pack: input.packKey,
     stages: input.stages.map(stage => graphStage(stage, started, startedOnItem)),
@@ -630,11 +630,19 @@ export function buildPackGraph(input: GraphInput): Omit<PackGraph, 'loaded' | 'o
   };
 }
 
-/** The outcomes `arrows` start a stage on for the ended run's own item, keyed as `arrowKey`. */
-function itemStarts(arrows: readonly Pick<PackGraphArrow, 'from' | 'linked'>[]): Set<string> {
+/**
+ * The outcomes `arrows` start a step on for the ended run's own item, keyed as `arrowKey`. A
+ * linked arrow starts on other items, and an arrow to a stage that observes its item starts
+ * no step: neither moves the item on. A stage outside the pack is taken to be a step.
+ */
+function itemStepStarts(
+  arrows: readonly Pick<PackGraphArrow, 'from' | 'linked' | 'to'>[],
+  stages: readonly Pick<Stage, 'name' | 'observes'>[]
+): Set<string> {
+  const observing = new Set(stages.filter(stage => stage.observes === true).map(s => s.name));
   return new Set(
     arrows
-      .filter(arrow => 'outcome' in arrow.from && arrow.linked === null)
+      .filter(arrow => 'outcome' in arrow.from && arrow.linked === null && !observing.has(arrow.to))
       .map(arrow => arrowKey(arrow.from, ''))
   );
 }
@@ -649,8 +657,8 @@ export interface DeclaredStop {
 /**
  * The outcomes of `stages` that stop their item when only the bindings declared beside them
  * start stages (`declaredItemFate`): what `archon validate workflows` reports before anything
- * is installed. A declared binding counts when it names stages that loaded and starts on the
- * ended run's own item, as the pack graph counts an installed one. With no declaration (a
+ * is installed. A declared binding counts when it names stages that loaded and starts a step
+ * on the ended run's own item, as the pack graph counts an installed one. With no declaration (a
  * workflow outside a pack) nothing starts. An installed trigger file is `archon trigger
  * check`'s to read.
  */
@@ -659,7 +667,7 @@ export function declaredStops(
   stages: readonly Stage[],
   declared: Readonly<Record<string, PackBinding>> | undefined
 ): DeclaredStop[] {
-  const bound = itemStarts(
+  const bound = itemStepStarts(
     declaredArrows({
       packKey,
       stages,
@@ -667,7 +675,8 @@ export function declaredStops(
       installed: [],
       workflows: [],
       discoveryErrors: [],
-    }).filter(arrow => arrow.binding.problems.length === 0)
+    }).filter(arrow => arrow.binding.problems.length === 0),
+    stages
   );
   return stages.flatMap(stage => {
     const outcome = declaredOutcome(stage);

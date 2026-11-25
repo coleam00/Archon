@@ -248,8 +248,9 @@ export function observesItemRecorded(metadata: unknown): boolean {
 
 /**
  * Set by the completing write of a top-level run on an item that stopped the item: its
- * ending started nothing, left no ask or wait and ended nothing (`itemFate` is `stops`).
- * The attention queue lists the item as `stopped` while this run is the newest step on it. `summary` is the declared `returns.summary` value,
+ * ending left no ask or wait and ended nothing (`itemFate` is `stops`), whatever it started.
+ * The attention queue lists the item as `stopped` while this run is the newest step on it
+ * and no start its end caused is still waiting to be prepared or queued (`listStoppedItemRuns`). `summary` is the declared `returns.summary` value,
  * or null. Older binaries read metadata as an open record and ignore the key.
  *
  * Admission also sets it, with `limit`, on the completed run whose end or settled asks

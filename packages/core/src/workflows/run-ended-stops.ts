@@ -73,7 +73,7 @@ function workflowStops(
 /**
  * The outcomes after which a run on an item would stop it, per project the bindings launch
  * in: each value a workflow's declared outcome can take that does not end the item
- * (`returns.ends`) and that no usable run-ended file in the project binds to a start on the
+ * (`returns.ends`) and that no usable run-ended file in the project binds to a step on the
  * item itself, of a workflow that is a step (not `observes: true`). A file is usable when the
  * check a run gets before it starts passes, as the pack graph counts it, and a `linked` file
  * starts on other items. A workflow that declares `returns.asks` or `returns.waits` stops
@@ -95,7 +95,25 @@ export async function runEndedStops(
   return [...stops.values()];
 }
 
-/** Each binding that can start, with its project, and every outcome a usable run-ended file binds on the item. */
+/** Whether the workflow a binding starts observes its item, read as the binding's check reads it. */
+async function startsObserver(
+  candidate: OnBindingFile,
+  deps: BindingDefinitionsDeps
+): Promise<boolean> {
+  const found = await discoverBindingWorkflows(candidate.binding.launch, deps);
+  return (
+    'discovered' in found &&
+    found.discovered.workflows.some(
+      ({ workflow }) =>
+        workflow.name === candidate.binding.launch.workflowName && workflow.observes === true
+    )
+  );
+}
+
+/**
+ * Each binding that can start, with its project, and every outcome a usable run-ended file
+ * binds to a step on the item: one that starts a workflow observing its item starts no step.
+ */
 async function readNamedBindings(
   bindings: readonly (OnBinding | OnBindingFile)[],
   deps: BindingDefinitionsDeps & Pick<RunEndedStartsDependencies, 'projectKeyOf'>
@@ -109,7 +127,8 @@ async function readNamedBindings(
     if (
       'runEnded' in candidate &&
       candidate.runEnded.linked === undefined &&
-      (await runEndedBindingCheck(candidate, deps)).length === 0
+      (await runEndedBindingCheck(candidate, deps)).length === 0 &&
+      !(await startsObserver(candidate, deps))
     )
       bound.add(stopKey(project, candidate.runEnded.workflowName, candidate.runEnded.outcome));
     read.push({ project, candidate, named: namedWorkflows(candidate) });

@@ -137,7 +137,7 @@ export async function finishRun(
   const { starts, asksCheckout, result } = handOffs;
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);
-  const item = itemCompletion(ctx, returned, starts, result);
+  const item = itemCompletion(ctx, returned, result);
   const written = await completeRun(
     ctx,
     nodeCounts,
