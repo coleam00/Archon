@@ -662,7 +662,7 @@ export interface IResourceStartStore {
   /** Every binding a process is preparing now. A store that records no preparer returns none. */
   listPreparingStarts(): Promise<PreparingStart[]>;
   /**
-   * The refused starts no run caused that are still their item's newest step: neither the
+   * The refused starts no existing run caused (a run whose stop would show them) that are still their item's newest step: neither the
    * same binding nor any run has started on the item since. A store without items has none.
    */
   listRefusedStarts(): Promise<RefusedStart[]>;

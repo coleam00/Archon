@@ -2,8 +2,7 @@
 /**
  * A start a run's end or settled asks caused, waiting while its trigger file is registered
  * again, follows the file's start config: rebuilt when it is prepared, or taken from its
- * queue and prepared again. A file removed while its host's trigger directory still names
- * the host refuses it.
+ * queue and prepared again, or refused on its item when the file no longer starts it.
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
@@ -22,6 +21,7 @@ import {
 import { readWorkflowSourceState } from '@archon/workflows/schemas/run-metadata';
 import { sealWorkflowRunConfig, unsealWorkflowRunConfig } from '../config/run-config';
 import { closeDatabase, getDatabase, resetDatabase } from '../db/connection';
+import { deleteWorkflowRun } from '../db/workflows';
 import * as codebaseDb from '../db/codebases';
 import { registerFolder } from '../handlers/clone';
 import { setPlatformPolicies } from '../platforms/registry';
@@ -241,11 +241,15 @@ async function holdPool({ store, codebaseId }: Setup): Promise<() => Promise<voi
 }
 
 /** A start of stage-b queued behind the held pool, prepared from the file mapping `issue`. */
-async function queueB(setupped: Setup, metadata: Record<string, unknown> = {}) {
+async function queueB(
+  setupped: Setup,
+  metadata: Record<string, unknown> = {},
+  issue = 'Fix the login page'
+) {
   await stage(['issue']);
   await trigger(afterA({ issue: { input: 'issue' } }), 1);
   const release = await holdPool(setupped);
-  const receiptId = await endA(setupped, 'Fix the login page', metadata);
+  const receiptId = await endA(setupped, issue, metadata);
   await setupped.pass();
   const [binding] = (await setupped.store.getStartReceipt(receiptId))?.bindings ?? [];
   expect(binding?.disposition?.status).toBe('queued');
@@ -298,32 +302,59 @@ const setRevision = (receiptId: string, revision: string | null) =>
     [revision, receiptId]
   );
 
-test.each(['before this release', 'now'])(
-  'a queued start whose receipt recorded its revision %s runs as prepared, on its captured source, when only its workflow changed',
-  async format => {
-    const setupped = await setup();
-    const { receiptId, release, requestId } = await queueB(setupped);
-    if (format === 'before this release') await olderRevision(receiptId);
-    await stage([]);
-    await release();
-    await setupped.pass();
+test('a queued start runs as prepared, on its captured source, when only its workflow changed', async () => {
+  const setupped = await setup();
+  const { receiptId, release, requestId } = await queueB(setupped);
+  await stage([]);
+  await release();
+  await setupped.pass();
 
-    expect(await startedInputs(setupped, receiptId)).toEqual({
-      status: 'admitted',
-      inputs: { issue: 'Fix the login page' },
-    });
-    expect(setupped.started).toEqual([requestId]);
-    const source = readWorkflowSourceState(
-      (await setupped.store.getWorkflowRun(requestId))?.metadata
-    );
-    expect(source.kind === 'recorded' && existsSync(source.record.root)).toBe(true);
-  }
-);
+  expect(await startedInputs(setupped, receiptId)).toEqual({
+    status: 'admitted',
+    inputs: { issue: 'Fix the login page' },
+  });
+  expect(setupped.started).toEqual([requestId]);
+  const source = readWorkflowSourceState(
+    (await setupped.store.getWorkflowRun(requestId))?.metadata
+  );
+  expect(source.kind === 'recorded' && existsSync(source.record.root)).toBe(true);
+});
 
-test('a queued start whose receipt an older Archon wrote follows a mapping-only change', async () => {
+/** The request a queued receipt's binding holds now. */
+const requestOf = async ({ store }: Setup, receiptId: string) =>
+  (await store.getStartReceipt(receiptId))?.bindings[0]?.disposition?.requestId;
+
+const unrevised = (receiptId: string) => setRevision(receiptId, null);
+
+test.each([
+  ['an older revision', olderRevision],
+  ['no revision', unrevised],
+])('a queued start recorded with %s is rebuilt once, then kept', async (_case, revision) => {
+  const setupped = await setup();
+  const { receiptId, release, requestId } = await queueB(setupped);
+  await revision(receiptId);
+  await setupped.pass();
+  const rebuilt = await requestOf(setupped, receiptId);
+  expect(rebuilt).not.toBe(requestId);
+  await setupped.pass();
+  expect(await requestOf(setupped, receiptId)).toBe(rebuilt);
+
+  await release();
+  await setupped.pass();
+  expect(await startedInputs(setupped, receiptId)).toEqual({
+    status: 'admitted',
+    inputs: { issue: 'Fix the login page' },
+  });
+  expect(setupped.started).toEqual([String(rebuilt)]);
+});
+
+test.each([
+  ['an older revision', olderRevision],
+  ['no revision', unrevised],
+])('a queued start recorded with %s follows a mapping-only change', async (_case, revision) => {
   const setupped = await setup();
   const { receiptId, release } = await queueB(setupped);
-  await olderRevision(receiptId);
+  await revision(receiptId);
   await stage(['task']);
   await trigger(afterA({ task: { input: 'issue' } }), 1);
   await release();
@@ -336,26 +367,62 @@ test('a queued start whose receipt an older Archon wrote follows a mapping-only 
   expect(await stageRuns()).toHaveLength(1);
 });
 
-test('a pending start whose file was removed, while its host is still named, is refused on its item', async () => {
+test('a queued start whose file changed is prepared again, even when its inputs map the same', async () => {
+  const setupped = await setup();
+  // The run was given its item's key, so mapping the key instead maps the same value.
+  const { receiptId, release, requestId } = await queueB(setupped, {}, 'issue-1');
+  await trigger(afterA({ issue: { item: 'key' } }), 1);
+  await release();
+  await setupped.pass();
+
+  expect(await startedInputs(setupped, receiptId)).toEqual({
+    status: 'admitted',
+    inputs: { issue: 'issue-1' },
+  });
+  expect(setupped.started).not.toEqual([requestId]);
+  expect(setupped.started).toHaveLength(1);
+});
+
+test("a start's file is the one registering its source on its host", async () => {
+  const setupped = await setup();
+  const { receiptId, release } = await queueB(setupped);
+  await stage(['task']);
+  await rm(join(getTriggersPath(), 'stage-b.json'));
+  await trigger(afterA({ issue: { input: 'issue' } }), 1, 'stage-b', {
+    file: 'aa.json',
+    hostId: 'elsewhere',
+  });
+  await trigger(afterA({ task: { input: 'issue' } }), 1, 'stage-b', { file: 'zz.json' });
+  await release();
+  await setupped.pass();
+
+  expect(await startedInputs(setupped, receiptId)).toEqual({
+    status: 'admitted',
+    inputs: { task: 'Fix the login page' },
+  });
+});
+
+test('a start refused after its causing run was deleted is listed, with the reason on its binding', async () => {
   const setupped = await setup();
   await stage(['issue']);
   await trigger(afterA({ issue: { input: 'issue' } }));
   const receiptId = await endA(setupped, 'Fix the login page');
-  // Another source on the same host, so this home is still the host's registry.
-  await trigger(afterA({}), 5, 'other-stage');
-  await rm(join(getTriggersPath(), 'stage-b.json'));
+  const ended = await getDatabase().query<{ id: string }>(
+    "SELECT id FROM remote_agent_workflow_runs WHERE workflow_name = 'stage-a'"
+  );
+  await deleteWorkflowRun(String(ended.rows[0]?.id));
+  await stage(['task']);
+  await trigger(afterA({ task: { input: 'issue' } }));
   await setupped.pass();
 
   expect(await stageRuns()).toEqual([]);
-  expect((await setupped.store.getStartReceipt(receiptId))?.bindings[0]?.status).toBe('rejected');
-  const ended = (
-    await getDatabase().query<{ metadata: string }>(
-      "SELECT metadata FROM remote_agent_workflow_runs WHERE workflow_name = 'stage-a'"
-    )
-  ).rows[0];
-  expect(JSON.parse(String(ended?.metadata)).item_stopped).toMatchObject({
-    refused: [{ workflow: 'stage-b', reason: 'launch_preparation_failed' }],
+  expect((await setupped.store.getStartReceipt(receiptId))?.bindings[0]).toMatchObject({
+    status: 'rejected',
+    error: expect.stringContaining('stage-b.json'),
   });
+  expect(await setupped.store.listRefusedStarts()).toMatchObject([
+    { receiptId, workflow: 'stage-b', itemKey: 'issue-1' },
+  ]);
 });
 
 test('an unreadable trigger file of another source does not affect a start whose own file is found', async () => {

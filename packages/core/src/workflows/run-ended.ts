@@ -144,10 +144,16 @@ export async function readTriggerFileHosts(
   return { hostIds: [...read.hosts], failures: read.unread };
 }
 
+/** One file registering a start's source on its host: its binding with `on`, or why it does not read. */
+export type StartFileEntry = { binding: OnBinding | undefined } | { unreadable: TriggerFileError };
+
 /** The trigger files of a directory, each read on its own, for a scan that must not fail on one. */
 export interface StartFiles {
-  /** Each readable file by its `sourceInstanceId` and `binding.hostId`; undefined when it has no `on`. */
-  byStart: Map<string, OnBinding | undefined>;
+  /**
+   * The files by the `sourceInstanceId` and `binding.hostId` they name. A file whose JSON
+   * does not parse names nothing, so it is in no entry.
+   */
+  byStart: Map<string, StartFileEntry[]>;
   /** The hosts the readable files name. */
   hosts: Set<string>;
   /** The files that did not read, each naming its file. */
@@ -183,20 +189,27 @@ export async function readStartFiles(directory: string): Promise<StartFiles> {
       );
       continue;
     }
+    const add = (sourceInstanceId: unknown, hostId: unknown, entry: StartFileEntry) => {
+      if (typeof sourceInstanceId !== 'string' || typeof hostId !== 'string') return;
+      const key = startFileKey(sourceInstanceId, hostId);
+      read.byStart.set(key, [...(read.byStart.get(key) ?? []), entry]);
+    };
     const parsed = triggerConfigSchema.safeParse(value);
     if (!parsed.success) {
-      read.unread.push(invalidFile(file, parsed.error));
+      const unreadable = invalidFile(file, parsed.error);
+      read.unread.push(unreadable);
+      // The identity it names, read loosely, so the start it registers waits on it.
+      const raw = value as { sourceInstanceId?: unknown; binding?: { hostId?: unknown } } | null;
+      add(raw?.sourceInstanceId, raw?.binding?.hostId, { unreadable });
       continue;
     }
     const { sourceInstanceId, binding } = parsed.data;
     read.hosts.add(binding.hostId);
     try {
-      read.byStart.set(
-        startFileKey(sourceInstanceId, binding.hostId),
-        onBindingOf(file, parsed.data)
-      );
+      add(sourceInstanceId, binding.hostId, { binding: onBindingOf(file, parsed.data) });
     } catch (error) {
       read.unread.push(error as TriggerFileError);
+      add(sourceInstanceId, binding.hostId, { unreadable: error as TriggerFileError });
     }
   }
   return read;
@@ -485,7 +498,12 @@ export function bindsRunEnd(
 export interface RebuildReads {
   store: Pick<
     IWorkflowStore,
-    'getWorkflowRun' | 'getItem' | 'getItemRuns' | 'listItemAsks' | 'listWorkflowEvents'
+    | 'getWorkflowRun'
+    | 'getItem'
+    | 'getItemRuns'
+    | 'listItemAsks'
+    | 'listItemLinks'
+    | 'listWorkflowEvents'
   >;
   projectKeyOf: (cwd: string) => Promise<string | null>;
   now: Date;
@@ -567,10 +585,23 @@ export async function rebuildRunEndedStart(
       ? readCompletedRunResult(run, await reads.store.listWorkflowEvents(run.id))
       : undefined;
   const value = result?.kind === 'result' ? result.value : undefined;
+  // A linked start keeps its item only while the file still selects it: the item holds
+  // the file's link to the ended item, and with `items`, the run's list names it.
   const entries = linked?.items === undefined ? undefined : linkedEntries(value, linked.items);
   const entry = Array.isArray(entries)
     ? entries.find(named => named.key === receipt.itemKey)?.entry
     : undefined;
+  if (
+    linked &&
+    (!(await holdsLink(reads, linked, item.id, receipt.itemKey)) ||
+      (linked.items !== undefined && entry === undefined))
+  )
+    return {
+      refused: {
+        reason: 'link_refused',
+        detail: `${file.file} no longer starts item '${receipt.itemKey}' over its ${linked.kind} link`,
+      },
+    };
   const mapped = mappedInputs(file.runEnded.inputs, {
     // The run's `$INPUTS`, as `resolveRunInputs` reads them for the completing write.
     inputs: readSubrunMetadata(run.metadata).inputs ?? {},
@@ -582,6 +613,20 @@ export async function rebuildRunEndedStart(
       : {}),
   });
   return rebuiltStart(file, receipt, mapped, stored, reads.now);
+}
+
+/** Whether `holderKey` holds an active `link` to the ended item, as `holdersOf` reads it at completion. */
+async function holdsLink(
+  reads: RebuildReads,
+  link: RunEndedLinked,
+  endedItemId: string,
+  holderKey: string | null
+): Promise<boolean> {
+  return (await reads.store.listItemLinks(endedItemId)).some(read => {
+    if ('type' in read || read.ended !== null || read.kind !== link.kind) return false;
+    const [holder, member] = link.holder === 'to' ? [read.to, read.from] : [read.from, read.to];
+    return member.id === endedItemId && holder.key === holderKey;
+  });
 }
 
 /** The receipt a matched binding writes for the end of `ended` on `item`. */

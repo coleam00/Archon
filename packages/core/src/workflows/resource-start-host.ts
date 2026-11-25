@@ -29,7 +29,6 @@ import {
  * fence, and recovery stay behind the supplied store; nothing here declares an owner dead.
  */
 import { randomUUID } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
 import { createLogger, canonicalizeProjectPath } from '@archon/paths';
 import { NoDefaultProviderError } from '@archon/provider-contract';
 import type { WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
@@ -89,9 +88,10 @@ import {
   launchProjectKey,
   readStartFiles,
   type RebuildReads,
+  type RebuiltStart,
   type StartFiles,
 } from './run-ended';
-import { waitingStart, type WaitingStartFate } from './waiting-start';
+import { rebuildStart, startFile, type WaitingStart } from './waiting-start';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { assertLaneStartable, executionLane, handoffIsolation } from './resource-start-lanes';
 import { resolveBindingInputs, selectStartedWorkflow } from './binding-workflow';
@@ -515,24 +515,24 @@ function followPass(host: ResourceStartHost): FollowPass {
   };
 }
 
-/** What a waiting start becomes before it is prepared or admitted (`waitingStart`). */
-async function fateOf(
+/** A waiting binding with its receipt, or undefined when the receipt is gone. */
+async function waitingStartOf(
   host: ResourceStartHost,
-  pass: FollowPass,
   binding: Pick<StartBindingInspection, 'receiptId' | 'bindingRevision'> & {
     intent: ResourceStartBindingIntent;
   }
-): Promise<WaitingStartFate> {
+): Promise<WaitingStart | undefined> {
   const receipt = await host.deps.store.getStartReceipt(binding.receiptId);
-  if (!receipt) return { keep: true };
-  return waitingStart({ ...binding, receipt }, await pass.files(), pass.reads);
+  return receipt
+    ? { receipt, bindingRevision: binding.bindingRevision, intent: binding.intent }
+    : undefined;
 }
 
 /**
- * The intent a claimed pending binding prepares with: as frozen, or as its trigger file
- * builds it now, written to the binding. Undefined when its file refused it, recorded as
- * PR 6188's stop on the item. Throws, giving the claim back, when its file is unknown or
- * the rebuild cannot be written, so the next drain tries again.
+ * The intent a claimed pending binding prepares with: as frozen, or as its changed trigger
+ * file builds it now (`startFile`, `rebuildStart`), written to the binding. Undefined when
+ * the file refused it, recorded on the binding and as PR 6188's stop on the item. Throws,
+ * giving the claim back, when its file is unknown or the rebuild cannot be written.
  */
 async function followedIntent(
   host: ResourceStartHost,
@@ -541,10 +541,13 @@ async function followedIntent(
   binding: StartBindingInspection & { intent: ResourceStartBindingIntent }
 ): Promise<ResourceStartBindingIntent | undefined> {
   const { store } = host.deps;
-  let fate: WaitingStartFate;
+  let fate: RebuiltStart;
   try {
-    fate = await fateOf(host, pass, binding);
-    if ('unknown' in fate) throw fate.unknown;
+    const start = await waitingStartOf(host, binding);
+    const found = start && startFile(start, await pass.files());
+    if (!start || !found || 'keep' in found) return binding.intent;
+    if ('unknown' in found) throw found.unknown;
+    fate = 'changed' in found ? await rebuildStart(found.changed, start, pass.reads) : found;
     if (
       'intent' in fate &&
       !(await store.replaceStartBindingIntent({ ...identity, intent: fate.intent }))
@@ -554,25 +557,25 @@ async function followedIntent(
     await store.resetStartBindingPreparation(identity);
     throw error;
   }
-  if ('keep' in fate) return binding.intent;
   if ('intent' in fate) return fate.intent;
-  // The detail names a trigger file, a source, a host and input names: no secret.
   log.info({ ...identity, ...fate.refused }, 'resource_start.binding_refused_by_file');
   await store.failStartBindingPreparation({
     ...identity,
     retryable: false,
-    error: preparationStageFailure('launch_preparation'),
+    // The detail names a trigger file, a source and input names: no secret, and
+    // `trigger inspect` shows it.
+    error: fate.refused.detail,
     refusal: fate.refused.reason,
   });
   return undefined;
 }
 
 /**
- * Send each queued request back to preparation whose trigger file no longer starts what it
- * was prepared from, before any is admitted. It keeps its launch when the file still
- * builds the same intent, revision aside, so a workflow-only change runs as prepared. The
- * pass's own preparation then rebuilds or refuses what it sent back; this is never the
- * place an intent is replaced or a start refused. Returns the requests it sent back.
+ * Send each queued request whose trigger file no longer matches its recorded revision
+ * (`startFile`) back to preparation before any is admitted: the request leaves its queue
+ * and its binding is pending again, in one write. The pass's own preparation then
+ * rebuilds, refuses or holds it; this is never the place an intent is replaced or a start
+ * refused. Returns the requests it sent back.
  */
 async function returnChangedQueuedStarts(
   host: ResourceStartHost,
@@ -590,11 +593,9 @@ async function returnChangedQueuedStarts(
       const binding = (await store.getStartReceipt(origin.receiptId))?.bindings.find(
         entry => entry.bindingId === origin.bindingId
       );
-      if (!binding?.intent) continue;
-      const fate = await fateOf(host, pass, { ...binding, intent: binding.intent });
-      if ('unknown' in fate) failures.push({ receiptId: origin.receiptId, error: fate.unknown });
-      if ('keep' in fate || 'unknown' in fate) continue;
-      if ('intent' in fate && sameStart(fate.intent, binding.intent)) continue;
+      const start =
+        binding?.intent && (await waitingStartOf(host, { ...binding, intent: binding.intent }));
+      if (!start || 'keep' in startFile(start, await pass.files())) continue;
       const launch = await store.returnQueuedStartToPreparation({
         requestId: request.id,
         ...origin,
@@ -608,13 +609,6 @@ async function returnChangedQueuedStarts(
     }
   }
   return returned;
-}
-
-/** Whether two intents start the same thing, whatever revision each records. */
-function sameStart(a: ResourceStartBindingIntent, b: ResourceStartBindingIntent): boolean {
-  const plain = ({ bindingRevision: _revision, ...intent }: ResourceStartBindingIntent) =>
-    JSON.parse(JSON.stringify(intent)) as unknown;
-  return isDeepStrictEqual(plain(a), plain(b));
 }
 
 async function startAdmittedRequest(
