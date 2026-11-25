@@ -67,8 +67,10 @@ The factory building this repository runs Archon from another checkout, on the h
   files that mount it: `ConsoleApp.tsx` (its routes and `factory.css`), `ProjectRail.tsx` (the
   sidebar entry) and `ProjectViewTabs.tsx` (the Factory tab). `bun run lint` enforces it
   (`scripts/check-factory-imports.ts`). On `combined` that script is not ported and the factory
-  folder holds only the board card's layer; its one importer outside it is Rasmus's board
-  (`routes/BoardPage.tsx` and `routes/board/ItemCard.tsx`, which draw the card). Every other file under `packages/web/src` (the answer
+  folder holds the board card's layer and the board furniture (work orders, Merged, Set aside,
+  the Table and the number tiles); its importers outside it are Rasmus's board and overview
+  (`routes/BoardPage.tsx`, `routes/board/ItemCard.tsx`, which draws the card, and
+  `routes/OverviewPage.tsx`, which draws the number tiles). Every other file under `packages/web/src` (the answer
   panel, the ask card, the project tabs apart from that one tab, every generic page and
   component, `theme.css`) stays as it is on Archon dev.
 - Server code is the view-file read (`GET /api/packs/{pack}/view` in `api.packs.ts`, beside the

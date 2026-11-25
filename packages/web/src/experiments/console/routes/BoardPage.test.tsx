@@ -3,6 +3,8 @@ import { Window } from 'happy-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { BoardPage, PackBoard } from './BoardPage';
+import { OverviewPage } from './OverviewPage';
+import { packBoard } from '../factory/lib/board-numbers';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import type { Project } from '../primitives/project';
 import type { ItemAsk } from '../primitives/run';
@@ -164,13 +166,6 @@ test('each open item is under the stage it stands at, in the order the pack grap
     next: null,
     totals: { ...NONE, failed: 1 },
   });
-  // The newest item at rest of twelve, which ended with the outcome `dropped`.
-  const done = item('issue-9', 'check', 'done');
-  set(K.boardDone('web', 'flow'), {
-    items: [{ ...done, runs: done.runs.map(run => ({ ...run, outcome: 'dropped' })) }],
-    next: 'cursor',
-    totals: { ...NONE, done: 12 },
-  });
   set(K.runsAttention, {
     runs: [],
     ownerLost: [],
@@ -195,11 +190,6 @@ test('each open item is under the stage it stands at, in the order the pack grap
     ['check', ['issue-1']],
     ['Not on a stage', ['issue-4']],
   ]);
-  // Done is the last column: the newest at rest, how each ended, and how many there are.
-  const doneColumn = pack.querySelector('[data-done]');
-  expect(doneColumn === null ? [] : keysIn(doneColumn)).toEqual(['issue-9']);
-  expect(doneColumn?.querySelector('[data-done-total]')?.textContent).toBe('12');
-  expect(doneColumn?.querySelector('[data-chip]')?.textContent).toBe('dropped');
   const decide = page.querySelector('[data-needs-decision]');
   expect(decide === null ? [] : keysIn(decide)).toEqual(['issue-3']);
   expect(decide?.querySelector('[data-item-reason]')?.textContent).toContain('check');
@@ -211,17 +201,13 @@ test('each open item is under the stage it stands at, in the order the pack grap
   expect(card?.getAttribute('data-state')).toBe('failed');
   expect(card?.querySelector('[data-item-title]')?.textContent).toBe('Title of issue-3');
   expect(card?.querySelector('a')?.getAttribute('href')).toBe('/console/p/web/r/run-issue-3');
-  // An item that waits on the operator says so; a work order lists its open members.
+  // An item that waits on the operator says so.
   expect(page.querySelector('[data-item="issue-2"] [data-chip]')?.getAttribute('data-chip')).toBe(
     'needs_you'
   );
-  expect(
-    [...page.querySelectorAll('[data-work-order]')].map(strip =>
-      strip.getAttribute('data-work-order')
-    )
-  ).toEqual(['order-9']);
-  // Until every item is read, the order shows its open members and no merged count.
-  expect(page.querySelector('[data-work-order-line]')?.textContent).toBe('1 open · 1 running');
+  // Until every item is read, the work orders are a skeleton: no total that may be wrong.
+  expect(page.querySelector('[data-work-orders-loading]')).not.toBeNull();
+  expect(page.querySelector('[data-work-order]')).toBeNull();
   // The project's asks are on the page, and the item that has one opens them over its card.
   expect(page.querySelector('[data-needs-you] [data-ask-ref="ask:a1"]')).not.toBeNull();
   const asks = page.querySelector('[data-item="issue-2"] [data-card-asks]');
@@ -252,14 +238,12 @@ test('a work order with no run of its own is listed from its members, open or me
   // An item whose standing run recorded its pack's key without the workflow's name; the run
   // carries the stage's published name.
   const older = item('issue-7', 'build', 'running');
-  set(K.board('web'), [
-    {
-      ...older,
-      runs: older.runs.map(run => ({ ...run, workflow: 'acme/flow:build', pack: null })),
-    },
-  ]);
+  const build = {
+    ...older,
+    runs: older.runs.map(run => ({ ...run, workflow: 'acme/flow:build', pack: null })),
+  };
+  set(K.board('web'), [build]);
   set(K.packGraph('web', 'flow'), graph);
-  set(K.boardDone('web', 'flow'), { items: [], next: null, totals: NONE });
   set(K.boardDecide('web'), { items: [], next: null, totals: NONE });
   const merged = (key: string, order: string): ItemRead => ({
     ...item(key, 'check', 'done'),
@@ -293,6 +277,15 @@ test('a work order with no run of its own is listed from its members, open or me
     merged('issue-2', '48'),
     { ...item('issue-8', 'plan', 'running'), links: [partOf('order-5', 'Open order')] },
     order48,
+    build,
+    // Order 64's only member merged, and its own read stands done: resolved.
+    merged('issue-10', '64'),
+    {
+      ...order48,
+      item: { ...order48.item, id: 'id-64', key: '64' },
+      standing: { runId: null, state: 'done', pack: null },
+      links: [incoming('issue-10')],
+    },
   ]);
   const page = render('/console/p/web/board', <BoardPage />);
   const strips = [...page.querySelectorAll('[data-work-order]')];
@@ -301,16 +294,21 @@ test('a work order with no run of its own is listed from its members, open or me
     strips.map(strip => [
       strip.getAttribute('data-work-order'),
       strip.querySelector('[data-work-order-line]')?.textContent,
+      strip.querySelector('[data-work-order-unstarted]')?.textContent,
+      strip.hasAttribute('data-resolved'),
     ])
   ).toEqual([
-    ['order-5', '0 of 1 merged · 1 open · 1 running'],
-    ['48', '2 of 3 merged · 1 not started'],
+    ['order-5', '0 of 1 merged', undefined, false],
+    // A member is not started, so the order's read stands at rest: not resolved.
+    ['48', '2 of 3 merged', '1 not started', false],
+    ['64', '1 of 1 merged', undefined, true],
   ]);
+  expect(strips[2]?.querySelector('[data-work-order-resolved]')?.textContent).toBe('Resolved');
+  expect(page.querySelector('[data-work-orders]')?.textContent).toContain('3 work orders · 2 open');
   // An order with a read of its own goes by its own title.
   expect(strips[1]?.textContent).toContain('Split the board');
   // Its key reads as a person reads an issue key: #48.
   expect(strips[1]?.querySelector('[data-work-order-key]')?.textContent).toBe('#48');
-  expect(strips[1]?.hasAttribute('disabled')).toBe(true);
   // The item counts for the pack its run recorded, and its run's name finds its stage.
   const pack = page.querySelector('[data-pack="flow"]');
   expect(pack?.querySelector('[data-stage="build"]')?.getAttribute('data-empty')).toBeNull();
@@ -325,13 +323,17 @@ test('stages a pack groups share a column, and each card there says its own stag
     ...graph,
     groups: [{ name: 'Make', stages: ['plan', 'build'] }],
   });
-  set(K.boardDone('web', 'flow'), { items: [], next: null, totals: NONE });
   const page = render(
     '/console/p/web/board',
     <PackBoard
       projectId="web"
       pack="flow"
-      items={[item('issue-1', 'build', 'running'), item('issue-2', 'plan', 'queued')]}
+      board={packBoard(
+        [item('issue-1', 'build', 'running'), item('issue-2', 'plan', 'queued')],
+        'flow',
+        new Date()
+      )}
+      counted
     />
   );
   expect(
@@ -374,7 +376,6 @@ function seedBoard(reads: ItemRead[]): void {
   set(K.board('web'), reads);
   set(K.boardOrders('web'), reads);
   set(K.boardDecide('web'), { items: [], next: null, totals: NONE });
-  set(K.boardDone('web', 'flow'), { items: [], next: null, totals: NONE });
   set(K.runsAttention, {
     runs: [],
     ownerLost: [],
@@ -546,4 +547,59 @@ test('while the project is still read, its packs are unknown and no card asks th
   } finally {
     await board.unmount();
   }
+});
+
+test('the Overview tiles and the Board count the same items: in flight, merged and the Merged column', () => {
+  const now = new Date();
+  const hoursAgo = (hours: number): string =>
+    new Date(now.getTime() - hours * 3600_000).toISOString();
+  // Merged an hour ago, three days ago and thirty days ago (outside the Merged column), each
+  // `took` hours after its run started.
+  const merged = (key: string, ago: number, took: number): ItemRead => ({
+    ...item(key, 'check', 'done'),
+    runs: item(key, 'check', 'done').runs.map(run => ({ ...run, startedAt: hoursAgo(ago + took) })),
+    merged: {
+      change: `https://example.test/pull/${key}`,
+      commit: null,
+      at: hoursAgo(ago),
+      recordedAt: now.toISOString(),
+      via: 'cli',
+      fromRun: null,
+    },
+  });
+  const dropped = item('issue-6', 'check', 'done');
+  const reads = [
+    item('issue-1', 'plan', 'running'),
+    item('issue-2', 'check', 'queued'),
+    merged('issue-3', 1, 1),
+    merged('issue-4', 72, 2),
+    merged('issue-5', 720, 4),
+    // Ended without merging: set aside, on neither page's count.
+    { ...dropped, runs: dropped.runs.map(run => ({ ...run, outcome: 'dropped' })) },
+  ];
+  seedBoard(reads);
+  // The stage-only read holds the moving items alone, as the server answers it.
+  set(K.board('web'), reads.slice(0, 2));
+  set(K.packGraph('web', 'flow'), graph);
+  const board = render('/console/p/web/board', <BoardPage />);
+  const overview = render('/console/p/web', <OverviewPage />);
+  const tile = (name: string): string | null | undefined =>
+    overview.querySelector(`[data-number="${name}"] [data-value]`)?.textContent;
+  const onStages = board.querySelectorAll('[data-pack="flow"] [data-stage] [data-item]').length;
+  const mergedShown = board.querySelector('[data-merged] [data-count]')?.textContent;
+  expect(tile('in-flight')).toBe(String(onStages));
+  expect(onStages).toBe(2);
+  expect(overview.querySelector('[data-flow-group="merged"] [data-count]')?.textContent).toBe(
+    mergedShown
+  );
+  expect(mergedShown).toBe('2');
+  // N of M: three merged of the five on the board (two moving, three merged).
+  expect(tile('merged')).toBe('3 of 5');
+  // The median of 1 h, 2 h and 4 h from first run to merge.
+  expect(tile('median-to-merged')).toBe('2 h');
+  expect(board.querySelector('[data-set-aside-count]')?.textContent).toBe('1');
+  // The Table lists what the Pipeline shows (two on stages, two merged this week), no columns.
+  const table = render('/console/p/web/board?view=table', <BoardPage />);
+  expect(table.querySelectorAll('[data-row]').length).toBe(4);
+  expect(table.querySelector('[data-stage]')).toBeNull();
 });

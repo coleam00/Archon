@@ -4,93 +4,46 @@
  *
  * The page decides nothing and names no pack. The pack's name, document, groups, arrows and
  * metric cards come from the pack graph read; where an item is comes from the item read's
- * `standing`, the same placement the board draws; the asks are the attention list's.
+ * `standing`, the same placement the board draws; the asks are the attention list's. Its
+ * numbers are `packBoard`'s over the board's own every-item read, so they match the board.
  */
 import type { ReactElement, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Link, useParams } from 'react-router';
 import { ItemAsksSection, useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
-import { relativeTime } from '../lib/format';
+import { FactoryNumbers } from '../factory/FactoryNumbers';
+import { MERGED_DAYS, packBoard, type BoardNumbers } from '../factory/lib/board-numbers';
+import { useBoardItems } from '../factory/useBoardItems';
 import type { Project } from '../primitives/project';
 import * as skill from '../skills';
-import {
-  getPackGraph,
-  ITEM_STATES,
-  listItems,
-  listItemsPage,
-  type ItemPage,
-  type ItemRead,
-  type PackGraph,
-} from '../skills/items';
+import { getPackGraph, listItems, type ItemRead, type PackGraph } from '../skills/items';
 import type { MetricsReport } from '../skills/metrics';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
-import { MOVING, chipOf, columnsOf, newestDone, standingRun, type StageGroup } from './BoardPage';
+import { MOVING, chipOf, columnsOf, type StageGroup } from './BoardPage';
+import { stageAt } from './board/standing';
 import { MetricCards } from './metrics/MetricsOverview';
 import { metricsRequests } from './metrics/model';
 
 const HEADLINE_CARDS = 3;
 const HEADLINE_DAYS = 7;
 const TOP_ASKS = 3;
-const TODAY_LIMIT = 100;
-
-/** The start of the operator's day, as the instant the item window reads from. */
-export function startOfToday(now = new Date()): string {
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-}
 
 /** How many of a pack's items sit in each column, and how many of those wait on the operator. */
 export function flowCounts(
   columns: readonly StageGroup[],
-  items: readonly ItemRead[]
+  items: readonly ItemRead[],
+  stages: PackGraph['stages'] | undefined
 ): { name: string; stages: string[]; count: number; needYou: number }[] {
   return columns.map(column => {
-    const here = items.filter(read =>
-      column.stages.includes(standingRun(read)?.pack?.workflow ?? '')
-    );
+    const here = items.filter(read => column.stages.includes(stageAt(read, stages) ?? ''));
     return {
       ...column,
       count: here.length,
       needYou: here.filter(read => chipOf(read) === 'needs_you').length,
     };
   });
-}
-
-/** What today's read says: items first started today, and items whose change merged today. */
-export function todayCounts(
-  page: Pick<ItemPage, 'items'> | undefined,
-  since: string
-): { entered: number; landed: number } {
-  const items = page?.items ?? [];
-  const start = Date.parse(since);
-  return {
-    entered: items.filter(read => Date.parse(read.runs[0]?.startedAt ?? '') >= start).length,
-    landed: items.filter(read => read.merged !== null && Date.parse(read.merged.at) >= start)
-      .length,
-  };
-}
-
-function Tile({
-  name,
-  label,
-  value,
-  children,
-}: {
-  name: string;
-  label: string;
-  value: number;
-  children?: ReactNode;
-}): ReactElement {
-  return (
-    <div data-number={name} className="rounded-console-12 border border-border px-5 py-4">
-      <h3 className="text-console-12 font-medium text-text-secondary">{label}</h3>
-      <p data-value className="mt-2 text-2xl font-medium tabular-nums text-text-primary">
-        {value}
-      </p>
-      <p className="mt-1 text-console-11 text-text-tertiary">{children}</p>
-    </div>
-  );
 }
 
 /** The pack's own numbers: the first cards it declares, over the last week of its metrics. */
@@ -144,17 +97,18 @@ function Headline({
   );
 }
 
-/** The pack's columns as a row of boxes with their counts, then the board's Done. */
+/** The pack's columns as a row of boxes with their counts, then the board's Merged. */
 function Flow({
   board,
   flow,
-  done,
-  landed,
+  numbers,
+  failed,
 }: {
   board: string;
   flow: ReturnType<typeof flowCounts>;
-  done: number;
-  landed: number;
+  numbers: BoardNumbers | undefined;
+  /** The every-item read failed: the numbers tiles say so, and the box shows no count. */
+  failed: boolean;
 }): ReactElement {
   return (
     <div data-flow>
@@ -187,16 +141,23 @@ function Flow({
         ))}
         <li>
           <Link
-            data-flow-group="done"
+            data-flow-group="merged"
             to={board}
             className="block min-w-36 rounded-console-12 border border-border px-4 py-3 hover:border-border-bright"
           >
-            <span className="text-console-12 font-medium text-text-secondary">Done</span>
-            <span data-count className="ml-2 text-base tabular-nums text-text-primary">
-              {done}
-            </span>
-            <span className="mt-1 block text-console-11 text-text-tertiary">
-              {landed} landed today
+            <span className="text-console-12 font-medium text-text-secondary">Merged</span>
+            {numbers === undefined ? (
+              failed ? null : (
+                <span className="ml-2 inline-block h-3 w-6 rounded bg-surface-elevated motion-safe:animate-pulse" />
+              )
+            ) : (
+              <span data-count className="ml-2 text-base tabular-nums text-text-primary">
+                {numbers.mergedRecent}
+              </span>
+            )}
+            <span className="mt-1 block text-console-12 text-text-tertiary">
+              last {MERGED_DAYS} days
+              {numbers === undefined ? '' : ` · ${String(numbers.mergedToday)} today`}
             </span>
           </Link>
         </li>
@@ -208,32 +169,29 @@ function Flow({
 function PackOverview({
   projectId,
   pack,
-  moving,
-  asks,
+  items,
+  itemsError,
+  needYou,
   children,
 }: {
   projectId: string;
   pack: string;
-  moving: ItemRead[];
-  asks: { count: number; oldest: string | undefined };
+  /** Every item of the project, as the board reads them; undefined while they are read. */
+  items: ItemRead[] | undefined;
+  itemsError: Error | undefined;
+  /** The project's open asks; undefined until the attention list answers. */
+  needYou: number | undefined;
   /** The top asks, drawn under the flow and the pack's numbers. */
   children?: ReactNode;
 }): ReactElement {
   const { data: graph, error } = useEntity<PackGraph>(K.packGraph(projectId, pack), () =>
     getPackGraph(projectId, pack)
   );
-  const done = useEntity<ItemPage>(K.boardDone(projectId, pack), () => newestDone(projectId, pack));
-  const since = startOfToday();
-  const today = useEntity<ItemPage>(K.boardSince(projectId, pack, since), () =>
-    listItemsPage(projectId, ITEM_STATES, { pack, since, limit: TODAY_LIMIT })
-  );
   const columns = columnsOf(graph);
-  const counts = todayCounts(today.data, since);
-  const running = moving.filter(read => read.standing.state === 'running').length;
-  const queued = moving.filter(read => read.standing.state === 'queued').length;
+  const board = items === undefined ? undefined : packBoard(items, pack, new Date());
   const heading = 'text-sm font-medium text-text-primary';
-  // As on the board: a pack with nothing on a stage and nothing done has nothing to show.
-  if (moving.length === 0 && done.data?.totals?.done === 0) return <></>;
+  // As on the board: a pack with nothing on its board has nothing to show.
+  if (board !== undefined && board.onBoard.length === 0) return <></>;
   return (
     <section data-pack={pack} className="mb-10 flex flex-col gap-6">
       <div>
@@ -251,24 +209,12 @@ function PackOverview({
         ) : null}
       </div>
 
-      <div data-numbers className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <Tile name="in-flight" label="In flight" value={moving.length}>
-          {running} running · {queued} queued · {moving.length - running - queued} waiting
-        </Tile>
-        <Tile name="need-you" label="Need you" value={asks.count}>
-          {asks.oldest === undefined ? 'nothing waits' : `oldest ${relativeTime(asks.oldest)}`}
-        </Tile>
-        <Tile name="landed-today" label="Landed today" value={counts.landed}>
-          {today.error !== undefined
-            ? today.error.message
-            : `${String(counts.entered)} entered today${today.data?.next != null ? ', of the first read' : ''}`}
-        </Tile>
-      </div>
+      <FactoryNumbers numbers={board?.numbers} needYou={needYou} error={itemsError} />
       <Flow
         board={`/console/p/${projectId}/board`}
-        flow={flowCounts(columns, moving)}
-        done={done.data?.totals?.done ?? 0}
-        landed={counts.landed}
+        flow={flowCounts(columns, board?.moving ?? [], graph?.stages)}
+        numbers={board?.numbers}
+        failed={itemsError !== undefined}
       />
       {graph?.metricViews == null ? null : (
         <Headline projectId={projectId} views={graph.metricViews} />
@@ -290,8 +236,7 @@ export function OverviewPage(): ReactElement {
     skill.listRunsNeedingAttention
   );
   const itemAsks = useItemAsks(attention, projectId);
-  const waits = itemAsks.asks.flatMap(ask => ask.pausedAt ?? []).sort();
-  const asks = { count: itemAsks.asks.length, oldest: waits[0] };
+  const every = useBoardItems(projectId);
   const topAsks =
     itemAsks.asks.length + itemAsks.answered.length > 0 ? (
       <section data-needs-you>
@@ -337,8 +282,9 @@ export function OverviewPage(): ReactElement {
             key={pack}
             projectId={projectId}
             pack={pack}
-            moving={(open.data ?? []).filter(read => read.standing.pack === pack)}
-            asks={asks}
+            items={every.data}
+            itemsError={every.error}
+            needYou={attention === undefined ? undefined : itemAsks.asks.length}
           >
             {index === 0 ? topAsks : null}
           </PackOverview>

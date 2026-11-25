@@ -18,15 +18,22 @@ import {
   howItEnded,
   needsDecision,
   runPath,
+  runToOpen,
   standingRun,
 } from './standing';
 
-/** The run the card opens: the one the item stands at, else its newest. */
-function runToOpen(read: ItemRead): ItemRead['runs'][number] | undefined {
-  return (
-    standingRun(read) ??
-    [...read.runs].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0]
-  );
+/**
+ * How a card reads under a highlighted work order (`lit`, the ids of its members): a member
+ * gets the accent border, any other card dims. Important (!): theme.css's unlayered
+ * `.console-root *` border colour outranks every border utility.
+ */
+function litShade(
+  lit: ReadonlySet<string> | null | undefined,
+  id: string
+): { border: string; dimmed: '' | undefined } {
+  if (lit == null) return { border: 'border-border', dimmed: undefined };
+  if (lit.has(id)) return { border: 'border-accent-bright!', dimmed: undefined };
+  return { border: 'border-border opacity-40', dimmed: '' };
 }
 
 export function ItemCard({
@@ -34,16 +41,20 @@ export function ItemCard({
   projectId,
   stage,
   progress,
+  lit,
 }: {
   read: ItemRead;
   projectId: string;
   /** The exact stage, shown when the card's column holds more than one. */
   stage?: string;
   progress: CardProgress;
+  /** The ids of a highlighted work order's members; null or absent when none is. */
+  lit?: ReadonlySet<string> | null;
 }): ReactElement {
   const run = standingRun(read);
   const open = runToOpen(read);
   const chip = chipOf(read);
+  const shade = litShade(lit, read.item.id);
   const [heldByRun] = read.questions.flatMap(question =>
     'run' in question && question.run !== undefined ? [question.run] : []
   );
@@ -59,7 +70,8 @@ export function ItemCard({
     <li
       data-item={read.item.key}
       data-state={read.standing.state}
-      className={`relative flex flex-col gap-2 rounded-console-12 border border-border bg-surface p-3 ${open === undefined ? '' : 'motion-safe:transition-colors motion-safe:duration-150 motion-safe:ease-out hover:border-border-bright hover:bg-surface-elevated'}`}
+      data-dimmed={shade.dimmed}
+      className={`relative flex flex-col gap-2 rounded-console-12 border ${shade.border} bg-surface p-3 ${open === undefined ? '' : 'motion-safe:transition-colors motion-safe:duration-150 motion-safe:ease-out hover:border-border-bright hover:bg-surface-elevated'}`}
     >
       {open === undefined ? null : (
         <Link
@@ -115,11 +127,13 @@ export function CardList({
   projectId,
   stageOf,
   className,
+  lit,
 }: {
   reads: ItemRead[];
   projectId: string;
   stageOf?: (read: ItemRead) => string | undefined;
   className: string;
+  lit?: ReadonlySet<string> | null;
 }): ReactElement {
   const progressOf = useCardList(reads);
   return (
@@ -131,6 +145,7 @@ export function CardList({
           projectId={projectId}
           stage={stageOf?.(read)}
           progress={progressOf(read)}
+          lit={lit}
         />
       ))}
     </ul>

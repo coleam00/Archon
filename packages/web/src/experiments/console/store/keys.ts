@@ -21,16 +21,13 @@ export const K = {
   needsYouCount: 'needs-you:count' as const,
   /** A project's open items, as the board lists them. Run and attention events refetch `board:*`. */
   board: (projectId: string): string => `board:${projectId}`,
-  /** The newest few items at rest of one pack; under `board:` so the same events refetch it. */
   /** The newest failed or stopped items of a project, which need a decision. */
   boardDecide: (projectId: string): string => `board:${projectId}:decide`,
-  /** A pack's items with a run started since `since`, in any state. */
-  boardSince: (projectId: string, pack: string, since: string): string =>
-    `board:${projectId}:since:${pack}:${since}`,
-  /** Every item of a project, for its work orders; under `board:` so the same events refetch it. */
+  /**
+   * Every item of a project, which the board's work orders, Merged column and Table and the
+   * overview's numbers count from; under `board:` so the same events refetch it.
+   */
   boardOrders: (projectId: string): string => `board:${projectId}:orders`,
-  boardDone: (projectId: string, pack: string): string =>
-    `board:${projectId}:done:${encodeURIComponent(pack)}`,
   /** The factory view a pack ships, which board cards read their words and declarations from. */
   packView: (projectId: string, pack: string): string =>
     `pack-view:${projectId}:${encodeURIComponent(pack)}`,
