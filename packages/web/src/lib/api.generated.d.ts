@@ -8087,6 +8087,33 @@ export interface components {
             itemKey: string | null;
             ownerId: string;
           };
+        }
+      | {
+          /** @enum {string} */
+          kind: 'unreadable_start';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          start: {
+            requestId: string;
+            resource: string;
+            hostId: string;
+            behind: number;
+          };
         };
     AttentionQueueCountsResponse: {
       counts: components['schemas']['AttentionQueueCounts'];
@@ -8545,6 +8572,33 @@ export interface components {
               ownerId: string;
             };
           }
+        | {
+            /** @enum {string} */
+            kind: 'unreadable_start';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              requestId: string;
+              resource: string;
+              hostId: string;
+              behind: number;
+            };
+          }
         | unknown;
     };
     LabelAttentionResponse: {
@@ -8673,6 +8727,7 @@ export interface components {
         /** Format: date-time */
         queuedAt: string;
         ahead: number;
+        blockedBy: string | null;
         heldBehind: {
           runId: string;
           workflow: string;
@@ -9134,6 +9189,33 @@ export interface components {
               ownerId: string;
             };
           }
+        | {
+            /** @enum {string} */
+            kind: 'unreadable_start';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              requestId: string;
+              resource: string;
+              hostId: string;
+              behind: number;
+            };
+          }
       )[];
       answers: (
         | {
@@ -9530,6 +9612,7 @@ export interface components {
           /** Format: date-time */
           queuedAt: string;
           ahead: number;
+          blockedBy: string | null;
           heldBehind: {
             runId: string;
             workflow: string;
@@ -9995,6 +10078,33 @@ export interface components {
                 workflow: string | null;
                 itemKey: string | null;
                 ownerId: string;
+              };
+            }
+          | {
+              /** @enum {string} */
+              kind: 'unreadable_start';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              start: {
+                requestId: string;
+                resource: string;
+                hostId: string;
+                behind: number;
               };
             }
         )[];
@@ -10792,6 +10902,33 @@ export interface components {
                   workflow: string | null;
                   itemKey: string | null;
                   ownerId: string;
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'unreadable_start';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                start: {
+                  requestId: string;
+                  resource: string;
+                  hostId: string;
+                  behind: number;
                 };
               };
         }

@@ -310,6 +310,21 @@ test('a lost preparation names its start and the recovery that returns it to pen
   expect(block).toContain('archon trigger drain --host h1');
 });
 
+test('an unreadable queued start names what it holds and the withdrawal that frees it', () => {
+  const block = attentionItemLines(
+    {
+      ...base,
+      kind: 'unreadable_start',
+      ref: 'unreadable-start:q-1',
+      start: { requestId: 'q-1', resource: 'pool', hostId: 'h1', behind: 2 },
+    },
+    'brief'
+  ).join('\n');
+  expect(block).toContain('unreadable start');
+  expect(block).toContain('the 2 starts queued behind it wait');
+  expect(block).toContain('archon trigger withdraw q-1');
+});
+
 test('a stopped item names its stage and outcome, and its commands work from any directory', () => {
   const stopped: Extract<AttentionQueueItem, { kind: 'stopped' }> = {
     ...base,
