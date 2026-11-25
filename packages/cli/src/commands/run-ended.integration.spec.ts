@@ -1667,6 +1667,9 @@ describe('a start refused before launch', () => {
         .parse(JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json'])))
         .questions.flatMap(question => (question.kind === 'stopped' ? [question] : []));
     const policy = join(fixture.projectRoot, 'docs', 'policy.md');
+    // The path as the engine reports it: joined as the value is written, not normalized, so
+    // `docs/policy.md` keeps its `/` on Windows.
+    const reported = `${fixture.projectRoot}${sep}docs/policy.md`;
 
     // The stage that does not read the setting runs; the one its end starts is refused.
     await run('chain-plan');
@@ -1678,17 +1681,12 @@ describe('a start refused before launch', () => {
         expect.objectContaining({
           workflow: 'chain-build',
           reason: 'file_setting_missing',
-          // Joined as the value is written, not normalized: `docs/policy.md` keeps its `/` on Windows.
-          fileSetting: {
-            setting: 'policy',
-            path: `${fixture.projectRoot}${sep}docs/policy.md`,
-            origin: 'project',
-          },
+          fileSetting: { setting: 'policy', path: reported, origin: 'project' },
         }),
       ],
     ]);
     const attention = await fixture.cli(['workflow', 'attention']);
-    for (const fact of ["'policy'", policy]) expect(attention).toContain(fact);
+    for (const fact of ["'policy'", reported]) expect(attention).toContain(fact);
 
     // Restored, the stage that reads it starts and runs.
     mkdirSync(join(fixture.projectRoot, 'docs'));
