@@ -2154,7 +2154,7 @@ declare module 'archon:script' {
       readonly node_id: string;
       readonly state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
       readonly error?: string;
-      readonly failure_kind?: 'fatal' | 'transient' | 'unknown' | 'rate_limited' | 'overloaded' | 'timeout' | 'exec_failed' | 'output_contract' | 'schema_unmet' | 'max_iterations' | 'child_failed' | 'cancelled' | 'config';
+      readonly failure_kind?: 'fatal' | 'transient' | 'unknown' | 'rate_limited' | 'overloaded' | 'timeout' | 'exec_failed' | 'output_contract' | 'schema_unmet' | 'max_iterations' | 'child_failed' | 'cancelled' | 'config' | 'outcome_unknown';
       readonly reason?: 'prior_success' | 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'timeout';
       readonly cause?: {
         readonly kind: 'condition';
@@ -2651,6 +2651,7 @@ declare module 'archon:script' {
       }>;
       readonly failed?: {
         readonly error: string | null;
+        readonly outcomeUnknown?: ReadonlyArray<string>;
       };
       readonly checkout: string | null;
     } | {
@@ -3400,6 +3401,7 @@ declare module 'archon:script' {
         }>;
         readonly failed?: {
           readonly error: string | null;
+          readonly outcomeUnknown?: ReadonlyArray<string>;
         };
         readonly checkout: string | null;
       } | {

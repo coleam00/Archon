@@ -191,6 +191,8 @@ describe('workflow run resume', () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([{ status: 'failed', metadata: { scheduled_resume: scheduled } }])
       );
+      // The run's node records: none holds an unknown outcome.
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
@@ -204,7 +206,7 @@ describe('workflow run resume', () => {
         resumeAt: scheduled.resumeAt,
       });
 
-      const [, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      const [, updateParams] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(JSON.parse(updateParams[1] as string)).toMatchObject({
         error: null,
         scheduled_resume: {
@@ -212,10 +214,10 @@ describe('workflow run resume', () => {
           triggeredAt: expect.any(String),
         },
       });
-      const [, resumedParams] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [, resumedParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(resumedParams[2]).toBe('workflow_resumed');
       expect(resumedParams[5]).toBe('{}');
-      const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
+      const [eventQuery, eventParams] = mockQuery.mock.calls[4] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       expect(eventParams[2]).toBe('quota_resume_triggered');
       expect(eventParams[5]).toBe(

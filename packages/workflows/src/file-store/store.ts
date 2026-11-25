@@ -424,8 +424,7 @@ export async function createFileWorkflowStore(
     // A wait belongs to an item too: none are open, and none can be withdrawn.
     listOpenItemWaits: async () => [],
     withdrawItemWaits: async () => ({ kind: 'not_found' }),
-    // Only a run on an item stops one.
-    listStoppedItemRuns: async () => [],
+    listStoppedItemRuns: () => query('all', view => view.listStoppedItemRuns()),
     listWorkflowRuns: async options => {
       const result = await query('all', view => view.listWorkflowRuns(options));
       result.runs = await Promise.all(
