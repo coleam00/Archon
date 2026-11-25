@@ -1340,8 +1340,8 @@ object. Without it each line is text a reader can act on: an ask is a short bloc
 labels, the question's first line, the recommendation and its reason, each option with what
 it does, and the commands that answer that occurrence, including the `--recommended` form
 when a recommendation exists; a failed run, a lost owner and an unreadable item name the run and the reason a failed outcome gave, and the
-command that shows more; a lost owner also names the item the run holds, if any (`item` on the JSON line), and gives `resume` beside `abandon`; the close of an ask is one line. The list prints the same blocks,
-and `workflow attention <run-id>` prints the whole message. An open ask a completed run left
+command that shows more; a lost owner also names the item the run holds, if any (`item` on the JSON line), and gives `resume` beside `abandon`; the close of an ask is one line. The list prints the same blocks, except that the
+usage-limit waits of one provider print as one block naming each run it holds, and `workflow attention <run-id>` prints the whole message. An open ask a completed run left
 is headed by its ref, `open ask`, its project and item key, and when it opened, and prints
 its whole question and context in every form, since its run is no longer paused. Read the watch unfiltered: a
 filter in the pipe can hold lines until the watch ends. Scope and `--label` work as for the list;
@@ -1349,8 +1349,7 @@ filter in the pipe can hold lines until the watch ends. Scope and `--label` work
 [Stream the queue](/getting-started/operate/#stream-the-queue).
 
 **`--notices`**, with `--watch`, also writes the `needs: "nothing"` lines that say what
-happened to work: a run that completed, was cancelled or resumed, a usage-limit wait
-opening or closing, and each [`workflow notice`](#workflow-notice) a run emits. It leaves
+happened to work: a run that completed, was cancelled or resumed, and each [`workflow notice`](#workflow-notice) a run emits. It leaves
 out `ready` and `bookmark`. It cannot be combined with `--protocol`.
 
 **`--notices --since <40m|24h|7d|2w|ISO>`**, without `--watch`, lists the notices runs emitted
