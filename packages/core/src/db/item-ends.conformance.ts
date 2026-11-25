@@ -95,8 +95,12 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       expect(Date.parse(recorded.at)).toBeGreaterThanOrEqual(before);
       expect(Date.parse(recorded.at)).toBeLessThanOrEqual(Date.now());
       expect(await stoppedRefs(harness)).toEqual([]);
-      // Ending changes no run.
+      // Ending changes no run, and the stop stays recorded, so a binary that predates ends
+      // still lists it.
       expect(await harness.store.getWorkflowRunStatus(latest)).toBe('completed');
+      expect((await harness.store.listStoppedItemRuns()).map(run => 'id' in run && run.id)).toEqual(
+        [latest]
+      );
 
       // Run cleanup deletes the latest run: the older stop is now the item's last, and stays
       // out of attention, and the end still reads.
@@ -114,7 +118,9 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
     try {
       await stopOnItem(harness);
       await recordItemEnd(harness.store, end, operator, 'cli');
-      const next = await startOnItem(harness);
+      const next = await createOnItem(harness);
+      expect(await holding(harness)).toBeNull();
+      await harness.store.claimPendingWorkflowRun(next);
       expect(await holding(harness)).toBeNull();
       await harness.store.completeWorkflowRun(
         next,
@@ -159,6 +165,31 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       await harness.store.resumeWorkflowRun(failed);
       expect(await holding(harness)).toBeNull();
       await harness.store.failWorkflowRun(failed, 'boom again');
+      expect(await holding(harness)).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a second resume of an ended run opens the item, even within the same second', async () => {
+    const harness = await makeHarness();
+    try {
+      const failed = await startOnItem(harness);
+      await harness.store.failWorkflowRun(failed, 'boom');
+      await harness.store.resumeWorkflowRun(failed);
+      await harness.store.failWorkflowRun(failed, 'boom again');
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      const phase = await harness.db.query<{ at: unknown }>(
+        'SELECT active_phase_started_at AS at FROM remote_agent_workflow_runs WHERE id = $1',
+        [failed]
+      );
+      await harness.store.resumeWorkflowRun(failed);
+      await harness.store.failWorkflowRun(failed, 'and again');
+      // As when both resumes land in one SQLite second: the resume time reads unchanged.
+      await harness.db.query(
+        'UPDATE remote_agent_workflow_runs SET active_phase_started_at = $1 WHERE id = $2',
+        [phase.rows[0]?.at, failed]
+      );
       expect(await holding(harness)).toBeNull();
     } finally {
       await harness.close();
@@ -270,6 +301,11 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
         throw new Error('Expected one admitted start and one queued');
       expect(await refusedBy()).toEqual({ kind: 'queued_start', requestId: queued.requestId });
       expect(await holding(harness)).toBeNull();
+      // No refused attempt left an end behind.
+      const ends = await harness.db.query<{ n: number | string }>(
+        'SELECT COUNT(*) AS n FROM remote_agent_item_ends'
+      );
+      expect(Number(ends.rows[0]?.n)).toBe(0);
     } finally {
       await harness.close();
     }

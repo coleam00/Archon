@@ -371,7 +371,34 @@ test.serial(
       );
     const stopped = await seedEnded('item-stop', 'stopped');
     expect(await attention()).toContain(`stopped:${stopped}`);
-    itemEndSchema.parse(succeeded(await end('item-stop', 'triage-agent')));
+    // The real command, through the CLI's own dispatch and argument parsing.
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, '..', 'cli.ts'),
+        ...['workflow', 'end', '--item', 'item-stop', '--as', 'triage-agent', '--json'],
+        ...['--', 'A duplicate of item-2.'],
+      ],
+      {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          ...callerEnv,
+          ARCHON_HOME: archonHome,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const [code, out, err] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(code, err || out).toBe(0);
+    itemEndSchema.parse(JSON.parse(out));
     expect(await attention()).not.toContain(`stopped:${stopped}`);
     expect((await readItemJson('item-stop')).ended).toMatchObject({
       reason: 'A duplicate of item-2.',

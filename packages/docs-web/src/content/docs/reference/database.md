@@ -335,7 +335,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `item_id`, `reason`, `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at`, as for rulings
   - A binary that predates the table never reads it and shows the item as before
 - **`remote_agent_item_end_runs`** - The runs an end saw on its item and below its runs, copied in the transaction that records the end
-  - One row per run: `end_id`, `run_id` (no foreign key) and the run's `active_phase_started_at`, which only a resume writes, in the same type as the run's column
+  - One row per run: `end_id`, `run_id` (no foreign key), and what a resume rewrites: the run's `active_phase_started_at`, in the same type as the run's column, and `execution_claim`, the run's metadata claim, fresh on every resume, which tells two resumes within one second apart
   - An end holds while every run on its item or below its runs is one it saw and not resumed since, none of them is live, and no start is queued on the item. A new run or a resume, even from a transaction that overlapped the end's, opens the item while that run exists. The rule reads only the runs that exist, so deleting runs the end saw leaves it holding, and deleting the run that opened the item makes it hold again
 - **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
   - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
