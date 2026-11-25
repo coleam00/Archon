@@ -264,6 +264,7 @@ export {
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
   runInputsMetadata,
+  subrunSummaryMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
   WORKFLOW_SOURCE_METADATA_KEY,

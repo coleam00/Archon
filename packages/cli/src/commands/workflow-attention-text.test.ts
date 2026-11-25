@@ -127,6 +127,18 @@ test('an unreadable item, a failed run and a lost owner say which run and what s
   expect(listed).toContain('item issue-7');
   expect(listed).toContain('archon workflow resume run-1');
   expect(listed).toContain('archon workflow abandon run-1');
+  // A pending start no process runs is started by its request, not resumed.
+  const unstarted = opened({
+    ...base,
+    kind: 'owner_lost',
+    ref: 'run-1',
+    run: held,
+    observedStatus: 'pending',
+    start: { requestId: 'run-1', hostId: 'h1' },
+  });
+  expect(unstarted).toContain('archon trigger execute run-1 --host h1');
+  expect(unstarted).toContain('archon workflow abandon run-1');
+  expect(unstarted).not.toContain('resume');
   // A run that ended well needs nobody, so it points nowhere.
   expect(
     text({ type: 'terminal', ...run, status: 'completed', outcome: null, cause: null })

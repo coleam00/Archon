@@ -21,7 +21,7 @@ import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps } from './deps';
 import type { IWorkflowStore } from './store';
-import type { WorkflowRun } from './schemas/workflow-run';
+import { readSuppliedRunInputs, type WorkflowRun } from './schemas/workflow-run';
 import type { ResolvedWorkflow } from './schemas/workflow';
 
 let cwd: string;
@@ -171,6 +171,8 @@ nodes:
       workflow_only: 'from-workflow',
     });
     expect(dispatchOf(run)?.pack).toBe('alpha');
+    // Only what the run was invoked with, so a re-run leaves the rest to their defaults.
+    expect(readSuppliedRunInputs(run?.metadata)).toEqual({ supplied: 'from-input' });
   });
 
   it('a flat workflow has no pack and gets no settings', async () => {

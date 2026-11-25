@@ -42,6 +42,11 @@ import { workflowSourceSchema } from './workflow';
  * `summary_value`  — additive sibling of `summary` (#2637): the child's terminal
  *                    structured value, stamped at completion alongside the text summary
  *                    so a parent `workflow:` node threads the logical value back.
+ * `summary_value_null` — `true` when the child's terminal value is JSON null. A
+ *                    metadata patch removes a top-level key whose value is null, so a
+ *                    null result cannot be stored as `summary_value`; without this marker
+ *                    the parent would fall back to the text summary "null". Written only
+ *                    for null, so every other result is stored and read as before.
  * `summary_declared_output_paths` — additive sibling of `summary_value`: the field
  *                    paths the child's selected `returns:` node declared, so a parent
  *                    reads `$<node>.output.a.b` under the CHILD's contract — a
@@ -59,6 +64,7 @@ export const SUBRUN_METADATA_KEYS = {
   inputs: 'inputs',
   inputsValues: 'inputs_values',
   summaryValue: 'summary_value',
+  summaryValueNull: 'summary_value_null',
   summaryDeclaredFields: 'summary_declared_fields',
   summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
@@ -81,6 +87,26 @@ export function runInputsMetadata(
       ? { [SUBRUN_METADATA_KEYS.inputsValues]: inputs }
       : {}),
   };
+}
+
+/** A child's terminal value as completion stamps it; a null value becomes the null marker. */
+export function subrunSummaryMetadata(value: unknown): Record<string, unknown> {
+  return value === null
+    ? { [SUBRUN_METADATA_KEYS.summaryValueNull]: true }
+    : { [SUBRUN_METADATA_KEYS.summaryValue]: value };
+}
+
+/**
+ * The value `subrunSummaryMetadata` stamped, or undefined when none was. Presence-keyed
+ * rather than truthiness: `false`/`0` are legitimate values. A merge never keeps a null
+ * `summary_value`, so the marker restores it.
+ */
+function readSubrunSummaryValue(metadata: Record<string, unknown> | undefined): unknown {
+  if (metadata === undefined) return undefined;
+  if (Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)) {
+    return metadata[SUBRUN_METADATA_KEYS.summaryValue];
+  }
+  return metadata[SUBRUN_METADATA_KEYS.summaryValueNull] === true ? null : undefined;
 }
 
 /** Parent deletion clears the foreign key; this creation-only key preserves child provenance. */
@@ -166,11 +192,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
     fanOutItemHash: typeof fanOutItemHash === 'string' ? fanOutItemHash : undefined,
     inputs,
-    // Presence-keyed rather than truthiness: `false`/`0`/`null` are legitimate values.
-    summaryValue:
-      metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
-        ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
-        : undefined,
+    summaryValue: readSubrunSummaryValue(metadata),
     summaryDeclaredOutputPaths,
   };
 }
@@ -550,6 +572,13 @@ export const runDispatchMetadataSchema = z.object({
    * defaults over them. Absent on rows from older builds.
    */
   inputs_resolved: z.literal(true).optional(),
+  /**
+   * Names of the inputs the run was supplied with (`--input`, the run route's `inputs`, a
+   * parent's `with:`), as opposed to the pack settings and declared defaults `inputs` also
+   * holds. A re-run restores only these, so an unsupplied input keeps taking its default.
+   * Absent on rows from older builds.
+   */
+  supplied_inputs: z.array(z.string()).optional(),
 });
 
 export type RunDispatchMetadata = z.infer<typeof runDispatchMetadataSchema>;
@@ -560,6 +589,28 @@ export function readRunDispatchMetadata(
 ): RunDispatchMetadata | undefined {
   const parsed = runDispatchMetadataSchema.safeParse(metadata?.[RUN_DISPATCH_METADATA_KEY]);
   return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The inputs a run was invoked with, as text by name: what re-running it supplies again.
+ * Empty for a run whose dispatch record names none, including every run started before
+ * the record did. Reads the canonical text map only, so a run list never depends on the
+ * rest of a row's sub-run metadata parsing.
+ */
+export function readSuppliedRunInputs(
+  metadata: Record<string, unknown> | undefined
+): Record<string, string> {
+  const names = readRunDispatchMetadata(metadata)?.supplied_inputs ?? [];
+  const text = metadata?.[SUBRUN_METADATA_KEYS.inputs];
+  if (typeof text !== 'object' || text === null) return {};
+  const supplied: Record<string, string> = {};
+  for (const name of names) {
+    const value: unknown = Object.hasOwn(text, name)
+      ? (text as Record<string, unknown>)[name]
+      : undefined;
+    if (typeof value === 'string') supplied[name] = value;
+  }
+  return supplied;
 }
 
 /**

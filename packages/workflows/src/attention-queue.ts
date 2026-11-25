@@ -45,7 +45,7 @@ import {
 } from './schemas/workflow-run';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import { stoppedLimitSchema, stoppedRefusalSchema } from './schemas/run-metadata';
-import type { RunOwnerObservation } from './schemas/workflow-run-listing';
+import { observeLostOwners, type LostOwner, type OwnerObserver } from './owner-observation';
 import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
 import type { AttentionQueueCounts } from './attention-counts';
@@ -120,8 +120,11 @@ const itemBase = {
  * its retries, that tries again by itself at `resetAt` (the provider's reported reset, or a
  * computed backoff for a rate limit) and needs no answer; `unreadable` is a paused run
  * nothing can describe, which someone has to look at and resume or abandon; `owner_lost`
- * is a run whose owner is gone while it holds its item and later starts of its workflow on
- * the item wait behind it (`holdsItem`), which only `resume` or `abandon` moves;
+ * is a top-level run that needs an owner to move and whose owner this process can prove
+ * gone, on any item or none: a running or paused run whose owner endpoint is gone
+ * (`resume` or `abandon` moves it), or a pending admitted start no process runs (`start`,
+ * which `archon trigger execute` or `abandon` moves). It still holds whatever it held, its
+ * item and its resource slot among them, and the engine never ends it by itself;
  * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
  * open past their deadline, which the awaited event, another run of the waiting workflow
  * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
@@ -178,6 +181,11 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     run: z.object(heldRunFields),
     /** The run's stored status, unchanged: the engine never ends it by itself. */
     observedStatus: workflowRunStatusSchema,
+    /**
+     * Set when the run is a pending admitted start that no process runs: the request and
+     * host `archon trigger execute <requestId> --host <hostId>` runs it once with.
+     */
+    start: z.object({ requestId: z.string(), hostId: z.string() }).optional(),
   }),
   z.object({
     kind: z.literal('overdue_wait'),
@@ -418,16 +426,8 @@ export interface AttentionQueueSource {
    * that does not read is reported in its place.
    */
   itemsWithoutRun?(): Promise<readonly AttentionRead<AttentionQueueItemWithoutRun>[]>;
-  /**
-   * Runs that hold their item while a later start of their workflow on it waits, and what
-   * this process observes about a run's execution owner. A holder the store cannot read
-   * is reported `run_unreadable`. Without it the queue lists no `owner_lost` items and an
-   * item read observes no owners.
-   */
-  ownerLost?: {
-    holders(): Promise<AttentionRead<WorkflowRun>[]>;
-    observe(run: WorkflowRun): Promise<RunOwnerObservation | null>;
-  };
+  /** Without it the queue lists no `owner_lost` items and an item read observes no owners. */
+  ownerLost?: OwnerObserver;
 }
 
 export type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
@@ -499,21 +499,20 @@ export async function attentionQueueItemForRun(
 }
 
 /**
- * The `owner_lost` item of `run`, a holder of its item that starts wait behind (see
- * `AttentionQueueSource.ownerLost`), when its owner is gone; null otherwise. Observing
- * never changes the run.
+ * The `owner_lost` item of `run` (see `AttentionQueueSource.ownerLost`) when `lost` proves
+ * its owner gone; null otherwise, and for a child run, whose top-level run is the item.
  */
 async function ownerLostItem(
   source: AttentionQueueSource,
   run: WorkflowRun,
+  lost: LostOwner | null | undefined,
   codebases: CodebaseCache
 ): Promise<RunAttentionQueueItem | null> {
-  if (source.ownerLost === undefined || run.item_id === null) return null;
-  if ((await source.ownerLost.observe(run)) !== 'unreachable') return null;
+  if (lost == null || run.parent_run_id !== null) return null;
   const sources: AttentionQueueItemSources = {
     codebase: await codebaseFor(source, run, codebases),
     branch: await source.branchOf(run),
-    item: await source.store.getItem(run.item_id),
+    item: run.item_id === null ? null : await source.store.getItem(run.item_id),
   };
   return {
     kind: 'owner_lost',
@@ -525,23 +524,25 @@ async function ownerLostItem(
     pausedAt: null,
     run: heldRun(run, sources),
     observedStatus: run.status,
+    ...lost,
   };
 }
 
-/** The `owner_lost` items; a holder already reported unreadable in `reported` is not repeated. */
+/** The `owner_lost` items, in the store's order; a run already in `reported` is not repeated. */
 async function ownerLostItems(
   source: AttentionQueueSource,
   reported: ReadonlySet<string>
 ): Promise<AttentionRead<RunAttentionQueueItem>[]> {
   if (source.ownerLost === undefined) return [];
+  const { values, degraded } = splitAttentionRead(await source.ownerLost.runs());
+  const top = values.filter(run => run.parent_run_id === null);
+  const lost = await observeLostOwners(source.ownerLost, top);
   const codebases: CodebaseCache = new Map();
-  const items: AttentionRead<RunAttentionQueueItem>[] = [];
-  for (const run of await source.ownerLost.holders()) {
-    if (isAttentionDegraded(run)) {
-      if (!reported.has(run.runId)) items.push(run);
-      continue;
-    }
-    const item = await ownerLostItem(source, run, codebases);
+  const items: AttentionRead<RunAttentionQueueItem>[] = degraded.filter(
+    run => !reported.has(run.runId)
+  );
+  for (const [index, run] of top.entries()) {
+    const item = await ownerLostItem(source, run, lost[index], codebases);
     if (item !== null) items.push(item);
   }
   return items;
@@ -594,7 +595,7 @@ async function runAttentionQueueItems(
 /**
  * Every open item in the install: the one entry every surface lists through. The items
  * paused runs hold come first, in the store's order (most recently started run first),
- * then the holders of an item whose owner is gone (`owner_lost`), then the items no run
+ * then the runs whose owner is gone (`owner_lost`), oldest first, then the items no run
  * holds. A host that also needs the queue rows passes the ones it
  * read as `runs`, so both come from one read.
  */
@@ -625,14 +626,11 @@ export async function readAttentionQueueItem(
 ): Promise<RunAttentionQueueItem | null | undefined> {
   const run = await source.store.getWorkflowRun(runId);
   if (run === null) return undefined;
-  // A held item's holder whose owner is gone reads as the list lists it, by the same rule.
-  if (run.item_id !== null && source.ownerLost !== undefined) {
-    const holders = splitAttentionRead(await source.ownerLost.holders()).values;
-    const lost = holders.some(holder => holder.id === run.id)
-      ? await ownerLostItem(source, run, new Map())
-      : null;
-    if (lost !== null) return lost;
-  }
+  // A run whose owner is gone reads as the list lists it, by the same rule.
+  const [owner] =
+    source.ownerLost === undefined ? [] : await observeLostOwners(source.ownerLost, [run]);
+  const lost = await ownerLostItem(source, run, owner, new Map());
+  if (lost !== null) return lost;
   const resolution = await resolveRunAttention(source.store, run);
   if (resolution.kind !== 'attention') return null;
   const holder =

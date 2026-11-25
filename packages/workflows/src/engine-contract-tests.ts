@@ -11,7 +11,7 @@ import {
   type IWorkflowEngine,
   type WorkflowResumeInput,
 } from './engine-port';
-import { WorkflowNotResumableError, type IWorkflowStore } from './store';
+import { PendingClaimRefusedError, WorkflowNotResumableError, type IWorkflowStore } from './store';
 export { WorkflowNotResumableError } from './store';
 import type { ResolvedWorkflow } from './schemas';
 import {
@@ -127,9 +127,35 @@ export function runWorkflowEngineContractTests(
       expect(result).toEqual({
         success: false,
         workflowRunId: pending.id,
-        error:
-          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
+        error: 'Workflow run is no longer pending',
       });
+    });
+
+    it('fails a still-pending run whose claim was refused, with the reason, and only while it is pending', async () => {
+      const pending = makeRun({ id: 'pending-run', status: 'pending' });
+      const failures: { id: string; error: string; options: unknown }[] = [];
+      const store = makeStore({
+        claimPendingWorkflowRun: async id => {
+          throw new PendingClaimRefusedError(id, 'checkout_released');
+        },
+        failWorkflowRun: async (id, error, options) => {
+          failures.push({ id, error, options });
+          return { failed: true };
+        },
+      });
+      const result = await makeEngine(makeDeps(providers, store)).submit({
+        ...callInput(),
+        options: { preCreatedRun: pending },
+      });
+      const reason = new PendingClaimRefusedError(pending.id, 'checkout_released').message;
+      expect(result).toEqual({ success: false, workflowRunId: pending.id, error: reason });
+      expect(failures).toEqual([
+        {
+          id: pending.id,
+          error: reason,
+          options: { pendingOnly: true, exitReason: 'launch_failed' },
+        },
+      ]);
     });
 
     for (const committed of [false, true]) {

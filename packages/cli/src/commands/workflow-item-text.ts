@@ -133,6 +133,12 @@ function runLines(run: ItemRun): string[] {
       `            result: archon workflow get ${run.id} --json${holds ? `, ${holds}` : ''}`
     );
   else if (holds) lines.push(`            result: ${holds}`);
+  if (run.changeSize) {
+    const { files, added, removed, base, commit } = run.changeSize;
+    lines.push(
+      `            change: ${files} file${files === 1 ? '' : 's'}, +${added} -${removed} at ${commit.slice(0, 12)} from ${base.slice(0, 12)}`
+    );
+  }
   if (run.operatorPause) lines.push(`            ${describeOperatorPause(run.operatorPause)}`);
   if (run.awaitingExecution)
     lines.push(`            ${awaitingExecutionText(run.awaitingExecution)}`);
@@ -280,9 +286,15 @@ function waitLines(read: ItemRead): string[] {
   );
 }
 
-/** The facts under the item's name: its merge and the branch it lands on. */
+/** The facts under the item's name: its end, its merge and the branch it lands on. */
 function itemFactLines(read: ItemRead): string[] {
   const lines: string[] = [];
+  if (read.ended !== null)
+    lines.push(
+      `Ended ${minute(read.ended.at)}${answererText(read.ended.by)} via ${read.ended.via}: ${read.ended.reason}`
+    );
+  if (read.degraded.some(report => report.reason === 'end_unreadable'))
+    lines.push('The end recorded on this item could not be read.');
   if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
   if (read.degraded.some(report => report.reason === 'merge_unreadable'))
     lines.push('The merge recorded on this item could not be read.');

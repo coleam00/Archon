@@ -33,7 +33,8 @@ export async function mergePullRequest(
     return refused(
       request,
       { kind: 'conflict', message: 'Pull request is not open and ready at the requested head' },
-      prRecord(request.ref.repo, before)
+      prRecord(request.ref.repo, before),
+      earlierMerge(before)
     );
   const { root, path } = location(request.ref.repo);
   submit('submitted');
@@ -115,4 +116,18 @@ export async function mergePullRequest(
     landed: { commit, tree, parents },
     ...mergedAt,
   });
+}
+
+/**
+ * A pull request merged earlier, by hand or by another run: the facts of that merge, so a run
+ * on an item can record it. None without the forge's merge time.
+ */
+function earlierMerge(
+  pull: Awaited<ReturnType<typeof readPull>>
+): Parameters<typeof refused>[3] | undefined {
+  if (!pull.merged || !pull.merged_at) return undefined;
+  return {
+    landed: { commit: pull.merge_commit_sha ?? null, tree: null, parents: null },
+    merged_at: pull.merged_at,
+  };
 }

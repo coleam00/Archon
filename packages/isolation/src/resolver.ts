@@ -30,7 +30,6 @@ import type {
   IsolationEnvironmentRow,
   IsolationWorkflowType,
   IsolationRequest,
-  WorktreeStatusBreakdown,
   ResolveRequest,
 } from './types';
 import {
@@ -56,15 +55,11 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /**
  * Dependencies injected into the resolver.
- * Keeps the resolver decoupled from DB and cleanup implementations.
+ * Keeps the resolver decoupled from DB implementations.
  */
 export interface IsolationResolverDeps {
   store: IIsolationStore;
   provider: IIsolationProvider;
-  cleanup?: {
-    makeRoom: (codebaseId: string, repoPath: string) => Promise<{ removedCount: number }>;
-    getBreakdown: (codebaseId: string, repoPath: string) => Promise<WorktreeStatusBreakdown>;
-  };
 }
 
 async function resolveCanonicalPath(

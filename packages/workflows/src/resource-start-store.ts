@@ -35,7 +35,6 @@ import type { WorkflowResource } from './schemas/resource-name';
 import type { ResumeClaimCursor, ResumeRefusal } from './store';
 import { itemHolder } from './item-hold';
 import type { StartLimitStanding } from './start-limit';
-import type { AttentionRead } from './schemas/attention-degraded';
 
 export type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 
@@ -672,12 +671,6 @@ export interface IResourceStartStore {
    * store without items returns none.
    */
   listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]>;
-  /**
-   * The runs that hold their item (`holdsItem`) while a later start of their workflow on
-   * it waits: a queued start request, or a pending hand start that holds nothing. A holder
-   * the store cannot read is reported `run_unreadable`. A store without items returns none.
-   */
-  listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
   /** The start limits on item `itemId`. A store without items reports none. */
   readItemStartLimits(itemId: string): Promise<ItemStartLimits>;

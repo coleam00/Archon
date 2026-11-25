@@ -170,7 +170,12 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # A leg takes 4-7 minutes on dev. A test that hangs where Bun's own 20 s per-test
+      # timeout cannot stop it (a synchronous spin, a stuck runtime) would otherwise hold the
+      # leg to the job limit; this fails it in minutes instead. Bun names a case that times
+      # out; for a hang the log shows which test file started and never ended (#6283).
       - name: Validate
+        timeout-minutes: 15
         env:
           ARCHON_TEST_PART: ${{ matrix.part }}
         run: bun run validate --only ${{ matrix.check }}
@@ -248,7 +253,11 @@ jobs:
       # `Git\bin\git.exe` on the runner's PATH is a launcher that starts
       # `mingw64\bin\git.exe` as a second process, so every git call cost two processes
       # (about 4,700 extra per leg). Putting the real binary first removes the launcher.
+      #
+      # The step deadline is the Linux one's (#6283), set for Windows legs: successful ones
+      # have taken up to 13 minutes.
       - name: Validate
+        timeout-minutes: 25
         env:
           ARCHON_TEST_PART: ${{ matrix.part }}
           TEMP: ${{ runner.temp }}

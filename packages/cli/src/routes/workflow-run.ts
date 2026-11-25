@@ -1,22 +1,12 @@
 import { resolve } from 'path';
-import { stat } from 'fs/promises';
 import { RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import { DETACHED_RUN_OWNER_ENV, DETACHED_LAUNCH_TOKEN_ENV } from '../utils/detached-run-control';
 import { matchProjectClaim } from '../utils/project-selector';
-import { fail } from './context';
+import { fail, isPathDirectory } from './context';
 import type { WorkflowRoute } from './workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRunOptions } from '../commands/workflow-shared';
 import type { RunRestart } from '../commands/workflow-run-restart';
-
-/** True when `path` exists and is a directory (used to validate `--workflow-source`). */
-async function isPathDirectory(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isDirectory();
-  } catch {
-    return false;
-  }
-}
 
 /** The first refusal among the worktree flags `workflow run` cannot combine. */
 function worktreeFlagConflict(values: Record<string, unknown>): string | undefined {

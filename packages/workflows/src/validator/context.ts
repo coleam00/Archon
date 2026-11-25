@@ -6,6 +6,8 @@ import type { ValidationConfig, ValidationIssue } from './types';
 /** One `validateWorkflowResources` call: its inputs, and the issues found so far. */
 export interface ResourceValidation {
   cwd: string;
+  /** Where commands and scripts are read: `config.sourceRoot`, else `cwd`. */
+  sourceRoot: string;
   providers: ProviderRegistry;
   config: ValidationConfig | undefined;
   defaultProvider: string | undefined;

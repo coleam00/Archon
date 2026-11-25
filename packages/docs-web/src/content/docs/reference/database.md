@@ -176,6 +176,8 @@ server on their own, and a `DATABASE_URL` in `.env` is not read.
 
 If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.postgres_schema_init_failed`.
 
+Prisma Postgres works with the connection string it issues. Keep `sslmode=require` in it: without the parameter the first database operation fails with `read ECONNRESET`. Point a server at the direct host (`db.prisma.io`). The pooled host (`pooled.db.prisma.io`) pools in transaction mode: schema initialization, CLI commands and the API work through it, but it does not deliver `LISTEN` notifications, so the server logs `pg_notify.listening` and the console still shows runs started from the CLI only when the dashboard poller's 10-second backstop reads them.
+
 ## Local PostgreSQL via Docker
 
 Use the `with-db` Docker Compose profile for automatic PostgreSQL setup.
@@ -330,6 +332,13 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `item_id`, `text`, `by_declared` or `by_user_id` (who, when they said), `via` (the surface), `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
   - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
 
+- **`remote_agent_item_ends`** - Ends of an item: an operator's statement that nothing more will happen on it (`archon workflow end`)
+  - Append-only: no row is updated or deleted, and nothing writes one by itself. `seq` is the recording order and `id` is text in both dialects
+  - `item_id`, `reason`, `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at`, as for rulings
+  - A binary that predates the table never reads it and shows the item as before
+- **`remote_agent_item_end_runs`** - The runs an end saw on its item and below its runs, copied in the transaction that records the end
+  - One row per run: `end_id`, `run_id` (no foreign key) and `execution_claim`, the run's metadata claim, which every resume writes fresh
+  - An end holds while every run on its item or below its runs is one it saw and not resumed since, none of them is live, and no start is queued on the item. A new run or a resume, even from a transaction that overlapped the end's, opens the item while that run exists. The rule reads only the runs that exist, so deleting runs the end saw leaves it holding, and deleting the run that opened the item makes it hold again
 - **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
   - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
   - `change` (the forge's identity of the merged change, never parsed), `merge_commit` (nullable), `merged_at` (the forge's merge time), `via`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`

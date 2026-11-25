@@ -15,6 +15,7 @@ import * as skill from '../skills';
 import { HttpError } from '../lib/http';
 import { orderWithRecommended } from '../lib/recommended';
 import { collectSuppliedInputs } from '../lib/workflow-inputs';
+import { takeRerun } from '../lib/rerun';
 import { collectRunModelOverrides, type RunModelOverrideRow } from '../lib/run-model-overrides';
 
 interface DraftRunCardProps {
@@ -25,6 +26,13 @@ interface DraftRunCardProps {
 type Mode = 'collapsed' | 'expanded';
 
 const LAST_WORKFLOW_KEY = 'archon.console.lastWorkflow';
+
+interface InputDraft {
+  workflow: string;
+  values: Readonly<Record<string, string>>;
+}
+
+const NO_INPUTS: InputDraft = { workflow: '', values: {} };
 
 const MAX_FILES = 5;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -84,30 +92,39 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Values for the selected workflow's declared `inputs:` (#2554), keyed by input name.
-  // Cleared whenever the selected workflow changes so one workflow's values can never
-  // be submitted against another's declaration.
-  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  // Values for a workflow's declared `inputs:` (#2554), keyed by input name, held with
+  // the workflow they were filled for, so one workflow's values can never be shown or
+  // submitted against another's declaration, whichever path changes the workflow.
+  const [inputDraft, setInputDraft] = useState<InputDraft>(NO_INPUTS);
+  const inputValues = inputDraft.workflow === workflowName ? inputDraft.values : {};
+
+  // Picking another workflow discards what was filled for the previous one; confirming
+  // the selected one keeps it. A handler, not an effect on `workflowName`: that would
+  // also run after a re-run sets the workflow and its inputs together, and wipe them.
+  const pickWorkflow = (name: string): void => {
+    if (name === workflowName) return;
+    setWorkflowName(name);
+    setInputDraft(NO_INPUTS);
+  };
   const [modelOverrideRows, setModelOverrideRows] = useState<RunModelOverrideRow[]>([]);
   const nextModelOverrideId = useRef(1);
 
-  // Pre-fill from `?rerun=1&workflow=…&message=…` query params (set by the
-  // ↻ rerun button on RecentRunRow). Reacts to searchParams so the card
-  // expands whether you arrive by navigation (same project, params change
-  // only) or by a fresh mount. Strips the params on entry so reload
-  // doesn't re-trigger and so the URL stays clean.
+  // Pre-fill from the re-run link (`lib/rerun.ts`). Reacts to searchParams so the card
+  // expands whether you arrive by navigation (same project, params change only) or by a
+  // fresh mount. Strips the params on entry so reload doesn't re-trigger.
   useEffect(() => {
-    if (searchParams.get('rerun') !== '1') return;
-    const wf = searchParams.get('workflow');
-    const msg = searchParams.get('message');
-    if (wf !== null && wf.length > 0) setWorkflowName(wf);
-    if (msg !== null) setContext(msg);
+    const taken = takeRerun(searchParams);
+    if (taken === null) return;
+    const { rerun, rest } = taken;
+    // A re-run replaces the whole draft: nothing typed before it is sent along.
+    if (rerun.workflow.length > 0) setWorkflowName(rerun.workflow);
+    setInputDraft({ workflow: rerun.workflow, values: rerun.inputs });
+    setContext(rerun.message ?? '');
+    setFiles([]);
+    setModelOverrideRows([]);
+    setError(null);
     setMode('expanded');
-    const next = new URLSearchParams(searchParams);
-    next.delete('rerun');
-    next.delete('workflow');
-    next.delete('message');
-    setSearchParams(next, { replace: true });
+    setSearchParams(rest, { replace: true });
   }, [searchParams, setSearchParams]);
 
   const addFiles = (incoming: File[]): void => {
@@ -132,9 +149,12 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     setFiles(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const { data: workflowData } = useEntity(K.workflows(projectCwd), () =>
+  const { data: workflowData, error: workflowsError } = useEntity(K.workflows(projectCwd), () =>
     skill.listWorkflows(projectCwd)
   );
+  // Until the declarations load, the card cannot tell which filled inputs to send, and
+  // sending none would drop a re-run's inputs, so it does not start.
+  const workflowsLoaded = workflowData !== undefined;
 
   const allWorkflows = workflowData?.workflows ?? [];
   const recommendedNames = workflowData?.recommended ?? [];
@@ -143,24 +163,22 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   // source/name. The picker draws a divider between the groups.
   const { ordered: sortedWorkflows } = orderWithRecommended(allWorkflows, recommendedNames);
 
-  // Default workflow: last-used if still valid, else first available.
+  // Default workflow: last-used if still valid, else first available. An updater, so a
+  // re-run's workflow set in the same commit is judged rather than overwritten.
   useEffect(() => {
-    if (sortedWorkflows.length === 0) return;
-    if (workflowName.length > 0 && sortedWorkflows.some(w => w.name === workflowName)) {
-      return;
-    }
     const pick = sortedWorkflows[0];
-    if (pick !== undefined) setWorkflowName(pick.name);
-  }, [sortedWorkflows, workflowName]);
+    if (pick === undefined) return;
+    setWorkflowName(current =>
+      current.length > 0 && sortedWorkflows.some(w => w.name === current) ? current : pick.name
+    );
+  }, [sortedWorkflows]);
 
   // Declared inputs of the selected workflow (#2554). Empty for the overwhelming
   // majority of workflows, which declare none and render exactly as before.
   const declaredInputs = sortedWorkflows.find(w => w.name === workflowName)?.inputs ?? [];
 
-  // Switching workflows discards values collected for the previous one — they were
-  // typed against a different declaration and would be rejected as undeclared keys.
+  // Switching workflows discards the model bindings collected for the previous one.
   useEffect(() => {
-    setInputValues({});
     setModelOverrideRows([]);
   }, [workflowName]);
 
@@ -205,6 +223,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   }, [mode]);
 
   const submit = async (): Promise<void> => {
+    if (!workflowsLoaded) return;
     if (workflowName.length === 0) {
       setError('Pick a workflow first.');
       return;
@@ -235,7 +254,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       // as the row exists, instead of waiting for the next 3s poll tick.
       setContext('');
       setFiles([]);
-      setInputValues({});
+      setInputDraft(NO_INPUTS);
       setModelOverrideRows([]);
       setMode('collapsed');
       invalidate('runs');
@@ -257,7 +276,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const collapse = (): void => {
     setMode('collapsed');
     setFiles([]);
-    setInputValues({});
+    setInputDraft(NO_INPUTS);
     setModelOverrideRows([]);
     setError(null);
   };
@@ -358,7 +377,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={submitting || workflowName.length === 0}
+          disabled={submitting || !workflowsLoaded || workflowName.length === 0}
           className="brand-bar flex items-center gap-1.5 rounded-lg px-3.75 py-2.25 text-console-13 font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
         >
           {submitting ? 'Starting…' : 'Start run'}
@@ -369,6 +388,11 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       </div>
 
       {error !== null ? <p className="mt-1 font-mono text-console-11 text-error">{error}</p> : null}
+      {workflowsError !== undefined && !workflowsLoaded ? (
+        <p className="mt-1 font-mono text-console-11 text-error">
+          Could not load workflows: {workflowsError.message}
+        </p>
+      ) : null}
     </>
   );
 
@@ -439,7 +463,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             workflows={sortedWorkflows}
             recommendedNames={recommendedNames}
             value={workflowName}
-            onChange={setWorkflowName}
+            onChange={pickWorkflow}
             disabled={submitting}
             onClose={() => {
               requestAnimationFrame(() => {
@@ -489,7 +513,10 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                   value={inputValues[declared.name] ?? ''}
                   onChange={e => {
                     const { value } = e.target;
-                    setInputValues(prev => ({ ...prev, [declared.name]: value }));
+                    setInputDraft({
+                      workflow: workflowName,
+                      values: { ...inputValues, [declared.name]: value },
+                    });
                     if (error !== null) setError(null);
                   }}
                   placeholder={declared.default ?? (declared.required ? 'required' : 'optional')}
