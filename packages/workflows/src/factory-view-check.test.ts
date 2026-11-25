@@ -227,3 +227,85 @@ describe('what the graph has and the view leaves out warns', () => {
     expect(problems(undefined, g)).toEqual([]);
   });
 });
+
+describe('progress declarations are checked against the graph', () => {
+  /** `check` with a loop group `rounds` holding `rounds.judge`. */
+  function loopGraph(): PackGraph {
+    const g = graph();
+    const check = g.stages.find(s => s.workflow === 'check');
+    const node = { kind: 'bash', dependsOn: [], blocks: [], fanOut: null };
+    check?.nodes.push(
+      { ...node, id: 'rounds', loopGroup: null },
+      { ...node, id: 'rounds.judge', loopGroup: 'rounds' }
+    );
+    return g;
+  }
+  /** Returns and approvals on check's judge, rounds from its loop, the change from make and an old `deliver`. */
+  const declared = (v: FactoryView): void => {
+    v.outcomes!['check:fail'] = { reads: 'returned' };
+    v.retired = ['deliver'];
+    v.rounds = [
+      { workflow: 'check', loop: 'rounds' },
+      { workflow: 'deliver', loop: 'anything' },
+    ];
+    v.returns = [
+      { workflow: 'check', node: 'rounds.judge', outcome: 'fail' },
+      { workflow: 'deliver', node: 'gone.step', outcome: 'return' },
+    ];
+    v.approves = [{ workflow: 'check', node: 'rounds.judge', outcome: 'pass' }];
+    v.change = [
+      { workflow: 'make', pointer: '/change' },
+      { workflow: 'deliver', pointer: '/change' },
+    ];
+  };
+  const checked = (edit: (v: FactoryView) => void) =>
+    problems(v => {
+      declared(v);
+      edit(v);
+    }, loopGraph());
+
+  test('a valid declaration passes, a retired workflow unchecked', () => {
+    expect(checked(() => undefined)).toEqual([]);
+  });
+
+  test.each<[string, (v: FactoryView) => void, string[]]>([
+    [
+      'an unknown workflow',
+      v => void v.approves?.push({ workflow: 'ship', node: 'x', outcome: 'y' }),
+      ['error approves.1.workflow'],
+    ],
+    ['a retired workflow the graph has', v => void v.retired?.push('land'), ['error retired.1']],
+    ['a workflow retired twice', v => void v.retired?.push('deliver'), ['error retired.1']],
+    [
+      'an unknown step',
+      v => void (v.approves = [{ workflow: 'check', node: 'judge', outcome: 'pass' }]),
+      ['error approves.0.node'],
+    ],
+    [
+      'an unknown loop',
+      v => void (v.rounds = { workflow: 'check', loop: 'laps' }),
+      ['error rounds.loop'],
+    ],
+    [
+      'a source naming one workflow twice',
+      v =>
+        void (v.change = [
+          { workflow: 'make', pointer: '/a' },
+          { workflow: 'make', pointer: '/b' },
+        ]),
+      ['error change.1'],
+    ],
+    [
+      'an outcome read as returned that no return point counts',
+      v => void (v.outcomes!['make:done'] = { reads: 'returned' }),
+      ['error outcomes.make:done'],
+    ],
+    [
+      'a return point on a stage none of whose outcomes reads returned',
+      v => void delete v.outcomes!['check:fail'],
+      ['error returns.0.workflow'],
+    ],
+  ])('%s is an error', (_name, edit, expected) => {
+    expect(checked(edit)).toEqual(expected);
+  });
+});

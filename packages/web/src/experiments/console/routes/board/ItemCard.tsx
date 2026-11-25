@@ -1,0 +1,138 @@
+/**
+ * One item on the board, and a list of them. The card is Rasmus's (its chip, how its run
+ * stands, why it needs a decision, the link to a run that waits for an answer) with the
+ * iteration detail v1's cards carried (`factory/BoardCardProgress.tsx`). There is no item page:
+ * the whole card opens the run log of the run the item stands at, else its newest run.
+ */
+import type { ReactElement } from 'react';
+import { Link } from 'react-router';
+import { BoardCardProgress, INNER } from '../../factory/BoardCardProgress';
+import { useCardList } from '../../factory/FactoryCards';
+import type { CardProgress } from '../../factory/lib/item-card';
+import { relativeTime } from '../../lib/format';
+import type { ItemRead } from '../../skills/items';
+import {
+  CHIP,
+  chipOf,
+  decisionReason,
+  howItEnded,
+  needsDecision,
+  runPath,
+  standingRun,
+} from './standing';
+
+/** The run the card opens: the one the item stands at, else its newest. */
+function runToOpen(read: ItemRead): ItemRead['runs'][number] | undefined {
+  return (
+    standingRun(read) ??
+    [...read.runs].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0]
+  );
+}
+
+export function ItemCard({
+  read,
+  projectId,
+  stage,
+  progress,
+}: {
+  read: ItemRead;
+  projectId: string;
+  /** The exact stage, shown when the card's column holds more than one. */
+  stage?: string;
+  progress: CardProgress;
+}): ReactElement {
+  const run = standingRun(read);
+  const open = runToOpen(read);
+  const chip = chipOf(read);
+  const [heldByRun] = read.questions.flatMap(question =>
+    'run' in question && question.run !== undefined ? [question.run] : []
+  );
+  const reason = needsDecision(read) ? decisionReason(read) : undefined;
+  const meta = [
+    stage,
+    run === undefined
+      ? undefined
+      : `${run.outcome === null ? run.status : `ended ${run.outcome}`} · ${relativeTime(run.completedAt ?? run.startedAt)}`,
+    read.merged === null ? undefined : 'merged',
+  ].filter(part => part !== undefined);
+  return (
+    <li
+      data-item={read.item.key}
+      data-state={read.standing.state}
+      className={`relative flex flex-col gap-2 rounded-console-12 border border-border bg-surface p-3 ${open === undefined ? '' : 'motion-safe:transition-colors motion-safe:duration-150 motion-safe:ease-out hover:border-border-bright hover:bg-surface-elevated'}`}
+    >
+      {open === undefined ? null : (
+        <Link
+          data-card-link
+          to={runPath(projectId, open.id)}
+          aria-label={`${progress.keyText}: open its run log`}
+          className="absolute inset-0 rounded-console-12"
+        />
+      )}
+      <div className="flex items-center justify-between gap-2">
+        <span data-item-key className="truncate font-mono text-console-12 text-text-tertiary">
+          {progress.keyText}
+        </span>
+        <span
+          data-chip={chip}
+          className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-console-12 font-medium ${CHIP[chip].tone}`}
+        >
+          {chip === 'done' ? howItEnded(read) : CHIP[chip].label}
+        </span>
+      </div>
+      {progress.titleIsKey ? null : (
+        <p
+          data-item-title
+          className={`${progress.asks === null ? 'line-clamp-3' : 'line-clamp-2'} text-console-15 font-semibold leading-snug text-text-primary`}
+        >
+          {progress.title}
+        </p>
+      )}
+      {meta.length === 0 ? null : (
+        <p className="text-console-13 text-text-tertiary">{meta.join(' · ')}</p>
+      )}
+      <BoardCardProgress read={read} progress={progress} />
+      {reason === undefined ? null : (
+        <p data-item-reason className="text-console-13 text-text-secondary">
+          {reason}
+        </p>
+      )}
+      {heldByRun !== undefined ? (
+        <Link
+          to={runPath(projectId, heldByRun.id)}
+          className={`${INNER} self-start text-console-13 text-warning underline hover:text-text-primary`}
+        >
+          Its run waits for an answer
+        </Link>
+      ) : null}
+    </li>
+  );
+}
+
+/** A list of cards, their run records and forge answers read in one batch. */
+export function CardList({
+  reads,
+  projectId,
+  stageOf,
+  className,
+}: {
+  reads: ItemRead[];
+  projectId: string;
+  stageOf?: (read: ItemRead) => string | undefined;
+  className: string;
+}): ReactElement {
+  const progressOf = useCardList(reads);
+  return (
+    <ul className={className}>
+      {reads.map(read => (
+        <ItemCard
+          key={read.item.id}
+          read={read}
+          projectId={projectId}
+          stage={stageOf?.(read)}
+          progress={progressOf(read)}
+        />
+      ))}
+    </ul>
+  );
+}

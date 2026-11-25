@@ -26,6 +26,10 @@ The factory building this repository runs Archon from another checkout, on the h
   the newest wholly answered set of asks per item and workflow, so the board and item pages have
   real asks to look at. Use it only for looking: never confirm an answer on the copy, because settling an
   item's asks there can start a real agent run.
+- The installed pack ships no factory view file yet, so on the copy the board cards show titles,
+  asks and PR links but no check rounds, returns or running step. To see those, copy
+  `docs/factory-console/pack-view/factory-view.json` into the copy's installed pack,
+  `.console-home/plugins/packs/<owner>/<name>/<commit>/.shared/` (`pack-view/README.md`).
 - Pick a free port (not 3090, 3190 or 8864, which are in use); check it first.
 - Stop every server and browser you start before you finish. Kill by the PID you started, never by
   process name: other factories run on this machine.
@@ -47,17 +51,24 @@ The factory building this repository runs Archon from another checkout, on the h
   `factory-view-how-it-works.ts`), read through the generic `pack-declarations.ts` reader from
   the copy of the pack the graph was read from (`packages/core/src/workflows/pack-view.ts`) and
   served by `GET /api/packs/{pack}/view`. It is presentation only: words, layout, drill-down
-  cards and story wording. It holds no step lists, outcome lists, arrows, ask flags, shadow flags,
+  cards and story wording, and where a console finds an item's check rounds, returns and change
+  in its runs' records (`retired`, `rounds`, `returns`, `approves`, `change`, in
+  `factory-view-progress.ts`; operator ruling of 2026-11-25, declare-in-view). The engine reads
+  none of those; the web counts rounds and returns from generic run records with them. It holds no step lists, outcome lists, arrows, ask flags, shadow flags,
   settings or stage-group enum; it names the graph's stages, steps, outcomes and groups, and
   `checkFactoryView` (`factory-view-check.ts`) fails a name the graph lacks and warns on an
   in-flow stage it leaves unplaced, when the file is read and in
-  `bun run check:factory-view <pack dir>`. The Wirasm pack's file is kept at
+  `bun run check:factory-view <pack dir>`. The progress declarations are checked too: a
+  workflow is a graph stage or one the file lists as `retired`, a step or loop is one the stage
+  has, and a stage's `returns` agree with its outcomes that read `returned`. The Wirasm pack's file is kept at
   `docs/factory-console/pack-view/` until the owner's pack ships it.
 - Factory web code stays under `packages/web/src/experiments/console/factory/` (components, pure
   `lib/`, the page routes), and nothing outside that folder imports from it, except the three
   files that mount it: `ConsoleApp.tsx` (its routes and `factory.css`), `ProjectRail.tsx` (the
   sidebar entry) and `ProjectViewTabs.tsx` (the Factory tab). `bun run lint` enforces it
-  (`scripts/check-factory-imports.ts`). Every other file under `packages/web/src` (the answer
+  (`scripts/check-factory-imports.ts`). On `combined` that script is not ported and the factory
+  folder holds only the board card's layer; its one importer outside it is Rasmus's board
+  (`routes/BoardPage.tsx` and `routes/board/ItemCard.tsx`, which draw the card). Every other file under `packages/web/src` (the answer
   panel, the ask card, the project tabs apart from that one tab, every generic page and
   component, `theme.css`) stays as it is on Archon dev.
 - Server code is the view-file read (`GET /api/packs/{pack}/view` in `api.packs.ts`, beside the

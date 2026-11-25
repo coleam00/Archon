@@ -7,6 +7,7 @@
  * (`readPackView`) and `bun run check:factory-view` both run this.
  */
 import type { PackGraph } from './pack-graph';
+import { progressErrors } from './factory-view-progress-check';
 import { PACK_SHARED_DIRECTORY } from './packaged-workflow';
 import {
   FACTORY_VIEW_FILE,
@@ -270,6 +271,7 @@ export function checkFactoryView(view: FactoryView, graph: PackGraph): FactoryVi
     ...groupErrors(view, graph),
     ...mapErrors(view, index),
     ...howItWorksErrors(view, index),
+    ...progressErrors(view, graph),
     ...warnings(view, graph),
   ];
 }

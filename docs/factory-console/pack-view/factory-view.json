@@ -820,6 +820,80 @@
     "workOrder": "work order",
     "workOrders": "work orders"
   },
+  "retired": [
+    "deliver"
+  ],
+  "rounds": [
+    {
+      "workflow": "deliver",
+      "loop": "rounds"
+    },
+    {
+      "workflow": "stage-check",
+      "round": "/round",
+      "allowance": "/allowance"
+    }
+  ],
+  "returns": [
+    {
+      "workflow": "deliver",
+      "node": "rounds.verdict__verdict",
+      "outcome": "return"
+    },
+    {
+      "workflow": "deliver",
+      "node": "hostrounds.host__host",
+      "outcome": "return"
+    },
+    {
+      "workflow": "stage-check",
+      "node": "verdict__verdict",
+      "outcome": "return"
+    },
+    {
+      "workflow": "stage-host",
+      "node": "rounds__host",
+      "outcome": "return"
+    }
+  ],
+  "approves": [
+    {
+      "workflow": "deliver",
+      "node": "rounds.verdict__verdict",
+      "outcome": "approve"
+    },
+    {
+      "workflow": "stage-check",
+      "node": "verdict__verdict",
+      "outcome": "approve"
+    }
+  ],
+  "change": [
+    {
+      "workflow": "deliver",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "stage-build",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "stage-check",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "stage-host",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "landgate",
+      "pointer": "/change"
+    },
+    {
+      "workflow": "land",
+      "pointer": "/change"
+    }
+  ],
   "map": {
     "cards": [
       {

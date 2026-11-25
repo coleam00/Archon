@@ -31,6 +31,21 @@ export const K = {
   boardOrders: (projectId: string): string => `board:${projectId}:orders`,
   boardDone: (projectId: string, pack: string): string =>
     `board:${projectId}:done:${encodeURIComponent(pack)}`,
+  /** The factory view a pack ships, which board cards read their words and declarations from. */
+  packView: (projectId: string, pack: string): string =>
+    `pack-view:${projectId}:${encodeURIComponent(pack)}`,
+  /**
+   * The run records a list of board cards reads, by the runs asked; under `board:`, so run and
+   * attention events refetch the running step and rounds.
+   */
+  cardReads: (projectId: string, runs: readonly string[]): string =>
+    `board:${projectId}:cards:${runs.join(',')}`,
+  /** The forge's titles for some issues, which board cards print and the board filter searches. */
+  forgeTitles: (projectId: string, issues: readonly number[]): string =>
+    `forge-titles:${projectId}:${issues.join(',')}`,
+  /** The forge's numbers for the pull requests some runs named. */
+  forgeChanges: (projectId: string, changes: readonly { run: string; url: string }[]): string =>
+    `forge-changes:${projectId}:${changes.map(c => `${c.run}@${encodeURIComponent(c.url)}`).join(',')}`,
   packGraph: (projectId: string, pack: string): string =>
     `pack-graph:${projectId}:${encodeURIComponent(pack)}`,
   runs: (scope: Scope): string => `runs:${scopeKey(scope)}`,

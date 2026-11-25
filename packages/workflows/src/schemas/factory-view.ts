@@ -2,7 +2,9 @@
  * A pack's factory view: how a console presents the pack as a software factory. The pack's
  * author ships it as `<pack>/.shared/factory-view.json`, hand-curated, and it is presentation
  * only: words for the pack's groups, stages, steps and outcomes, the Overview map's cards, the
- * How it works picture (`factory-view-how-it-works.ts`), drill-down cards and story wording.
+ * How it works picture (`factory-view-how-it-works.ts`), drill-down cards and story wording,
+ * and where a console finds an item's rounds, returns and change in its runs' records
+ * (`factory-view-progress.ts`).
  *
  * Structure is never stated here. Which stages exist, their order, their groups, steps,
  * outcomes and the arrows between them come from the pack graph
@@ -12,6 +14,7 @@
  */
 import { z } from 'zod';
 import { howItWorksSchema } from './factory-view-how-it-works';
+import { progressDeclarations } from './factory-view-progress';
 
 export const FACTORY_VIEW_FILE = 'factory-view.json';
 /** A map note may sit by the Needs-you list instead of a card. */
@@ -214,6 +217,7 @@ export const factoryViewSchema = z.strictObject({
    */
   answers: z.record(answerKeySchema, z.strictObject({ starts: sentenceSchema })).optional(),
   words: wordsSchema.optional(),
+  ...progressDeclarations,
   map: mapSchema,
   howItWorks: howItWorksSchema,
 });

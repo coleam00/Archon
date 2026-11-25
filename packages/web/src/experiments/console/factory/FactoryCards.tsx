@@ -1,0 +1,288 @@
+/**
+ * What board cards read beyond the item read, shared by every card list of a board: each of the
+ * project's packs' graph and factory view, the project's open asks by item, and which item's
+ * asks are open in the popover. A card list reads the run records and forge answers its own
+ * cards need in batches (`useCardList`). With no provider (a test drawing a pack board alone)
+ * cards show what the item read alone gives.
+ */
+import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import type { ItemAsks } from '../components/ItemAsksSection';
+import { getPackGraph, type ItemRead } from '../skills/items';
+import { useEntity } from '../store/cache';
+import { K } from '../store/keys';
+import {
+  forgePending,
+  getForgeSubjects,
+  getPackView,
+  getRunRecords,
+  type ForgeSubjects,
+  type RunRecord,
+  type RunRecords,
+} from './api';
+import { CardsContext, useFactoryCards, type FactoryCards, type OpenAsks } from './cards-context';
+import { ItemAsksPopover } from './ItemAsksPopover';
+import { issueNumber } from '../lib/item-key';
+import {
+  cardProgress,
+  OUTPUT_KEYS,
+  packOf,
+  resultKeys,
+  runsToRead,
+  type CardPack,
+  type CardProgress,
+} from './lib/item-card';
+
+/** What one pack's reads gave: its graph's stages and its view, or that a read failed. */
+type PackReadResult = CardPack | 'error';
+
+/**
+ * One pack's graph and factory view, reported to the provider. The graph is read through the
+ * board's own `K.packGraph` entry, so the stage columns and the cards share one read, and the
+ * view (whose read computes the graph again on the server) is read only once the graph has
+ * answered, so it never competes with the read the columns wait on.
+ */
+function PackRead({
+  projectId,
+  pack,
+  onRead,
+}: {
+  projectId: string;
+  pack: string;
+  onRead: (pack: string, result: PackReadResult) => void;
+}): null {
+  const graph = useEntity(K.packGraph(projectId, pack), () => getPackGraph(projectId, pack));
+  const stages = graph.data?.stages;
+  const view = useEntity(
+    stages === undefined ? 'pack-view:none' : K.packView(projectId, pack),
+    () => (stages === undefined ? Promise.resolve(null) : getPackView(projectId, pack))
+  );
+  const failed = graph.error !== undefined || (stages !== undefined && view.error !== undefined);
+  const viewRead = stages !== undefined && view.data !== undefined;
+  const viewData = view.data;
+  useEffect(() => {
+    if (failed) onRead(pack, 'error');
+    else if (stages !== undefined && viewRead) onRead(pack, { stages, view: viewData ?? null });
+  }, [failed, onRead, pack, stages, viewData, viewRead]);
+  return null;
+}
+
+export function FactoryCardsProvider({
+  projectId,
+  packs,
+  itemAsks,
+  children,
+}: {
+  projectId: string;
+  /** The project's packs; null while the project is still being read. */
+  packs: readonly string[] | null;
+  itemAsks: ItemAsks;
+  children: ReactNode;
+}): ReactElement {
+  const [read, setRead] = useState<ReadonlyMap<string, PackReadResult>>(new Map());
+  const onRead = useCallback((pack: string, result: PackReadResult): void => {
+    setRead(prev => (prev.get(pack) === result ? prev : new Map(prev).set(pack, result)));
+  }, []);
+  const [open, setOpen] = useState<OpenAsks | null>(null);
+  const readPacks = new Map<string, CardPack>();
+  for (const [pack, result] of read)
+    if (result !== 'error' && packs?.includes(pack) === true) readPacks.set(pack, result);
+  const value: FactoryCards = {
+    projectId,
+    // Cards read records once every pack has answered, so a card is never read under a pack
+    // whose stages are still unknown and then read again.
+    packs: packs !== null && packs.every(pack => read.has(pack)) ? readPacks : null,
+    packsError: [...read.values()].includes('error'),
+    itemAsks,
+    open,
+    setOpen,
+  };
+  return (
+    <CardsContext.Provider value={value}>
+      {(packs ?? []).map(pack => (
+        <PackRead key={pack} projectId={projectId} pack={pack} onRead={onRead} />
+      ))}
+      {children}
+      <ItemAsksPopover />
+    </CardsContext.Provider>
+  );
+}
+
+/** The issue an item's key names whose title the card needs: none when the item has its own. */
+function titleIssue(read: ItemRead): number[] {
+  const number = issueNumber(read.item.key);
+  return number === null || (read.item.title ?? '').trim() !== '' ? [] : [Number(number)];
+}
+
+/** What one card list reads: its cards' runs to read and the result keys their pointers name. */
+function recordsAsk(packs: ReadonlyMap<string, CardPack>, reads: readonly ItemRead[]) {
+  const runs = new Set<string>();
+  const result = new Set<string>();
+  for (const read of reads) {
+    const pack = packOf(packs, read);
+    for (const id of pack === null ? [] : runsToRead(pack, read)) runs.add(id);
+    for (const key of pack?.view == null ? [] : resultKeys(pack.view)) result.add(key);
+  }
+  return { runs: [...runs].sort(), result: [...result] };
+}
+
+/** An entity's newest answer, or the last one while a changed key reads again. */
+function useHeld<T>(data: T | null | undefined): T | null {
+  const held = useRef<T | null>(null);
+  if (data != null) held.current = data;
+  return data ?? held.current;
+}
+
+/**
+ * A forge read that fails leaves what it would have named unknown (titles, PR numbers) and the
+ * rest of the card as read. The error goes to the console: the card still shows its key.
+ */
+async function forgeOrNull(
+  query: Parameters<typeof getForgeSubjects>[0]
+): Promise<ForgeSubjects | null> {
+  try {
+    return await getForgeSubjects(query);
+  } catch (error) {
+    console.warn('Board cards: the forge could not be read', error);
+    return null;
+  }
+}
+
+/** How long apart, and how often at most, a forge read with pending entries is read again. */
+const PENDING_WAIT_MS = 2000;
+const PENDING_READS = 30;
+
+/**
+ * A forge read under `key`, read again while the forge leaves anything pending. The server asks
+ * the change host for one subject at a time and answers `pending` for a first lookup it could
+ * not finish in time, so a board's older issues can stay pending for tens of seconds behind
+ * the newer ones. What has answered is drawn meanwhile, and each re-read fills in more. After
+ * `PENDING_READS` re-reads it stops and says so in the console; what is still pending then
+ * shows its key, as with no forge answer.
+ */
+function useForgeRead(
+  key: string,
+  query: Parameters<typeof getForgeSubjects>[0] | null
+): ForgeSubjects | null {
+  const read = useEntity<ForgeSubjects | null>(key, () =>
+    query === null ? Promise.resolve(null) : forgeOrNull(query)
+  );
+  const shown = useHeld(read.data);
+  const reads = useRef(new Map<string, number>());
+  const pending = read.data != null && forgePending(read.data);
+  const { refetch } = read;
+  useEffect(() => {
+    if (!pending) return undefined;
+    const count = reads.current.get(key) ?? 0;
+    if (count >= PENDING_READS) {
+      console.warn(
+        `Board cards: the forge still answers pending after ${String(count)} re-reads`,
+        key
+      );
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      reads.current.set(key, count + 1);
+      refetch();
+    }, PENDING_WAIT_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+    // `read.data` changes identity on every answer, which is what schedules the next re-read.
+  }, [key, pending, read.data, refetch]);
+  return shown;
+}
+
+/**
+ * The issue titles the forge names for `reads` whose title column is empty: what a card prints
+ * as its title, and what the board's filter searches (`itemMatches`). `projectId` null reads
+ * nothing: a forge lookup holds the server (it asks the change host for each issue), so the
+ * cards ask only once the board's pack graph, which the stage columns wait on, has answered.
+ */
+export function useForgeTitles(
+  projectId: string | null,
+  reads: readonly ItemRead[]
+): ForgeSubjects['issues'] | null {
+  const issues = [...new Set(reads.flatMap(titleIssue))].sort((a, b) => a - b);
+  const enabled = projectId !== null && issues.length > 0;
+  return (
+    useForgeRead(
+      enabled ? K.forgeTitles(projectId, issues) : 'forge-titles:none',
+      enabled ? { codebaseId: projectId, issues, changes: [] } : null
+    )?.issues ?? null
+  );
+}
+
+/**
+ * The run records a list's cards need. While a changed list (a filter, "Show more", a run
+ * starting) reads again, its last answer stays drawn: records are by run, so the held ones stay
+ * true, and a run the held read was not asked for is not taken as unreadable.
+ */
+function useListRecords(
+  projectId: string | null,
+  ask: ReturnType<typeof recordsAsk>
+): { records: ReadonlyMap<string, RunRecord>; asked: ReadonlySet<string> } {
+  const enabled = projectId !== null && ask.runs.length > 0;
+  const read = useEntity<RunRecords | null>(
+    enabled ? K.cardReads(projectId, ask.runs) : 'factory-cards:none',
+    () =>
+      enabled
+        ? getRunRecords(ask.runs, { output: OUTPUT_KEYS, result: ask.result })
+        : Promise.resolve(null)
+  );
+  const held = useRef<{ data: RunRecords; runs: readonly string[] } | null>(null);
+  if (read.data != null) held.current = { data: read.data, runs: ask.runs };
+  const shown = read.data ?? held.current?.data ?? null;
+  return {
+    records: new Map((shown?.records ?? []).map(record => [record.id, record])),
+    asked: new Set(
+      read.data != null || read.error !== undefined ? ask.runs : (held.current?.runs ?? [])
+    ),
+  };
+}
+
+/** The forge's pull request numbers for the changes runs named, read once the records answer. */
+function useForgeChanges(
+  projectId: string | null,
+  changes: readonly { run: string; url: string }[]
+): ForgeSubjects['changes'] | null {
+  const enabled = projectId !== null && changes.length > 0;
+  return (
+    useForgeRead(
+      enabled ? K.forgeChanges(projectId, changes) : 'forge-changes:none',
+      enabled ? { codebaseId: projectId, issues: [], changes } : null
+    )?.changes ?? null
+  );
+}
+
+/**
+ * Each card's progress for a list of cards. Three reads, each drawn as soon as it answers: the
+ * issue titles, the run records (rounds, returns, the running step, the PR), and then the
+ * forge's numbers for the PRs those records name. Before they answer, and with no provider, a
+ * card shows what its item read alone gives.
+ */
+export function useCardList(reads: readonly ItemRead[]): (read: ItemRead) => CardProgress {
+  const cards = useFactoryCards();
+  const projectId = cards?.projectId ?? null;
+  const packs = cards?.packs ?? new Map<string, CardPack>();
+  // After the packs are read, so the forge never competes with the columns' graph read.
+  const issues = useForgeTitles(cards?.packs == null ? null : projectId, reads);
+  const { records, asked } = useListRecords(
+    cards?.packs == null ? null : projectId,
+    recordsAsk(packs, reads)
+  );
+  const progressOf = (read: ItemRead, forge: ForgeSubjects | null): CardProgress => {
+    const answered = new Set(cards?.itemAsks?.answered.map(record => record.ask.ref) ?? []);
+    const asks = (cards?.itemAsks?.asks ?? []).filter(
+      entry => entry.item?.id === read.item.id && !answered.has(entry.ref)
+    );
+    const progress = cardProgress(read, packOf(packs, read), { records, asked, forge }, asks);
+    return cards?.packsError === true ? { ...progress, unread: true } : progress;
+  };
+  const changes = reads.flatMap(read => {
+    const pr = progressOf(read, null).pr;
+    return pr?.run == null ? [] : [{ run: pr.run, url: pr.url }];
+  });
+  const numbers = useForgeChanges(projectId, changes);
+  const forge = { issues: issues ?? [], changes: numbers ?? [] };
+  return read => progressOf(read, forge);
+}

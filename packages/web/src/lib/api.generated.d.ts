@@ -12342,6 +12342,47 @@ export interface components {
           workOrder?: string;
           workOrders?: string;
         };
+        retired?: string[];
+        rounds?:
+          | {
+              workflow: string;
+              loop: string;
+            }
+          | {
+              workflow: string;
+              round: string;
+              allowance: string;
+            }
+          | (
+              | {
+                  workflow: string;
+                  loop: string;
+                }
+              | {
+                  workflow: string;
+                  round: string;
+                  allowance: string;
+                }
+            )[];
+        returns?: {
+          workflow: string;
+          node: string;
+          outcome: string;
+        }[];
+        approves?: {
+          workflow: string;
+          node: string;
+          outcome: string;
+        }[];
+        change?:
+          | {
+              workflow: string;
+              pointer: string;
+            }
+          | {
+              workflow: string;
+              pointer: string;
+            }[];
         map: {
           cards: {
             id: string;

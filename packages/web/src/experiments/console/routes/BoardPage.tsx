@@ -11,12 +11,12 @@
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
-import { ItemAsksSection, itemAsksAnchor, useItemAsks } from '../components/ItemAsksSection';
+import { ItemAsksSection, useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
-import { relativeTime } from '../lib/format';
+import { FactoryCardsProvider, useForgeTitles } from '../factory/FactoryCards';
+import { itemMatches } from '../factory/lib/item-card';
 import { displayItemKey } from '../lib/item-key';
 import type { Project } from '../primitives/project';
-import { isItemAsk } from '../primitives/run';
 import * as skill from '../skills';
 import {
   getItem,
@@ -30,139 +30,19 @@ import {
 } from '../skills/items';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
+import { CardList } from './board/ItemCard';
+import { CHIP, chipOf, standingRun, type Chip } from './board/standing';
 
-type Chip = ItemRead['standing']['state'] | 'needs_you';
+export { chipOf, standingRun } from './board/standing';
 
 /** The states of an item that is on a stage: something runs, is queued or waits on it. */
 export const MOVING = ['running', 'waiting', 'queued'] as const;
-
-// The order chips are counted in on a stage heading.
-const CHIP: Record<Chip, { label: string; tone: string }> = {
-  needs_you: { label: 'Needs you', tone: 'border-warning/50 bg-warning/15 text-warning' },
-  running: { label: 'Running', tone: 'border-accent/50 bg-accent/15 text-accent-bright' },
-  waiting: { label: 'Waiting', tone: 'border-border bg-surface-elevated text-text-secondary' },
-  queued: { label: 'Queued', tone: 'border-border bg-surface-elevated text-text-secondary' },
-  failed: { label: 'Failed', tone: 'border-error/50 bg-error/15 text-error' },
-  stopped: { label: 'Stopped', tone: 'border-error/50 bg-error/15 text-error' },
-  done: { label: 'Done', tone: 'border-success/50 bg-success/15 text-success' },
-  resting: { label: 'At rest', tone: 'border-border bg-surface text-text-tertiary' },
-};
-
-/** An item that waits on the operator says so, whatever else is true of it. */
-export function chipOf(read: ItemRead): Chip {
-  const asked = read.questions.some(question => question.kind !== 'stopped');
-  return asked && read.standing.state === 'waiting' ? 'needs_you' : read.standing.state;
-}
 
 /** The work order an item is part of: the item its active `part_of` link points at. */
 function orderOf(read: ItemRead): ItemRead['item'] | undefined {
   return read.links.find(
     link => link.kind === 'part_of' && link.direction === 'outgoing' && link.ended === null
   )?.other;
-}
-
-/** The run the engine says the item stands at. */
-export function standingRun(read: ItemRead): ItemRead['runs'][number] | undefined {
-  return read.runs.find(run => run.id === read.standing.runId);
-}
-
-/**
- * A failed or stopped item stays so until a newer run starts on it or its change merges, so an
- * operator has to decide.
- */
-const needsDecision = (read: ItemRead): boolean =>
-  read.standing.state === 'failed' || read.standing.state === 'stopped';
-
-/** Why the item needs a decision, in the engine's own facts: what failed, or how its run ended. */
-function decisionReason(read: ItemRead): string {
-  const run = standingRun(read);
-  const stage = run?.pack?.workflow ?? run?.workflow ?? 'A run';
-  if (read.standing.state === 'failed') return `${stage} failed`;
-  const [stop] = read.questions.flatMap(question =>
-    question.kind === 'stopped' ? [question] : []
-  );
-  if (stop === undefined)
-    return `${stage} ended ${run?.outcome ?? 'with no outcome'} and nothing followed`;
-  const ended = `${stage} ended ${stop.stoppedIn.outcome} and nothing followed`;
-  return stop.summary === null ? ended : `${ended}: ${stop.summary}`;
-}
-
-const runPath = (projectId: string, runId: string): string =>
-  `/console/p/${encodeURIComponent(projectId)}/r/${encodeURIComponent(runId)}`;
-
-function ItemCard({
-  read,
-  projectId,
-  stage,
-}: {
-  read: ItemRead;
-  projectId: string;
-  /** The exact stage, shown when the card's column holds more than one. */
-  stage?: string;
-}): ReactElement {
-  const run = standingRun(read);
-  const chip = chipOf(read);
-  const asks = read.questions.filter(isItemAsk).length;
-  const [heldByRun] = read.questions.flatMap(question =>
-    'run' in question && question.run !== undefined ? [question.run] : []
-  );
-  const link = 'text-console-11 underline hover:text-text-primary';
-  const reason = needsDecision(read) ? decisionReason(read) : undefined;
-  const key = <span className="font-mono text-console-11">{read.item.key}</span>;
-  return (
-    <li
-      data-item={read.item.key}
-      data-state={read.standing.state}
-      className="rounded border border-border bg-surface px-3 py-2"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <p data-item-title className="min-w-0 text-sm font-medium text-text-primary">
-          {read.item.title ?? read.item.key}
-        </p>
-        <span
-          data-chip={chip}
-          className={`shrink-0 rounded-full border px-2 py-0.5 text-console-10 font-semibold ${CHIP[chip].tone}`}
-        >
-          {chip === 'done' ? howItEnded(read) : CHIP[chip].label}
-        </span>
-      </div>
-      <p className="mt-1 text-console-11 text-text-tertiary">
-        {stage === undefined ? '' : `${stage} · `}
-        {run === undefined ? (
-          key
-        ) : (
-          <Link to={runPath(projectId, run.id)} className="underline hover:text-text-primary">
-            {key}
-          </Link>
-        )}
-        {run === undefined
-          ? ''
-          : ` · ${run.outcome === null ? run.status : `ended ${run.outcome}`} · ${relativeTime(run.completedAt ?? run.startedAt)}`}
-        {read.merged === null ? '' : ' · merged'}
-      </p>
-      {reason === undefined ? null : (
-        <p data-item-reason className="mt-1 text-console-11 text-text-secondary">
-          {reason}
-        </p>
-      )}
-      {asks > 0 ? (
-        <a href={`#${itemAsksAnchor(read.item.id)}`} className={`${link} text-warning`}>
-          {asks === 1 ? '1 ask waits on you' : `${String(asks)} asks wait on you`}
-        </a>
-      ) : null}
-      {heldByRun !== undefined ? (
-        <Link to={runPath(projectId, heldByRun.id)} className={`${link} block text-warning`}>
-          Its run waits for an answer
-        </Link>
-      ) : null}
-    </li>
-  );
-}
-
-/** How a done item ended, in the engine's facts: its change merged, or its run's final outcome. */
-function howItEnded(read: ItemRead): string {
-  if (read.merged !== null) return 'Merged';
-  return standingRun(read)?.outcome ?? CHIP.done.label;
 }
 
 /** What the items of a stage are doing, as counts: `1 needs you · 2 running`. */
@@ -241,16 +121,12 @@ function Column({
         </p>
       )}
       {empty ? null : (
-        <ul className="mt-2 flex flex-col gap-2">
-          {items.map(read => (
-            <ItemCard
-              key={read.item.id}
-              read={read}
-              projectId={projectId}
-              stage={stageOf?.(read)}
-            />
-          ))}
-        </ul>
+        <CardList
+          reads={items}
+          projectId={projectId}
+          stageOf={stageOf}
+          className="mt-2 flex flex-col gap-2"
+        />
       )}
     </div>
   );
@@ -366,11 +242,7 @@ function DoneColumn({
           {total}
         </span>
       </h3>
-      <ul className="mt-2 flex flex-col gap-2">
-        {list.shown.map(read => (
-          <ItemCard key={read.item.id} read={read} projectId={projectId} />
-        ))}
-      </ul>
+      <CardList reads={list.shown} projectId={projectId} className="mt-2 flex flex-col gap-2" />
       <MoreControls list={list} total={total} />
     </div>
   );
@@ -403,11 +275,11 @@ function DecisionStrip({ projectId }: { projectId: string }): ReactElement | nul
       <p className="mt-1 text-console-12 text-text-tertiary">
         Nothing moves these until a new run starts on them or their change merges.
       </p>
-      <ul className="mt-3 grid gap-2 md:grid-cols-3">
-        {list.shown.map(read => (
-          <ItemCard key={read.item.id} read={read} projectId={projectId} />
-        ))}
-      </ul>
+      <CardList
+        reads={list.shown}
+        projectId={projectId}
+        className="mt-3 grid gap-2 md:grid-cols-3"
+      />
       <MoreControls list={list} total={total} />
     </section>
   );
@@ -647,13 +519,15 @@ export function BoardPage(): ReactElement {
   const every = useEntity<ItemRead[]>(K.boardOrders(projectId), () => listOrderItems(projectId));
   const all = open.data ?? [];
   const orders = workOrders(every.data ?? all);
+  // The filter searches what each card shows: its issue title and its key as a person reads it.
+  // The titles are read only once something is typed, so a cold board's first reads are the
+  // stage columns' own.
   const wanted = filter.trim().toLowerCase();
+  const titles = useForgeTitles(wanted === '' ? null : projectId, all);
   const items = all.filter(
     read =>
       (order === null || orderOf(read)?.id === order || read.item.id === order) &&
-      (wanted === '' ||
-        read.item.key.toLowerCase().includes(wanted) ||
-        (read.item.title ?? '').toLowerCase().includes(wanted))
+      itemMatches(read, titles, wanted)
   );
   const packOf = (read: ItemRead): string | undefined => read.standing.pack ?? undefined;
   const moving = items;
@@ -680,65 +554,72 @@ export function BoardPage(): ReactElement {
         </div>
         <ProjectViewTabs projectId={projectId} active="board" />
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-4 md:px-6">
-        <input
-          type="search"
-          value={filter}
-          onChange={event => {
-            setFilter(event.target.value);
-          }}
-          aria-label="Filter items"
-          placeholder="Filter by key or title"
-          className="mb-4 w-full rounded border border-border bg-surface px-3 py-1.5 text-console-12 text-text-primary md:w-80"
-        />
-        <WorkOrderStrip
-          orders={orders}
-          counted={every.data !== undefined}
-          error={every.error}
-          chosen={order}
-          choose={id => {
-            setOrder(current => (current === id ? null : id));
-          }}
-        />
-        {packs.map(pack => (
-          <PackBoard
-            key={pack}
-            projectId={projectId}
-            pack={pack}
-            items={moving.filter(read => packOf(read) === pack)}
+      <FactoryCardsProvider
+        projectId={projectId}
+        // Until the project is read its packs are unknown, and an empty list would read as all read.
+        packs={project === undefined ? null : packs}
+        itemAsks={itemAsks}
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-4 md:px-6">
+          <input
+            type="search"
+            value={filter}
+            onChange={event => {
+              setFilter(event.target.value);
+            }}
+            aria-label="Filter items"
+            placeholder="Filter by key or title"
+            className="mb-4 w-full rounded border border-border bg-surface px-3 py-1.5 text-console-12 text-text-primary md:w-80"
           />
-        ))}
-        <DecisionStrip projectId={projectId} />
-        {outside.length > 0 ? (
-          <section data-outside-pack className="mb-6">
-            <button
-              type="button"
-              aria-expanded={showOutside}
-              onClick={() => {
-                setShowOutside(shown => !shown);
-              }}
-              className="rounded border border-border px-3 py-1.5 text-console-12 text-text-secondary hover:bg-surface-hover hover:text-text-primary"
-            >
-              {showOutside ? 'Hide' : 'Show'} {outside.length} open on no pack stage
-            </button>
-            {showOutside ? (
-              <ul className="mt-3 grid gap-2 md:grid-cols-3">
-                {outside.map(read => (
-                  <ItemCard key={read.item.id} read={read} projectId={projectId} />
-                ))}
-              </ul>
-            ) : null}
-          </section>
-        ) : null}
-        {itemAsks.asks.length + itemAsks.answered.length > 0 ? (
-          <section data-needs-you className="mt-8">
-            <h2 className="text-sm font-medium text-text-primary">Needs you</h2>
-            <div className="mt-3 flex flex-col gap-3">
-              <ItemAsksSection {...itemAsks} showProject={false} />
-            </div>
-          </section>
-        ) : null}
-      </div>
+          <WorkOrderStrip
+            orders={orders}
+            counted={every.data !== undefined}
+            error={every.error}
+            chosen={order}
+            choose={id => {
+              setOrder(current => (current === id ? null : id));
+            }}
+          />
+          {packs.map(pack => (
+            <PackBoard
+              key={pack}
+              projectId={projectId}
+              pack={pack}
+              items={moving.filter(read => packOf(read) === pack)}
+            />
+          ))}
+          <DecisionStrip projectId={projectId} />
+          {outside.length > 0 ? (
+            <section data-outside-pack className="mb-6">
+              <button
+                type="button"
+                aria-expanded={showOutside}
+                onClick={() => {
+                  setShowOutside(shown => !shown);
+                }}
+                className="rounded border border-border px-3 py-1.5 text-console-12 text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+              >
+                {showOutside ? 'Hide' : 'Show'} {outside.length} open on no pack stage
+              </button>
+              {showOutside ? (
+                <CardList
+                  reads={outside}
+                  projectId={projectId}
+                  className="mt-3 grid gap-2 md:grid-cols-3"
+                />
+              ) : null}
+            </section>
+          ) : null}
+          {itemAsks.asks.length + itemAsks.answered.length > 0 ? (
+            <section data-needs-you className="mt-8">
+              <h2 className="text-sm font-medium text-text-primary">Needs you</h2>
+              <div className="mt-3 flex flex-col gap-3">
+                <ItemAsksSection {...itemAsks} showProject={false} />
+              </div>
+            </section>
+          ) : null}
+        </div>
+      </FactoryCardsProvider>
     </section>
   );
 }
