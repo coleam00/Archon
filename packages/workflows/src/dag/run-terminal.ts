@@ -665,7 +665,7 @@ async function usageLimitWait(
       pauseId: randomUUID(),
       waitingSince: new Date(now).toISOString(),
       resumeAt: new Date(latest.resumeAt).toISOString(),
-      ...(latest.failure.provider === undefined ? {} : { provider: latest.failure.provider }),
+      provider: latest.failure.provider,
     },
     cause: latest.failure.class,
   };
@@ -690,14 +690,9 @@ async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
     getLog().warn({ workflowRunId: workflowRun.id }, 'dag.usage_limit_wait_status_changed');
     return true;
   }
+  const { nodeId, resumeAt, provider } = wait;
   getLog().info(
-    {
-      workflowRunId: workflowRun.id,
-      nodeId: wait.nodeId,
-      resumeAt: wait.resumeAt,
-      cause,
-      provider: wait.provider,
-    },
+    { workflowRunId: workflowRun.id, nodeId, resumeAt, cause, provider },
     'dag.usage_limit_wait_started'
   );
   await safeSendMessage(
