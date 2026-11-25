@@ -131,10 +131,9 @@ const itemBase = {
  * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
  * open past their deadline, which the awaited event, another run of the waiting workflow
  * on the item, or a withdrawal closes; `stopped`, which takes no answer, is an item whose newest
- * step failed, or completed with an ending that started no step, left no ask or wait and ended
- * nothing, until a newer step, its end or its merge (a run that observes the item,
- * `observes: true`, is not a step); or a failed run whose outcome is unknown, until it is
- * resumed or abandoned;
+ * step (not an `observes: true` run) failed, or completed starting no step, asking nothing and
+ * ending nothing, until a newer step, its end or its merge; or a failed run whose outcome is
+ * unknown, until it is resumed or abandoned;
  * `refused_start` is a start no run caused that was refused and is its item's newest step;
  * `preparation_lost` is a binding start whose preparer this process can prove gone, which
  * `archon trigger recover-preparation` returns to pending.

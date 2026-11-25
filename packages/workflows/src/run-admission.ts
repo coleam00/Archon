@@ -1,8 +1,5 @@
-import {
-  CONTAINER_ISOLATION_MARKER,
-  ISOLATION_ENV_ID_METADATA_KEY,
-  observesItemMetadata,
-} from './schemas/run-metadata';
+import { observesItemMetadata } from './schemas/item-role';
+import { CONTAINER_ISOLATION_MARKER, ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { currentExecutionOwner, executionClaim } from './store';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';

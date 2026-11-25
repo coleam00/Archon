@@ -13,7 +13,7 @@ import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
 import {
   bindingProjectKey,
-  runEndedBindingReading,
+  runEndedBindingCheck,
   type OnBinding,
   type OnBindingFile,
   type RunEndedStartsDependencies,
@@ -110,7 +110,7 @@ async function readNamedBindings(
     if (!existsSync(candidate.binding.launch.cwd)) continue;
     const project = (await bindingProjectKey(candidate, deps)) ?? candidate.binding.launch.cwd;
     if ('runEnded' in candidate && candidate.runEnded.linked === undefined) {
-      const { problems, startsStep } = await runEndedBindingReading(candidate, deps);
+      const { problems, startsStep } = await runEndedBindingCheck(candidate, deps);
       if (problems.length === 0 && startsStep)
         bound.add(stopKey(project, candidate.runEnded.workflowName, candidate.runEnded.outcome));
     }

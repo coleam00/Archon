@@ -1,4 +1,5 @@
 import { requestingRun } from './schemas/resource-start';
+import type { ItemStart } from './schemas/item-role';
 import { workflowNoticeDataSchema, WORKFLOW_NOTICE_LIMITS } from './workflow-notice';
 import { createLogger } from '@archon/paths';
 import {
@@ -22,7 +23,6 @@ import type {
   ResourceStartIntent,
   SourceReceiptInput,
   SourceReceiptAcceptance,
-  StartCause,
   startBindingInspectionSchema,
   resourceStartRequestStatusSchema,
 } from './schemas/resource-start';
@@ -256,30 +256,6 @@ export interface UnreadableQueuedStart {
   /** How many requests are queued behind it on its resource and host. */
   behind: number;
 }
-
-/**
- * A start on an item that has no run yet, with what caused it and what its run will be. The
- * role is the one recorded fact, `observes_item` in the run metadata preparation writes
- * (`observesItemMetadata`): a queued request's prepared launch carries it, so its run is a
- * `step` or an `observer`. An unprepared binding (waiting to be prepared, being prepared, or
- * retrying, under the install hold or not) has no record yet, so its role is `unprepared`;
- * nothing reads its target's definition to guess one. `cause` is null for a queued start no
- * receipt carries (a hand start) or whose receipt's source actor does not read.
- */
-export type ItemStart =
-  | {
-      phase: 'queued';
-      requestId: string;
-      cause: StartCause | null;
-      role: 'step' | 'observer';
-    }
-  | {
-      phase: 'unprepared';
-      receiptId: string;
-      bindingId: string;
-      cause: StartCause | null;
-      role: 'unprepared';
-    };
 
 /** A held `trigger` start on one item, as the item read lists it. */
 export type HeldItemStart = Pick<
@@ -682,13 +658,9 @@ export interface IResourceStartStore {
   liftInstallHold(): Promise<InstallHold | null>;
   /** Every start the hold would keep: unprepared bindings, then queued requests. */
   listHeldStarts(): Promise<HeldStart[]>;
-  /** The unprepared binding starts on item `itemId`, for display. A store without items returns none. */
+  /** The unprepared binding starts on item `itemId`. A store without items returns none. */
   listHeldItemStarts(itemId: string): Promise<HeldItemStart[]>;
-  /**
-   * Every start on item `itemId` that has no run yet, queued and unprepared, with its cause
-   * and role (`ItemStart`): the one reader the end rule, `workflow end` and the stop rule use
-   * for starts. A store without items returns none.
-   */
+  /** Every start on item `itemId` with no run yet (`ItemStart`). Itemless stores: none. */
   listItemStarts(itemId: string): Promise<ItemStart[]>;
   /** Every binding a process is preparing now. A store that records no preparer returns none. */
   listPreparingStarts(): Promise<PreparingStart[]>;

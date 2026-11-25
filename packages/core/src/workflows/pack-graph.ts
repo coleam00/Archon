@@ -27,7 +27,7 @@ import type { BindingDefinitionsDeps } from './definition-source';
 import {
   bindingProjectKey,
   readOnBindings,
-  runEndedBindingReading,
+  runEndedBindingCheck,
   type OnBinding,
   type RunEndedStartsDependencies,
 } from './run-ended';
@@ -104,7 +104,7 @@ async function installedArrows(
     // asks arrow starts on answers, so the role of what it starts is never read.
     const reading =
       'runEnded' in file
-        ? await runEndedBindingReading(file, deps)
+        ? await runEndedBindingCheck(file, deps)
         : { problems: await asksSettledBindingCheck(file, deps), startsStep: true };
     installed.push({ ...entry, ...reading });
   }

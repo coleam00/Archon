@@ -1,5 +1,5 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
-import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {

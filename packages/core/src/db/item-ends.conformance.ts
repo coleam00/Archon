@@ -5,12 +5,13 @@
  * not undo it. An end is refused, naming it, while anything on the item is live. The runs
  * follow each other at once, as fast stages do, so on SQLite they share one second.
  */
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
 import { readHoldingItemEnd } from '@archon/workflows/item-end';
 import { ItemEndRefusedError } from '@archon/workflows/schemas/item-end';
-import { itemStoppedMetadata, observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
+import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
 import {
   CONFORMANCE_CODEBASE_ID,
   CONFORMANCE_CONVERSATION_ID,

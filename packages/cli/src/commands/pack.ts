@@ -756,13 +756,6 @@ function linkText(link: PackGraphLink): string {
   return ` ${parts.join(', ')}`;
 }
 
-/** How a stopping outcome is marked: a stage that can leave an ask or wait stops only without one. */
-function stopsNote(stage: PackGraph['stages'][number]): string {
-  return stage.asks || stage.waits
-    ? ' (item stops unless the run leaves an ask or wait)'
-    : ' (item stops)';
-}
-
 /** The graph as plain lines; `--json` prints the read itself, which is the contract. */
 function graphText(graph: PackGraph, source: string, explicitSource: boolean): string {
   const lines = [
@@ -775,12 +768,14 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
   }
   lines.push('', `Arrows: ${String(graph.arrows.length)}`);
   for (const arrow of graph.arrows) lines.push(arrowText(arrow));
-  // An outcome whose only arrows start observing stages starts something but no step.
-  const nothing = graph.stages.flatMap(stage =>
-    (stage.outcome?.values ?? [])
+  // `stops` counts an arrow to an observing stage as starting no step.
+  const nothing = graph.stages.flatMap(stage => {
+    const stops =
+      stage.asks || stage.waits ? ' (item stops unless it asks or waits)' : ' (item stops)';
+    return (stage.outcome?.values ?? [])
       .filter(v => v.stops || (v.startsNothing && !v.ends))
-      .map(v => `  ${stage.name}:${v.value}${v.stops ? stopsNote(stage) : ''}`)
-  );
+      .map(v => `  ${stage.name}:${v.value}${v.stops ? stops : ''}`);
+  });
   if (nothing.length > 0) lines.push('', 'Outcomes that start no step:', ...nothing);
   if (graph.discoveryErrors.length > 0)
     lines.push(

@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { recordWorktreeAdoption } from '@archon/isolation';
 import type {
@@ -25,7 +26,6 @@ import {
 } from '@archon/core/workflows/registered-worktree';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
-import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import { CHECKOUT_HANDOFF_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
 import {

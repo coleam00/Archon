@@ -3,11 +3,11 @@
  * completed run takes from it. The load-time contract, the completion write and dry-run
  * read the declaration through this one module, so they cannot disagree on its forms.
  */
+import { observesItem } from './schemas/item-role';
 import type { DagNode, IncludeDirective, NodeOutput, RunCompletedOutcome } from './schemas';
 import type { WorkflowDefinition } from './schemas/workflow';
 import { outputRefText, resolveNodeOutputField } from './output-ref';
 import { workflowRunOutcomeSchema } from './schemas/run-status';
-import { observesItem } from './schemas/run-metadata';
 
 /** The two forms an outcome property may take: a boolean, or a string with an `enum`. */
 export type OutcomeForm =

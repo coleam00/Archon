@@ -13,11 +13,11 @@
  * The same files hold asks-settled bindings (`asks-settled.ts`); this module reads both
  * forms and builds the receipt either form writes.
  */
+import { observesItem } from '@archon/workflows/schemas/item-role';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { observesItem } from '@archon/workflows/schemas/run-metadata';
 import type { z } from 'zod';
 import type { RunEndedFacts, RunEndedStarts } from '@archon/workflows/deps';
 import { resolveJsonPointer } from '@archon/workflows/json-pointer';
@@ -877,27 +877,15 @@ export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | '
  * launches in: the ended workflow exists and declares the outcome and every input the
  * binding reads, and the started workflow exists and accepts its inputs as a start would:
  * `launch.inputs` and the mapped names, none undeclared and no required one missing. With
- * `checkout: "ended-run"`, neither workflow may be pinned in place. The
- * check a run gets before it starts; `runEndedTriggerCheck` reports it with the rest.
+ * `checkout: "ended-run"`, neither workflow may be pinned in place. The check a run gets
+ * before it starts; `runEndedTriggerCheck` reports it with the rest. `startsStep` says whether
+ * the started workflow, as resolved, is a step of its item (`observesItem`), as the static
+ * readers count a start; one that does not resolve is a problem and counted as a step.
  */
 export async function runEndedBindingCheck(
-  candidate: RunEndedBinding,
-  deps: BindingDefinitionsDeps,
-  /** The run starting now whose end or asks may fire the binding; see `discoverBindingWorkflows`. */
-  launchRun?: Pick<WorkflowRun, 'metadata'>
-): Promise<string[]> {
-  return (await runEndedBindingReading(candidate, deps, launchRun)).problems;
-}
-
-/**
- * `runEndedBindingCheck`'s problems, and whether the workflow the binding starts, as the check
- * resolved it, is a step of its item (`observesItem`): what the static readers count as a
- * start that moves the item on. A target that does not resolve is reported as a problem and
- * counted as a step.
- */
-export async function runEndedBindingReading(
   { binding, runEnded }: RunEndedBinding,
   deps: BindingDefinitionsDeps,
+  /** The run starting now whose end or asks may fire the binding; see `discoverBindingWorkflows`. */
   launchRun?: Pick<WorkflowRun, 'metadata'>
 ): Promise<{ problems: string[]; startsStep: boolean }> {
   const read = await discoverBindingWorkflows(binding.launch, deps, launchRun);
@@ -976,7 +964,7 @@ export async function runEndedTriggerCheck(
       link ? { kind: link.kind, holder: link.holder } : null,
     ]);
     stages.set(stage, [...(stages.get(stage) ?? []), index]);
-    const found = await runEndedBindingCheck(candidate, deps);
+    const found = (await runEndedBindingCheck(candidate, deps)).problems;
     if (!runEnded.linked && binding.launch.workflowName === runEnded.workflowName)
       found.push(
         `binding starts '${runEnded.workflowName}', the workflow whose end fires it: each run that completes with '${runEnded.outcome}' starts another on the same item`
@@ -1015,7 +1003,7 @@ export function createRunEndedPreflight(
     for (const candidate of candidates) {
       if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
       // Checked against the definitions this run executes.
-      const problems = await runEndedBindingCheck(candidate, dependencies, run);
+      const { problems } = await runEndedBindingCheck(candidate, dependencies, run);
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
     }

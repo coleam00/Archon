@@ -222,45 +222,10 @@ export function readAsksResult(metadata: Record<string, unknown>): JsonValue | u
 }
 
 /**
- * Set when a run of a workflow that declares `observes: true` is created: the run acts on
- * its item without being one of its steps, so the item's stop and end rules read past it
- * (see `itemFate`). Written once, in the creation write, so a pending run of a queued start
- * already carries it. Older binaries read metadata as an open record and ignore the key, so
- * they count the run as a step.
- */
-export const OBSERVES_ITEM_METADATA_KEY = 'observes_item';
-
-/**
- * Whether a workflow's runs observe their item instead of being steps of it: the one reading
- * of `observes: true`. The completion's fate, a run's creation metadata, a binding's target
- * and the pack graph's stages all ask it. A run that exists is asked through what it recorded
- * (`observesItemRecorded`, and `stepRun` in the SQL stores), which this writes.
- */
-export function observesItem(workflow: { readonly observes?: boolean }): boolean {
-  return workflow.observes === true;
-}
-
-/** The creation metadata that records a run as observing its item, or none for a step. */
-export function observesItemMetadata(workflow: { readonly observes?: boolean }): {
-  [OBSERVES_ITEM_METADATA_KEY]?: true;
-} {
-  return observesItem(workflow) ? { [OBSERVES_ITEM_METADATA_KEY]: true } : {};
-}
-
-/** Whether run metadata records the run as observing its item (`observesItemMetadata`). */
-export function observesItemRecorded(metadata: unknown): boolean {
-  return (
-    metadata !== null &&
-    typeof metadata === 'object' &&
-    (metadata as Record<string, unknown>)[OBSERVES_ITEM_METADATA_KEY] === true
-  );
-}
-
-/**
  * Set by the completing write of a top-level run on an item that stopped the item: its
  * ending left no ask or wait and ended nothing (`itemFate` is `stops`), whatever it started.
- * The attention queue lists the item as `stopped` while this run is the newest step on it
- * and no start its end caused is still waiting to be prepared or queued (`listStoppedItemRuns`). `summary` is the declared `returns.summary` value,
+ * The attention queue lists it while this run is the newest step on its item and no start
+ * the run caused is still unprepared or queued. `summary` is the declared `returns.summary` value,
  * or null. Older binaries read metadata as an open record and ignore the key.
  *
  * Admission also sets it, with `limit`, on the completed run whose end or settled asks

@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { continuationInheritsEstate } from '@archon/workflows/schemas/workflow-run';
 import type { ResolvedRunContinuation } from '../../operations/workflow-continuation';
 // Background dispatch: run a workflow in a hidden worker conversation, bridged to the
@@ -11,7 +12,6 @@ import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { providerRegistry } from '@archon/providers';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
-import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,

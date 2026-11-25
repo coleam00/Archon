@@ -12,16 +12,16 @@
  *   it is a step or unprepared; an observer holds nothing. Once its run exists, `stepRun`
  *   decides.
  */
-import type { ItemStart } from '@archon/workflows/resource-start-store';
+import type { ItemStart } from '@archon/workflows/schemas/item-role';
+import {
+  OBSERVES_ITEM_METADATA_KEY,
+  observesItemRecorded,
+} from '@archon/workflows/schemas/item-role';
 import {
   sourceReceiptInputSchema,
   startCause,
   type StartCause,
 } from '@archon/workflows/schemas/resource-start';
-import {
-  OBSERVES_ITEM_METADATA_KEY,
-  observesItemRecorded,
-} from '@archon/workflows/schemas/run-metadata';
 import { getDialect } from './connection';
 import type { TransactionQuery } from './resource-slots';
 

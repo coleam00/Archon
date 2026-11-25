@@ -6,10 +6,11 @@
  * merge recorded on the item. The runs follow each other at once, as fast stages do, so on
  * SQLite they share one second.
  */
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { listAttentionQueue, readAttentionQueueItemByRef } from '@archon/workflows/attention-queue';
-import { itemStoppedMetadata, observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
+import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
 import { RUN_ENDED_SOURCE_ACTOR, RUN_SOURCE_ACTOR } from '@archon/workflows/schemas/resource-start';
 import {
   CONFORMANCE_CODEBASE_ID,

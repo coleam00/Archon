@@ -1,3 +1,4 @@
+import { observesItem } from '../schemas/item-role';
 import type { WorkflowDefinition, DagNode, IncludeDirective } from '../schemas';
 import {
   isComposeFanOutNode,
@@ -12,7 +13,6 @@ import { compileOutputSchema } from '../structured-output';
 import { declaredOutcome, outcomeValues, stringEnumValues } from '../completed-outcome';
 import { itemAsksJsonSchema } from '../schemas/item-ask';
 import { itemWaitsJsonSchema } from '../schemas/item-wait';
-import { observesItem } from '../schemas/run-metadata';
 import { isDeepStrictEqual } from 'node:util';
 
 /**

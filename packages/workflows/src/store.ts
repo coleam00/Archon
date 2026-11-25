@@ -243,10 +243,9 @@ export interface IWorkflowStore
     input: { rulingId: string; projectKey?: string } & ItemAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
   /**
-   * The newest end on an item while no step on it is live or started or resumed since
-   * (`schemas/item-end.ts`), or null. It reads runs only: starts with no run yet are read by
-   * `listItemStarts`, and `readHoldingItemEnd` combines the two, so a reader of an end calls
-   * that, not this. An unreadable row is reported, not thrown.
+   * The newest end on an item while no step on it is live or started or resumed since, or
+   * null. Runs only: readers call `readHoldingItemEnd`, which adds `listItemStarts`. An
+   * unreadable row is reported, not thrown.
    */
   getHoldingItemEnd(
     itemId: string
@@ -370,10 +369,8 @@ export interface IWorkflowStore
    */
   withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
   /**
-   * Steps that stopped their item (`readItemStopped`, or a failed top-level run) while its
-   * last step, and every run that failed with stop reason `outcome_unknown` until resumed or
-   * abandoned. A run that observes its item (`observes: true`) is no step: it is not listed
-   * for its item and ends no stop. Itemless stores: none.
+   * Steps (not `observes: true` runs) that stopped their item while its last step, and every
+   * run that failed with stop reason `outcome_unknown` until resumed or abandoned.
    */
   listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]>;
   /** Top-level `pending`, `running` or `paused` runs, oldest first; see `OwnerObserver`. */
@@ -628,10 +625,8 @@ export interface IWorkflowStore
    * `result.waits` is the same for `returns.waits`: the open waits of that workflow on the
    * run's item close as `replaced` and these open, in the same transaction.
    *
-   * `result.end` is the end the run's outcome records on its item (`returns.ends`), written
-   * in the same transaction and only when this call wins: the end `archon workflow end`
-   * writes, `via: engine`, from this run and its returns node (`node`). A store refuses it
-   * for a run with no item; a store without items refuses any.
+   * `result.end` is the end its outcome records on the item (`returns.ends`), likewise, `via:
+   * engine` from this run and its returns `node`; refused for a run with no item.
    */
   completeWorkflowRun(
     id: string,

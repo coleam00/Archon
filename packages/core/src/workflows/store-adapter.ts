@@ -1,3 +1,4 @@
+import type { ItemStart } from '@archon/workflows/schemas/item-role';
 import { createRunResourceRelease } from '../services/cleanup/run-verification-images';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
@@ -20,7 +21,6 @@ import { existsSync } from 'node:fs';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import type {
   HeldItemStart,
-  ItemStart,
   PreparingStart,
   RefusedStart,
 } from '@archon/workflows/resource-start-store';

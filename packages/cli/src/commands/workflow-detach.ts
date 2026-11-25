@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { generatedTaskBranch } from '@archon/isolation';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -16,7 +17,6 @@ import * as archonPaths from '@archon/paths';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { sealWorkflowRunConfig } from '@archon/core/config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
-import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { resolveRunStartInputs } from '@archon/workflows/pack-settings';

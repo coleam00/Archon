@@ -3,8 +3,8 @@
  * A start no run caused (a fire, a schedule, a webhook, a label) that is refused records why
  * on its binding row, and attention lists it while it is its item's newest step.
  */
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

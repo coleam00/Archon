@@ -11,9 +11,9 @@
  * and a `run_ended` cause names the run that ended and the arrow (`sourceInstanceId`) that
  * started the next.
  */
+import { observesItem } from './schemas/item-role';
 import { z } from 'zod';
 import { declaredItemFate, declaredOutcome, outcomeValues } from './completed-outcome';
-import { observesItem } from './schemas/run-metadata';
 import { readComposedMeta } from './compiled-command';
 import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';

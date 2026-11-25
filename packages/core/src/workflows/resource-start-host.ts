@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import type {
   HeldPreparation,
   RefusedPreparation,
@@ -7,7 +8,6 @@ import type {
 } from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
-import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
