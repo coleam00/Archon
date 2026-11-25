@@ -34,7 +34,7 @@ import {
 } from '@archon/workflows/webhook-source-plugin';
 import { declaredWakes, freshOverdue, isTemporaryForgeFailure, nextBackoff } from './observe-read';
 import {
-  sourceObservationSchema,
+  sourcePluginObservationSchema,
   webhookSourceResultSchema,
 } from '@archon/workflows/webhook-source-plugin';
 
@@ -330,7 +330,7 @@ export async function loadWebhookSourcePlugins(
       });
       let observation: SourceObservation;
       try {
-        observation = sourceObservationSchema.parse(
+        observation = sourcePluginObservationSchema.parse(
           await plugin.observe({
             waits,
             labels,

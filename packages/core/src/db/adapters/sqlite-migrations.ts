@@ -163,6 +163,12 @@ const sqliteMigrations: readonly Migration[] = [
   {
     kind: 'tolerated',
     scope: 'schema',
+    failureEvent: 'db.sqlite_migration_start_overrides_column_failed',
+    apply: addStartOverridesColumn,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
     failureEvent: 'db.sqlite_migration_completed_outcome_column_failed',
     apply: addCompletedOutcomeColumn,
   },
@@ -506,6 +512,14 @@ function addStartLimitColumns(db: Database): void {
   for (const column of ['start_limit', 'grants_limit'])
     if (!requests.has(column))
       db.run(`ALTER TABLE remote_agent_resource_start_requests ADD COLUMN ${column} TEXT`);
+}
+
+// A fire's `--config` and `--model` for its starts, beside the intent for the same reason:
+// an older binary parses `intent` strictly and would refuse a key it does not know.
+function addStartOverridesColumn(db: Database): void {
+  if (!columnNames(db, 'remote_agent_start_receipt_bindings').has('start_overrides')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN start_overrides TEXT');
+  }
 }
 
 // A receipt records the key a start named; its start request and the run point at the item.

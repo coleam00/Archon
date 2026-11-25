@@ -32,13 +32,13 @@ afterEach(async () => {
 function config(overrides: Partial<NativeScheduleConfig> = {}): NativeScheduleConfig {
   return {
     id: 'source-refresh',
-    programArguments: ['/opt/archon/bin/archon', 'trigger', 'fire', '--config', '/tmp/a&b.json'],
+    programArguments: ['/opt/archon/bin/archon', 'trigger', 'fire', '--binding', '/tmp/a&b.json'],
     workingDirectory: '/Users/example/Project <one>',
     archonHome: '/Users/example/.archon',
     path: '/Users/example/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin',
     schedule: { intervalSeconds: 37, runAtLoad: false },
     output: 'log',
-    removeCommand: 'archon trigger schedule remove --config /tmp/a&b.json',
+    removeCommand: 'archon trigger schedule remove --binding /tmp/a&b.json',
     ...overrides,
   };
 }
@@ -387,7 +387,7 @@ describe('Task Scheduler', () => {
         'C:\\Program Files\\archon\\archon.exe',
         'trigger',
         'fire',
-        '--config',
+        '--binding',
         'C:\\packs\\a&b 100%.json',
         'C:\\trailing\\',
       ],
@@ -407,7 +407,7 @@ describe('Task Scheduler', () => {
       'set "PATH=C:\\Users\\me\\.bun\\bin;C:\\Windows\\System32"',
     ]);
     expect(wrapper).toContain(
-      '(cd /d "C:\\Users\\me\\Project (one)" && "C:\\Program Files\\archon\\archon.exe" "trigger" "fire" "--config" "C:\\packs\\a&b 100%%.json" "C:\\trailing\\\\")'
+      '(cd /d "C:\\Users\\me\\Project (one)" && "C:\\Program Files\\archon\\archon.exe" "trigger" "fire" "--binding" "C:\\packs\\a&b 100%%.json" "C:\\trailing\\\\")'
     );
     expect(wrapper).toContain(`>> "C:\\home\\schedules\\${LABEL}.log" 2>&1`);
     expect(() =>
@@ -577,7 +577,7 @@ describe('reading installed jobs back', () => {
         '/opt/archon/bin/archon',
         'trigger',
         'fire',
-        '--config',
+        '--binding',
         posixConfig,
       ] as const;
       await installNativeSchedule(config({ archonHome, programArguments }), scheduler);
@@ -602,7 +602,7 @@ describe('reading installed jobs back', () => {
       'C:\\Program Files\\archon\\archon.exe',
       'trigger',
       'fire',
-      '--config',
+      '--binding',
       'C:\\packs\\a&b <c> 100% $x.json',
       'C:\\trailing\\',
     ] as const;
@@ -652,7 +652,7 @@ describe('a host with no supported scheduler', () => {
     expect(failure).toBeInstanceOf(NativeScheduleUnsupportedError);
     expect((failure as Error).message).toContain('every 37 seconds');
     expect((failure as Error).message).toContain(
-      "'/opt/archon/bin/archon' 'trigger' 'fire' '--config' '/tmp/a&b.json'"
+      "'/opt/archon/bin/archon' 'trigger' 'fire' '--binding' '/tmp/a&b.json'"
     );
     await expect(inspectNativeSchedule(config(), { platform: 'freebsd' })).rejects.toBeInstanceOf(
       NativeScheduleUnsupportedError

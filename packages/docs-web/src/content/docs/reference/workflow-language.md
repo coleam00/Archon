@@ -3179,7 +3179,7 @@ bindings:
 ```
 
 A binding sets at most one of `schedule:` (a timer binding, written as a file
-`archon trigger fire --config` reads), `event:` (an entry for the GitHub source plugin's
+`archon trigger fire --binding` reads), `event:` (an entry for the GitHub source plugin's
 `bindings` array), `run_ended:` and `asks_settled:`. With none it is a
 [fire-only binding](/guides/workflow-triggers/#start-a-binding-only-with-trigger-fire): the
 same file as a timer binding without a schedule, started only when a run or an operator fires

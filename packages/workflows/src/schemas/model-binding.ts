@@ -63,6 +63,19 @@ export const runTiersConfigSchema = z.partialRecord(tierNameSchema, runModelAlia
 export type RawAliasesConfig = z.infer<typeof rawAliasesConfigSchema>;
 export type RawTiersConfig = z.infer<typeof rawTiersConfigSchema>;
 
+/**
+ * The sparse transport shape one invocation accepts: `--model <tier|@alias>=<spec>`, already
+ * validated for name shape by its parser. Values stay raw specs, because a spec names a
+ * provider and model the install resolves at start, not at the moment it was typed.
+ */
+export const runModelOverridesSchema = z
+  .object({
+    tiers: z.partialRecord(tierNameSchema, z.string().trim().min(1)).optional(),
+    aliases: z.record(z.string().trim().min(1), z.string().trim().min(1)).optional(),
+  })
+  .strict();
+export type RunModelOverrides = z.infer<typeof runModelOverridesSchema>;
+
 export const resolvedRunModelOverridesSchema = z.object({
   tiers: runTiersConfigSchema.optional(),
   aliases: runAliasesConfigSchema.optional(),

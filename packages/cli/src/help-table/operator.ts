@@ -124,7 +124,7 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'fire',
-      spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>] [--input <name>=<value>] [--item <key> | --no-item] [--priority]',
+      spec: 'trigger fire --binding <file> [--config <file>] [--model <name>=<spec>]... [--delivery-id <key>] [--inputs <file>] [--input <name>=<value>] [--item <key> | --no-item] [--priority]',
       description: 'Record a configured start and drain its execution host',
       scopedFlags: [
         {
@@ -135,6 +135,14 @@ export const operatorHelp: HelpGroup = {
         {
           spec: '--input <name>=<value>',
           description: 'Set one event input as text; repeat per input. Not also in --inputs',
+        },
+        {
+          spec: '--config <file>',
+          description: "Run these starts on this run config layer, outranking the item's own",
+        },
+        {
+          spec: '--model <name>=<spec>',
+          description: 'Rebind a tier or an @alias for these starts; repeatable',
         },
       ],
     },
@@ -183,7 +191,7 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'schedule',
-      spec: 'trigger schedule <install|remove|status> --config <file>',
+      spec: 'trigger schedule <install|remove|status> --binding <file>',
       description: "Manage the binding's OS timer (launchd, systemd user timer, Task Scheduler)",
     },
     {

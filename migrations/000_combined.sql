@@ -766,6 +766,9 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS refusal
 -- the count is derived from these rows, so no counter has to agree with them.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS start_limit TEXT;
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS grants_limit TEXT;
+-- A fire's own choices for its starts (`trigger fire --config`, `--model`), kept beside
+-- `intent` because an older binary parses that column strictly.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS start_overrides TEXT;
 ALTER TABLE remote_agent_resource_start_requests ADD COLUMN IF NOT EXISTS start_limit TEXT;
 ALTER TABLE remote_agent_resource_start_requests ADD COLUMN IF NOT EXISTS grants_limit TEXT;
 

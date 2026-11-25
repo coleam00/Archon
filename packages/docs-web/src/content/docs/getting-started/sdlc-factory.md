@@ -47,6 +47,6 @@ On your machine it keeps state documents (`archon state list --prefix work/`), w
 
 ## Pause or stop it
 
-- **Stop new runs.** Remove the schedules (`archon trigger schedule remove --config <file>`, or the cron or systemd entry) and the intake webhook bindings. Removing a schedule does not cancel work already accepted.
+- **Stop new runs.** Remove the schedules (`archon trigger schedule remove --binding <file>`, or the cron or systemd entry) and the intake webhook bindings. Removing a schedule does not cancel work already accepted.
 - **Stop runs in flight.** Runs start follow-ups by firing the binding files directly: the engine starts a build run when an intake run routes its issue, a pick and a merge run when a build run ends, a build round when a merge run returns its pull request, a merge run when a check completes or its ask is answered, and a discoveries pass after a merge. A pick fires a build run for each waiting issue, and the merge backstop a merge run for each waiting pull request. A build pick that sends an issue back to intake launches that intake run itself. So removing schedules alone does not stop a chain. List the runs with `archon workflow status --all` and `archon workflow cancel` or `archon workflow abandon` them.
 - **Stop one item.** Answer its attention item with `park`, where the item offers it. A paused run waiting on you does nothing until you answer.

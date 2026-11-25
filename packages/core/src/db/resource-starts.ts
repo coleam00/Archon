@@ -39,6 +39,7 @@ import {
   resourceStartBindingIntentSchema,
   checkoutHandoffSchema,
   forgeRefusalSchema,
+  startOverridesSchema,
   type ForgeRefusal,
 } from '@archon/workflows/schemas/resource-start';
 import { countStartLimits, storedLimitFields, type StartLimitColumns } from './start-limits';
@@ -313,28 +314,43 @@ export function parseStoredJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
+/** The columns `storableIntent` split a stored binding's intent across. */
+interface StoredIntentColumns {
+  intent: unknown;
+  eventInputNames: unknown;
+  checkoutFrom: unknown;
+  itemKey: unknown;
+  startLimit: unknown;
+  grantsLimit: unknown;
+  startOverrides: unknown;
+}
+
 /** Reverses `storableIntent` in `./start-receipt-writes`. */
-function readStoredIntent(
-  intent: unknown,
-  eventInputNames: unknown,
-  checkoutFrom: unknown,
-  itemKey: unknown,
-  startLimit: unknown,
-  grantsLimit: unknown
-): ResourceStartBindingIntent {
+function readStoredIntent(columns: StoredIntentColumns): ResourceStartBindingIntent {
+  const { eventInputNames, checkoutFrom, itemKey, startLimit, grantsLimit, startOverrides } =
+    columns;
   const parsed = {
-    ...resourceStartBindingIntentSchema.parse(parseStoredJson(intent)),
+    ...resourceStartBindingIntentSchema.parse(parseStoredJson(columns.intent)),
     ...storedLimitFields(startLimit, grantsLimit),
   };
   const stored = withEventInputs(
     typeof itemKey === 'string' ? { ...parsed, itemKey } : parsed,
     eventInputNames
   );
-  // A malformed hand-off throws like a malformed intent: read as absent, the start would
-  // run on the branch with no commit pin.
+  // A malformed override throws like a malformed intent: read as absent, the start would
+  // run on a config the operator did not choose.
+  const overridden =
+    startOverrides == null
+      ? stored
+      : { ...stored, startOverrides: startOverridesSchema.parse(parseStoredJson(startOverrides)) };
+  // A malformed hand-off throws for the same reason: read as absent, the start would run
+  // on the branch with no commit pin.
   return checkoutFrom == null
-    ? stored
-    : { ...stored, checkoutFrom: checkoutHandoffSchema.parse(parseStoredJson(checkoutFrom)) };
+    ? overridden
+    : {
+        ...overridden,
+        checkoutFrom: checkoutHandoffSchema.parse(parseStoredJson(checkoutFrom)),
+      };
 }
 
 function withEventInputs(
@@ -400,14 +416,15 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
     intent:
       row.intent == null
         ? null
-        : readStoredIntent(
-            row.intent,
-            row.event_input_names,
-            row.checkout_from,
-            row.item_key,
-            row.start_limit,
-            row.grants_limit
-          ),
+        : readStoredIntent({
+            intent: row.intent,
+            eventInputNames: row.event_input_names,
+            checkoutFrom: row.checkout_from,
+            itemKey: row.item_key,
+            startLimit: row.start_limit,
+            grantsLimit: row.grants_limit,
+            startOverrides: row.start_overrides,
+          }),
     requestStatus,
     disposition: requestDisposition,
   };

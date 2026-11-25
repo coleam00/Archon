@@ -130,13 +130,13 @@ async function fixture() {
     await installNativeSchedule(
       {
         id: 'timer',
-        programArguments: ['/opt/archon/bin/archon', 'trigger', 'fire', '--config', path],
+        programArguments: ['/opt/archon/bin/archon', 'trigger', 'fire', '--binding', path],
         workingDirectory: project,
         archonHome,
         path: '/usr/bin:/bin',
         schedule: { intervalSeconds: 1800, runAtLoad: false },
         output: 'log',
-        removeCommand: `archon trigger schedule remove --config ${path}`,
+        removeCommand: `archon trigger schedule remove --binding ${path}`,
       },
       schedules
     );
@@ -431,7 +431,7 @@ describe('schedule finds the binding timer however ARCHON_HOME is spelled', () =
           host,
           'schedule',
           [operation],
-          { config: path },
+          { binding: path },
           { schedules: base.schedules }
         );
       } finally {

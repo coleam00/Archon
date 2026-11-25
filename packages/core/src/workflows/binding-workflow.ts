@@ -121,7 +121,7 @@ export function resolveBindingInputs(
 
 /**
  * What a binding supplies beside `launch.inputs`: the names its `on` mapping or event
- * fills in (none for a timer, whose job runs `trigger fire --config` alone), or
+ * fills in (none for a timer, whose job runs `trigger fire --binding` alone), or
  * `'at-fire'` for a fire-only binding, whose `trigger fire --inputs` may supply any name.
  */
 export type SuppliedAtStart = { mapped: readonly string[] } | 'at-fire';

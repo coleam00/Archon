@@ -968,7 +968,7 @@ nodes:
   const queueConfig = config('queue'),
     skipConfig = config('skip');
   async function fire(path: string): Promise<ResourceStartDisposition> {
-    const result = await cli(f, ['trigger', 'fire', '--config', path]);
+    const result = await cli(f, ['trigger', 'fire', '--binding', path]);
     expect(result, result.output + result.error).toMatchObject({ code: 0 });
     return z
       .object({ bindings: z.tuple([z.object({ disposition: resourceStartDispositionSchema })]) })
@@ -1264,7 +1264,7 @@ nodes:
       })
     );
     const fired = await commandResult(() =>
-      triggerCommand(host, 'fire', [], { config }, { env: {} })
+      triggerCommand(host, 'fire', [], { binding: config }, { env: {} })
     );
     expect(fired, fired.output + fired.error).toMatchObject({ code: 0 });
     const store = host.deps.store;

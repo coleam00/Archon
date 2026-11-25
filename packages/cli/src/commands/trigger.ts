@@ -30,9 +30,12 @@ import {
   RUN_SOURCE_ACTOR,
   requestingRun,
   type SourceReceiptInput,
+  type StartOverrides,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
 import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
+import { parseRunModelAssignments } from '@archon/workflows/model-validation';
+import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
 import { releaseQueuedLaunchSource } from '@archon/core/workflows/queued-launch-source';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
@@ -82,7 +85,12 @@ export function drainHost(
 }
 
 type TriggerOptions = {
+  /** The binding file a fire or a schedule describes (`--binding`). */
+  binding?: string;
+  /** A run config layer for the starts a fire creates (`--config`). */
   config?: string;
+  /** `--model <tier|@alias>=<model>`, repeatable, for the starts a fire creates. */
+  model?: string[];
   host?: string;
   owner?: string;
   yes?: boolean;
@@ -330,6 +338,46 @@ async function readEventInputs(
   return { ...fromFile, ...assigned };
 }
 
+/**
+ * The choices a fire makes for the starts it records: a config layer (`--config`) and
+ * tier/`@alias` rebindings (`--model`). Both are read here — a typo fails the fire, not the
+ * start it would have recorded a minute later — and stored as the operator typed them, so a
+ * retry of that start needs no flags.
+ */
+async function fireStartOverrides(
+  options: TriggerOptions,
+  layerPath: string | undefined
+): Promise<StartOverrides | undefined> {
+  const models =
+    options.model === undefined || options.model.length === 0
+      ? undefined
+      : parseRunModelAssignments(options.model);
+  const configPath = layerPath === undefined ? undefined : resolve(layerPath);
+  if (configPath !== undefined) await loadWorkflowRunConfigFile(configPath);
+  if (configPath === undefined && models === undefined) return undefined;
+  return {
+    ...(configPath === undefined ? {} : { config: { path: configPath } }),
+    ...(models === undefined ? {} : { models }),
+  };
+}
+
+/**
+ * The binding file a fire describes.
+ *
+ * `--binding` is the name. `--config` used to be, and an installed timer's job still spells it
+ * that way, so a fire that gives `--config` alone reads it as the binding and says so once on
+ * stderr: breaking every timer on upgrade is not worth the tidy name. A fire that gives both
+ * means the new meaning of `--config` — a run config layer — and is not a timer.
+ */
+function fireBindingFile(options: TriggerOptions): string | undefined {
+  if (options.binding !== undefined) return options.binding;
+  if (options.config === undefined) return undefined;
+  process.stderr.write(
+    `Reading --config '${options.config}' as the binding file, as an installed timer writes it. Pass it as --binding; --config now names a run config layer.\n`
+  );
+  return options.config;
+}
+
 async function triggerFire(
   host: WorkflowHost,
   options: TriggerOptions,
@@ -337,21 +385,30 @@ async function triggerFire(
   env: NodeJS.ProcessEnv,
   wait: PreparationWait
 ): Promise<void> {
-  if (!options.config) throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
+  const bindingFile = fireBindingFile(options);
+  if (bindingFile === undefined)
+    throw new Error(
+      'Usage: archon trigger fire --binding <timer-binding.json> [--config <run-config.yaml>] [--model <tier|@alias>=<model>]'
+    );
   if (options.deliveryId !== undefined && options.deliveryId.length === 0)
     throw new Error('--delivery-id must not be empty.');
   const eventInputs = await readEventInputs(options);
   assertItemOptions(options);
-  const config = await loadFireConfig(options.config);
+  const config = await loadFireConfig(bindingFile);
+  // A `--config` that named the binding file is not also a layer; see `fireBindingFile`.
+  const startOverrides = await fireStartOverrides(
+    options,
+    options.binding === undefined ? undefined : options.config
+  );
   // A fire has no ended or asking run to take the checkout from; starting the stage anyway would
   // cut it from the base branch, which is the one place this binding must never run.
   if (config.on?.runEnded?.checkout !== undefined)
     throw new Error(
-      `${options.config} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
+      `${bindingFile} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
     );
   if (config.on?.asksSettled?.checkout !== undefined)
     throw new Error(
-      `${options.config} takes its checkout from the run that left the asks (on.asksSettled.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on that checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <holder-run-id> --item <key>, naming the run that holds the checkout: metadata.asks_checkout.handoff.runId in archon workflow get <asking-run-id> --json, which after a read-only asking stage is the run it was given, not the asking run. When asks_checkout records a refusal, or none, no checkout is left: run the asking workflow again on the item. Pass an --input <name>=<value> for each input the file maps (${mappedNames(config.on.asksSettled.inputs)}): --adopt carries the checkout, not the answers. Read the answers from archon workflow runs --item <key> --json (its answers of kind 'ask': the asking run's for an input read from { answers: true }, all of them for { item: answers }) and the asking run's inputs from archon workflow get <asking-run-id> --json.`
+      `${bindingFile} takes its checkout from the run that left the asks (on.asksSettled.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on that checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <holder-run-id> --item <key>, naming the run that holds the checkout: metadata.asks_checkout.handoff.runId in archon workflow get <asking-run-id> --json, which after a read-only asking stage is the run it was given, not the asking run. When asks_checkout records a refusal, or none, no checkout is left: run the asking workflow again on the item. Pass an --input <name>=<value> for each input the file maps (${mappedNames(config.on.asksSettled.inputs)}): --adopt carries the checkout, not the answers. Read the answers from archon workflow runs --item <key> --json (its answers of kind 'ask': the asking run's for an input read from { answers: true }, all of them for { item: answers }) and the asking run's inputs from archon workflow get <asking-run-id> --json.`
     );
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
@@ -375,6 +432,7 @@ async function triggerFire(
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
+    ...(startOverrides === undefined ? {} : { startOverrides }),
     bindingRevision: triggerRevision(config),
   };
   const receipt = await host.deps.store
@@ -707,17 +765,17 @@ async function scheduleTrigger(
 ): Promise<void> {
   const operation = args[0];
   if (
-    !options.config ||
+    !options.binding ||
     (operation !== 'install' && operation !== 'remove' && operation !== 'status')
   )
     throw new Error(
-      'Usage: archon trigger schedule <install|remove|status> --config <timer-binding.json>'
+      'Usage: archon trigger schedule <install|remove|status> --binding <timer-binding.json>'
     );
-  const config = await loadFireConfig(options.config);
+  const config = await loadFireConfig(options.binding);
   await scheduleTimer({
     operation,
     config,
-    configPath: resolve(options.config),
+    configPath: resolve(options.binding),
     schedules,
     assertKnownRunAsUser: () => assertKnownRunAsUser(host, config),
   });

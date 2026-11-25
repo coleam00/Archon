@@ -649,6 +649,10 @@ describe('durable resource starts', () => {
           },
           eventInputs: { count: 42 },
           checkoutFrom: handoff,
+          startOverrides: {
+            config: { path: '/srv/archon/one-off.yaml' },
+            models: { tiers: { large: 'pi/sonnet' }, aliases: { '@reviewer': 'pi/haiku' } },
+          },
         },
       ],
     });
@@ -657,13 +661,14 @@ describe('durable resource starts', () => {
       intent: string;
       event_input_names: string | null;
       checkout_from: string | null;
+      start_overrides: string | null;
     };
     const readStored = (): StoredBinding | null => {
       const raw = new Database(join(root, 'archon.db'), { readonly: true });
       try {
         return raw
           .query<StoredBinding, SQLQueryBindings[]>(
-            'SELECT intent, event_input_names, checkout_from FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
+            'SELECT intent, event_input_names, checkout_from, start_overrides FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
           )
           .get(receiptId);
       } finally {
@@ -678,11 +683,22 @@ describe('durable resource starts', () => {
     expect(shipped.launch.isolation).toEqual({ kind: 'worktree', branch: 'archon/build-1' });
     expect(stored?.event_input_names).toBe('["count"]');
     expect(JSON.parse(stored?.checkout_from ?? 'null')).toEqual(handoff);
+    // The fire's choices are beside the intent, never in it: the frozen reader above would
+    // refuse a start it cannot parse, and receipts are never deleted.
+    expect(shipped).not.toHaveProperty('startOverrides');
+    expect(JSON.parse(stored?.start_overrides ?? 'null')).toEqual({
+      config: { path: '/srv/archon/one-off.yaml' },
+      models: { tiers: { large: 'pi/sonnet' }, aliases: { '@reviewer': 'pi/haiku' } },
+    });
     // This version reads the event inputs back apart from the literals.
     const restored = (await getStartReceipt(receiptId))?.bindings[0]?.intent;
     expect(restored?.launch.inputs).toEqual({ mode: 'nightly' });
     expect(restored?.eventInputs).toEqual({ count: 42 });
     expect(restored?.checkoutFrom).toEqual(handoff);
+    expect(restored?.startOverrides).toEqual({
+      config: { path: '/srv/archon/one-off.yaml' },
+      models: { tiers: { large: 'pi/sonnet' }, aliases: { '@reviewer': 'pi/haiku' } },
+    });
 
     // An intent rebuilt from its trigger file is stored the same way.
     const { claimStartBindingPreparation, replaceStartBindingIntent } = createWorkflowStore();
@@ -700,6 +716,13 @@ describe('durable resource starts', () => {
     expect(rebuilt.launch.inputs).toEqual({ mode: 'nightly', count: 7 });
     expect(stored?.event_input_names).toBe('["count"]');
     expect(JSON.parse(stored?.checkout_from ?? 'null')).toEqual(handoff);
+
+    // The fire's choices are this start's, not its binding file's, so rewriting the intent
+    // from the file leaves them alone.
+    expect((await getStartReceipt(receiptId))?.bindings[0]?.intent?.startOverrides).toEqual({
+      config: { path: '/srv/archon/one-off.yaml' },
+      models: { tiers: { large: 'pi/sonnet' }, aliases: { '@reviewer': 'pi/haiku' } },
+    });
   });
 
   test('preparation completion and admission share one commit', async () => {

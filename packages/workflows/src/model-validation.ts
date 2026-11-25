@@ -35,6 +35,7 @@ import {
   type ResolvedAiProfile,
   type ResolvedRunModelOverrides,
   type RunModelBindingsMetadata,
+  type RunModelOverrides,
   type TierName,
 } from './schemas/model-binding';
 
@@ -52,10 +53,7 @@ export type {
 };
 
 /** Sparse transport shape accepted by one workflow invocation. */
-export interface RunModelOverrides {
-  tiers?: Partial<Record<TierName, string>>;
-  aliases?: Record<string, string>;
-}
+export type { RunModelOverrides };
 
 export const RUN_MODEL_BINDINGS_METADATA_KEY = 'model_bindings';
 

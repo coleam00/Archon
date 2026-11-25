@@ -178,16 +178,16 @@ nodes:
 Test the binding once before installing it:
 
 ```bash
-archon trigger fire --config /Users/alice/.archon/triggers/repository-refresh.json
+archon trigger fire --binding /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
 The command returns a durable receipt and disposition, then runs accepted work in the background. Install the timer after the one-shot request succeeds:
 
 ```bash
-archon trigger schedule install --config /Users/alice/.archon/triggers/repository-refresh.json
+archon trigger schedule install --binding /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-The timer belongs to the operating system's own scheduler: a LaunchAgent on macOS, a systemd user timer on Linux, and a Task Scheduler task on Windows. Archon installs only jobs named `com.archon.trigger.*` (on Windows, under the `\Archon\` task folder). Each job runs the same `trigger fire --config <file>` command as the installing user, with the absolute executable and arguments, the working directory, `ARCHON_HOME`, and the `PATH` of the shell that ran `install`, so scheduled runs find `bun`, `uv`, `gh`, git credential helpers, and provider CLIs where your terminal finds them. A scheduler's default `PATH` lacks them; launchd's is only `/usr/bin:/bin:/usr/sbin:/sbin`. Its output is appended to `ARCHON_HOME/schedules/com.archon.trigger.<id>.log`, and `archon trigger schedule status --config <file>` reports whether the timer is installed and when it last ran. See [trigger schedules](/reference/cli/#trigger-schedules) for what each platform writes.
+The timer belongs to the operating system's own scheduler: a LaunchAgent on macOS, a systemd user timer on Linux, and a Task Scheduler task on Windows. Archon installs only jobs named `com.archon.trigger.*` (on Windows, under the `\Archon\` task folder). Each job runs the same `trigger fire --binding <file>` command as the installing user, with the absolute executable and arguments, the working directory, `ARCHON_HOME`, and the `PATH` of the shell that ran `install`, so scheduled runs find `bun`, `uv`, `gh`, git credential helpers, and provider CLIs where your terminal finds them. A scheduler's default `PATH` lacks them; launchd's is only `/usr/bin:/bin:/usr/sbin:/sbin`. Its output is appended to `ARCHON_HOME/schedules/com.archon.trigger.<id>.log`, and `archon trigger schedule status --binding <file>` reports whether the timer is installed and when it last ran. See [trigger schedules](/reference/cli/#trigger-schedules) for what each platform writes.
 
 A tick's environment holds what the scheduler gives every job, plus that working directory, `ARCHON_HOME`, and the recorded `PATH`. Nothing else from your shell comes along. Archon loads `ARCHON_HOME/.env` at each tick, as it does at any start, so put any other variable a run needs there. Credentials stay where their provider keeps them: the `gh` login, Git Credential Manager, a provider CLI's own login. A credential that exists only as a variable in your shell is not there: keep it with its provider.
 
@@ -214,7 +214,7 @@ archon trigger inspect 1f3be5de-4e63-4da2-b352-20d95ba83b37
 Remove future firings with the same configuration file:
 
 ```bash
-archon trigger schedule remove --config /Users/alice/.archon/triggers/repository-refresh.json
+archon trigger schedule remove --binding /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
 Removing a schedule does not cancel work that Archon already accepted. To change its interval or startup behavior, or to record a changed `PATH`, remove the existing job before installing again. A schedule installed before Archon recorded `PATH` needs the same remove and install once; until then its runs cannot find tools outside launchd's default `PATH`. A macOS schedule installed before Archon wrote its output to a log needs it once too, and until then `status` cannot say when it last ran.
@@ -236,7 +236,7 @@ For plain schedules, use the trigger workflow to read the current source state w
 Use this on a host with no scheduler `schedule install` supports, or when you prefer your own. `schedule install` on such a host prints the exact command to schedule by hand. Configure the scheduler to run the same one-shot command with an absolute executable path, an absolute config path, the configured working directory, `ARCHON_HOME`, and a `PATH` that contains the tools your workflows run, such as `bun`, `uv`, `gh`, and provider CLIs:
 
 ```text
-/opt/archon/bin/archon trigger fire --config /home/alice/.archon/triggers/repository-refresh.json
+/opt/archon/bin/archon trigger fire --binding /home/alice/.archon/triggers/repository-refresh.json
 ```
 
 A server with `ARCHON_TRIGGER_HOST` set already drains its host. Without a running server, schedule a cold drain for a host that receives webhook starts but has no timer binding:
@@ -249,7 +249,7 @@ The host scheduler owns login, sleep, wake, missed-time, and credential-loading 
 
 ## Start a binding only with `trigger fire`
 
-A binding file without `schedule` is fire-only: no clock starts it. A workflow node, a script or an operator starts it with `archon trigger fire --config <file>`, and the start goes through the same receipt, resource admission, capacity, overlap policy and deduplication as a scheduled one. Use it for a workflow that other runs start, such as a follow-up a run requests when it finishes. A fire from inside a node records the requesting run on the receipt (see [preparation and retained records](#preparation-and-retained-records)).
+A binding file without `schedule` is fire-only: no clock starts it. A workflow node, a script or an operator starts it with `archon trigger fire --binding <file>`, and the start goes through the same receipt, resource admission, capacity, overlap policy and deduplication as a scheduled one. Use it for a workflow that other runs start, such as a follow-up a run requests when it finishes. A fire from inside a node records the requesting run on the receipt (see [preparation and retained records](#preparation-and-retained-records)).
 
 ```json
 {
@@ -281,7 +281,7 @@ A node that runs `archon trigger fire`, or starts other work through the CLI, ca
 **`archon` on `PATH` is another install.** The node fails with `Unknown command: trigger`, or another unknown command or flag, while the same command works in your terminal. A node finds `archon` on its own `PATH`, and a scheduled run has the `PATH` recorded when its schedule was [installed](#configure-a-native-schedule), so an older global install, such as an `archon.exe` from an earlier Windows setup, can come before the install running the workflow. Name the install's own CLI instead:
 
 1. In a `runtime: bun` script, call `trigger.fire` from [`archon:script`](/guides/script-nodes/#the-script-api). It already uses the running install's CLI.
-2. Anywhere else, run the argv in `ARCHON_CLI_COMMAND` (see [workflow host integration](/reference/forge/#workflow-host-integration-and-audit)). In a bash node with `jq`: `cli=(); while IFS= read -r arg; do cli+=("$arg"); done < <(jq -r '.[]' <<<"$ARCHON_CLI_COMMAND"); "${cli[@]}" trigger fire --config <file>`.
+2. Anywhere else, run the argv in `ARCHON_CLI_COMMAND` (see [workflow host integration](/reference/forge/#workflow-host-integration-and-audit)). In a bash node with `jq`: `cli=(); while IFS= read -r arg; do cli+=("$arg"); done < <(jq -r '.[]' <<<"$ARCHON_CLI_COMMAND"); "${cli[@]}" trigger fire --binding <file>`.
 3. Otherwise, name the CLI by absolute path.
 
 A container execution receives no `ARCHON_CLI_COMMAND`, so start the work from a node that runs on the host.
@@ -291,6 +291,19 @@ A container execution receives no `ARCHON_CLI_COMMAND`, so start the work from a
 The work a node fires does not use the calling run's credential. The fire reads the remote (default-branch detection, the item's landing branch, the base branch its definitions come from) with the binding's `runAsUserId` credential. The process that executes the started run carries that user's credential too, so the git Archon runs before the first node (the landing check, worktree fetches, submodules), the forge check and the nodes all use it, for `gh` and for git over HTTPS to `https://github.com`. So only the run-as user needs a token, connected with [`archon auth github`](/reference/cli/#auth-github). [`archon trigger whoami`](#find-your-run-as-user-id) prints the user for your CLI identity.
 
 When the run-as user has no token, the fire and the started run are scrubbed as well, and nothing falls back to the calling process's or the host's login. A fired start that reads its definitions from the base branch of a private repository over HTTPS fails before admission with `Cannot read <ref>, the base branch this run's definitions come from: ...`, or `Cannot read the base branch for this run's definitions: ...` when the base is detected from the remote. A workflow that declares forge needs is refused before admission with `credential environment GH_TOKEN or GITHUB_TOKEN is empty`, and others fail at their first GitHub command that needs authentication. A public repository still fetches anonymously, and SSH remotes still use the host's SSH keys. `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true` is not a fix for one node; it lets every unconnected user's run on the install use the shared token.
+
+### Choose the config and models for one fire
+
+A fire can decide, for the starts it creates, what a lane would otherwise bake into the binding file. `--config <file>` gives those starts a [run config layer](/reference/configuration/#per-run-config-files), which outranks the config the item carries exactly as `workflow run --config` does; `--model <tier|@alias>=<spec>`, repeatable, rebinds a tier or one of your aliases for them. A fire with neither behaves as before: the config the item carries, else the binding's `launch.configSource`.
+
+```bash
+# one heavier round on an item, without touching the lane's binding file
+archon trigger fire --binding build-queue.json --item issue-42 \
+  --model large=requesty/anthropic-claude-sonnet \
+  --config /srv/archon/one-off-config.yaml
+```
+
+Both are read when the fire runs, so a bad path or a malformed `name=spec` fails the fire instead of the start it would have recorded a moment later, and both are recorded with the start: `trigger inspect` shows them, and `trigger execute` or a retry of that start uses them without repeating the flags. Nothing about them reaches the binding file, the pack or a later fire, and a webhook source plugin cannot set them — a plugin's binding is a template for many starts, not a lever on one.
 
 ## Put a start on the item its event names
 
@@ -307,7 +320,7 @@ In a fire-only file, `item` sits beside `binding`, and `field` is a key of the f
 }
 ```
 
-`archon trigger fire --config widgets-build-round.json --inputs inputs.json` with `{"number": 42}` in `inputs.json` starts a run on item `issue-42`. The fired start's item is chosen in this order:
+`archon trigger fire --binding widgets-build-round.json --inputs inputs.json` with `{"number": 42}` in `inputs.json` starts a run on item `issue-42`. The fired start's item is chosen in this order:
 
 1. `--item <key>`, or no item with `--no-item`, when the fire passes it. The mapping is not read.
 2. The binding's `item` mapping. A run that fires the binding while on another item still starts on the mapped item.
@@ -414,7 +427,7 @@ The values are resolved when the run completes and frozen into the start's recei
 A result pointer that names nothing in the result starts nothing. The run still completes, because its own work succeeded, but the command that ended it prints that the next stage was not started, naming the file and the pointer, and `archon trigger list` shows the receipt as `unmatched` with the same `reason`. `archon trigger check` cannot catch this: whether a pointer resolves depends on what the run returned. The receipt is the end's one hand-off, so fixing the file does not start the owed stage. Fix the file, then start the stage by hand with the inputs the binding should have passed, written to a JSON file:
 
 ```bash
-archon trigger fire --config ~/.archon/triggers/build-after-plan.json --item <key> --inputs inputs.json
+archon trigger fire --binding ~/.archon/triggers/build-after-plan.json --item <key> --inputs inputs.json
 ```
 
 A run on an item is refused before it starts, naming the file, when a run-ended binding its end could fire in its project is broken: the started workflow does not exist or would refuse the binding's inputs (an input the binding maps or sets in `launch.inputs` that it does not declare, or a required input neither supplies), the ended workflow does not declare the binding's outcome or an input it reads, or, for a binding with [`checkout: "ended-run"`](#work-in-the-checkout-the-ended-run-left), either workflow pins `worktree.enabled: false`. The run is cancelled before its first node, so a binding that names a missing stage is found before the stage feeding it does any work. With `--detach`, the refusal is the command's result and the run is cancelled before the child starts. `archon trigger check` reports these problems, and also a `launch.cwd` that does not exist, a binding that starts the workflow that ended, and two files that start the same stage, which no run is refused for.
@@ -729,7 +742,7 @@ A binding starts once for a set of asks that meets all of these:
 The values are resolved when the set settles and frozen into the start's receipt, so an answer given on the item later is not in them, until the trigger file changes while the start waits and it is rebuilt ([check bindings after an update](#check-bindings-after-an-update)). A pointer that names nothing, a run whose record is gone when a binding reads its result or inputs, or an ask on the item this binary cannot read when a binding reads `{ "item": "answers" }`, writes the receipt as `unmatched` with the reason and starts nothing. The command that recorded the answer prints it with the `archon trigger inspect` command for the receipt, and so it does for a binding whose preparation failed, for example because the stage it names is gone. The receipt is the settlement's one hand-off, so fixing the file does not start the owed stage, and `trigger fire` does not rebuild the settlement's inputs. Fix the file, then start the stage by hand with the inputs the binding should have passed, written to a JSON file: the answers as `archon workflow runs --item <key> --json` lists them (for `{ "item": "answers" }`, all its `answers` entries of kind `ask`), and the asking run's inputs and result.
 
 ```bash
-archon trigger fire --config ~/.archon/triggers/build-after-answers.json --item <key> --inputs inputs.json
+archon trigger fire --binding ~/.archon/triggers/build-after-answers.json --item <key> --inputs inputs.json
 ```
 
 A binding with `checkout`, which a fire refuses, is recovered [as below](#work-in-the-checkout-the-asking-run-left).
@@ -1410,7 +1423,7 @@ jq -c '.[]' "$poll_dir/response.json" > "$poll_dir/items.jsonl"
 while IFS= read -r item; do
   delivery_id=$(printf '%s' "$item" | jq -er '[.id, .version] | @base64')
   printf '%s' "$item" | jq -cS '{order_id: .id}' > "$poll_dir/inputs.json"
-  /opt/archon/bin/archon trigger fire --config /srv/archon/polled-orders.json \
+  /opt/archon/bin/archon trigger fire --binding /srv/archon/polled-orders.json \
     --delivery-id "$delivery_id" --inputs "$poll_dir/inputs.json"
 done < "$poll_dir/items.jsonl"
 /opt/archon/bin/archon trigger drain --host orders-host

@@ -16,9 +16,25 @@ export interface WebhookSourceRequest {
   receivedAt: string;
 }
 
+/**
+ * A source plugin's bindings carry no `startOverrides`. A run config layer names `env:`
+ * values and provider settings for a start, and `--model` rebinds its tiers, so choosing
+ * either is the operator's decision about that start rather than something a webhook
+ * payload's handler may take. `trigger fire --config|--model` is the only producer, and a
+ * plugin that sends the field is refused rather than having it dropped.
+ */
+const sourcePluginAcceptanceSchema = sourceReceiptAcceptanceSchema.refine(
+  acceptance => acceptance.bindings.every(binding => binding.startOverrides === undefined),
+  {
+    message:
+      "a source plugin's binding cannot choose a run config or models; only `trigger fire --config` and `--model` set them",
+    path: ['bindings'],
+  }
+);
+
 export const webhookSourceResultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('rejected'), reason: z.literal('unauthenticated') }).strict(),
-  z.object({ status: z.literal('received'), acceptance: sourceReceiptAcceptanceSchema }).strict(),
+  z.object({ status: z.literal('received'), acceptance: sourcePluginAcceptanceSchema }).strict(),
 ]);
 export type WebhookSourceResult = z.infer<typeof webhookSourceResultSchema>;
 
@@ -166,6 +182,29 @@ export const sourceObservationSchema = z
   })
   .strict();
 export type SourceObservation = z.infer<typeof sourceObservationSchema>;
+
+/**
+ * The same rule for the acceptances an observing source returns. A read may hand over many
+ * starts, so every acceptance is checked, including the per-issue ones a label read makes.
+ */
+export const sourcePluginObservationSchema = sourceObservationSchema.superRefine(
+  (observation, ctx) => {
+    const acceptances = [
+      ...observation.acceptances,
+      ...observation.labelAcceptances.map(entry => entry.acceptance),
+    ];
+    const chosen = (acceptance: (typeof acceptances)[number]) =>
+      acceptance.bindings.some(binding => binding.startOverrides !== undefined);
+    if (!acceptances.some(chosen)) return;
+    ctx.addIssue({
+      code: 'custom',
+      path: ['acceptances'],
+      message:
+        "a source plugin's binding cannot choose a run config or models; only `trigger fire --config` and `--model` set them",
+    });
+  }
+);
+
 /**
  * What a plugin's `observe` returns: `openedIssueFailures` only when the engine passed
  * `openedIssues`, so an engine that predates them still parses the result.

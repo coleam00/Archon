@@ -258,7 +258,7 @@ function generate(
   if (kinded.kind === 'asks_settled' || kinded.kind === 'run_ended')
     return onFiles(id, kinded, pack, target, intent, fromRun);
   const path = bindingPath(target, id);
-  // A timer and a fire-only binding are the same `trigger fire --config` file; only the
+  // A timer and a fire-only binding are the same `trigger fire --binding` file; only the
   // timer carries a schedule.
   const fireConfig = {
     version: 1,
@@ -525,8 +525,8 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
     );
     for (const timer of timers) {
       lines.push(
-        `  archon trigger fire --config ${shellQuote(timer.path)}`,
-        `  archon trigger schedule install --config ${shellQuote(timer.path)}`
+        `  archon trigger fire --binding ${shellQuote(timer.path)}`,
+        `  archon trigger schedule install --binding ${shellQuote(timer.path)}`
       );
     }
   }
@@ -536,7 +536,8 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
       '',
       'Fire-only bindings. Nothing schedules these; a run or an operator starts each with:'
     );
-    for (const fire of fires) lines.push(`  archon trigger fire --config ${shellQuote(fire.path)}`);
+    for (const fire of fires)
+      lines.push(`  archon trigger fire --binding ${shellQuote(fire.path)}`);
   }
   if (events.length > 0) {
     lines.push(

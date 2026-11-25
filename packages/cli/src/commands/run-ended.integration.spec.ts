@@ -345,7 +345,7 @@ describe('a run-ended binding', () => {
       await fixture.cli([
         'trigger',
         'fire',
-        '--config',
+        '--binding',
         fireA,
         '--item',
         'issue-1',
@@ -1137,7 +1137,7 @@ describe("an item's later starts", () => {
     await fixture.cli([
       'trigger',
       'fire',
-      '--config',
+      '--binding',
       configuredBinding(fixture, 'again', other),
       '--item',
       'issue-1',
@@ -1203,7 +1203,7 @@ describe("an item's later starts", () => {
     const fired = await fixture.attempt([
       'trigger',
       'fire',
-      '--config',
+      '--binding',
       fixture.fireConfig('again', 'stage-b', 'stage-b'),
       '--item',
       'issue-1',
@@ -1234,6 +1234,98 @@ describe("an item's later starts", () => {
       `Run ${first?.id}, the most recent on item 'issue-1'`
     );
     expect(fixture.rows(RUNS_SQL)).toHaveLength(1);
+  }, 90_000);
+
+  test('a fire runs its starts on the config and models it names, and records both with the start', async () => {
+    const fixture = await makeFixture('fire-overrides');
+    const declared = join(fixture.root, 'declared.yaml');
+    writeFileSync(declared, 'env:\n  CONFIG_PROOF: declared\n');
+    const oneOff = join(fixture.root, 'one-off.yaml');
+    writeFileSync(oneOff, 'env:\n  CONFIG_PROOF: one-off\n');
+    const binding = configuredBinding(fixture, 'override', declared);
+    // A model rebinding needs a provider to resolve against; the start's node is a bash one,
+    // so no agent is ever spawned for it.
+    writeFileSync(join(fixture.root, 'project', '.archon', 'config.yaml'), 'assistant: codex\n');
+    const fire = (extra: string[]) =>
+      fixture.attempt([
+        'trigger',
+        'fire',
+        '--binding',
+        binding,
+        '--item',
+        'issue-1',
+        '--inputs',
+        inputsFile(fixture),
+        ...extra,
+      ]);
+
+    // The binding's own config starts the item the first time, as it always did.
+    expect((await fire([])).exitCode).toBe(0);
+    const [first] = await waitFor(() => completedRuns(fixture, 1), 'the first fire');
+    expect(runConfig(first)).toMatchObject({ source: { label: 'declared.yaml' } });
+
+    // Fired with a layer of its own, the start runs on that instead of the item's config.
+    const configured = await fire(['--config', oneOff, '--model', '@reviewer=large']);
+    expect(configured.exitCode).toBe(0);
+    const second = (await waitFor(() => completedRuns(fixture, 2), 'the configured fire'))?.[1];
+    expect(runConfig(second)).toMatchObject({
+      source: { label: 'one-off.yaml' },
+      keys: ['env.CONFIG_PROOF'],
+    });
+    // Both choices are stored beside the intent, so a retry needs no flags.
+    expect(
+      fixture
+        .rows<{ start_overrides: string | null }>(
+          'SELECT start_overrides FROM remote_agent_start_receipt_bindings WHERE start_overrides IS NOT NULL'
+        )
+        .map(row => JSON.parse(row.start_overrides ?? 'null'))
+    ).toEqual([
+      {
+        config: { path: oneOff },
+        models: { aliases: { '@reviewer': 'large' } },
+      },
+    ]);
+
+    // A binding whose configSource has gone still starts when the fire names a layer: the
+    // file a start does not use cannot fail it.
+    rmSync(declared);
+    const withoutDeclared = await fire(['--config', oneOff]);
+    expect(withoutDeclared.exitCode).toBe(0);
+    await waitFor(() => completedRuns(fixture, 3), 'the fire whose binding config is gone');
+
+    // An unreadable layer, and a mapping that is not name=spec, fail the fire before it
+    // records anything.
+    const missing = await fire(['--config', join(fixture.root, 'gone.yaml')]);
+    expect(missing.exitCode).not.toBe(0);
+    expect(missing.stderr + missing.stdout).toContain('Unable to read run config');
+    const malformed = await fire(['--model', 'large']);
+    expect(malformed.exitCode).not.toBe(0);
+    expect(malformed.stderr + malformed.stdout).toContain("Invalid --model 'large'");
+    expect(
+      fixture.rows<{ count: number }>('SELECT COUNT(*) AS count FROM remote_agent_start_receipts')
+    ).toEqual([{ count: 3 }]);
+  }, 90_000);
+
+  test('a timer written with --config still names its binding file', async () => {
+    const fixture = await makeFixture('timer-alias');
+    const declared = join(fixture.root, 'declared.yaml');
+    writeFileSync(declared, 'env:\n  CONFIG_PROOF: declared\n');
+    const binding = configuredBinding(fixture, 'alias', declared);
+    // The spelling an installed timer's job carries, unchanged by the rename.
+    const fired = await fixture.attempt([
+      'trigger',
+      'fire',
+      '--config',
+      binding,
+      '--item',
+      'issue-1',
+      '--inputs',
+      inputsFile(fixture),
+    ]);
+    expect(fired.exitCode).toBe(0);
+    expect(fired.stderr).toContain('as the binding file, as an installed timer writes it');
+    const [run] = await waitFor(() => completedRuns(fixture, 1), 'the timer-spelled fire');
+    expect(runConfig(run)).toMatchObject({ source: { label: 'declared.yaml' } });
   }, 90_000);
 
   test('a start naming another project with --project takes the config of the item in that project', async () => {
@@ -1330,7 +1422,7 @@ describe("an item's later starts", () => {
     await fixture.cli([
       'trigger',
       'fire',
-      '--config',
+      '--binding',
       configuredBinding(fixture, 'configured', config),
       '--item',
       'issue-1',
@@ -1347,7 +1439,7 @@ describe('a run end on a trigger host', () => {
     const fixture = await makeFixture('capacity');
     const config = fixture.fireConfig('pool', 'pool-work', 'pool', 2);
     for (let index = 0; index < 6; index++)
-      await fixture.cli(['trigger', 'fire', '--config', config]);
+      await fixture.cli(['trigger', 'fire', '--binding', config]);
     const runs = await waitFor(
       () => completedRuns(fixture, 6),
       'all six starts to run to their end'
@@ -1370,7 +1462,7 @@ describe('a run end on a trigger host', () => {
       await fixture.cli([
         'trigger',
         'fire',
-        '--config',
+        '--binding',
         fixture.fireConfig('quick', 'quick', 'pool', 1, HOST, true),
       ]);
       expect(queued()).toEqual([{ status: 'queued' }]);
@@ -1406,7 +1498,7 @@ describe('a run end on a trigger host', () => {
       await fixture.cli([
         'trigger',
         'fire',
-        '--config',
+        '--binding',
         fixture.fireConfig('other', 'quick', 'pool', 1, 'other-host'),
       ]);
       expect(queued()).toEqual([{ status: 'queued' }]);

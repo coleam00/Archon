@@ -144,6 +144,27 @@ describe('webhook source plugin host', () => {
     expect(acceptReceipt).not.toHaveBeenCalled();
   });
 
+  test('a source plugin cannot choose the run config or models of the start it hands over', async () => {
+    const overridden = acceptance();
+    overridden.bindings[0].startOverrides = {
+      config: { path: '/srv/archon/one-off.yaml' },
+      models: { tiers: { large: 'codex/gpt-6.1-sol' } },
+    };
+    const { configPath } = await fixture({ status: 'received', acceptance: overridden });
+    const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+    const host = await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt,
+      isKnownUser: mock(async () => true),
+      hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
+    });
+    // Refused, not dropped: a handler that tries to pick a config is a mistake worth naming.
+    await expect(
+      host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
+    ).rejects.toThrow('failed to normalize a receipt');
+    expect(acceptReceipt).not.toHaveBeenCalled();
+  });
+
   test('does not persist unauthenticated or unknown-user receipts', async () => {
     const unauthenticated = await fixture({ status: 'rejected', reason: 'unauthenticated' });
     const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));

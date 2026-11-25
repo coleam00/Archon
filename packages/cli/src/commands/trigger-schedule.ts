@@ -23,7 +23,7 @@ export type ScheduleOperation = 'install' | 'remove' | 'status';
 export interface ScheduleRequest {
   operation: ScheduleOperation;
   config: TriggerConfig;
-  /** The binding file, absolute: the timer's job runs `trigger fire --config` with it. */
+  /** The binding file, absolute: the timer's job runs `trigger fire --binding` with it. */
   configPath: string;
   schedules: NativeScheduleOptions;
   /** Install only: refuses a binding whose run-as user this install does not know. */
@@ -97,20 +97,20 @@ async function installTimer(request: ScheduleRequest, target: NativeScheduleTarg
   const bindingId = config.binding.bindingId;
   if (!config.schedule)
     throw new Error(
-      `Binding '${bindingId}' is fire-only: its configuration has no schedule, so there is no timer to install. Start it with: archon trigger fire --config ${configPath}`
+      `Binding '${bindingId}' is fire-only: its configuration has no schedule, so there is no timer to install. Start it with: archon trigger fire --binding ${configPath}`
     );
   await request.assertKnownRunAsUser();
   const [executable, ...prefix] = cliProgramArguments();
   await installNativeSchedule(
     {
       id: target.id,
-      programArguments: [executable, ...prefix, 'trigger', 'fire', '--config', configPath],
+      programArguments: [executable, ...prefix, 'trigger', 'fire', '--binding', configPath],
       workingDirectory: config.binding.launch.cwd,
       archonHome: target.archonHome,
       path: process.env.PATH ?? '',
       schedule: config.schedule,
       output: 'log',
-      removeCommand: `archon trigger schedule remove --config ${configPath}`,
+      removeCommand: `archon trigger schedule remove --binding ${configPath}`,
     },
     schedules
   );

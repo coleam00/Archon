@@ -4191,6 +4191,16 @@ declare module 'archon:script' {
        * Left out, a fire from a run on an item inherits it.
        */
       readonly item?: string | null;
+      /**
+       * The run config layer these starts run on (`--config`), outranking the config the item
+       * carries. Relative paths resolve against the script's working directory.
+       */
+      readonly config?: string;
+      /**
+       * Tier and `@alias` rebindings for these starts (`--model <name>=<spec>`), as the flag
+       * takes them.
+       */
+      readonly model?: readonly string[];
   }
   /** A fire's receipt and the admission its binding's request got; null when it got none. */
   export interface TriggerFired {

@@ -67,6 +67,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import type { RunModelOverrides } from '@archon/workflows/schemas/model-binding';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
   itemRunConfig,
@@ -243,7 +244,8 @@ async function prepareBinding(
   intent: ResourceStartBindingIntent,
   identity: BindingIdentity,
   item: WorkflowItem | null,
-  runConfig: WorkflowRunConfigInput | undefined
+  runConfig: WorkflowRunConfigInput | undefined,
+  models: RunModelOverrides | undefined
 ): Promise<PreparationResult> {
   const cwd = await canonicalizeProjectPath(intent.launch.cwd);
 
@@ -288,6 +290,9 @@ async function prepareBinding(
       codebaseId: codebase.id,
       userId: intent.runAsUserId,
       runConfig,
+      ...(models === undefined
+        ? {}
+        : { modelOverrideLayer: { kind: 'raw' as const, overrides: models } }),
     });
     // Before admission, so a binding its forge cannot serve never takes a slot.
     const site = { cwd, settingsCwd: cwd, codebaseId: codebase.id, supplied: bindingInputs };
@@ -328,6 +333,43 @@ async function prepareBinding(
   });
 }
 
+/**
+ * The run config and model rebindings a start runs on.
+ *
+ * A fire's `--config` replaces the config this start would otherwise inherit, as `--config`
+ * does for `workflow run`; its `--model` rebinds tiers and `@alias`es over whichever config
+ * applies. Without either, the item's own config wins over `configSource`: a binding file's
+ * config is written once for the install (`pack bindings --config`), a default for an item's
+ * first run, not a change to this item's config.
+ *
+ * A file is read only for the branch that uses it, so a config a start does not use cannot
+ * fail it: a binding whose `configSource` has gone still starts on the item's own config, or
+ * on a fire's `--config`.
+ */
+async function startConfiguration(
+  intent: ResourceStartBindingIntent,
+  found: Awaited<ReturnType<typeof bindingItem>>
+): Promise<{
+  runConfig: WorkflowRunConfigInput | undefined;
+  models: RunModelOverrides | undefined;
+}> {
+  const overrides = intent.startOverrides;
+  const models = overrides?.models;
+  if (overrides?.config !== undefined) {
+    return {
+      runConfig: await loadWorkflowRunConfigFile(overrides.config.path),
+      models,
+    };
+  }
+  const inherited = (): WorkflowRunConfigInput | undefined =>
+    found ? itemRunConfig(found.item.key, found.runs) : undefined;
+  const declared = async (): Promise<WorkflowRunConfigInput | undefined> =>
+    intent.launch.configSource
+      ? await loadWorkflowRunConfigFile(intent.launch.configSource)
+      : undefined;
+  return { runConfig: inherited() ?? (await declared()), models };
+}
+
 async function prepareClaimedBinding(
   host: ResourceStartHost,
   intent: ResourceStartBindingIntent,
@@ -339,17 +381,10 @@ async function prepareClaimedBinding(
       throw new Error('The configured run-as user no longer exists.');
     }
     stage = 'run_configuration';
-    // The item's own config wins over `configSource`: a binding file's config is written
-    // once for the install (`pack bindings --config`), a default for an item's first run,
-    // not a change to this item's config.
     const found = await bindingItem(host, intent, identity.receiptId);
-    const runConfig =
-      (found ? itemRunConfig(found.item.key, found.runs) : undefined) ??
-      (intent.launch.configSource
-        ? await loadWorkflowRunConfigFile(intent.launch.configSource)
-        : undefined);
+    const { runConfig, models } = await startConfiguration(intent, found);
     stage = 'launch_preparation';
-    return await prepareBinding(host, intent, identity, found?.item ?? null, runConfig);
+    return await prepareBinding(host, intent, identity, found?.item ?? null, runConfig, models);
   } catch (error) {
     if (host.engineChanged?.())
       return await leaveForInstalledEngine(
