@@ -65,6 +65,8 @@ export interface Run {
   /** workflow_runs.working_path — used to join against worktrees. */
   workingPath: WorkflowRun['working_path'];
   userMessage: NonNullable<WorkflowRun['user_message']>;
+  /** The inputs the run was invoked with, by name; a re-run restores these. */
+  suppliedInputs?: Readonly<WorkflowRun['supplied_inputs']>;
   activeNodes: NonNullable<components['schemas']['DashboardWorkflowRun']['active_nodes']>;
   lastTool?: string | null;
   toolCallAttention?: NonNullable<WorkflowRunMetadata['tool_call_attention']>;
@@ -144,6 +146,7 @@ type RawWorkflowRun = Pick<
       | 'working_path'
       | 'user_message'
       | 'metadata'
+      | 'supplied_inputs'
       | 'attention'
       | 'operator_pause'
       | 'parent_run_id'
@@ -291,6 +294,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     finishedAt: raw.completed_at ?? null,
     workingPath: raw.working_path ?? null,
     userMessage: raw.user_message ?? '',
+    suppliedInputs: raw.supplied_inputs ?? {},
     activeNodes,
     lastTool: null,
     toolCallAttention: raw.status === 'running' ? (raw.metadata?.tool_call_attention ?? []) : [],

@@ -42,7 +42,7 @@ export async function workflowGetCommand(
 ): Promise<number> {
   let run: WorkflowRun | null;
   try {
-    const resolvedId = await resolveRunIdArg(host, runId, cwd);
+    const resolvedId = await resolveRunIdArg(host, runId, cwd, 'refuse-outside-project');
     run = await host.deps.store.getWorkflowRun(resolvedId);
   } catch (error) {
     const err = error as Error;

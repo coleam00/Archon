@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { FAN_OUT_CANCEL_REASONS, executionClaim, type IWorkflowStore } from '../store';
 import { TERMINAL_WORKFLOW_STATUSES, isTerminalRunStatus } from '../schemas/workflow-run';
 import { terminalRecordSchema } from '../schemas/terminal-record';
+import { subrunSummaryMetadata } from '../schemas/run-metadata';
+import { childOutcomeFromRun } from '../dag/child-run';
 import type { WorkflowStoreHarness } from '../store-conformance';
 import {
   CONFORMANCE_CONVERSATION_ID,
@@ -51,6 +53,24 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
         });
       }
     );
+    test.each([
+      ['null', null],
+      ['false', false],
+      ['0', 0],
+      ['an object with a null field', { a: null }],
+      ['a string', 'x'],
+    ] as const)("a child's %s result reads back as the same typed value", async (_label, value) => {
+      const parent = await running(store);
+      const child = await running(store, { parent_run_id: parent.id });
+      await store.completeWorkflowRun(
+        child.id,
+        { duration_ms: 1 },
+        { summary: JSON.stringify(value), ...subrunSummaryMetadata(value) }
+      );
+      const read = await store.getWorkflowRun(child.id);
+      if (!read) throw new Error('child run not found');
+      expect(childOutcomeFromRun(read).structuredOutput).toStrictEqual(value);
+    });
     test('gate resolution has one winner and no loser events', async () => {
       await assertWorkflowGateRace(store);
     });

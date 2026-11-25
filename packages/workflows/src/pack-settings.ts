@@ -352,7 +352,11 @@ async function fileSettingProblem(
   if (value === undefined || value === '') return undefined;
   // Joined, not resolved: normalizing would drop a trailing slash or fold `..` across a
   // symlink, so validate would check a different path than a stage opens.
-  return fileProblem(isAbsolute(value) ? value : `${cwd}${sep}${value}`);
+  const resolved = isAbsolute(value) ? value : `${cwd}${sep}${value}`;
+  // A trailing separator writes a directory. Decide that from the value, not `stat`: Windows
+  // drops the final separator, so a file written as `file.md/` would read as a file there.
+  if (value.endsWith('/') || value.endsWith('\\')) return `is not a file (${resolved})`;
+  return fileProblem(resolved);
 }
 
 /** Why a file setting's resolved path is not a file, or undefined when it is one. */

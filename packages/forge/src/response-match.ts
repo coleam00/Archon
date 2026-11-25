@@ -118,7 +118,11 @@ function matchesMergeEvidence(
     evidence.merge?.method === request.method &&
     mergeConditionSchema.options.every(
       key => evidence.merge?.conditions[key] === request.conditions[key]
-    )
+    ) &&
+    // A merge time belongs only to a refusal that observed the pull request merged, so no
+    // other failure can have a run record a merge the forge does not report.
+    (evidence.merge.merged_at === undefined ||
+      (evidence.outcome === 'refused' && evidence.observed?.state === 'merged'))
   );
 }
 

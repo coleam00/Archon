@@ -25,6 +25,8 @@ import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import { formatRunUsage } from './workflow-usage';
 import { readRunUsageReport } from '@archon/workflows/run-usage-read';
 import type { RunUsageReport } from '@archon/workflows/schemas/run-usage-report';
+import { refusedStartLines } from './workflow-attention-text';
+import { readItemStopped } from '@archon/workflows/schemas/run-metadata';
 import { formatSkipCause } from './workflow-node-summaries';
 import { getLog, NAME_ITEM_HINT, type RunDestination } from './workflow-shared';
 import { pendingDurableWait, type PendingWaitContinuation } from './workflow-wait-continuation';
@@ -213,6 +215,7 @@ export async function presentRunResult(
     if (!printRunFacts(workflow, run, '\nWorkflow finished.')) {
       console.log('\nWorkflow completed successfully.');
     }
+    printRefusedStart(run);
     printRunUsage(run, usage);
   } else {
     const usage = await readPresentationUsage(host, run);
@@ -326,6 +329,17 @@ function runUsageLines(run: WorkflowRun | null, usage?: RunUsageReport): string[
 
 function printRunUsage(run: WorkflowRun | null, usage?: RunUsageReport): void {
   for (const line of runUsageLines(run, usage)) console.log(line);
+}
+
+/**
+ * The run completed, but a start its end caused was refused: say so, from its stop. Here and
+ * in `workflow get`, which `trigger fire` points to for a detached run.
+ */
+export function printRefusedStart(run: WorkflowRun | null): void {
+  const refused = run === null ? undefined : readItemStopped(run.metadata)?.refused;
+  if (refused === undefined) return;
+  console.log('  Next stage not started:');
+  for (const line of refusedStartLines(refused)) console.log(`    ${line}`);
 }
 
 async function presentDurableWait(

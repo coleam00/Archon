@@ -36,7 +36,7 @@ import { formatAge, getLog } from './workflow-shared';
 import type { LatestWorkflowNotice } from '@archon/workflows/workflow-notice';
 import { formatRunUsage } from './workflow-usage';
 import type { RunUsageReport } from '@archon/workflows/schemas/run-usage-report';
-import { stallMessageLine } from './workflow-run-output';
+import { printRefusedStart, stallMessageLine } from './workflow-run-output';
 import { printRequestedBy, type RequestedBy } from '../utils/requested-by';
 import {
   formatFanOutOutcome,
@@ -538,6 +538,7 @@ export function printRunDetail(
   console.log(`  Status: ${run.status}`);
   const outcome = displayedRunOutcome(run);
   if (outcome !== null) console.log(`  Authored outcome: ${outcome}`);
+  printRefusedStart(run);
   printReason(terminalRecord);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
   for (const line of formatRunUsage(run.metadata, detail.usage)) console.log(line);

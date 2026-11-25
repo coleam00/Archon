@@ -45,13 +45,13 @@ const answer = (value: unknown, code = 0): void => {
 if (command === 'forge') {
   const request = JSON.parse(readFileSync(args.at(-1)!, 'utf8'));
   if (request.silent) process.exitCode = 1;
-  else if (request.fail)
-    answer({ operationId: 'x', ok: false, error: { kind: 'conflict', message: 'head moved' },
-      mutation: { op: sub, target: request.ref, outcome: 'refused' } }, 1);
   else {
     if (request.reason) process.stderr.write(request.reason);
     const itemRecord = request.unrecorded ? { itemRecord: { recorded: false, reason: 'no_merge_time' } } : {};
-    answer({ operationId: 'x', ok: true, result: { op: sub, value: { echoed: request } }, ...itemRecord }, request.exit ?? 0);
+    if (request.fail)
+      answer({ operationId: 'x', ok: false, error: { kind: 'conflict', message: 'head moved' },
+        mutation: { op: sub, target: request.ref, outcome: 'refused' }, ...itemRecord }, request.exit ?? 1);
+    else answer({ operationId: 'x', ok: true, result: { op: sub, value: { echoed: request } }, ...itemRecord }, request.exit ?? 0);
   }
 } else if (command === 'state' && args.includes('--held')) {
   answer({ ok: false, error: 'not held', code: 3, reason: 'lease_not_held' }, 3);
@@ -122,6 +122,22 @@ test('forge returns the result, and a completed operation the host could not rec
       echoed: { ref, unrecorded: true, reason: unrecorded },
     } as never);
     expect(stderr.mock.calls).toEqual([[unrecorded]]);
+  } finally {
+    stderr.mockRestore();
+  }
+});
+
+test('a refusal the host could not record on the item passes the host reason on before it throws', () => {
+  const stderr = spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    for (const request of [
+      { ref, fail: true, exit: 2, reason: 'found it already merged, but the store failed' },
+      { ref, fail: true, unrecorded: true, reason: 'the forge plugin reported no merge time' },
+    ]) {
+      stderr.mockClear();
+      expect(thrownBy(() => forge('pr.merge', request as never))).toBeInstanceOf(ForgeError);
+      expect(stderr.mock.calls).toEqual([[request.reason]]);
+    }
   } finally {
     stderr.mockRestore();
   }

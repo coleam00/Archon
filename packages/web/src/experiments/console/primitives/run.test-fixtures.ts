@@ -60,6 +60,7 @@ export const detailFixture: Detail = {
         excluded: [],
       },
     },
+    supplied_inputs: {},
     started_at: '2026-10-05T10:00:00Z',
     active_phase_started_at: null,
     completed_at: '2026-10-05T10:01:00Z',

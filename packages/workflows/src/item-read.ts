@@ -78,6 +78,8 @@ import {
 import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 import { readItemRunResult, itemCompletionEvents } from './item-run-result';
+import { changeSizeSchema } from './schemas/change-size';
+import { readChangeSize } from './change-size';
 import { runPack, runPackSchema } from './run-pack';
 import { itemStartLimitSchema, type LimitBindingsReader, withLimitBindings } from './start-limit';
 import { recordedSpendSchema, type RunUsageReport } from './schemas/run-usage-report';
@@ -158,6 +160,8 @@ export const itemRunSchema = z.object({
    * held at commits.
    */
   resultCommit: z.string().nullable(),
+  /** The change the run ended with, as `archon workflow runs --item` documents it; null when unknown, never zero. */
+  changeSize: changeSizeSchema.nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
 
@@ -417,6 +421,7 @@ async function itemRun(
     heldBehind,
     operatorPause: operatorPause(run),
     ...readItemRunResult(run, terminalEvents.get(run.id) ?? []),
+    changeSize: readChangeSize(run),
   };
 }
 
