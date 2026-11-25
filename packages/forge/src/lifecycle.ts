@@ -472,6 +472,8 @@ export const mergeEvidenceSchema = z.object({
   method: prMergeRequestSchema.shape.method,
   conditions: mergeConditionsSchema,
   landed: landedSchema.optional(),
+  // The earlier merge's time, on a refusal that observed it merged; `response-match` checks it.
+  merged_at: z.iso.datetime({ offset: true }).optional(),
 });
 
 export const lifecycleReadRequestSchemas = [

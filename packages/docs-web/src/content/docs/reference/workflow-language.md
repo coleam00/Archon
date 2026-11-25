@@ -1854,7 +1854,12 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
   `result_of` input as `null`.
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
-get a value from it, and `resultCommit`: the commit its result holds at.
+get a value from it, `resultCommit`: the commit its result holds at, and `changeSize`: how
+large the change was when the run completed or failed (`files`, `added`, `removed`) from
+`base`, the commit the item's work was cut from, to `commit`, the clean commit it ended on.
+A run on a checkout another run left (a hand-off, or `--adopt`) keeps that run's base.
+`changeSize` is `null` when the checkout ended on no clean commit or no cut-from is known for
+its work, such as a branch reused with `--branch`, never zeros.
 
 ### The result that holds at this run's commit
 
@@ -1947,7 +1952,8 @@ nodes:
 ```
 
 `item().runs[].resultCommit` and `archon workflow runs --item <key> --json` show the commit
-each run's result holds at, so a node that got `null` can say why.
+each run's result holds at, so a node that got `null` can say why. `changeSize` beside it lets
+a stage see whether the change grew since an earlier run on the item.
 
 ## Reading a project's items over a window
 
@@ -2477,8 +2483,9 @@ nodes:
   that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
   workflow that declares no `final` has none, so every unbound outcome stops its item. A run
   whose end does start a binding also stops its item when admission refuses that start at
-  its [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item); the
-  listing then names the limit.
+  its [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item), or
+  when that start is refused before launch, once the run's own asks and waits are closed; the
+  listing then names the limit or the refusal.
 
 - **`returns.summary`**: a string property of the `returns:` node's output that the attention
   queue shows, as one line, on a `stopped` item: why the stage stopped. The node's

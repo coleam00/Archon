@@ -9,6 +9,7 @@ import { renderHelp } from '../help';
 import { forgeCommand } from './forge';
 import {
   forgeAuditResponse,
+  type ForgeMutationFailure,
   type ForgeRequest,
   type ForgeResponse,
 } from '@archon/forge/operations';
@@ -729,8 +730,21 @@ test('forge check exits 1 with a typed reason for a missing plugin, capability o
       message: 'plugin test 1.0.0 does not support pr.merge, pr.review.submit',
     },
     unsupported: ['pr.merge', 'pr.review.submit'],
-    // The test plugin states no remedies, so forge names the generic step.
-    remedy: expect.stringContaining('archon plugin update'),
+    // The test plugin states no remedies, so forge names the generic step for its config entry.
+    remedy: expect.stringContaining('`forge` entry for plugin test'),
+  });
+
+  // A plugin's own remedy replaces forge's generic step.
+  const ownRemedy = await checkForge(
+    { host: 'forge.example', operations: ['pr.merge'] },
+    env,
+    'remedies'
+  );
+  expect(ownRemedy.code).toBe(1);
+  expect(ownRemedy.response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    remedy: 'Run the fixture upgrade.',
   });
 
   const noCredential = await checkForge(
@@ -904,21 +918,58 @@ const mergedPr = {
   maintainer_can_modify: null,
 };
 const mergeRequest = { ref: mergeRef, method: 'squash', conditions: { head: 'b'.repeat(40) } };
-/** `applied-no-time` is an applied merge from a plugin released before `merged_at`. */
-type MergeOutcome = 'applied' | 'applied-no-time' | 'refused' | 'outcome_unknown';
+/**
+ * `applied-no-time` is an applied merge from a plugin released before `merged_at`.
+ * `already-merged` and `closed` are refusals that observed the pull request in that state;
+ * `already-merged-no-time` is the first from a plugin released before `merge.merged_at`.
+ */
+type MergeOutcome =
+  | 'applied'
+  | 'applied-no-time'
+  | 'refused'
+  | 'outcome_unknown'
+  | 'already-merged'
+  | 'already-merged-no-time'
+  | 'closed';
+/** An earlier merge, by hand: every fact differs from the applied fixture and the request. */
+const earlierMerge = {
+  pr: { ...mergedPr, url: 'https://forge.example/acme/web/pull/7#by-hand', base: 'release/1' },
+  commit: 'd'.repeat(40),
+  at: '2026-11-18T14:05:00Z',
+};
+
+const attempt = { method: 'squash' as const, conditions: mergeRequest.conditions };
+const earlierLanded = { commit: earlierMerge.commit, tree: null, parents: null };
+/** The evidence each failed outcome carries beyond the merge it attempted. */
+const failureEvidence = {
+  refused: { outcome: 'refused' },
+  outcome_unknown: { outcome: 'outcome_unknown' },
+  closed: { outcome: 'refused', observed: { ...mergedPr, state: 'closed' } },
+  'already-merged': {
+    outcome: 'refused',
+    observed: earlierMerge.pr,
+    merge: { ...attempt, landed: earlierLanded, merged_at: earlierMerge.at },
+  },
+  'already-merged-no-time': {
+    outcome: 'refused',
+    observed: earlierMerge.pr,
+    merge: { ...attempt, landed: earlierLanded },
+  },
+} as const satisfies Record<
+  Exclude<MergeOutcome, 'applied' | 'applied-no-time'>,
+  Partial<ForgeMutationFailure>
+>;
 
 function mergeResponse(request: ForgeRequest, outcome: MergeOutcome): ForgeResponse {
-  if (outcome === 'refused' || outcome === 'outcome_unknown')
+  if (outcome !== 'applied' && outcome !== 'applied-no-time')
     return {
       operationId: request.operationId,
       ok: false,
-      error: { kind: outcome === 'refused' ? 'conflict' : 'process_failed', message: 'not merged' },
-      mutation: {
-        op: 'pr.merge',
-        target: mergeRef,
-        merge: { method: 'squash', conditions: mergeRequest.conditions },
-        outcome,
+      error: {
+        kind: outcome === 'outcome_unknown' ? 'process_failed' : 'conflict',
+        message: 'not merged',
       },
+      mutation: { op: 'pr.merge', target: mergeRef, merge: attempt, ...failureEvidence[outcome] },
     };
   return {
     operationId: request.operationId,
@@ -943,11 +994,12 @@ function mergeResponse(request: ForgeRequest, outcome: MergeOutcome): ForgeRespo
 async function runMerge(options: {
   outcome?: MergeOutcome;
   env?: NodeJS.ProcessEnv;
-  record?: 'recorded' | 'no_item' | 'throws';
+  record?: 'recorded' | 'already_recorded' | 'no_item' | 'throws';
 }) {
   const dispatched: string[] = [];
   const audited: string[] = [];
   const recorded: unknown[] = [];
+  const recordedFor: string[] = [];
   const output: unknown[] = [];
   const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
   try {
@@ -979,8 +1031,10 @@ async function runMerge(options: {
           audited.push(audit.operation);
         },
         // Stands in for the store: a run on an item, unless `record` says otherwise.
-        recordMerge: async (_runId, facts) => {
+        recordMerge: async (runId, facts) => {
+          recordedFor.push(runId);
           if (options.record === 'no_item') return 'no_item';
+          if (options.record === 'already_recorded') return 'already_recorded';
           if (facts.at === undefined) return 'no_merge_time';
           recorded.push(facts);
           if (options.record === 'throws') throw new Error('store unavailable');
@@ -992,7 +1046,7 @@ async function runMerge(options: {
       }
     );
     const lines = stderr.mock.calls.map(([line]) => String(line));
-    return { code, dispatched, audited, recorded, output, stderr: lines };
+    return { code, dispatched, audited, recorded, recordedFor, output, stderr: lines };
   } finally {
     stderr.mockRestore();
   }
@@ -1008,7 +1062,7 @@ test("an applied merge from a run records the merge result's facts on the run's 
   ]);
   expect(result.audited).toEqual(['pr.merge']);
   expect(result.output).toEqual([
-    expect.objectContaining({ ok: true, itemRecord: { recorded: true } }),
+    expect.objectContaining({ ok: true, itemRecord: { recorded: true, landing: 'recorded' } }),
   ]);
   expect(result.stderr).toEqual([]);
 });
@@ -1055,10 +1109,76 @@ test('a merge outside a run records nothing', async () => {
 test('a store failure keeps the applied merge on stdout and exits 2', async () => {
   const result = await runMerge({ record: 'throws' });
   expect(result.code).toBe(2);
-  expect(result.output).toEqual([expect.objectContaining({ ok: true })]);
-  expect(result.output[0]).not.toHaveProperty('itemRecord');
+  expect(result.output).toEqual([
+    expect.objectContaining({ ok: true, itemRecord: { recorded: false, reason: 'write_failed' } }),
+  ]);
   expect(result.stderr).toHaveLength(1);
   expect(result.stderr[0]).toContain(
     `merged ${mergedPr.url} but the item record could not be written: store unavailable`
   );
+});
+
+test("a merge refused as already merged records the refusal's facts of the earlier merge", async () => {
+  const result = await runMerge({ outcome: 'already-merged' });
+  // Still a refusal: this call merged nothing, and the forge is not read again.
+  expect(result.code).toBe(1);
+  expect(result.dispatched).toEqual(['pr.merge']);
+  expect(result.recordedFor).toEqual(['run-1']);
+  expect(result.recorded).toEqual([
+    {
+      change: earlierMerge.pr.url,
+      commit: earlierMerge.commit,
+      at: earlierMerge.at,
+      branch: 'release/1',
+    },
+  ]);
+  expect(result.output).toEqual([
+    expect.objectContaining({
+      ok: false,
+      mutation: expect.objectContaining({
+        outcome: 'refused',
+        observed: expect.objectContaining({ state: 'merged' }),
+      }),
+      itemRecord: { recorded: true, landing: 'recorded' },
+    }),
+  ]);
+  expect(result.stderr).toEqual([]);
+});
+
+test('a merge refused on a closed, unmerged pull request records nothing', async () => {
+  const result = await runMerge({ outcome: 'closed' });
+  expect(result.code).toBe(1);
+  expect(result.recordedFor).toEqual([]);
+  expect(result.output[0]).not.toHaveProperty('itemRecord');
+  expect(result.output[0]).toMatchObject({ mutation: { observed: { state: 'closed' } } });
+});
+
+test('an already-merged refusal from a plugin without the merge time records nothing and says so', async () => {
+  const result = await runMerge({ outcome: 'already-merged-no-time' });
+  expect(result.code).toBe(1);
+  expect(result.recorded).toEqual([]);
+  expect(result.output[0]).toMatchObject({
+    itemRecord: { recorded: false, reason: 'no_merge_time' },
+  });
+  expect(result.stderr).toHaveLength(1);
+});
+
+test('a merge already recorded on the item says nothing was written', async () => {
+  const result = await runMerge({ outcome: 'already-merged', record: 'already_recorded' });
+  expect(result.code).toBe(1);
+  expect(result.output[0]).toMatchObject({
+    itemRecord: { recorded: false, reason: 'already_recorded' },
+  });
+  expect(result.stderr).toEqual([]);
+});
+
+test('an already-merged refusal whose item write fails says so and exits 2', async () => {
+  const result = await runMerge({ outcome: 'already-merged', record: 'throws' });
+  expect(result.code).toBe(2);
+  expect(result.output[0]).toMatchObject({
+    ok: false,
+    mutation: { observed: { state: 'merged' } },
+    itemRecord: { recorded: false, reason: 'write_failed' },
+  });
+  expect(result.stderr).toHaveLength(1);
 });

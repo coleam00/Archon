@@ -173,7 +173,7 @@ const HOW_TO_ANSWER = [
   '- kind attention: choose=<JSON array of option ids> (one id, several only for form multi_select), or recommended=true; form message takes text only.',
   '- kind awaiting_response: choose=<JSON array with one decision id>, e.g. ["approve"] or ["reject"].',
   '- kind usage_limit continues by itself at resetAt; kind unreadable needs someone to look at the run. Neither takes an answer.',
-  '- kind stopped is an item whose last run (stoppedIn) ended in an outcome nothing starts from, with no ask; summary says why. It takes no answer: a new run on the item moves it on.',
+  '- kind stopped is an item whose last run (stoppedIn) left nothing to move it: an outcome nothing starts from, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new run on the item moves it on.',
 ].join('\n');
 
 const chooseSchema = z.array(z.string().min(1)).min(1);
@@ -241,7 +241,7 @@ function notAnswered(
         case 'overdue_wait':
           return `attention: item '${ref}' waits for ${result.item.waits.map(wait => `'${wait.event}' about ${wait.about}`).join(' or ')}, due ${result.item.deadline}. It takes no answer: the event meets it, a new run of ${result.item.waitingIn.workflow} on the item replaces it, or \`archon workflow answer --withdraw ${ref}\` closes it.`;
         case 'stopped':
-          return `attention: item '${ref}' stopped: run ${result.item.stoppedIn.runId} (${result.item.stoppedIn.workflow}) ended as '${result.item.stoppedIn.outcome}', started nothing and left no ask.${result.item.summary === null ? '' : ` Summary: ${result.item.summary}`} It takes no answer: start a new run on the item to move it on.`;
+          return `attention: item '${ref}' stopped: run ${result.item.stoppedIn.runId} (${result.item.stoppedIn.workflow}) ended${result.item.stoppedIn.outcome === null ? '' : ` as '${result.item.stoppedIn.outcome}'`}, and nothing started after it.${result.item.summary === null ? '' : ` Summary: ${result.item.summary}`} It takes no answer: start a new run on the item to move it on.`;
       }
       return result.item satisfies never;
     case 'refused':

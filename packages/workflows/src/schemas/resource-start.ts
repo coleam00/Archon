@@ -8,6 +8,7 @@ import {
   runEndedInputSourceSchema,
 } from './binding-input-source';
 import { itemLinkKindSchema } from './item-link';
+import { handoffRefusalSchema } from './run-metadata';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
@@ -589,6 +590,7 @@ const sourceReceiptAcceptanceBaseSchema = z
             bindingRevision: z.string().min(1).nullable(),
             status: startBindingPreparationStatusSchema.extract(['unmatched', 'rejected']),
             reason: z.string(),
+            refused: handoffRefusalSchema.optional(),
           })
           .strict()
       )

@@ -585,6 +585,30 @@ test('merge refuses stale and unsupported conditions before writing', async () =
   }
 });
 
+test('merge refuses a pull request merged earlier and reports the facts of that merge', async () => {
+  const github = mergeGitHub({ alreadyMerged: true });
+  const response = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: github.fetch,
+  });
+  expect(forgeResponseSchema.parse(response)).toMatchObject({
+    ok: false,
+    mutation: {
+      outcome: 'refused',
+      observed: { state: 'merged' },
+      merge: { landed: { commit: 'landed' }, merged_at: MERGED_AT },
+    },
+  });
+  expect(github.writes).toEqual([]);
+  // Without a merge time from the forge, none is supplied; a close time never stands in.
+  const untimed = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: mergeGitHub({ alreadyMerged: true, noMergeTime: true }).fetch,
+  });
+  expect(untimed).toMatchObject({ ok: false, mutation: { observed: { state: 'merged' } } });
+  expect(untimed.ok ? undefined : untimed.mutation?.merge).not.toHaveProperty('merged_at');
+});
+
 test.each([
   [{ status: 409 }, 'refused'],
   [{ lost: true }, 'outcome_unknown'],
