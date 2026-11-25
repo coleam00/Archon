@@ -104,8 +104,10 @@ export const prCloseRequestSchema = requestBase.extend({
 });
 // The marker identifies the one canonical comment, so it has to survive a
 // first-line comparison against a body the forge may have re-wrapped.
-// The help examples of a marker and its body agree, so an example request is accepted.
-const MARKER_EXAMPLE = '<!-- marker -->';
+// The marker identifies one issue or comment, so its help example is a placeholder the
+// caller replaces per item, never a value to copy. The body example repeats it on its first
+// line, so the example request is accepted.
+const MARKER_EXAMPLE = '<marker chosen for this item>';
 const commentMarker = text
   .refine(value => !/[\r\n]/.test(value), 'comment marker must be one line')
   .meta({ examples: [MARKER_EXAMPLE] });
@@ -456,7 +458,8 @@ export const attachmentPutRequestSchema = requestBase.extend({
       },
       `content must decode to between 1 byte and ${String(ATTACHMENT_MAX_BYTES)} bytes`
     )
-    .meta({ examples: ['iVBORw0KGgo='] }),
+    // Valid base64 that reads as the value to replace, since real image bytes do not fit help.
+    .meta({ examples: ['REPLACE+WITH+BASE64+IMAGE+BYTES='] }),
 });
 /** Replace an issue's body. */
 export const workItemEditBodyRequestSchema = requestBase.extend({

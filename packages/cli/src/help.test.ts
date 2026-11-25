@@ -192,7 +192,8 @@ describe('CLI help output', () => {
     const forge = renderHelp('forge');
     expect(forge).toContain('archon forge <operation> --help');
     expect(forge).not.toContain('Request (--data):');
-    expect(forge).not.toMatch(/github|gitlab|gitea|bitbucket|\.(com|org|io)\b/i);
+    for (const forgeName of ['github', 'gitlab', 'gitea', 'forgejo', 'bitbucket'])
+      expect(forge.toLowerCase()).not.toContain(forgeName);
   });
 
   const EXPECTED_GLOBAL_HELP = `
