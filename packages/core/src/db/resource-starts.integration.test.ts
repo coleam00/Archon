@@ -653,22 +653,24 @@ describe('durable resource starts', () => {
       ],
     });
 
-    const raw = new Database(join(root, 'archon.db'), { readonly: true });
     type StoredBinding = {
       intent: string;
       event_input_names: string | null;
       checkout_from: string | null;
     };
-    let stored: StoredBinding | null;
-    try {
-      stored = raw
-        .query<StoredBinding, SQLQueryBindings[]>(
-          'SELECT intent, event_input_names, checkout_from FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
-        )
-        .get(receiptId);
-    } finally {
-      raw.close();
-    }
+    const readStored = (): StoredBinding | null => {
+      const raw = new Database(join(root, 'archon.db'), { readonly: true });
+      try {
+        return raw
+          .query<StoredBinding, SQLQueryBindings[]>(
+            'SELECT intent, event_input_names, checkout_from FROM remote_agent_start_receipt_bindings WHERE receipt_id = ?'
+          )
+          .get(receiptId);
+      } finally {
+        raw.close();
+      }
+    };
+    let stored = readStored();
     // An older binary sees the merged inputs it always passed through, and the hand-off's
     // branch but not the hand-off.
     const shipped = shippedIntentSchema.parse(JSON.parse(stored?.intent ?? 'null'));
@@ -681,6 +683,23 @@ describe('durable resource starts', () => {
     expect(restored?.launch.inputs).toEqual({ mode: 'nightly' });
     expect(restored?.eventInputs).toEqual({ count: 42 });
     expect(restored?.checkoutFrom).toEqual(handoff);
+
+    // An intent rebuilt from its trigger file is stored the same way.
+    const { claimStartBindingPreparation, replaceStartBindingIntent } = createWorkflowStore();
+    const identity = { receiptId, bindingId: 'binding', ownerId: 'owner' };
+    expect(await claimStartBindingPreparation(identity)).toBe(true);
+    if (!restored) throw new Error('no intent');
+    expect(
+      await replaceStartBindingIntent({
+        ...identity,
+        intent: { ...restored, bindingRevision: '2', eventInputs: { count: 7 } },
+      })
+    ).toBe(true);
+    stored = readStored();
+    const rebuilt = shippedIntentSchema.parse(JSON.parse(stored?.intent ?? 'null'));
+    expect(rebuilt.launch.inputs).toEqual({ mode: 'nightly', count: 7 });
+    expect(stored?.event_input_names).toBe('["count"]');
+    expect(JSON.parse(stored?.checkout_from ?? 'null')).toEqual(handoff);
   });
 
   test('preparation completion and admission share one commit', async () => {

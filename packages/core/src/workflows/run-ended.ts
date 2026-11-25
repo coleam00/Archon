@@ -42,7 +42,7 @@ import {
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
-import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
+import type { CheckoutHandoff, EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { getArchonHome } from '@archon/paths';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import {
@@ -131,36 +131,20 @@ export async function readOnBindings(directory: string): Promise<OnBinding[]> {
  */
 export async function readTriggerFileHosts(
   directory: string
-): Promise<{ hostIds: string[]; failures: TriggerFileError[] }> {
-  let names: string[];
-  try {
-    names = (await readdir(directory)).filter(name => name.endsWith('.json')).sort();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { hostIds: [], failures: [] };
-    throw error;
-  }
+): Promise<{ hostIds: string[]; failures: Error[] }> {
   const hostIds = new Set<string>();
-  const failures: TriggerFileError[] = [];
-  for (const name of names) {
-    const file = join(directory, name);
-    let value: unknown;
-    try {
-      value = JSON.parse(await readFile(file, 'utf8')) as unknown;
-    } catch (error) {
-      failures.push(
-        new TriggerFileError(
-          `Trigger file ${file} is not readable JSON: ${(error as Error).message}`,
-          { cause: error }
-        )
-      );
+  const failures: Error[] = [];
+  for (const entry of await readTriggerEntries(directory)) {
+    if ('unparsed' in entry) {
+      failures.push(entry.unparsed);
       continue;
     }
-    const parsed = triggerConfigSchema.safeParse(value);
+    const parsed = triggerConfigSchema.safeParse(entry.value);
     if (parsed.success) hostIds.add(parsed.data.binding.hostId);
     else
       failures.push(
         new TriggerFileError(
-          `Trigger file ${file} is invalid: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
+          `Trigger file ${entry.file} is invalid: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
         )
       );
   }
@@ -190,6 +174,11 @@ async function readOnFile(file: string): Promise<OnBinding | undefined> {
       }
     );
   }
+  return parseOnFile(file, value);
+}
+
+/** A parsed trigger file as a binding with `on`, or undefined when it has none. */
+function parseOnFile(file: string, value: unknown): OnBinding | undefined {
   if (value === null || typeof value !== 'object' || !('on' in value)) return undefined;
   const parsed = triggerConfigSchema.safeParse(value);
   if (!parsed.success)
@@ -493,7 +482,7 @@ function namedLinkedStart(
  * The entries of the list `pointer` holds in the run's result, each with its item key: an
  * entry is the key itself or an object with a string `key`. Or why the list cannot be read.
  */
-function linkedEntries(
+export function linkedEntries(
   result: JsonValue | undefined,
   pointer: string
 ): { key: string; entry: JsonValue }[] | string {
@@ -560,7 +549,7 @@ export async function bindingProjectKey(
  * checkout (`checkout: "ended-run"` or `checkout: "asking-run"`).
  */
 export function bindingReceipt(
-  candidate: OnBindingFile,
+  candidate: OnBinding,
   delivery: {
     deliveryId: string;
     sourceActor: NonNullable<SourceReceiptInput['sourceActor']>;
@@ -580,10 +569,7 @@ export function bindingReceipt(
         : undefined;
   const refusal = 'missing' in mapped ? (mapped.reason ?? 'inputs_unmapped') : 'checkout_refused';
   const handoff = checkout && 'handoff' in checkout ? checkout.handoff : undefined;
-  // Computed as `trigger fire` computes it, over the binding alone.
-  const bindingRevision = createHash('sha256')
-    .update(JSON.stringify(candidate.binding))
-    .digest('hex');
+  const bindingRevision = startConfigRevision(candidate);
   const content = refused ?? inputs;
   const receipt = {
     id: randomUUID(),
@@ -614,9 +600,26 @@ export function bindingReceipt(
         },
       ],
     });
-  const binding: ResourceStartBindingIntent = {
+  return sourceReceiptAcceptanceSchema.parse({
+    receipt,
+    outcome: 'matched',
+    bindings: [startIntent(candidate, inputs, handoff)],
+  });
+}
+
+/**
+ * The intent a matched file starts: its binding with the mapped inputs as event inputs and,
+ * for a start on another run's checkout, the hand-off. The receipt and the rebuild of a
+ * waiting start (`waiting-start.ts`) both build it here.
+ */
+export function startIntent(
+  candidate: OnBinding,
+  inputs: Record<string, JsonValue>,
+  handoff: CheckoutHandoff | undefined
+): ResourceStartBindingIntent {
+  return {
     ...candidate.binding,
-    bindingRevision,
+    bindingRevision: startConfigRevision(candidate),
     ...(Object.keys(inputs).length > 0 ? { eventInputs: inputs } : {}),
     // `launch.isolation` names the branch for an older binary, which reads no hand-off: it
     // runs the stage on that branch or fails to check it out, never on the base branch.
@@ -630,7 +633,109 @@ export function bindingReceipt(
         }
       : {}),
   };
-  return sourceReceiptAcceptanceSchema.parse({ receipt, outcome: 'matched', bindings: [binding] });
+}
+
+/** Marks a revision `startConfigRevision` wrote; an older Archon hashed the binding alone. */
+const START_CONFIG_REVISION_PREFIX = 'start-config:';
+
+/**
+ * The revision of a trigger file's start config: its source, binding and `on`, since `on`
+ * holds the input mapping. A waiting start whose receipt holds another revision follows the
+ * file as it is now (`waiting-start.ts`). `trigger fire` hashes a fire or timer binding alone.
+ */
+export function startConfigRevision(candidate: OnBinding): string {
+  const { file: _file, ...config } = candidate;
+  return `${START_CONFIG_REVISION_PREFIX}${createHash('sha256').update(JSON.stringify(config)).digest('hex')}`;
+}
+
+/** Whether `startConfigRevision` wrote `revision`, rather than an older Archon. */
+export function isStartConfigRevision(revision: string | null): boolean {
+  return revision?.startsWith(START_CONFIG_REVISION_PREFIX) === true;
+}
+
+/** One file of the trigger directory: its parsed JSON, or why it is not JSON. */
+export type TriggerEntry = { file: string; value: unknown } | { file: string; unparsed: Error };
+
+/** Every `*.json` file in `directory`, in file-name order, each read on its own. */
+export async function readTriggerEntries(directory: string): Promise<TriggerEntry[]> {
+  let names: string[];
+  try {
+    names = (await readdir(directory)).filter(name => name.endsWith('.json')).sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const entries: TriggerEntry[] = [];
+  for (const name of names) {
+    const file = join(directory, name);
+    try {
+      entries.push({ file, value: JSON.parse(await readFile(file, 'utf8')) as unknown });
+    } catch (error) {
+      entries.push({
+        file,
+        unparsed: new TriggerFileError(
+          `Trigger file ${file} is not readable JSON: ${(error as Error).message}`,
+          { cause: error }
+        ),
+      });
+    }
+  }
+  return entries;
+}
+
+/** A waiting start's own trigger file, as the directory that serves its host reads now. */
+export type StartTriggerFile =
+  | { found: OnBinding }
+  | { gone: string }
+  | { unread: Error }
+  | { notServed: true };
+
+/**
+ * The trigger file a start of `sourceInstanceId` on `hostId` was written from. A file that
+ * names another source or host never affects the answer; only the file naming both is read
+ * strictly, and when it does not read, the start's own file is unread. A directory with no
+ * file naming `hostId` does not serve the host (`install-hosts.ts`), so it cannot say the
+ * file was removed. A file that is not JSON could be the start's own.
+ */
+export function findStartTriggerFile(
+  entries: readonly TriggerEntry[],
+  start: { sourceInstanceId: string; hostId: string }
+): StartTriggerFile {
+  let served = false;
+  let unparsed: Error | undefined;
+  for (const entry of entries) {
+    if ('unparsed' in entry) {
+      unparsed ??= entry.unparsed;
+      continue;
+    }
+    const named = rawStartNames(entry.value);
+    if (named.hostId !== start.hostId) continue;
+    served = true;
+    if (named.sourceInstanceId !== start.sourceInstanceId) continue;
+    try {
+      const found = parseOnFile(entry.file, entry.value);
+      return found
+        ? { found }
+        : { gone: `trigger file ${entry.file} no longer binds a run's end or settled asks` };
+    } catch (error) {
+      return { unread: error as Error };
+    }
+  }
+  if (unparsed) return { unread: unparsed };
+  return served
+    ? { gone: `trigger file for '${start.sourceInstanceId}' on host '${start.hostId}' is gone` }
+    : { notServed: true };
+}
+
+/** The source and host a parsed file names, read without its schema. */
+function rawStartNames(value: unknown): { sourceInstanceId?: unknown; hostId?: unknown } {
+  if (value === null || typeof value !== 'object') return {};
+  const config = value as { sourceInstanceId?: unknown; binding?: unknown };
+  const binding =
+    config.binding !== null && typeof config.binding === 'object'
+      ? (config.binding as { hostId?: unknown })
+      : {};
+  return { sourceInstanceId: config.sourceInstanceId, hostId: binding.hostId };
 }
 
 /** The input names a workflow declares: its own `inputs:` and its pack's settings. */

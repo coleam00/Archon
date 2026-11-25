@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A start that a run's end or settled asks caused follows its trigger file while it waits. When the file is registered again with another start config, a start not yet prepared is rebuilt from it and a queued one leaves its queue and is prepared again, with its inputs mapped again from what the run recorded; a file removed from the directory serving the start's host refuses the start on its item. A queued start whose workflow changed but whose file did not still runs as prepared, and so does a queued start recorded before this release. (#6225)
+
 ## [0.15.0] - 2026-11-25
 
 Runs belong to items, a stage hands off to the next through a binding instead of pausing, and an install with no server or webhooks can run the whole loop.

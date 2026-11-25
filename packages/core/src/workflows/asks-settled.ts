@@ -41,6 +41,7 @@ import {
   mappedInputs,
   readAsksSettledBindings,
   type AsksSettledBinding,
+  type MappedSources,
   type RunEndedStartsDependencies,
 } from './run-ended';
 import {
@@ -111,21 +112,7 @@ export function createAsksSettledStarts(
       const runId = rows[0]?.runId;
       if (runId === undefined) return [];
       const settledAs = rows.some(row => row.closed?.as === 'answered') ? 'answered' : 'withdrawn';
-      const answers = rows.map(settledAnswer);
-      const onItem = itemAnswers(itemAsks);
-      const from =
-        run === null
-          ? {
-              gone: `run '${runId}', which left the asks, no longer exists`,
-              answers,
-              itemAnswers: onItem,
-            }
-          : {
-              inputs: readSubrunMetadata(run.metadata).inputs ?? {},
-              result: readAsksResult(run.metadata),
-              answers,
-              itemAnswers: onItem,
-            };
+      const from = settledSources(runId, rows, run, itemAsks);
       return candidates
         .filter(({ asksSettled: { settled, option } }) =>
           option === undefined
@@ -149,6 +136,33 @@ export function createAsksSettledStarts(
         );
     };
   };
+}
+
+/**
+ * What an asks-settled binding maps from: the settled set, the item's answers and, while
+ * it exists, the asking run's inputs and result. The settling write and the rebuild of a
+ * waiting start (`waiting-start.ts`) both read it here.
+ */
+export function settledSources(
+  runId: string,
+  rows: readonly StoredItemAsk[],
+  run: AskingRunRow | null,
+  itemAsks: readonly AttentionRead<StoredItemAsk>[]
+): MappedSources {
+  const answers = rows.map(settledAnswer);
+  const onItem = itemAnswers(itemAsks);
+  return run === null
+    ? {
+        gone: `run '${runId}', which left the asks, no longer exists`,
+        answers,
+        itemAnswers: onItem,
+      }
+    : {
+        inputs: readSubrunMetadata(run.metadata).inputs ?? {},
+        result: readAsksResult(run.metadata),
+        answers,
+        itemAnswers: onItem,
+      };
 }
 
 /**

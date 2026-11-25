@@ -47,6 +47,7 @@ import {
 } from '@archon/workflows/run-config';
 import {
   RESOURCE_START_METADATA_KEY,
+  readResourceStartOrigin,
   readResourceStartReceiptId,
   ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
   CHECKOUT_HANDOFF_METADATA_KEY,
@@ -77,6 +78,9 @@ import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { handOffAdmitted, type StartedExecutor } from './start-executor';
 import { leaveForInstalledEngine } from './installed-engine-preparation';
+import { releaseQueuedLaunchSource } from './queued-launch-source';
+import type { TriggerEntry } from './run-ended';
+import { triggerEntriesReader, waitingStartFreshness } from './waiting-start';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { assertLaneStartable, executionLane, handoffIsolation } from './resource-start-lanes';
 import { resolveBindingInputs, selectStartedWorkflow } from './binding-workflow';
@@ -424,6 +428,7 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 async function preparePendingBindings(
   host: ResourceStartHost,
   failures: ResourceStartDrainFailure[],
+  entries: () => Promise<readonly TriggerEntry[]>,
   receiptIds?: readonly string[]
 ): Promise<void> {
   const PAGE = 100;
@@ -445,7 +450,7 @@ async function preparePendingBindings(
       });
       for (const binding of listed.filter(entry => !tried.has(key(entry)))) {
         tried.add(key(binding));
-        await preparePendingBinding(host, failures, binding);
+        await preparePendingBinding(host, failures, entries, binding);
       }
       // The limit counts bindings, not the damaged receipts reported beside them.
       if (listed.filter(entry => !('document' in entry)).length < limit) break;
@@ -456,21 +461,81 @@ async function preparePendingBindings(
 async function preparePendingBinding(
   host: ResourceStartHost,
   failures: ResourceStartDrainFailure[],
+  entries: () => Promise<readonly TriggerEntry[]>,
   binding: PendingStartBindingInspection
 ): Promise<void> {
   if ('document' in binding) return void failures.push({ error: binding.error });
   if (!binding.intent) return;
-  const { receiptId, bindingId } = binding;
+  const { receiptId, bindingId, bindingRevision } = binding;
   const identity = { receiptId, bindingId, ownerId: randomUUID() };
   if (!(await host.deps.store.claimStartBindingPreparation(identity))) return;
+  let intent: ResourceStartBindingIntent;
+  try {
+    intent = await followedIntent(host, identity, entries, {
+      bindingRevision,
+      intent: binding.intent,
+    });
+  } catch (error) {
+    return void failures.push({ receiptId, error });
+  }
   let disposition: PreparationResult;
   try {
-    disposition = await prepareClaimedBinding(host, binding.intent, identity);
+    disposition = await prepareClaimedBinding(host, intent, identity);
   } catch (error) {
     return void failures.push({ receiptId, error });
   }
   if (disposition.status === 'admitted')
     await startAdmittedRequest(host, failures, disposition.requestId, receiptId);
+}
+
+/**
+ * The intent a claimed binding prepares with: as its receipt froze it, or as its trigger
+ * file builds it now (`waitingStartFreshness`). Throws, with the binding rejected, when the
+ * file refuses the start; on any other failure the claim is given back first, so the next
+ * drain tries again.
+ */
+async function followedIntent(
+  host: ResourceStartHost,
+  identity: BindingIdentity,
+  entries: () => Promise<readonly TriggerEntry[]>,
+  binding: { bindingRevision: string | null; intent: ResourceStartBindingIntent }
+): Promise<ResourceStartBindingIntent> {
+  const { store } = host.deps;
+  try {
+    const receipt = await store.getStartReceipt(identity.receiptId);
+    if (!receipt) return binding.intent;
+    const freshness = await waitingStartFreshness(host, entries, {
+      receipt,
+      binding,
+      phase: 'pending',
+    });
+    if ('wait' in freshness) throw freshness.wait;
+    if ('refused' in freshness) {
+      const { reason, detail } = freshness.refused;
+      await store.failStartBindingPreparation({
+        ...identity,
+        retryable: false,
+        error: preparationStageFailure('launch_preparation'),
+        refusal: reason,
+      });
+      log.info({ ...identity, reason, detail }, 'resource_start.rebuilt_binding_refused');
+      throw new Error(`The start's trigger file no longer starts it: ${detail}`);
+    }
+    if (!('intent' in freshness)) return binding.intent;
+    if (!(await store.replaceStartBindingIntent({ ...identity, intent: freshness.intent })))
+      throw new Error('Preparation ownership changed before the rebuilt binding was written.');
+    log.info(
+      { ...identity, bindingRevision: freshness.intent.bindingRevision },
+      'resource_start.binding_rebuilt'
+    );
+    return freshness.intent;
+  } catch (error) {
+    // A no-op once the binding was rejected: the reset applies only while it is preparing.
+    await store.resetStartBindingPreparation(identity).catch((resetError: unknown) => {
+      throw new AggregateError([error, resetError], 'Giving back the preparation claim failed.');
+    });
+    throw error;
+  }
 }
 
 async function startAdmittedRequest(
@@ -507,7 +572,7 @@ export async function startReceiptBindings(
 ): Promise<void> {
   if (await heldPass(host)) return;
   const failures: ResourceStartDrainFailure[] = [];
-  await preparePendingBindings(host, failures, [...receiptIds]);
+  await preparePendingBindings(host, failures, triggerEntriesReader(), [...receiptIds]);
   if (failures.length > 0) throw new ResourceStartDrainError(failures);
 }
 
@@ -526,8 +591,15 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   const start = (requestId: string, receiptId?: string): Promise<void> =>
     startAdmittedRequest(host, failures, requestId, receiptId);
 
-  const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
+  const entries = triggerEntriesReader();
+  // A resource holding a start not known to follow its trigger file is not drained this pass.
   const failed = new Set<string>();
+  const queued = await returnStaleQueuedStarts(
+    host,
+    entries,
+    await host.deps.store.listQueuedResourceStartsForHost(host.hostId),
+    { failures, failed }
+  );
   const drain = async (resource: string): Promise<boolean> => {
     let decisions: ResourceStartDisposition[];
     try {
@@ -567,11 +639,68 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
       if (!failed.has(resource) && (await drain(resource))) admitted = true;
   }
 
-  await preparePendingBindings(host, failures);
+  await preparePendingBindings(host, failures, entries);
 
   if (failures.length > 0) {
     throw new ResourceStartDrainError(failures);
   }
+}
+
+/**
+ * The queued requests left once those whose trigger file changed or is gone
+ * (`waitingStartFreshness`) are taken from the queue, their bindings back to pending; the
+ * pass's own preparation then rebuilds or refuses each, behind the queue. A request whose
+ * own file does not read adds its resource to `failed`: the store admits a host's queue by
+ * resource, so the pass drains none of it rather than admit a launch its file may no
+ * longer say.
+ */
+async function returnStaleQueuedStarts(
+  host: ResourceStartHost,
+  entries: () => Promise<readonly TriggerEntry[]>,
+  queued: QueuedResourceStartInspection[],
+  pass: { failures: ResourceStartDrainFailure[]; failed: Set<string> }
+): Promise<QueuedResourceStartInspection[]> {
+  const { store } = host.deps;
+  const kept: QueuedResourceStartInspection[] = [];
+  for (const request of queued) {
+    const origin =
+      'error' in request ? undefined : readResourceStartOrigin(request.launch.run.metadata);
+    if (!origin || 'error' in request) {
+      kept.push(request);
+      continue;
+    }
+    let launch: PreparedWorkflowLaunch | null;
+    try {
+      const receipt = await store.getStartReceipt(origin.receiptId);
+      const binding = receipt?.bindings.find(entry => entry.bindingId === origin.bindingId);
+      const freshness =
+        receipt && binding?.intent
+          ? await waitingStartFreshness(host, entries, {
+              receipt,
+              binding: { bindingRevision: binding.bindingRevision, intent: binding.intent },
+              phase: 'queued',
+            })
+          : { fresh: true as const };
+      if ('wait' in freshness) throw freshness.wait;
+      if (!('stale' in freshness)) {
+        kept.push(request);
+        continue;
+      }
+      launch = await store.returnQueuedStartToPreparation({ requestId: request.id, ...origin });
+    } catch (error) {
+      pass.failures.push({ receiptId: origin.receiptId, error });
+      pass.failed.add(request.resource);
+      kept.push(request);
+      continue;
+    }
+    // Null: another process admitted or withdrew it first, so it is not this pass's to drain.
+    if (!launch) continue;
+    log.info({ requestId: request.id, ...origin }, 'resource_start.queued_start_returned');
+    await releaseQueuedLaunchSource(launch).catch((error: unknown) => {
+      pass.failures.push({ receiptId: origin.receiptId, error });
+    });
+  }
+  return kept;
 }
 
 function queuedDrainResources(

@@ -148,7 +148,7 @@ describe('run-ended starts', () => {
         },
       ],
     });
-    expect(receipt?.bindings[0]?.bindingRevision).toMatch(/^[0-9a-f]{64}$/);
+    expect(receipt?.bindings[0]?.bindingRevision).toMatch(/^start-config:[0-9a-f]{64}$/);
   });
 
   test('the stage started is the one the binding names, whatever the ended run returned', async () => {
