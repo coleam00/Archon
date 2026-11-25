@@ -963,6 +963,24 @@ describe('reading a work order', () => {
     });
   });
 
+  test("a nested order's unreadable merge and end reach the top order's degraded list", async () => {
+    // b is open under a, and a is under the order; a's merge and end rows do not read.
+    const lostMerge = { type: 'degraded', reason: 'merge_unreadable', itemId: a.id } as const;
+    const lostEnd = { type: 'degraded', reason: 'end_unreadable', endId: 'end-a' } as const;
+    const read = await readOrder({
+      links: [partOf(a, order), partOf(b, a)],
+      store: {
+        getItemMerge: async id => (id === a.id ? lostMerge : null),
+        getHoldingItemEnd: async id => (id === a.id ? lostEnd : null),
+      },
+    });
+    expect(read.workOrder?.state).toBe('open');
+    expect(read.degraded).toEqual([
+      { type: 'degraded', reason: 'member_unreadable', member: a, report: lostMerge },
+      { type: 'degraded', reason: 'member_unreadable', member: a, report: lostEnd },
+    ]);
+  });
+
   test('a part_of cycle reads unknown, whatever order its links were recorded in', async () => {
     // a and b are part of each other and of the order; c, part of b, merged.
     const cycle = [partOf(a, b), partOf(b, a), partOf(c, b)];

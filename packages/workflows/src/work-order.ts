@@ -79,27 +79,26 @@ async function walkWorkOrder(
  * A member's state. A member that is a work order itself has the state its own members
  * give it; its merge and end stay facts of its own and do not close it. Any other member
  * is merged, ended (an end that holds), or open. A link of the member that cannot be read
- * may be the `part_of` that makes it a work order, so the member then reads unknown.
+ * may be the `part_of` that makes it a work order, so the member then reads unknown. Every
+ * fact of the member that cannot be read is reported, whichever of them decides its state.
  */
 async function memberState(walk: Walk, member: WorkflowItem): Promise<WorkOrderMemberState> {
-  const unreadable = (report: WorkOrderMemberUnreadable['report']) =>
-    walk.degraded.set(`${member.id}:${JSON.stringify(report)}`, {
-      type: 'degraded',
-      reason: 'member_unreadable',
-      member,
-      report,
-    });
   const links = await walk.store.listItemLinks(member.id);
-  for (const link of links) if ('type' in link) unreadable(link);
+  const merge = await walk.store.getItemMerge(member.id);
+  const end = await readHoldingItemEnd(walk.store, member.id);
+  for (const read of [...links, merge, end])
+    if (read !== null && 'type' in read)
+      walk.degraded.set(`${member.id}:${JSON.stringify(read)}`, {
+        type: 'degraded',
+        reason: 'member_unreadable',
+        member,
+        report: read,
+      });
   const own = await walkWorkOrder(walk, member, links);
   if (own !== null) return own.state;
   if (links.some(link => 'type' in link)) return 'unknown';
-  const merge = await walk.store.getItemMerge(member.id);
   if (merge !== null && !('type' in merge)) return 'merged';
-  if (merge !== null) unreadable(merge);
-  const end = await readHoldingItemEnd(walk.store, member.id);
   if (end !== null && !('type' in end)) return 'ended';
-  if (end !== null) unreadable(end);
   // An unread merge or end may be the fact that closes the member.
   return merge !== null || end !== null ? 'unknown' : 'open';
 }
