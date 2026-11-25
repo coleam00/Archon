@@ -511,6 +511,13 @@ function addItemColumns(db: Database): void {
       'ALTER TABLE remote_agent_workflow_runs ADD COLUMN item_id TEXT REFERENCES remote_agent_items(id)'
     );
   }
+  // The run order's tie-break on SQLite is the rowid; see migrations/000_combined.sql.
+  if (!columnNames(db, 'remote_agent_items').has('moved_on_at')) {
+    db.run('ALTER TABLE remote_agent_items ADD COLUMN moved_on_at TEXT');
+  }
+  if (!columnNames(db, 'remote_agent_items').has('moved_on_tie')) {
+    db.run('ALTER TABLE remote_agent_items ADD COLUMN moved_on_tie INTEGER');
+  }
   db.run(
     'CREATE INDEX IF NOT EXISTS idx_workflow_runs_item ON remote_agent_workflow_runs(item_id) WHERE item_id IS NOT NULL'
   );

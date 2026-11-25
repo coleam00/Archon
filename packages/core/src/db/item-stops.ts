@@ -27,7 +27,8 @@ import { getLog } from './workflow-run-shared';
  * The completed runs that stopped their item and are still its last run (see
  * `IWorkflowStore.listStoppedItemRuns`). Runs on an item are ordered as `getItemRuns` orders
  * them: by start time, and on SQLite, which records it to the second, by insertion order
- * within a second. Any run after this one, in any status, ends the stop. A run that still
+ * within a second. Any run after this one, in any status, ends the stop, and so does one
+ * deleted since (`moved_on_at` on the item, recorded by the delete). A run that still
  * has an open ask or wait is not listed: the ask or wait is what needs someone, and the stop
  * shows once they close.
  */
@@ -44,6 +45,11 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
            AND (n.started_at > r.started_at
              OR (n.started_at = r.started_at AND n.${tie} > r.${tie}))
        )
+       -- A later run that was deleted still moved the item on.
+       AND NOT EXISTS (SELECT 1 FROM remote_agent_items i
+                        WHERE i.id = r.item_id
+                          AND (i.moved_on_at > r.started_at
+                            OR (i.moved_on_at = r.started_at AND i.moved_on_tie > r.${tie})))
        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
                         WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)
        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits

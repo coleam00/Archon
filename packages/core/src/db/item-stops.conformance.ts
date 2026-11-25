@@ -89,6 +89,27 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
     }
   });
 
+  test('deleting the run that moved an item on keeps its earlier stop closed', async () => {
+    const harness = await makeHarness();
+    try {
+      const deps = itemDeps(harness);
+      const stopped = async () =>
+        (await listAttentionQueue(deps.queue)).filter(
+          item => 'kind' in item && item.kind === 'stopped'
+        );
+      const stop = await completeOnItem(harness, 'deliver', 'replan', 'The plan missed it.');
+      const later = await completeOnItem(harness, 'plan', 'landed');
+      expect(await stopped()).toEqual([]);
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      await deleteWorkflowRun(later);
+      expect(await stopped()).toEqual([]);
+      // Nothing about the stop was erased: its run still records it.
+      expect((await harness.store.getWorkflowRun(stop))?.metadata).toHaveProperty('item_stopped');
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('of two stops on an item only the later run is listed', async () => {
     const harness = await makeHarness();
     try {
