@@ -88,29 +88,37 @@ development branch.
 
 ### Follow releases
 
+If `git branch --list main` prints nothing, your checkout has no local `main`
+yet. Create it once from origin's `main`:
+
 ```bash
-git remote set-branches origin '*'
-git fetch origin
-git switch main
-git pull --ff-only origin main
-bun install --frozen-lockfile
-bun run cli version
+git fetch origin main && git branch main FETCH_HEAD
 ```
 
-A clone made with `--single-branch` fetches only the branch it cloned, so
-`git switch main` fails there with `invalid reference: main`. The
-`set-branches` line makes `git fetch` fetch every branch, as a normal clone
-does; on a normal clone it changes nothing. `git switch main` then creates a
-local `main` that tracks `origin/main` the first time, and switches to it after
-that.
+Then update. Each step runs only if the one before it succeeded:
+
+```bash
+git fetch origin main && \
+  git switch main && \
+  git merge --ff-only FETCH_HEAD && \
+  bun install --frozen-lockfile && \
+  bun run cli version
+```
+
+This fetches `main` by name, so it works on a clone made with
+`--single-branch` of `dev`, which never fetches `main` on its own.
 
 ### Follow development
 
+Use this on a checkout whose `dev` branch tracks the repository's `dev`, as a
+normal clone does. A clone made with `--single-branch` of `main` has no `dev`;
+follow releases instead.
+
 ```bash
-git switch dev
-git pull --ff-only origin dev
-bun install --frozen-lockfile
-bun run cli version
+git switch dev && \
+  git pull --ff-only && \
+  bun install --frozen-lockfile && \
+  bun run cli version
 ```
 
 If you serve the console from source, rebuild it with `bun run build:web` before
