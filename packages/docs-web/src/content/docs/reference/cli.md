@@ -2529,6 +2529,14 @@ nothing in it is needed, then run `archon isolation list`, which retires a recor
 is missing unless a run can still claim it; the next cleanup pass does the same. A checkout that exists but cannot be read
 still fails the pass.
 
+Merged cleanup judges merges against `worktree.remote`, or `origin` when that is unset. A
+repository with neither, such as one with no remote, or with only remotes under other names,
+gets no merge judgment. A worktree environment that reaches the merge judgment in `--merged`
+or the scheduled sweep is kept instead and reported as skipped, with a reason that names
+`worktree.remote`. Checks that come earlier still apply first: the platform, missing-path and
+run-ownership rules above. These skips are not failures and do not change the exit status.
+`--merged` prints the reason; the scheduled sweep's server log records only totals.
+
 With `--json`, `--merged` prints one document, `{ "codebases": [...] }`. Each entry carries
 `codebaseId`, `repositoryUrl`, `path`, and a `kind`: `swept` with the sweep's `result`
 (`removed`, `skipped`, `warnings`, `releasedFailedRuns`, `errors`); `repository-gone` with

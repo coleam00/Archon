@@ -4,6 +4,7 @@ import { GitFailure } from '@archon/git';
 import type * as Isolation from '@archon/isolation';
 import { cleanupStaleWorktrees, runScheduledCleanup } from '../cleanup-service';
 import { cleanupMergedWorktrees, type CleanupOperationResult } from './merged-sweep';
+import { NO_MERGE_REMOTE_REASON } from './merge-verdict';
 import {
   NO_PR,
   daysAgo,
@@ -16,6 +17,7 @@ import {
   mockHasUncommittedChanges,
   mockWorktreeExists,
   mockGetDefaultBranch,
+  mockGetDefaultRemote,
   mockIsBranchMerged,
   mockIsPatchEquivalent,
   mockLocalBranchExists,
@@ -368,6 +370,46 @@ describe('cleanupMergedWorktrees', () => {
       expect(mockGetPrState).not.toHaveBeenCalled();
     }
   );
+
+  test.each(
+    (['manual', 'scheduled'] as const).flatMap(sweep =>
+      ([null, 'upstream'] as const).map(detected => ({ sweep, detected }))
+    )
+  )(
+    '$sweep cleanup keeps a worktree without judging it when no origin or worktree.remote exists (detected: $detected)',
+    async ({ sweep, detected }) => {
+      mergedSweepFinds(
+        worktreeEnv('local-only'),
+        worktreeEnv('folder', { id: 'env-folder', provider: 'container' })
+      );
+      scheduledSweepFinds(sweptWorktreeEnv('local-only', { created_at: daysAgo(30) }));
+      mockWorktreeExists.mockResolvedValue(true);
+      mockIsBranchMerged.mockResolvedValue(true);
+      mockGetDefaultRemote.mockResolvedValue(detected);
+      const result =
+        sweep === 'manual'
+          ? await sweepMerged('codebase-1', '/workspace/repo')
+          : await runScheduledCleanup();
+      expect(result.skipped.map(entry => entry.reason)).toEqual([NO_MERGE_REMOTE_REASON]);
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual([]);
+      expect(mockIsBranchMerged).not.toHaveBeenCalled();
+      expect(mockGetPrState).not.toHaveBeenCalled();
+      expect(mockDestroy).not.toHaveBeenCalled();
+    }
+  );
+
+  test('a project with only containers sweeps nothing and asks Git nothing', async () => {
+    mergedSweepFinds(worktreeEnv('folder', { id: 'env-folder', provider: 'container' }));
+    mockGetDefaultRemote.mockRejectedValue(new Error('not a git repository'));
+    expect(await sweepMerged('codebase-1', '/workspace/folder')).toEqual({
+      errors: [],
+      removed: [],
+      warnings: [],
+      skipped: [],
+      releasedFailedRuns: [],
+    });
+  });
 
   test.each(['CLOSED', 'MERGED'] as const)(
     'preserves associated %s evidence when the branch ref is gone',
