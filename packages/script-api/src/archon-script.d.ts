@@ -2644,6 +2644,11 @@ declare module 'archon:script' {
           readonly bindingId: string;
           readonly workflow: string;
         };
+        readonly fileSetting?: {
+          readonly setting: string;
+          readonly path: string;
+          readonly origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+        };
       };
     } | {
       readonly kind: 'preparation_lost';
@@ -3331,6 +3336,11 @@ declare module 'archon:script' {
             readonly used: number;
             readonly bindingId: string;
             readonly workflow: string;
+          };
+          readonly fileSetting?: {
+            readonly setting: string;
+            readonly path: string;
+            readonly origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
           };
         };
       } | {

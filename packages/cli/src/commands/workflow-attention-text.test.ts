@@ -288,7 +288,7 @@ test('a refused start names its item, its reason and what moves it on', () => {
   });
   expect(limited).toContain("start limit 'rounds': 1 of 1 starts used");
   // A code a newer binary wrote reads as it is.
-  expect(lines('file_setting_missing')).toContain('file_setting_missing');
+  expect(lines('a_newer_code')).toContain('a_newer_code');
 });
 
 test('a lost preparation names its start and the recovery that returns it to pending', () => {

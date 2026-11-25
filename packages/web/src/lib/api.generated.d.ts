@@ -8062,6 +8062,12 @@ export interface components {
               bindingId: string;
               workflow: string;
             };
+            fileSetting?: {
+              setting: string;
+              path: string;
+              /** @enum {string} */
+              origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+            };
           };
         }
       | {
@@ -8524,6 +8530,12 @@ export interface components {
                 used: number;
                 bindingId: string;
                 workflow: string;
+              };
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
               };
             };
           }
@@ -9119,6 +9131,12 @@ export interface components {
                 used: number;
                 bindingId: string;
                 workflow: string;
+              };
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
               };
             };
           }
@@ -9989,6 +10007,12 @@ export interface components {
                   bindingId: string;
                   workflow: string;
                 };
+                fileSetting?: {
+                  setting: string;
+                  path: string;
+                  /** @enum {string} */
+                  origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+                };
               };
             }
           | {
@@ -10791,6 +10815,12 @@ export interface components {
                     used: number;
                     bindingId: string;
                     workflow: string;
+                  };
+                  fileSetting?: {
+                    setting: string;
+                    path: string;
+                    /** @enum {string} */
+                    origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
                   };
                 };
               }
