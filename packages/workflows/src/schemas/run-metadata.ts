@@ -96,6 +96,19 @@ export function subrunSummaryMetadata(value: unknown): Record<string, unknown> {
     : { [SUBRUN_METADATA_KEYS.summaryValue]: value };
 }
 
+/**
+ * The value `subrunSummaryMetadata` stamped, or undefined when none was. Presence-keyed
+ * rather than truthiness: `false`/`0` are legitimate values. A merge never keeps a null
+ * `summary_value`, so the marker restores it.
+ */
+function readSubrunSummaryValue(metadata: Record<string, unknown> | undefined): unknown {
+  if (metadata === undefined) return undefined;
+  if (Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)) {
+    return metadata[SUBRUN_METADATA_KEYS.summaryValue];
+  }
+  return metadata[SUBRUN_METADATA_KEYS.summaryValueNull] === true ? null : undefined;
+}
+
 /** Parent deletion clears the foreign key; this creation-only key preserves child provenance. */
 export function initialRunMetadata(
   metadata: Record<string, unknown> | undefined,
@@ -179,14 +192,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
     fanOutItemHash: typeof fanOutItemHash === 'string' ? fanOutItemHash : undefined,
     inputs,
-    // Presence-keyed rather than truthiness: `false`/`0` are legitimate values. A null
-    // result is never stored under `summary_value` by a merge, so its marker restores it.
-    summaryValue:
-      metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
-        ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
-        : metadata?.[SUBRUN_METADATA_KEYS.summaryValueNull] === true
-          ? null
-          : undefined,
+    summaryValue: readSubrunSummaryValue(metadata),
     summaryDeclaredOutputPaths,
   };
 }
