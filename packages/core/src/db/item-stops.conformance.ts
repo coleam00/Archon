@@ -301,6 +301,42 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
         metadata: { scheduled_resume: { resumeAt: new Date(Date.now() + 60_000).toISOString() } },
       });
       expect(await stopped()).toEqual([]);
+
+      // A run that failed with an unknown outcome names the nodes from its terminal record,
+      // and only its resume or abandon closes it: a later run on the item does not, and a
+      // child run with no item is listed too.
+      const unknown = await createOnItem(harness, 'check');
+      await harness.store.claimPendingWorkflowRun(unknown);
+      await harness.store.persistWorkflowEvent({
+        workflow_run_id: unknown,
+        event_type: 'node_failed',
+        step_name: 'fan__b__write',
+        data: { error: 'timed out', failure_kind: 'outcome_unknown' },
+      });
+      await harness.store.failWorkflowRun(unknown, 'write timed out', {
+        exitReason: 'outcome_unknown',
+      });
+      await createOnItem(harness, 'check');
+      const child = await harness.store.createWorkflowRun({
+        workflow_name: 'writer',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        parent_run_id: unknown,
+      });
+      await harness.store.claimPendingWorkflowRun(child.id);
+      await harness.store.failWorkflowRun(child.id, 'write timed out', {
+        exitReason: 'outcome_unknown',
+      });
+      const listed = await stopped();
+      expect(listed).toMatchObject([
+        {
+          stoppedIn: { runId: unknown },
+          item: { key: 'pr-7' },
+          failed: { outcomeUnknown: ['fan__b__write'] },
+        },
+        { stoppedIn: { runId: child.id }, failed: { outcomeUnknown: [] } },
+      ]);
+      expect(listed[1]).not.toHaveProperty('item');
     } finally {
       await harness.close();
     }

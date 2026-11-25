@@ -130,10 +130,11 @@ const itemBase = {
  * item and its resource slot among them, and the engine never ends it by itself;
  * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
  * open past their deadline, which the awaited event, another run of the waiting workflow
- * on the item, or a withdrawal closes; `stopped` is an item whose newest step completed
- * with an ending that started no step, left no ask or wait and ended nothing, or failed, so
- * nothing moves it: it takes no answer, and a newer step, its end or its merge closes it (a
- * run that observes the item, `observes: true`, is not a step);
+ * on the item, or a withdrawal closes; `stopped`, which takes no answer, is an item whose newest
+ * step failed, or completed with an ending that started no step, left no ask or wait and ended
+ * nothing, until a newer step, its end or its merge (a run that observes the item,
+ * `observes: true`, is not a step); or a failed run whose outcome is unknown, until it is
+ * resumed or abandoned;
  * `refused_start` is a start no run caused that was refused and is its item's newest step;
  * `preparation_lost` is a binding start whose preparer this process can prove gone, which
  * `archon trigger recover-preparation` returns to pending.
@@ -219,8 +220,10 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** Set when the start the run caused was refused: at its limit, or before launch. */
     limit: stoppedLimitSchema.optional(),
     refused: z.array(stoppedRefusalSchema).optional(),
-    /** Set when the run failed: its recorded error, or null when it recorded none. */
-    failed: z.object({ error: z.string().nullable() }).optional(),
+    /** Set when the run failed: its error or null; `outcomeUnknown` names uncertain nodes. */
+    failed: z
+      .object({ error: z.string().nullable(), outcomeUnknown: z.array(z.string()).optional() })
+      .optional(),
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),

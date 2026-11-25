@@ -342,6 +342,21 @@ export function packWorkflowName(names: readonly string[], declared: string): st
 }
 
 /**
+ * Every workflow name one binding declares: the workflow it starts, the run it follows,
+ * the workflow whose run resets its limit, and the workflow it wakes. `archon pack bindings`
+ * resolves each of these with `packWorkflowName`, so a field that names a workflow there
+ * belongs here too.
+ */
+export function bindingWorkflowNames(binding: PackBinding): string[] {
+  const kinded = kindedPackBinding(binding);
+  const from = declaredFrom(binding);
+  const wake = kinded.kind === 'event' ? kinded.binding.wake?.workflow : undefined;
+  return [binding.workflow, from, binding.limit?.reset_on, wake].filter(
+    (name): name is string => name !== undefined
+  );
+}
+
+/**
  * Every full workflow name that belongs to the pack: its stages, and each name its
  * run-ended and asks-settled bindings declare, qualified within the pack, so a stage that
  * failed to load still counts. A trigger file touches the pack when one of its ends is in

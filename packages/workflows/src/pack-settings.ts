@@ -265,6 +265,9 @@ function parseForgeNeeds(raw: Record<string, unknown>, fail: Fail): PackForgeNee
   return fail(`'forge' is invalid${where}: ${issue?.message ?? 'unknown error'}`);
 }
 
+/** Where a pack's declaration sits, relative to the pack directory. */
+export { PACK_DECLARATION_PATH };
+
 /**
  * Read a pack directory's declaration. A pack with no `.pack/pack.yaml` declares nothing.
  *

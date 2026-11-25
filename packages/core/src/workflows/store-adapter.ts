@@ -42,6 +42,7 @@ import { acceptStartReceipt } from '../db/start-receipt-writes';
 import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
 import * as installHold from '../db/install-hold';
 import { queuedItemStarts } from '../db/item-step';
+import { isOutcomeUnknownRun } from '@archon/workflows/unknown-outcome';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
 import { listMetricRecords } from '../db/workflow-metrics';
@@ -196,14 +197,15 @@ async function listItemStarts(itemId: string): Promise<ItemStart[]> {
  * The runs that stopped their item (`itemStopsDb.listStoppedItemRuns`), less those a start
  * they caused still holds back: a start on the run's own item, caused by its end, its settled
  * asks or one of its nodes, that has no run yet and is not an observer (`ItemStart`). Once
- * that start's run exists, the store's step rule decides.
+ * that start's run exists, the store's step rule decides. A run whose outcome is unknown is
+ * never held back: only resuming or abandoning it closes its entry.
  */
 async function listStoppedItemRuns(): ReturnType<IWorkflowStore['listStoppedItemRuns']> {
   const candidates = await itemStopsDb.listStoppedItemRuns();
   const startsOn = new Map<string, Promise<ItemStart[]>>();
   const stopped: Awaited<ReturnType<IWorkflowStore['listStoppedItemRuns']>> = [];
   for (const run of candidates) {
-    if ('type' in run || run.item_id === null) {
+    if ('type' in run || run.item_id === null || isOutcomeUnknownRun(run)) {
       stopped.push(run);
       continue;
     }

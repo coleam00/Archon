@@ -14,6 +14,7 @@ import {
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { WORKTREE_REMOVAL_OWNER } from '@archon/isolation/types';
 import {
+  claimedFailureStatuses,
   sourceReleaseMetadata,
   DETACHED_LAUNCH_METADATA_KEY,
   EXECUTION_CLAIM_METADATA_KEY,
@@ -522,6 +523,7 @@ export async function failWorkflowRun(
     pendingOnly,
     changeSize,
   } = options;
+  const claimed = claimedFailureStatuses(options).map(status => `'${status}'`);
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
@@ -539,7 +541,7 @@ export async function failWorkflowRun(
   const claimPredicate =
     expectedExecutionClaim === undefined
       ? ''
-      : ` AND status = 'running' AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${
+      : ` AND status IN (${claimed.join(', ')}) AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${
           expectedExecutionClaim === null
             ? 'IS NULL'
             : `= $${pendingLaunchToken !== undefined ? 4 : 3}`
@@ -555,7 +557,7 @@ export async function failWorkflowRun(
          WHERE id = $1 AND ${
            pendingLaunchToken !== undefined
              ? `status = 'pending' AND ${dialect.jsonText('metadata', DETACHED_LAUNCH_METADATA_KEY)} = $3`
-             : "status IN ('running', 'pending')"
+             : `status IN (${[...claimed, "'pending'"].join(', ')})`
          }${pendingOnly ? " AND status = 'pending'" : ''}${claimPredicate}`,
         [
           id,

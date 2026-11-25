@@ -592,6 +592,7 @@ describe('typed provider failures decide retry — #3520', () => {
       child_failed: 'unknown',
       cancelled: 'fatal',
       config: 'fatal',
+      outcome_unknown: 'fatal',
     });
   });
 });

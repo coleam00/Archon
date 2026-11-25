@@ -1271,7 +1271,12 @@ continues automatically after reset, and `unreadable` needs inspection. `stopped
 item whose last step ended in an outcome no step followed and left no ask; it takes no
 answer, and a new step on the item (not a run of a workflow that observes it),
 [ending the item](#workflow-end) or
-[recording its merge](#workflow-merged) closes it ([kinds](/getting-started/operate/)). Read-only.
+[recording its merge](#workflow-merged) closes it ([kinds](/getting-started/operate/)). A run
+that failed with stop reason
+[`outcome_unknown`](/reference/workflow-language/#a-failure-whose-outcome-is-unknown) is a
+`stopped` item too, also as a child run or with no item; it names the nodes whose outcome is
+unknown, offers `resume` and `abandon`, and closes only when the run is resumed or abandoned.
+Read-only.
 
 ```bash
 archon workflow attention --json                                   # this project
@@ -2388,7 +2393,7 @@ Each outcome of a step workflow that would [stop its item](/guides/workflow-trig
 
 A pack that declares [forge needs](/reference/workflow-language/#pack-forge-needs) gets a `pack_forge` warning for each listed capability no installed forge plugin advertises, and for a plugin that could not be discovered. It is a warning, not an error: which plugins are installed is a fact about this install, and a run of the pack is refused at start until one serves it.
 
-When the directory you run it in holds an `archon-plugin.json` (a plugin root, also one inside a repository), each key its manifest kind does not declare gets a `manifest_unknown_key` warning under the result named `archon-plugin.json`, with or without a workflow name, such as `unknown key 'compatibility.min' is ignored`. Archon ignores such keys when it installs or loads a plugin, so a manifest written for a newer Archon still works here; the warning is how a misspelled key shows up. A workflow-pack manifest that declares a `skill` whose folder holds no `SKILL.md` gets a `manifest_skill` error there, because installing the pack would refuse it.
+When the directory you run it in holds an `archon-plugin.json` (a plugin root, also one inside a repository), each key its manifest kind does not declare gets a `manifest_unknown_key` warning under the result named `archon-plugin.json`, with or without a workflow name, such as `unknown key 'compatibility.min' is ignored`. Archon ignores such keys when it installs or loads a plugin, so a manifest written for a newer Archon still works here; the warning is how a misspelled key shows up. A workflow-pack manifest that declares a `skill` whose folder holds no `SKILL.md` gets a `manifest_skill` error there, because installing the pack would refuse it. A binding in the pack's `.pack/pack.yaml` that names a workflow the manifest does not list under `entrypoints` gets a `manifest_entrypoints` error there too, for each such name: an installed copy runs only its entrypoints, so [`pack bindings`](#pack-bindings) refuses that binding, while a pack folder given as `--workflow-source` sees every workflow and would not. A binding names its own pack's stage by the bare entrypoint key (`plan`), and `pack bindings` adds the installed `owner/plugin:` prefix; a qualified name such as `acme/factory:plan` gets the same error, because a pack folder cannot know the owner it will be installed under.
 
 Exit code: 0 = all valid, 1 = errors found.
 
