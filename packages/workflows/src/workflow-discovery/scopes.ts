@@ -127,11 +127,13 @@ function parseBundledWorkflow(
       error: { filename, error: error.message, errorType: 'validation_error' },
     };
   }
-  return parseWorkflow(content, filename, providers, configuredEnvNames, {
+  const { warnings = [], ...settings } = declared;
+  const parsed = parseWorkflow(content, filename, providers, configuredEnvNames, {
     key: owner.pack,
     source: 'bundled',
-    ...declared,
+    ...settings,
   });
+  return parsed.workflow ? { ...parsed, warnings: [...parsed.warnings, ...warnings] } : parsed;
 }
 
 /**

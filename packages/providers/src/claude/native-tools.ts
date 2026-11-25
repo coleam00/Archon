@@ -24,9 +24,17 @@ export function buildArchonMcpServer(nativeTools: NativeTool[]): McpSdkServerCon
         inputSchema: schema as unknown as SdkInput,
         _meta: { 'anthropic/alwaysLoad': true },
       },
-      async (args: unknown) => ({
-        content: [{ type: 'text', text: await spec.handler(schema.parse(args)) }],
-      })
+      async (
+        args: unknown,
+        extra: { requestId: string | number; _meta?: Record<string, unknown> }
+      ) => {
+        // Claude Code names the model's tool_use id in the request metadata. Without it
+        // the MCP request id, a counter per server, still tells one call from the next.
+        const toolUseId = extra._meta?.['claudecode/toolUseId'];
+        const providerCallId = typeof toolUseId === 'string' ? toolUseId : String(extra.requestId);
+        const text = await spec.handler(schema.parse(args), { providerCallId });
+        return { content: [{ type: 'text', text }] };
+      }
     );
   }
   return server;

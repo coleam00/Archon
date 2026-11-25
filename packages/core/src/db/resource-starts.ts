@@ -1,3 +1,4 @@
+import { storedBindingRefusal } from '@archon/workflows/schemas/binding-refusal';
 import { WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import { insertWorkflowEvent } from './workflow-events';
 import { z } from 'zod';
@@ -19,7 +20,6 @@ import type {
   QueuedResourceStartInspection,
   SkippedItemStart,
 } from '@archon/workflows/resource-start-store';
-import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 export type {
   StartBindingInspection,
@@ -47,7 +47,6 @@ import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run'
 import { getDatabase, getDialect } from './connection';
 import {
   addResourceSlotHolder,
-  liveItemRuns,
   lockAdmission,
   lockResourceSlot,
   lockResourceSlotForAdmission,
@@ -60,11 +59,8 @@ import {
 import { drainAdmits, runLimitBlocker } from './run-room';
 import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
-import { getLog } from './workflow-run-shared';
-import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
-import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
+import { currentProcessOwner } from '@archon/paths/process-owner';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { toHydratedTimestamp } from './timestamps';
 import { InstallHeldError } from '@archon/workflows/store';
@@ -571,57 +567,6 @@ export async function listSkippedItemStarts(itemId: string): Promise<SkippedItem
   }));
 }
 
-/** Runs by id; a row that cannot be normalized is reported `run_unreadable`. */
-async function readRunsForAttention(ids: readonly string[]): Promise<AttentionRead<WorkflowRun>[]> {
-  const runs: AttentionRead<WorkflowRun>[] = [];
-  for (const id of ids) {
-    const row = (
-      await getDatabase().query<WorkflowRunRow>(
-        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
-        [id]
-      )
-    ).rows[0];
-    if (row === undefined) continue;
-    try {
-      runs.push(normalizeWorkflowRun(row));
-    } catch {
-      // Parser errors can quote stored data, including message text.
-      getLog().error({ workflowRunId: id }, 'attention_run_normalization_failed');
-      runs.push({ type: 'degraded', reason: 'run_unreadable', runId: id });
-    }
-  }
-  return runs;
-}
-
-export async function listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]> {
-  const db = getDatabase();
-  const runs = await liveItemRuns(db.query.bind(db));
-  const queued = await db.query<{ id: string; item_id: string; launch: unknown }>(
-    `SELECT id, item_id, launch FROM remote_agent_resource_start_requests
-      WHERE status = 'queued' AND item_id IS NOT NULL`
-  );
-  const held = itemHolders(runs);
-  const waiting = [
-    ...runs
-      .filter(run => !holdsItem(run))
-      .map(run => ({ runId: run.id, workflow: run.workflow_name, itemId: run.item_id })),
-    ...queued.rows.flatMap(row => {
-      const launch = preparedWorkflowLaunchSchema.safeParse(parseStoredJson(row.launch));
-      // A damaged request is reported by the trigger reads; it names no workflow here.
-      if (!launch.success) return [];
-      const workflow = launch.data.run.workflow_name;
-      return [{ runId: String(row.id), workflow, itemId: String(row.item_id) }];
-    }),
-  ];
-  const ids = new Set(
-    waiting.flatMap(start => {
-      const holder = itemHolder(held, start);
-      return holder === undefined ? [] : [holder];
-    })
-  );
-  return readRunsForAttention([...ids]);
-}
-
 export async function listQueuedResourceStartsForHost(
   hostId: string
 ): Promise<QueuedResourceStartInspection[]> {
@@ -716,10 +661,11 @@ export async function claimStartBindingPreparation(input: {
   bindingId: string;
   ownerId: string;
 }): Promise<boolean> {
+  // The claiming process is recorded beside the owner id, so a reader can prove it gone.
   const result = await getDatabase().query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'preparing', preparation_owner = $3, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'preparing', preparation_owner = $3, preparation_process = $4, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status IN ('pending','failed')`,
-    [input.receiptId, input.bindingId, input.ownerId]
+    [input.receiptId, input.bindingId, input.ownerId, JSON.stringify(currentProcessOwner)]
   );
   return result.rowCount === 1;
 }
@@ -756,12 +702,18 @@ export async function completeStartBindingPreparation(
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(row.intent));
     const { limit, grants } = storedLimitFields(row.start_limit, row.grants_limit);
     const item = await namedItem(query, input, row.item_key);
-    const counted = await countStartLimits(query, item, limit, grants);
+    const counted = await countStartLimits(query, item, limit, grants, { ...input, persisted });
     if ('refused' in counted) {
       await query(
-        `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'rejected', preparation_error = $4, forge_refusal = NULL, updated_at = ${getDialect().now()}
+        `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'rejected', preparation_error = $4, forge_refusal = NULL, refusal = $5, updated_at = ${getDialect().now()}
           WHERE receipt_id = $1 AND binding_id = $2 AND preparation_owner = $3`,
-        [input.receiptId, input.bindingId, input.ownerId, counted.refused]
+        [
+          input.receiptId,
+          input.bindingId,
+          input.ownerId,
+          counted.refused,
+          storedBindingRefusal('start_limit', counted.limit),
+        ]
       );
       return { status: 'refused', reason: counted.refused };
     }
@@ -799,35 +751,14 @@ async function namedItem(
   return { id: await ensureItem(query, input.launch.run.codebase_id, key), key };
 }
 
-export async function failStartBindingPreparation(input: {
-  receiptId: string;
-  bindingId: string;
-  ownerId: string;
-  retryable: boolean;
-  error: string;
-  forgeRefusal?: ForgeRefusal;
-}): Promise<boolean> {
-  const result = await getDatabase().query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = $4, preparation_error = $5, forge_refusal = $6, updated_at = ${getDialect().now()}
-      WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
-    [
-      input.receiptId,
-      input.bindingId,
-      input.ownerId,
-      input.retryable ? 'failed' : 'rejected',
-      input.error,
-      input.forgeRefusal ? JSON.stringify(input.forgeRefusal) : null,
-    ]
-  );
-  return result.rowCount === 1;
-}
+export { failStartBindingPreparation } from './refused-preparation';
 
 export async function resetStartBindingPreparation(
   input: { receiptId: string; bindingId: string; ownerId: string },
   query: Query = (sql, params) => getDatabase().query(sql, params)
 ): Promise<boolean> {
   const result = await query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'pending', preparation_owner = NULL, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'pending', preparation_owner = NULL, preparation_process = NULL, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
     [input.receiptId, input.bindingId, input.ownerId]
   );

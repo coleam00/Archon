@@ -1,8 +1,7 @@
 /**
  * Where an item's change lands: the branch the item records, else the branch of the
- * nearest item it is `part_of`. This is the one meaning the engine gives a link kind: a
- * work order's members land where the work order lands. Every reader (a start, the item
- * read) resolves through here, so they cannot disagree.
+ * nearest item it is `part_of`, so a work order's members land where the work order lands.
+ * Every reader (a start, the item read) resolves through here, so they cannot disagree.
  */
 import type { ResolvedItemLanding } from './schemas/item-landing';
 import type { WorkflowItem } from './schemas/workflow-run';

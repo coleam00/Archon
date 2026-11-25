@@ -48,7 +48,9 @@ async function resolveArtifactsRun(
   let run: WorkflowRun | null = null;
   let artifactsDir: string | null;
   try {
-    run = await host.deps.store.getWorkflowRun(await resolveRunIdArg(host, runId, opts.cwd));
+    run = await host.deps.store.getWorkflowRun(
+      await resolveRunIdArg(host, runId, opts.cwd, 'refuse-outside-project')
+    );
     if (!run) return fail(opts.json, `Workflow run not found: ${runId}`, runId);
     artifactsDir = await resolveRunArtifactsDir(host, run);
   } catch (error) {

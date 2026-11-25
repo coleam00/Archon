@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -15,6 +15,7 @@ import {
   launchProjectKey,
   readTriggerFileHosts,
 } from './run-ended';
+import { runEndedStops } from './run-ended-stops';
 
 /** No project is registered in these tests. */
 const NO_PROJECT_LOOKUPS = {
@@ -702,4 +703,105 @@ describe('the hosts trigger files name', () => {
       failures: [],
     });
   });
+});
+
+describe('the outcomes after which an item stops', () => {
+  test('are those of a named workflow that are neither final, bound, nor able to leave an ask', async () => {
+    const root = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-stops-')));
+    const workflows = join(root, '.archon', 'workflows');
+    await mkdir(workflows, { recursive: true });
+    const stage = (name: string, returns: string): string =>
+      `name: ${name}\ndescription: ${name}\nreturns: ${returns}\nnodes:\n  - id: result\n    bash: echo '{}'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [approve, replan, landed] }\n      required: [stage]\n`;
+    await writeFile(
+      join(workflows, 'deliver.yaml'),
+      stage('deliver', '{ node: result, outcome: stage, final: [landed] }')
+    );
+    await writeFile(
+      join(workflows, 'review.yaml'),
+      stage('review', '{ node: result, outcome: stage, asks: asks }')
+    );
+    const binding = {
+      bindingId: 'b',
+      bindingRevision: null,
+      hostId: 'host',
+      runAsUserId: 'operator',
+      resource: 'r',
+      overlap: 'queue' as const,
+      launch: {
+        cwd: root,
+        workflowName: 'review',
+        inputs: {},
+        isolation: { kind: 'default' as const },
+      },
+    };
+
+    const stops = await runEndedStops(
+      [
+        {
+          file: 'b.json',
+          sourceInstanceId: 'b',
+          binding,
+          runEnded: { workflowName: 'deliver', outcome: 'approve' },
+        },
+      ],
+      {
+        loadConfig: async () => ({
+          assistant: 'claude' as const,
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+        }),
+        providers: providerRegistry,
+        projectOf: async () => null,
+        projectKeyOf: async () => 'acme/widgets',
+      }
+    );
+
+    // `approve` is bound and `landed` final; `review` can leave an ask.
+    expect(stops).toEqual([{ project: 'acme/widgets', workflow: 'deliver', outcome: 'replan' }]);
+  });
+});
+
+test('each binding of a project reads the workflows of its own definition source', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-sources-')));
+  const deps = {
+    loadConfig: async () => ({
+      assistant: 'claude' as const,
+      assistants: { claude: {}, codex: {} },
+      commands: {},
+    }),
+    providers: providerRegistry,
+    projectOf: async () => null,
+    projectKeyOf: async () => 'acme/widgets',
+  };
+  const fireOnly = async (name: string) => {
+    const source = join(root, `${name}-source`);
+    await mkdir(join(source, '.archon', 'workflows'), { recursive: true });
+    await writeFile(
+      join(source, '.archon', 'workflows', `${name}.yaml`),
+      `name: ${name}\ndescription: ${name}\nreturns: { node: result, outcome: stage }\nnodes:\n  - id: result\n    bash: echo '{}'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [replan] }\n      required: [stage]\n`
+    );
+    return {
+      file: `${name}.json`,
+      sourceInstanceId: name,
+      binding: {
+        bindingId: name,
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: 'r',
+        overlap: 'queue' as const,
+        launch: {
+          cwd: root,
+          discoveryCwd: source,
+          workflowName: name,
+          inputs: {},
+          isolation: { kind: 'default' as const },
+        },
+      },
+    };
+  };
+
+  const stops = await runEndedStops([await fireOnly('alpha'), await fireOnly('beta')], deps);
+
+  expect(stops.map(stop => stop.workflow).sort()).toEqual(['alpha', 'beta']);
 });

@@ -165,6 +165,9 @@ export function fakeGitHub(
   return { fetch, state, comments, calls };
 }
 
+/** When the merge fixture's pull request reads back as merged. */
+export const MERGED_AT = '2026-11-20T09:30:00Z';
+
 export function mergeGitHub(
   options: {
     stale?: boolean;
@@ -175,9 +178,14 @@ export function mergeGitHub(
     supplementalMissing?: boolean;
     mergedFalse?: boolean;
     readFailed?: boolean;
+    /** Merged before the request, by hand. */
+    alreadyMerged?: boolean;
+    /** The forge reports no merge time for the merged pull request. */
+    noMergeTime?: boolean;
   } = {}
 ) {
-  let wrote = false;
+  let wrote = options.alreadyMerged ?? false;
+  const mergedAt = options.noMergeTime ? null : MERGED_AT;
   const writes: unknown[] = [];
   const mergePull = (init: RequestInit) => {
     writes.push(JSON.parse(String(init.body)));
@@ -201,7 +209,13 @@ export function mergeGitHub(
     }
     if (wrote && options.readFailed) return json({}, 500);
     return json({
-      ...pull({ draft: false, merged: wrote, state: wrote ? 'closed' : 'open' }),
+      ...pull({
+        draft: false,
+        merged: wrote,
+        state: wrote ? 'closed' : 'open',
+        merged_at: wrote ? mergedAt : null,
+        closed_at: wrote ? MERGED_AT : null,
+      }),
       head: {
         ref: 'feature',
         sha: options.stale || (wrote && options.mismatch) ? 'other' : 'headsha',

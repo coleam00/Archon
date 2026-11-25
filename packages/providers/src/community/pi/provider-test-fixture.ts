@@ -242,17 +242,19 @@ export const MockDefaultResourceLoader = mock((_opts: unknown) => ({
 }));
 const mockGetAgentDir = mock(() => process.env.PI_CODING_AGENT_DIR?.trim() || '/mock/.pi/agent');
 
-const mockCreateReadTool = mock((_cwd: string) => ({ __piTool: 'read' }));
+const mockCreateReadTool = mock((_cwd: string) => ({ __piTool: 'read', name: 'read' }));
 export const mockCreateBashTool = mock((_cwd: string, _options?: unknown) => ({
   __piTool: 'bash',
+  name: 'bash',
 }));
-const mockCreateEditTool = mock((_cwd: string) => ({ __piTool: 'edit' }));
-const mockCreateWriteTool = mock((_cwd: string) => ({ __piTool: 'write' }));
-const mockCreateGrepTool = mock((_cwd: string) => ({ __piTool: 'grep' }));
-const mockCreateFindTool = mock((_cwd: string) => ({ __piTool: 'find' }));
-const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
+const mockCreateEditTool = mock((_cwd: string) => ({ __piTool: 'edit', name: 'edit' }));
+const mockCreateWriteTool = mock((_cwd: string) => ({ __piTool: 'write', name: 'write' }));
+const mockCreateGrepTool = mock((_cwd: string) => ({ __piTool: 'grep', name: 'grep' }));
+const mockCreateFindTool = mock((_cwd: string) => ({ __piTool: 'find', name: 'find' }));
+const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls', name: 'ls' }));
 export const mockCreatePowerShellTool = mock((_cwd: string, _options?: unknown) => ({
   __piTool: 'powershell',
+  name: 'powershell',
 }));
 
 export const mockDefineTool = mock(

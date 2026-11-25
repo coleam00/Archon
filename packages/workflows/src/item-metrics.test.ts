@@ -20,6 +20,7 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
     operatorPause: null,
     hasResult: false,
     resultCommit: null,
+    changeSize: null,
   };
 }
 
@@ -38,6 +39,7 @@ function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
     answers: [],
     links: [],
     landing: null,
+    ended: null,
     merged:
       mergedAt === null
         ? null

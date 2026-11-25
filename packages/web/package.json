@@ -68,6 +68,9 @@
       "src/experiments/DraftRunCardInteraction.test.tsx"
     ],
     [
+      "src/experiments/DraftRunRerun.test.tsx"
+    ],
+    [
       "src/experiments/ApprovalPanelResponse.test.tsx"
     ],
     [

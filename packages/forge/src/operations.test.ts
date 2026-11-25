@@ -67,6 +67,16 @@ test('merge conditions cannot disappear during validation and reruns cannot dupl
       conditions: { head: 'head', extra: 'unsafe' },
     }).success
   ).toBe(false);
+  // A merge not pinned to a head is refused before it reaches a plugin.
+  expect(
+    forgeRequestSchema.safeParse({
+      operationId: '1',
+      op: 'pr.merge',
+      ref,
+      method: 'merge',
+      conditions: { base: 'base' },
+    }).success
+  ).toBe(false);
   const selected = { unit: failed.unit, rerun: null };
   for (const units of [[], [selected, selected]])
     expect(

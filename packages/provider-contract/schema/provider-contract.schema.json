@@ -1354,88 +1354,109 @@
                 "type": "string"
               },
               "inputSchema": {
-                "type": "object",
-                "properties": {
-                  "properties": {
+                "anyOf": [
+                  {
                     "type": "object",
-                    "propertyNames": {
-                      "type": "string"
-                    },
-                    "additionalProperties": {
-                      "oneOf": [
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "const": "string"
-                            },
-                            "description": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "kind"
-                          ]
+                    "properties": {
+                      "properties": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
                         },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "const": "enum"
-                            },
-                            "values": {
-                              "readOnly": true,
-                              "type": "array",
-                              "prefixItems": [
-                                {
+                        "additionalProperties": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "string"
+                                },
+                                "description": {
                                   "type": "string"
                                 }
-                              ],
-                              "items": {
-                                "type": "string"
                               },
-                              "minItems": 1
+                              "required": [
+                                "kind"
+                              ]
                             },
-                            "description": {
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "values"
-                          ]
-                        },
-                        {
-                          "type": "object",
-                          "properties": {
-                            "kind": {
-                              "type": "string",
-                              "const": "boolean"
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "enum"
+                                },
+                                "values": {
+                                  "readOnly": true,
+                                  "type": "array",
+                                  "prefixItems": [
+                                    {
+                                      "type": "string"
+                                    }
+                                  ],
+                                  "items": {
+                                    "type": "string"
+                                  },
+                                  "minItems": 1
+                                },
+                                "description": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "values"
+                              ]
                             },
-                            "description": {
-                              "type": "string"
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "const": "boolean"
+                                },
+                                "description": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind"
+                              ]
                             }
-                          },
-                          "required": [
-                            "kind"
                           ]
                         }
-                      ]
-                    }
+                      },
+                      "required": {
+                        "readOnly": true,
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "required": [
+                      "properties",
+                      "required"
+                    ]
                   },
-                  "required": {
-                    "readOnly": true,
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
+                  {
+                    "type": "object",
+                    "properties": {
+                      "jsonSchema": {
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {
+                          "$ref": "#/$defs/schema10"
+                        }
+                      }
+                    },
+                    "required": [
+                      "jsonSchema"
+                    ]
                   }
-                },
-                "required": [
-                  "properties",
-                  "required"
                 ]
               }
             },
@@ -1725,8 +1746,12 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema10"
+            "$ref": "#/$defs/schema11"
           }
+        },
+        "providerCallId": {
+          "type": "string",
+          "minLength": 1
         }
       },
       "required": [
@@ -1769,7 +1794,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema11"
+            "$ref": "#/$defs/schema12"
           }
         }
       },
@@ -2493,6 +2518,37 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/schema11"
+          }
+        }
+      ]
+    },
+    "schema12": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema12"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema12"
           }
         }
       ]

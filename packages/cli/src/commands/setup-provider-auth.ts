@@ -8,6 +8,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { execSync } from 'child_process';
 import { execFileAsync } from '@archon/git';
+import { validateProviderConcurrencyConfig } from '@archon/core/config';
 import { loadGlobalConfig } from '@archon/core/config/config-loader';
 import { PI_PROVIDER_ENV_VARS } from '@archon/providers';
 import { CODEX_SETUP_ENV } from '@archon/providers/codex/setup-env';
@@ -558,7 +559,8 @@ export async function collectCodexAuth(): Promise<CodexTokens | null> {
  * setting and comment. The model was already agreed in `collectPiConfig`, which
  * asks before replacing a different saved model, so this writes without asking.
  * A file setup cannot parse, or an `assistants` value that is not a mapping,
- * is left alone with a note showing the YAML to add.
+ * is left alone with a note showing the YAML to add. Provider caps that admission
+ * would refuse throw `InvalidConfigError` before the write, as `updateGlobalConfig` does.
  */
 export async function writeHomePiModelConfig(model: string): Promise<void> {
   // Use the paths-package version of getArchonHome so Docker (/.archon) is
@@ -585,7 +587,11 @@ export async function writeHomePiModelConfig(model: string): Promise<void> {
     manualNote();
     return;
   }
-  writeFileSync(configPath, doc.toString());
+  const next = doc.toString();
+  // Check the text admission will read, parsed the way admission parses it: the `yaml`
+  // library resolves merge keys (`<<`) differently from Bun's parser.
+  validateProviderConcurrencyConfig(Bun.YAML.parse(next) ?? {}, configPath);
+  writeFileSync(configPath, next);
   log.info(`Pi model written to ${configPath}`);
 }
 

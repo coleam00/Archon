@@ -15,6 +15,8 @@ import { describeLinkedStartConformance } from './linked-starts.conformance-harn
 import { describeSqlItemAskStartConformance } from './item-ask-starts.conformance';
 import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { describeSqlRunDeleteConformance } from './workflow-run-delete.conformance';
+import { describeSqlItemStopConformance } from './item-stops.conformance';
+import { describeSqlItemEndConformance } from './item-ends.conformance';
 import { describeSqlStartLimitConformance } from './start-limits.conformance';
 import { describeSqlItemWaitConformance } from './item-waits.conformance';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
@@ -44,6 +46,8 @@ describeItemLandingConformance(makeHarness);
 describeLinkedStartConformance(makeHarness);
 describeSqlItemAskConformance(makeHarness);
 describeSqlItemWaitConformance(makeHarness);
+describeSqlItemStopConformance(makeHarness);
+describeSqlItemEndConformance(makeHarness);
 describeSqlItemAskStartConformance(makeHarness);
 describeSqlRunDeleteConformance(makeHarness);
 describeSqlStartLimitConformance(makeHarness);

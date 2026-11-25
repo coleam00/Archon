@@ -63,15 +63,22 @@ function evaluateBinding(
   event: ForgeEvent
 ): { start: ResourceStartBindingIntent } | { skipped: EvaluatedBinding } {
   const bindingRevision = createHash('sha256').update(JSON.stringify(binding)).digest('hex');
-  const skipped = (status: EvaluatedBinding['status'], reason: string) => ({
-    skipped: { bindingId: binding.bindingId, bindingRevision, status, reason },
-  });
   const { selector, inputMapping, item, wake, ...intent } = binding;
+  // The item is mapped first, so a refusal past it says which item it was for.
+  const itemKey = item ? mappedItemKey(item, readForgeEventField(event, item.field)) : undefined;
+  const skipped = (status: EvaluatedBinding['status'], reason: string) => ({
+    skipped: {
+      bindingId: binding.bindingId,
+      bindingRevision,
+      status,
+      reason,
+      ...(itemKey?.ok === true ? { itemKey: itemKey.key } : {}),
+    },
+  });
   if (!matchForgeEvent(selector, event)) return skipped('unmatched', 'selector_did_not_match');
+  if (itemKey && !itemKey.ok) return skipped('rejected', `Item: ${itemKey.reason}`);
   const mapped = mapForgeInputs(inputMapping, event);
   if (!mapped.ok) return skipped('rejected', `Input '${mapped.input}': ${mapped.reason}`);
-  const itemKey = item ? mappedItemKey(item, readForgeEventField(event, item.field)) : undefined;
-  if (itemKey && !itemKey.ok) return skipped('rejected', `Item: ${itemKey.reason}`);
   const woken = wake ? wakeOf(wake, event) : undefined;
   if (woken && 'reason' in woken) return skipped('rejected', woken.reason);
   // Field mappings carry event content; literal mappings are the operator's own values.
@@ -616,10 +623,7 @@ async function labelAcceptance(
     actor: added.actor,
   } satisfies ForgeEvent;
   const evaluated = evaluateBinding(binding, event);
-  if ('skipped' in evaluated)
-    return evaluated.skipped.status === 'rejected'
-      ? failure(`the binding rejects the event: ${evaluated.skipped.reason}`)
-      : undefined;
+  if ('skipped' in evaluated && evaluated.skipped.status !== 'rejected') return undefined;
   const receipt: SourceReceiptInput = {
     id: randomUUID(),
     sourceInstanceId,
@@ -637,16 +641,32 @@ async function labelAcceptance(
   // The two clocks are the forge's and this host's, so an add within their skew of the
   // first sight can fall on either side of it.
   const seen = read.seenSince === null || Date.parse(added.at) < Date.parse(read.seenSince);
+  if (seen)
+    return {
+      kind: 'accepted',
+      acceptance: {
+        receipt,
+        outcome: 'unmatched',
+        reason: 'label was on the item when the binding was first observed',
+        bindings: [],
+      },
+    };
+  // A refused add is recorded once, as a webhook delivery's refusal is: its receipt names
+  // the refused binding and why, so it is not read and reported again on every pass.
+  if ('skipped' in evaluated)
+    return {
+      kind: 'accepted',
+      acceptance: {
+        receipt,
+        outcome: 'unmatched',
+        reason: 'the binding rejects the event',
+        bindings: [],
+        evaluatedBindings: [evaluated.skipped],
+      },
+    };
   return {
     kind: 'accepted',
-    acceptance: seen
-      ? {
-          receipt,
-          outcome: 'unmatched',
-          reason: 'label was on the item when the binding was first observed',
-          bindings: [],
-        }
-      : { receipt, outcome: 'matched', bindings: [evaluated.start] },
+    acceptance: { receipt, outcome: 'matched', bindings: [evaluated.start] },
   };
 }
 

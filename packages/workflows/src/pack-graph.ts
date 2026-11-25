@@ -12,7 +12,7 @@
  * started the next.
  */
 import { z } from 'zod';
-import { declaredOutcome, outcomeValues } from './completed-outcome';
+import { declaredOutcome, isFinalOutcome, outcomeValues } from './completed-outcome';
 import { readComposedMeta } from './compiled-command';
 import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
@@ -70,12 +70,16 @@ const packGraphStageSchema = z.object({
            * is the pack's call.
            */
           startsNothing: z.boolean(),
+          /** The stage declares this outcome final (`returns.final`): its item needs nothing more. */
+          final: z.boolean(),
         })
       ),
     })
     .nullable(),
   /** The stage declares `result.asks`, so a run can end leaving questions on its item. */
   asks: z.boolean(),
+  /** The stage declares `result.waits`, so a run can end leaving its item waiting on an event. */
+  waits: z.boolean(),
   nodes: z.array(packGraphNodeSchema),
 });
 
@@ -566,6 +570,7 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
       values: values.map(value => ({
         value,
         startsNothing: !started.has(arrowKey({ stage: stage.name, outcome: value }, '')),
+        final: isFinalOutcome(stage, value),
       })),
     };
   }
@@ -574,6 +579,7 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
     returns: stage.returns ?? null,
     outcome,
     asks: stage.result?.asks !== undefined,
+    waits: stage.result?.waits !== undefined,
     nodes: stageNodes(stage),
   };
 }

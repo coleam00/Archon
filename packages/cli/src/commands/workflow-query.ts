@@ -425,7 +425,7 @@ export async function workflowWaitCommand(
   let result: RunWaitResult;
   let resolvedId: string;
   try {
-    resolvedId = await resolveRunIdArg(host, runId, cwd);
+    resolvedId = await resolveRunIdArg(host, runId, cwd, 'refuse-outside-project');
     result = await waitForRunAttention(host.deps.store, resolvedId, {
       doorbell: host.doorbell,
       // No timeout by default: a wait that ends on its own clock would answer a
@@ -464,7 +464,7 @@ export async function workflowLogsCommand(
 ): Promise<number> {
   let resolvedId = runId;
   try {
-    resolvedId = await resolveRunIdArg(host, runId, cwd);
+    resolvedId = await resolveRunIdArg(host, runId, cwd, 'refuse-outside-project');
     let run = await host.deps.store.getWorkflowRun(resolvedId);
     if (!run) {
       await writeStderr(`Workflow run not found: ${runId}\n`);

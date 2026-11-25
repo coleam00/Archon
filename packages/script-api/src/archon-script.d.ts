@@ -708,7 +708,7 @@ declare module 'archon:script' {
         };
         readonly method: 'merge' | 'squash';
         readonly conditions: {
-          readonly head?: string;
+          readonly head: string;
           readonly base?: string;
           readonly tree?: string;
         };
@@ -758,6 +758,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
     };
     'checks.rerun': {
@@ -1749,6 +1750,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
       readonly rerun?: {
         readonly revision: string;
@@ -1842,6 +1844,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
       readonly rerun?: {
         readonly revision: string;
@@ -1949,6 +1952,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
       readonly rerun?: {
         readonly revision: string;
@@ -1978,6 +1982,13 @@ declare module 'archon:script' {
       readonly outcome: 'outcome_unknown';
     };
     readonly credentialSource?: string;
+    readonly itemRecord?: {
+      readonly recorded: true;
+      readonly landing: 'recorded' | 'kept';
+    } | {
+      readonly recorded: false;
+      readonly reason: 'no_merge_time' | 'already_recorded' | 'write_failed';
+    };
     readonly unsupported?: ReadonlyArray<string>;
     readonly remedy?: string;
   };
@@ -2294,6 +2305,13 @@ declare module 'archon:script' {
       } | null;
       readonly hasResult: boolean;
       readonly resultCommit: string | null;
+      readonly changeSize: {
+        readonly base: string;
+        readonly commit: string;
+        readonly files: number;
+        readonly added: number;
+        readonly removed: number;
+      } | null;
     }>;
     readonly queued: ReadonlyArray<{
       readonly requestId: string;
@@ -2344,6 +2362,14 @@ declare module 'archon:script' {
       readonly granted: number;
       readonly used: number;
       readonly left: number;
+      readonly bindings: ReadonlyArray<{
+        readonly bindingId: string;
+        readonly workflow: string;
+        readonly runEnded: {
+          readonly workflowName: string;
+          readonly outcome: string;
+        } | null;
+      }> | null;
     }>;
     readonly waits: ReadonlyArray<{
       readonly event: string;
@@ -2403,6 +2429,7 @@ declare module 'archon:script' {
         readonly why: string;
         readonly confidence?: 'low' | 'medium' | 'high';
       };
+      readonly noRecommendation?: string;
       readonly context?: string;
       readonly artifacts?: ReadonlyArray<{
         readonly type: 'archon_artifact';
@@ -2549,6 +2576,10 @@ declare module 'archon:script' {
         };
       };
       readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      readonly start?: {
+        readonly requestId: string;
+        readonly hostId: string;
+      };
     } | {
       readonly kind: 'overdue_wait';
       readonly ref: string;
@@ -2574,6 +2605,103 @@ declare module 'archon:script' {
         readonly about: string;
       }>;
       readonly deadline: string;
+    } | {
+      readonly kind: 'stopped';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly stoppedIn: {
+        readonly runId: string;
+        readonly workflow: string;
+        readonly outcome: string | null;
+      };
+      readonly summary: string | null;
+      readonly limit?: {
+        readonly name: string;
+        readonly starts: number;
+        readonly granted: number;
+        readonly used: number;
+        readonly bindingId: string;
+        readonly workflow: string;
+      };
+      readonly refused?: ReadonlyArray<{
+        readonly receiptId: string;
+        readonly bindingId: string;
+        readonly workflow: string;
+        readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
+        readonly refusedAt: string;
+      }>;
+      readonly failed?: {
+        readonly error: string | null;
+      };
+      readonly checkout: string | null;
+    } | {
+      readonly kind: 'refused_start';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly start: {
+        readonly receiptId: string;
+        readonly bindingId: string;
+        readonly hostId: string | null;
+        readonly workflow: string | null;
+        readonly itemKey: string;
+        readonly reason: string;
+        readonly limit?: {
+          readonly name: string;
+          readonly starts: number;
+          readonly granted: number;
+          readonly used: number;
+          readonly bindingId: string;
+          readonly workflow: string;
+        };
+      };
+    } | {
+      readonly kind: 'preparation_lost';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly start: {
+        readonly receiptId: string;
+        readonly bindingId: string;
+        readonly hostId: string | null;
+        readonly workflow: string | null;
+        readonly itemKey: string | null;
+        readonly ownerId: string;
+      };
     }>;
     readonly answers: ReadonlyArray<{
       readonly kind: 'attention';
@@ -2737,6 +2865,22 @@ declare module 'archon:script' {
         };
       };
     } | null;
+    readonly ended: {
+      readonly kind: 'ended';
+      readonly id: string;
+      readonly reason: string;
+      readonly at: string;
+      readonly via: string;
+      readonly by: {
+        readonly declared: string;
+      } | {
+        readonly userId: string;
+      } | null;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+    } | null;
     readonly degraded: ReadonlyArray<{
       readonly type: 'degraded';
       readonly reason: 'run_unreadable';
@@ -2757,6 +2901,10 @@ declare module 'archon:script' {
       readonly type: 'degraded';
       readonly reason: 'landing_unresolved';
       readonly message: string;
+    } | {
+      readonly type: 'degraded';
+      readonly reason: 'end_unreadable';
+      readonly endId: string;
     }>;
   };
 
@@ -2840,6 +2988,13 @@ declare module 'archon:script' {
         } | null;
         readonly hasResult: boolean;
         readonly resultCommit: string | null;
+        readonly changeSize: {
+          readonly base: string;
+          readonly commit: string;
+          readonly files: number;
+          readonly added: number;
+          readonly removed: number;
+        } | null;
       }>;
       readonly queued: ReadonlyArray<{
         readonly requestId: string;
@@ -2890,6 +3045,14 @@ declare module 'archon:script' {
         readonly granted: number;
         readonly used: number;
         readonly left: number;
+        readonly bindings: ReadonlyArray<{
+          readonly bindingId: string;
+          readonly workflow: string;
+          readonly runEnded: {
+            readonly workflowName: string;
+            readonly outcome: string;
+          } | null;
+        }> | null;
       }>;
       readonly waits: ReadonlyArray<{
         readonly event: string;
@@ -2949,6 +3112,7 @@ declare module 'archon:script' {
           readonly why: string;
           readonly confidence?: 'low' | 'medium' | 'high';
         };
+        readonly noRecommendation?: string;
         readonly context?: string;
         readonly artifacts?: ReadonlyArray<{
           readonly type: 'archon_artifact';
@@ -3095,6 +3259,10 @@ declare module 'archon:script' {
           };
         };
         readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly start?: {
+          readonly requestId: string;
+          readonly hostId: string;
+        };
       } | {
         readonly kind: 'overdue_wait';
         readonly ref: string;
@@ -3120,6 +3288,103 @@ declare module 'archon:script' {
           readonly about: string;
         }>;
         readonly deadline: string;
+      } | {
+        readonly kind: 'stopped';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly stoppedIn: {
+          readonly runId: string;
+          readonly workflow: string;
+          readonly outcome: string | null;
+        };
+        readonly summary: string | null;
+        readonly limit?: {
+          readonly name: string;
+          readonly starts: number;
+          readonly granted: number;
+          readonly used: number;
+          readonly bindingId: string;
+          readonly workflow: string;
+        };
+        readonly refused?: ReadonlyArray<{
+          readonly receiptId: string;
+          readonly bindingId: string;
+          readonly workflow: string;
+          readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
+          readonly refusedAt: string;
+        }>;
+        readonly failed?: {
+          readonly error: string | null;
+        };
+        readonly checkout: string | null;
+      } | {
+        readonly kind: 'refused_start';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly start: {
+          readonly receiptId: string;
+          readonly bindingId: string;
+          readonly hostId: string | null;
+          readonly workflow: string | null;
+          readonly itemKey: string;
+          readonly reason: string;
+          readonly limit?: {
+            readonly name: string;
+            readonly starts: number;
+            readonly granted: number;
+            readonly used: number;
+            readonly bindingId: string;
+            readonly workflow: string;
+          };
+        };
+      } | {
+        readonly kind: 'preparation_lost';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly start: {
+          readonly receiptId: string;
+          readonly bindingId: string;
+          readonly hostId: string | null;
+          readonly workflow: string | null;
+          readonly itemKey: string | null;
+          readonly ownerId: string;
+        };
       }>;
       readonly answers: ReadonlyArray<{
         readonly kind: 'attention';
@@ -3283,6 +3548,22 @@ declare module 'archon:script' {
           };
         };
       } | null;
+      readonly ended: {
+        readonly kind: 'ended';
+        readonly id: string;
+        readonly reason: string;
+        readonly at: string;
+        readonly via: string;
+        readonly by: {
+          readonly declared: string;
+        } | {
+          readonly userId: string;
+        } | null;
+        readonly fromRun: {
+          readonly runId: string;
+          readonly nodePath: string;
+        } | null;
+      } | null;
       readonly degraded: ReadonlyArray<{
         readonly type: 'degraded';
         readonly reason: 'run_unreadable';
@@ -3303,6 +3584,10 @@ declare module 'archon:script' {
         readonly type: 'degraded';
         readonly reason: 'landing_unresolved';
         readonly message: string;
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'end_unreadable';
+        readonly endId: string;
       }>;
     }>;
     readonly next: string | null;
@@ -3557,6 +3842,8 @@ declare module 'archon:script' {
    * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item), and
    * {@link HostCommandError} when the host gives no answer, in which case the merge may or
    * may not have been recorded. A container run cannot call it, as it has no host CLI.
+   * A `pr.merge` through {@link forge} on a run with an item records the merge by itself
+   * when the forge plugin reports its merge time; calling this afterwards keeps that record.
    */
   export function recordMerge(merge: {
       readonly change: string;
@@ -3569,6 +3856,9 @@ declare module 'archon:script' {
    * the run is on no item), and {@link HostCommandError} when the host gives no answer, in
    * which case the branch may or may not have been recorded.
    * A container run cannot call it, as it has no host CLI.
+   * A `pr.merge` through {@link forge} on a run with an item records the merged pull
+   * request's base branch by itself, with the merge, when the forge plugin reports its merge
+   * time; recording the same branch afterwards changes nothing.
    */
   export function recordLanding(branch: string): ItemLanding;
   /**

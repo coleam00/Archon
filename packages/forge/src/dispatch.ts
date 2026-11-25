@@ -335,9 +335,6 @@ function refuseBeforeRun(request: ForgeRequest, metadata: PluginMetadata): Forge
     };
   }
   if (request.op !== 'pr.merge') return undefined;
-  if (!request.conditions.head) {
-    return { kind: 'invalid_request', message: 'A merge requires the approved head condition' };
-  }
   const enforced = metadata.mutationConditions?.['pr.merge'];
   if (
     Object.keys(request.conditions).some(key => !enforced?.some(condition => condition === key))
@@ -473,7 +470,7 @@ export async function checkForgeAccess(
           kind: 'unsupported_op',
           message: `plugin ${name} ${version} does not support ${unsupported.join(', ')}`,
         },
-        plugin.metadata
+        plugin
       ),
       unsupported,
     };
@@ -483,7 +480,7 @@ export async function checkForgeAccess(
   if (credential.kind === 'missing') {
     return refused(
       { kind: 'no_credential', message: credential.message },
-      plugin.metadata,
+      plugin,
       credentialEnvNames(plugin, discovery, host).override
     );
   }
@@ -576,20 +573,21 @@ type PreReadRefusalKind = Exclude<ForgeAccessRefusalKind, 'authorization' | 'not
 /** A refusal the operator fixes, with their next step: the plugin's text, else forge's. */
 function refused(
   error: ForgeError & { kind: PreReadRefusalKind },
-  metadata?: PluginMetadata,
+  plugin?: DiscoveredPlugin,
   tokenEnvOverride?: string
 ): Extract<ForgeAccessCheck, { ok: false }> {
-  return { ok: false, error, remedy: remedy(error.kind, metadata, tokenEnvOverride) };
+  return { ok: false, error, remedy: remedy(error.kind, plugin, tokenEnvOverride) };
 }
 
 function remedy(
   kind: PreReadRefusalKind,
-  metadata: PluginMetadata | undefined,
+  plugin: DiscoveredPlugin | undefined,
   tokenEnvOverride: string | undefined
 ): string {
-  if (kind === 'no_plugin_for_host' || metadata === undefined) {
-    return "Install a forge plugin that claims this host with `archon plugin add`, or map the host to an installed plugin under `forge.hosts` in Archon's config.";
+  if (kind === 'no_plugin_for_host' || plugin === undefined) {
+    return "Install a forge plugin that claims this host with `archon plugin add <owner/repo[/path][@tag]>`, or map the host to an installed plugin under `forge.hosts` in Archon's config.";
   }
+  const { metadata } = plugin;
   // The plugin's own text names the variables it declares, which a configured token_env replaces.
   if (kind === 'no_credential' && tokenEnvOverride) {
     return `Set ${tokenEnvOverride}, the token_env Archon's config names for plugin ${metadata.name}, in Archon's env file or the run's environment.`;
@@ -597,8 +595,28 @@ function remedy(
   const own = metadata.remedies?.[kind];
   if (own) return own;
   return kind === 'unsupported_op'
-    ? `Update plugin ${metadata.name} (installed ${metadata.version}) with \`archon plugin update\`; \`archon plugin list\` shows what is installed.`
+    ? replacePluginStep(plugin)
     : `Supply the credential plugin ${metadata.name} reads${metadata.token_env.length > 0 ? ` (${metadata.token_env.join(', ')})` : ''} in Archon's env file or the run's environment.`;
+}
+
+/**
+ * How the operator gets a plugin version that serves a missing operation. Forge reads
+ * no receipts, so it cannot tell whether `archon plugin add` owns what runs; it names
+ * what runs and leaves ownership to `archon plugin list`, which shows each forge
+ * receipt's executable. A configured entry's args are not echoed: they may hold a secret.
+ */
+function replacePluginStep({ metadata, origin, command }: DiscoveredPlugin): string {
+  const plugin = `plugin ${metadata.name} ${metadata.version}`;
+  const owned =
+    "if `archon plugin list` shows a forge receipt for it, run `archon plugin update <id>` with that receipt's id, or the repair command the list prints for it; otherwise replace it with a version that supports the operation.";
+  switch (origin) {
+    case 'scanned':
+      return `Update ${command}, which runs ${plugin}: ${owned}`;
+    case 'configured':
+      return `Update the executable or script that the \`forge\` entry for ${plugin} in Archon's config runs: ${owned}`;
+    case 'source':
+      return `Update Archon: this source checkout runs ${plugin}, so a newer revision is where a version that supports the operation comes from.`;
+  }
 }
 
 async function runOperation(

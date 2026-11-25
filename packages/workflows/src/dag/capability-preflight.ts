@@ -153,7 +153,7 @@ export interface ScopedCapabilityMismatch {
 }
 
 /**
- * Collect AI nodes that name `mcp:`, `skills:` or `plugins:` while their resolved
+ * Collect AI nodes that name `mcp:`, `skills:`, `plugins:` or `tools:` while their resolved
  * provider declares that capability `false`. Unknown providers are skipped here;
  * they fail later with a clearer "unknown provider" error.
  */

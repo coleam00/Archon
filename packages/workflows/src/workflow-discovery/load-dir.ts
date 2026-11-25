@@ -233,12 +233,11 @@ export async function loadPackWorkflows(
   const listing = await readPackWorkflowFolders(packPath, pack.label);
   if ('error' in listing) return { files, errors: [listing.error] };
   let workflowPack: WorkflowPack | PackSettingsError;
+  let declarationWarnings: readonly string[] = [];
   try {
-    workflowPack = {
-      key: pack.pack,
-      source: pack.source,
-      ...(await loadPackDeclaration(packPath, pack.label)),
-    };
+    const { warnings, ...declared } = await loadPackDeclaration(packPath, pack.label);
+    declarationWarnings = warnings ?? [];
+    workflowPack = { key: pack.pack, source: pack.source, ...declared };
   } catch (error) {
     if (!(error instanceof PackSettingsError)) throw error;
     getLog().warn({ err: error, packPath }, 'pack_declaration_invalid');
@@ -250,7 +249,7 @@ export async function loadPackWorkflows(
       errors.push(entry.error);
       continue;
     }
-    const loaded = await loadPackWorkflowFile(pack, workflowPack, entry);
+    const loaded = await loadPackWorkflowFile(pack, workflowPack, declarationWarnings, entry);
     if ('parsed' in loaded) files.push(loaded);
     else errors.push(loaded);
   }
@@ -262,6 +261,7 @@ export async function loadPackWorkflows(
 async function loadPackWorkflowFile(
   pack: PackLoad,
   workflowPack: WorkflowPack | PackSettingsError,
+  declarationWarnings: readonly string[],
   { folder, path, filename }: PackWorkflowLocation
 ): Promise<PackWorkflowFile | WorkflowLoadError> {
   const folderLabel = `${pack.label}/${folder}`;
@@ -296,7 +296,7 @@ async function loadPackWorkflowFile(
     filename,
     parsed: {
       workflow: parsed.workflow,
-      parseWarnings: parsed.warnings,
+      parseWarnings: [...parsed.warnings, ...declarationWarnings],
       filePath: resolve(path, filename),
     },
   };

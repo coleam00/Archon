@@ -10,8 +10,8 @@ export interface ChildWorkflowOutcome extends RunUsageFigures {
   /** Child's terminal output (its first sink node's output), threaded as `$<id>.output`. */
   output?: string;
   /**
-   * The terminal node's structured payload (#2637), read from `metadata.summary_value`
-   * when the child stamped one. Threads the LOGICAL value back to the parent so
+   * The terminal node's structured payload (#2637), decoded by `readSubrunMetadata`
+   * when the child stamped one (a null result is stored as a marker). Threads the LOGICAL value back to the parent so
    * `$<id>.output.field` access and fan-out aggregation keep the type instead of
    * re-encoding the text. Absent for text-only children and pre-#2637 rows.
    */

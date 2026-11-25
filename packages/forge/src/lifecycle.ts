@@ -104,10 +104,8 @@ export const prCloseRequestSchema = requestBase.extend({
 });
 // The marker identifies the one canonical comment, so it has to survive a
 // first-line comparison against a body the forge may have re-wrapped.
-const commentMarker = text.refine(
-  value => !/[\r\n]/.test(value),
-  'comment marker must be one line'
-);
+const oneLine = (what: string) => text.refine(v => !/[\r\n]/.test(v), `${what} must be one line`);
+const commentMarker = oneLine('comment marker');
 /** The pull-request form, kept for callers and installed plugins that predate subjects. */
 export const commentUpsertRequestSchema = requestBase.extend({
   op: z.literal('comment.upsert'),
@@ -140,7 +138,9 @@ export const workItemCreateRequestSchema = requestBase
     repo: repoRefSchema,
     title: text,
     body: text,
-    marker: text.refine(value => !/[\r\n]/.test(value), 'marker must be one line'),
+    marker: oneLine('marker').describe(
+      "Chosen for this one item and used by no other; a create that repeats a marker returns the item it first created. The body's first line must be this marker."
+    ),
   })
   .refine(
     value => value.body.split(/\r?\n/, 1)[0] === value.marker,
@@ -248,7 +248,7 @@ export const prMergeRequestSchema = requestBase.extend({
   op: z.literal('pr.merge'),
   ref: prRefSchema,
   method: z.enum(['merge', 'squash']),
-  conditions: mergeConditionsSchema,
+  conditions: mergeConditionsSchema.extend({ head: gitObjectIdSchema }),
 });
 export const checksRerunRequestSchema = requestBase.extend({
   op: z.literal('checks.rerun'),
@@ -476,6 +476,8 @@ export const mergeEvidenceSchema = z.object({
   method: prMergeRequestSchema.shape.method,
   conditions: mergeConditionsSchema,
   landed: landedSchema.optional(),
+  // The earlier merge's time, on a refusal that observed it merged; `response-match` checks it.
+  merged_at: z.iso.datetime({ offset: true }).optional(),
 });
 
 export const lifecycleReadRequestSchemas = [
@@ -717,6 +719,9 @@ export const mutationResultSchemas = [
       conditions: mergeConditionsSchema,
       enforcedConditions: z.array(mergeConditionSchema),
       landed: landedSchema,
+      // When the forge says the change merged, from the read-back after the merge. A run on
+      // an item records the merge with it. Absent from a plugin released before the field.
+      merged_at: timestamp.optional(),
     }),
   }),
   z.object({

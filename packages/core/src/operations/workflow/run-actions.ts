@@ -16,7 +16,7 @@ import {
 import type { RunActor } from '../run-authorization';
 import { hostname } from 'node:os';
 import { getLog, type OperationContext } from './context';
-import { rootRunIdOf } from './teardown';
+import { isSubrun, rootRunIdOf } from './teardown';
 import { removeRunFiles, type RunFilesReport } from '../../services/cleanup/run-files';
 
 export interface WorkflowStatusData {
@@ -41,11 +41,16 @@ export type ResumeRefusal =
   | 'live_owner'
   | 'owner_unreachable';
 
-/** Resume refused; the run is unchanged. The message states why. */
+/**
+ * Resume refused; the run is unchanged. The message states why. `restartCommand` is set
+ * when the refusal is final for this run and the message ends with the command that
+ * starts it again from its record ({@link restartCommandFor}).
+ */
 export class ResumeRefusedError extends Error {
   constructor(
     readonly reason: ResumeRefusal,
-    message: string
+    message: string,
+    readonly restartCommand?: string
   ) {
     super(message);
     this.name = 'ResumeRefusedError';
@@ -129,6 +134,17 @@ export async function resumeWorkflow(
     assertHasCheckout(run);
     return run;
   }
+  // Abandon removes a run's worktree, so a cancelled run has no checkout left to continue.
+  // The text does not say "abandoned": a cancel with a live owner also ends it cancelled.
+  const restart = restartCommandFor(run);
+  if (run.status === 'cancelled' && restart) {
+    throw new ResumeRefusedError(
+      'not_resumable',
+      `Run ${run.id} was cancelled, so there is nothing to resume. ` +
+        `Start it again from its record, without its completed nodes, with: ${restart}`,
+      restart
+    );
+  }
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
     throw new ResumeRefusedError(
       'not_resumable',
@@ -151,19 +167,34 @@ export async function resumeWorkflow(
 }
 
 /**
+ * The command that starts a run again from its record. With no workflow name,
+ * `workflow run --supersedes <id>` takes the workflow, message, inputs, definitions source
+ * and item from the run's record and starts fresh, without its completed nodes. The line
+ * holds only the run id, so it pastes unchanged into any shell.
+ *
+ * A `workflow:` sub-run gets none, also after its parent was deleted: restarting it alone
+ * would run the child outside its parent, and the parent is the run to resume or abandon.
+ */
+export function restartCommandFor(
+  run: Pick<WorkflowRun, 'id' | 'parent_run_id' | 'metadata'>
+): string | undefined {
+  return isSubrun(run) ? undefined : `archon workflow run --supersedes ${run.id}`;
+}
+
+/**
  * Refuse a run that has no checkout to continue in. A start fails this way when its
  * worktree could not be prepared: the run was recorded first, with no working path, and
  * failed before it got one. Preparing a checkout now would be a new start, so the refusal
- * names the command that makes one: `workflow run --supersedes <id>` takes the workflow,
- * its source, inputs and lane from this run's record. The line holds only the run id, so
- * it pastes unchanged into any shell.
+ * names the command that makes one.
  */
 function assertHasCheckout(run: WorkflowRun): void {
   if (run.working_path) return;
+  const restart = restartCommandFor(run);
   throw new ResumeRefusedError(
     'not_resumable',
-    `Run ${run.id} failed before its checkout was prepared, so there is nothing to resume. ` +
-      `Start it again with: archon workflow run --supersedes ${run.id}`
+    `Run ${run.id} failed before its checkout was prepared, so there is nothing to resume.` +
+      (restart ? ` Start it again with: ${restart}` : ''),
+    restart
   );
 }
 

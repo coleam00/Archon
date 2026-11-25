@@ -333,6 +333,33 @@ The `runtime:` declared on the node **must match the file's extension** — the
 validator rejects `runtime: uv` pointing at a `.ts` file, and vice versa. For
 inline scripts, you can use any language that the chosen runtime supports.
 
+## Offer a script to an agent as a tool
+
+A `script:` node runs at a fixed point in the graph. When the agent should decide whether and when to run a script, declare the script as a tool on the agent's node instead:
+
+```yaml
+nodes:
+  - id: inspect
+    prompt: Look up the checks of pull request $ARGUMENTS and say whether they are green.
+    tools:
+      lookup_checks:
+        description: Get the check status of a pull request
+        script: lookup-checks
+        input_schema: { type: object, properties: { pr: { type: integer } }, required: [pr] }
+        output_schema: { type: object, properties: { green: { type: boolean } }, required: [green] }
+```
+
+The script reads the call's arguments as JSON from stdin and prints its result as JSON:
+
+```ts
+// .archon/scripts/lookup-checks.ts
+const { pr } = JSON.parse(await Bun.stdin.text());
+const checks = await Bun.$`gh pr checks ${pr} --json state`.json();
+console.log(JSON.stringify({ green: checks.every(check => check.state === 'SUCCESS') }));
+```
+
+Write a tool so it is safe to rerun: a retried attempt starts the node over and the agent calls it again. Tools that write are not supported yet. [Script tools](/reference/workflow-language/#script-tools) has the fields, what the agent sees when a call fails, and the event each call records.
+
 ## Dependencies (uv only)
 
 `deps` is a pass-through to `uv run --with <dep>`, which installs packages into
@@ -486,6 +513,11 @@ passes through normally. `uv`-launched Python subprocesses do not auto-load
 `.env` at all, and a uv node does not join the target repository's uv project
 (see [Dependencies](#dependencies-uv-only)). See [Security Model](/reference/security/#target-repo-env-isolation)
 for the full story.
+
+A `.env` or `.env.*` file inside a workflow, command or script directory, or an
+installed pack, is never copied into a run's frozen source. Archon logs the path
+of each one it leaves out (`workflow.source_capture_env_file_skipped`), never its
+contents. A script gets its environment from Archon, not from a file beside it.
 
 ## Validation
 

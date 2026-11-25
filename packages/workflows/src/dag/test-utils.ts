@@ -168,7 +168,7 @@ export function createMockStore(): MockWorkflowStore {
     {
       setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
       listSkippedItemStarts: mock<IWorkflowStore['listSkippedItemStarts']>(async () => []),
-      listWaitedItemHolders: mock<IWorkflowStore['listWaitedItemHolders']>(async () => []),
+      listUnfinishedRuns: mock<IWorkflowStore['listUnfinishedRuns']>(async () => []),
       releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(
         async (_id, _release, beforePublish) => {
           await beforePublish?.();

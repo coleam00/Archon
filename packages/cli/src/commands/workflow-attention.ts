@@ -1,3 +1,4 @@
+import { askIdOfRef } from '@archon/workflows/attention-item-refs';
 import {
   splitAttentionRead,
   scopeAttentionDegraded,
@@ -21,7 +22,6 @@ import {
   type AttentionQueueCounts,
 } from '@archon/workflows/attention-counts';
 import {
-  askIdOfRef,
   listAttentionQueue,
   parseAttentionLabelPairs,
   parseAttentionQueueRequest,
@@ -83,7 +83,7 @@ export async function resolveAttentionRunId(
   cwd: string
 ): Promise<string> {
   const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
-  return resolveRunIdArg(host, runId, undefined, false, codebase?.id);
+  return resolveRunIdArg(host, runId, undefined, 'pass-through', codebase?.id);
 }
 
 /** Chat scope takes precedence over the CLI's explicit or working-directory scope. */

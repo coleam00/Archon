@@ -1,28 +1,18 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
-import { getArchonHome } from '@archon/paths';
 import {
   drainResourceStartHost,
+  isPreparationStageFailure,
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import type { StartedExecutor } from '@archon/core/workflows/start-executor';
-import {
-  getTriggersPath,
-  readOnBindings,
-  runEndedTriggerCheck,
-  type OnBinding,
-} from '@archon/core/workflows/run-ended';
-import { asksSettledTriggerCheck } from '@archon/core/workflows/asks-settled';
-import {
-  registeredProjectForPath,
-  registeredProjectKeyForPath,
-} from '@archon/core/services/codebase-checkout-resolver';
+import { getTriggersPath } from '@archon/core/workflows/run-ended';
+import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
@@ -51,32 +41,20 @@ import {
 } from '../utils/detached-run-control';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { addTriggerFile } from '../triggers/add-trigger-file';
-import {
-  inspectNativeSchedule,
-  installNativeSchedule,
-  removeNativeSchedule,
-  type NativeScheduleOptions,
-} from '../triggers/native-schedule';
-import { checkFireBindings, fireConfig } from '../triggers/fire-binding-check';
+import type { NativeScheduleOptions } from '../triggers/native-schedule';
+import { fireConfig } from '../triggers/fire-binding-check';
 import { resolveCliUserId } from './auth';
-import { loadConfig } from '@archon/core/config/config-loader';
 import { readCallingNode } from '../utils/calling-node';
 import { requestedBy } from '../utils/requested-by';
+import { checkTriggers } from './trigger-check';
+import { scheduleTimer } from './trigger-schedule';
 
 export { spawnAdmitted } from '../utils/spawn-admitted';
 
-/** A configuration a clock can start. One without `schedule` is fire-only and is not this. */
-type TimerTriggerConfig = TriggerConfig & {
-  schedule: NonNullable<TriggerConfig['schedule']>;
-};
 /** The input names a binding maps, for a message that tells the operator what to pass. */
 function mappedNames(inputs: Readonly<Record<string, unknown>> | undefined): string {
   const names = Object.keys(inputs ?? {});
   return names.length === 0 ? 'it maps none' : names.join(', ');
-}
-
-function isTimerConfig(config: TriggerConfig): config is TimerTriggerConfig {
-  return config.schedule !== undefined;
 }
 
 async function loadFireConfig(path: string): Promise<TriggerConfig> {
@@ -296,7 +274,8 @@ async function triggerFire(
   host: WorkflowHost,
   options: TriggerOptions,
   dispatch: TriggerDispatch,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  wait: PreparationWait
 ): Promise<void> {
   if (!options.config) throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
   if (options.deliveryId !== undefined && options.deliveryId.length === 0)
@@ -375,7 +354,55 @@ async function triggerFire(
       throw error;
     });
   await drainReceipt(host, receipt.receiptId, dispatch);
+  await awaitOthersPreparation(host, receipt, wait);
   await writeFiredReceipt(host, receipt.receiptId);
+}
+
+/**
+ * How long `fire` waits for another process preparing its binding. Bounded because a
+ * stopped owner looks the same as a slow one; past it the fire changes nothing and names
+ * the owner.
+ */
+const PREPARATION_WAIT: PreparationWait = { intervalMs: 250, timeoutMs: 60_000 };
+
+type PreparationWait = { intervalMs: number; timeoutMs: number };
+
+/**
+ * Another process's drain can claim the binding this fire just accepted, so the fire's own
+ * drain leaves it alone. Wait for that preparation to end, so the fire reports its outcome
+ * and fails as it would had it prepared the binding itself. A replay reports what is stored.
+ */
+async function awaitOthersPreparation(
+  host: WorkflowHost,
+  receipt: { receiptId: string; replay: boolean },
+  wait: PreparationWait
+): Promise<void> {
+  const { receiptId } = receipt;
+  const deadline = Date.now() + wait.timeoutMs;
+  for (;;) {
+    const retained = await host.deps.store.getStartReceipt(receiptId);
+    const bindings = retained?.bindings ?? [];
+    const preparing = bindings.filter(binding => binding.status === 'preparing');
+    if (preparing.length === 0) {
+      // This fire's own preparation failure already failed its drain.
+      const failed = receipt.replay
+        ? undefined
+        : bindings.find(binding => isPreparationStageFailure(binding.error));
+      if (failed)
+        throw new Error(
+          `Receipt ${receiptId} is retained, but another process's preparation of binding ${failed.bindingId} failed at ${failed.error}. Inspect that receipt before recovery.`
+        );
+      return;
+    }
+    if (Date.now() >= deadline) {
+      for (const binding of preparing)
+        process.stderr.write(
+          `Another process (preparation owner ${binding.ownerId}) is still preparing binding ${binding.bindingId} of receipt ${receiptId}. If that process has stopped, run archon trigger recover-preparation ${receiptId} ${binding.bindingId} --owner ${binding.ownerId} --yes, then drain the host.\n`
+        );
+      return;
+    }
+    await Bun.sleep(wait.intervalMs);
+  }
 }
 
 /** The fired receipt, with the install hold when it keeps one of the receipt's starts. */
@@ -620,7 +647,8 @@ async function withdrawTrigger(host: WorkflowHost, args: string[]): Promise<void
 async function scheduleTrigger(
   host: WorkflowHost,
   args: string[],
-  options: TriggerOptions
+  options: TriggerOptions,
+  schedules: NativeScheduleOptions
 ): Promise<void> {
   const operation = args[0];
   if (
@@ -631,113 +659,13 @@ async function scheduleTrigger(
       'Usage: archon trigger schedule <install|remove|status> --config <timer-binding.json>'
     );
   const config = await loadFireConfig(options.config);
-  const bindingId = config.binding.bindingId;
-  const target = {
-    id: createHash('sha256')
-      .update(JSON.stringify([getArchonHome(), config.sourceInstanceId, bindingId]))
-      .digest('hex'),
-    archonHome: getArchonHome(),
-  };
-  // Remove and status need no schedule, so a timer installed before the file lost its
-  // `schedule` can still be inspected and removed.
-  if (operation === 'status') {
-    const installed = await inspectNativeSchedule(target);
-    await writeJsonLine({
-      bindingId,
-      schedule: operation,
-      ...(installed ? { installed: true, ...installed } : { installed: false }),
-    });
-    return;
-  }
-  if (operation === 'remove') await removeNativeSchedule(target);
-  else {
-    if (!isTimerConfig(config))
-      throw new Error(
-        `Binding '${bindingId}' is fire-only: its configuration has no schedule, so there is no timer to install. Start it with: archon trigger fire --config ${options.config}`
-      );
-    await assertKnownRunAsUser(host, config);
-    await installTimer(config, target.id, resolve(options.config));
-  }
-  await writeJsonLine({ bindingId, schedule: operation });
-}
-
-/** Only a timer configuration can be installed; the type refuses a fire-only one. */
-async function installTimer(
-  config: TimerTriggerConfig,
-  scheduleId: string,
-  configPath: string
-): Promise<void> {
-  const [executable, ...prefix] = cliProgramArguments();
-  await installNativeSchedule({
-    id: scheduleId,
-    programArguments: [executable, ...prefix, 'trigger', 'fire', '--config', configPath],
-    workingDirectory: config.binding.launch.cwd,
-    archonHome: getArchonHome(),
-    path: process.env.PATH ?? '',
-    schedule: config.schedule,
-    output: 'log',
-    removeCommand: `archon trigger schedule remove --config ${configPath}`,
+  await scheduleTimer({
+    operation,
+    config,
+    configPath: resolve(options.config),
+    schedules,
+    assertKnownRunAsUser: () => assertKnownRunAsUser(host, config),
   });
-}
-
-/**
- * List every trigger binding this install can start, reading only, and check that its
- * started workflow accepts its inputs as a start would. Bindings with `on`: for run-ended,
- * the ended workflow declares the outcome and every input the binding reads from it; for
- * asks-settled, the asking workflow declares `returns.asks` and every input the
- * binding reads. A run whose end or asks could fire such a binding is refused before it
- * starts, by the same check. It also reports what no run is refused for: a missing
- * `launch.cwd`, a run-ended binding that starts the workflow that ended, and two files that
- * start the same stage. Every other binding, including installed timers' config files
- * wherever they live, is listed under `bindings` (`checkFireBindings`); sources that observe,
- * under `observing` (`observingReport`).
- */
-async function checkTriggers(host: WorkflowHost, schedules: NativeScheduleOptions): Promise<void> {
-  const bindings = await readOnBindings(getTriggersPath());
-  // The file store has no items, so a binding with `on` can never start anything there.
-  if (host.deps.credentialStore === 'files' && bindings.length > 0)
-    throw new FileStoreUnsupportedError(
-      `Run-ended and asks-settled triggers (${bindings.map(entry => entry.file).join(', ')})`
-    );
-  const deps = {
-    ...host.deps,
-    // A check changes nothing: a missing global config.yaml stays missing.
-    loadConfig: (cwd: string) => loadConfig(cwd, { readOnly: true }),
-    projectKeyOf: (cwd: string) => registeredProjectKeyForPath(cwd, host.records.codebases),
-    projectOf: (cwd: string) => registeredProjectForPath(cwd, host.records.codebases),
-  };
-  const runEnded = bindings.filter(entry => 'runEnded' in entry);
-  const asksSettled = bindings.filter(entry => 'asksSettled' in entry);
-  const runEndedProblems = await runEndedTriggerCheck(runEnded, deps);
-  const asksSettledProblems = await asksSettledTriggerCheck(asksSettled, deps);
-  const listed = (entry: OnBinding, problems: string[] | undefined) => ({
-    file: entry.file,
-    sourceInstanceId: entry.sourceInstanceId,
-    bindingId: entry.binding.bindingId,
-    hostId: entry.binding.hostId,
-    ...('runEnded' in entry ? { runEnded: entry.runEnded } : { asksSettled: entry.asksSettled }),
-    workflowName: entry.binding.launch.workflowName,
-    cwd: entry.binding.launch.cwd,
-    problems: problems ?? [],
-  });
-  const checked = {
-    runEnded: runEnded.map((entry, index) => listed(entry, runEndedProblems[index])),
-    asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
-    bindings: await checkFireBindings(deps, schedules),
-  };
-  await writeJsonLine({
-    directory: getTriggersPath(),
-    // A standalone check has no item, so it cannot know an item's landing branch.
-    definitions:
-      "Each binding is checked against the definitions a start without an item reads: the binding's base, else its project's default branch, as fetched now, with the launch checkout's uncommitted changes on top. A run on an item checks the bindings it may fire against the definitions it captured, before it starts.",
-    ...checked,
-    observing: await (await import('./wake-observation')).observingReport(host, schedules),
-  });
-  const broken = [...checked.runEnded, ...checked.asksSettled, ...checked.bindings].filter(
-    entry => entry.problems.length > 0
-  ).length;
-  if (broken > 0)
-    throw new Error(`${String(broken)} trigger binding(s) have problems; see "problems" above.`);
 }
 
 async function addTrigger(args: string[]): Promise<void> {
@@ -751,8 +679,10 @@ export interface TriggerDependencies {
   dispatch?: TriggerDispatch;
   /** The environment `fire` reads the calling node's identity from; by default `process.env`. */
   env?: NodeJS.ProcessEnv;
-  /** Where `check` reads installed timers from; by default this host's scheduler directories. */
+  /** The scheduler `check` and `schedule` use; by default this host's. */
   schedules?: NativeScheduleOptions;
+  /** How long `fire` waits for another process preparing its binding; by default a minute. */
+  preparationWait?: PreparationWait;
 }
 
 export async function triggerCommand(
@@ -779,7 +709,13 @@ export async function triggerCommand(
     case 'check':
       return checkTriggers(host, dependencies.schedules ?? {});
     case 'fire':
-      return triggerFire(host, options, dispatch, dependencies.env ?? process.env);
+      return triggerFire(
+        host,
+        options,
+        dispatch,
+        dependencies.env ?? process.env,
+        dependencies.preparationWait ?? PREPARATION_WAIT
+      );
     case 'drain':
       return triggerDrain(host, options, dispatch);
     case 'execute':
@@ -791,7 +727,7 @@ export async function triggerCommand(
     case 'withdraw':
       return withdrawTrigger(host, args);
     case 'schedule':
-      return scheduleTrigger(host, args, options);
+      return scheduleTrigger(host, args, options, dependencies.schedules ?? {});
     default:
       throw new Error(
         'Usage: archon trigger <fire|drain|execute|list|add|check|inspect|withdraw|recover-preparation|schedule|whoami>'
