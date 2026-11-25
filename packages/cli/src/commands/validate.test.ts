@@ -416,6 +416,54 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test('refuses a binding to a workflow the manifest does not list as an entrypoint', async () => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
+    const manifest = (entrypoints: Record<string, string>) =>
+      writeFile(
+        join(validationCwd, 'archon-plugin.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          kind: 'workflow-pack',
+          name: 'factory',
+          description: 'Factory workflows',
+          entrypoints,
+        })
+      );
+    await manifest({ plan: 'plan/plan.yaml' });
+    await mkdir(join(validationCwd, '.pack'));
+    await writeFile(
+      join(validationCwd, '.pack', 'pack.yaml'),
+      'bindings:\n  plan-after-triage:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'
+    );
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(1);
+      expect(JSON.parse(String(write.mock.calls[0]?.[0])).results).toEqual([
+        {
+          workflowName: 'archon-plugin.json',
+          filename: 'archon-plugin.json',
+          valid: false,
+          issues: [
+            {
+              level: 'error',
+              field: 'manifest_entrypoints',
+              message:
+                "binding 'plan-after-triage' in .pack/pack.yaml names workflow 'triage', which archon-plugin.json does not list as an entrypoint",
+              hint: "An installed copy refuses this binding at archon pack bindings. List 'triage' under entrypoints, or bind one it lists: plan.",
+            },
+          ],
+        },
+      ]);
+
+      await manifest({ plan: 'plan/plan.yaml', triage: 'triage/triage.yaml' });
+      write.mockClear();
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(0);
+      expect(JSON.parse(String(write.mock.calls[0]?.[0])).results).toEqual([]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('loose output schema warns and exits successfully', async () => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [
