@@ -40,6 +40,7 @@ import {
   packForgeNeedsSchema,
   packSettingSpecSchema,
   type PackForgeNeeds,
+  type FileSettingRefusal,
   type PackSettingOrigin,
   type PackSettingSpec,
   type WorkflowPack,
@@ -60,10 +61,8 @@ export class PackSettingsError extends Error {
  * fields describe the first such setting; the message names every one.
  */
 export class FileSettingError extends PackSettingsError {
-  readonly setting: string;
-  /** The path that was checked. */
-  readonly path: string;
-  readonly origin: PackSettingOrigin;
+  /** The first such setting, as a refused start records it. */
+  readonly fileSetting: FileSettingRefusal;
 
   constructor(
     cwd: string,
@@ -73,9 +72,7 @@ export class FileSettingError extends PackSettingsError {
   ) {
     super([first, ...rest].map(finding => fileSettingMessage(cwd, packKey, finding)).join('; '));
     this.name = 'FileSettingError';
-    this.setting = first.setting;
-    this.path = first.path;
-    this.origin = first.origin;
+    this.fileSetting = { setting: first.setting, path: first.path, origin: first.origin };
   }
 }
 

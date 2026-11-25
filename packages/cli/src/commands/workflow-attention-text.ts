@@ -21,7 +21,8 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowNotice } from '@archon/workflows/workflow-notice';
 import { PACK_SETTING_ORIGIN_TEXT } from '@archon/workflows/pack-settings';
-import type { FileSettingRefusal, StoppedRefusal } from '@archon/workflows/schemas/run-metadata';
+import type { FileSettingRefusal } from '@archon/workflows/schemas/pack-settings';
+import type { StoppedRefusal } from '@archon/workflows/schemas/run-metadata';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { formatAge } from './workflow-shared';
 

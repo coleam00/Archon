@@ -1,6 +1,5 @@
 import type {
   HeldPreparation,
-  IResourceStartStore,
   RefusedPreparation,
   PendingStartBindingInspection,
   QueuedResourceStartInspection,
@@ -366,19 +365,11 @@ async function prepareClaimedBinding(
   }
 }
 
-/** Why a rejected preparation refused its start, as its stop records it. */
-function preparationRefusal(
-  error: unknown,
-  stage: PreparationStage
-): Pick<
-  Parameters<IResourceStartStore['failStartBindingPreparation']>[0],
-  'refusal' | 'fileSetting'
-> {
-  if (error instanceof NoDefaultProviderError) return { refusal: 'no_default_provider' };
-  if (error instanceof FileSettingError) {
-    const { setting, path, origin } = error;
-    return { refusal: 'file_setting_missing', fileSetting: { setting, path, origin } };
-  }
+/** Why a rejected preparation refused its start, and the setting when a file names none. */
+function preparationRefusal(error: unknown, stage: PreparationStage) {
+  if (error instanceof FileSettingError)
+    return { refusal: 'file_setting_missing', fileSetting: error.fileSetting } as const;
+  if (error instanceof NoDefaultProviderError) return { refusal: 'no_default_provider' } as const;
   return { refusal: preparationStageFailure(stage) };
 }
 

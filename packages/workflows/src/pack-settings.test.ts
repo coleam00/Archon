@@ -525,7 +525,7 @@ describe('validateProjectPackSettings file settings', () => {
     const start = resolveRunStartInputs(cwd, policy, undefined);
     await expect(start).rejects.toBeInstanceOf(FileSettingError);
     const error = (await start.catch((e: unknown) => e)) as FileSettingError;
-    expect({ setting: error.setting, path: error.path, origin: error.origin }).toEqual({
+    expect(error.fileSetting).toEqual({
       setting: 'policy',
       path: join(cwd, 'docs', 'review.md'),
       origin: 'project',
@@ -578,7 +578,7 @@ describe('validateProjectPackSettings file settings', () => {
     const refusal = (await resolveRunStartInputs(cwd, policy, { policy: 'docs/gone.md' }).catch(
       (e: unknown) => e
     )) as FileSettingError;
-    expect({ setting: refusal.setting, path: refusal.path, origin: refusal.origin }).toEqual({
+    expect(refusal.fileSetting).toEqual({
       setting: 'policy',
       path: join(cwd, 'docs', 'gone.md'),
       origin: 'supplied',
@@ -628,7 +628,7 @@ describe('validateProjectPackSettings file settings', () => {
         () => undefined,
         (e: unknown) => e as FileSettingError
       );
-      expect(refusal?.origin).toBe(origin);
+      expect(refusal?.fileSetting.origin).toBe(origin);
       expect(reported).toEqual(refusal === undefined ? [] : [refusal.message]);
     }
   });

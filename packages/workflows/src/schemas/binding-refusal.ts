@@ -1,9 +1,6 @@
 import { z } from 'zod';
-import {
-  fileSettingRefusalSchema,
-  stoppedLimitSchema,
-  type StartRefusalReason,
-} from './run-metadata';
+import { fileSettingRefusalSchema } from './pack-settings';
+import { stoppedLimitSchema, type StartRefusalReason } from './run-metadata';
 
 /**
  * Why a binding start was refused, stored on its binding row (`refusal`) by the write that

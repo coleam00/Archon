@@ -6,7 +6,7 @@
  */
 import { storedBindingRefusal } from '@archon/workflows/schemas/binding-refusal';
 import type { IResourceStartStore } from '@archon/workflows/resource-start-store';
-import type { FileSettingRefusal } from '@archon/workflows/schemas/run-metadata';
+import type { FileSettingRefusal } from '@archon/workflows/schemas/pack-settings';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { getDatabase, getDialect } from './connection';
 import { recordRefusedStartStop } from './item-stops';

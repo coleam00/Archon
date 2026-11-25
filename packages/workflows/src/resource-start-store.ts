@@ -7,7 +7,8 @@ import {
   readAdmissionCheckoutGuard,
 } from './schemas/resource-start';
 import type { RunLimitState } from './schemas/run-limit';
-import type { FileSettingRefusal, StartRefusalReason } from './schemas/run-metadata';
+import type { StartRefusalReason } from './schemas/run-metadata';
+import type { FileSettingRefusal } from './schemas/pack-settings';
 import type { BindingRefusal } from './schemas/binding-refusal';
 import type { z } from 'zod';
 import type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';

@@ -50,6 +50,17 @@ export const PACK_SETTING_ORIGINS = [
 ] as const;
 export type PackSettingOrigin = (typeof PACK_SETTING_ORIGINS)[number];
 
+/**
+ * The pack setting a `file_setting_missing` refusal is about: its name, the path that was
+ * checked, and where the value came from. Project configuration, not exception text.
+ */
+export const fileSettingRefusalSchema = z.object({
+  setting: z.string(),
+  path: z.string(),
+  origin: z.enum(PACK_SETTING_ORIGINS),
+});
+export type FileSettingRefusal = z.infer<typeof fileSettingRefusalSchema>;
+
 /** Every key a setting may carry, derived from the schema so the two cannot drift. */
 export const PACK_SETTING_KEYS: ReadonlySet<string> = new Set([
   ...Object.keys(plainSetting.shape),

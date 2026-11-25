@@ -14,7 +14,7 @@ import {
 } from '../output-ref';
 import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
-import { PACK_SETTING_ORIGINS } from './pack-settings';
+import { fileSettingRefusalSchema } from './pack-settings';
 
 /**
  * Keys the sub-run machinery writes into a child run's untyped `metadata` JSONB, and the
@@ -259,9 +259,8 @@ export type StoppedLimit = z.infer<typeof stoppedLimitSchema>;
  * the checkout could not be handed on (`checkout_refused`), a mapped input named nothing
  * (`inputs_unmapped`), or the items it links to could not be read or hold no such link
  * (`link_refused`). In preparation: the cause when the engine types it
- * (`no_default_provider`, or `file_setting_missing` when a pack `file: true` setting the
- * workflow reads names no file), else the stage that failed, as the binding's `error`
- * stores it. Never the exception text, which can hold secret values.
+ * (`no_default_provider`, `file_setting_missing`), else the stage that failed, as the
+ * binding's `error` stores it. Never the exception text, which can hold secret values.
  */
 export const startRefusalReasonSchema = z.enum([
   'checkout_refused',
@@ -283,17 +282,6 @@ export const handoffRefusalSchema = z.object({
   workflow: z.string(),
   reason: startRefusalReasonSchema,
 });
-
-/**
- * The pack setting a `file_setting_missing` refusal is about: its name, the path that was
- * checked, and where the value came from. Project configuration, not exception text.
- */
-export const fileSettingRefusalSchema = z.object({
-  setting: z.string(),
-  path: z.string(),
-  origin: z.enum(PACK_SETTING_ORIGINS),
-});
-export type FileSettingRefusal = z.infer<typeof fileSettingRefusalSchema>;
 
 /**
  * A start refused before launch: its receipt and binding (`archon trigger inspect`), the
