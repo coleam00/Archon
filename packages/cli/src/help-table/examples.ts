@@ -74,6 +74,10 @@ export const orderedExamples: ExampleHelp[] = [
     text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
+  {
+    text: "archon forge <operation> --help    # that operation's request fields and an example",
+    owner: { command: 'forge' },
+  },
   { text: 'archon skill add', owner: { command: 'skill', subcommand: 'add' } },
   {
     text: 'archon skill add /path/to/project',

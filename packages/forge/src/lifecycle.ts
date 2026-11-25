@@ -239,7 +239,8 @@ export const prMergeRequestSchema = requestBase.extend({
   op: z.literal('pr.merge'),
   ref: prRefSchema,
   method: z.enum(['merge', 'squash']),
-  conditions: mergeConditionsSchema,
+  // A merge is always pinned to the approved head; base and tree pin it further.
+  conditions: mergeConditionsSchema.extend({ head: gitObjectIdSchema }),
 });
 export const checksRerunRequestSchema = requestBase.extend({
   op: z.literal('checks.rerun'),

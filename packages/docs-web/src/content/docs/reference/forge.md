@@ -80,6 +80,8 @@ archon forge workitem.edit-body --data-file ./issue-body.json
 archon forge attachment.put --data-file ./attachment.json
 ```
 
+`archon forge <operation> --help` prints that operation's request as a type, with its required and optional fields, and a minimal example `--data` value. Both come from the operation's request schema.
+
 Every command emits JSON. When the host selects a credential, it adds `credentialSource` to the CLI response envelope with the source name, never the token. This is host diagnostic metadata; the plugin protocol is unchanged. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation names its target explicitly: a qualified repository for creation, repository-label operations, listing by label, `workitem.search`, `checks.logs` and a `pr.view` head selector; a subject `{kind: "issue" | "pr", ref}` for single-label writes and `workitem.comment.upsert`; a qualified repository and number otherwise. None is inferred from the checkout.
 
 The GitHub plugin also resolves HTTP Git remotes. For example, `http://github.example.com:8080/team/repo.git` resolves to host `github.example.com:8080` and path `team/repo` when that exact host and port are explicitly claimed by the plugin. The remote must not contain credentials, a query, or a fragment. Resolution needs no credential or network request; it does not select the API origin.

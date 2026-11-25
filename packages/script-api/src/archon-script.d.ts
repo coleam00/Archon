@@ -670,7 +670,7 @@ declare module 'archon:script' {
         };
         readonly method: 'merge' | 'squash';
         readonly conditions: {
-          readonly head?: string;
+          readonly head: string;
           readonly base?: string;
           readonly tree?: string;
         };

@@ -335,9 +335,6 @@ function refuseBeforeRun(request: ForgeRequest, metadata: PluginMetadata): Forge
     };
   }
   if (request.op !== 'pr.merge') return undefined;
-  if (!request.conditions.head) {
-    return { kind: 'invalid_request', message: 'A merge requires the approved head condition' };
-  }
   const enforced = metadata.mutationConditions?.['pr.merge'];
   if (
     Object.keys(request.conditions).some(key => !enforced?.some(condition => condition === key))

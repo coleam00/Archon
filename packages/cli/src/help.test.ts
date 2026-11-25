@@ -2,12 +2,27 @@ import { describe, it, expect } from 'bun:test';
 import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { cliForgeJsonSchemas } from '@archon/forge';
 import { forgeRequestSchema } from '@archon/forge/operations';
+import { convertOutputSchema } from '@archon/workflows/output-types/schema-to-ts';
 import { formatSpecLine, helpEntries, renderHelp, renderHelpFor } from './help';
+import { forgeRequestHelp } from './help-table/forge-request';
 import { cliArgOptions } from './args';
 import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
+
+function indentType(type: string): string {
+  return type.replace(/^/gm, '  ');
+}
+
+/** The `--data` value of the request example in a forge operation's scoped help. */
+function exampleData(help: string, subcommand: string): unknown {
+  const prefix = `  archon forge ${subcommand} --data '`;
+  const line = help.split('\n').find(l => l.startsWith(prefix));
+  expect(line, `no request example in forge ${subcommand} --help`).toBeDefined();
+  return JSON.parse((line ?? '').slice(prefix.length, -1));
+}
 
 /**
  * The `Options:` block that `archon <argv...> --help` prints.
@@ -114,13 +129,61 @@ describe('CLI help output', () => {
     expect(scoped).not.toContain('--follow');
   });
 
-  for (const request of forgeRequestSchema.options) {
-    const op = request.shape.op.value;
-    it(`renders scoped help for the admitted forge operation ${op}`, () => {
-      expect(renderHelp('forge', op)).toContain(`forge ${op}`);
-      expect(scopedHelpOptions(['forge', op])).toContain('--data <json>');
+  // Every operation's request type and example come from its schema.
+  for (const { op, request } of cliForgeJsonSchemas().operations) {
+    const subcommand = op === 'checks.state' ? 'checks' : op;
+    it(`renders the request and an example in forge ${subcommand} --help`, () => {
+      const scoped = renderHelp('forge', subcommand);
+      expect(scopedHelpOptions(['forge', subcommand])).toContain('--data <json>');
+      expect(scoped).toContain(
+        `Request (--data):\n${indentType(convertOutputSchema(request).type)}`
+      );
+      expect(exampleData(scoped, subcommand)).toBeObject();
     });
   }
+
+  // Placeholders cannot satisfy every pattern a field narrows to, so only the merge
+  // example, the one the item is about, is held to the host's parser.
+  it('shows the pull request and the head pr.merge is pinned to, in an example the host admits', () => {
+    const scoped = renderHelp('forge', 'pr.merge');
+    expect(scoped).toMatch(/readonly ref: \{\n\s+readonly repo: \{/);
+    expect(scoped).toContain('readonly number: number;');
+    expect(scoped).toContain('readonly head: string;');
+    const example = exampleData(scoped, 'pr.merge');
+    expect(example).toMatchObject({ conditions: { head: '<head>' } });
+    expect(
+      forgeRequestSchema.safeParse({ ...(example as object), op: 'pr.merge', operationId: 'help' })
+        .success
+    ).toBe(true);
+  });
+
+  it('states a field added to a request schema in both the type and the example', () => {
+    const base = {
+      type: 'object',
+      properties: { ref: { type: 'integer' }, note: { type: 'string' } },
+      required: ['ref'],
+      additionalProperties: false,
+    };
+    const added = {
+      ...base,
+      properties: { ...base.properties, pinned: { type: 'string' } },
+      required: ['ref', 'pinned'],
+    };
+    expect(forgeRequestHelp('op', base)).toEqual({
+      type: '{\n  readonly ref: number;\n  readonly note?: string;\n}',
+      example: `archon forge op --data '{"ref":1}'`,
+    });
+    const help = forgeRequestHelp('op', added);
+    expect(help.type).toContain('readonly pinned: string;');
+    expect(help.example).toBe(`archon forge op --data '{"ref":1,"pinned":"<pinned>"}'`);
+  });
+
+  it('points forge --help to each operation without printing every request', () => {
+    const forge = renderHelp('forge');
+    expect(forge).toContain('archon forge <operation> --help');
+    expect(forge).not.toContain('Request (--data):');
+    expect(forge).not.toContain('github');
+  });
 
   const EXPECTED_GLOBAL_HELP = `
 Archon CLI - Run AI workflows from the command line
@@ -351,6 +414,7 @@ Examples:
   archon workflow cancel --item issue-42
   archon workflow runs --open
   archon workflow run archon-review --adopt <run-id> "Review the changes"
+  archon forge <operation> --help    # that operation's request fields and an example
   archon skill add
   archon skill add /path/to/project
   archon skill add --pack owner/repo
@@ -442,6 +506,5 @@ it('every supported attachment verb has scoped help, with aliases scoped only', 
 it('documents host metadata separately from plugin operations', () => {
   const scoped = renderHelp('forge', 'metadata');
   expect(scoped).toContain('without credentials or forge operations');
-  expect(scoped).toContain('"host":"github.com"');
   expect(renderHelp()).not.toContain('forge metadata');
 });

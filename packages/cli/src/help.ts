@@ -95,7 +95,8 @@ function selectFlagsFor(selected: HelpEntry[], scopedOnly: FlagHelp[] = []): Fla
 }
 
 function selectExamplesFor(selected: HelpEntry[]): ExampleHelp[] {
-  const keys = new Set(selected.map(e => ownerKey(e)));
+  // An example owned by a command alone belongs to every slice of that command.
+  const keys = new Set(selected.flatMap(e => [ownerKey(e), ownerKey({ command: e.command })]));
   return orderedExamples.filter(ex => keys.has(ownerKey(ex.owner)));
 }
 
@@ -147,11 +148,19 @@ export function renderHelp(command?: string, subcommand?: string): string {
     sections.push('Options:');
     sections.push(flags.map(f => formatSpecLine(f.spec, f.description)).join('\n'));
   }
+  // One entry's own help also states the request it reads; a group's help lists many.
+  const request = entries.length === 1 ? entries[0]?.request : undefined;
+  if (request) {
+    sections.push('');
+    sections.push('Request (--data):');
+    sections.push(request.type.replace(/^/gm, '  '));
+  }
   const examples = command === undefined ? orderedExamples : selectExamplesFor(entries);
-  if (examples.length > 0) {
+  const exampleLines = [...(request ? [request.example] : []), ...examples.map(ex => ex.text)];
+  if (exampleLines.length > 0) {
     sections.push('');
     sections.push('Examples:');
-    sections.push(examples.map(ex => `  ${ex.text}`).join('\n'));
+    sections.push(exampleLines.map(text => `  ${text}`).join('\n'));
   }
   return `\n${sections.join('\n')}\n`;
 }

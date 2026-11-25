@@ -570,7 +570,6 @@ test.each(['merge', 'squash'] as const)(
 
 test('merge refuses stale and unsupported conditions before writing', async () => {
   for (const conditions of [
-    {},
     { head: 'headsha', base: 'base' },
     { head: 'headsha', tree: 'tree' },
     { head: 'headsha' },
