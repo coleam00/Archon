@@ -42,6 +42,7 @@ nodes:
     bash: |
       printf '%s' "$INPUTS_BASH_BARE"
       printf '%s' "\${INPUTS_BASH_BRACED}"
+      printf '%s' "\${INPUTS_BASH_DEFAULTED:-fallback}"
 `,
       'supported-forms.yaml',
       providerRegistry
@@ -57,6 +58,7 @@ nodes:
       'INPUTS_JS_DOUBLE',
       'INPUTS_BASH_BARE',
       'INPUTS_BASH_BRACED',
+      'INPUTS_BASH_DEFAULTED',
     ]) {
       expect(result.error?.error).toContain(name);
     }

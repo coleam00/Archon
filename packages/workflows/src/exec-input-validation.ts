@@ -222,11 +222,8 @@ export function findUnpassedPackSettingReads(
       if (readComposedMeta(slot.owner) !== undefined) return;
       const source = packSettingReadSource(slot, namedScripts);
       if (source === undefined) return;
-      // Mirrors inputEnvVars: only a non-shell exec node's own `with:` reaches its env.
       const owner = slot.owner;
-      const bound = new Set(
-        isExecNode(owner) && owner.runtime !== 'sh' ? Object.keys(owner.with ?? {}) : []
-      );
+      const bound = ownEnvBindings(owner);
       for (const read of scanEnvironmentReads(source.text, source.runtime)) {
         const setting = settingByEnv.get(read.name);
         if (setting === undefined || passed(setting) || bound.has(setting)) continue;
@@ -243,13 +240,19 @@ export function findUnpassedPackSettingReads(
   return found;
 }
 
+/** Mirrors inputEnvVars: only a non-shell exec node's own `with:` reaches its env. */
+function ownEnvBindings(owner: TemplateSlot['owner']): ReadonlySet<string> {
+  return new Set(isExecNode(owner) && owner.runtime !== 'sh' ? Object.keys(owner.with ?? {}) : []);
+}
+
 const INPUTS_REF = new RegExp(String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})`, 'g');
 
 /**
  * The settings of `settingNames` that a flattened workflow reads where the engine can see
  * it: `$INPUTS.<name>` in any template slot or command-file body, or a literal
- * `INPUTS_<NAME>` (or `input('<name>')`) read in a bash or script body. Every node of the
- * run counts, composed ones included. A body that cannot be read (a command with no
+ * `INPUTS_<NAME>` (or `input('<name>')`) read in a bash or script body, unless the node's
+ * own `with:` binds that name (a binding that passes `$INPUTS.<name>` counts as its
+ * template). Every node of the run counts, composed ones included. A body that cannot be read (a command with no
  * readable file, a named script discovery did not resolve) counts as reading every name:
  * the check this feeds refuses a start, so an unknown read errs toward checking.
  */
@@ -280,9 +283,10 @@ export function packSettingReads(
         if (slot.surface === 'script' && !isInlineScript(slot.value)) readAll();
         return;
       }
+      const bound = ownEnvBindings(slot.owner);
       for (const read of scanEnvironmentReads(source.text, source.runtime)) {
         const setting = settingByEnv.get(read.name);
-        if (setting !== undefined) reads.add(setting);
+        if (setting !== undefined && !bound.has(setting)) reads.add(setting);
       }
     });
   }
@@ -332,7 +336,8 @@ function scanEnvironmentReads(
     if (/(["'])archon:script\1/.test(source))
       collect(/(?<![\w.$])input\s*\(\s*(["'])([A-Za-z0-9_-]+)\1\s*\)/g, 2, inputEnvKey);
   } else {
-    collect(new RegExp(`\\$\\{(${INPUT_ENV_PREFIX}[A-Z0-9_]+)\\}`, 'g'), 1);
+    // `${NAME}` and every operator form (`${NAME:-x}`, `${NAME?}`) read the variable.
+    collect(new RegExp(`\\$\\{(${INPUT_ENV_PREFIX}[A-Z0-9_]+)(?![A-Za-z0-9_])`, 'g'), 1);
     collect(new RegExp(`\\$(${INPUT_ENV_PREFIX}[A-Z0-9_]+)\\b`, 'g'), 1);
   }
 

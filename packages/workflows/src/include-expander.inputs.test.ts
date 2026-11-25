@@ -943,15 +943,25 @@ describe('expandWorkflowIncludes — the file settings a workflow reads', () => 
     );
   };
 
+  const readsPolicy = (bound: Record<string, string>) => ({
+    id: 'a',
+    script: 'console.log(process.env.INPUTS_POLICY)',
+    runtime: 'bun',
+    with: bound,
+  });
+
   test('counts prompt, bash env, command-body and same-pack include reads, and nothing else', () => {
     expect(
       readsOf(
         mapOf(
           wf('prompted', [{ id: 'a', prompt: 'follow $INPUTS.policy and $INPUTS.tone' }], { pack }),
-          wf('shelled', [{ id: 'a', bash: 'cat "$INPUTS_BRIEF"' }], { pack }),
+          wf('shelled', [{ id: 'a', bash: 'cat "${INPUTS_BRIEF:-x}"' }], { pack }),
           wf('commanded', [{ id: 'a', command: 'land' }], { pack }),
           wf('host', [{ id: 'blk', include: 'prompted' }], { pack }),
-          wf('silent', [{ id: 'a', bash: 'echo "$INPUTS_TONE"' }], { pack })
+          wf('silent', [{ id: 'a', bash: 'echo "$INPUTS_TONE"' }], { pack }),
+          // Its own `with:` replaces the pack value in the script's env, unless it passes it.
+          wf('shadowed', [readsPolicy({ policy: './fixed.md' })], { pack }),
+          wf('passed', [readsPolicy({ policy: '$INPUTS.policy' })], { pack })
         ),
         [['land', 'read $INPUTS.policy first']]
       )
@@ -961,6 +971,8 @@ describe('expandWorkflowIncludes — the file settings a workflow reads', () => 
       commanded: ['policy'],
       host: ['policy'],
       silent: [],
+      shadowed: [],
+      passed: ['policy'],
     });
   });
 
