@@ -577,6 +577,7 @@ export function bindingReceipt(
       : checkout && 'refused' in checkout
         ? `Checkout: ${checkout.refused}`
         : undefined;
+  const refusal = 'missing' in mapped ? 'inputs_unmapped' : 'checkout_refused';
   const handoff = checkout && 'handoff' in checkout ? checkout.handoff : undefined;
   // Computed as `trigger fire` computes it, over the binding alone.
   const bindingRevision = createHash('sha256')
@@ -608,6 +609,7 @@ export function bindingReceipt(
           bindingRevision,
           status: 'rejected',
           reason: refused,
+          refused: { workflow: candidate.binding.launch.workflowName, reason: refusal },
         },
       ],
     });

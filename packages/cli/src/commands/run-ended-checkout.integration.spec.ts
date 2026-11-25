@@ -392,6 +392,27 @@ printf '{"outcome": "return"}'`
     }[];
     expect(receipt?.outcome).toBe('unmatched');
     expect(receipt?.reason).toContain(runs(fixture)[0]?.id ?? 'build run');
+    // The refusal stops the item on the build run, in the item read and in attention.
+    const refused = {
+      receiptId: expect.any(String),
+      bindingId: 'check-after-build',
+      workflow: 'check',
+      reason: 'checkout_refused',
+      refusedAt: expect.any(String),
+    };
+    const read = JSON.parse(
+      (await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json'])).stdout
+    ) as { questions: { kind: string }[] };
+    const attention = JSON.parse(
+      (await fixture.cli(['workflow', 'attention', '--json'])).stdout
+    ) as { items: { kind: string }[] };
+    for (const items of [read.questions, attention.items])
+      expect(items.filter(item => item.kind === 'stopped')).toEqual([
+        expect.objectContaining({
+          stoppedIn: expect.objectContaining({ workflow: 'build' }),
+          refused,
+        }),
+      ]);
   }, 120_000);
 
   test('trigger check reports a workflow pinned in place on either side, and fire refuses', async () => {

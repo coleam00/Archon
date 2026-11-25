@@ -935,6 +935,23 @@ await closeDatabase();
     expect(last).toMatchObject({ ok: true, settled: true });
     expect(last.notStarted).toHaveLength(1);
     expect(fixture.rows<RunRow>(RUNS_SQL).map(run => run.workflow_name)).toEqual(['ask-plan']);
+    // The asking run declares no outcome; the refused start still stops the item on it.
+    const read = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+    );
+    const attention = JSON.parse(
+      await fixture.cli(['workflow', 'attention', '--all', '--json'])
+    ) as { items: { kind: string }[] };
+    for (const queue of [read.questions, attention.items])
+      expect(queue.filter(item => item.kind === 'stopped')).toEqual([
+        expect.objectContaining({
+          stoppedIn: expect.objectContaining({ workflow: 'ask-plan', outcome: null }),
+          refused: expect.objectContaining({
+            bindingId: 'build-after-answers',
+            workflow: 'build-answers',
+          }),
+        }),
+      ]);
   }, 90_000);
 
   test('trigger check reports a binding on a workflow with no asks, not one that starts its own', async () => {
@@ -1512,7 +1529,7 @@ describe('a start refused before launch', () => {
       };
     };
 
-    await run('stage-a');
+    const output = await run('stage-a');
     const [planned] = fixture.rows<RunRow>(RUNS_SQL);
     const before = await stopped();
     expect(before.onItem).toEqual([
@@ -1524,10 +1541,19 @@ describe('a start refused before launch', () => {
           bindingId: 'judge-after-plan',
           workflow: 'stage-ai',
           reason: 'no_default_provider',
+          refusedAt: expect.any(String),
         },
       }),
     ]);
+    const [entry] = before.onItem as {
+      pausedAt: string;
+      refused: { receiptId: string; refusedAt: string };
+    }[];
+    expect(entry?.pausedAt).toBe(entry?.refused.refusedAt);
     expect(before.inAttention.map(item => item.ref)).toEqual(before.onItem.map(item => item.ref));
+    // The stage that caused it says so: the refused workflow and its receipt.
+    expect(output).toContain('stage-ai');
+    expect(output).toContain(entry?.refused.receiptId ?? 'a receipt');
 
     await cli(['ai', 'default', 'claude']);
     await run('stage-ai');

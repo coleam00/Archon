@@ -16,6 +16,7 @@ import {
   type StoppedRefusal,
 } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import { getDatabaseType, getDialect, pool } from './connection';
 import type { TransactionQuery as Query } from './resource-slots';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
@@ -25,7 +26,8 @@ import { getLog } from './workflow-run-shared';
  * The completed runs that stopped their item and are still its last run (see
  * `IWorkflowStore.listStoppedItemRuns`). Runs on an item are ordered as `getItemRuns` orders
  * them: by start time, and on SQLite, which records it to the second, by insertion order
- * within a second. Any run after this one, in any status, ends the stop.
+ * within a second. Any run after this one, in any status, ends the stop, and deleting that
+ * later run keeps it ended (`closeStopsBeforeRun`).
  */
 export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]> {
   const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
@@ -53,6 +55,26 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
     }
   }
   return runs;
+}
+
+/**
+ * Close the stops recorded before run `runId` on its item, inside the transaction that
+ * deletes it. A stop is open while its run is the item's newest, so the deleted run is the
+ * only evidence that the item moved on; without this, deleting it would reopen them.
+ */
+export async function closeStopsBeforeRun(query: Query, runId: string): Promise<void> {
+  const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
+  await query(
+    `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 2)}
+      WHERE id IN (
+        SELECT r.id FROM remote_agent_workflow_runs r
+          JOIN remote_agent_workflow_runs d ON d.id = $1 AND d.item_id = r.item_id
+         WHERE r.id <> d.id
+           AND ${getDialect().jsonText('r.metadata', ITEM_STOPPED_METADATA_KEY)} IS NOT NULL
+           AND (r.started_at < d.started_at
+             OR (r.started_at = d.started_at AND r.${tie} < d.${tie})))`,
+    [runId, JSON.stringify({ [ITEM_STOPPED_METADATA_KEY]: null })]
+  );
 }
 
 /**
@@ -96,4 +118,24 @@ export async function recordRefusedStartStop(
     // The run id twice: the runs table keys it as a UUID on PostgreSQL, asks and waits as text.
     [source.id, itemKey, JSON.stringify(itemStoppedMetadata(null, refusal)), source.id]
   );
+}
+
+/**
+ * Record the stops of the bindings `receipts` refused at the hand-off (`refused` on their
+ * evaluated bindings), inside the transaction that writes them. On a run's completion call
+ * it after the run's asks and waits are opened: a run that leaves one stops nothing.
+ */
+export async function recordRefusedHandoffStops(
+  query: Query,
+  receipts: readonly SourceReceiptAcceptance[]
+): Promise<void> {
+  for (const { receipt, evaluatedBindings } of receipts) {
+    const { id: receiptId, itemKey, receivedAt } = receipt;
+    if (itemKey === undefined) continue;
+    for (const { bindingId, refused } of evaluatedBindings ?? [])
+      if (refused !== undefined)
+        await recordRefusedStartStop(query, receiptId, itemKey, {
+          refused: { receiptId, bindingId, ...refused, refusedAt: receivedAt },
+        });
+  }
 }

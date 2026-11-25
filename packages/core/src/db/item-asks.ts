@@ -25,6 +25,7 @@ import { getDatabase, getDatabaseType, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { toHydratedTimestamp } from './timestamps';
 import { insertStartReceipt } from './start-receipt-writes';
+import { recordRefusedHandoffStops } from './item-stops';
 import { insertWorkflowEvent } from './workflow-events';
 import { getLog } from './workflow-run-shared';
 
@@ -270,6 +271,7 @@ async function recordSettlement(
     itemAsks
   );
   for (const receipt of receipts) await insertStartReceipt(query, receipt);
+  await recordRefusedHandoffStops(query, receipts);
   return receipts;
 }
 

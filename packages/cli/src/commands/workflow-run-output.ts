@@ -23,6 +23,8 @@ import type { CLIAdapter } from '../adapters/cli-adapter';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import { formatRunUsage } from './workflow-usage';
+import { refusedStartLines } from './workflow-attention-text';
+import { readItemStopped } from '@archon/workflows/schemas/run-metadata';
 import { formatSkipCause } from './workflow-node-summaries';
 import { getLog, NAME_ITEM_HINT, type RunDestination } from './workflow-shared';
 import { pendingDurableWait, type PendingWaitContinuation } from './workflow-wait-continuation';
@@ -210,6 +212,7 @@ export async function presentRunResult(
     if (!printRunFacts(workflow, run, '\nWorkflow finished.')) {
       console.log('\nWorkflow completed successfully.');
     }
+    printRefusedStart(run);
     printRunUsage(run);
   } else {
     printRunUsage(run);
@@ -305,6 +308,14 @@ function printRunFacts(workflow: ResolvedWorkflow, run: WorkflowRun | null, lead
   if (run.completed_outcome === null) return false;
   console.log(`${lead}\n  Status: ${run.status}\n  Authored outcome: ${run.completed_outcome}`);
   return true;
+}
+
+/** The run completed, but the start its end caused was refused: say so, from its stop. */
+function printRefusedStart(run: WorkflowRun | null): void {
+  const refused = run === null ? undefined : readItemStopped(run.metadata)?.refused;
+  if (refused === undefined) return;
+  console.log('  Next stage not started:');
+  for (const line of refusedStartLines(refused)) console.log(`    ${line}`);
 }
 
 function printRunUsage(run: WorkflowRun | null): void {

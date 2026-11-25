@@ -150,23 +150,31 @@ function overdueWaitLines(item: Extract<AttentionQueueItem, { kind: 'overdue_wai
   ];
 }
 
-/** What preparation could not do, by the code its refusal recorded. */
+/** Why a start was refused before launch, by the code its stop recorded. */
 const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
+  checkout_refused: 'the checkout could not be handed on',
+  inputs_unmapped: 'an input the binding maps named nothing',
   no_default_provider: 'no default AI provider is set',
   run_as_user_failed: "the binding's run-as user could not be found",
   run_configuration_failed: "the item's or the binding's run configuration could not be read",
   launch_preparation_failed: 'preparing its launch failed',
 };
 
-/** What a stop says when preparation refused the start its run's end caused. */
-function refusedLines(workflow: string, outcome: string, refused: StoppedRefusal): string[] {
+/**
+ * What a start refused before launch says, wherever it shows: the stage's own output, the
+ * item read and attention. `trigger inspect` shows what the binding would have passed.
+ */
+export function refusedStartLines(refused: StoppedRefusal): string[] {
   return [
-    `${workflow} ended as '${outcome}'; its start of ${refused.workflow} was refused before launch: ${REFUSAL_REASONS[refused.reason]}`,
-    refused.reason === 'no_default_provider'
-      ? 'set one: archon ai default <provider>'
-      : `see the refusal: archon trigger inspect ${refused.receiptId}`,
+    `the start of ${refused.workflow} (binding ${refused.bindingId}) was refused before launch at ${refused.refusedAt}: ${REFUSAL_REASONS[refused.reason]}`,
+    ...(refused.reason === 'no_default_provider' ? ['set one: archon ai default <provider>'] : []),
+    `see the refusal and what it would have passed: archon trigger inspect ${refused.receiptId}`,
   ];
 }
+
+/** How a stopped item's run ended: a run that settled asks may have no outcome. */
+const ended = (workflow: string, outcome: string | null): string =>
+  outcome === null ? `${workflow} ended` : `${workflow} ended as '${outcome}'`;
 
 /** A path as one shell word: quoted only when it holds a character a shell would split on. */
 const shellWord = (text: string): string =>
@@ -183,12 +191,12 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
   const lines =
     limit !== undefined
       ? [
-          `${workflow} ended as '${outcome}'; its start of ${limit.workflow} was refused at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
+          `${ended(workflow, outcome)}; its start of ${limit.workflow} was refused at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
           `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
         ]
       : refused !== undefined
-        ? refusedLines(workflow, outcome, refused)
-        : [`${workflow} ended as '${outcome}'; nothing started and it left no ask`];
+        ? [`${ended(workflow, outcome)}; nothing started`, ...refusedStartLines(refused)]
+        : [`${ended(workflow, outcome)}; nothing started and it left no ask`];
   if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
   lines.push(
     `show the run: ${command(`get ${runId}`)}`,
@@ -196,7 +204,9 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
   );
   if (item.item !== undefined) {
     const cwd = item.checkout === null ? '' : ` --cwd ${shellWord(item.checkout)}`;
-    const next = limit?.workflow ?? refused?.workflow;
+    // Not a refused start's workflow: a bare run lacks the inputs and checkout its binding
+    // would have passed, which `trigger inspect` shows.
+    const next = limit?.workflow;
     const start = command(
       `run ${next === undefined ? '<workflow>' : shellWord(next)} --item ${shellWord(item.item.key)}${cwd}`
     );

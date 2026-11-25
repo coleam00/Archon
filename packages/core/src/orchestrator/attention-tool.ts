@@ -241,7 +241,7 @@ function notAnswered(
         case 'overdue_wait':
           return `attention: item '${ref}' waits for ${result.item.waits.map(wait => `'${wait.event}' about ${wait.about}`).join(' or ')}, due ${result.item.deadline}. It takes no answer: the event meets it, a new run of ${result.item.waitingIn.workflow} on the item replaces it, or \`archon workflow answer --withdraw ${ref}\` closes it.`;
         case 'stopped':
-          return `attention: item '${ref}' stopped: run ${result.item.stoppedIn.runId} (${result.item.stoppedIn.workflow}) ended as '${result.item.stoppedIn.outcome}', started nothing and left no ask.${result.item.summary === null ? '' : ` Summary: ${result.item.summary}`} It takes no answer: start a new run on the item to move it on.`;
+          return `attention: item '${ref}' stopped: run ${result.item.stoppedIn.runId} (${result.item.stoppedIn.workflow}) ended${result.item.stoppedIn.outcome === null ? '' : ` as '${result.item.stoppedIn.outcome}'`}, started nothing and left no ask.${result.item.summary === null ? '' : ` Summary: ${result.item.summary}`} It takes no answer: start a new run on the item to move it on.`;
       }
       return result.item satisfies never;
     case 'refused':

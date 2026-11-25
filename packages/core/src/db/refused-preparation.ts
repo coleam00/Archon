@@ -59,7 +59,13 @@ export async function failStartBindingPreparation(input: FailedPreparation): Pro
     const { receiptId, bindingId } = input;
     const workflow = intent.data.launch.workflowName;
     await recordRefusedStartStop(query, receiptId, itemKey, {
-      refused: { receiptId, bindingId, workflow, reason: refusal },
+      refused: {
+        receiptId,
+        bindingId,
+        workflow,
+        reason: refusal,
+        refusedAt: new Date().toISOString(),
+      },
     });
     return true;
   });

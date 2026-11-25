@@ -13,6 +13,7 @@ import {
   type SourceReceiptInput,
 } from '@archon/workflows/schemas/resource-start';
 import { readItemStopped } from '@archon/workflows/schemas/run-metadata';
+import { pool } from './connection';
 import {
   CONFORMANCE_CODEBASE_ID,
   CONFORMANCE_CONVERSATION_ID,
@@ -210,8 +211,39 @@ export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harn
           bindingId: 'binding',
           workflow: 'w',
           reason: 'no_default_provider',
+          refusedAt: expect.any(String),
         },
       });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a refusal whose stop cannot be written is not recorded either', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const { claimed, admitted } = starts(harness);
+      const ended = await admitted('s', {});
+      const identity = await claimed('s', {}, { source: RUN_ENDED_SOURCE_ACTOR, id: ended });
+      // The stop reads the receipt's cause; one that does not parse fails the stop's write.
+      await pool.query(
+        "UPDATE remote_agent_start_receipts SET source_actor = 'not json{' WHERE id = $1",
+        [identity.receiptId]
+      );
+      await expect(
+        store.failStartBindingPreparation({
+          ...identity,
+          retryable: false,
+          error: 'launch_preparation_failed',
+          refusal: 'no_default_provider',
+        })
+      ).rejects.toThrow();
+      const binding = await pool.query<{ status: string }>(
+        'SELECT preparation_status AS status FROM remote_agent_start_receipt_bindings WHERE receipt_id = $1',
+        [identity.receiptId]
+      );
+      expect(binding.rows).toEqual([{ status: 'preparing' }]);
     } finally {
       await harness.close();
     }

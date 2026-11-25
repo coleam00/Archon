@@ -232,11 +232,15 @@ export const stoppedLimitSchema = z.object({
 export type StoppedLimit = z.infer<typeof stoppedLimitSchema>;
 
 /**
- * Why preparation refused a start before launch: the cause when the engine types it
+ * Why a start was refused before launch. At the hand-off a run's end or settled asks make:
+ * the checkout could not be handed on (`checkout_refused`) or a mapped input named nothing
+ * (`inputs_unmapped`). In preparation: the cause when the engine types it
  * (`no_default_provider`), else the stage that failed, as the binding's `error` stores it.
  * Never the exception text, which can hold secret values.
  */
 export const startRefusalReasonSchema = z.enum([
+  'checkout_refused',
+  'inputs_unmapped',
   'no_default_provider',
   'run_as_user_failed',
   'run_configuration_failed',
@@ -245,14 +249,24 @@ export const startRefusalReasonSchema = z.enum([
 export type StartRefusalReason = z.infer<typeof startRefusalReasonSchema>;
 
 /**
- * A start that preparation refused before launch: its receipt and binding
- * (`archon trigger inspect`), the workflow it was for, and why.
+ * A binding a run's end or settled asks refused at the hand-off: the workflow it would have
+ * started and why, carried on the evaluated binding for the stop on that run. Not stored.
+ */
+export const handoffRefusalSchema = z.object({
+  workflow: z.string(),
+  reason: startRefusalReasonSchema,
+});
+
+/**
+ * A start refused before launch: its receipt and binding (`archon trigger inspect`), the
+ * workflow it was for, why, and when.
  */
 export const stoppedRefusalSchema = z.object({
   receiptId: z.string(),
   bindingId: z.string(),
   workflow: z.string(),
   reason: startRefusalReasonSchema,
+  refusedAt: z.string(),
 });
 export type StoppedRefusal = z.infer<typeof stoppedRefusalSchema>;
 
