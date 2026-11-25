@@ -174,7 +174,7 @@ const HOW_TO_ANSWER = [
   '- kind attention: choose=<JSON array of option ids> (one id, several only for form multi_select), or recommended=true; form message takes text only.',
   '- kind awaiting_response: choose=<JSON array with one decision id>, e.g. ["approve"] or ["reject"].',
   '- kind usage_limit continues by itself at resetAt; kind unreadable needs someone to look at the run. Neither takes an answer.',
-  '- kind stopped is an item whose last run (stoppedIn) left nothing to move it: an outcome nothing starts from, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new run on the item moves it on.',
+  '- kind stopped is an item whose last run (stoppedIn) left nothing to move it: an outcome nothing starts from, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new run on the item moves it on. A stopped run whose failed.outcomeUnknown is set (any failed run, on an item or not, whose write may or may not have happened) is different: check what its node (failed.outcomeUnknown.node) did, then resume or abandon that run; a new run or ending the item does not clear it.',
 ].join('\n');
 
 const chooseSchema = z.array(z.string().min(1)).min(1);
@@ -225,7 +225,7 @@ function stoppedText(ref: string, item: Extract<AttentionQueueItem, { kind: 'sto
   if (item.failed !== undefined)
     return `attention: item '${ref}' stopped: run ${runId} (${workflow}) failed${item.failed.error === null ? '' : `: ${item.failed.error}`}. It takes no answer: ${
       item.failed.outcomeUnknown
-        ? `its outcome is unknown, so check what it did, then resume it with archon workflow resume ${runId} or abandon it with archon workflow abandon ${runId}`
+        ? `${item.failed.outcomeUnknown.node === null ? 'its outcome' : `the outcome of node ${item.failed.outcomeUnknown.node}`} is unknown, so check what it did, then resume it with archon workflow resume ${runId} or abandon it with archon workflow abandon ${runId}; a new run on its item does not clear this`
         : `start it again with archon workflow run --supersedes ${runId}, which closes this`
     }.`;
   const count = item.refused?.length ?? 0;

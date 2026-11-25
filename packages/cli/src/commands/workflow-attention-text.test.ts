@@ -370,10 +370,14 @@ test('a stopped item names its stage and outcome, and its commands work from any
       ...stopped,
       stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
       summary: null,
-      failed: { error: '(outcome_unknown) push timed out', outcomeUnknown: true },
+      failed: {
+        error: '(outcome_unknown) push timed out',
+        outcomeUnknown: { node: 'fan__b__write' },
+      },
     },
     'brief'
   ).join('\n');
+  expect(unknown).toContain('node fan__b__write');
   expect(unknown).toContain('archon workflow resume run-9');
   expect(unknown).toContain('archon workflow abandon run-9');
   // A restart does not close it, so the restart is not offered; with no item, nor is the item read.
@@ -384,7 +388,7 @@ test('a stopped item names its stage and outcome, and its commands work from any
       ...withoutItem,
       stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
       summary: null,
-      failed: { error: null, outcomeUnknown: true },
+      failed: { error: null, outcomeUnknown: { node: null } },
     },
     'brief'
   ).join('\n');

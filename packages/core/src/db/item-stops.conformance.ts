@@ -152,6 +152,13 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       // closes it: a later run on the item does not, and a child run with no item is listed.
       const unknown = await createOnItem(harness, 'check');
       await harness.store.claimPendingWorkflowRun(unknown);
+      // A composed instance's step: the entry names it, from the run's terminal record.
+      await harness.store.persistWorkflowEvent({
+        workflow_run_id: unknown,
+        event_type: 'node_failed',
+        step_name: 'fan__b__write',
+        data: { error: 'timed out', failure_kind: 'outcome_unknown' },
+      });
       await harness.store.failWorkflowRun(unknown, 'write timed out', {
         exitReason: 'outcome_unknown',
       });
@@ -168,8 +175,12 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       });
       const listed = await stopped();
       expect(listed).toMatchObject([
-        { stoppedIn: { runId: unknown }, item: { key: 'pr-7' }, failed: { outcomeUnknown: true } },
-        { stoppedIn: { runId: child.id }, failed: { outcomeUnknown: true } },
+        {
+          stoppedIn: { runId: unknown },
+          item: { key: 'pr-7' },
+          failed: { outcomeUnknown: { node: 'fan__b__write' } },
+        },
+        { stoppedIn: { runId: child.id }, failed: { outcomeUnknown: { node: null } } },
       ]);
       expect(listed[1]).not.toHaveProperty('item');
     } finally {

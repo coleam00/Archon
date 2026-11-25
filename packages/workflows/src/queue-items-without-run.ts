@@ -35,7 +35,8 @@ import {
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
 import type { WorkflowEventRow } from './schemas/workflow-event';
-import { getTerminalRecord, terminalReason } from './terminal-record';
+import { getTerminalRecord, outcomeUnknownNodes, terminalReason } from './terminal-record';
+import type { TerminalRecord } from './schemas/terminal-record';
 import { isOutcomeUnknownRun } from './outcome-unknown';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { StoredItemAsk } from './schemas/item-ask';
@@ -222,14 +223,7 @@ export async function stoppedQueueItem(
     summary: stopped.summary,
     ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
     ...(stopped.refused === undefined ? {} : { refused: stopped.refused }),
-    ...(failed
-      ? {
-          failed: {
-            error: failureReason(run, failedEvents),
-            ...(outcomeUnknown ? { outcomeUnknown: true as const } : {}),
-          },
-        }
-      : {}),
+    ...(failed ? { failed: failedStop(run, failedEvents, outcomeUnknown) } : {}),
     checkout: codebase?.default_cwd ?? null,
   };
 }
@@ -238,21 +232,33 @@ export async function stoppedQueueItem(
  * Why a failed run failed, as `workflow get` says it: the first failed node's error from the
  * terminal record. A run whose record is missing or unreadable falls back to the error the
  * run recorded (`metadata.error`), which `workflow get` shows too; null when it has neither.
+ * A run whose outcome is unknown also names, from the same record, the node to check.
  */
-function failureReason(run: WorkflowRun, events: readonly WorkflowEventRow[]): string | null {
-  let reason: string | undefined;
+function failedStop(
+  run: WorkflowRun,
+  events: readonly WorkflowEventRow[],
+  outcomeUnknown: boolean
+): NonNullable<StoppedQueueItem['failed']> {
+  let record: TerminalRecord | null = null;
   try {
-    reason = terminalReason(getTerminalRecord('failed', events))[0];
+    record = getTerminalRecord('failed', events);
   } catch (error) {
-    reason = undefined;
     createLogger('workflow.attention_queue').warn(
       { err: error as Error, runId: run.id },
       'workflow.stopped_item_terminal_record_unreadable'
     );
   }
-  const error = run.metadata.error;
-  if (reason !== undefined && reason.trim() !== '') return reason;
-  return typeof error === 'string' && error.trim() !== '' ? error : null;
+  const reason = terminalReason(record)[0];
+  const recorded = run.metadata.error;
+  const error =
+    reason !== undefined && reason.trim() !== ''
+      ? reason
+      : typeof recorded === 'string' && recorded.trim() !== ''
+        ? recorded
+        : null;
+  if (!outcomeUnknown) return { error };
+  const node = record === null ? undefined : outcomeUnknownNodes(record.nodes)[0];
+  return { error, outcomeUnknown: { node: node?.node_id ?? null } };
 }
 
 /**

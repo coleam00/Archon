@@ -268,6 +268,35 @@ export async function executeDagWorkflow(
     return;
   }
 
+  /** Fail the run with stop reason `outcome_unknown` instead of letting it go on by itself. */
+  const failForOutcomeUnknown = async (
+    held: readonly string[],
+    why: string,
+    site: string
+  ): Promise<void> => {
+    if (await skipIfStatusChanged(deps, workflowRun, `${site}_status_changed`)) return;
+    const failMsg = `Workflow '${workflow.name}' ${why}. ${outcomeUnknownText(held)}`;
+    await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
+      workflowId: workflowRun.id,
+    });
+    await failRun(deps, workflowRun, workflow.name, failMsg, 'outcome_unknown', site);
+  };
+
+  // A pass that replays earlier failures continues a pause: a timer, an event, an answer,
+  // a child's end. That is the one door an automatic continuation comes through, so a run
+  // holding an unknown outcome fails here and nothing in it starts, whatever would run.
+  if (options.replayedFailures !== undefined) {
+    const held = await readOutcomeUnknownSteps(deps.store, workflowRun);
+    if (held.length > 0) {
+      await failForOutcomeUnknown(
+        held,
+        'was not continued after its pause',
+        'dag.continuation_refused_outcome_unknown'
+      );
+      return;
+    }
+  }
+
   /**
    * Pause the run instead of failing it: this host could not read its source (#4209).
    * The release compares status and execution claim, so an operator's abandon or a
@@ -282,18 +311,9 @@ export async function executeDagWorkflow(
   ): Promise<boolean> => {
     const held = await readOutcomeUnknownSteps(deps.store, workflowRun);
     if (held.length > 0) {
-      if (await skipIfStatusChanged(deps, workflowRun, 'dag.source_release_status_changed'))
-        return false;
-      const failMsg = `Workflow '${workflow.name}' could not read the source of node '${error.nodeId}' and was not released to another host. ${outcomeUnknownText(held)}`;
-      await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
-        workflowId: workflowRun.id,
-      });
-      await failRun(
-        deps,
-        workflowRun,
-        workflow.name,
-        failMsg,
-        'outcome_unknown',
+      await failForOutcomeUnknown(
+        held,
+        `could not read the source of node '${error.nodeId}' and was not released to another host`,
         'dag.source_release_refused_outcome_unknown'
       );
       return false;

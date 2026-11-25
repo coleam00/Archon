@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -84,6 +85,47 @@ describe('a failure whose outcome is unknown', () => {
     spy = undefined;
     await removeTempTree(testDir);
   });
+
+  it.each([
+    ['outcome_unknown', false],
+    ['exec_failed', true],
+  ] as const)(
+    'a continuation after a pause, when a node failed with %s before it, starts work: %s',
+    async (failureKind, starts) => {
+      const marker = join(testDir, 'ran');
+      const store = createMockStore();
+      // The pass before the pause recorded the failure; its fold is what the continuation replays.
+      await store.createWorkflowEvent({
+        workflow_run_id: 'unknown-continue',
+        event_type: 'node_failed',
+        step_name: 'write',
+        data: { error: 'timed out', failure_kind: failureKind },
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'unknown-continue',
+            nodes: [
+              // always_run re-executes on a continuation; nothing else here would run again.
+              {
+                id: 'write',
+                kind: 'exec',
+                runtime: 'sh',
+                script: `touch '${marker}'; exit 1`,
+                always_run: true,
+              },
+            ] as DagNode[],
+          },
+          workflowRun: makeWorkflowRun('unknown-continue'),
+          replayedFailures: new Map([['write', { error: 'timed out', failureKind }]]),
+        })
+      );
+      expect(existsSync(marker)).toBe(starts);
+      if (!starts) expectFailedOutcomeUnknown(store, 'unknown-continue');
+    }
+  );
 
   it('is not retried under on_error: all, and fails the run with its stop reason', async () => {
     spy = failingWithOutcomeUnknown(['write']);

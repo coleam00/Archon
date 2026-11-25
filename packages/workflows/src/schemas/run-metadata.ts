@@ -294,10 +294,10 @@ export const stoppedRefusalSchema = z.object({
 });
 export type StoppedRefusal = z.infer<typeof stoppedRefusalSchema>;
 
-/** Why a failed run stopped its item; `outcomeUnknown` means resume it, not restart it. */
+/** Why a failed run stopped; `outcomeUnknown` names the node to check before a resume. */
 export const failedStopSchema = z.object({
   error: z.string().nullable(),
-  outcomeUnknown: z.literal(true).optional(),
+  outcomeUnknown: z.object({ node: z.string().nullable() }).optional(),
 });
 
 /** A recorded stop: why the run stopped its item, and the starts its end caused that were refused. */

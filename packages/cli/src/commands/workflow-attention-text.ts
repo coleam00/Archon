@@ -246,7 +246,7 @@ function failedLines(
   if (outcomeUnknown)
     return [
       failed,
-      `its outcome is unknown, so nothing continues it by itself: check what it did, then resume it with ${command(`resume ${runId}`)}, or abandon it with ${command(`abandon ${runId}`)}`,
+      `${outcomeUnknown.node === null ? 'its outcome' : `the outcome of node ${outcomeUnknown.node}`} is unknown, so nothing continues it by itself: check what it did, then resume it with ${command(`resume ${runId}`)}, or abandon it with ${command(`abandon ${runId}`)}; a new run on its item does not close this`,
       show,
       ...(item.item === undefined ? [] : [readItem]),
     ];

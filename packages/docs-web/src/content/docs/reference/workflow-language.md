@@ -1142,9 +1142,9 @@ A node failure can record the kind `outcome_unknown`: the node may have had a si
 - A node in a `workflow:` child run fails the child with that stop reason. The parent never re-drives such a child, on a resume or a wake: its `workflow:` node fails with `child_failed`, or under `join: all_done` counts the child as a failed instance. Resume the child itself.
 - The run does not wait out a provider usage limit, even when the limit hit another node first. A `quota_resume_skipped` event with reason `outcome_unknown` records the refusal.
 - A run whose source this host cannot read is failed instead of released to another host, since the host that continues a released run runs its failed nodes again.
-- When a run continues after a wait, an `always_run` node that failed this way is replayed as failed instead of running again.
+- A run paused after such a failure (a timed or event wait, a gate, a child, an operator pause) is not continued: when its continuation comes, the run fails with stop reason `outcome_unknown` and nothing in it starts, not even an `always_run` node or a fan-out whose cached result went stale.
 - A loop group does not start another round after a round that left such a failure, which an `all_done` fan-out in its body can let complete. The group fails with `child_failed`.
-- In `archon workflow attention --watch`, the run's terminal line names the node with `(outcome_unknown)` and gives the resume and abandon commands. Every failed run with stop reason `outcome_unknown` is also listed by `archon workflow attention` as `stopped`, child runs and runs with no item included, with the same commands, until it is resumed or abandoned. A later run on its item does not close it. A completed run that went past such an instance under `all_done` shows only in the watch.
+- In `archon workflow attention --watch`, the run's terminal line names the node with `(outcome_unknown)` and gives the resume and abandon commands. Every failed run with stop reason `outcome_unknown` is also listed by `archon workflow attention` as `stopped`, child runs and runs with no item included, with the same commands and the node to check, until it is resumed or abandoned. A later run on its item, or ending the item, does not close it. A completed run that went past such an instance under `all_done` shows only in the watch.
 
 The operator decides what happens next: check what the node did, then continue with `archon workflow resume <run-id>`, which runs the node again, or discard the run with `archon workflow abandon <run-id>`. Resume works even when the node was the run's first.
 
@@ -1155,7 +1155,7 @@ What each join does with a node or instance that fails this way:
 | Join | What happens |
 |------|--------------|
 | `join: all_success` on a `workflow:` or composed fan-out | Same as any failed instance: the fan-out node fails |
-| `join: all_done` on a `workflow:` or composed fan-out | Same as any failed instance: the other instances finish and the node completes with the `archon_failed` marker in that slot. The attention line names the instance that failed this way, including when the run then completes. If the run fails for any reason, its stop reason is `outcome_unknown` |
+| `join: all_done` on a `workflow:` or composed fan-out | Same as any failed instance: the other instances finish and the node completes with the `archon_failed` marker in that slot. The attention line names the instance that failed this way, including when the run then completes. A composed instance's failure is in this run's records, so if the run fails for any reason, its stop reason is `outcome_unknown`. A `workflow:` child's failure is in the child's records, so the stop reason is on the child run |
 | A `loop_group:` body node | Same as any body failure: the group fails at that iteration, and the iteration is not retried |
 
 This is separate from `retryable: false`, which a `bash:`/`script:` contract failure records and which only stops the immediate retry of that node. A failure with `retryable: false` keeps the usage-limit wait, source release, joins and stop reason of any other failure.

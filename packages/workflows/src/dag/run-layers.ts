@@ -202,13 +202,11 @@ async function runLayerPhase(
  * the pause: their dependents ran on the failure. Re-running them would be a retry
  * nobody asked for, and would change what those dependents and any answered wait
  * were computed from, so the failure is replayed as it was. The prior pass's
- * `node_failed` row stays the node's latest record. `always_run` keeps re-executing,
- * except after a failure whose outcome is unknown, which nothing runs again by itself.
+ * `node_failed` row stays the node's latest record. `always_run` keeps re-executing.
  */
 function replayPriorFailure(ctx: RunLayersContext, node: DagNode): LayerNodeResult | undefined {
   const failure = ctx.replayedFailures?.get(node.id);
-  if (failure === undefined) return undefined;
-  if (node.always_run && failure.failureKind !== 'outcome_unknown') return undefined;
+  if (failure === undefined || node.always_run) return undefined;
   getLog().info(
     { workflowRunId: ctx.workflowRun.id, nodeId: node.id },
     'dag.node_prior_failure_replayed'
