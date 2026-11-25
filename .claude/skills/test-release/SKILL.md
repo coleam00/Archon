@@ -305,8 +305,9 @@ If you *do* have `claudeBinaryPath` set globally, skip this test or temporarily 
 
 ### Test 4 — Env-leak guard strips sensitive keys from .env
 
-Create a second throwaway repo with a fake sensitive key and a one-node workflow that
-reports what the run sees for that key:
+Create a second throwaway repo with a fake sensitive key and a one-node workflow. The
+node compares the key it sees with the planted value inside the run and prints only a
+fixed marker, never a value:
 
 ```bash
 LEAKREPO=/tmp/archon-test-leak-$(date +%s)
@@ -320,25 +321,33 @@ name: env-leak-probe
 description: Reports whether the target repo's ANTHROPIC_API_KEY reached the run
 nodes:
   - id: probe
-    bash: 'echo "probe: ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-unset}"'
+    bash: |
+      if [ "${ANTHROPIC_API_KEY:-}" = "sk-ant-test-fake" ]; then echo "probe: LEAKED"
+      elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then echo "probe: OTHER"
+      else echo "probe: CLEAN"; fi
 YAML
 ```
 
 **Pass criteria** (current behaviour — the guard **strips** silently, it does not refuse):
 
-- The probe workflow completes and its output line shows the run did **not** get
-  `sk-ant-test-fake`. It shows `unset`, or your own key if `~/.archon/.env` sets one
+- Run on a fresh scratch Archon home with no inherited `ANTHROPIC_API_KEY` or
+  `DATABASE_URL`, the probe workflow completes and prints `probe: CLEAN`. With no other
+  source for the key, any other marker means the planted key, or some key, reached the run
 - No `[archon] stripped` line on stderr: the guard no longer prints on every command
 - `archon doctor` in the repo names this repo's `.env` and the planted key:
   `Target repo .env: 1 key from <repo>/.env is kept out of runs, …: ANTHROPIC_API_KEY`
 
 The probe is the security check: it observes the run itself. The doctor line only
-checks the operator-facing report.
+checks the operator-facing report. The scratch home keeps your own configured key from
+masking a broken guard or appearing in the log, and keeps the run off your database.
 
 ```bash
-"$BINARY" workflow run env-leak-probe --no-worktree > /tmp/archon-test-leak.log 2>&1
+PROBE_HOME=$(mktemp -d)
+probe() { env -u ANTHROPIC_API_KEY -u DATABASE_URL ARCHON_HOME="$PROBE_HOME" "$BINARY" "$@"; }
+probe workflow run env-leak-probe --no-worktree > /tmp/archon-test-leak.log 2>&1
 leak_exit=$?
-"$BINARY" doctor > /tmp/archon-test-leak-doctor.log 2>&1
+probe doctor > /tmp/archon-test-leak-doctor.log 2>&1
+rm -rf "$PROBE_HOME"
 
 # $LEAKREPO may be a symlinked path (/tmp -> /private/tmp on macOS); the binary
 # reports the resolved form, so compare against that.
@@ -347,10 +356,8 @@ expected="Target repo .env: 1 key from ${resolved_repo}/.env is kept out of runs
 
 if [ "$leak_exit" -ne 0 ]; then
   echo "FAIL: workflow exited $leak_exit — the guard strips and proceeds, it should not abort"
-elif ! grep -qF 'probe: ANTHROPIC_API_KEY=' /tmp/archon-test-leak.log; then
-  echo "FAIL: the probe node printed nothing. Got:"; tail -20 /tmp/archon-test-leak.log
-elif grep -qF 'sk-ant-test-fake' /tmp/archon-test-leak.log; then
-  echo "FAIL: the target repo's key reached the run"
+elif ! grep -qx 'probe: CLEAN' /tmp/archon-test-leak.log; then
+  echo "FAIL: the run saw a key. Probe said: $(grep -o 'probe: [A-Z]*' /tmp/archon-test-leak.log || echo nothing)"
 elif grep -qF '[archon] stripped' /tmp/archon-test-leak.log; then
   echo "FAIL: the per-command strip line is back on stderr"
 elif grep -F "$expected" /tmp/archon-test-leak-doctor.log | grep -qF ': ANTHROPIC_API_KEY'; then
@@ -376,7 +383,7 @@ from **any** path, so a report belonging to a different repository reads as succ
 
 **Common failures:**
 
-- The probe prints `sk-ant-test-fake` → the guard is not active; the `.env` reaches runs
+- The probe prints `LEAKED` → the guard is not active; the `.env` reaches runs
 - Doctor reports `skip` (no `.env` keys) → the file was not found or not parsed
 - Doctor names the wrong file or repo → path resolution regression
 

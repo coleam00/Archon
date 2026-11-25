@@ -11,5 +11,5 @@
  */
 import { type CwdEnvStrip, stripCwdEnv } from './strip-cwd-env';
 
-/** What the boot strip removed in this process; entry points log it and doctor shows it. */
+/** What the boot strip removed in this process; `archon doctor` shows it. */
 export const cwdEnvStrip: CwdEnvStrip = stripCwdEnv();

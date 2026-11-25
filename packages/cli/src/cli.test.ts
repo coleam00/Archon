@@ -2766,20 +2766,14 @@ describe('receipt policies in the CLI host', () => {
     }
   );
 
-  it('keeps the target repo .env strip off stderr, and logs it only under the output policy', async () => {
+  it('keeps the target repo .env strip off stderr, and logs it at debug', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cli-cwd-env-strip-'));
-    expect(spawnSync('git', ['init', '-q', '.'], { cwd: root }).status).toBe(0);
     const valueA = 'planted-value-a-6362';
     const valueB = 'planted-value-b-6362';
     writeFileSync(join(root, '.env'), `STRIP_PROBE_A=${valueA}\n`);
     writeFileSync(join(root, '.env.local'), `STRIP_PROBE_B=${valueB}\n`);
-    const records = (stream: string): unknown[] =>
-      stream
-        .split('\n')
-        .filter(line => line.includes('"env.cwd_keys_stripped"'))
-        .map(line => JSON.parse(line) as unknown);
-    const run = (argv: string[], logLevel = '') => {
-      const result = spawnSync(process.execPath, [CLI_ENTRY, ...argv], {
+    const run = (logLevel: string) => {
+      const result = spawnSync(process.execPath, [CLI_ENTRY, '--version'], {
         cwd: root,
         encoding: 'utf8',
         env: {
@@ -2791,36 +2785,25 @@ describe('receipt policies in the CLI host', () => {
           LOG_LEVEL: logLevel,
         },
       });
+      expect(result.status).toBe(0);
       for (const value of [valueA, valueB]) {
         expect(result.stdout).not.toContain(value);
         expect(result.stderr).not.toContain(value);
       }
-      return {
-        status: result.status,
-        stdout: records(result.stdout),
-        stderr: records(result.stderr),
-        rawStderr: result.stderr,
-      };
+      return result.stderr;
     };
-    const record = expect.objectContaining({
-      files: ['.env', '.env.local'],
-      keys: ['STRIP_PROBE_A', 'STRIP_PROBE_B'],
-    });
     try {
-      expect(run(['--version']).rawStderr).toBe('');
-      const cases: [string[], string, number, unknown[]][] = [
-        [['--version'], 'debug', 0, [record]],
-        [['--version', '--verbose'], '', 0, [record]],
-        [['--version', '--quiet'], 'debug', 0, []],
-        [['--version', '--json'], 'debug', 0, []],
-        [['workflow', 'list', '--verbose'], '', 0, [record]],
-        [['workflow', 'list', '--json'], 'debug', 0, []],
-        [['--no-such-flag'], 'debug', 1, [record]],
-      ];
-      for (const [argv, logLevel, status, stderr] of cases) {
-        const { rawStderr: _, ...result } = run(argv, logLevel);
-        expect({ argv, ...result }).toEqual({ argv, status, stdout: [], stderr });
-      }
+      expect(run('')).toBe('');
+      const records = run('debug')
+        .split('\n')
+        .filter(line => line.includes('"env.cwd_keys_stripped"'))
+        .map(line => JSON.parse(line) as unknown);
+      expect(records).toEqual([
+        expect.objectContaining({
+          files: ['.env', '.env.local'],
+          keys: ['STRIP_PROBE_A', 'STRIP_PROBE_B'],
+        }),
+      ]);
     } finally {
       await removeTempTree(root);
     }

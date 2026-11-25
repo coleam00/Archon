@@ -3301,7 +3301,7 @@ These flags apply to every command. Command-specific flags are described under t
 A command's stdout carries only its output, so `archon workflow list --full > out.txt`
 captures the listing and nothing else. Engine logs go to stderr, and by default only
 warnings and errors appear. `--verbose` (or `LOG_LEVEL=debug`) adds debug logs, still on
-stderr. `--json` and `workflow logs` print no logs at all.
+stderr. `--json` and `workflow logs` print no logs at all, except the `env.cwd_keys_stripped` record: it is written while env loads, before options apply, so `LOG_LEVEL=debug` still puts it on stderr.
 
 `archon serve` is the exception: its logs are its output, so it logs at `info` (or debug with `--verbose`) on stdout,
 as the server does when started directly.
@@ -3346,7 +3346,7 @@ for recovery details.
 
 On startup, the CLI:
 
-1. Removes from `process.env` every key named in `<cwd>/.env`, `.env.local`, `.env.development` and `.env.production`, whatever its value or source (shell exports and direnv included), plus nested Claude Code session markers. It prints nothing about it; `archon doctor` names the stripped keys, and `--verbose` or `LOG_LEVEL=debug` shows an `env.cwd_keys_stripped` record on every command. This keeps project API keys from overriding subscription auth, which would bill the API, and from overriding Archon's own environment.
+1. Removes from `process.env` every key named in `<cwd>/.env`, `.env.local`, `.env.development` and `.env.production`, whatever its value or source (shell exports and direnv included), plus nested Claude Code session markers. It prints nothing about it; `archon doctor` names the stripped keys, and `LOG_LEVEL=debug` shows an `env.cwd_keys_stripped` record on every command. This keeps project API keys from overriding subscription auth, which would bill the API, and from overriding Archon's own environment.
 2. Loads `~/.archon/.env` (home scope) with `override: true`.
 3. Loads `<cwd>/.archon/.env` (project scope), which overrides home scope except for `GH_CONFIG_DIR` and inherited workflow identity. The CLI keeps the home-scope `GH_CONFIG_DIR`, including its absence; inside a workflow, and in the start-time forge check of a pack that declares `forge:`, an inherited login directory takes precedence over both files. See [forge configuration](/reference/forge/#plugin-configuration). Steps 2 and 3 print `[archon] loaded N keys …` only when `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL` is `debug` or `trace`.
 4. Sets `CLAUDE_USE_GLOBAL_AUTH=true` when neither `CLAUDE_API_KEY` nor `CLAUDE_CODE_OAUTH_TOKEN` is set and the variable is not already set. The variable is only the server's startup-check marker; Claude Code ignores it and uses your `claude /login` session whenever no token or key is set.

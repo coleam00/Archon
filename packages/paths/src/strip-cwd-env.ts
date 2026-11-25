@@ -53,8 +53,8 @@ export interface CwdEnvStrip {
  * Keys in ~/.archon/.env (loaded afterward by each entry point) are unaffected.
  * Safe to call even when no CWD .env files exist.
  *
- * Returns what it stripped. It prints nothing about it: the entry point logs the result
- * once its logging is set up, and `archon doctor` shows it.
+ * Returns what it stripped and prints nothing about it: loadArchonEnv logs it at debug,
+ * and `archon doctor` shows it.
  */
 export function stripCwdEnv(cwd: string = process.cwd()): CwdEnvStrip {
   const preserveDetachedInstallContext = process.argv
@@ -112,8 +112,12 @@ function stripDebuggerEnv(): void {
   }
 }
 
-/** The env files in `cwd` that name keys, and the sorted key names; never values. */
-function readCwdEnvKeys(cwd: string): { files: string[]; keys: string[] } {
+/**
+ * The env files in `cwd` that name keys, and the sorted key names; never values. The
+ * single source for what the guard strips: stripCwdEnv() and loadArchonEnv's debug
+ * record read it.
+ */
+export function readCwdEnvKeys(cwd: string): { files: string[]; keys: string[] } {
   const keys = new Set<string>();
   const files: string[] = [];
   for (const filename of BUN_AUTO_LOADED_ENV_FILES) {
