@@ -53,7 +53,8 @@ function installed(
   outcome: string,
   to: string,
   id: string,
-  problems: string[] = []
+  problems: string[] = [],
+  startsStep = true
 ): InstalledArrow {
   return {
     file: `/home/triggers/${id}.json`,
@@ -62,6 +63,7 @@ function installed(
     launchWorkflow: to,
     linked: null,
     problems,
+    startsStep,
   };
 }
 
@@ -166,6 +168,7 @@ describe('a pack graph', () => {
           launchWorkflow: 'a',
           linked: null,
           problems: [],
+          startsStep: true,
         },
       ],
     });
@@ -197,6 +200,7 @@ describe('a pack graph', () => {
           launchWorkflow: 'b',
           linked: null,
           problems: [],
+          startsStep: true,
         },
       ],
     });
@@ -217,6 +221,7 @@ describe('a pack graph', () => {
           launchWorkflow: 'b',
           linked: null,
           problems: [],
+          startsStep: true,
         },
       ],
     });
@@ -557,7 +562,8 @@ describe('a pack graph', () => {
       declared,
       installed: [
         installed('review', 'ready', 'build', 'file-build'),
-        installed('review', 'advise', 'shadow', 'file-shadow'),
+        // The check resolved the file's target as a workflow that observes its item.
+        installed('review', 'advise', 'shadow', 'file-shadow', [], false),
       ],
     });
 

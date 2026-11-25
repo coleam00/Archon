@@ -203,7 +203,7 @@ async function bindingProject(cwd: string | null): Promise<Codebase | null> {
 
 /**
  * The refused starts no run caused, each placed in its project and on its item when those
- * resolve, less those whose item has had a run since: the item moved on.
+ * resolve, less those whose item has had a step since: the item moved on.
  */
 async function listRefusedStarts(): Promise<RefusedStart[]> {
   const starts: RefusedStart[] = [];

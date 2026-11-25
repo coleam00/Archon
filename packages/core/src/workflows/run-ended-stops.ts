@@ -13,7 +13,7 @@ import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
 import {
   bindingProjectKey,
-  runEndedBindingCheck,
+  runEndedBindingReading,
   type OnBinding,
   type OnBindingFile,
   type RunEndedStartsDependencies,
@@ -95,21 +95,6 @@ export async function runEndedStops(
   return [...stops.values()];
 }
 
-/** Whether the workflow a binding starts observes its item, read as the binding's check reads it. */
-async function startsObserver(
-  candidate: OnBindingFile,
-  deps: BindingDefinitionsDeps
-): Promise<boolean> {
-  const found = await discoverBindingWorkflows(candidate.binding.launch, deps);
-  return (
-    'discovered' in found &&
-    found.discovered.workflows.some(
-      ({ workflow }) =>
-        workflow.name === candidate.binding.launch.workflowName && workflow.observes === true
-    )
-  );
-}
-
 /**
  * Each binding that can start, with its project, and every outcome a usable run-ended file
  * binds to a step on the item: one that starts a workflow observing its item starts no step.
@@ -124,13 +109,11 @@ async function readNamedBindings(
     // A binding whose checkout is gone never starts; `runEndedTriggerCheck` reports it.
     if (!existsSync(candidate.binding.launch.cwd)) continue;
     const project = (await bindingProjectKey(candidate, deps)) ?? candidate.binding.launch.cwd;
-    if (
-      'runEnded' in candidate &&
-      candidate.runEnded.linked === undefined &&
-      (await runEndedBindingCheck(candidate, deps)).length === 0 &&
-      !(await startsObserver(candidate, deps))
-    )
-      bound.add(stopKey(project, candidate.runEnded.workflowName, candidate.runEnded.outcome));
+    if ('runEnded' in candidate && candidate.runEnded.linked === undefined) {
+      const { problems, startsStep } = await runEndedBindingReading(candidate, deps);
+      if (problems.length === 0 && startsStep)
+        bound.add(stopKey(project, candidate.runEnded.workflowName, candidate.runEnded.outcome));
+    }
     read.push({ project, candidate, named: namedWorkflows(candidate) });
   }
   return { read, bound };

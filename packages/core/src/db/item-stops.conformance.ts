@@ -144,8 +144,13 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
         CONFORMANCE_CODEBASE_ID,
         CONFORMANCE_CONVERSATION_ID
       );
-      // A start the end of `ended` caused on its item, as the completing write records it.
-      const caused = async (ended: string, bindingId: string) => {
+      // A start the end of `ended` caused on its item, as the completing write records it, or
+      // with `as`, one delivered under the run's id that it did not cause on that item.
+      const caused = async (
+        ended: string,
+        bindingId: string,
+        as: { actor?: null; itemKey?: string } = {}
+      ) => {
         const receiptId = crypto.randomUUID();
         await store.acceptStartReceipt({
           receipt: {
@@ -155,8 +160,11 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
             contentDigest: receiptId,
             receivedAt: new Date().toISOString(),
             occurredAt: null,
-            sourceActor: { source: RUN_ENDED_SOURCE_ACTOR, id: ended, display: 'planned' },
-            itemKey: 'pr-7',
+            sourceActor:
+              'actor' in as
+                ? null
+                : { source: RUN_ENDED_SOURCE_ACTOR, id: ended, display: 'planned' },
+            itemKey: as.itemKey ?? 'pr-7',
           },
           outcome: 'matched',
           bindings: [
@@ -182,6 +190,11 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       // The only stage its end started observes the item: held back while it waits to be
       // prepared, listed once its run exists.
       const planned = await completeOnItem(harness, 'plan', 'planned', 'Planned.');
+      // A start that only reuses the run's id as its delivery id, or that the run caused on
+      // another item (a linked start), holds nothing back.
+      await caused(planned, 'fired', { actor: null, itemKey: 'pr-8' });
+      await caused(planned, 'linked', { itemKey: 'pr-8' });
+      expect(await stopped()).toEqual([`stopped:${planned}`]);
       const shadow = await caused(planned, 'shadow');
       expect(await stopped()).toEqual([]);
       await store.claimStartBindingPreparation(shadow);

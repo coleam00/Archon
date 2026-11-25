@@ -57,19 +57,6 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
            AND (n.started_at > r.started_at
              OR (n.started_at = r.started_at AND n.${tie} > r.${tie}))
        )
-       -- A stage this run's end started on its item moves it on once that stage's run exists;
-       -- until then, while the start waits to be prepared or in the resource queue, the stop
-       -- is held back. A run-ended start on the run's own item is delivered under the run's
-       -- id; a linked one, on another item, is not.
-       AND NOT EXISTS (
-         SELECT 1 FROM remote_agent_start_receipts sr
-         JOIN remote_agent_start_receipt_bindings sb ON sb.receipt_id = sr.id
-         WHERE sr.delivery_id = CAST(r.id AS TEXT) AND sr.outcome = 'matched'
-           AND (sb.preparation_status IN ('pending', 'preparing')
-             OR EXISTS (SELECT 1 FROM remote_agent_resource_start_requests sq
-                         WHERE sq.receipt_id = sb.receipt_id AND sq.binding_id = sb.binding_id
-                           AND sq.status = 'queued'))
-       )
        -- A later run that was deleted still moved the item on.
        AND NOT EXISTS (SELECT 1 FROM remote_agent_items i
                         WHERE i.id = r.item_id
@@ -82,8 +69,10 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
                          WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL))
      ORDER BY r.started_at, r.${tie}`
   );
+  const owed = await owedStarts(result.rows);
   const runs: AttentionRead<WorkflowRun>[] = [];
   for (const row of result.rows) {
+    if (owed.has(String(row.id))) continue;
     try {
       runs.push(normalizeWorkflowRun(row));
     } catch {
@@ -93,6 +82,77 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
     }
   }
   return runs;
+}
+
+/**
+ * The run that caused a start, from the receipt's stored source actor: a run whose end (a
+ * run-ended binding) or settled asks (an asks-settled binding) started it. Undefined for a
+ * start anything else caused (a fire, a schedule, a webhook), whatever its delivery id.
+ * Throws on an actor that does not parse; a writer lets that fail its transaction.
+ */
+export function causingRun(stored: unknown): string | undefined {
+  const actor = sourceReceiptInputSchema.shape.sourceActor.safeParse(
+    typeof stored === 'string' ? JSON.parse(stored) : (stored ?? null)
+  );
+  const source = actor.success ? actor.data : undefined;
+  return source?.source === RUN_ENDED_SOURCE_ACTOR || source?.source === ASKS_SETTLED_SOURCE_ACTOR
+    ? source.id
+    : undefined;
+}
+
+/**
+ * The candidate runs a start of theirs on their own item still holds back: one the run
+ * caused (`causingRun`) on the run's item key, still waiting to be prepared (an install hold
+ * included) or in a resource queue. Once its run exists it is a later run on the item, and
+ * the step rule decides. A linked start the run caused names another item and holds nothing.
+ */
+async function owedStarts(
+  candidates: readonly Pick<WorkflowRunRow, 'id' | 'item_id'>[]
+): Promise<Set<string>> {
+  const owed = new Set<string>();
+  if (candidates.length === 0) return owed;
+  const pending = await pool.query<{ source_actor: unknown; item_key: string | null }>(
+    `SELECT r.source_actor, COALESCE(b.item_key, r.item_key) AS item_key
+       FROM remote_agent_start_receipts r
+       JOIN remote_agent_start_receipt_bindings b ON b.receipt_id = r.id
+      WHERE r.outcome = 'matched'
+        AND (b.preparation_status IN ('pending', 'preparing')
+          OR EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q
+                      WHERE q.receipt_id = b.receipt_id AND q.binding_id = b.binding_id
+                        AND q.status = 'queued'))`
+  );
+  const causedOn = new Set<string>();
+  for (const row of pending.rows) {
+    let run: string | undefined;
+    try {
+      run = causingRun(row.source_actor);
+    } catch {
+      // An actor that does not read names no run, so its start holds no stop back; the
+      // stop shows rather than the whole queue failing.
+      continue;
+    }
+    if (run !== undefined && row.item_key !== null)
+      causedOn.add(JSON.stringify([run, row.item_key]));
+  }
+  if (causedOn.size === 0) return owed;
+  const itemIds = [
+    ...new Set(candidates.flatMap(run => (run.item_id === null ? [] : [String(run.item_id)]))),
+  ];
+  const placeholders = itemIds.map((_, index) => '$' + String(index + 1)).join(', ');
+  const keys = new Map(
+    (
+      await pool.query<{ id: string; key: string }>(
+        `SELECT CAST(id AS TEXT) AS id, key FROM remote_agent_items WHERE id IN (${placeholders})`,
+        itemIds
+      )
+    ).rows.map(row => [row.id, row.key])
+  );
+  for (const run of candidates) {
+    const key = run.item_id === null ? undefined : keys.get(String(run.item_id));
+    if (key !== undefined && causedOn.has(JSON.stringify([String(run.id), key])))
+      owed.add(String(run.id));
+  }
+  return owed;
 }
 
 /**
@@ -116,13 +176,9 @@ export async function recordRefusedStartStop(
       [receiptId]
     )
   ).rows[0];
-  const stored = receipt?.source_actor;
-  const actor = sourceReceiptInputSchema.shape.sourceActor.safeParse(
-    typeof stored === 'string' ? JSON.parse(stored) : (stored ?? null)
-  );
-  const source = actor.success ? actor.data : undefined;
-  if (source?.source !== RUN_ENDED_SOURCE_ACTOR && source?.source !== ASKS_SETTLED_SOURCE_ACTOR)
-    return;
+  const causedBy = causingRun(receipt?.source_actor);
+  if (causedBy === undefined) return;
+  const source = { id: causedBy };
   // Locked, so a sibling binding's refusal in another transaction adds to this stop rather
   // than replacing it: a limit and the preparation refusals of one run's end are kept together.
   const limited =

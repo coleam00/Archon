@@ -13,6 +13,7 @@
  */
 import { z } from 'zod';
 import { declaredItemFate, declaredOutcome, outcomeValues } from './completed-outcome';
+import { observesItem } from './schemas/run-metadata';
 import { readComposedMeta } from './compiled-command';
 import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
@@ -384,6 +385,11 @@ export interface InstalledArrow {
    */
   linked: PackGraphLink | null;
   problems: readonly string[];
+  /**
+   * The workflow the file starts, as its check resolved it, is a step of its item; false for
+   * one that observes it (`observesItem`), whose start moves the item on not at all.
+   */
+  startsStep: boolean;
 }
 
 type Stage = Pick<ResolvedWorkflow, 'name' | 'returns' | 'result' | 'nodes' | 'observes'>;
@@ -599,7 +605,7 @@ function graphStage(
     name: stage.name,
     returns: stage.returns ?? null,
     outcome,
-    observes: stage.observes === true,
+    observes: observesItem(stage),
     asks: stage.result?.asks !== undefined,
     waits: stage.result?.waits !== undefined,
     nodes: stageNodes(stage),
@@ -616,7 +622,10 @@ export function buildPackGraph(input: GraphInput): Omit<PackGraph, 'loaded' | 'o
   // Only an outcome arrow starts something for an outcome; an asks arrow starts on answers.
   const usable = arrows.filter(arrow => arrow.active && arrow.installed.problems.length === 0);
   const started = new Set(usable.map(arrow => arrowKey(arrow.from, '')));
-  const startedOnItem = itemStepStarts(usable, input.stages);
+  // What an installed file starts is its check's resolution, not a guess from the stages.
+  const startedOnItem = itemStepStarts(
+    input.installed.filter(entry => entry.problems.length === 0)
+  );
   return {
     pack: input.packKey,
     stages: input.stages.map(stage => graphStage(stage, started, startedOnItem)),
@@ -631,18 +640,15 @@ export function buildPackGraph(input: GraphInput): Omit<PackGraph, 'loaded' | 'o
 }
 
 /**
- * The outcomes `arrows` start a step on for the ended run's own item, keyed as `arrowKey`. A
- * linked arrow starts on other items, and an arrow to a stage that observes its item starts
- * no step: neither moves the item on. A stage outside the pack is taken to be a step.
+ * The outcomes the arrows start a step on for the ended run's own item, keyed as `arrowKey`,
+ * from each arrow's `startsStep`. A linked arrow starts on other items and moves nothing here.
  */
 function itemStepStarts(
-  arrows: readonly Pick<PackGraphArrow, 'from' | 'linked' | 'to'>[],
-  stages: readonly Pick<Stage, 'name' | 'observes'>[]
+  arrows: readonly { from: PackGraphArrowFrom; linked: PackGraphLink | null; startsStep: boolean }[]
 ): Set<string> {
-  const observing = new Set(stages.filter(stage => stage.observes === true).map(s => s.name));
   return new Set(
     arrows
-      .filter(arrow => 'outcome' in arrow.from && arrow.linked === null && !observing.has(arrow.to))
+      .filter(arrow => 'outcome' in arrow.from && arrow.linked === null && arrow.startsStep)
       .map(arrow => arrowKey(arrow.from, ''))
   );
 }
@@ -667,6 +673,8 @@ export function declaredStops(
   stages: readonly Stage[],
   declared: Readonly<Record<string, PackBinding>> | undefined
 ): DeclaredStop[] {
+  // A declaration names a stage of the pack, or a workflow outside it, taken to be a step.
+  const observing = new Set(stages.filter(observesItem).map(stage => stage.name));
   const bound = itemStepStarts(
     declaredArrows({
       packKey,
@@ -675,8 +683,9 @@ export function declaredStops(
       installed: [],
       workflows: [],
       discoveryErrors: [],
-    }).filter(arrow => arrow.binding.problems.length === 0),
-    stages
+    })
+      .filter(arrow => arrow.binding.problems.length === 0)
+      .map(arrow => ({ ...arrow, startsStep: !observing.has(arrow.to) }))
   );
   return stages.flatMap(stage => {
     const outcome = declaredOutcome(stage);

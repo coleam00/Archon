@@ -596,7 +596,9 @@ describe('a run-ended binding', () => {
         }
       ).items
         .filter(item => item.kind === 'stopped')
-        .map(item => [item.item?.key, item.stoppedIn?.workflow]);
+        .map(item => [item.item?.key ?? '', item.stoppedIn?.workflow ?? ''])
+        // Attention orders ties by ref, which holds a random run id; the item key does not.
+        .sort(([a], [b]) => a.localeCompare(b));
     const runA = (issue: string) =>
       fixture.cli([
         ...['workflow', 'run', 'stage-a', '--no-worktree', '--item', issue],

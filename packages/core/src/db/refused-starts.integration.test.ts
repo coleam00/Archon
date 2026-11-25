@@ -165,10 +165,18 @@ test('a start refused in preparation names its reason and detail until the bindi
     }),
   ]);
 
-  // The same binding starting on the item later closes it.
+  // The same binding starting a workflow that observes the item leaves it listed; starting a
+  // step on the item later closes it.
   await getDatabase().query(
     "UPDATE remote_agent_start_receipt_bindings SET updated_at = datetime(updated_at, '-1 minute')"
   );
+  const observer = await claimed(intent());
+  const base = launch();
+  await store().completeStartBindingPreparation({
+    ...observer,
+    launch: { ...base, run: { ...base.run, metadata: observesItemMetadata({ observes: true }) } },
+  });
+  expect(await refused()).toHaveLength(1);
   const next = await claimed(intent());
   await store().completeStartBindingPreparation({ ...next, launch: launch() });
   expect(await refused()).toEqual([]);

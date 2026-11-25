@@ -174,7 +174,7 @@ const HOW_TO_ANSWER = [
   '- kind attention: choose=<JSON array of option ids> (one id, several only for form multi_select), or recommended=true; form message takes text only.',
   '- kind awaiting_response: choose=<JSON array with one decision id>, e.g. ["approve"] or ["reject"].',
   '- kind usage_limit continues by itself at resetAt; kind unreadable needs someone to look at the run. Neither takes an answer.',
-  '- kind stopped is an item whose last run (stoppedIn) left nothing to move it: an outcome nothing starts from, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new run on the item moves it on.',
+  '- kind stopped is an item whose last step (stoppedIn) left nothing to move it: an outcome no step followed, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new step on the item moves it on; a run of a workflow that observes the item (observes: true) does not.',
 ].join('\n');
 
 const chooseSchema = z.array(z.string().min(1)).min(1);
@@ -228,9 +228,9 @@ function stoppedText(ref: string, item: Extract<AttentionQueueItem, { kind: 'sto
   // A refusal says only what was refused: other starts the run's end caused may have started.
   const after =
     count === 0
-      ? 'and nothing started after it'
+      ? 'and no step followed it'
       : `and ${count === 1 ? 'a start it caused was' : `${String(count)} starts it caused were`} refused`;
-  return `attention: item '${ref}' stopped: run ${runId} (${workflow}) ended${outcome === null ? '' : ` as '${outcome}'`}, ${after}.${item.summary === null ? '' : ` Summary: ${item.summary}`} It takes no answer: start a new run on the item to move it on.`;
+  return `attention: item '${ref}' stopped: run ${runId} (${workflow}) ended${outcome === null ? '' : ` as '${outcome}'`}, ${after}.${item.summary === null ? '' : ` Summary: ${item.summary}`} It takes no answer: start a new step on the item to move it on (a workflow that observes the item does not).`;
 }
 
 /** Why the item `ref` names was not answered, in words the agent can act on. */

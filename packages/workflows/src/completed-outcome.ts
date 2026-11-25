@@ -7,6 +7,7 @@ import type { DagNode, IncludeDirective, NodeOutput, RunCompletedOutcome } from 
 import type { WorkflowDefinition } from './schemas/workflow';
 import { outputRefText, resolveNodeOutputField } from './output-ref';
 import { workflowRunOutcomeSchema } from './schemas/run-status';
+import { observesItem } from './schemas/run-metadata';
 
 /** The two forms an outcome property may take: a boolean, or a string with an `enum`. */
 export type OutcomeForm =
@@ -147,7 +148,7 @@ export function itemFate(
   outcome: string | undefined,
   leaves: { readonly asks: boolean; readonly waits: boolean }
 ): ItemFate {
-  if (workflow.observes === true) return 'observes';
+  if (observesItem(workflow)) return 'observes';
   if (outcome !== undefined && workflow.result?.ends?.includes(outcome) === true) return 'ends';
   return leaves.asks || leaves.waits ? 'moves' : 'stops';
 }

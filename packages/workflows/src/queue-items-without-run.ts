@@ -4,9 +4,9 @@
  * (`returns.waits`, see `schemas/item-wait.ts`). A host joins them to the one reader through
  * `AttentionQueueSource.itemsWithoutRun`. A wait's deadline raises attention and wakes
  * nothing; the set stays open until an event meets it, a newer run of its workflow replaces
- * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
- * `readItemStopped`), or a failed top-level run, is listed while it is the newest run on the
- * item, the item's end does not hold (`item-end.ts`) and no merge is recorded on it
+ * it, or it is withdrawn by its `wait:` ref. A completed step that stopped its item (see
+ * `readItemStopped`), or a failed top-level step, is listed while it is the newest step on
+ * the item (a run that observes it is no step), the item's end does not hold (`item-end.ts`) and no merge is recorded on it
  * (`getItemMerge`); it takes no answer. Asks and waits on an item whose end holds are left
  * out too: an item at rest asks nothing.
  */

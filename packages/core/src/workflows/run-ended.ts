@@ -17,6 +17,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { observesItem } from '@archon/workflows/schemas/run-metadata';
 import type { RunEndedFacts, RunEndedStarts } from '@archon/workflows/deps';
 import { resolveJsonPointer } from '@archon/workflows/json-pointer';
 import type { JsonValue } from '@archon/workflows/output-ref';
@@ -647,13 +648,27 @@ export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | '
  * check a run gets before it starts; `runEndedTriggerCheck` reports it with the rest.
  */
 export async function runEndedBindingCheck(
-  { binding, runEnded }: RunEndedBinding,
+  candidate: RunEndedBinding,
   deps: BindingDefinitionsDeps,
   /** The run starting now whose end or asks may fire the binding; see `discoverBindingWorkflows`. */
   launchRun?: Pick<WorkflowRun, 'metadata'>
 ): Promise<string[]> {
+  return (await runEndedBindingReading(candidate, deps, launchRun)).problems;
+}
+
+/**
+ * `runEndedBindingCheck`'s problems, and whether the workflow the binding starts, as the check
+ * resolved it, is a step of its item (`observesItem`): what the static readers count as a
+ * start that moves the item on. A target that does not resolve is reported as a problem and
+ * counted as a step.
+ */
+export async function runEndedBindingReading(
+  { binding, runEnded }: RunEndedBinding,
+  deps: BindingDefinitionsDeps,
+  launchRun?: Pick<WorkflowRun, 'metadata'>
+): Promise<{ problems: string[]; startsStep: boolean }> {
   const read = await discoverBindingWorkflows(binding.launch, deps, launchRun);
-  if ('refused' in read) return [read.refused];
+  if ('refused' in read) return { problems: [read.refused], startsStep: true };
   const { discovered } = read;
   const workflows = discovered.workflows.map(found => found.workflow);
   const problems: string[] = [];
@@ -690,7 +705,7 @@ export async function runEndedBindingCheck(
       mapped: Object.keys(runEnded.inputs ?? {}),
     })
   );
-  return problems;
+  return { problems, startsStep: !('workflow' in started && observesItem(started.workflow)) };
 }
 
 /**

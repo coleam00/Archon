@@ -230,11 +230,21 @@ export function readAsksResult(metadata: Record<string, unknown>): JsonValue | u
  */
 export const OBSERVES_ITEM_METADATA_KEY = 'observes_item';
 
+/**
+ * Whether a workflow's runs observe their item instead of being steps of it: the one reading
+ * of `observes: true`. The completion's fate, a run's creation metadata, a binding's target
+ * and the pack graph's stages all ask it. A run that exists is asked through what it recorded
+ * (`observesItemRecorded`, and `stepRun` in the SQL stores), which this writes.
+ */
+export function observesItem(workflow: { readonly observes?: boolean }): boolean {
+  return workflow.observes === true;
+}
+
 /** The creation metadata that records a run as observing its item, or none for a step. */
 export function observesItemMetadata(workflow: { readonly observes?: boolean }): {
   [OBSERVES_ITEM_METADATA_KEY]?: true;
 } {
-  return workflow.observes === true ? { [OBSERVES_ITEM_METADATA_KEY]: true } : {};
+  return observesItem(workflow) ? { [OBSERVES_ITEM_METADATA_KEY]: true } : {};
 }
 
 /** Whether run metadata records the run as observing its item (`observesItemMetadata`). */

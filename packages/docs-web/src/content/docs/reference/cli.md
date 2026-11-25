@@ -1268,8 +1268,9 @@ runs that need an answer or inspection, plus observable provider usage- and rate
 Batch reads report unreadable stored rows and affected paused parents through `degraded` warnings, described below.
 Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_limit`
 continues automatically after reset, and `unreadable` needs inspection. `stopped` is an
-item whose last run ended in an outcome nothing starts from and left no ask; it takes no
-answer, and a new run on the item, [ending the item](#workflow-end) or
+item whose last step ended in an outcome no step followed and left no ask; it takes no
+answer, and a new step on the item (not a run of a workflow that observes it),
+[ending the item](#workflow-end) or
 [recording its merge](#workflow-merged) closes it ([kinds](/getting-started/operate/)). Read-only.
 
 ```bash
@@ -1471,16 +1472,18 @@ archon workflow end --item issue-42 --as triage-agent -- "Folded into issue-40"
 | `--json` | Print the end as the item read shows it under `ended`, or `{ ok: false, error }` |
 
 The reason goes after `--`, and must not be blank. The end changes no run. It holds until
-work starts on the item again: a new run or a queued start on the item, a
-[resume](#workflow-resume) of one of its runs or a run below one, or a trigger start waiting
+a step starts on the item again: a new step or a queued start of one on the item, a
+[resume](#workflow-resume) of one of its steps or a run below one, or a trigger start waiting
 to be prepared opens the item, with no further command, and the item's next stop is listed
-as usual. The rule reads the runs that exist now: deleting
+as usual. A run of a workflow that declares
+[`observes: true`](/reference/workflow-language/#workflow-fields), and a queued start of one,
+is not a step: it neither opens the end nor keeps it from holding. The rule reads the runs that exist now: deleting
 runs the end saw ([`workflow cleanup`](#workflow-cleanup)) leaves it holding, and deleting the
 run that opened the item lets the end hold again. Ending the item again records a new end.
 
 The command is refused, with exit 1, while anything on the item is still active or waiting,
-and names the first it finds: a run on the item, or a run below one of its runs, that is
-pending, running or paused (`error: "run"`), a queued start (`error: "queued_start"`), a
+and names the first it finds: a step on the item, or a run below one of its steps, that is
+pending, running or paused (`error: "run"`), a queued start of a step (`error: "queued_start"`), a
 trigger start not yet prepared (`error: "held_start"`), an open ask (`error: "open_ask"`), or
 an open wait (`error: "open_wait"`). With `--json` the refusal also carries `blocker`, such as
 `{ kind: "run", runId, status }`, and `message`. Let what it names end, or cancel, abandon,

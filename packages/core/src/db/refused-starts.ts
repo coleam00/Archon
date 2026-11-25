@@ -4,17 +4,13 @@
  * end or settled asks caused is not here: its refusal is a stop on that run (`item-stops.ts`).
  */
 import {
-  ASKS_SETTLED_SOURCE_ACTOR,
-  RUN_ENDED_SOURCE_ACTOR,
-  sourceReceiptInputSchema,
-} from '@archon/workflows/schemas/resource-start';
-import {
   bindingRefusalSchema,
   type BindingRefusal,
 } from '@archon/workflows/schemas/binding-refusal';
 import { getDatabase } from './connection';
 import { heldIntent } from './install-hold';
-import { stepRun } from './item-step';
+import { launchRunsStep, stepRun } from './item-step';
+import { causingRun } from './item-stops';
 import { parseStoredJson } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
 import { getLog } from './workflow-run-shared';
@@ -33,9 +29,11 @@ export interface StoredRefusedStart {
 
 /**
  * The rejected binding starts on an item that recorded why (`refusal`) and that no run
- * caused, unless the same binding has since started on the same item key. A rejection
- * with no item key (the source could not map one) names nothing to list it on, and one an
- * older binary wrote has no `refusal`; both stay in `archon trigger list` only.
+ * caused, unless the same binding has since started a step on the same item key: its
+ * prepared launch runs a step (`launchRunsStep`), so a start of an observing workflow under
+ * the binding clears nothing. A rejection with no item key (the source could not map one)
+ * names nothing to list it on, and one an older binary wrote has no `refusal`; both stay in
+ * `archon trigger list` only.
  */
 export async function listStoredRefusedStarts(): Promise<StoredRefusedStart[]> {
   const rows = await getDatabase().query<{
@@ -54,17 +52,13 @@ export async function listStoredRefusedStarts(): Promise<StoredRefusedStart[]> {
        JOIN remote_agent_start_receipts r ON r.id = b.receipt_id
       WHERE b.preparation_status = 'rejected' AND b.refusal IS NOT NULL
         AND COALESCE(b.item_key, r.item_key) IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM remote_agent_start_receipt_bindings l
-            JOIN remote_agent_start_receipts lr ON lr.id = l.receipt_id
-           WHERE l.binding_id = b.binding_id AND l.preparation_status = 'complete'
-             AND COALESCE(l.item_key, lr.item_key) = COALESCE(b.item_key, r.item_key)
-             AND l.updated_at > b.updated_at)
       ORDER BY b.updated_at, b.binding_id`
   );
+  const steppedSince = await laterStepStarts();
   const starts: StoredRefusedStart[] = [];
   for (const row of rows.rows) {
-    if (causedByRun(row.source_actor)) continue;
+    if (causingRun(row.source_actor) !== undefined) continue;
+    if (steppedSince.has(JSON.stringify([String(row.receipt_id), row.binding_id]))) continue;
     const refusal = bindingRefusalSchema.safeParse(parseStoredJson(row.refusal));
     if (!refusal.success) {
       getLog().warn(
@@ -88,13 +82,33 @@ export async function listStoredRefusedStarts(): Promise<StoredRefusedStart[]> {
   return starts;
 }
 
-/** True when a run's end or settled asks caused the receipt: its stop shows the refusal. */
-function causedByRun(stored: unknown): boolean {
-  const actor = sourceReceiptInputSchema.shape.sourceActor.safeParse(
-    parseStoredJson(stored ?? null)
+/**
+ * The refused binding starts, as `[receiptId, bindingId]` keys, whose binding has since
+ * completed a preparation on the same item key whose launch runs a step.
+ */
+async function laterStepStarts(): Promise<Set<string>> {
+  const later = await getDatabase().query<{
+    receipt_id: string;
+    binding_id: string;
+    launch: unknown;
+  }>(
+    `SELECT b.receipt_id, b.binding_id, q.launch
+       FROM remote_agent_start_receipt_bindings b
+       JOIN remote_agent_start_receipts r ON r.id = b.receipt_id
+       JOIN remote_agent_start_receipt_bindings l
+         ON l.binding_id = b.binding_id AND l.preparation_status = 'complete'
+        AND l.updated_at > b.updated_at
+       JOIN remote_agent_start_receipts lr ON lr.id = l.receipt_id
+        AND COALESCE(l.item_key, lr.item_key) = COALESCE(b.item_key, r.item_key)
+       LEFT JOIN remote_agent_resource_start_requests q
+         ON q.receipt_id = l.receipt_id AND q.binding_id = l.binding_id
+      WHERE b.preparation_status = 'rejected' AND b.refusal IS NOT NULL`
   );
-  const source = actor.success ? actor.data?.source : undefined;
-  return source === RUN_ENDED_SOURCE_ACTOR || source === ASKS_SETTLED_SOURCE_ACTOR;
+  return new Set(
+    later.rows
+      .filter(row => launchRunsStep(row.launch ?? null))
+      .map(row => JSON.stringify([String(row.receipt_id), row.binding_id]))
+  );
 }
 
 /**

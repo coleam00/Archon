@@ -24,11 +24,9 @@ import {
 import { askItemRef } from '@archon/workflows/attention-item-refs';
 import type { ItemAct } from '@archon/workflows/schemas/item-act';
 import { EXECUTION_CLAIM_METADATA_KEY } from '@archon/workflows/store';
-import { observesItemRecorded } from '@archon/workflows/schemas/run-metadata';
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import { actColumns, actRead, type ActColumns } from './item-act';
-import { stepRun } from './item-step';
-import { parseStoredJson } from './resource-starts';
+import { launchRunsStep, stepRun } from './item-step';
 import type { TransactionQuery } from './resource-slots';
 import { getLog } from './workflow-run-shared';
 
@@ -109,8 +107,7 @@ function holdsOverRuns(): string {
 /**
  * The oldest start queued on item `itemId` that will run a step, by request id, or undefined.
  * A queued start has no run row yet; whether it observes is in the run its prepared launch
- * will create (`observes_item` in `launch.run.metadata`), read here because the launch is
- * stored as text. A launch that does not read counts as a step, as every start did before.
+ * will create (`launchRunsStep`).
  */
 async function queuedStep(query: TransactionQuery, itemId: string): Promise<string | undefined> {
   const queued = await query<{ id: string; launch: unknown }>(
@@ -118,16 +115,7 @@ async function queuedStep(query: TransactionQuery, itemId: string): Promise<stri
      WHERE item_id = $1 AND status = 'queued' ORDER BY created_at`,
     [itemId]
   );
-  return queued.rows.find(row => !launchObservesItem(row.launch))?.id;
-}
-
-function launchObservesItem(launch: unknown): boolean {
-  try {
-    const run = (parseStoredJson(launch) as { run?: { metadata?: unknown } } | null)?.run;
-    return observesItemRecorded(run?.metadata);
-  } catch {
-    return false;
-  }
+  return queued.rows.find(row => launchRunsStep(row.launch))?.id;
 }
 
 /**

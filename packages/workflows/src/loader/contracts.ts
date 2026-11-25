@@ -12,6 +12,7 @@ import { compileOutputSchema } from '../structured-output';
 import { declaredOutcome, outcomeValues, stringEnumValues } from '../completed-outcome';
 import { itemAsksJsonSchema } from '../schemas/item-ask';
 import { itemWaitsJsonSchema } from '../schemas/item-wait';
+import { observesItem } from '../schemas/run-metadata';
 import { isDeepStrictEqual } from 'node:util';
 
 /**
@@ -33,7 +34,7 @@ export function validateWorkflowResultContract(
   const ends = workflow.result?.ends;
   if (ends !== undefined && workflow.result?.outcome === undefined)
     return 'Workflow declares returns.ends but no returns.outcome; returns.ends names outcomes, so it needs returns.outcome';
-  if (ends !== undefined && workflow.observes === true)
+  if (ends !== undefined && observesItem(workflow))
     return 'Workflow declares both observes: true and returns.ends; a run that observes an item is not one of its steps, so it never ends the item';
   const [first] = declared;
   if (first === undefined) return null;

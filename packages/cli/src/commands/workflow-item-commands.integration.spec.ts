@@ -444,10 +444,12 @@ nodes:
       workflowRunsCommand(host, projectRoot, { item: 'item-close' })
     );
     expect(text.stdout).toContain(`via engine: ${reason}`);
-    const attention = await invoke(host =>
-      workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
-    );
-    expect(attention.stdout).not.toContain('item-close');
+    const attention = succeeded(
+      await invoke(host =>
+        workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+      )
+    ) as { items: { item?: { key: string } }[] };
+    expect(attention.items.map(item => item.item?.key)).not.toContain('item-close');
   }
 );
 
