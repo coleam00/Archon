@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { getRegistration } from '@archon/providers';
 import type { MergedConfig } from '@archon/core';
-import { readCwdEnvKeys } from '@archon/paths/strip-cwd-env';
+import type { CwdEnvStrip } from '@archon/paths/strip-cwd-env';
 import { loadMergedConfig, type CheckResult } from './doctor-check';
 
 /**
@@ -46,12 +46,11 @@ export async function checkProviderDeprecation(
 }
 
 /**
- * Name the target repo env keys Archon strips at boot. This is where an operator reads
- * what the env-leak guard does; commands stay silent about it.
+ * Name the target repo env keys this process stripped at boot. This is where an operator
+ * reads what the env-leak guard does; commands stay silent about it.
  */
-export function checkCwdEnvIsolation(cwd: string = process.cwd()): CheckResult {
+export function checkCwdEnvIsolation({ cwd, files, keys }: CwdEnvStrip): CheckResult {
   const label = 'Target repo .env';
-  const { files, keys } = readCwdEnvKeys(cwd);
   if (keys.length === 0) return { label, status: 'skip', message: `no .env keys in ${cwd}` };
   const paths = files.map(file => join(cwd, file)).join(', ');
   const count = keys.length === 1 ? '1 key' : `${keys.length} keys`;

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { readCwdEnvKeys, stripCwdEnv } from './strip-cwd-env';
+import { stripCwdEnv } from './strip-cwd-env';
 
 describe('stripCwdEnv', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'archon-strip-cwd-env-test-'));
@@ -117,12 +117,16 @@ describe('stripCwdEnv — what it reports', () => {
     expect(stderrWrites).toEqual([]);
   });
 
-  it('readCwdEnvKeys returns the files and sorted key names across env files, never values', () => {
-    writeFileSync(join(tmpDir, '.env'), 'TEST_B=value-b\nTEST_A=value-a\n');
-    writeFileSync(join(tmpDir, '.env.local'), 'TEST_A=value-c\nTEST_C=value-d\n');
-    expect(readCwdEnvKeys(tmpDir)).toEqual({
+  it('returns the files and sorted key names it stripped, never values', () => {
+    writeFileSync(join(tmpDir, '.env'), 'TEST_STRIP_LOG_B=value-b\nTEST_STRIP_LOG_A=value-a\n');
+    writeFileSync(
+      join(tmpDir, '.env.local'),
+      'TEST_STRIP_LOG_A=value-c\nTEST_STRIP_LOG_C=value-d\n'
+    );
+    expect(stripCwdEnv(tmpDir)).toEqual({
+      cwd: tmpDir,
       files: ['.env', '.env.local'],
-      keys: ['TEST_A', 'TEST_B', 'TEST_C'],
+      keys: ['TEST_STRIP_LOG_A', 'TEST_STRIP_LOG_B', 'TEST_STRIP_LOG_C'],
     });
   });
 });

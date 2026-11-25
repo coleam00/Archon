@@ -1,13 +1,7 @@
 import { describe, it, expect } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
-import { mkdtempSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
 import { join } from 'path';
-import { trackTempRoots } from '@archon/paths/test-utils';
 import { checkConfigFiles, checkCwdEnvIsolation, checkProviderDeprecation } from './doctor-config';
-
-const trackTempRoot = trackTempRoots();
-const tempRepo = (): string => trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-doctor-cwd-env-')));
 
 describe('checkConfigFiles', () => {
   it('passes and names the resolved default assistant', async () => {
@@ -52,23 +46,22 @@ describe('checkProviderDeprecation', () => {
 });
 
 describe('checkCwdEnvIsolation', () => {
-  it('names the stripped keys and files, never their values', () => {
-    const repo = tempRepo();
-    writeFileSync(join(repo, '.env'), 'SECRET_KEY=value123\nOTHER_KEY=value456\n');
-    writeFileSync(join(repo, '.env.local'), 'LOCAL_KEY=value789\n');
-    const result = checkCwdEnvIsolation(repo);
+  it('names the stripped files and keys', () => {
+    const result = checkCwdEnvIsolation({
+      cwd: '/repo',
+      files: ['.env', '.env.local'],
+      keys: ['LOCAL_KEY', 'OTHER_KEY', 'SECRET_KEY'],
+    });
     expect(result).toEqual({
       label: 'Target repo .env',
       status: 'pass',
       message:
-        `3 keys from ${join(repo, '.env')}, ${join(repo, '.env.local')} are kept out of runs, ` +
+        `3 keys from ${join('/repo', '.env')}, ${join('/repo', '.env.local')} are kept out of runs, ` +
         "so the target repo's secrets cannot reach Archon's processes: LOCAL_KEY, OTHER_KEY, SECRET_KEY",
     });
-    expect(result.message).not.toContain('value');
   });
 
-  it('skips a folder without .env keys', () => {
-    const repo = tempRepo();
-    expect(checkCwdEnvIsolation(repo).status).toBe('skip');
+  it('skips when nothing was stripped', () => {
+    expect(checkCwdEnvIsolation({ cwd: '/repo', files: [], keys: [] }).status).toBe('skip');
   });
 });

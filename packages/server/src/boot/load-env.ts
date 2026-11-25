@@ -1,7 +1,8 @@
 import { config } from 'dotenv';
 import { resolve } from 'node:path';
 import { BUNDLED_IS_BINARY } from '@archon/paths/bundled-build';
-import { loadArchonEnv } from '@archon/paths/env-loader';
+import { logCwdEnvStrip, loadArchonEnv } from '@archon/paths/env-loader';
+import { cwdEnvStrip } from '@archon/paths/strip-cwd-env-boot';
 
 // import.meta.dir is frozen at build time; compiled binaries use Archon env files.
 export const envPath = BUNDLED_IS_BINARY
@@ -17,3 +18,4 @@ if (envPath) {
 }
 
 loadArchonEnv(process.cwd());
+logCwdEnvStrip(cwdEnvStrip);

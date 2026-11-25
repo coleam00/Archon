@@ -819,7 +819,7 @@ A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFI
 ✓ Target repo .env: 2 keys from /path/to/target-repo/.env, /path/to/target-repo/.env.local are kept out of runs, so the target repo's secrets cannot reach Archon's processes: API_URL, OPENAI_API_KEY
 ```
 
-Every command also logs an `env.cwd_keys_stripped` record at debug level with the same files and key names; `LOG_LEVEL=debug` shows it. Neither ever contains a value.
+Every command also logs an `env.cwd_keys_stripped` record at debug level with the same files and key names. It follows the command's log settings: `--verbose` or `LOG_LEVEL=debug` shows it, and `--quiet` and `--json` do not. Neither the doctor line nor the record ever contains a value.
 
 The `[archon] loaded N keys from …` lines are suppressed by default (they would otherwise interleave with `archon setup`/`archon doctor` checklist output). To enable them, set `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug` before running:
 

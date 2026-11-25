@@ -40,13 +40,23 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
   'CLAUDE_CODE_USE_VERTEX',
 ]);
 
+/** The target repo env files and key names stripCwdEnv() removed. Names only, never values. */
+export interface CwdEnvStrip {
+  cwd: string;
+  files: string[];
+  keys: string[];
+}
+
 /**
  * Strip every key named in CWD .env files, whatever its value or source
  * (detached children then restore DETACHED_INSTALL_CONTEXT_KEYS), and nested Claude Code session markers from process.env.
  * Keys in ~/.archon/.env (loaded afterward by each entry point) are unaffected.
  * Safe to call even when no CWD .env files exist.
+ *
+ * Returns what it stripped. It prints nothing about it: the entry point logs the result
+ * once its logging is set up, and `archon doctor` shows it.
  */
-export function stripCwdEnv(cwd: string = process.cwd()): void {
+export function stripCwdEnv(cwd: string = process.cwd()): CwdEnvStrip {
   const preserveDetachedInstallContext = process.argv
     .slice(2)
     .includes('--internal-detached-run-config');
@@ -54,7 +64,8 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     ? captureDetachedInstallContext()
     : undefined;
 
-  for (const key of readCwdEnvKeys(cwd).keys) {
+  const { files, keys } = readCwdEnvKeys(cwd);
+  for (const key of keys) {
     Reflect.deleteProperty(process.env, key);
   }
 
@@ -67,6 +78,7 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
 
   stripNestedSessionMarkers();
   stripDebuggerEnv();
+  return { cwd, files, keys };
 }
 
 function stripNestedSessionMarkers(): void {
@@ -100,12 +112,8 @@ function stripDebuggerEnv(): void {
   }
 }
 
-/**
- * The files and key names stripCwdEnv() strips for `cwd`: the single source for what the
- * guard covers. loadArchonEnv's debug record and `archon doctor` read it too. Names
- * only, sorted; values are never returned.
- */
-export function readCwdEnvKeys(cwd: string): { files: string[]; keys: string[] } {
+/** The env files in `cwd` that name keys, and the sorted key names; never values. */
+function readCwdEnvKeys(cwd: string): { files: string[]; keys: string[] } {
   const keys = new Set<string>();
   const files: string[] = [];
   for (const filename of BUN_AUTO_LOADED_ENV_FILES) {

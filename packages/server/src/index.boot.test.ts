@@ -81,13 +81,18 @@ class DisabledAdapter {
   constructor(..._args: unknown[]) {}
 }
 
-mock.module('@archon/paths/strip-cwd-env-boot', () => ({}));
+mock.module('@archon/paths/strip-cwd-env-boot', () => ({
+  cwdEnvStrip: { cwd: '', files: [], keys: [] },
+}));
 mock.module('./boot/claude-auth-posture', () => ({
   shouldDefaultClaudeGlobalAuth: (): boolean => false,
   hasClaudeBootAuthPosture: (): boolean => true,
 }));
 mock.module('dotenv', () => ({ config: (): object => ({}) }));
-mock.module('@archon/paths/env-loader', () => ({ loadArchonEnv: (): void => undefined }));
+mock.module('@archon/paths/env-loader', () => ({
+  loadArchonEnv: (): void => undefined,
+  logCwdEnvStrip: (): void => undefined,
+}));
 // In-process boots must not publish a store id or server record into the real home.
 mock.module('@archon/paths/server-discovery', () => ({
   getStoreIdPath: (): string => '/nonexistent/archon-home/store-id',

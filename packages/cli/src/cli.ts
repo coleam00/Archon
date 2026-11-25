@@ -9,7 +9,7 @@
  */
 // Must be the very first import — strips Bun-auto-loaded CWD .env keys before
 // any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
-import '@archon/paths/strip-cwd-env-boot';
+import { cwdEnvStrip } from '@archon/paths/strip-cwd-env-boot';
 // Capture explicit chat scope before loading Archon env or command modules.
 import './workflow-scope';
 // Load Archon env before command imports. loadCliEnv preserves inherited workflow
@@ -104,6 +104,7 @@ import {
   canonicalizeProjectPath,
 } from '@archon/paths';
 import { publishArchonCliCommand } from '@archon/paths/cli-command';
+import { logCwdEnvStrip } from '@archon/paths/env-loader';
 
 publishArchonCliCommand();
 
@@ -169,6 +170,7 @@ async function main(): Promise<number> {
 
 /** Bare `archon`: show the help index and exit successfully. */
 async function printIndexHelp(): Promise<number> {
+  logCwdEnvStrip(cwdEnvStrip);
   refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
   await printUsageFor();
   await shutdownTelemetry();
@@ -177,6 +179,7 @@ async function printIndexHelp(): Promise<number> {
 
 async function runVersionRequest(): Promise<number> {
   try {
+    logCwdEnvStrip(cwdEnvStrip);
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
     const { versionCommand } = await import('./commands/version');
     await versionCommand();
@@ -259,6 +262,8 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   // Apply output policy before install discovery: its best-effort debug logs
   // must never prefix a machine-readable response.
   applyOutputPolicy(values, command, subcommand);
+  // Logged here, not at boot, so the record follows --verbose, --quiet and --json.
+  logCwdEnvStrip(cwdEnvStrip);
   refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
 
   // Handle help flag — route through the scoped renderer using the already-
