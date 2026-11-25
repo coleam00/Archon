@@ -1,0 +1,118 @@
+name: archon-triage
+description: |
+  Ground one issue against the current repository before deciding what kind of work it
+  needs. Reconciles tracker history, current code, moved branches, stale assumptions and
+  explicit direction; judges whether the issue is a contract a run can start from; then
+  routes it to investigate, plan, build (including continuing an open pull request that
+  already carries the outcome), split, or no action. It posts questions for the author,
+  what a blocked issue waits on, or the close of a duplicate or delivered issue, adds area
+  labels, and changes nothing in the checkout.
+
+  Starts when a maintainer adds the label `archon-triage` to an issue, or by hand:
+  `archon workflow run archon-triage --item issue-<n> --input issue=<n>`.
+
+model: ['@triage', medium]
+mutates_checkout: false
+
+inputs:
+  issue:
+    description: The number of the issue to triage, in the repository `repo_host` and `repo_path` name.
+  repo_host:
+    default: ""
+    description: The host of the issue's repository, such as github.com. Empty means the checkout's `origin` remote.
+  repo_path:
+    default: ""
+    description: The issue's repository on its host, such as acme/widgets. Empty means the checkout's `origin` remote.
+  answers:
+    default: "None."
+    description: Every answer an operator gave on this item, oldest first.
+
+# The engine defines `asks` and adds it to the triage node's output, so the node does not declare it.
+returns: { node: triage, outcome: outcome, asks: asks, final: [questions, blocked, close], summary: summary }
+
+nodes:
+  - id: triage
+    command: triage
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        outcome:
+          type: string
+          enum: [investigate, plan, build, split, questions, blocked, ask, close, not_triaged]
+        contract:
+          type: string
+          enum: [READY, NEEDS_CONTRACT_WORK, BLOCKED, NO_ACTION, NOT_TRIAGED]
+        route:
+          type: string
+          enum: [investigate, plan, deliver, continue, split, ""]
+        pull_request: { type: integer, minimum: 0 }
+        questions: { type: array, maxItems: 5, items: { type: string } }
+        blocked_reason: { type: string }
+        blocked_by: { type: array, items: { type: string } }
+        closure:
+          type: object
+          additionalProperties: false
+          properties:
+            kind: { type: string, enum: [duplicate, delivered, none] }
+            url: { type: string }
+          required: [kind, url]
+        failed:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              op: { type: string }
+              kind: { type: string }
+            required: [op, kind]
+        type:
+          type: object
+          additionalProperties: false
+          properties:
+            value: { type: string, enum: [bug, feature, refactor, maintenance, docs, question] }
+            reason: { type: string }
+          required: [value, reason]
+        size:
+          type: object
+          additionalProperties: false
+          properties:
+            value: { type: string, enum: [s, m, l] }
+            reason: { type: string }
+          required: [value, reason]
+        complexity:
+          type: object
+          additionalProperties: false
+          properties:
+            value: { type: string, enum: [low, medium, high] }
+            reason: { type: string }
+          required: [value, reason]
+        importance:
+          type: object
+          additionalProperties: false
+          properties:
+            value: { type: string, enum: [low, medium, high] }
+            reason: { type: string }
+          required: [value, reason]
+        urgency:
+          type: object
+          additionalProperties: false
+          properties:
+            value: { type: string, enum: [none, soon, now] }
+            reason: { type: string }
+          required: [value, reason]
+        area_labels: { type: array, items: { type: string } }
+        related:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              url: { type: string }
+              relation: { type: string }
+            required: [url, relation]
+        summary: { type: string }
+        report: { type: string, description: 'The absolute path of triage.md.' }
+      required:
+        [outcome, contract, route, pull_request, questions, blocked_reason, blocked_by, closure,
+         failed, type, size, complexity, importance, urgency, area_labels, related, summary, report]

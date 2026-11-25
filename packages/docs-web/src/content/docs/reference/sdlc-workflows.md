@@ -1,270 +1,138 @@
 ---
 title: SDLC pack workflows
-description: Every workflow in the bundled sdlc pack, what it produces and when to use it.
+description: Every workflow in the bundled sdlc pack, what starts it, what it takes and how it ends.
 category: reference
 audience: [user]
 sidebar:
   order: 4
 ---
 
-Archon bundles one workflow pack, `sdlc`. It covers the software lifecycle from an incoming issue to a merged pull request. Its source lives in `.archon/workflows/sdlc/` in the Archon repository. [Operate the SDLC factory](/guides/sdlc-operations/) documents the queues' behaviour, settings and bindings, and [SDLC factory metrics](/guides/sdlc-metrics/) the metrics the pack records.
+Archon bundles one workflow pack, `sdlc`. It takes an issue to a merged pull request in stages, one workflow each. Its source lives in `.archon/workflows/sdlc/` in the Archon repository, with a [README](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md) that is also the guide to building a pack of your own. [Operate the SDLC factory](/guides/sdlc-operations/) says how to install the bindings, follow an item and answer what it asks.
 
-## How the factory runs
+## How the stages fit together
 
-`archon-intake` triages each new issue, `archon-split` files the issues a large item splits into when it can't be built as one, `archon-build-queue` works it to a reviewed pull request, `archon-merge-queue` merges it, and `archon-discoveries` files what runs noticed on the way. Anything unclear pauses as one attention item with a recommendation. [The SDLC factory](/getting-started/sdlc-factory/) introduces them and points at the setup guide; the pack binds no trigger by default.
+Every stage works on the issue's [item](/reference/cli/#items), `issue-<n>`, and ends with a named outcome. The pack's bindings, declared in `.pack/pack.yaml` and installed with [`archon pack bindings`](/reference/cli/#pack-bindings), start the next stage on the same item when a run ends with an outcome, or when the asks a run left are answered. A stage never pauses for you: a decision that is not its own becomes an ask on the item, and the run ends.
 
-`archon-ship` itself is a graph of the stage workflows below. Triage picks a route; investigate or plan runs when the route needs it; then the delivery rounds implement, open a draft pull request, review it through specialist lenses, fix the findings and hand the pull request off ready without waiting for CI. Stages hand each other files in `$ARTIFACTS_DIR`, such as `triage.md`, `plan.md` and `implementation.md`, not conversation history.
+- Intake is a label: a maintainer adds `archon-triage` to an issue, and triage starts.
+- From build on, each stage starts in the checkout the stage before it left, so the change stays on one branch.
+- Each stage reads what earlier stages returned through `result_of` inputs, and every decision made on the item so far through `answers`. Reports travel as file paths in a stage's result, such as the plan's `plan.md`.
+- The builder keeps one session across rounds (`context: same`). A change goes back to its builder at most three times per way back (from review, host and land) until the item is planned again; past that, the stage asks.
 
-## Which workflow to use
+## Running a stage by hand
 
-`archon-ship` is the default for taking an issue or request to a reviewed pull request. The [summary table](#summary) lists every workflow by when to use it. To ask a question or explore the codebase, ask in chat; no workflow is needed.
-
-## Catalog
-
-### End to end
-
-#### `archon-ship`
-
-Grounds an issue or request against the current repository before spending on it, then takes the least speculative path: investigate an unknown cause, plan an undecided shape, deliver an implementation-ready work order, continue an open PR that already carries the outcome, or stop when no work remains. Every actionable path ends in the same reviewed delivery tail as `archon-deliver`.
-
-**When to use it**: A GitHub issue or request should go from a current-truth check to a reviewed PR. This is your default for bugs, features, and enhancements.
+Every stage runs by hand on an item, with the issue's number:
 
 ```bash
-archon workflow run archon-ship --branch fix/login-crash "#142"
+archon workflow run archon-plan --item issue-42 --input issue=42
 ```
 
-**What it produces**: A PR marked ready for review once its review passes, for the merge queue to judge its CI, or an explained stop, with a PR it opened left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The run's result says whether it delivered; when it did not, such as on a question triage or the plan could not settle, an unrooted cause, or a delivery that ended not ready, [continue it with a note](#continuing-a-stage-that-ended-not-ready). The workflow never merges. Merge a pull request it opened yourself; the merge queue merges only what the build queue finished.
+Review, host and land read a change that already exists, so by hand they run on the change's branch: add `--branch <head-branch>`, or `--adopt <run-id>` to continue the checkout a run left. A stage started by hand still ends with its outcome, and the pack's bindings, when installed, start the next stage from it. Every stage also takes `repo_host` and `repo_path`; left empty, the repository is the checkout's `origin` remote. `answers` defaults to `None.`.
 
-`--input pull_request=<number>` has delivery finish that open PR whichever route reaches delivery; a run that stops before delivery leaves it as it was, and a run whose triage names a different PR to continue fails before delivery. `--input branch=<name>` passes through to `archon-deliver`.
+## The stages
 
-**Delivering one part of a multi-part plan**: When an approved plan splits the work into several PRs, tell the run which part it delivers and which contract items each part owns, quoting each item as the contract states it:
+### `archon-triage`
 
-```bash
-archon workflow run archon-ship --branch feat/export-csv-api \
-  --input part='{"delivers":1,"parts":[{"part":1,"items":["The API returns CSV."]},{"part":2,"items":["The console offers a CSV download.","Users can export their data as CSV."]}]}' \
-  "#142"
-```
+Grounds one issue against the current repository: tracker history, current code, moved branches, stale assumptions and the project's direction. It judges whether the issue is a contract a run can start from, against the triage policy, and routes it. It writes only these to the tracker: area labels the repository already has, one comment of questions for the author, one comment naming what a blocked issue waits on, and for a duplicate or delivered issue a comment linking the cause and the close. The report is `triage.md` in the run's artifacts.
 
-The review then treats an item that only later parts list as deferred: it is neither a blocking finding nor a discovery, and the PR says `Refs #N` instead of closing the issue. The required outcome is an item like any other, so list it under the part that completes it, as the example does with "Users can export their data as CSV." An item the input lists under no part is still reviewed as part of this PR, and the review still reports a change that contradicts a later part. The run never works out part ownership from the plan's prose; without this input, the PR is reviewed against the whole contract.
+- **Started by** a maintainer adding the label `archon-triage`, or by its own answers.
+- **Inputs**: `issue`.
+- **Outcomes**: `investigate` and `split` start that stage. `plan` and `build` (small specified work, or an open pull request that already carries the outcome, which the builder continues) start the link stage, which places the issue in that stage once it can be built. `questions` (the author must answer; remove and add the label again once they did), `blocked`, `close` and `not_triaged` (a forge read it needed failed) start nothing. `ask` leaves an operator decision, such as an owner-level product call or a close the policy leaves to a maintainer; the answer starts triage again.
 
-### One stage at a time
+### `archon-link`
 
-#### `archon-triage`
+Decides whether an issue that should be built can be built now, and how it relates to the project's other work. The agent checks the state of what the issue would wait on, records its `depends_on`, `part_of` and `duplicate_of` links on the item itself with `archon workflow link`, and places the issue or holds it. Changes nothing in the checkout.
 
-Reconciles an issue, plan, or request with the current code, tracker history, and stated direction, judges whether it is a contract a run can start from, then routes it to investigate, plan, deliver, split, or no action.
+- **Started by** triage `plan` or `build`; an item it holds a `depends_on` link to that landed (land `merged`) or ended without landing (triage `close` or `split`, investigate `refuted`); or its own answers.
+- **Inputs**: `issue` (empty when a blocker ended; the agent reads its own item), `ended`, the key of the item that just ended; reads triage's result and its own last result from the item.
+- **Outcomes**: `plan` and `build` start that stage, by triage's route. `waiting` (it holds a `depends_on` link to each item it waits on), `fold`, `dropped` and `none` start nothing. `ask` offers `wait`, `start-anyway`, `drop`, `keep-this` and `keep-other`; every answer starts link again.
 
-**When to use it**: An item may be stale or may prescribe an unverified solution, and you want to know what it needs next before paying for the work.
+### `archon-investigate`
 
-```bash
-archon workflow run archon-triage "#142"
-```
+Establishes the proven causal chain from the symptom to the root cause, reproducing it where it can, and decides the fix. Changes nothing. The report is `investigation.md`.
 
-**What it produces**: A verdict with the recommended next step. It leaves the checkout unchanged. Pass `--input publish=true` to write the derived labels to the issue. An item that is blocked, or that no route can start from, ends the run not ready, with what it waits on or the questions for its author in the verdict; [continue it with a note](#continuing-a-stage-that-ended-not-ready) that answers it.
+- **Started by** triage `investigate`, or its own answers.
+- **Inputs**: `issue`; reads triage's result from the item.
+- **Outcomes**: `rooted` starts the build, with the investigation as the work order. `refuted` and `inconclusive` start nothing. `ask` leaves a product decision the fix hinges on.
 
-#### `archon-intake`
+### `archon-split`
 
-The standing front of the pack, started by trigger bindings on issue and label events rather than by hand. A script checks whether the issue's author is on the project's maintainer list (`.archon/sdlc/policy/maintainers.json`) before any model reads the text. A maintainer's issue is triaged and gets a route label; an outside issue gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage`.
+Decides whether a large issue is built whole or as the fewest pieces that each prove something on their own, by its kind: a PRD splits into phases, an epic into vertical increments, a bundle into its tasks. It files only the piece that comes next as its own issue, marked so it is never filed twice, links it `part_of` the item, and adds `archon-triage` to it so it comes back through triage. One comment on the item holds the plan for the later pieces. A bundle is closed once its tasks are filed.
 
-**When to use it**: You want new issues triaged as they arrive without letting anyone who can open an issue spend tokens. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it. [Intake](/guides/sdlc-operations/#intake) covers trust, promotion, pickup and closing.
+- **Started by** triage `split`, or its own answers.
+- **Inputs**: `issue`; reads triage's result and its own last result from the item.
+- **Outcomes**: `split` starts nothing on this item: each piece is triaged on its own. `plan` and `build` mean it is built whole, and start that stage. `ask`.
 
-**What it produces**: A work item per issue (`archon state get work/<number>`) holding its trust, stage, triage fields, and history, and the labels that mirror it. The run completes with the stage it left the item at as its outcome: a route (`deliver`, `plan`, `investigate`, `continue` or `split`), a stage that waits (`needs_maintainer`, `needs_contract` or `blocked`), `close`, or `new` for an item not yet triaged. A run that claimed no item completes `idle`, and fails when it also found stored items no pickup can act on.
+### `archon-plan`
 
-#### `archon-build-queue`
+Turns an issue whose outcome is decided into an implementable plan: the approach with rejected alternatives and what settled each call, verifiable steps, contract coverage and the validation. Changes nothing. The plan is `plan.md`; non-blocking questions are in `open_questions`.
 
-The stage after intake. Each run builds one issue, the one `--input number=<n>` names, on that issue's item (`--item issue-<n>`), where the engine admits one build run at a time. The engine starts it when the issue's intake run ends with a build route, and `archon-build-pick` starts it for every other issue that waits. The run takes one round on the issue from a brief, and reads how the round ended. A round is `archon-ship` without its triage, since intake already triaged the item. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers leaves the item waiting for its next round, which the pick the engine starts when the run ends starts. An unclear one ends the run with one ask on the item, with the agent's recommendation and declared choices; the answer starts the next run, which writes it into the issue body as a dated "Current scope" section. [Build queue](/guides/sdlc-operations/#build-queue) covers rounds, the questions it asks and [work orders](/guides/sdlc-operations/#work-orders), which limit the pick to the items you approved.
+- **Started by** link or split `plan`, a build or review that ended `replan`, a `replan` answer on a review or host ask, or its own answers.
+- **Inputs**: `issue`; reads triage, split, and the last build and review from the item.
+- **Outcomes**: `planned` starts the build. `ask` leaves each call that belongs to an operator; the answers start the plan again.
 
-**When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it.
+### `archon-build`
 
-**What it produces**: Reviewed pull requests, the queue's record on each work item (`facts.build`: status, rounds and decisions), and attention items for the decisions that need a person.
+Implements the work with focused checks on what it changed, commits, pushes the branch and opens a draft pull request, written to the project's propose policy. When the change comes back from the review, the host, the land stage or an operator, the same node continues it in the session it last had on the item, on the same branch. The report is `implementation.md`, which records the disposition of every finding and review thread that came back.
 
-#### `archon-build-pick`
+- **Started by** plan `planned`, investigate `rooted`, link or split `build`; review, host or land `return`; a `send-back` answer; or its own answers.
+- **Inputs**: `issue`, `returned` (the result of the stage that sent the change back; `null` on a first build); reads the latest plan, investigation, triage and split from the item.
+- **Outcomes**: `built` starts the review on the commit it pushed. `replan` starts planning. `ask` leaves a decision that is not the builder's; the answers start the build again in the same session.
 
-Chooses what the build queue builds next. It lists the issues that wait for a build round, in pickup order, and fires the `build-queue` binding once for each, on that issue's item. The binding's capacity admits as many as it has slots and skips the rest, and the engine skips an issue a build run already holds, so the pick holds no build slot and keeps no count. It runs on a schedule and when a build run ends. With a message it resolves what you said to an issue to start, a choice between issues, a work order, or new work it files for intake: `archon workflow run archon-build-pick "build the retry fix"`.
+### `archon-review`
 
-**When to use it**: Bind it beside `archon-build-queue`, or say in words what to build.
+Reviews a change through parallel specialist lenses and ends in one evidence-based verdict. A scope agent fixes the commit under review and the accepted contract; a route agent picks the lenses the change earns (seams, code, tests, errors, docs, ux). Synthesis aggregates their reports and judges every acceptance item, invariant and steering constraint. When the verdict is not ready, three independent verifiers judge each blocking finding, and the verdict node demotes one two of them reject. A round after an earlier review of the item verifies the earlier findings and reviews only the delta since the commit that round reviewed. The report is posted on the pull request as one marked comment, edited in place each round, only while the pull request's head is the reviewed commit. Read-only.
 
-**What it produces**: Starts of `archon-build-queue`, a work order, or a filed issue. It builds nothing itself.
+Beside the lenses, a simplify pass judges whether the change delivers its outcome through more structure than it needs and writes `shape.md`. A smaller shape it names sends the change back to the builder even when the verdict is ready; the verdict's `simplify` field counts them and `shape` names the report.
 
-#### `archon-merge-queue`
+- **Started by** build `built`. By hand on any pull request, on its own item, from a checkout of its head branch:
 
-The stage after the build queue. One run decides one issue's pull request, on the issue's item, started when its build round ends ready. One agent judges it: a Ready pull request that passes the gate merges, what the build queue can fix goes back to it (a conflict, a stale or missing verdict, a review thread that raises a defect, red the change caused), and the stage never pushes or waits for CI itself. The merge goes through a gate script that reads the pull request fresh and merges pinned to its head. A pull request whose checks still run ends the run waiting, and a completed check at its head starts the stage again. An unclear pull request, such as a very large change, ends the run with an ask on the item, and the answer starts the stage again. A red base branch merges nothing and asks nobody: the run's summary names the diagnosis. [Merge queue](/guides/sdlc-operations/#merge-queue) covers the gate's conditions, what a run returns, reruns or waits for, and what each answer does.
+  ```bash
+  archon workflow run archon-review --item pr-87 --input pr=87 --branch <head-branch>
+  ```
 
-**When to use it**: You want reviewed, green pull requests merged without merging each by hand, while changes that need a person still wait for one. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it.
+- **Inputs**: `issue` (empty by hand), `pr` (by hand: the pull request's number or URL; empty means the builder's pull request, or the current branch's); reads the last build and review from the item.
+- **Outcomes in delivery**: `approve` starts the host stage. `return` sends the change back to its builder; past the round limit it is `ask` instead, and `send-back` gives one more round. `replan` starts planning. `ask` offers the options the workflow declares under `returns.options`: `send-back` (the builder continues with your answer), `take-as-is` (the host stage starts on the change as it is), `replan` and `stop` (nothing more runs).
+- **Outcomes by hand**: `ready` or `not_ready`; nothing starts.
 
-**What it produces**: Merged pull requests, the queue's record on each work item (`facts.merge`: status and decisions), and attention items for the decisions that need a person.
+### `archon-host`
 
-#### `archon-discoveries`
+Hands a reviewed pull request to its host in three agent steps: it answers and resolves the review threads whose disposition holds, listing the rest for the builder; brings the description in line with the change, including the `Closes #N` or `Refs #N` reference from the review's contract coverage and the issue's dated rulings; checks that it still merges with its base, reads the checks once without waiting for them, and takes it out of draft. Under `ci: none` it runs the project's full validation itself and records it. The result is in `ci.md`.
 
-Drains the discoveries finished runs recorded outside their own scope. One agent verifies each one against the default branch, merges duplicates across runs and with earlier decisions, and decides: file an issue with a full brief, track it on the open issue that already covers it, drop it with a reason, ask a maintainer, or wait when the code it is about is still on an open pull request, so a later pass decides it after that pull request merges or closes. Scripts perform only the writes it declared.
+- **Started by** review `approve`, or a `take-as-is` answer on a review ask. By hand: `--branch <head-branch>`.
+- **Inputs**: `issue`; reads the last build and review from the item.
+- **Outcomes**: `ready` starts the land stage. `return` sends the change back to its builder for a red check it caused, a conflict, or an open thread; past the limit it asks, and `send-back` gives one more round. `ask` offers the declared `send-back`, `take-as-is` (the land stage judges it as it is), `replan` and `stop`.
 
-**When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it. Naming its binding in the merge queue's `discoveries_binding` input also starts a pass after each sweep that merged a pull request. [Discoveries](/guides/sdlc-operations/#discoveries) covers the queue, the decisions and the writes.
+### `archon-land`
 
-**What it produces**: Filed issues and evidence comments, and one state document per drained run (`archon state list --prefix discoveries/runs/`) recording which of its records were decided and any question asked with its answer, so a record is decided once.
+One agent judges the ready pull request against the project's land policy: the base branch's CI, the review's verdict at the head, conflicts, CI at the head (waiting up to 30 minutes for pending checks, and rerunning red outside the change once), open threads, and whether the change is clear or must be asked. A clear one, or one an operator approved at its head, it merges with `pr.merge` pinned to the head whose checks it read, after setting the issue keyword. The merge records itself and its landing branch on the item. Land runs one at a time per repository.
 
-#### `archon-split`
+- **Started by** host `ready`, a `take-as-is` answer on a host ask, or a `land` answer. By hand: `--branch <head-branch>`.
+- **Inputs**: `issue`; reads the last host, review and land results from the item.
+- **Outcomes**: `merged` starts the discoveries stage. `return` sends the change back to its builder. `ask` offers `land` (approve it at the head the question names; the land stage starts again), `send-back` and `stop`.
 
-Files the issues a large item splits into, when triage routed the item `split`. A large item, such as a PRD, an epic or a bundle of tasks, is built as one work item by default; triage splits it only when building it whole would not work, and says why. Triage passes a PRD only when it states a hypothesis, the signal that proves or disproves it with the command that measures it, and a threshold and window; otherwise it asks for that contract work. One agent checks triage's reason first and can hand the item back to the build queue whole, with why. Otherwise it files only the piece that comes next, each issue a contract of its own: a PRD's current phase, an epic's current increment, or every task of a bundle. The agent's comment on the item names the later phases, each with what the earlier work must show before it is filed. A script files each issue once and posts that comment with the filed issues listed under it. A PRD is labelled `archon-prd` and stays open; an epic stays open until its increments merge; a bundle is closed.
+### `archon-discoveries`
 
-**When to use it**: Your issues include PRDs, epics or lists of tasks too large to build as one work item. The pack installs no binding; `archon pack bindings sdlc --only split-queue` writes the one it recommends. [Split queue](/guides/sdlc-operations/#split-queue) covers how an item is sliced and filed. By hand: `archon workflow run archon-split --input number=42` from the repository's checkout.
+Reads what the item's runs recorded outside their change, the review's accepted records and every run's raw `discoveries/` files, verifies each against the landing branch, and files, tracks, drops, holds or asks about it, under the discoveries policy. Files at most three issues a pass, marked so none is filed twice, and labels none: a maintainer decides what is triaged.
 
-**What it produces**: The filed issues, which come back through intake, the agent's comment on the item with them listed under it, and the queue's record on its work item (`facts.split`: status, kind and filed issues, or the route when the item was built whole).
+- **Started by** land `merged`, or its own answers.
+- **Inputs**: `issue`; reads the latest review from the item.
+- **Outcomes**: `decided`; `ask`.
 
-#### `archon-investigate`
+## Removed workflows
 
-Establishes the proven causal chain for a bug, unexplained behavior, or open question, down to the root cause whose fix prevents the symptom.
-
-**When to use it**: The cause is not yet known and you want it proven before anyone writes a fix.
-
-```bash
-archon workflow run archon-investigate "Why does the workflow list spin forever when no workflows exist?"
-```
-
-**What it produces**: An evidence-backed report a fixer or planner can act on, with a verdict: `rooted` (a change is owed here and the fix is decided), `refuted` (no change is owed in this repository), or `inconclusive` (the cause is not established yet). The verdict is the run's outcome. The repository is left as it was found.
-
-#### `archon-plan`
-
-Turns decided intent, such as a feature request, an investigation report, or an idea, into an implementable plan: the chosen approach with rejected alternatives, verifiable steps, and the validation that proves it.
-
-**When to use it**: You know what to build but not how.
-
-```bash
-archon workflow run archon-plan "Add CSV export to the reports page"
-```
-
-**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops to ask a question, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `ask`. An addition that leaves every existing value meaning what it meant before is the plan's call, not a person's: the plan lists it under contract additions and the pull request body flags it for the reviewer. Changing what an existing value means, removing something shipped, or changing a persisted shape still stops to ask: the run ends not ready with the questions in the plan; [continue it with a note](#continuing-a-stage-that-ended-not-ready) that answers them. [Policy and models](/guides/sdlc-operations/#policy-and-models) describes the policy documents.
-
-#### `archon-implement`
-
-Implements a change and keeps working until it is complete and the project's own checks pass. It commits as it goes and opens no PR.
-
-**When to use it**: The work is decided and needs building: a plan, review findings, a CI failure, or a plain description.
-
-```bash
-archon workflow run archon-implement --branch feat/export-csv "Implement the plan in .archon/plans/csv-export.md"
-```
-
-**What it produces**: Commits on the run's branch.
-
-#### `archon-pr`
-
-Opens a pull request for the committed work on the current branch. It neither merges the base nor runs checks: CI judges the pushed head. It uses the repository's PR template when one exists, pushes the branch, and reads the created PR back to verify it. It references a linked issue with `Refs #N`, never a closing keyword, because no review has judged the work yet.
-
-**When to use it**: A branch has committed work and needs a PR. Run it with `--no-worktree` from the checkout that holds the branch.
-
-```bash
-archon workflow run archon-pr --no-worktree --input draft=false
-```
-
-**What it produces**: A pull request, draft unless you pass `--input draft=false`. On a pull request that already exists it leaves the description as its author wrote it, unless you pass `--input publish_description=true`. It never sweeps in unrelated changes, never rebases, and never force-pushes.
-
-#### `archon-deliver`
-
-The delivery tail, in capped rounds: implement the work with focused checks on what it changes, push and open (or update) a draft PR, and review it, with a structure pass beside the review that looks for a smaller shape; the next round's implementer adopts or declines its findings together with the review's. Once a round's review passes and the structure pass names nothing, an agent reads the checks once and hands the PR off ready without waiting for CI (the full validation): pending checks and red outside the change are the merge queue's to judge before it merges. A project with no CI (`ci: none`) gets the full validation from that agent instead, and a round ends ready only when the agent recorded one that passed at the head. Review findings, smaller shapes, a check already red because of the change, and a conflict with the base go back to the implementer for another round (it merges the base on a conflict, never rebasing), up to four rounds. Each correction is reviewed on its delta, leaving out code a merge of the base brought in, by the general code reviewer, which judges every prior finding, plus any lens the route agent adds because the delta reaches new ground in its area. Any other ending is not ready, with its reason. When the work requires content in the PR description, such as benchmark results, the round publishes it into a marked section of the description before review reads the PR, leaving the rest of the description as written. Finally it updates the PR description. The description closes its issue (`Closes #N`) only when the last review's contract coverage marks the required outcome and every acceptance item met and no dated ruling on the issue keeps it open; otherwise it says `Refs #N` and lists what is left or names the ruling. The description lists the contract items left open and names a ruling that keeps the issue open; the run's outcome carries the typed reason and the deciding node's summary. Before merging, the merge queue rechecks the keyword against the review's stamped coverage and the issue's latest ruling, and corrects it in either direction. `--input pull_request=<number>` continues that open PR instead of opening one. `--input prior_report=<path>` names the published review report of that PR from an earlier run's artifacts, so the first round's review continues from it. `--input branch=<name>` opens the PR from that branch instead of the checkout's, or updates the open PR that already has it as its head. `--input part=<json>` delivers one part of a multi-part plan, as described for `archon-ship`. When the rounds end not ready, the run ends with the reason; [continue it with a note](#continuing-a-stage-that-ended-not-ready) for another batch of rounds on the same PR. It never pauses for approval of a ready PR; your gate is PR review and merge.
-
-Unresolved review threads on the pull request are work too, whoever opened them: a person, a review bot, or nobody in a project without outside reviewers. While any is open, a ready pull request goes back to draft and the round ends not ready. The next round's implementer fixes each thread or declines it with evidence, and the run posts the replies and resolves those threads. A thread about code the pull request doesn't change or make reachable, or one a dated ruling in the issue body already decided, is settled with a reply saying so. A thread no agent can settle ends the run asking. Threads gate delivery, not the review's own verdict.
-
-A pull request counts as ready only at the commit its review comment stamps. The comment's first lines carry the reviewed commit, the verdict and the contract coverage, which the merge queue reads. Delivery never marks ready a head carrying commits the round's review did not cover. Commits pushed after a run ends, by hand or by another run, are reviewed by a continuation delivery of that pull request, or by `archon-review`. Either one reviews the whole change again unless you pass the earlier run's `review/published/report.md` as `prior_report`: then its first review checks that report's findings and reviews only what changed since the commit it reviewed. The build queue passes it for you, as [its guide](/guides/sdlc-operations/#how-a-round-runs) describes.
-
-A workflow that includes `archon-deliver` keeps running after a failed delivery, because the delivery's report completes either way. Gate what follows on `$deliver.output.ready`.
-
-**When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
-
-```bash
-archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in .archon/plans/csv-export.md"
-```
-
-**What it produces**: A PR marked ready for review, with one canonical review comment.
-
-### Review
-
-#### `archon-review`
-
-Reviews a change through specialist lenses and produces one evidence-based verdict. Every round, a quick route agent picks the lenses the change earns: seams (on unless the change touches no type, contract, state or boundary), code (which uses the configured `large` model tier), tests, errors, docs, and ux (for a change a person sees or does in a browser: it starts the app and uses the change, on the `large` tier). `--input errors=true` or `false` overrides its errors call. A continuation (`--input prior_report=<path>`) reviews the correction delta only (code a merge of the base brought in is left out). The general code reviewer always runs and judges whether each prior finding was resolved or validly declined; every lens that raised a blocker the previous round left open runs again to verify its findings and check the fix for new defects in its area; the route agent adds another lens only when the delta reaches new ground in its area. When the verdict is not ready, three independent verifiers judge each blocking finding, and one that at least two of them reject is demoted: to a discovery when it predates the change, to disproved when it is not real. Findings from the contract check are never demoted. The review also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding. `--input part=<json>` reviews one part of a multi-part plan, as described for `archon-ship`.
-
-**When to use it**: A PR or your working diff needs judging. It never edits code. On a PR it posts or edits its review comment; it never changes the PR's draft state.
-
-```bash
-archon workflow run archon-review --input scope=87 --branch fix/login-redirect
-```
-
-Replace `fix/login-redirect` with the PR's head branch for a same-repository PR. `--branch` reuses an existing healthy worktree without advancing it. Before rerunning, locate it with `git worktree list` and check for local changes. Only when clean, run `git -C <worktree-path> pull --ff-only <base-clone-url> <PR-head-ref>` with the PR's actual values. Verify its HEAD equals the current PR head SHA before rerunning. Stop on local changes, divergence or an ahead checkout and reconcile them before retrying. For a fork PR, fetch its head into the launch repository first, then start a fresh review branch at that commit:
-
-```bash
-git fetch <fork-clone-url> <PR-head-ref>
-archon workflow run archon-review --input scope=<PR-URL> --branch <fresh-review-branch> --from <PR-head-SHA>
-```
-
-Use the fork's actual clone URL, head ref and full head SHA, and choose a review branch absent locally, on the configured remote and from existing worktrees. `--from` only applies to a new branch; `--branch` alone cannot resolve a fork-only ref and would create it from the base. The review reads the checkout. If its commit differs from the PR head, the run still reviews the checkout but refuses to publish, naming both commits.
-
-**What it produces**: A synthesized review report. When reviewing a PR whose head is the reviewed commit, the report is posted as one comment and edited in place on re-review. Empty `scope` selects the current branch's open PR first, otherwise the working diff. A Ready verdict leaves a draft PR a draft; take it out of draft on the forge.
-
-### Maintenance
-
-#### `archon-metrics-prs`
-
-Records the outcomes of the pull requests the build queue opened as metrics: how many were opened, merged and abandoned, the merge rate, the review rounds each merged one took to reach Ready, and the issues the queue built and merged, by route. One run records the pull requests and issues that changed in the last seven days, or in the window `--input since=<date or Nd>` and `--input until=<date>` name. With `--input lines_since=<window>` it also records the test and production lines each merged pull request added. Each record is attributed to the build-queue runs that built its pull request, so `archon metrics --compare` splits pull requests by when those runs started. Pull requests a round only continued count in no metric. [SDLC factory metrics](/guides/sdlc-metrics/) defines every metric.
-
-**When to use it**: You want current factory PR counts, merge rate and review rounds, or to compare them before and after a pack change. Run it on demand, or schedule it with the binding `archon pack bindings sdlc --only metrics-prs` writes; the pack installs none.
-
-```bash
-archon workflow run archon-metrics-prs
-archon metrics sdlc.pr_merge_rate --since 2026-10-01
-```
-
-**What it produces**: Metric records on the node's output, read with [`archon metrics`](/guides/metrics/). It changes no code.
-
-#### `archon-metrics-test-value`
-
-Judges the tests in each factory pull request merged since a date, one `archon-metrics-test-value-judge` run per pull request, and records `sdlc.tests_added` and `sdlc.tests_unprotective`: how many tests it added or changed, and how many of them protect nothing on their own merits, as tests in the suite and not against what the pull request promised. [Test value](/guides/sdlc-metrics/#test-value) says what the judge reads, how to calibrate it and what its identity is.
-
-**When to use it**: You want to see whether factory pull requests carry tests that protect nothing. Calibrate the judge first with `archon-metrics-test-value-calibrate`, which scores it against the pull requests you labeled by hand in `.archon/sdlc/metrics/test-value-cases.json`.
-
-```bash
-archon workflow run archon-metrics-test-value-calibrate
-archon workflow run archon-metrics-test-value --input since=7d
-archon metrics sdlc.tests_unprotective
-```
-
-**What it produces**: Metric records on the node's output. Each judged pull request costs one judge run on the `large` tier. It changes no code.
-
-## Continuing a stage that ended not ready
-
-`archon-ship`, `archon-triage`, `archon-plan`, `archon-deliver` and `archon-review` never pause for a person when you run them yourself. Each ends with its outcome as the run's result. `archon workflow get <run-id>` shows whether it got there; `archon workflow get <run-id> --json` carries the stage's typed outcome, ready (delivered, for `archon-ship`) or not, in `terminal_record.returns.value`, and `archon workflow artifacts <run-id>` lists the reports that say why. To take one further, start it again in the same checkout with the original item and your note as the message, or repeat the `--input` that named the item, since a message that is only the note becomes the work:
-
-```bash
-archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out of scope; skip it"
-```
-
-[`--adopt`](/reference/cli/#continuing-an-existing-estate) starts the new run in the prior run's worktree and branch, so a delivery continues its pull request. The prior run's artifacts stay in the directory `archon workflow artifacts <run-id> --json` reports as `artifactsDir`: name a report by that path in your note. A review continues only from an input: pass `--input prior_report=<artifactsDir>/review/published/report.md` to `archon-deliver` or `archon-review`, or the first review reads the whole change again. The checkout must be at a commit that descends from the one that report reviewed. Repeat any other `--input` the first run had. `archon-triage` runs in the launch checkout and has no worktree to adopt, so run it again the same way without `--adopt`. The queues compose these same workflows and raise their own attention items when they need you.
+`archon-intake`, `archon-build-queue`, `archon-build-pick`, `archon-deliver`, `archon-implement`, `archon-simplify` (now a pass inside `archon-review`), `archon-pr`, `archon-merge-queue`, `archon-merge-pick`, `archon-ship` and the `archon-metrics-*` workflows are gone. The changelog's entry for the rebuilt pack names what replaces each one, and the inputs that changed.
 
 ## Summary
 
-| Workflow | Use When | Creates PR? | Changes code? |
-|----------|----------|-------------|---------------|
-| `archon-ship` | Issue or request to reviewed PR | Yes | Yes |
-| `archon-triage` | Decide what an item needs next | No | No |
-| `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
-| `archon-build-queue` | Work one triaged issue to a reviewed PR (trigger-started) | Yes | Yes |
-| `archon-build-pick` | Start a build for each waiting issue, or for work named in words (trigger-started) | No | No |
-| `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | No |
-| `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
-| `archon-split` | File the issues a large item splits into when it can't be built whole (trigger-started) | No | No |
-| `archon-investigate` | Root-cause a bug or question | No | No |
-| `archon-plan` | Plan decided intent | No | No |
-| `archon-implement` | Build decided work | No | Yes (commits) |
-| `archon-pr` | Open a PR for committed work | Yes | No |
-| `archon-deliver` | Decided work to reviewed PR | Yes | Yes |
-| `archon-review` | Review a PR or the working diff | No (comments on a PR) | No |
-| `archon-metrics-prs` | Count factory PRs, their merge rate and review rounds | No | No |
-| `archon-metrics-test-value` | Count factory tests that protect nothing on their own merits | No | No |
-| `archon-metrics-test-value-calibrate` | Score the test-value judge against hand labels | No | No |
-
-## Workflows that no longer ship
-
-Archon 0.12.0 stopped bundling the older `archon-*` workflows, such as `archon-fix-github-issue`, `archon-idea-to-pr`, `archon-smart-pr-review`, and `archon-assist`. Most have an `sdlc` replacement: use `archon-ship` for issue fixing and idea-to-PR work, `archon-review` for PR review, and `archon-plan` followed by `archon-deliver` for plan-to-PR. For questions, ask in chat.
-
-To keep using one of the old workflows, copy its YAML from [`.archon/workflows/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/workflows/defaults) (most are in its `legacy/` folder) into your project's `.archon/workflows/`, and the commands it uses from [`.archon/commands/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/commands/defaults) into `.archon/commands/`. `archon-idea-to-pr`, `archon-plan-to-pr` and `archon-issue-review-full` also need `archon-review-block.yaml` from the same `legacy/` folder, because they include it. Keep its name: the `sdlc` pack's own review is `archon-review`, so the copy replaces nothing.
-
-## Your own workflows
-
-`archon workflow list` shows the bundled workflows and the ones in your repository's `.archon/workflows/`. A workflow you write overrides a bundled one with the same name.
+| Workflow | Starts after | Ends with | Writes |
+|---|---|---|---|
+| `archon-triage` | the `archon-triage` label | `investigate`, `plan`, `build`, `split`, `questions`, `blocked`, `close`, `not_triaged`, `ask` | labels, issue comments, closes |
+| `archon-link` | triage `plan` or `build`, a blocker that ended | `plan`, `build`, `waiting`, `fold`, `dropped`, `none`, `ask` | links on the item |
+| `archon-investigate` | triage `investigate` | `rooted`, `refuted`, `inconclusive`, `ask` | nothing |
+| `archon-split` | triage `split` | `split`, `plan`, `build`, `ask` | new issues, a comment, links |
+| `archon-plan` | link or split `plan`, `replan` | `planned`, `ask` | nothing |
+| `archon-build` | `planned`, `rooted`, `build`, any `return` | `built`, `replan`, `ask` | commits, a draft pull request |
+| `archon-review` | build `built` | `approve`, `return`, `replan`, `ask`; by hand `ready`, `not_ready` | one review comment |
+| `archon-host` | review `approve` | `ready`, `return`, `ask` | thread replies, the description, ready |
+| `archon-land` | host `ready` | `merged`, `return`, `ask` | the merge |
+| `archon-discoveries` | land `merged` | `decided`, `ask` | new issues, evidence comments |

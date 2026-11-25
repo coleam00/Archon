@@ -493,13 +493,13 @@ Options:
 Examples:
   archon chat "What does the orchestrator do?"
   archon workflow list
-  archon workflow run archon-investigate "Why does login fail?"
-  archon workflow run archon-plan --cwd /path/to/repo "Add dark mode"
-  archon workflow run archon-implement --branch feature-auth "Implement auth"
-  archon workflow run archon-implement --no-worktree "Fix the typo in the README"
-  archon workflow run archon-investigate --folder "Explain how the repos under this root fit together"
-  archon workflow run archon-investigate --detach "Investigate the flaky test"
-  archon workflow run archon-investigate --dry-run --stubs ./stubs.yaml --json
+  archon workflow run archon-triage --item issue-42 --input issue=42
+  archon workflow run archon-plan --cwd /path/to/repo --item issue-42 --input issue=42
+  archon workflow run archon-land --item issue-42 --input issue=42 --branch feature-auth
+  archon workflow run archon-investigate --no-worktree --item issue-42 --input issue=42
+  archon workflow run archon-investigate --folder --item issue-42 --input issue=42
+  archon workflow run archon-triage --item issue-42 --input issue=42 --detach
+  archon workflow run archon-investigate --item issue-42 --input issue=42 --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
   archon workflow artifacts <run-id> plan.md
@@ -514,7 +514,7 @@ Examples:
   archon workflow cancel <run-id>
   archon workflow cancel --item issue-42
   archon workflow runs --open
-  archon workflow run archon-review --adopt <run-id> "Review the changes"
+  archon workflow run archon-review --adopt <run-id>
   archon forge <operation> --help    # that operation's request fields and an example
   archon skill add
   archon skill add /path/to/project

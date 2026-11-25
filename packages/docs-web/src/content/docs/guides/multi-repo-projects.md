@@ -42,7 +42,7 @@ Folder projects intentionally run in the live checkout — `--branch` and `--fro
 
 ```bash
 cd ~/platform/auth-service       # a real git repo
-archon workflow run archon-implement --branch fix-auth "Fix the token refresh bug"
+archon workflow run archon-build --item issue-12 --input issue=12 --branch fix-auth
 # → normal repo project: isolated worktree + branch, no --folder
 ```
 

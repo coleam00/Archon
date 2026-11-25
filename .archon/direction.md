@@ -94,7 +94,7 @@ A software factory takes work items in and lands changes, and asks an operator o
 - **Policy is a project document.** Pack policy lives in markdown documents the project can reword, found the same way as its architecture, engineering and direction documents. The pack ships defaults, and a project's own document adds to one, winning where they conflict; a policy document may just point at docs the project already has. Each judging node reads only the policy its decision needs, and agents interpret it; nothing parses it. Values that must be exact, such as label names, user allow-lists and numeric caps, stay typed configuration.
 - **The factory asks nothing pack-specific of the engine.** When it needs a capability the engine lacks, the engine gains a general primitive any workflow can use, never behavior that knows the pack's stages, labels or outcomes.
 
-The bundled SDLC pack predates this shape: its stages are queues joined by forge labels, its work item is a state document, and a stop it cannot answer pauses the run. It stays the working reference until a pack built on the primitives above replaces it.
+The bundled SDLC pack is built on this shape: each stage is a workflow on the issue's item, ends with an outcome or asks, and its declared bindings start the next stage. It keeps no record of its own and is the reference for operators building their own pack.
 
 Triage clause: cite this direction as `direction.md §software-factory`.
 

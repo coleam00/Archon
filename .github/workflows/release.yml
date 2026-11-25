@@ -245,7 +245,7 @@ jobs:
             exit 1
           fi
           echo "$OUTPUT"
-          if echo "$OUTPUT" | grep -q "archon-deliver"; then
+          if echo "$OUTPUT" | grep -q "archon-build"; then
             echo "::notice::Bundled workflows loaded correctly"
           else
             echo "::error::Bundled workflows did not load — embedded JSON may be missing from the binary"

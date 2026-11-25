@@ -1,0 +1,67 @@
+name: archon-land
+description: |
+  Land one ready pull request on the item's landing branch. One agent reads the pull
+  request, its checks, its threads and the base branch on the host, judges it against
+  the project's land policy, and either merges it pinned to the head whose checks it
+  read, sends it back to its builder, or asks an operator. The forge records the merge
+  and its landing branch on the item itself.
+
+  Starts when the host stage hands a pull request off ready, when an operator takes a
+  change as it is, or when an operator answers `land`. By hand, on the change's branch:
+  `archon workflow run archon-land --item issue-<n> --input issue=<n> --branch <head-branch>`.
+  `merged` starts the discoveries stage.
+
+model: ['@merge', large]
+mutates_checkout: false
+
+inputs:
+  issue:
+    description: The number of the issue whose change this is.
+  repo_host:
+    default: ""
+    description: The host of the repository. Empty means the checkout's `origin` remote.
+  repo_path:
+    default: ""
+    description: The repository on its host. Empty means the checkout's `origin` remote.
+  answers:
+    default: "None."
+    description: Every answer an operator gave on this item, oldest first.
+  host:
+    result_of: archon-host
+    description: What the host stage ended with. Read from the item.
+  review:
+    result_of: archon-review
+    description: What the latest review ended with. Read from the item.
+  earlier:
+    result_of: archon-land
+    description: What the last land run on the item ended with, for the head an approval names.
+
+returns:
+  node: land
+  outcome: outcome
+  asks: asks
+  summary: reason
+  # One option set for every ask; the asks-settled bindings in .pack/pack.yaml route on these ids.
+  options:
+    - { id: land, does: 'Approves the pull request at the head the question names. The land stage starts again and merges it once the gate passes there.', cost: 'The change lands on the branch everyone builds on.' }
+    - { id: send-back, does: 'The same builder continues the change with your answer and the land brief, and it is reviewed again.', cost: 'One build run and another review, host and land round.' }
+    - { id: stop, does: 'Nothing more runs. An operator lands or closes the change by hand.', cost: 'The item ends here unless someone takes it on.' }
+
+nodes:
+  - id: land
+    command: land
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        outcome: { type: string, enum: [merged, return, ask] }
+        pull_request: { type: string }
+        head: { type: string }
+        class: { type: string, enum: [clear, unclear] }
+        reran: { type: boolean }
+        reason: { type: string }
+        brief: { type: string }
+        base: { type: string }
+        recorded: { type: boolean, description: 'With merged: whether the merge response says it recorded the merge on the item. False otherwise.' }
+        report: { type: string, description: 'The absolute path of land.md, or empty.' }
+      required: [outcome, pull_request, head, class, reran, reason, brief, base, recorded, report]

@@ -1,0 +1,65 @@
+name: archon-link
+description: |
+  Decide whether one issue that should be built can be built now, and how it relates to
+  the project's other work. The agent checks the state of what the issue would wait on,
+  records `depends_on`, `part_of` and `duplicate_of` links on the item itself, and ends
+  `plan` or `build` (that stage starts), `waiting`, `fold`, `dropped` or `none`. It runs
+  after triage, again when an issue it waits on ends, and when its asks are answered.
+  Changes nothing in the checkout.
+
+  By hand: `archon workflow run archon-link --item issue-<n> --input issue=<n>`.
+
+model: ['@link', medium]
+mutates_checkout: false
+
+inputs:
+  issue:
+    default: ""
+    description: The number of the issue. Empty when an issue it waits on ended; the agent then reads it from its item.
+  repo_host:
+    default: ""
+    description: The host of the issue's repository. Empty means the checkout's `origin` remote.
+  repo_path:
+    default: ""
+    description: The issue's repository on its host. Empty means the checkout's `origin` remote.
+  answers:
+    default: "None."
+    description: Every answer an operator gave on this item, oldest first.
+  ended:
+    default: ""
+    description: The key of an item this one depends on that just ended, landed or not.
+  triage:
+    result_of: archon-triage
+    description: What triage concluded about the issue. Read from the item.
+  earlier:
+    result_of: archon-link
+    description: What the last link run on this item returned. Null on the first.
+
+returns: { node: link, outcome: outcome, asks: asks, final: [waiting, fold, dropped, none], summary: summary }
+
+nodes:
+  - id: link
+    command: link
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        outcome: { type: string, enum: [plan, build, waiting, fold, dropped, none] }
+        issue: { type: string, description: 'The issue number, as text.' }
+        links:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              to: { type: string }
+              kind: { type: string, enum: [depends_on, overlaps, part_of, duplicate_of] }
+              blocking: { type: boolean }
+              recorded: { type: boolean }
+              why: { type: string }
+            required: [to, kind, blocking, recorded, why]
+        waits_on: { type: array, items: { type: string } }
+        would_wait: { type: array, items: { type: string } }
+        summary: { type: string }
+        notes: { type: string }
+      required: [outcome, issue, links, waits_on, would_wait, summary, notes]

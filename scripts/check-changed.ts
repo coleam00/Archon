@@ -36,7 +36,7 @@ import { VALIDATE_CHECKS } from './validate';
  * `tsc -b` over the scoped projects from `type-check.ts` (which also brings their dependencies up
  * to date from cache), each package's own `test` script, the lint checks `scripts/lint.ts` lists
  * (see `lintPlan`), and the `validate.ts` checks by id for the ratchet, the type-check and the
- * root and pack tests.
+ * root script tests.
  */
 
 /** The root manifest as a graph node: its devDependencies name workspace packages. */
@@ -130,7 +130,7 @@ function classify(file: string, graph: WorkspaceGraph, inputs: ClassifierInputs)
     };
   }
   if (file.startsWith('.archon/')) {
-    // Root script tests import pack modules, so a pack change runs them too.
+    // Root script tests read the bundled pack, so a pack change runs them too.
     return { kind: 'checked', packages: [], reason: '', rootScripts: true, pack: true };
   }
   return { kind: 'everything', because: `${file} maps to no package or root project` };
@@ -325,7 +325,7 @@ function printScope(scope: ChangeScope, graph: WorkspaceGraph, lint: LintPlan): 
     `Packages skipped: ${all.filter(name => !scope.packages.has(name)).join(', ') || 'none'}`
   );
   console.log(`Root scripts (scripts/): ${scope.rootScripts ? 'checked' : 'skipped'}`);
-  console.log(`Pack (.archon/scripts, .archon/workflows): ${scope.pack ? 'checked' : 'skipped'}`);
+  console.log(`Pack (.archon/workflows): ${scope.pack ? 'checked' : 'skipped'}`);
   if (scope.unchecked.length > 0) {
     console.log('Prose and inert files, which nothing checks:');
     for (const file of scope.unchecked) console.log(`  ${file}`);
@@ -405,7 +405,6 @@ function steps(scope: ChangeScope, lint: LintPlan, base: string): Step[] {
         command(`tests: ${manifest.name}`, ['bun', 'run', 'test'], join(REPO_ROOT, manifest.path))
       ),
     ...(scope.rootScripts ? validateSteps('script-tests', 'tests: scripts/') : []),
-    ...(scope.pack ? validateSteps('pack-tests', 'tests: .archon/scripts/') : []),
   ];
   return [...(tasks.length > 0 ? [typeCheckStep(tasks)] : []), ...tests, ...tail];
 }

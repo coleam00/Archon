@@ -222,7 +222,6 @@ describe('CI wiring', () => {
 
   test.each([
     'workspace-tests',
-    'pack-tests',
     'pack-fixtures',
     'full-matrix',
     'windows-full-suite',

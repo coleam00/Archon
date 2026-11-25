@@ -7,46 +7,51 @@ sidebar:
   order: 4
 ---
 
-The bundled `sdlc` pack is a software factory made of five queues. You write an issue; intake triages it, the split queue files the issues a large item splits into when it can't be built as one, the build queue works it to a reviewed pull request, and the merge queue merges it. When a run reaches a decision it can't make, it pauses as one attention item for you to answer. This page says what the factory is, what it writes, and how to stop it. The setup steps are in the pack's README.
+The bundled `sdlc` pack is a software factory made of stages. A maintainer labels an issue `archon-triage`; triage routes it, and the engine starts each next stage on the issue's item, `issue-<n>`, through to a merged pull request. When a stage reaches a decision it can't make, it ends and leaves the question on the item for you to answer, and your answer starts the next stage. This page says what the factory is, what it writes, and how to stop it. The setup steps are in the pack's README.
 
-| Queue | What it does |
+| Stage | What it does |
 |---|---|
-| `archon-intake` | Checks the issue's author against your maintainer list, triages a maintainer's issue and labels its route |
-| `archon-build-queue` | Takes one triaged issue through build rounds until its pull request is reviewed Ready, or a maintainer's `ready` answer hands it to the merge queue |
-| `archon-merge-queue` | Merges the Ready, green pull requests the build queue finished, and sends back what it can't merge |
-| `archon-discoveries` | Files, tracks or drops what runs noticed outside their own task |
-| `archon-split` | Files the issues a large item splits into when triage judged it can't be built as one work item, and sends them back through intake. Its agent can also hand the item back to be built whole. They are opened by the install's login, so that login must be in `maintainers.json`, or intake treats them as outside items |
+| `archon-triage` | Judges whether a run can start from the issue and routes it to investigate, plan, build or split; asks the author questions, or closes a duplicate or delivered issue |
+| `archon-link` | Decides whether the issue can be built now, records its links to other work, and holds it until what it waits on lands |
+| `archon-investigate` | Proves the root cause of a symptom and decides the fix |
+| `archon-split` | Files the next piece of a large issue as its own issue and puts it in triage |
+| `archon-plan` | Chooses the approach and breaks it into verifiable steps |
+| `archon-build` | Builds the change and opens a draft pull request; continues it in one session when it comes back |
+| `archon-review` | Reviews the change through specialist lenses and posts one verdict |
+| `archon-host` | Answers review threads, updates the description, reads CI and takes the pull request out of draft |
+| `archon-land` | Judges the pull request against your land policy and merges it, or asks |
+| `archon-discoveries` | Files, tracks or drops what the runs noticed outside the change |
 
 Every workflow in the pack is described in [SDLC pack workflows](/reference/sdlc-workflows/).
 
 ## Set it up
 
-The pack's README owns the setup: [Set up the pack](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack). It is an ordered guide with the command for each step, the check that proves it and the decisions that are yours, written so you can point your coding agent at it. It covers the forge plugin and credential, the maintainer list, the pack's settings, a first run of each queue by hand, answering what the factory asks, and the trigger bindings that let it run on its own.
+The pack's README owns the setup: [Set it up](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-it-up). It covers the forge plugin and credential, the one setting and the policy documents, a first run of each stage by hand, and the bindings that let the stages chain on their own.
 
-Before the first run, write an issue the factory can build. The issue body is the contract every round is measured against: state the problem, why it is worth solving, why now, the desired outcome, the invariants, and acceptance; see [The input is the contract](/getting-started/quick-start/#the-input-is-the-contract). The build queue asks you for a missing element instead of guessing it.
+Before the first run, write an issue the factory can build. The issue body is the contract every stage is measured against: state the problem, why it is worth solving, why now, the desired outcome, the invariants, and acceptance; see [The input is the contract](/getting-started/quick-start/#the-input-is-the-contract). Triage asks the author for what is missing instead of guessing it.
 
-Once it runs, [Operate the SDLC factory](/guides/sdlc-operations/) says how each queue behaves, and [Operate runs](/getting-started/operate/) covers answering, resuming and stopping runs.
+Once it runs, [Operate the SDLC factory](/guides/sdlc-operations/) says how to follow an item and answer what it asks, and [Operate runs](/getting-started/operate/) covers resuming and stopping runs.
 
 ## What the pack writes
 
-Everything below is written as the `gh` account, to the repository the queues name.
+Everything below is written as the forge account whose credential the pack uses, to the repository the bindings name.
 
 | Where | What | Who |
 |---|---|---|
-| Labels | Creates the pack's own `archon-*` labels when missing. Adds and removes them on issues as a delta, so labels others add survive | Intake; `archon-triage` with `--input publish=true` |
-| Issues | Closes a duplicate of an open issue, or an issue a merged change already delivered, with one comment linking the cause, and a link-back comment on the original. Intake closes issues by triage verdict, as `triage.md` allows, and a merged pull request closes the issue it names with `Closes #N` | Intake; merges |
-| Issue bodies | Appends a dated "Current scope" section with your answer | Build queue, merge queue |
-| New issues | Files an issue for a verified discovery, marked so a rerun never files it twice. Adds one evidence comment to an open issue it tracks | Discoveries |
-| Branches | Pushes `build/<issue>-<slug>-<run>`, or pushes onto an open pull request's existing head. Never force-pushes or rebases | Build queue rounds |
-| Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place, replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met and no dated ruling on the issue keeps it open. Before merging, the merge queue rechecks the keyword against the review's stamped coverage and the issue's latest ruling, and corrects it in either direction | Build queue rounds; merge queue |
-| CI | Reruns a pull request's failed jobs once, when the red is outside the change. A red default branch is never rerun: the merge run waits and its summary names the diagnosis | Merge queue |
-| Merges | Merges through the gate, pinned to the reviewed head. Deletes no branch | Merge queue |
-| Worktrees and branches | If you schedule it, removes each merged worktree with its local branch, including a branch Archon adopted. Remote branches stay, with a warning | `archon isolation cleanup schedule install` |
+| Labels | Adds area labels the repository already has. Adds `archon-triage` to a piece it filed from a split issue | Triage; split |
+| Issue comments | One marked comment each for questions to the author, what a blocked issue waits on, a close, a split's plan, and evidence added to an issue a discovery belongs to | Triage; split; discoveries |
+| Issues | Closes a duplicate of an open issue, or an issue a merged change already delivered. Closes a bundle once its tasks are filed. A merged pull request closes the issue it names with `Closes #N` | Triage; split; merges |
+| New issues | Files a split's next piece, and up to three verified discoveries a pass, each marked so a rerun never files it twice | Split; discoveries |
+| Branches | Pushes the change's branch, or onto an open pull request's head it continues. Never force-pushes or rebases | Build |
+| Pull requests | Opens a draft, posts one review comment and edits it in place, answers and resolves review threads, updates the description, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met and no dated ruling on the issue keeps it open | Build; review; host; land |
+| CI | Reruns a pull request's failed jobs once, when the red is outside the change | Land |
+| Merges | Merges pinned to the head whose checks it read, and records the merge on the item. Deletes no branch | Land |
 
-On your machine it keeps state documents (`archon state list --prefix work/`), worktrees and run artifacts under `~/.archon/`.
+With the item tracker turned on (`itemTracker` in `~/.archon/config.yaml`), the engine also keeps one status comment on the issue and posts each question and the result. On your machine Archon keeps the item's runs, worktrees and run artifacts under `~/.archon/`.
 
 ## Pause or stop it
 
-- **Stop new runs.** Remove the schedules (`archon trigger schedule remove --config <file>`, or the cron or systemd entry) and the intake webhook bindings. Removing a schedule does not cancel work already accepted.
-- **Stop runs in flight.** Runs start follow-ups by firing the binding files directly: the engine starts a build run when an intake run routes its issue, a pick and a merge run when a build run ends, a build round when a merge run returns its pull request, a merge run when a check completes or its ask is answered, and a discoveries pass after a merge. A pick fires a build run for each waiting issue, and the merge backstop a merge run for each waiting pull request. A build pick that sends an issue back to intake launches that intake run itself. So removing schedules alone does not stop a chain. List the runs with `archon workflow status --all` and `archon workflow cancel` or `archon workflow abandon` them.
-- **Stop one item.** Answer its attention item with `park`, where the item offers it. A paused run waiting on you does nothing until you answer.
+- **Stop new work.** Remove the label binding from the GitHub source plugin's config, so a label starts nothing. `archon hold set` holds every new start on the install until `archon hold lift`.
+- **Stop the chain.** Delete the pack's trigger files from `~/.archon/triggers/`: each one is a hand-off from one stage to the next, and a stage that ends with no file to start starts nothing.
+- **Stop runs in flight.** List them with `archon workflow status --all`, then `archon workflow cancel` or `archon workflow abandon` them.
+- **Stop one item.** Answer its question with `stop` where it offers it, or withdraw it: nothing more runs on the item until someone starts a stage again.

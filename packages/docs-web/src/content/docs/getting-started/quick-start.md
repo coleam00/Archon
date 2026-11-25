@@ -82,10 +82,10 @@ Wherever the run reads its input, an issue body, a message or a document, make i
 
 Solution steering is optional and goes last. Leave it out and the run chooses its own approach. If you hold a constraint, such as "reuse this helper" or "no new dependency", say it, because the run can't honor a preference you didn't state.
 
-A brief worth running:
+A brief worth running, written as the body of an issue:
 
 ```bash
-archon workflow run archon-ship --branch fix/upload-timeout "$(cat <<'BRIEF'
+gh issue create --title "Large uploads time out" --body-file - <<'BRIEF'
 Problem: uploads over ~8 MB fail with a 504 after 30s. The proxy read timeout is
 30s and the upload handler streams to disk before responding.
 
@@ -102,10 +102,11 @@ Acceptance: a 50 MB upload succeeds end to end; a test covers the timeout path.
 
 Steering: prefer streaming straight to storage over raising the timeout.
 BRIEF
-)" --detach
+
+archon workflow run archon-triage --item issue-<n> --input issue=<n> --detach
 ```
 
-`archon-ship` takes an issue or request to a reviewed pull request. It reaches GitHub through the forge plugin, so run `archon plugin add coleam00/Archon/plugins/forge-github` first; your `gh auth login` (or `GH_TOKEN`) is the credential it uses. `--detach` starts the run in the background and returns at once.
+`archon-triage` is the first stage of the bundled `sdlc` pack: it judges the issue and routes it to investigate, plan, build or split. With the pack's bindings installed, each stage starts the next one, up to a merged pull request; without them, start each stage the same way. The pack reaches GitHub through the forge plugin, so run `archon plugin add coleam00/Archon/plugins/forge-github` first; your `gh auth login` (or `GH_TOKEN`) is the credential it uses. `--detach` starts the run in the background and returns at once.
 
 ## Next steps
 

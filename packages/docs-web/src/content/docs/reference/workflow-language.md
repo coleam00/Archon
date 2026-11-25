@@ -2127,13 +2127,13 @@ own. The composing workflow contributes ordering and gates; it does not reach in
 
 ```yaml
 nodes:
-  - id: pr
-    include: archon-pr
+  - id: build
+    include: archon-build
 
-  # Inlines every node from archon-review, attached after pr.
+  # Inlines every node from archon-review, attached after build.
   - id: review
     include: archon-review
-    depends_on: [pr]
+    depends_on: [build]
 
   - id: summary
     prompt: "Summarize the review findings for the PR author."

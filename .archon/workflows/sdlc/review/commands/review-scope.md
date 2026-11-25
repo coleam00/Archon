@@ -4,43 +4,49 @@ Establish exactly what this review round examines, and write it down for the rev
 
 ## Inputs
 
-**Requested scope** (may be empty):
+**The pull request to review** (may be empty): `$INPUTS.pr`. In delivery this is empty and the change is the one the builder proposed, named in its result below.
 
-$INPUTS.scope
+**The issue whose change this is** (empty for a review started by hand on a pull request): number `$INPUTS.issue` in `$INPUTS.repo_host`/`$INPUTS.repo_path`.
 
-**Previous round's report** (path; empty means this is the first round, full review):
+**What the builder ended with** (`null` for a review by hand): its `pull_request`, the `head` it pushed, and its `report`, the path of its `implementation.md`:
 
-$INPUTS.prior_report
+$INPUTS.build
 
-**Commit under review**: `$mode.output.head`, which the mode node fixed from the checkout. Every diff you record ends at that full SHA, never a branch name or a revision read from a pull-request record. Do not compare it with the pull request's head yourself: publication refuses the report when the checkout or the pull request's remote head differs from it.
+**The previous round's result** (`null` when no review of this item completed before): its `head` is the commit that round reviewed, its `report` the path of its report, beside which its `findings.json` lies.
 
-**Previous round's reviewed commit**: `$mode.output.cursor` (empty on a first round), which the mode node read from the previous round's publication. This is the cursor this round's delta starts from, not a SHA inferred from the report's prose.
+$INPUTS.earlier
 
-**Accepted work order** (may be empty for a standalone review):
+**Commit under review**: this checkout's `HEAD` (`git rev-parse HEAD`), read before anything else. Every diff you record ends at that full SHA, never a branch name or a revision read from a pull-request record. Declare it as `head`.
 
-$INPUTS.work_order
+**Part assignment**: none. This review judges the whole contract.
 
-**Part assignment** (empty when this run delivers the whole contract; mode validates its schema before lenses run):
+Decisions an operator already made on this item, oldest first; where two disagree, the later one holds. A decision here is part of the accepted contract:
 
-$INPUTS.part
+$INPUTS.answers
 
 The run's trigger message, which may narrow or override the above:
 
 $ARGUMENTS
 
+## Continuation or full review
+
+This round continues the previous one when the previous round's result is not `null`, its `report` file exists, and the commit under review descends from its `head` (`git merge-base --is-ancestor <its head> HEAD`). Then its `head` is the **cursor** this round's delta starts from, and the path of its report is the **prior report**. Otherwise this is a full review. When the previous round's `head` is not an ancestor of the commit under review, say so in scope.md and review in full.
+
 ## Resolve the target
 
-- When the requested scope is a recorded pull request — delivery passes its verified record as JSON, carrying `repo`, `number`, `head` and `base` — review exactly that pull request. The record names the pull request and its base, so read nothing from a forge to establish them. It does not name the commit: its `head_revision` was captured when the pull request opened and is stale after any later push, so ignore it. The review object is the diff of the commit under review against that base. Fetch the base first, from the remote whose URL is the record's `repo` (`git remote -v`; it need not be named `origin`), and diff against the fetched ref (`git diff <that remote>/<base>...<commit under review>`): a local `<base>` branch can lag the forge's base during a long run, and a stale base reviews a diff the pull request does not have. Do not resolve a PR from the current branch, and do not accept a different target.
+- In delivery, the pull request is the builder's `pull_request`: review exactly that pull request. Read it with `pr.view` (below) for its repository and base. Its `head_revision` must be the commit under review: when it is not, someone pushed after the builder or the builder's push did not land, so write that in scope.md, declare it, and the review stops there. The review object is the diff of the commit under review against that base. Fetch the base first, from the remote whose URL is the record's `repo` (`git remote -v`; it need not be named `origin`), and diff against the fetched ref (`git diff <that remote>/<base>...<commit under review>`): a local `<base>` branch can lag the forge's base during a long run, and a stale base reviews a diff the pull request does not have. Do not resolve a PR from the current branch, and do not accept a different target.
 - A PR number, URL, or branch → read it through the Archon CLI, whose argv is the JSON string array in `$ARCHON_CLI_COMMAND`: `<argv...> forge pr.view --json --data '<request>'`, with `{"selector":{"kind":"number","ref":{"repo":{"host":…,"path":…},"number":…}}}` for a number or URL (the repository from the URL, or from the checkout's remote), or `{"selector":{"kind":"head","repo":…,"headRepo":…,"head":"<branch>"}}` for a branch, which answers its open pull request or `null`. The answer carries the title, body, state, base, head branch and head revision. Its diff is the commit under review against the base, fetched as above (`git diff <that remote>/<base>...<commit under review>`). **In PR mode the review object is the PR's diff, exactly — uncommitted or untracked local state is out of scope and must not appear in the scope file.**
-- Empty scope → first check whether the current branch has an open PR (`pr.view` with the head selector, as above); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). The head is the commit under review.
+- Empty → first check whether the current branch has an open PR (`pr.view` with the head selector, as above); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). The head is the commit under review.
 
 ## Resolve the accepted contract
 
 The review judges the change against what the contract says completion looks like, so resolve the contract in full, in every mode, including a continuation.
 
-- When `work_order` is non-empty, read it in full, then follow it to the **originating contract**: the issue, request, or document the work order, or a document it points to, names as its source. Read that source yourself. Triage summaries, plans, and a previous review report are derived from it: a summary is where an acceptance line gets lost, a plan's own design decisions are not steering, and a contract a previous round recorded is not a source. The originating contract, as settled by the work order, is the accepted contract implementation received. Preserve its required outcome, explicit non-goals, and boundaries as prose; do not parse it with scripts, regexes, or keyword extraction.
-- When `work_order` is empty and the target is a PR, use the PR body's problem/outcome and explicit scope or non-goals as the standalone review contract, following it to any source it names in the same way. Do not infer a broader promise from the changed files.
+- When the issue is named, it is the **originating contract**: read it, with its comments, through `workitem.view` and `workitem.comments`. Read the builder's work order too: the plan or investigation report its `implementation.md` cites, or, when neither exists, triage's handoff in the triage report it cites. What the work order asks for beyond the issue's words, such as a sibling defect on the touched path, is in the accepted work. Read that source yourself. Triage summaries, plans, and a previous review report are derived from it: a summary is where an acceptance line gets lost, a plan's own design decisions are not steering, and a contract a previous round recorded is not a source. The originating contract, as settled by the work order, is the accepted contract implementation received. Preserve its required outcome, explicit non-goals, and boundaries as prose; do not parse it with scripts, regexes, or keyword extraction.
+- When no issue is named and the target is a PR, use the PR body's problem/outcome and explicit scope or non-goals as the standalone review contract, following it to any source it names in the same way. Do not infer a broader promise from the changed files.
 - When neither supplies an explicit boundary, state that the review is using the requested scope and repository contracts without inventing a non-goal.
+
+The builder's result declares `carried_by`, the existing primitive or owner it says carries the outcome, and `disappears`, what it says the change removes. Record each as its own Steering item, quoted, with the source "builder's design statement" (or the plan's, when the plan named them and the builder kept them). The review holds the diff to them. A review by hand has none; say so.
 
 From the originating contract, list every **acceptance** item (how completed behavior will be recognized), every stated **invariant**, and every **steering** constraint on how the work is done, each as its own numbered item, quoted as the contract words it. A document that counts, mentions, or paraphrases acceptance without stating each item has not given you the items; go to its source. When you cannot reach a source the contract depends on, say which items could not be read rather than standing in other text for them. Finding these items is your reading of the contract, not a parse: never extract them with scripts, regexes, or heading matches, and never invent an item the contract does not state.
 
@@ -48,7 +54,7 @@ An explicit narrowing in the operator's trigger is an accepted boundary. The par
 
 ## Continuation (a prior report exists)
 
-When a prior-report path is supplied, read it in full. The cursor is the previous round's reviewed commit given above, not a SHA you read from the report. This round's diff is **only the delta**, and only this change's part of it: code that arrived through a merge of the base branch is not this change. Fetch the base as above, rebuild the cursor's change on the base the commit under review now sits on, and diff the commit under review against that tree:
+When this round continues the previous one, read the prior report in full. The cursor is the previous round's `head` given above, not a SHA you read from the report. This round's diff is **only the delta**, and only this change's part of it: code that arrived through a merge of the base branch is not this change. Fetch the base as above, rebuild the cursor's change on the base the commit under review now sits on, and diff the commit under review against that tree:
 
 ```
 tree=$(git merge-tree --write-tree "$(git merge-base <remote>/<base> <commit under review>)" <cursor> | head -1)
@@ -67,10 +73,16 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing the following:
 4. **Changed files** — path list with a one-line shape of the change per file (added/modified/deleted, rough size).
 5. **The diff to review** — inline when small; for a large diff, the exact commands a reviewer runs to see it (`git diff <range>`).
 6. **Prior report** — continuation mode only: its path and reviewed-head cursor. Do not duplicate its findings or coverage.
+7. **Builder's report** — the path of the builder's `implementation.md`, from its result, or that there is none for a review by hand.
 
 ## Verify before finishing
 
 Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, names the head SHA, and that the diff commands in it actually produce output in this checkout. Then declare:
+
+- `head`: the commit under review, the full SHA.
+- `continuation`: true when this round continues the previous one, as above.
+- `prior_report`: the path of the prior report on a continuation, otherwise the empty string.
+- `head_matches`: true when the target is a pull request whose head is the commit under review, or a working diff; false when the pull request's head is another commit.
 
 - `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `null`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.
 - `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/scope.md"}`. The engine refuses this node if that file is missing or empty, so write it before you declare.

@@ -94,15 +94,17 @@ Repository runs get their own git worktree by default, so several can work on on
 
 The bundled `sdlc` pack is a working factory for a repository:
 
-1. **You open an issue.** `archon-intake` checks it against the current code and decides what it needs: a plan, an investigation, straight to delivery, or a maintainer's look.
-2. **The build queue picks it up.** `archon-build-queue` takes a ready issue, writes the brief and runs `archon-ship`: plan, implement, review through specialist lenses, fix the findings, wait for CI. It stops at a pull request whose review says Ready, asking once for any check no round can run, or at one a maintainer's `ready` answer hands on; the merge gate checks either the same way.
-3. **The merge queue lands it.** `archon-merge-queue` merges the clear ready pull requests that merge cleanly, through a gate that checks the review verdict and CI at the head commit and that the base branch is not red. The queue judges open review threads itself and sends a pull request that conflicts back to the build queue.
-4. **You answer what's unclear.** A scope question, a schema change or a stuck round becomes one attention item with a recommendation. Your answer is written into the issue as the new scope.
-5. **Nothing found along the way is lost.** `archon-discoveries` reads what runs noticed outside their task and files it, tracks it on an existing issue, or drops it.
+1. **A maintainer labels an issue `archon-triage`.** `archon-triage` checks it against the current code and decides what it needs: an investigation, a plan, a split into smaller issues, straight to a build, or questions for its author. An issue nobody labelled reaches no agent.
+2. **It gets built.** `archon-link` checks whether it can be built now or waits on other work, `archon-plan` or `archon-investigate` decides how, and `archon-build` makes the change and opens a draft pull request. `archon-review` judges it through specialist lenses and sends findings back to the same builder session, round by round, until it approves.
+3. **It gets landed.** `archon-host` answers review threads, updates the description and reads CI. `archon-land` merges the pull request pinned to the head whose checks it read, when the project's land policy lets it, and asks otherwise.
+4. **You answer what's unclear.** A scope question, a schema change or a stuck round ends its stage with a question on the issue's item, with a recommendation. Your answer starts the stage it chose.
+5. **Nothing found along the way is lost.** Once a change lands, `archon-discoveries` reads what its runs noticed outside their task and files it, tracks it on an existing issue, or drops it.
+
+Each stage is one workflow on the issue's item, and the engine starts the next one when a stage ends; the pack's [README](.archon/workflows/sdlc/README.md) shows how to install the bindings.
 
 Archon builds Archon: of the 524 pull requests merged into this repository between 1 and 19 October 2026, Archon runs built 363.
 
-You start the queues by hand or bind them to a schedule or issue events with a [trigger](https://archon.diy/guides/workflow-triggers/). The pack binds nothing by default. The pack reaches GitHub through the forge plugin (`archon plugin add coleam00/Archon/plugins/forge-github`); see [the forge path](https://archon.diy/reference/forge/#use-the-forge-path-in-the-sdlc-pack). [The SDLC factory](https://archon.diy/getting-started/sdlc-factory/) introduces it and links its setup guide, and [SDLC pack workflows](https://archon.diy/reference/sdlc-workflows/) describes every workflow in it.
+You run each stage by hand on an item, or install the pack's bindings with `archon pack bindings sdlc` so a label starts triage and each stage starts the next ([triggers](https://archon.diy/guides/workflow-triggers/)). Nothing is bound until you install them. The pack reaches GitHub through the forge plugin (`archon plugin add coleam00/Archon/plugins/forge-github`); see [the forge path](https://archon.diy/reference/forge/#use-the-forge-path-in-the-sdlc-pack). [The SDLC factory](https://archon.diy/getting-started/sdlc-factory/) introduces it and links its setup guide, and [SDLC pack workflows](https://archon.diy/reference/sdlc-workflows/) describes every workflow in it.
 
 ## Build any factory
 

@@ -1,0 +1,63 @@
+name: archon-build
+description: |
+  Build one issue's change, commit it, push it and propose it as a draft pull request; or,
+  when the review, the host, the land stage or an operator sent it back, continue it in
+  the session the builder last had on this item, on the same branch.
+
+  Starts when a plan, an investigation or triage hands the issue on, when a later stage
+  returns the change, or by hand:
+  `archon workflow run archon-build --item issue-<n> --input issue=<n>`.
+  `built` starts the review on the commit it pushed.
+
+model: ['@implementer', large]
+
+inputs:
+  issue:
+    description: The number of the issue to build.
+  repo_host:
+    default: ""
+    description: The host of the issue's repository. Empty means the checkout's `origin` remote.
+  repo_path:
+    default: ""
+    description: The issue's repository on its host. Empty means the checkout's `origin` remote.
+  answers:
+    default: "None."
+    description: Every answer an operator gave on this item, oldest first.
+  returned:
+    default: "null"
+    description: What the stage that sent the change back ended with, as its result. `null` on a first build.
+  plan:
+    result_of: archon-plan
+    description: The latest plan of the item. Read from the item.
+  investigation:
+    result_of: archon-investigate
+    description: The latest investigation of the item. Read from the item.
+  triage:
+    result_of: archon-triage
+    description: What triage concluded about the item. Read from the item.
+  split:
+    result_of: archon-split
+    description: What the split stage concluded, when the item came through one. Read from the item.
+
+returns: { node: build, outcome: outcome, asks: asks, summary: summary }
+
+nodes:
+  # The first build and every later fix are this one node on purpose: `context: same`
+  # continues the session this node last had on the item, and a session is kept per
+  # workflow and node. A second fix node would start without the builder's context.
+  - id: build
+    command: build
+    context: same
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        outcome: { type: string, enum: [built, ask, replan] }
+        red_cause: { type: string, enum: [introduced, inherited, environment, ""] }
+        pull_request: { type: string, description: 'The URL of the pull request. Empty when not proposed.' }
+        head: { type: string, description: 'The full commit pushed. Empty when nothing was pushed.' }
+        carried_by: { type: string, description: 'The existing primitive or owner the change extends, or that nothing carries it and where the new thing belongs. Empty when nothing was built.' }
+        disappears: { type: string, description: 'What the change removed or made unnecessary, or Nothing with why. Empty when nothing was built.' }
+        summary: { type: string }
+        report: { type: string, description: 'The absolute path of implementation.md.' }
+      required: [outcome, red_cause, pull_request, head, carried_by, disappears, summary, report]

@@ -34,7 +34,6 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
       ['bun', 'run', 'check:provider-contract-schema'],
       ['bun', 'run', 'check:chat-contract-schema'],
       ['bun', 'run', 'check:api-types'],
-      ['bun', 'run', 'check:workflow-output-types'],
       ['bun', 'run', 'check:script-api-types'],
     ],
   },
@@ -85,12 +84,6 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     id: 'script-tests',
     label: 'Repository script tests',
     commands: [['bun', 'run', 'test', '--plan', 'scripts']],
-  },
-  {
-    id: 'pack-tests',
-    label: 'Pack script tests under .archon/scripts/',
-    commands: [['bun', 'run', 'test', '--plan', 'pack']],
-    explicitOnly: true,
   },
   {
     id: 'windows-tests',

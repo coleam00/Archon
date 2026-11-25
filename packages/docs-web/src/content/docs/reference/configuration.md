@@ -317,7 +317,7 @@ defaults:
 
 # Recommended workflows for this project (declared order = pin order in the UI)
 # recommendedWorkflows:
-#   - archon-ship
+#   - archon-triage
 #   - archon-review
 #   - archon-plan
 
@@ -549,7 +549,7 @@ Repo owners curate an **ordered list of recommended workflows** in the project's
 
 ```yaml
 recommendedWorkflows:
-  - archon-ship
+  - archon-triage
   - archon-review
   - archon-plan
 ```

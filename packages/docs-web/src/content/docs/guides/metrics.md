@@ -335,7 +335,7 @@ cut is in `before`; one whose runs all started at or after it is in `after`. The
 started before it, belongs to `before`.
 
 ```bash
-archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
+archon metrics acme.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
 ```
 
 - **Straddling.** A record with runs on both sides of the cut, such as a pull request
@@ -366,7 +366,7 @@ records by the model that ran `<node>` in their producing runs and the runs belo
 such as the child runs of a `workflow:` node or a fan-out.
 
 ```bash
-archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.review__code
+archon metrics acme.pr_merge_rate --since 60d --by-model review__code
 ```
 
 - **Model labels.** A label is the provider, the model and the effort when recorded, such
@@ -408,8 +408,8 @@ needs a metric per route, size or issue type writes each record once with that v
 rather than once per name.
 
 ```bash
-archon metrics sdlc.issues_merged --since 30d --by-dimension route
-archon metrics sdlc.issue_asks --since 60d --by-dimension route --compare 2026-10-15T09:30:00Z
+archon metrics acme.issues_merged --since 30d --by-dimension route
+archon metrics acme.issue_asks --since 60d --by-dimension route --compare 2026-10-15T09:30:00Z
 ```
 
 - **Groups.** One group per value, ordered by value, then `none` for records that do not
