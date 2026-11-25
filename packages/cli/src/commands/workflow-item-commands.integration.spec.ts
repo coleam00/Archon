@@ -1154,3 +1154,76 @@ test.serial(
     expect(recovered.landing?.branch).toBe('release/1');
   }
 );
+
+test.serial(
+  'a work order reads open while a member is open, done once every member merged or ended, and open again when one reopens',
+  async () => {
+    for (const member of ['item-1', 'item-2'])
+      succeeded(
+        await invoke(host =>
+          workflowLinkCommand(
+            host,
+            projectRoot,
+            { item: member, kind: 'part_of', to: 'order-1' },
+            true,
+            callerEnv
+          )
+        )
+      );
+    succeeded(
+      await invoke(host =>
+        workflowMergedCommand(
+          host,
+          projectRoot,
+          {
+            item: 'item-2',
+            change: 'https://github.com/acme/web/pull/2',
+            at: '2026-11-02T10:00:00Z',
+          },
+          true,
+          callerEnv
+        )
+      )
+    );
+    const order = async () => {
+      const read = await readItemJson('order-1');
+      expect(read.runs).toEqual([]);
+      return {
+        state: read.workOrder?.state,
+        members: read.workOrder?.members.map(({ item, state }) => [item.key, state]),
+      };
+    };
+    expect(await order()).toEqual({
+      state: 'open',
+      members: [
+        ['item-1', 'open'],
+        ['item-2', 'merged'],
+      ],
+    });
+
+    // Ending the open member closes the order with no run on it.
+    const member = (await readItemJson('item-1')).item;
+    const ended = await captureWorkflowCommand(archonHome, async host => {
+      await host.deps.store.recordItemEnd({
+        itemId: member.id,
+        key: member.key,
+        reason: 'Folded into item-2.',
+        via: 'cli',
+        by: null,
+        fromRun: null,
+      });
+    });
+    expect(ended.status, ended.stderr).toBe(0);
+    expect((await order()).state).toBe('done');
+
+    // A newer run on the ended member reopens it, and with it the order.
+    await seedRuns(['item-1']);
+    expect(await order()).toEqual({
+      state: 'open',
+      members: [
+        ['item-1', 'open'],
+        ['item-2', 'merged'],
+      ],
+    });
+  }
+);

@@ -525,6 +525,7 @@ describe('reading an item', () => {
       landing: { branch: 'feat/order-1', from: { kind: 'own' } },
       links: [],
       ended: null,
+      workOrder: null,
       degraded: [],
     });
   });
@@ -826,5 +827,143 @@ describe('reading an item', () => {
     ]);
     // The lost owner is reported on the starts held behind it, not as an open question.
     expect(read?.questions).toEqual([]);
+  });
+});
+
+describe('reading a work order', () => {
+  const order: WorkflowItem = { id: 'order-row', projectKey: 'acme/web', key: 'order-9' };
+  const a: WorkflowItem = { id: 'a-row', projectKey: 'acme/web', key: 'issue-a' };
+  const b: WorkflowItem = { id: 'b-row', projectKey: 'acme/web', key: 'issue-b' };
+  const c: WorkflowItem = { id: 'c-row', projectKey: 'acme/web', key: 'issue-c' };
+  const partOf = (from: WorkflowItem, to: WorkflowItem): ItemLink => ({
+    id: `${from.key}-in-${to.key}`,
+    kind: 'part_of',
+    from,
+    to,
+    ...linkAct,
+    ended: null,
+  });
+  const end: ItemEnd = {
+    kind: 'ended',
+    id: 'end-a',
+    reason: 'Not needed.',
+    at: '2026-11-01T10:00:00.000Z',
+    via: 'cli',
+    by: { declared: 'alice' },
+    fromRun: null,
+  };
+
+  /** The order's read, with no run on it, where `merged` and `ended` name which items carry those facts. */
+  async function readOrder(facts: {
+    links: ItemLink[];
+    merged?: string[];
+    ended?: string[];
+    store?: Partial<ItemReadSource['store']>;
+  }) {
+    const linksOf = (id: string) =>
+      facts.links.filter(link => link.from.id === id || link.to.id === id);
+    const read = await readItem(
+      {
+        ...source,
+        store: {
+          ...source.store,
+          getItemRuns: async () => ({ item: order, runs: [], descendantIds: [] }),
+          listItemRulings: async () => [],
+          getItemMerge: async id => (facts.merged?.includes(id) ? merge : null),
+          getItemLanding: async () => null,
+          getHoldingItemEnd: async id => (facts.ended?.includes(id) ? end : null),
+          listItemLinks: async id => linksOf(id),
+          ...facts.store,
+        },
+      },
+      order.projectKey,
+      order.key
+    );
+    return { workOrder: read?.workOrder, degraded: read?.degraded };
+  }
+
+  test('one open member and one merged member: open, naming the open member', async () => {
+    const links = [partOf(a, order), partOf(b, order)];
+    expect((await readOrder({ links, merged: [b.id] })).workOrder).toEqual({
+      state: 'open',
+      members: [
+        { item: a, state: 'open' },
+        { item: b, state: 'merged' },
+      ],
+    });
+  });
+
+  test('once the open member merges or is ended, the order is done with no run on it', async () => {
+    const links = [partOf(a, order), partOf(b, order)];
+    expect((await readOrder({ links, merged: [a.id, b.id] })).workOrder?.state).toBe('done');
+    expect((await readOrder({ links, merged: [b.id], ended: [a.id] })).workOrder).toEqual({
+      state: 'done',
+      members: [
+        { item: a, state: 'ended' },
+        { item: b, state: 'merged' },
+      ],
+    });
+  });
+
+  test('an ended member whose end no longer holds makes the order open again', async () => {
+    // A start waiting on the member reopens it; the store's newer-run rule is `getHoldingItemEnd`'s.
+    const held = {
+      receiptId: 'receipt-a',
+      bindingId: 'binding',
+      hostId: 'host',
+      workflow: 'build',
+      receivedAt: '2026-11-01T11:00:00.000Z',
+    };
+    const read = await readOrder({
+      links: [partOf(a, order)],
+      ended: [a.id],
+      store: { listHeldItemStarts: async id => (id === a.id ? [held] : []) },
+    });
+    expect(read.workOrder?.state).toBe('open');
+  });
+
+  test('an unreadable member merge reads unknown, never done, and is reported with its member', async () => {
+    const lost = { type: 'degraded', reason: 'merge_unreadable', itemId: a.id } as const;
+    const read = await readOrder({
+      links: [partOf(a, order), partOf(b, order)],
+      merged: [b.id],
+      store: { getItemMerge: async id => (id === a.id ? lost : id === b.id ? merge : null) },
+    });
+    expect(read.workOrder?.state).toBe('unknown');
+    expect(read.workOrder?.members[0]).toEqual({ item: a, state: 'unknown' });
+    expect(read.degraded).toEqual([
+      { type: 'degraded', reason: 'member_unreadable', member: a, report: lost },
+    ]);
+  });
+
+  test('an unreadable link of the order itself keeps it from done', async () => {
+    const read = await readOrder({
+      links: [partOf(a, order)],
+      merged: [a.id],
+      store: {
+        listItemLinks: async id =>
+          id === order.id
+            ? [partOf(a, order), { type: 'degraded', reason: 'link_unreadable', linkId: 'lost' }]
+            : [],
+      },
+    });
+    expect(read.workOrder?.state).toBe('unknown');
+  });
+
+  test('a member that is a work order follows its own members, and a cycle ends', async () => {
+    // a is part of the order; b and c are part of a; the order is part of c, a cycle.
+    const links = [partOf(a, order), partOf(b, a), partOf(c, a), partOf(order, c)];
+    expect((await readOrder({ links, merged: [b.id] })).workOrder).toEqual({
+      state: 'open',
+      members: [{ item: a, state: 'open' }],
+    });
+    expect((await readOrder({ links, merged: [b.id, c.id] })).workOrder).toEqual({
+      state: 'done',
+      members: [{ item: a, state: 'done' }],
+    });
+  });
+
+  test('an item nothing is part of is no work order', async () => {
+    expect((await readOrder({ links: [partOf(order, a)] })).workOrder).toBeNull();
   });
 });

@@ -291,7 +291,38 @@ function waitLines(read: ItemRead): string[] {
   );
 }
 
-/** The facts under the item's name: its end, its merge and the branch it lands on. */
+/** A work order's state and the members it names: those open, or those that could not be read. */
+function workOrderLine(read: ItemRead): string[] {
+  const order = read.workOrder;
+  if (order === null) return [];
+  const keys = (state: (typeof order.members)[number]['state']) =>
+    order.members
+      .filter(member => member.state === state)
+      .map(({ item }) =>
+        item.projectKey === read.item.projectKey ? item.key : `${item.projectKey}/${item.key}`
+      );
+  const total = String(order.members.length);
+  switch (order.state) {
+    case 'open': {
+      const open = keys('open');
+      return [
+        `Work order: open, ${String(open.length)} of ${total} members open: ${open.join(', ')}`,
+      ];
+    }
+    case 'done':
+      return [`Work order: done, all ${total} members merged or ended`];
+    case 'unknown': {
+      const unknown = keys('unknown');
+      return [
+        unknown.length > 0
+          ? `Work order: unknown, member(s) could not be read: ${unknown.join(', ')}`
+          : 'Work order: unknown, a link of this item could not be read',
+      ];
+    }
+  }
+}
+
+/** The facts under the item's name: its end, its merge, its work order and the branch it lands on. */
 function itemFactLines(read: ItemRead): string[] {
   const lines: string[] = [];
   if (read.ended !== null)
@@ -303,6 +334,7 @@ function itemFactLines(read: ItemRead): string[] {
   if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
   if (read.degraded.some(report => report.reason === 'merge_unreadable'))
     lines.push('The merge recorded on this item could not be read.');
+  lines.push(...workOrderLine(read));
   if (read.landing !== null)
     lines.push(`Lands on: ${read.landing.branch} (${landingSourceText(read.landing)})`);
   for (const report of read.degraded)

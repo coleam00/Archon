@@ -5,7 +5,8 @@
  * are listed with the queue order recorded for them, and its refused starts beside them. A
  * start waiting or refused because another run of its workflow works the item names that
  * run (`item-hold`). Where the item stands is left to the reader; this computes no stage
- * and stores nothing.
+ * and stores nothing. The one state it derives is a work order's, from its members
+ * (`work-order.ts`).
  */
 import { askItemRef } from './attention-item-refs';
 import { z } from 'zod';
@@ -47,6 +48,8 @@ import { itemLandingUnresolvedSchema, resolvedItemLandingSchema } from './schema
 import { itemEndDegradedSchema, itemEndSchema } from './schemas/item-end';
 import { readHoldingItemEnd } from './item-end';
 import { ItemLandingUnresolvedError, resolveItemLanding } from './item-landing';
+import { readWorkOrder } from './work-order';
+import { workOrderMemberUnreadableSchema, workOrderSchema } from './schemas/work-order';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import { parseRunUsage } from './schemas/run-usage';
 import { chosenAskOption, type StoredItemAsk } from './schemas/item-ask';
@@ -336,7 +339,10 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * holds (`schemas/item-end.ts`): the item is at rest until a run on it starts or resumes
  * after the end, or a start waits on it in `queued` or `held`. Null when the item was
  * never ended, the end no longer holds, or its row could not be read (`end_unreadable`, by
- * `endId`). `waits` are what the item waits for outside Archon:
+ * `endId`). `workOrder` is set when items are `part_of` this one through an active link:
+ * its state, derived on each read from its members (`schemas/work-order.ts`), and each
+ * member's state. Null when nothing is part of the item. A member part that could not be
+ * read is `member_unreadable`, with the store's report. `waits` are what the item waits for outside Archon:
  * the open waits completed runs left on it (`returns.waits`), each with when it opened and
  * fell due, and `overdue` once that time has passed. An overdue set is also among
  * `questions`. `startLimits` are the start limits bindings counted on the item, each with
@@ -359,6 +365,7 @@ export const itemReadSchema = z.object({
   merged: itemMergeSchema.nullable(),
   landing: resolvedItemLandingSchema.nullable(),
   ended: itemEndSchema.nullable(),
+  workOrder: workOrderSchema.nullable(),
   degraded: z.array(
     z.discriminatedUnion('reason', [
       attentionDegradedSchema,
@@ -367,6 +374,7 @@ export const itemReadSchema = z.object({
       itemLinkDegradedSchema,
       itemLandingUnresolvedSchema,
       itemEndDegradedSchema,
+      workOrderMemberUnreadableSchema,
     ])
   ),
 });
@@ -702,7 +710,10 @@ async function readEnd(source: ItemReadSource, itemId: string) {
   return { ended: end, degraded: [] };
 }
 
-/** The facts recorded on the item itself: its rulings, its links, its merge, its landing and its end. */
+/**
+ * The facts recorded on the item itself: its rulings, its links, its merge, its landing and
+ * its end, and the work order state its members give it.
+ */
 async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
   const itemId = item.id;
   const rulings: ItemRuling[] = [];
@@ -712,25 +723,29 @@ async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
     else rulings.push(read);
   const links: ItemReadLink[] = [];
   const unreadableLinks: ItemLinkDegraded[] = [];
-  for (const read of await source.store.listItemLinks(itemId))
+  const linkReads = await source.store.listItemLinks(itemId);
+  for (const read of linkReads)
     if ('type' in read) unreadableLinks.push(read);
     else links.push(readLink(itemId, read));
   const merge = await source.store.getItemMerge(itemId);
   const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
   const landing = await readLanding(source, item);
   const end = await readEnd(source, itemId);
+  const workOrder = await readWorkOrder(source.store, item, linkReads);
   return {
     rulings,
     links,
     merged: merge !== null && !('type' in merge) ? merge : null,
     landing: landing.landing,
     ended: end.ended,
+    workOrder: workOrder.workOrder,
     degraded: [
       ...unreadableRulings,
       ...unreadableMerge,
       ...unreadableLinks,
       ...landing.degraded,
       ...end.degraded,
+      ...workOrder.degraded,
     ],
   };
 }
@@ -833,6 +848,7 @@ export async function assembleItemRead(
     merged: facts.merged,
     landing: facts.landing,
     ended: facts.ended,
+    workOrder: facts.workOrder,
     // A paused item run the store could not read is in both reports, and an unreadable
     // open ask in the queue's and the item's; list each run once.
     degraded: [

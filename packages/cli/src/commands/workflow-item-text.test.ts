@@ -166,6 +166,7 @@ const read: ItemRead = {
     by: { declared: 'alice' },
     fromRun: null,
   },
+  workOrder: null,
   merged: {
     change: 'https://github.com/acme/web/pull/12',
     commit: null,
@@ -175,6 +176,29 @@ const read: ItemRead = {
     fromRun: null,
   },
 };
+
+test('a work order prints its state and names the members that keep it open', () => {
+  const member = (key: string, projectKey = 'acme/web') => ({ id: `${key}-row`, projectKey, key });
+  const workOrderText = (workOrder: ItemRead['workOrder']) =>
+    itemReadLines({ ...read, workOrder }, SERVED).find(line => line.startsWith('Work order'));
+  expect(
+    workOrderText({
+      state: 'open',
+      members: [
+        { item: member('issue-a'), state: 'open' },
+        { item: member('issue-b', 'acme/api'), state: 'open' },
+        { item: member('issue-c'), state: 'merged' },
+      ],
+    })
+  ).toBe('Work order: open, 2 of 3 members open: issue-a, acme/api/issue-b');
+  expect(
+    workOrderText({ state: 'done', members: [{ item: member('issue-a'), state: 'ended' }] })
+  ).toBe('Work order: done, all 1 members merged or ended');
+  expect(
+    workOrderText({ state: 'unknown', members: [{ item: member('issue-a'), state: 'unknown' }] })
+  ).toBe('Work order: unknown, member(s) could not be read: issue-a');
+  expect(workOrderText(null)).toBeUndefined();
+});
 
 test('an item read prints its runs, open questions and answers', () => {
   const lines = itemReadLines(read, SERVED);
