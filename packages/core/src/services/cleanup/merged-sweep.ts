@@ -108,24 +108,10 @@ export async function cleanupMergedWorktrees(
   };
   // No worktree to judge: a folder project with only containers has no Git to ask.
   if (environments.length === 0) return { kind: 'swept', result };
-  const repoPath = toRepoPath(mainRepoPath);
-  const remote = await resolveMergeRemote(repoPath, await loadRepoConfig(mainRepoPath));
-  if (!remote) {
-    getLog().info(
-      { codebaseId, repoPath: mainRepoPath, environments: environments.length },
-      'isolation.merged_cleanup_no_remote'
-    );
-  }
-  const sweep: MergedSweep | null = remote
-    ? {
-        repoPath,
-        mainRepoPath,
-        remote,
-        includeClosed: options.includeClosed ?? false,
-        prStateCache: new Map<string, PrLookup>(),
-        result,
-      }
-    : null;
+  const sweep = await openMergedSweep(codebaseId, mainRepoPath, environments.length, {
+    includeClosed: options.includeClosed ?? false,
+    result,
+  });
 
   for (const env of environments) {
     const reason = unknownPlatformReason(env.created_by_platform);
@@ -136,19 +122,44 @@ export async function cleanupMergedWorktrees(
       });
       continue;
     }
-    const verdict = await judgeMergedEnvironment(env, sweep);
-    if (verdict === 'merged' || verdict === 'pr-closed') {
-      await removeMergedEnvironment(env, verdict, sweep);
-    } else if (verdict) {
-      const skipReason =
-        verdict === 'unmerged'
-          ? 'no cleanup evidence covers all local tips'
-          : skipReasonFor(verdict);
-      if (skipReason) result.skipped.push({ branchName: env.branch_name, reason: skipReason });
-    }
+    await sweepMergedEnvironment(env, sweep);
   }
 
   return { kind: 'swept', result };
+}
+
+/** The sweep's shared judgment context, or null when the repository has no merge remote. */
+async function openMergedSweep(
+  codebaseId: string,
+  mainRepoPath: string,
+  environments: number,
+  shared: Pick<MergedSweep, 'includeClosed' | 'result'>
+): Promise<MergedSweep | null> {
+  const repoPath = toRepoPath(mainRepoPath);
+  const remote = await resolveMergeRemote(repoPath, await loadRepoConfig(mainRepoPath));
+  if (!remote) {
+    getLog().info(
+      { codebaseId, repoPath: mainRepoPath, environments },
+      'isolation.merged_cleanup_no_remote'
+    );
+    return null;
+  }
+  return { repoPath, mainRepoPath, remote, prStateCache: new Map<string, PrLookup>(), ...shared };
+}
+
+async function sweepMergedEnvironment(
+  env: IsolationEnvironmentRow,
+  sweep: MergedSweep
+): Promise<void> {
+  const verdict = await judgeMergedEnvironment(env, sweep);
+  if (verdict === 'merged' || verdict === 'pr-closed') {
+    await removeMergedEnvironment(env, verdict, sweep);
+    return;
+  }
+  if (!verdict) return;
+  const reason =
+    verdict === 'unmerged' ? 'no cleanup evidence covers all local tips' : skipReasonFor(verdict);
+  if (reason) sweep.result.skipped.push({ branchName: env.branch_name, reason });
 }
 
 /** The environment's merge verdict, or null when the check failed and is recorded as an error. */
