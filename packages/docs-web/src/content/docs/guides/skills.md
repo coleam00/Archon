@@ -230,6 +230,7 @@ their existing errors.
 | Skill | Install | What It Teaches |
 |-------|---------|----------------|
 | `archon-cli` (bundled) | `archon skill add` | Run, manage, configure, and author Archon workflows through the CLI |
+| A workflow pack's own skill | `archon skill add --pack <id>` | How to use that pack; see [`skill add --pack`](/reference/cli/#skill-add---pack-id-path) |
 | `remotion-best-practices` | `npx skills add remotion-dev/skills` | Remotion animation patterns, API usage, gotchas (35 rules) |
 | `skill-creator` | `npx skills add anthropics/skills` | How to create new SKILL.md files |
 | Community skills | Browse [skills.sh](https://skills.sh) | Search 500K+ skills for any domain |
