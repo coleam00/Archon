@@ -129,7 +129,10 @@ const itemBase = {
  * open past their deadline, which the awaited event, another run of the waiting workflow
  * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
  * an outcome that is not final (`returns.final`), started nothing and left no ask or wait,
- * so nothing moves it: it takes no answer, and any newer run on the item closes it.
+ * so nothing moves it: it takes no answer, and any newer run on the item closes it;
+ * `refused_start` is a start no run caused that was refused and is its item's newest step;
+ * `preparation_lost` is a binding start whose preparer this process can prove gone, which
+ * `archon trigger recover-preparation` returns to pending.
  *
  * `run` is the paused run that holds the item. A gate, a usage-limit wait and an
  * unreadable pause are always a run. A question may have none: then nothing is paused on
@@ -200,7 +203,7 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('stopped'),
     ...itemBase,
-    /** The completed run that stopped the item and its outcome; `pausedAt` is when it ended. */
+    /** The run that stopped the item and its outcome; `pausedAt` is when it ended. */
     stoppedIn: z.object({
       runId: z.string(),
       workflow: z.string(),
@@ -211,8 +214,47 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** Set when the start the run caused was refused: at its limit, or before launch. */
     limit: stoppedLimitSchema.optional(),
     refused: z.array(stoppedRefusalSchema).optional(),
+    /** Set when the run failed: its recorded error, or null when it recorded none. */
+    failed: z.object({ error: z.string().nullable() }).optional(),
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('refused_start'),
+    ...itemBase,
+    /**
+     * A binding start that no run caused (a fire, a schedule, a webhook or a label), refused
+     * for `reason`: a start-refusal code, `start_limit` with the limit's standing in `limit`,
+     * or `rejected_by_source`. `pausedAt` is when it was refused. It takes no answer; a run on
+     * the item, or a later start of the same binding on it, closes it.
+     */
+    start: z.object({
+      receiptId: z.string(),
+      bindingId: z.string(),
+      hostId: z.string().nullable(),
+      workflow: z.string().nullable(),
+      itemKey: z.string(),
+      reason: z.string(),
+      limit: stoppedLimitSchema.optional(),
+    }),
+  }),
+  z.object({
+    kind: z.literal('preparation_lost'),
+    ...itemBase,
+    /**
+     * The binding start whose preparer is provably gone: it stays `preparing`, owned by
+     * `ownerId`, and nothing prepares it again until `archon trigger recover-preparation`
+     * returns it to pending. `pausedAt` is when the preparation was claimed.
+     */
+    start: z.object({
+      receiptId: z.string(),
+      bindingId: z.string(),
+      hostId: z.string().nullable(),
+      workflow: z.string().nullable(),
+      /** The item key the start names, also before a start has made the item. */
+      itemKey: z.string().nullable(),
+      ownerId: z.string(),
+    }),
   }),
   z.object({
     kind: z.literal('unreadable_start'),
@@ -234,7 +276,7 @@ export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
 /** An item a paused run holds. */
 export type RunAttentionQueueItem = Exclude<
   AttentionQueueItem,
-  { kind: 'overdue_wait' | 'stopped' | 'unreadable_start' }
+  { kind: 'overdue_wait' | 'stopped' | 'refused_start' | 'preparation_lost' | 'unreadable_start' }
 > & {
   run: object;
 };
@@ -267,11 +309,25 @@ export type AskQueueItem = Extract<AttentionQueueItem, { kind: 'attention' }> & 
 /** An item no run holds: an ask, an overdue wait, or a stopped item. */
 export type AttentionQueueItemWithoutRun =
   | AskQueueItem
-  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' | 'unreadable_start' }>;
+  | Extract<
+      AttentionQueueItem,
+      {
+        kind:
+          | 'overdue_wait'
+          | 'stopped'
+          | 'refused_start'
+          | 'preparation_lost'
+          | 'unreadable_start';
+      }
+    >;
 /** An overdue wait's queue item. */
 export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
 /** A stopped item's queue item. */
 export type StoppedQueueItem = Extract<AttentionQueueItem, { kind: 'stopped' }>;
+/** A refused start's queue item. */
+export type RefusedStartQueueItem = Extract<AttentionQueueItem, { kind: 'refused_start' }>;
+/** A lost binding preparation's queue item. */
+export type PreparationLostQueueItem = Extract<AttentionQueueItem, { kind: 'preparation_lost' }>;
 /** An unreadable queued request's queue item. */
 export type UnreadableStartQueueItem = Extract<AttentionQueueItem, { kind: 'unreadable_start' }>;
 

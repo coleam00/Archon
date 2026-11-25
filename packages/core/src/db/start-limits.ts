@@ -13,6 +13,7 @@
  * cleanup cannot undo a reset. An item with neither a limit nor a grant has nothing to
  * reset: every limited start on it comes after.
  */
+import type { StoppedLimit } from '@archon/workflows/schemas/run-metadata';
 import { z } from 'zod';
 import type { ItemStartLimits } from '@archon/workflows/resource-start-store';
 import type {
@@ -183,7 +184,7 @@ export async function countStartLimits(
   limit: StartLimit | undefined,
   grants: string | undefined,
   start: { receiptId: string; bindingId: string; persisted: ResourceStartBindingIntent }
-): Promise<StartLimitColumns | { refused: string }> {
+): Promise<StartLimitColumns | { refused: string; limit?: StoppedLimit }> {
   const grantsLimit = item === null ? null : (grants ?? null);
   if (limit === undefined) return { startLimit: null, grantsLimit };
   if (item === null)
@@ -210,7 +211,7 @@ export async function countStartLimits(
       workflow: persisted.launch.workflowName,
     };
     await recordRefusedStartStop(query, start.receiptId, { limit: stop, itemKey: item.key });
-    return { refused: startLimitRefusal(standing, item.key) };
+    return { refused: startLimitRefusal(standing, item.key), limit: stop };
   }
   return { startLimit: JSON.stringify(limit), grantsLimit };
 }

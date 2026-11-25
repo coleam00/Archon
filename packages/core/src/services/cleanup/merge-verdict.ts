@@ -4,6 +4,7 @@ import {
   execFileAsync,
   GitFailure,
   getDefaultBranch,
+  getDefaultRemote,
   isRevCoveredBy,
   isBranchMerged,
   isPatchEquivalent,
@@ -18,14 +19,27 @@ import { loadRepoConfig } from '../../config/config-loader';
 export interface RepoGitContext {
   /** Remote-qualified base ref (e.g. "origin/main"), kept current via `git fetch`. */
   remoteMainRef: BranchName;
-  /** Configured remote name (worktree.remote). Always resolved to a string (defaults to 'origin'). */
+  /** worktree.remote, else origin; with neither, resolveRepoGitContext throws NoMergeRemoteError. */
   remote: string;
+}
+
+/** Why cleanup cannot judge merges for a repository, in the sweeps and in status. */
+export const NO_MERGE_REMOTE_REASON =
+  'repository has no origin remote and worktree.remote is unset; set worktree.remote to judge merges against another remote';
+
+/** The repository has no remote cleanup may judge a merge against. */
+export class NoMergeRemoteError extends Error {
+  constructor() {
+    super(NO_MERGE_REMOTE_REASON);
+    this.name = 'NoMergeRemoteError';
+  }
 }
 
 // Resolve the base branch and remote for a repo, preferring worktree.baseBranch /
 // worktree.remote from .archon/config.yaml before falling back to runtime git
 // detection. A reachable remote with a known symbolic HEAD is required unless
-// worktree.baseBranch is configured.
+// worktree.baseBranch is configured. A repository with no merge remote throws
+// NoMergeRemoteError.
 // A missing config falls back to git detection; a config that fails to load
 // throws, and cleanup surfaces that rather than working around it.
 export async function resolveRepoGitContext(
@@ -33,17 +47,35 @@ export async function resolveRepoGitContext(
   cwd: string
 ): Promise<RepoGitContext> {
   const repoConfig = await loadRepoConfig(cwd);
-  const remote = configuredRemote(repoConfig);
-  const configured = repoConfig.worktree?.baseBranch?.trim();
-  if (configured) {
-    return { remoteMainRef: toBranchName(`${remote}/${configured}`), remote };
-  }
-  const branch = await getDefaultBranch(repoPath, remote);
-  return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
+  const remote = await resolveMergeRemote(repoPath, repoConfig);
+  if (!remote) throw new NoMergeRemoteError();
+  return { remoteMainRef: await remoteBaseRef(repoPath, repoConfig, remote), remote };
 }
 
-export function configuredRemote(repoConfig: Awaited<ReturnType<typeof loadRepoConfig>>): string {
-  return repoConfig.worktree?.remote?.trim() || 'origin';
+/** The remote-qualified base ref on an already selected remote. */
+async function remoteBaseRef(
+  repoPath: RepoPath,
+  repoConfig: Awaited<ReturnType<typeof loadRepoConfig>>,
+  remote: string
+): Promise<BranchName> {
+  const branch =
+    repoConfig.worktree?.baseBranch?.trim() || (await getDefaultBranch(repoPath, remote));
+  return toBranchName(`${remote}/${branch}`);
+}
+
+/**
+ * The remote merge cleanup judges against: worktree.remote, else origin when it exists.
+ * Null means neither, and nothing may be removed as merged. A sole non-origin remote is
+ * not auto-selected here: the merge judgment trusts local tracking refs, so widening it
+ * to a remote nobody named would widen deletion with it.
+ */
+export async function resolveMergeRemote(
+  repoPath: RepoPath,
+  repoConfig: Awaited<ReturnType<typeof loadRepoConfig>>
+): Promise<string | null> {
+  const configured = repoConfig.worktree?.remote?.trim();
+  if (configured) return configured;
+  return (await getDefaultRemote(repoPath)) === 'origin' ? 'origin' : null;
 }
 
 /** Git integration or one eligible PR head must cover every existing local tip. */
@@ -143,8 +175,8 @@ export async function judgeBranchForRemoval(input: MergeJudgmentInput): Promise<
 
 async function gitProvesMerged(input: MergeJudgmentInput, tips: LocalTips): Promise<boolean> {
   if (!tips.refExists) return false;
-  const { repoPath, branchName, worktreePath } = input;
-  const { remoteMainRef } = await resolveRepoGitContext(repoPath, repoPath);
+  const { repoPath, branchName, worktreePath, remote } = input;
+  const remoteMainRef = await remoteBaseRef(repoPath, await loadRepoConfig(repoPath), remote);
   const branchMerged =
     (await isBranchMerged(repoPath, branchName, remoteMainRef)) ||
     (await isPatchEquivalent(repoPath, branchName, remoteMainRef));

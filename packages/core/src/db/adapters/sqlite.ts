@@ -564,6 +564,8 @@ export class SqliteAdapter implements IDatabase {
         project_key TEXT NOT NULL,
         key TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        moved_on_at TEXT,
+        moved_on_tie INTEGER,
         UNIQUE(project_key, key)
       );
 
@@ -761,8 +763,10 @@ export class SqliteAdapter implements IDatabase {
         grants_limit TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
+        preparation_process TEXT,
         preparation_error TEXT,
         forge_refusal TEXT,
+        refusal TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         PRIMARY KEY (receipt_id, binding_id)

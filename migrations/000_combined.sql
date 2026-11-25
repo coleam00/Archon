@@ -609,6 +609,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   checkout_from TEXT,
   preparation_status VARCHAR(20) NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
   preparation_owner TEXT,
+  preparation_process TEXT,
   preparation_error TEXT,
   forge_refusal TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -750,6 +751,15 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS item_ke
 -- preparation_error, which keeps only the failed boundary.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS forge_refusal TEXT;
 
+-- The process preparing a binding (host, pid and instance, JSON), written when it claims the
+-- preparation. Only with it can a reader prove a preparer that died is gone; null (an older
+-- binary's claim) leaves the preparer unknown.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS preparation_process TEXT;
+
+-- Why a binding start was refused (JSON: a reason code, and a start limit's standing), written
+-- by the write that refuses it, so a read names the reason without parsing preparation_error.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS refusal TEXT;
+
 -- A binding's start limit (JSON) and the name of the limit it grants (#6109), beside the
 -- intent for the same reason as event_input_names. On each start request, the limit it
 -- counted under and the limit it granted, each JSON with the window it was counted in:
@@ -777,6 +787,11 @@ ALTER TABLE remote_agent_resource_start_requests
   ADD COLUMN IF NOT EXISTS item_id UUID REFERENCES remote_agent_items(id);
 ALTER TABLE remote_agent_workflow_runs
   ADD COLUMN IF NOT EXISTS item_id UUID REFERENCES remote_agent_items(id);
+-- The newest top-level run deleted from the item, by its start and its id (the tie-break the
+-- item's run order uses): a deleted run moved the item on, so a stop from before it stays
+-- closed though the run is gone.
+ALTER TABLE remote_agent_items ADD COLUMN IF NOT EXISTS moved_on_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE remote_agent_items ADD COLUMN IF NOT EXISTS moved_on_tie UUID;
 
 -- The outcome a run completed with (#5660), from its workflow's returns.outcome: an enum
 -- value as it is, a boolean as 'succeeded' or 'failed'. Written only by the write that

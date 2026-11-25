@@ -17,6 +17,10 @@ import {
   type AskItemStore,
   stoppedItems,
   type StoppedItemStore,
+  preparationLostItems,
+  type PreparingItemStore,
+  refusedStartItems,
+  type RefusedStartItemStore,
   unreadableStartItems,
   type UnreadableStartItemStore,
 } from '@archon/workflows/queue-items-without-run';
@@ -55,6 +59,8 @@ export function attentionQueueSource<
     AskItemStore &
     WaitItemStore &
     StoppedItemStore &
+    PreparingItemStore &
+    RefusedStartItemStore &
     UnreadableStartItemStore &
     Pick<IWorkflowStore, 'listUnfinishedRuns' | 'getResourceStartRequest'>,
 >(
@@ -71,6 +77,8 @@ export function attentionQueueSource<
       ...(await openAskItems(store)),
       ...(await overdueWaitItems(store)),
       ...(await stoppedItems(store)),
+      ...(await refusedStartItems(store)),
+      ...(await preparationLostItems(store)),
       ...(await unreadableStartItems(store)),
     ],
     branchOf: async run =>

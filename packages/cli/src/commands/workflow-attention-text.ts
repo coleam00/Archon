@@ -8,6 +8,7 @@
 import {
   isHeldByRun,
   type AttentionQueueItem,
+  type AttentionQueueItemWithoutRun,
   type AttentionQueueScope,
   type RunAttentionQueueItem,
 } from '@archon/workflows/attention-queue';
@@ -197,7 +198,10 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
           `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
         ]
       : [
-          `${ended(workflow, outcome)}; nothing started${refused === undefined ? ' and it left no ask' : ''}`,
+          // A refused start says only what was refused: others the end caused may have started.
+          refused === undefined
+            ? `${ended(workflow, outcome)}; nothing started and it left no ask`
+            : `${ended(workflow, outcome)}; ${refused.length === 1 ? 'a start it caused was' : `${String(refused.length)} starts it caused were`} refused`,
         ];
   lines.push(...refusedStartLines(refused ?? []));
   if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
@@ -218,6 +222,29 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
     );
   }
   return lines;
+}
+
+/** A stopped item's lines: a failed run's, or a stop's. */
+function stoppedItemLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
+  return item.failed === undefined ? stoppedLines(item) : failedLines(item, item.failed.error);
+}
+
+/**
+ * A failed run that is the newest on its item: its error, and the restarts. A restart from
+ * the run's record repeats its inputs; naming the workflow passes others.
+ */
+function failedLines(
+  item: Extract<AttentionQueueItem, { kind: 'stopped' }>,
+  error: string | null
+): string[] {
+  const { runId, workflow } = item.stoppedIn;
+  return [
+    `${workflow} failed${error === null ? '' : `: ${oneLine(error)}`}`,
+    `start it again from its record, which closes this: ${command(`run --supersedes ${runId}`)}`,
+    `or with other inputs: ${command(`run ${shellWord(workflow)} --supersedes ${runId} --input <name>=<value>`)}`,
+    `show the run: ${command(`get ${runId}`)}`,
+    `read the item: ${command(`runs --item-of ${runId}`)}`,
+  ];
 }
 
 /** What an item a paused run holds says under its heading line. */
@@ -283,33 +310,14 @@ function headingLine(item: AttentionQueueItem): string {
 }
 
 /** What the heading of an item no run holds calls it, and the event its time is of. */
-const withoutRunHeading: Record<AttentionQueueItem['kind'], [string, string]> = {
+const withoutRunHeading: Record<AttentionQueueItemWithoutRun['kind'], [string, string]> = {
   attention: ['open ask', 'opened'],
   overdue_wait: ['overdue wait', 'opened'],
   stopped: ['stopped', 'ended'],
+  refused_start: ['refused start', 'refused'],
+  preparation_lost: ['preparer gone', 'claimed'],
   unreadable_start: ['unreadable start', 'queued'],
-  // Held by a run, so headed by it instead; listed only so every kind has a heading.
-  awaiting_response: ['gate', 'paused'],
-  usage_limit: ['usage limit', 'paused'],
-  unreadable: ['unreadable', 'paused'],
-  owner_lost: ['owner gone', 'paused'],
 };
-
-/** What an item no run holds says under its heading line; a run's kinds never reach it. */
-function withoutRunBody(item: AttentionQueueItem): string[] {
-  switch (item.kind) {
-    case 'overdue_wait':
-      return overdueWaitLines(item);
-    case 'stopped':
-      return stoppedLines(item);
-    case 'unreadable_start':
-      return unreadableStartLines(item);
-    case 'attention':
-      return refItemLines(item);
-    default:
-      return [];
-  }
-}
 
 /** One queue item as a block of text lines. */
 export function attentionItemLines(
@@ -329,6 +337,72 @@ export function attentionItemLines(
   const body = isHeldByRun(item) ? itemBody(item, detail) : withoutRunBody(item);
   for (const line of body) lines.push(`    ${line}`);
   return lines;
+}
+
+/** What an item no run holds says under its heading line; a run's kinds never reach it. */
+function withoutRunBody(item: AttentionQueueItem): string[] {
+  switch (item.kind) {
+    case 'overdue_wait':
+      return overdueWaitLines(item);
+    case 'stopped':
+      return stoppedItemLines(item);
+    case 'refused_start':
+      return refusedStartItemLines(item);
+    case 'preparation_lost':
+      return preparationLostLines(item);
+    case 'unreadable_start':
+      return unreadableStartLines(item);
+    case 'attention':
+      return refItemLines(item);
+    default:
+      return [];
+  }
+}
+
+/**
+ * A start no run caused that was refused and is its item's newest step: what it was for,
+ * why, and what moves the item on. A run on the item, or the binding starting on it, closes it.
+ */
+function refusedStartItemLines(
+  item: Extract<AttentionQueueItem, { kind: 'refused_start' }>
+): string[] {
+  const { receiptId, bindingId, workflow, itemKey, reason, limit } = item.start;
+  const what = `the start of ${workflow ?? 'its workflow'} on item ${itemKey} (binding ${bindingId}) was refused`;
+  const lines =
+    limit !== undefined
+      ? [
+          `${what} at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
+          `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
+        ]
+      : [`${what}: ${refusalText(reason)}`];
+  if (reason === 'no_default_provider') lines.push('set one: archon ai default <provider>');
+  lines.push(`see the refusal: archon trigger inspect ${receiptId}`);
+  return lines;
+}
+
+/** A stored refusal code as text; a code a newer binary wrote is shown as it is. */
+function refusalText(reason: string): string {
+  if (reason === 'rejected_by_source') return 'its source rejected the event';
+  return Object.hasOwn(REFUSAL_REASONS, reason)
+    ? REFUSAL_REASONS[reason as StoppedRefusal['reason']]
+    : reason;
+}
+
+/**
+ * A binding start whose preparer is gone: what it was for, and the recovery that returns it
+ * to pending so the next drain of its host prepares it again.
+ */
+function preparationLostLines(
+  item: Extract<AttentionQueueItem, { kind: 'preparation_lost' }>
+): string[] {
+  const { receiptId, bindingId, hostId, workflow, itemKey, ownerId } = item.start;
+  const on = itemKey === null ? '' : ` on item ${itemKey}`;
+  return [
+    `the start of ${workflow ?? 'its workflow'}${on} (binding ${bindingId}) is still preparing, and the process preparing it is gone`,
+    `return it to pending: archon trigger recover-preparation ${receiptId} ${bindingId} --owner ${ownerId} --yes`,
+    `then prepare it: archon trigger drain --host ${hostId ?? '<host-id>'}`,
+    `show the receipt: archon trigger inspect ${receiptId}`,
+  ];
 }
 
 /**

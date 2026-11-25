@@ -278,12 +278,75 @@ test.serial(
       workflowRunsCommand(host, projectRoot, { item: 'item-9', json: true })
     );
     expect(unknown.exitCode).toBe(1);
-    expect(JSON.parse(unknown.stdout)).toEqual({ ok: false, error: 'not_found', item: 'item-9' });
+    expect(JSON.parse(unknown.stdout)).toEqual({
+      ok: false,
+      error: 'not_found',
+      item: 'item-9',
+      refused: [],
+    });
     const textUnknown = await invoke(host =>
       workflowRunsCommand(host, projectRoot, { item: 'item-9' })
     );
     expect(textUnknown.exitCode).toBe(1);
     expect(textUnknown.stderr).toContain("No item 'item-9'");
+
+    // A start refused before any start made its item names it all the same.
+    await invoke(async host => {
+      const receiptId = crypto.randomUUID();
+      const { store } = host.deps;
+      await store.acceptStartReceipt({
+        receipt: {
+          id: receiptId,
+          sourceInstanceId: 'fire',
+          deliveryId: null,
+          contentDigest: receiptId,
+          receivedAt: new Date().toISOString(),
+          occurredAt: null,
+          sourceActor: null,
+          itemKey: 'item-8',
+        },
+        outcome: 'matched',
+        bindings: [
+          {
+            bindingId: 'triage',
+            bindingRevision: null,
+            hostId: 'host',
+            runAsUserId: 'operator',
+            resource: 'pool',
+            overlap: 'queue',
+            launch: {
+              cwd: projectRoot,
+              workflowName: 'triage',
+              inputs: {},
+              isolation: { kind: 'in-place' },
+            },
+          },
+        ],
+      });
+      const identity = { receiptId, bindingId: 'triage', ownerId: crypto.randomUUID() };
+      await store.claimStartBindingPreparation(identity);
+      await store.failStartBindingPreparation({
+        ...identity,
+        error: 'launch_preparation_failed',
+        retryable: false,
+        refusal: 'no_default_provider',
+      });
+    });
+    const refusedJson = await invoke(host =>
+      workflowRunsCommand(host, projectRoot, { item: 'item-8', json: true })
+    );
+    expect(refusedJson.exitCode).toBe(1);
+    expect(JSON.parse(refusedJson.stdout)).toMatchObject({
+      error: 'not_found',
+      refused: [
+        { kind: 'refused_start', start: { itemKey: 'item-8', reason: 'no_default_provider' } },
+      ],
+    });
+    const refusedText = await invoke(host =>
+      workflowRunsCommand(host, projectRoot, { item: 'item-8' })
+    );
+    expect(refusedText.stderr).toContain('no start has made it yet');
+    expect(refusedText.stderr).toContain('archon ai default <provider>');
     const writable = new Database(database);
     try {
       writable.run(

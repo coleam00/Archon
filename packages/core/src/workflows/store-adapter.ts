@@ -16,7 +16,14 @@ import {
 } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
-import type { HeldItemStart } from '@archon/workflows/resource-start-store';
+import { existsSync } from 'node:fs';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import type {
+  HeldItemStart,
+  PreparingStart,
+  RefusedStart,
+} from '@archon/workflows/resource-start-store';
+import * as refusedStartsDb from '../db/refused-starts';
 import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
@@ -43,6 +50,7 @@ import {
   upsertWorkflowRunNodeSession,
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
+import type { Codebase } from '../schemas/codebase';
 import * as isolationEnvironmentsDb from '../db/isolation-environments';
 import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
@@ -164,6 +172,56 @@ async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
   return held;
 }
 
+/**
+ * The bindings a process is preparing, each placed in the project its checkout is registered
+ * as and on its item when that exists. A checkout that no longer resolves has no project.
+ */
+async function listPreparingStarts(): Promise<PreparingStart[]> {
+  const starts: PreparingStart[] = [];
+  for (const { cwd, itemKey, ...start } of await installHold.listPreparingBindings()) {
+    const codebase = await bindingProject(cwd);
+    const item =
+      codebase === null || itemKey === null
+        ? null
+        : await itemsDb.findItem(projectKeyForCodebase(codebase, codebase.default_cwd), itemKey);
+    starts.push({ ...start, itemKey, codebase, item });
+  }
+  return starts;
+}
+
+/** The project a binding's checkout is registered as; one that fails to resolve has none. */
+async function bindingProject(cwd: string | null): Promise<Codebase | null> {
+  if (cwd === null || !existsSync(cwd)) return null;
+  try {
+    return await launchProjectOf(cwd);
+  } catch (error) {
+    // The start is still listed, with no project; the failure is in the log.
+    getLog().warn({ err: error as Error, cwd }, 'binding_start.project_unresolved');
+    return null;
+  }
+}
+
+/**
+ * The refused starts no run caused, each placed in its project and on its item when those
+ * resolve, less those whose item has had a run since: the item moved on.
+ */
+async function listRefusedStarts(): Promise<RefusedStart[]> {
+  const starts: RefusedStart[] = [];
+  for (const { cwd, ...start } of await refusedStartsDb.listStoredRefusedStarts()) {
+    const codebase = await bindingProject(cwd);
+    const item =
+      codebase === null
+        ? null
+        : await itemsDb.findItem(
+            projectKeyForCodebase(codebase, codebase.default_cwd),
+            start.itemKey
+          );
+    if (item !== null && (await refusedStartsDb.itemRanSince(item.id, start))) continue;
+    starts.push({ ...start, codebase, item });
+  }
+  return starts;
+}
+
 /** Where trigger files with `on` are read from and how a binding is placed in a project. */
 function onBindingDeps(
   getItem: IWorkflowStore['getItem']
@@ -189,6 +247,8 @@ export function createWorkflowStore(): IWorkflowStore {
     liftInstallHold: installHold.liftInstallHold,
     listHeldStarts: installHold.listHeldStarts,
     listHeldItemStarts,
+    listPreparingStarts,
+    listRefusedStarts,
     getRunLimit: installHold.getRunLimit,
     admitResourceStart: resourceStarts.admitResourceStart,
     admitPendingRun: resourceStarts.admitPendingRun,
