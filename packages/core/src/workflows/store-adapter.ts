@@ -16,7 +16,9 @@ import {
 } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
-import type { HeldItemStart } from '@archon/workflows/resource-start-store';
+import { existsSync } from 'node:fs';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import type { HeldItemStart, PreparingStart } from '@archon/workflows/resource-start-store';
 import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
@@ -43,6 +45,7 @@ import {
   upsertWorkflowRunNodeSession,
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
+import type { Codebase } from '../schemas/codebase';
 import * as isolationEnvironmentsDb from '../db/isolation-environments';
 import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
@@ -164,6 +167,34 @@ async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
   return held;
 }
 
+/** The project a preparing binding's checkout is registered as; one that fails to resolve has none. */
+async function preparingProject(cwd: string): Promise<Codebase | null> {
+  try {
+    return await launchProjectOf(cwd);
+  } catch (error) {
+    // The binding is still listed, with no project; the failure is in the log.
+    getLog().warn({ err: error as Error, cwd }, 'preparing_start.project_unresolved');
+    return null;
+  }
+}
+
+/**
+ * The bindings a process is preparing, each placed in the project its checkout is registered
+ * as and on its item when that exists. A checkout that no longer resolves has no project.
+ */
+async function listPreparingStarts(): Promise<PreparingStart[]> {
+  const starts: PreparingStart[] = [];
+  for (const { cwd, itemKey, ...start } of await installHold.listPreparingBindings()) {
+    const codebase = cwd === null || !existsSync(cwd) ? null : await preparingProject(cwd);
+    const item =
+      codebase === null || itemKey === null
+        ? null
+        : await itemsDb.findItem(projectKeyForCodebase(codebase, codebase.default_cwd), itemKey);
+    starts.push({ ...start, itemKey, codebase, item });
+  }
+  return starts;
+}
+
 /** Where trigger files with `on` are read from and how a binding is placed in a project. */
 function onBindingDeps(
   getItem: IWorkflowStore['getItem']
@@ -189,6 +220,7 @@ export function createWorkflowStore(): IWorkflowStore {
     liftInstallHold: installHold.liftInstallHold,
     listHeldStarts: installHold.listHeldStarts,
     listHeldItemStarts,
+    listPreparingStarts,
     getRunLimit: installHold.getRunLimit,
     admitResourceStart: resourceStarts.admitResourceStart,
     admitPendingRun: resourceStarts.admitPendingRun,

@@ -9,7 +9,9 @@
  * item and the item's end does not hold (`item-end.ts`); it takes no answer.
  */
 import { createLogger } from '@archon/paths';
-import { askItemRef, stoppedItemRef, waitItemRef } from './attention-item-refs';
+import { isOwnerProvablyGone } from '@archon/paths/process-owner';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import { askItemRef, preparingItemRef, stoppedItemRef, waitItemRef } from './attention-item-refs';
 import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
 import {
   projectRef,
@@ -20,6 +22,7 @@ import {
   type AttentionQueueItemWithoutRun,
   type CodebaseCache,
   type OverdueWaitQueueItem,
+  type PreparationLostQueueItem,
   type StoppedQueueItem,
 } from './attention-queue';
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
@@ -262,6 +265,45 @@ export async function stoppedItems(
     if (end !== null && !('type' in end)) continue;
     const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
     if (item !== null) items.push(item);
+  }
+  return items;
+}
+
+/** The store reads a lost preparation's queue item needs. */
+export type PreparingItemStore = Pick<IWorkflowStore, 'listPreparingStarts' | 'getStartReceipt'>;
+
+/**
+ * The binding starts whose preparer this process can prove gone, as queue items, for
+ * `AttentionQueueSource.itemsWithoutRun`. A preparer is gone only when it ran on this host
+ * and no process with its pid and instance exists (`isOwnerProvablyGone`); one with no
+ * record, or on another host, is unknown and never listed. A binding that left `preparing`
+ * or changed owner after the list was read is not listed: its preparer finished.
+ */
+export async function preparationLostItems(
+  store: PreparingItemStore
+): Promise<PreparationLostQueueItem[]> {
+  const items: PreparationLostQueueItem[] = [];
+  for (const start of await store.listPreparingStarts()) {
+    if (start.preparer === null || !isOwnerProvablyGone(start.preparer)) continue;
+    const { receiptId, bindingId, hostId, workflow, itemKey, ownerId } = start;
+    const binding = (await store.getStartReceipt(receiptId))?.bindings.find(
+      found => found.bindingId === bindingId
+    );
+    if (binding?.status !== 'preparing' || binding.ownerId !== ownerId) continue;
+    const { codebase } = start;
+    items.push({
+      kind: 'preparation_lost',
+      ref: preparingItemRef(receiptId, bindingId),
+      project:
+        codebase === null
+          ? null
+          : projectRef(projectKeyForCodebase(codebase, codebase.default_cwd), codebase),
+      ...(start.item === null ? {} : { item: start.item }),
+      revision: 1,
+      labels: {},
+      pausedAt: start.claimedAt,
+      start: { receiptId, bindingId, hostId, workflow, itemKey, ownerId },
+    });
   }
   return items;
 }

@@ -761,6 +761,7 @@ export class SqliteAdapter implements IDatabase {
         grants_limit TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
+        preparation_process TEXT,
         preparation_error TEXT,
         forge_refusal TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
