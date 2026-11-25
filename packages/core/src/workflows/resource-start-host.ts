@@ -245,8 +245,9 @@ async function prepareBinding(
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
     const bindingInputs = resolveBindingInputs(intent, workflow);
-    // Before it takes a slot, so the refusal lands on the item's stop with the setting.
-    await assertReadFileSettings(cwd, workflow, bindingInputs);
+    // Before it takes a slot, so the refusal lands on the item's stop. A start on another
+    // run's checkout opens its files there, not here, so its run's own start checks them.
+    if (!intent.checkoutFrom) await assertReadFileSettings(cwd, workflow, bindingInputs);
 
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;
