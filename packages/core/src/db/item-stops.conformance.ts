@@ -14,33 +14,34 @@ import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
 import { answerAttentionItem } from '../operations/attention-items';
 import { itemDeps, operator, type Harness } from './item-asks.conformance';
 
-/** Create a run of `workflow` on item `pr-7`. */
-async function createOnItem(harness: Harness, workflow: string): Promise<string> {
+/** Create a run of `workflow` on item `key`. */
+async function createOnItem(harness: Harness, workflow: string, key = 'pr-7'): Promise<string> {
   const run = await harness.store.createWorkflowRun({
     workflow_name: workflow,
     user_message: '',
     codebase_id: CONFORMANCE_CODEBASE_ID,
-    item_key: 'pr-7',
+    item_key: key,
   });
   return run.id;
 }
 
-/** Fail a new run of `workflow` on item `pr-7`. */
-async function failOnItem(harness: Harness, workflow: string): Promise<string> {
-  const id = await createOnItem(harness, workflow);
+/** Fail a new run of `workflow` on item `key`. */
+async function failOnItem(harness: Harness, workflow: string, key = 'pr-7'): Promise<string> {
+  const id = await createOnItem(harness, workflow, key);
   await harness.store.claimPendingWorkflowRun(id);
   await harness.store.failWorkflowRun(id, 'the queue run failed');
   return id;
 }
 
-/** Run `workflow` on item `pr-7` to completion with `outcome`, recording a stop when `stop`. */
+/** Run `workflow` on item `key` to completion with `outcome`, recording a stop when `stop`. */
 async function completeOnItem(
   harness: Harness,
   workflow: string,
   outcome: string,
-  stop?: string
+  stop?: string,
+  key = 'pr-7'
 ): Promise<string> {
-  const id = await createOnItem(harness, workflow);
+  const id = await createOnItem(harness, workflow, key);
   await harness.store.claimPendingWorkflowRun(id);
   await harness.store.completeWorkflowRun(
     id,
@@ -226,14 +227,21 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
         (await listAttentionQueue(deps.queue)).filter(
           item => 'kind' in item && item.kind === 'stopped'
         );
-      const failed = await failOnItem(harness, 'build');
-      expect(await stopped()).toMatchObject([{ stoppedIn: { runId: failed } }]);
-
-      // The merge closes the stop the failed run left before it.
       const projectKey = projectKeyForCodebase(
         { name: 'conformance', default_cwd: '/conformance' },
         ''
       );
+      // pr-7 merges at 08:00Z; its first run failed before that, the later ones run now.
+      const failed = await failOnItem(harness, 'build');
+      await harness.db.query(
+        'UPDATE remote_agent_workflow_runs SET started_at = $2, completed_at = $3 WHERE id = $1',
+        [failed, '2026-11-17T06:00:00.000Z', '2026-11-17T07:00:00.000Z']
+      );
+      // pr-8 never merges and stops the same way, so it stays listed throughout.
+      await failOnItem(harness, 'build', 'pr-8');
+      const unmerged = await completeOnItem(harness, 'deliver', 'replan', 'Not yet.', 'pr-8');
+      expect(await stopped()).toHaveLength(2);
+
       expect(
         await harness.store.recordItemMerge({
           projectKey,
@@ -245,17 +253,34 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
           fromRun: null,
         })
       ).toMatchObject({ recorded: true });
-      expect(await stopped()).toEqual([]);
+      const onlyUnmerged = [{ item: { key: 'pr-8' }, stoppedIn: { runId: unmerged } }];
+      expect(await stopped()).toMatchObject(onlyUnmerged);
+      // Reading the queue wrote nothing: the item has no end and its run is as it was.
+      const read = await harness.store.getItemRuns(projectKey, 'pr-7');
+      expect(read?.runs).toMatchObject([{ id: failed, status: 'failed' }]);
+      const itemId = read?.item.id ?? '';
+      expect(await harness.store.getHoldingItemEnd(itemId)).toBeNull();
 
       // A run that fails after the merge, or completes and records a stop, leaves it done.
       await failOnItem(harness, 'build-queue');
-      expect(await stopped()).toEqual([]);
+      expect(await stopped()).toMatchObject(onlyUnmerged);
       const stop = await completeOnItem(harness, 'deliver', 'replan', 'The plan missed it.');
-      expect(await stopped()).toEqual([]);
+      expect(await stopped()).toMatchObject(onlyUnmerged);
 
-      // A merge row that cannot be read does not hide the stop.
-      await harness.db.query("UPDATE remote_agent_item_merges SET via = 'unknown'");
-      expect(await stopped()).toMatchObject([{ stoppedIn: { runId: stop } }]);
+      // A merge row that cannot be read does not hide the stop, and the item read reports it.
+      await harness.db.query("UPDATE remote_agent_item_merges SET via = '' WHERE item_id = $1", [
+        itemId,
+      ]);
+      expect(await harness.store.getItemMerge(itemId)).toEqual({
+        type: 'degraded',
+        reason: 'merge_unreadable',
+        itemId,
+      });
+      const listed = await stopped();
+      expect(listed).toHaveLength(2);
+      expect(listed).toContainEqual(
+        expect.objectContaining({ stoppedIn: expect.objectContaining({ runId: stop }) })
+      );
     } finally {
       await harness.close();
     }

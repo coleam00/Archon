@@ -193,7 +193,7 @@ export type StoppedItemStore = Pick<
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
-  store: Omit<StoppedItemStore, 'listStoppedItemRuns' | 'listEventsForRuns'>,
+  store: Pick<StoppedItemStore, 'getItem' | 'getCodebase'>,
   run: WorkflowRun,
   codebases: CodebaseCache = new Map(),
   /** A failed run's `workflow_failed` events, which carry what failed first. */
