@@ -481,6 +481,9 @@ function addReceiptBindingColumns(db: Database): void {
   if (!columns.has('forge_refusal')) {
     db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN forge_refusal TEXT');
   }
+  if (!columns.has('preparation_process')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN preparation_process TEXT');
+  }
   if (!columns.has('refusal')) {
     db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN refusal TEXT');
   }
