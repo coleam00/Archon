@@ -29,7 +29,7 @@ const project = (id: string, itemPacks: string[]): Project => ({
 function item(key: string, stage: string | null, state: ItemRead['standing']['state']): ItemRead {
   return {
     item: { id: `id-${key}`, projectKey: 'acme/web', key, title: `Title of ${key}` },
-    standing: { runId: `run-${key}`, state },
+    standing: { runId: `run-${key}`, state, pack: stage === null ? null : 'flow' },
     runs: [
       {
         id: `run-${key}`,
@@ -220,12 +220,102 @@ test('each open item is under the stage it stands at, in the order the pack grap
       strip.getAttribute('data-work-order')
     )
   ).toEqual(['order-9']);
+  // Until every item is read, the order shows its open members and no merged count.
+  expect(page.querySelector('[data-work-order-line]')?.textContent).toBe('1 open · 1 running');
   // The project's asks are on the page, and the item that has one links to it.
   const asked = page.querySelector('[data-ask-ref="ask:a1"]')?.closest('[id]');
   expect(asked).not.toBeNull();
   expect(
     page.querySelector(`[data-item="issue-2"] a[href="#${asked?.getAttribute('id') ?? ''}"]`)
   ).not.toBeNull();
+});
+
+/** An active `part_of` link from an item to work order `key`. */
+function partOf(key: string, title: string | null): ItemRead['links'][number] {
+  return {
+    id: `link-${key}`,
+    kind: 'part_of',
+    direction: 'outgoing',
+    other: { id: `id-${key}`, projectKey: 'acme/web', key, title },
+    at: '2026-11-20T09:00:00.000Z',
+    via: 'cli',
+    by: null,
+    fromRun: null,
+    ended: null,
+  };
+}
+
+test('a work order with no run of its own is listed from its members, open or merged', () => {
+  set(K.projects, [project('web', ['flow'])]);
+  // An item whose standing run recorded its pack's key without the workflow's name; the run
+  // carries the stage's published name.
+  const older = item('issue-7', 'build', 'running');
+  set(K.board('web'), [
+    {
+      ...older,
+      runs: older.runs.map(run => ({ ...run, workflow: 'acme/flow:build', pack: null })),
+    },
+  ]);
+  set(K.packGraph('web', 'flow'), graph);
+  set(K.boardDone('web', 'flow'), { items: [], next: null, totals: NONE });
+  set(K.boardDecide('web'), { items: [], next: null, totals: NONE });
+  const merged = (key: string, order: string): ItemRead => ({
+    ...item(key, 'check', 'done'),
+    links: [partOf(order, null)],
+    merged: {
+      change: `https://example.test/pull/${key}`,
+      commit: null,
+      at: '2026-11-19T10:00:00.000Z',
+      recordedAt: '2026-11-19T10:00:00.000Z',
+      via: 'cli',
+      fromRun: null,
+    },
+  });
+  // Order 48 has no run of its own; its read names a third member, 9, that has not started.
+  const incoming = (key: string): ItemRead['links'][number] => ({
+    ...partOf(key, null),
+    id: `link-in-${key}`,
+    direction: 'incoming',
+  });
+  const order48: ItemRead = {
+    ...item('48', null, 'resting'),
+    item: { id: 'id-48', projectKey: 'acme/web', key: '48', title: 'Split the board' },
+    standing: { runId: null, state: 'resting', pack: null },
+    runs: [],
+    links: [incoming('issue-1'), incoming('issue-2'), incoming('9')],
+  };
+  // Newest first: the merged members are newer than the open one, so only the sort puts
+  // the open order first.
+  set(K.boardOrders('web'), [
+    merged('issue-1', '48'),
+    merged('issue-2', '48'),
+    { ...item('issue-8', 'plan', 'running'), links: [partOf('order-5', 'Open order')] },
+    order48,
+  ]);
+  const page = render('/console/p/web/board', <BoardPage />);
+  const strips = [...page.querySelectorAll('[data-work-order]')];
+  // The order with an open member comes first.
+  expect(
+    strips.map(strip => [
+      strip.getAttribute('data-work-order'),
+      strip.querySelector('[data-work-order-line]')?.textContent,
+    ])
+  ).toEqual([
+    ['order-5', '0 of 1 merged · 1 open · 1 running'],
+    ['48', '2 of 3 merged · 1 not started'],
+  ]);
+  // An order with a read of its own goes by its own title.
+  expect(strips[1]?.textContent).toContain('Split the board');
+  // Its key reads as a person reads an issue key: #48.
+  expect(strips[1]?.querySelector('[data-work-order-key]')?.textContent).toBe('#48');
+  expect(strips[1]?.hasAttribute('disabled')).toBe(true);
+  // The item counts for the pack its run recorded, and its run's name finds its stage.
+  const pack = page.querySelector('[data-pack="flow"]');
+  expect(pack?.querySelector('[data-stage="build"]')?.getAttribute('data-empty')).toBeNull();
+  expect(keysIn(pack?.querySelector('[data-stage="build"]') ?? page.createElement('div'))).toEqual([
+    'issue-7',
+  ]);
+  expect(page.querySelector('[data-outside-pack]')).toBeNull();
 });
 
 test('stages a pack groups share a column, and each card there says its own stage', () => {

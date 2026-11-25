@@ -27,6 +27,8 @@ export const K = {
   /** A pack's items with a run started since `since`, in any state. */
   boardSince: (projectId: string, pack: string, since: string): string =>
     `board:${projectId}:since:${pack}:${since}`,
+  /** Every item of a project, for its work orders; under `board:` so the same events refetch it. */
+  boardOrders: (projectId: string): string => `board:${projectId}:orders`,
   boardDone: (projectId: string, pack: string): string =>
     `board:${projectId}:done:${encodeURIComponent(pack)}`,
   packGraph: (projectId: string, pack: string): string =>

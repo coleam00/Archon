@@ -79,6 +79,7 @@ import { readCompletedRunResult, resultCommitOf } from './run-result';
 import { getTerminalRecord } from './terminal-record';
 import { runPack, runPackSchema } from './run-pack';
 import { startLimitStandingSchema } from './start-limit';
+import { readLinked } from './item-parts';
 import { itemStanding, itemStandingSchema, type ItemStanding } from './item-standing';
 import { askAnswers, itemAnswer } from './item-answers';
 
@@ -613,7 +614,8 @@ async function readLanding(source: ItemReadSource, item: WorkflowItem) {
 async function readItemFacts(
   source: ItemReadSource,
   item: WorkflowItem,
-  merge: Awaited<ReturnType<ItemReadSource['store']['getItemMerge']>>
+  merge: Awaited<ReturnType<ItemReadSource['store']['getItemMerge']>>,
+  linkReads: Awaited<ReturnType<ItemReadSource['store']['listItemLinks']>>
 ) {
   const itemId = item.id;
   const rulings: ItemRuling[] = [];
@@ -623,7 +625,7 @@ async function readItemFacts(
     else rulings.push(read);
   const links: ItemReadLink[] = [];
   const unreadableLinks: ItemLinkDegraded[] = [];
-  for (const read of await source.store.listItemLinks(itemId))
+  for (const read of linkReads)
     if ('type' in read) unreadableLinks.push(read);
     else links.push(readLink(itemId, read));
   const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
@@ -645,7 +647,9 @@ async function readItemFacts(
 export async function placeItem(
   source: ItemReadSource,
   item: WorkflowItem,
-  install: InstallFacts
+  install: InstallFacts,
+  /** The items whose parts are being placed, so a `part_of` cycle ends. */
+  visiting: ReadonlySet<string> = new Set()
 ): Promise<{
   standing: ItemStanding;
   /** The run `standing.runId` names, for a reader that orders or filters items by it. */
@@ -691,6 +695,10 @@ export async function placeItem(
     overdue: Date.parse(wait.deadlineAt) <= Date.now(),
   }));
   const merge = await source.store.getItemMerge(found.item.id);
+  const linkReads = await source.store.listItemLinks(found.item.id);
+  const linked = await readLinked(source.store, found.item, linkReads, visiting, (other, inside) =>
+    placeItem(source, other, install, inside).then(place => place?.standing.state === 'done')
+  );
   const standing = itemStanding({
     runs: own.values,
     queued: queuedStarts,
@@ -699,13 +707,14 @@ export async function placeItem(
     questions,
     // A merge row that does not read still says the change merged.
     merged: merge !== null,
+    ...linked,
   });
   const read = async (): Promise<ItemRead> => {
     const events =
       tree.size === 0
         ? new Map<string, WorkflowEventRow[]>()
         : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
-    const facts = await readItemFacts(source, found.item, merge);
+    const facts = await readItemFacts(source, found.item, merge, linkReads);
     const terminalEvents = await completionEvents(source, own.values);
     const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
     const answers = [

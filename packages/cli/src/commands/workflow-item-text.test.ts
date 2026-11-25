@@ -7,7 +7,7 @@ const SERVED: ReadonlySet<string> = new Set(['host']);
 
 const read: ItemRead = {
   item: { id: 'item-row', projectKey: 'acme/web', key: 'issue-7' },
-  standing: { runId: null, state: 'resting' },
+  standing: { runId: null, state: 'resting', pack: null },
   runs: [
     {
       id: 'run-done-1',

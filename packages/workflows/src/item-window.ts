@@ -14,7 +14,6 @@ import {
 } from './item-read';
 import { MetricsQueryError, resolveMetricsWindow } from './metrics';
 import { ITEM_STANDING_STATES, type ItemStanding } from './item-standing';
-import { runPack } from './run-pack';
 import type { WorkflowItem } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 
@@ -55,7 +54,7 @@ export type ItemWindow = z.infer<typeof itemWindowSchema>;
  * optional); a later page names only the cursor it follows.
  *
  * `states` keeps the items whose `standing.state` is one of them. `pack` keeps the items
- * whose standing run is a run of that pack (`runPack`'s key). With either, every item of the
+ * that count for that pack (`standing.pack`). With either, every item of the
  * window is placed, the page comes most recently active first (when its standing run ended,
  * or started), and the answer carries `totals`. A cursor does not carry them, so each page
  * names them again.
@@ -182,7 +181,7 @@ async function readPlacedPage(
   const kept: { place: Awaited<ReturnType<typeof placed>>; at: number }[] = [];
   for (const item of await listWindow(source, range)) {
     const place = await placed(source, item, install);
-    if (query.pack !== undefined && (place.run && runPack(place.run))?.key !== query.pack) continue;
+    if (query.pack !== undefined && place.standing.pack !== query.pack) continue;
     totals[place.standing.state] += 1;
     if (query.states === undefined || query.states.includes(place.standing.state))
       kept.push({

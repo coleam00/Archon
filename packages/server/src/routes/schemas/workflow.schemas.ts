@@ -533,7 +533,7 @@ export const itemWindowQuerySchema = z.object({
     }),
   pack: z.string().min(1).optional().openapi({
     description:
-      'Keep only the items whose standing run is a run of this pack, by pack key. Ordered and counted as with states. Name it on every page.',
+      'Keep only the items that count for this pack (standing.pack), by pack key. Ordered and counted as with states. Name it on every page.',
   }),
 });
 

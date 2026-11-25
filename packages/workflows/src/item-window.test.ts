@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { ItemWindowQueryError, readItemWindow, type ItemWindowSource } from './item-window';
+import type { ItemLink } from './schemas/item-link';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
 
 const PROJECT = 'acme/web';
-const items: WorkflowItem[] = ['a', 'b', 'c'].map(key => ({
+const defaultItems: WorkflowItem[] = ['a', 'b', 'c'].map(key => ({
   id: `item-${key}`,
   projectKey: PROJECT,
   key,
@@ -38,7 +39,7 @@ function run(id: string, itemId: string, workflow: string, startedAt: string): W
 
 // The window is November. Item a and c have runs in it; b only before it. Every item's
 // runs are listed in start order, including the one before the window.
-const runsByItem = new Map<string, WorkflowRun[]>([
+const defaultRuns = new Map<string, WorkflowRun[]>([
   [
     'item-a',
     [
@@ -56,13 +57,32 @@ const runsByItem = new Map<string, WorkflowRun[]>([
   ],
 ]);
 
-function source(
-  unreadable: string[] = [],
-  statuses: Record<string, WorkflowRun['status']> = {},
-  queuedOn: string[] = [],
-  mergedIds: string[] = [],
-  finalRuns: string[] = []
-): ItemWindowSource {
+interface World {
+  unreadable?: string[];
+  statuses?: Record<string, WorkflowRun['status']>;
+  queuedOn?: string[];
+  mergedIds?: string[];
+  finalRuns?: string[];
+  /** Metadata by run id, in place of the run's own. */
+  metadata?: Record<string, Record<string, unknown>>;
+  /** Items and runs in place of the module's. */
+  items?: WorkflowItem[];
+  runsByItem?: Map<string, WorkflowRun[]>;
+  links?: ItemLink[];
+}
+
+function source(world: World = {}): ItemWindowSource {
+  const {
+    unreadable = [],
+    statuses = {},
+    queuedOn = [],
+    mergedIds = [],
+    finalRuns = [],
+    metadata = {},
+    items = defaultItems,
+    runsByItem = defaultRuns,
+    links = [],
+  } = world;
   return {
     branchOf: async () => null,
     store: {
@@ -82,7 +102,9 @@ function source(
           .map(row => ({
             ...row,
             status: statuses[row.id] ?? row.status,
-            metadata: finalRuns.includes(row.id) ? { item_final: true } : row.metadata,
+            metadata: finalRuns.includes(row.id)
+              ? { item_final: true }
+              : (metadata[row.id] ?? row.metadata),
           }))
           .map(row =>
             unreadable.includes(row.id)
@@ -103,7 +125,8 @@ function source(
           ? { type: 'degraded', reason: 'merge_unreadable', itemId }
           : null,
       getItemLanding: async () => null,
-      listItemLinks: async () => [],
+      listItemLinks: async itemId =>
+        links.filter(link => link.from.id === itemId || link.to.id === itemId),
       listItemAsks: async () => [],
       listOpenItemWaits: async () => [],
       listQueuedItemStarts: async itemId =>
@@ -182,21 +205,23 @@ describe('reading items over a window', () => {
     const wide = { since: '2026-10-01T00:00:00Z', until: '2027-01-01T00:00:00Z' };
     // a: its first run still runs after a later one ended. b: its only run failed.
     // c: every run ended, and a start waits for admission.
-    const moving = (): ItemWindowSource => source([], { a1: 'running', b1: 'failed' }, ['item-c']);
+    const moving = (): ItemWindowSource =>
+      source({ statuses: { a1: 'running', b1: 'failed' }, queuedOn: ['item-c'] });
     const all = await readItemWindow(moving(), PROJECT, wide);
     expect(all.items.map(read => [read.item.key, read.standing])).toEqual([
-      ['a', { runId: 'a1', state: 'running' }],
-      ['b', { runId: 'b1', state: 'failed' }],
-      ['c', { runId: 'c2', state: 'queued' }],
+      ['a', { runId: 'a1', state: 'running', pack: null }],
+      ['b', { runId: 'b1', state: 'failed', pack: null }],
+      ['c', { runId: 'c2', state: 'queued', pack: null }],
     ]);
     // A run that ended with an outcome and nothing followed stopped its item: it is not done.
     // Done is a recorded merge, whatever the last run did, or an outcome recorded as final.
-    const ended = (): ItemWindowSource => source([], { b1: 'failed' }, [], ['item-b'], ['c2']);
+    const ended = (): ItemWindowSource =>
+      source({ statuses: { b1: 'failed' }, mergedIds: ['item-b'], finalRuns: ['c2'] });
     const rested = await readItemWindow(ended(), PROJECT, wide);
     expect(rested.items.map(read => [read.item.key, read.standing])).toEqual([
-      ['a', { runId: 'a2', state: 'stopped' }],
-      ['b', { runId: 'b1', state: 'done' }],
-      ['c', { runId: 'c2', state: 'done' }],
+      ['a', { runId: 'a2', state: 'stopped', pack: null }],
+      ['b', { runId: 'b1', state: 'done', pack: null }],
+      ['c', { runId: 'c2', state: 'done', pack: null }],
     ]);
 
     // The filter holds across pages, most recently active first: c's last run ended after b's.
@@ -219,8 +244,140 @@ describe('reading items over a window', () => {
     expect([ofPack.items, ofPack.totals?.done]).toEqual([[], 0]);
   });
 
+  test('the pack filter keeps an item whose standing run recorded the pack key alone', async () => {
+    const wide = { since: '2026-10-01T00:00:00Z', until: '2027-01-01T00:00:00Z' };
+    // a stands at a2, which an older build dispatched with the pack key alone. b and c
+    // recorded no pack. (The fallback to an item's other runs is itemStanding's own test.)
+    const world: World = {
+      mergedIds: ['item-a', 'item-c'],
+      metadata: { a2: { dispatch: { base_branch: 'dev', pack: 'flow' } } },
+    };
+    const page = await readItemWindow(source(world), PROJECT, { ...wide, pack: 'flow' });
+    expect(page.items.map(read => [read.item.key, read.standing.pack])).toEqual([['a', 'flow']]);
+    expect(page.totals?.done).toBe(1);
+  });
+
+  test('an item stands by the items linked to it: done by its parts, waiting on what it depends on', async () => {
+    const wide = { since: '2026-10-01T00:00:00Z', until: '2027-01-01T00:00:00Z' };
+    type Link = [from: string, to: string, kind?: 'part_of' | 'depends_on' | 'ended'];
+    const states = async (
+      keys: string[],
+      links: Link[],
+      merged: string[],
+      queuedOn: string[] = []
+    ): Promise<[string, string][]> => {
+      const items = keys.map(key => ({ id: `item-${key}`, projectKey: PROJECT, key }));
+      const byKey = (key: string): WorkflowItem =>
+        items.find(item => item.key === key) as WorkflowItem;
+      const act = { at: '2026-11-01T00:00:00.000Z', via: 'cli', by: null, fromRun: null };
+      const read = source({
+        items,
+        // Each item's one run ended with an outcome and nothing followed: it is stopped.
+        runsByItem: new Map(
+          items.map(item => [
+            item.id,
+            [run(`${item.key}1`, item.id, 'build', '2026-11-02T00:00:00.000Z')],
+          ])
+        ),
+        mergedIds: merged.map(key => `item-${key}`),
+        queuedOn: queuedOn.map(key => `item-${key}`),
+        links: links.map(([from, to, kind = 'part_of'], index) => ({
+          id: `link-${String(index)}`,
+          kind: kind === 'ended' ? 'part_of' : kind,
+          from: byKey(from),
+          to: byKey(to),
+          ...act,
+          ended: kind === 'ended' ? act : null,
+        })),
+      });
+      return (await readItemWindow(read, PROJECT, wide)).items.map(item => [
+        item.item.key,
+        item.standing.state,
+      ]);
+    };
+    const split: Link[] = [
+      ['x', 'p'],
+      ['y', 'p'],
+    ];
+    // p was split into x and y, both merged; x has a later start queued, and is still merged.
+    expect(await states(['p', 'x', 'y'], split, ['x', 'y'], ['x'])).toEqual([
+      ['p', 'done'],
+      ['x', 'queued'],
+      ['y', 'done'],
+    ]);
+    // y is not merged, so p is not done; its work goes on in y, so it needs no decision.
+    expect(await states(['p', 'x', 'y'], split, ['x'])).toEqual([
+      ['p', 'resting'],
+      ['x', 'done'],
+      ['y', 'stopped'],
+    ]);
+    // An ended link joins no part: y's no longer counts against p.
+    expect(
+      await states(
+        ['p', 'x', 'y'],
+        [
+          ['x', 'p'],
+          ['y', 'p', 'ended'],
+        ],
+        ['x']
+      )
+    ).toEqual([
+      ['p', 'done'],
+      ['x', 'done'],
+      ['y', 'stopped'],
+    ]);
+    // A part is not done by its merged parent, and an item is not done by an item that
+    // depends on it.
+    expect(await states(['p', 'x'], [['x', 'p']], ['p'])).toEqual([
+      ['p', 'done'],
+      ['x', 'stopped'],
+    ]);
+    expect(await states(['p', 'x'], [['x', 'p', 'depends_on']], ['x'])).toEqual([
+      ['p', 'stopped'],
+      ['x', 'done'],
+    ]);
+    // x depends on p: while p is not done x waits for it, and once p merged x's stop is its own.
+    expect(await states(['p', 'x'], [['x', 'p', 'depends_on']], [])).toEqual([
+      ['p', 'stopped'],
+      ['x', 'waiting'],
+    ]);
+    expect(await states(['p', 'x'], [['x', 'p', 'depends_on']], ['p'])).toEqual([
+      ['p', 'done'],
+      ['x', 'stopped'],
+    ]);
+    // A part split again is done by its own parts, and so is the item it is part of.
+    expect(
+      await states(
+        ['p', 'x', 'z'],
+        [
+          ['z', 'x'],
+          ['x', 'p'],
+        ],
+        ['z']
+      )
+    ).toEqual([
+      ['p', 'done'],
+      ['x', 'done'],
+      ['z', 'done'],
+    ]);
+    // Two items part of each other: the read ends, neither is done, and both rest.
+    expect(
+      await states(
+        ['a', 'b'],
+        [
+          ['a', 'b'],
+          ['b', 'a'],
+        ],
+        []
+      )
+    ).toEqual([
+      ['a', 'resting'],
+      ['b', 'resting'],
+    ]);
+  });
+
   test('an item whose runs cannot all be read is reported as degraded, and the rest of it reads', async () => {
-    const page = await readItemWindow(source(['a1']), PROJECT, NOVEMBER);
+    const page = await readItemWindow(source({ unreadable: ['a1'] }), PROJECT, NOVEMBER);
     const a = page.items.find(read => read.item.key === 'a');
     expect(a?.runs.map(row => row.id)).toEqual(['a2']);
     expect(a?.degraded).toEqual([{ type: 'degraded', reason: 'run_unreadable', runId: 'a1' }]);

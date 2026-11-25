@@ -2389,7 +2389,7 @@ export interface paths {
           after?: string;
           /** @description Keep only the items whose standing.state is one of these, comma-separated (running, waiting, queued, failed, stopped, done, resting). With it the page comes most recently active first and the answer carries totals per state. Name it on every page; the cursor does not carry it. */
           states?: string;
-          /** @description Keep only the items whose standing run is a run of this pack, by pack key. Ordered and counted as with states. Name it on every page. */
+          /** @description Keep only the items that count for this pack (standing.pack), by pack key. Ordered and counted as with states. Name it on every page. */
           pack?: string;
         };
         header?: never;
@@ -8494,6 +8494,7 @@ export interface components {
         runId: string | null;
         /** @enum {string} */
         state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'done' | 'resting';
+        pack: string | null;
       };
       runs: {
         id: string;
@@ -9223,6 +9224,7 @@ export interface components {
           runId: string | null;
           /** @enum {string} */
           state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'done' | 'resting';
+          pack: string | null;
         };
         runs: {
           id: string;

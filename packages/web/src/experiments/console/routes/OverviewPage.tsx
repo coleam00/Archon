@@ -16,11 +16,11 @@ import type { Project } from '../primitives/project';
 import * as skill from '../skills';
 import {
   getPackGraph,
+  ITEM_STATES,
   listItems,
   listItemsPage,
   type ItemPage,
   type ItemRead,
-  type ItemState,
   type PackGraph,
 } from '../skills/items';
 import type { MetricsReport } from '../skills/metrics';
@@ -34,17 +34,6 @@ const HEADLINE_CARDS = 3;
 const HEADLINE_DAYS = 7;
 const TOP_ASKS = 3;
 const TODAY_LIMIT = 100;
-
-// Every standing state, so the read of today's items keeps them all; a new state fails the build.
-const EVERY_STATE = Object.keys({
-  running: true,
-  waiting: true,
-  queued: true,
-  failed: true,
-  stopped: true,
-  done: true,
-  resting: true,
-} satisfies Record<ItemState, true>) as ItemState[];
 
 /** The start of the operator's day, as the instant the item window reads from. */
 export function startOfToday(now = new Date()): string {
@@ -236,7 +225,7 @@ function PackOverview({
   const done = useEntity<ItemPage>(K.boardDone(projectId, pack), () => newestDone(projectId, pack));
   const since = startOfToday();
   const today = useEntity<ItemPage>(K.boardSince(projectId, pack, since), () =>
-    listItemsPage(projectId, EVERY_STATE, { pack, since, limit: TODAY_LIMIT })
+    listItemsPage(projectId, ITEM_STATES, { pack, since, limit: TODAY_LIMIT })
   );
   const columns = columnsOf(graph);
   const counts = todayCounts(today.data, since);
@@ -348,7 +337,7 @@ export function OverviewPage(): ReactElement {
             key={pack}
             projectId={projectId}
             pack={pack}
-            moving={(open.data ?? []).filter(read => standingRun(read)?.pack?.key === pack)}
+            moving={(open.data ?? []).filter(read => read.standing.pack === pack)}
             asks={asks}
           >
             {index === 0 ? topAsks : null}
