@@ -155,8 +155,8 @@ const mockListEnvironments = mock<typeof IsolationOperations.listEnvironments>((
     ghostsReconciled: 0,
   })
 );
-const mockCleanupMergedEnvironments = mock<typeof IsolationOperations.cleanupMergedEnvironments>(
-  () => Promise.resolve(swept())
+const mockCleanupMergedWorktrees = mock<typeof IsolationOperations.cleanupMergedWorktrees>(() =>
+  Promise.resolve(swept())
 );
 
 function swept(
@@ -177,7 +177,7 @@ function swept(
 
 mock.module('@archon/core/operations/isolation-operations', () => ({
   listEnvironments: mockListEnvironments,
-  cleanupMergedEnvironments: mockCleanupMergedEnvironments,
+  cleanupMergedWorktrees: mockCleanupMergedWorktrees,
 }));
 
 const mockWorktreeExists = mock<typeof Git.worktreeExists>(() => Promise.resolve(true));
@@ -1273,8 +1273,8 @@ describe('isolationCleanupMergedCommand', () => {
   beforeEach(() => {
     consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    mockCleanupMergedEnvironments.mockReset();
-    mockCleanupMergedEnvironments.mockResolvedValue(swept());
+    mockCleanupMergedWorktrees.mockReset();
+    mockCleanupMergedWorktrees.mockResolvedValue(swept());
   });
 
   afterEach(() => {
@@ -1285,7 +1285,7 @@ describe('isolationCleanupMergedCommand', () => {
   it.each([false, true])(
     'returns failure for merged removal errors (failure: %s)',
     async failed => {
-      mockCleanupMergedEnvironments.mockResolvedValueOnce(
+      mockCleanupMergedWorktrees.mockResolvedValueOnce(
         swept({
           removed: ['done'],
           skipped: failed ? [] : [{ branchName: 'kept', reason: 'has uncommitted changes' }],
@@ -1316,7 +1316,7 @@ describe('isolationCleanupMergedCommand', () => {
 
   it('reports a gone repository with its release command and still succeeds', async () => {
     twoCodebases();
-    mockCleanupMergedEnvironments.mockImplementation(async codebaseId =>
+    mockCleanupMergedWorktrees.mockImplementation(async codebaseId =>
       codebaseId === 'gone' ? goneOutcome : swept({ removed: ['done'] })
     );
     expect(await cleanupRoute(true)).toBe(0);
@@ -1331,7 +1331,7 @@ describe('isolationCleanupMergedCommand', () => {
 
   it('--json distinguishes a gone repository from a failed merge check', async () => {
     twoCodebases();
-    mockCleanupMergedEnvironments.mockImplementation(async codebaseId =>
+    mockCleanupMergedWorktrees.mockImplementation(async codebaseId =>
       codebaseId === 'gone'
         ? goneOutcome
         : swept({ errors: [{ branchName: 'broken', error: 'merge check failed: exit 128' }] })
@@ -1375,9 +1375,9 @@ describe('isolationCleanupMergedCommand', () => {
       totalEnvironments: 0,
       ghostsReconciled: 0,
     });
-    mockCleanupMergedEnvironments.mockRejectedValueOnce(new Error('cannot inspect repository'));
+    mockCleanupMergedWorktrees.mockRejectedValueOnce(new Error('cannot inspect repository'));
     expect(await cleanupRoute(true)).toBe(1);
-    expect(mockCleanupMergedEnvironments).toHaveBeenLastCalledWith('later', '/test/repo', {
+    expect(mockCleanupMergedWorktrees).toHaveBeenLastCalledWith('later', '/test/repo', {
       includeClosed: false,
     });
     expect(consoleLogSpy).toHaveBeenCalledWith(
@@ -1387,18 +1387,18 @@ describe('isolationCleanupMergedCommand', () => {
 
   it('passes includeClosed=true when --include-closed flag is set', async () => {
     await isolationCleanupMergedCommand({ includeClosed: true });
-    expect(mockCleanupMergedEnvironments).toHaveBeenCalledWith('cb-1', '/test/repo', {
+    expect(mockCleanupMergedWorktrees).toHaveBeenCalledWith('cb-1', '/test/repo', {
       includeClosed: true,
     });
   });
 
   it('defaults to includeClosed=false', async () => {
     await isolationCleanupMergedCommand();
-    expect(mockCleanupMergedEnvironments).toHaveBeenCalledWith('cb-1', '/test/repo', {});
+    expect(mockCleanupMergedWorktrees).toHaveBeenCalledWith('cb-1', '/test/repo', {});
   });
 
   it('names each failed run whose lock the sweep released', async () => {
-    mockCleanupMergedEnvironments.mockResolvedValueOnce(
+    mockCleanupMergedWorktrees.mockResolvedValueOnce(
       swept({
         removed: ['settled'],
         releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'merged' }],
@@ -1411,7 +1411,7 @@ describe('isolationCleanupMergedCommand', () => {
   });
 
   it('shows retained remote branch warnings from merged cleanup', async () => {
-    mockCleanupMergedEnvironments.mockResolvedValueOnce(
+    mockCleanupMergedWorktrees.mockResolvedValueOnce(
       swept({
         removed: ['settled'],
         warnings: [{ branchName: 'settled', message: "Remote branch retained 'settled'" }],

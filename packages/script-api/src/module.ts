@@ -210,16 +210,23 @@ export function forge<Op extends keyof ForgeOperations>(
   const answer = withJsonFile(request, path => archon(command, ['--json', '--data-file', path]));
   const response = answer.value;
   if (!isRecord(response) || typeof response.ok !== 'boolean') throw failed(command, answer);
+  // Exit 2: the host could not record the answer, in the run's audit or on the run's item.
+  // A merge the host could not record on the run's item for want of a forge fact: the merge
+  // happened. Either way the host's own reason, with its fix, is passed on, also before a
+  // refusal is thrown: a pull request found already merged is refused and still recorded.
+  const unrecorded =
+    answer.code === 2 ||
+    (isRecord(response.itemRecord) && response.itemRecord.reason === 'no_merge_time');
+  if (unrecorded)
+    console.error(
+      answer.stderr || `forge ${op} answered, but the host could not record it on the run.`
+    );
   if (!response.ok) throw new ForgeError(op, response as ForgeFailure);
   const result = response.result;
   if (!isRecord(result) || result.op !== op) throw failed(command, answer);
-  // Exit 2 with a result: the operation completed and the host could not record it in
-  // the run's audit log. Reporting a performed write as a failure would invite a retry.
-  if (answer.code === 2)
-    console.error(
-      `forge ${op} completed, but the host could not record it in the run's audit log.`
-    );
-  else if (answer.code !== 0) throw failed(command, answer);
+  // Exit 2 with a result: the operation completed. Reporting a performed write as a failure
+  // would invite a retry, so the result is returned.
+  if (answer.code !== 0 && answer.code !== 2) throw failed(command, answer);
   return result.value as ForgeOperations[Op]['result'];
 }
 
@@ -392,6 +399,8 @@ export function linkItem(request: ItemLinkRequest): ItemLink & { readonly create
  * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item), and
  * {@link HostCommandError} when the host gives no answer, in which case the merge may or
  * may not have been recorded. A container run cannot call it, as it has no host CLI.
+ * A `pr.merge` through {@link forge} on a run with an item records the merge by itself
+ * when the forge plugin reports its merge time; calling this afterwards keeps that record.
  */
 export function recordMerge(merge: {
   readonly change: string;
@@ -409,6 +418,9 @@ export function recordMerge(merge: {
  * the run is on no item), and {@link HostCommandError} when the host gives no answer, in
  * which case the branch may or may not have been recorded.
  * A container run cannot call it, as it has no host CLI.
+ * A `pr.merge` through {@link forge} on a run with an item records the merged pull
+ * request's base branch by itself, with the merge, when the forge plugin reports its merge
+ * time; recording the same branch afterwards changes nothing.
  */
 export function recordLanding(branch: string): ItemLanding {
   return itemWrite('workflow landing', ['--branch', branch]) as ItemLanding;

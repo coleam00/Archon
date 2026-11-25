@@ -6,6 +6,7 @@ import {
   isContainerRun,
   isRunBlockedOnChild,
   readExecutionOwner,
+  SUBRUN_METADATA_KEYS,
 } from '@archon/workflows/schemas/workflow-run';
 import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { ReleasedWorktree } from '../../services/cleanup/run-worktree';
@@ -14,6 +15,16 @@ import {
   type DetachedRunStopTarget,
 } from '../../services/run-owner-stop';
 import { getLog, releaseRunResources, type OperationContext } from './context';
+
+/**
+ * Whether a run is a `workflow:` sub-run. Deleting the parent clears `parent_run_id`, but
+ * the spawning node's id stays in the metadata, so a child stays a child.
+ */
+export function isSubrun(run: Pick<WorkflowRun, 'parent_run_id' | 'metadata'>): boolean {
+  return (
+    run.parent_run_id !== null || Object.hasOwn(run.metadata, SUBRUN_METADATA_KEYS.parentNodeId)
+  );
+}
 
 /** Maximum parent expansions in the abandon tree walks. */
 export const MAX_CASCADE_RUNS = 500;

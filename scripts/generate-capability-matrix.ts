@@ -313,6 +313,8 @@ function buildMarkdown(providers: ProviderRegistration[], caveats: ResolvedCavea
     '  use the existing CLI for run launch and management after project selection.',
     '  These launches are detached and headless, with CLI identity and no originating-chat',
     '  delivery. Registration requires an explicit user command; assistant prose has no effects.',
+    "  A workflow node's [`tools:`](/reference/workflow-language/#script-tools) needs it too: on a",
+    '  provider without it the run fails before it starts.',
     '',
     'For per-provider field-level notes (YAML syntax, caveats), see the',
     '[AI Assistants guide](/getting-started/ai-assistants/).',

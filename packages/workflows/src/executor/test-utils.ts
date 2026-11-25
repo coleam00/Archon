@@ -164,7 +164,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
   return workflowStoreDouble<IWorkflowStore>(
     {
       listSkippedItemStarts: mock(async () => []),
-      listWaitedItemHolders: mock(async () => []),
+      listUnfinishedRuns: mock(async () => []),
       releasePausedRunSlot: mock(async () => ({ released: false })),
       findWorkflowRunsByIdPrefix: mock(async () => []),
       getActiveWorkflowRunByPath: mock(async () => null),

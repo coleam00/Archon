@@ -1,3 +1,4 @@
+import { stat } from 'fs/promises';
 import { createLogger } from '@archon/paths';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { writeJsonLine } from '../utils/stdout';
@@ -39,6 +40,15 @@ export async function fail(json: boolean | undefined, message: string): Promise<
     console.error(message);
   }
   return 1;
+}
+
+/** True when `path` exists and is a directory (used to validate `--workflow-source`). */
+export async function isPathDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Print help for `<command> [subcommand...]` positionals; none prints the global index. */

@@ -29,6 +29,7 @@ import {
   parsePackagedResourceReference,
 } from './packaged-workflow';
 import { FIXTURES_DIR } from './fixture-layout';
+import { isReservedScopeDirName } from './workflow-discovery/pack-layout';
 import type { WorkflowSource } from './schemas';
 import { getRuntimeForExtension, type ScriptRuntime } from './script-runtime';
 
@@ -233,7 +234,7 @@ async function discoverPackagedScripts(
   }
 
   for (const pack of packs) {
-    if (pack === FIXTURES_DIR) continue;
+    if (isReservedScopeDirName(pack)) continue;
     if (!isValidWorkflowFolderSegment(pack)) continue;
     if (
       requestedNames &&

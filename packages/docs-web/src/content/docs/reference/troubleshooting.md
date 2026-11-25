@@ -50,6 +50,16 @@ Repairing container credentials does not enable this capability. See
 A host credential preflight refusal before run creation leaves no run to resume:
 repeat the original `archon workflow run` command after fixing the login.
 
+## Claude signs in with the wrong account or reports "Not logged in"
+
+Each Claude request and credential check logs `provider.plugin.log` through `provider.claude` with a `credentialInput` field and the env key names in `credentialKeys`, never their values. The field says what Archon handed Claude Code, not which account Claude Code then chose:
+
+- `delivered`: a per-user credential the user connected in Archon replaced every install-wide Claude credential.
+- `forwarded`: Archon passed install-wide credentials, an auth header or a cloud-backend selector (the names in `credentialKeys`); Claude Code picks among them and its own settings.
+- `none`: Archon passed no Claude credential, so Claude Code's own login (`claude /login`), its settings, or a container image's environment decide.
+
+The record is logged at `info`, so the CLI shows it only with `--verbose`, and a `LOG_LEVEL` of `warn` or quieter in Archon's environment hides it even then.
+
 ## Project uses an unexpected provider
 
 New projects follow the configured provider when a conversation is created: repository

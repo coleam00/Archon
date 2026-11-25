@@ -4,19 +4,39 @@
  * (`returns.waits`, see `schemas/item-wait.ts`). A host joins them to the one reader through
  * `AttentionQueueSource.itemsWithoutRun`. A wait's deadline raises attention and wakes
  * nothing; the set stays open until an event meets it, a newer run of its workflow replaces
- * it, or it is withdrawn by its `wait:` ref.
+ * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
+ * `readItemStopped`), or a failed top-level run, is listed while it is the newest run on the
+ * item and the item's end does not hold (`item-end.ts`); it takes no answer.
  */
-import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
+import { createLogger } from '@archon/paths';
+import { isOwnerProvablyGone } from '@archon/paths/process-owner';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
   askItemRef,
-  projectRef,
-  runProject,
+  preparingItemRef,
+  refusedStartRef,
+  stoppedItemRef,
   waitItemRef,
+} from './attention-item-refs';
+import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
+import {
+  projectRef,
+  projectRefForRun,
+  runProject,
   type AskQueueItem,
+  type AttentionQueueItemSources,
   type AttentionQueueItemWithoutRun,
   type CodebaseCache,
   type OverdueWaitQueueItem,
+  type PreparationLostQueueItem,
+  type RefusedStartQueueItem,
+  type StoppedQueueItem,
 } from './attention-queue';
+import { readHoldingItemEnd, type ItemEndStore } from './item-end';
+import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
+import type { WorkflowEventRow } from './schemas/workflow-event';
+import { getTerminalRecord, terminalReason } from './terminal-record';
+import type { WorkflowRun } from './schemas/workflow-run';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { StoredItemWait } from './schemas/item-wait';
 import { OTHER_ATTENTION_OPTION } from './schemas/wait-node';
@@ -63,7 +83,9 @@ export async function askQueueItem(
     ],
     other: true,
     ...(ask.ask.recommendation === null
-      ? {}
+      ? ask.ask.no_recommendation === undefined
+        ? {}
+        : { noRecommendation: ask.ask.no_recommendation }
       : {
           recommendation: {
             option: ask.ask.recommendation.option,
@@ -151,4 +173,181 @@ export async function overdueWaitItems(
     if (set.some(wait => Date.parse(wait.deadlineAt) <= now.getTime()))
       items.push(await waitQueueItem(store, set, codebases));
   return items;
+}
+
+/** The store reads a stopped item's queue item needs. */
+export type StoppedItemStore = Pick<
+  IWorkflowStore,
+  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase'
+> &
+  ItemEndStore;
+
+/**
+ * The queue item of an item `run` stopped, or null when the run has no item, or completed
+ * and recorded no stop. A failed run stopped its item by failing: nothing moves it on by
+ * itself. A run that settled asks may have no outcome; a refused start's stop dates from its
+ * latest refusal. Nothing here changes the item. Each surface spells the commands that
+ * read it and start a new run on it, which closes the item.
+ */
+export async function stoppedQueueItem(
+  store: Omit<StoppedItemStore, 'listStoppedItemRuns' | 'listEventsForRuns'>,
+  run: WorkflowRun,
+  codebases: CodebaseCache = new Map(),
+  /** A failed run's `workflow_failed` events, which carry what failed first. */
+  failedEvents: readonly WorkflowEventRow[] = []
+): Promise<StoppedQueueItem | null> {
+  const failed = run.status === 'failed';
+  const stopped: ItemStopped | undefined = failed
+    ? { summary: null }
+    : readItemStopped(run.metadata);
+  if (stopped === undefined || run.item_id === null) return null;
+  const item = await store.getItem(run.item_id);
+  let codebase: AttentionQueueItemSources['codebase'] = null;
+  if (run.codebase_id !== null) {
+    const read = codebases.get(run.codebase_id) ?? store.getCodebase(run.codebase_id);
+    codebases.set(run.codebase_id, read);
+    codebase = await read;
+  }
+  return {
+    kind: 'stopped',
+    ref: stoppedItemRef(run.id),
+    project: projectRefForRun(run, codebase),
+    ...(item === null ? {} : { item }),
+    revision: 1,
+    labels: {},
+    pausedAt: stopped.refused?.at(-1)?.refusedAt ?? run.completed_at?.toISOString() ?? null,
+    stoppedIn: { runId: run.id, workflow: run.workflow_name, outcome: run.completed_outcome },
+    summary: stopped.summary,
+    ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
+    ...(stopped.refused === undefined ? {} : { refused: stopped.refused }),
+    ...(failed ? { failed: { error: failureReason(run, failedEvents) } } : {}),
+    checkout: codebase?.default_cwd ?? null,
+  };
+}
+
+/**
+ * Why a failed run failed, as `workflow get` says it: the first failed node's error from the
+ * terminal record. A run whose record is missing or unreadable falls back to the error the
+ * run recorded (`metadata.error`), which `workflow get` shows too; null when it has neither.
+ */
+function failureReason(run: WorkflowRun, events: readonly WorkflowEventRow[]): string | null {
+  let reason: string | undefined;
+  try {
+    reason = terminalReason(getTerminalRecord('failed', events))[0];
+  } catch (error) {
+    reason = undefined;
+    createLogger('workflow.attention_queue').warn(
+      { err: error as Error, runId: run.id },
+      'workflow.stopped_item_terminal_record_unreadable'
+    );
+  }
+  const error = run.metadata.error;
+  if (reason !== undefined && reason.trim() !== '') return reason;
+  return typeof error === 'string' && error.trim() !== '' ? error : null;
+}
+
+/**
+ * The items runs stopped, for `AttentionQueueSource.itemsWithoutRun`, but for an item whose
+ * end holds (`readHoldingItemEnd`): an operator said nothing more happens on it.
+ */
+export async function stoppedItems(
+  store: StoppedItemStore
+): Promise<AttentionRead<StoppedQueueItem>[]> {
+  const codebases: CodebaseCache = new Map();
+  const items: AttentionRead<StoppedQueueItem>[] = [];
+  const runs = await store.listStoppedItemRuns();
+  const failedIds = runs.flatMap(run =>
+    !isAttentionDegraded(run) && run.status === 'failed' ? [run.id] : []
+  );
+  const failedEvents =
+    failedIds.length === 0
+      ? new Map<string, WorkflowEventRow[]>()
+      : await store.listEventsForRuns(failedIds, ['workflow_failed']);
+  for (const run of runs) {
+    if (isAttentionDegraded(run)) {
+      items.push(run);
+      continue;
+    }
+    const end = run.item_id === null ? null : await readHoldingItemEnd(store, run.item_id);
+    if (end !== null && !('type' in end)) continue;
+    const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
+    if (item !== null) items.push(item);
+  }
+  return items;
+}
+
+/** The store reads a lost preparation's queue item needs. */
+export type PreparingItemStore = Pick<IWorkflowStore, 'listPreparingStarts' | 'getStartReceipt'>;
+
+/**
+ * The binding starts whose preparer this process can prove gone, as queue items, for
+ * `AttentionQueueSource.itemsWithoutRun`. A preparer is gone only when it ran on this host
+ * and no process with its pid and instance exists (`isOwnerProvablyGone`); one with no
+ * record, or on another host, is unknown and never listed. A binding that left `preparing`
+ * or changed owner after the list was read is not listed: its preparer finished.
+ */
+export async function preparationLostItems(
+  store: PreparingItemStore
+): Promise<PreparationLostQueueItem[]> {
+  const items: PreparationLostQueueItem[] = [];
+  for (const start of await store.listPreparingStarts()) {
+    if (start.preparer === null || !isOwnerProvablyGone(start.preparer)) continue;
+    const { receiptId, bindingId, hostId, workflow, itemKey, ownerId } = start;
+    const binding = (await store.getStartReceipt(receiptId))?.bindings.find(
+      found => found.bindingId === bindingId
+    );
+    if (binding?.status !== 'preparing' || binding.ownerId !== ownerId) continue;
+    const { codebase } = start;
+    items.push({
+      kind: 'preparation_lost',
+      ref: preparingItemRef(receiptId, bindingId),
+      project:
+        codebase === null
+          ? null
+          : projectRef(projectKeyForCodebase(codebase, codebase.default_cwd), codebase),
+      ...(start.item === null ? {} : { item: start.item }),
+      revision: 1,
+      labels: {},
+      pausedAt: start.claimedAt,
+      start: { receiptId, bindingId, hostId, workflow, itemKey, ownerId },
+    });
+  }
+  return items;
+}
+
+/** The store read a refused start's queue item needs. */
+export type RefusedStartItemStore = Pick<IWorkflowStore, 'listRefusedStarts'>;
+
+/**
+ * The refused starts no run caused that are still their item's newest step, as queue items,
+ * for `AttentionQueueSource.itemsWithoutRun`. The store decides which those are; nothing
+ * here changes them.
+ */
+export async function refusedStartItems(
+  store: RefusedStartItemStore
+): Promise<RefusedStartQueueItem[]> {
+  return (await store.listRefusedStarts()).map(start => {
+    const { receiptId, bindingId, hostId, workflow, itemKey, refusal, codebase } = start;
+    return {
+      kind: 'refused_start',
+      ref: refusedStartRef(receiptId, bindingId),
+      project:
+        codebase === null
+          ? null
+          : projectRef(projectKeyForCodebase(codebase, codebase.default_cwd), codebase),
+      ...(start.item === null ? {} : { item: start.item }),
+      revision: 1,
+      labels: {},
+      pausedAt: start.refusedAt,
+      start: {
+        receiptId,
+        bindingId,
+        hostId,
+        workflow,
+        itemKey,
+        reason: refusal.reason,
+        ...(refusal.limit === undefined ? {} : { limit: refusal.limit }),
+      },
+    };
+  });
 }

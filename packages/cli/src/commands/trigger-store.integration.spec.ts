@@ -48,7 +48,7 @@ import {
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
 import { registerFolder, registerRepository } from '@archon/core/handlers/clone';
-import { triggerCommand } from './trigger';
+import { drainHost, triggerCommand } from './trigger';
 import { workflowGetCommand } from './workflow-query';
 import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
 
@@ -1113,6 +1113,179 @@ async function fireFixture(fileStore = false): Promise<{
 const noDispatch = async (): Promise<null> => null;
 /** An environment with no calling node, whatever the shell running the tests exports. */
 const NO_RUN: NodeJS.ProcessEnv = {};
+
+type PrintedReceipt = {
+  id: string;
+  bindings: {
+    status: string;
+    ownerId: string | null;
+    requestStatus: string | null;
+    disposition: { status: string; requestId: string } | null;
+  }[];
+};
+
+/** Runs `fire` with stdout and stderr captured: the receipt it printed, and its stderr. */
+async function captureFire(
+  run: () => Promise<void>
+): Promise<{ printed: PrintedReceipt; stderr: string }> {
+  const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    _chunk: unknown,
+    callback?: () => void
+  ) => {
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    await run();
+    const output = stdout.mock.calls
+      .map(call => String(call[0]))
+      .find(chunk => chunk.startsWith('{\n'));
+    if (!output) throw new Error('Expected printed receipt');
+    return {
+      printed: JSON.parse(output) as PrintedReceipt,
+      stderr: stderr.mock.calls.map(call => String(call[0])).join(''),
+    };
+  } finally {
+    stderr.mockRestore();
+    stdout.mockRestore();
+  }
+}
+
+test('fire reports the disposition of its binding when another process prepares it', async () => {
+  const { host, configPath, restore } = await fireFixture();
+  const store = host.deps.store;
+  const accept = store.acceptStartReceipt.bind(store);
+  const claim = store.claimStartBindingPreparation.bind(store);
+  const read = store.getStartReceipt.bind(store);
+  // Another process's drain claims the binding the moment it is accepted, and holds it
+  // until this fire has drained and gone back to read its receipt.
+  let claimed!: () => void;
+  const claimedByOther = new Promise<void>(resolve => (claimed = resolve));
+  let release!: () => void;
+  const released = new Promise<void>(resolve => (release = resolve));
+  let otherDrain: Promise<void> | undefined;
+  let readsAfterClaim = 0;
+  store.acceptStartReceipt = async input => {
+    const accepted = await accept(input);
+    otherDrain = drainHost(host, 'host', noDispatch);
+    await claimedByOther;
+    return accepted;
+  };
+  store.claimStartBindingPreparation = async input => {
+    const won = await claim(input);
+    if (won) {
+      claimed();
+      await released;
+    }
+    return won;
+  };
+  store.getStartReceipt = async id => {
+    // The first read is the fire's own before its drain; the second comes after it.
+    if (otherDrain && ++readsAfterClaim === 2) release();
+    return read(id);
+  };
+  try {
+    const { printed } = await captureFire(() =>
+      triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        { dispatch: noDispatch, env: NO_RUN }
+      )
+    );
+    await otherDrain;
+    const [binding] = printed.bindings;
+    expect(binding?.status).toBe('complete');
+    expect(binding?.disposition?.requestId).toEqual(expect.any(String));
+    expect(binding?.disposition?.status).toBe(binding?.requestStatus ?? 'missing');
+  } finally {
+    release();
+    restore();
+  }
+});
+
+test('fire exits 0 naming the owner when another process holds preparation past the wait', async () => {
+  const { host, configPath, restore } = await fireFixture();
+  const store = host.deps.store;
+  const accept = store.acceptStartReceipt.bind(store);
+  store.acceptStartReceipt = async input => {
+    const accepted = await accept(input);
+    await store.claimStartBindingPreparation({
+      receiptId: accepted.receiptId,
+      bindingId: 'fired',
+      ownerId: 'stuck',
+    });
+    return accepted;
+  };
+  try {
+    const { printed, stderr } = await captureFire(() =>
+      triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        {
+          dispatch: noDispatch,
+          env: NO_RUN,
+          preparationWait: { intervalMs: 5, timeoutMs: 50 },
+        }
+      )
+    );
+    expect(printed.bindings[0]).toMatchObject({ status: 'preparing', ownerId: 'stuck' });
+    expect(stderr).toContain(`recover-preparation ${printed.id} fired --owner stuck`);
+    expect((await store.getStartReceipt(printed.id))?.bindings[0]?.status).toBe('preparing');
+  } finally {
+    restore();
+  }
+});
+
+test("fire fails when another process's preparation of its binding fails", async () => {
+  const { host, configPath, restore } = await fireFixture();
+  const store = host.deps.store;
+  const accept = store.acceptStartReceipt.bind(store);
+  store.acceptStartReceipt = async input => {
+    const accepted = await accept(input);
+    const identity = { receiptId: accepted.receiptId, bindingId: 'fired', ownerId: 'other' };
+    await store.claimStartBindingPreparation(identity);
+    await store.failStartBindingPreparation({
+      ...identity,
+      retryable: false,
+      error: 'launch_preparation_failed',
+    });
+    return accepted;
+  };
+  try {
+    await expect(
+      triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        { dispatch: noDispatch, env: NO_RUN }
+      )
+    ).rejects.toThrow('launch_preparation_failed');
+  } finally {
+    restore();
+  }
+});
+
+test('a replayed delivery whose preparation failed reports the stored receipt', async () => {
+  const { host, configPath, inputsPath, restore } = await fireFixture();
+  await writeFile(inputsPath, JSON.stringify({ order_id: 'from-the-event' }));
+  const options = { config: configPath, inputs: inputsPath, deliveryId: 'refused-once' };
+  const deps = { dispatch: noDispatch, env: NO_RUN };
+  try {
+    await expect(triggerCommand(host, 'fire', [], options, deps)).rejects.toThrow(
+      'declares no inputs'
+    );
+    const { printed } = await captureFire(() => triggerCommand(host, 'fire', [], options, deps));
+    expect(printed.bindings[0]).toMatchObject({ status: 'rejected', disposition: null });
+  } finally {
+    restore();
+  }
+});
 
 test('fire reports why preparation refused while the receipt keeps only the stage', async () => {
   const { host, configPath, inputsPath, restore } = await fireFixture();

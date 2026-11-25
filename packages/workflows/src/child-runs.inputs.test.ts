@@ -11,6 +11,8 @@ import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
+import { createFileWorkflowStore } from './file-store';
+import { readSubrunMetadata } from './schemas/run-metadata';
 import type { WorkflowDeps } from './deps';
 import type { IWorkflowStore } from './store';
 import { type WorkflowRun } from './schemas/workflow-run';
@@ -1199,6 +1201,73 @@ nodes:
     );
     expect(subCompleted?.data?.structured_output).toEqual({ green: true, items: ['a', 'b'] });
   });
+
+  // The file store removes a top-level metadata key patched to null, as the SQL stores
+  // do, so this drives the real completion write through the rule that lost the null.
+  it.each([
+    ['JSON null', 'null', 'null', null],
+    ['the string "null"', '\'"null"\'', 'string', 'null'],
+  ] as const)(
+    "a child's %s result reaches the next child's with: input with its type",
+    async (_label, stdout, type, expected) => {
+      await writeWorkflow(
+        'child-emits',
+        `
+name: child-emits
+description: returns one typed value
+nodes:
+  - id: emit
+    bash: echo ${stdout}
+    output_format: { type: '${type}' }
+`
+      );
+      await writeWorkflow(
+        'child-receives',
+        `
+name: child-receives
+description: receives the value
+nodes:
+  - id: got
+    bash: echo "v=$INPUTS_V"
+`
+      );
+      await writeWorkflow(
+        'parent-passes',
+        `
+name: parent-passes
+description: passes the first child's result to the second
+nodes:
+  - id: sub
+    workflow: child-emits
+  - id: pass
+    workflow: child-receives
+    depends_on: [sub]
+    with:
+      v: $sub.output
+`
+      );
+
+      const store = await createFileWorkflowStore({ root: join(cwd, 'store') });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover('parent-passes'),
+        'goal',
+        { conversationId: 'conv-db' },
+        { baseBranch: 'main' }
+      );
+
+      expect(result.success).toBe(true);
+      const parent = (await store.listWorkflowRuns()).runs.find(
+        run => run.workflow_name === 'parent-passes'
+      );
+      const children = await store.findChildRuns(parent?.id ?? '');
+      const receiver = children.find(run => run.workflow_name === 'child-receives');
+      expect(readSubrunMetadata(receiver?.metadata).inputs).toStrictEqual({ v: expected });
+    }
+  );
 
   it('AC6: fan-out aggregates are logical arrays — structured children single-encoded, string children raw', async () => {
     await writeWorkflow(

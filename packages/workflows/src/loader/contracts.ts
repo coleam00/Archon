@@ -9,13 +9,13 @@ import {
 import { isOutputFormatEnforced } from '../schemas/node-ignored-fields';
 import { declaredFieldsFromSchema, outputFieldConstraints } from '../output-ref';
 import { compileOutputSchema } from '../structured-output';
-import { stringEnumValues } from '../completed-outcome';
+import { declaredOutcome, outcomeValues, stringEnumValues } from '../completed-outcome';
 import { itemAsksJsonSchema } from '../schemas/item-ask';
 import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { isDeepStrictEqual } from 'node:util';
 
 /**
- * Validate the result contract (`returns: { node, outcome, asks, options, waits }`) against its selected node.
+ * Validate the result contract (`returns: { node, outcome, asks, options, waits, final, summary }`) against its selected node.
  *
  * Include aliases are deliberately deferred: `parseWorkflow` can only see the
  * `include:` directive, while `expandWorkflowIncludes` owns rebinding that alias
@@ -30,6 +30,9 @@ export function validateWorkflowResultContract(
   if (workflow.result?.options !== undefined && workflow.result.asks === undefined)
     return 'Workflow returns.options declares the options of asks; declare returns.asks too';
   const declared = declaredResultFields(workflow.result);
+  const final = workflow.result?.final;
+  if (final !== undefined && workflow.result?.outcome === undefined)
+    return 'Workflow declares returns.final but no returns.outcome; returns.final names outcomes, so it needs returns.outcome';
   const [first] = declared;
   if (first === undefined) return null;
   if (workflow.returns === undefined)
@@ -52,12 +55,33 @@ export function validateWorkflowResultContract(
     );
     if (error !== null) return error;
   }
+  return final === undefined ? null : finalOutcomesError(workflow, final);
+}
+
+/**
+ * Each `returns.final` entry is a value the declared outcome can take, named once. Checked
+ * after the outcome's own schema, so the form it is read against is a valid one.
+ */
+function finalOutcomesError(
+  workflow: Parameters<typeof declaredOutcome>[0],
+  final: readonly string[]
+): string | null {
+  const outcome = declaredOutcome(workflow);
+  // Unreachable: the outcome was validated before this runs.
+  if (outcome === undefined) return null;
+  const values = outcomeValues(outcome.form);
+  for (const [index, value] of final.entries()) {
+    if (!values.includes(value))
+      return `Workflow returns.final names '${value}', which returns.outcome: '${outcome.field}' cannot take (it takes: ${values.join(', ')})`;
+    if (final.indexOf(value) !== index)
+      return `Workflow returns.final names '${value}' twice; name each final outcome once`;
+  }
   return null;
 }
 
 /** A property the result contract names; `engineSchema` for one whose schema the engine owns. */
 interface DeclaredResultField {
-  key: 'outcome' | 'asks' | 'waits';
+  key: 'outcome' | 'asks' | 'waits' | 'summary';
   field: string;
   engineSchema?: () => Record<string, unknown>;
 }
@@ -75,6 +99,7 @@ function declaredResultFields(result: WorkflowDefinition['result']): DeclaredRes
   }
   if (result?.waits !== undefined)
     fields.push({ key: 'waits', field: result.waits, engineSchema: itemWaitsJsonSchema });
+  if (result?.summary !== undefined) fields.push({ key: 'summary', field: result.summary });
   return fields;
 }
 
@@ -98,6 +123,11 @@ function resultFieldError(
   engineSchema: DeclaredResultField['engineSchema']
 ): string | null {
   const subject = `Workflow returns.${key}: '${field}'`;
+  if (key === 'summary')
+    return (
+      selectedNodeShapeError(subject, nodeId, node, 'a string summary property') ??
+      validateSummaryFieldSchema(subject, nodeId, field, node.output_format)
+    );
   if (engineSchema === undefined)
     return (
       selectedNodeShapeError(subject, nodeId, node, 'a required outcome property') ??
@@ -154,6 +184,34 @@ function validateEngineFieldSchema(
       : undefined;
   if (declared !== undefined && !isDeepStrictEqual(declared, engineSchema)) {
     return `${subject} on node '${nodeId}': the engine defines this property; remove it from output_format`;
+  }
+  return null;
+}
+
+/** A summary is shown as text, so the node declares it as a string; it need not be required. */
+function validateSummaryFieldSchema(
+  subject: string,
+  nodeId: string,
+  field: string,
+  schema: DagNode['output_format']
+): string | null {
+  if (schema === undefined) {
+    return `${subject} selects node '${nodeId}', but that node declares no output_format`;
+  }
+  if (!outputFieldConstraints(schema, field).object) {
+    return `${subject} requires node '${nodeId}' output_format to declare type: object`;
+  }
+  const properties = schema.properties;
+  const declared =
+    properties !== null && typeof properties === 'object' && !Array.isArray(properties)
+      ? (properties as Record<string, unknown>)[field]
+      : undefined;
+  const type =
+    declared !== null && typeof declared === 'object' && !Array.isArray(declared)
+      ? (declared as Record<string, unknown>).type
+      : undefined;
+  if (type !== 'string') {
+    return `${subject} must be declared in node '${nodeId}' output_format properties with type: string`;
   }
   return null;
 }
@@ -281,6 +339,8 @@ export function validateNodeOutputFormats(
 }
 
 function nodeOutputFormatCompileError(node: DagNode): string | null {
+  const toolError = scriptToolsCompileError(node);
+  if (toolError !== null) return toolError;
   // Only a schema the engine will enforce is worth rejecting. Where the field is
   // inert (warned and ignored) a dangling `$ref` governs nothing and must not fail
   // the file; the predicate derives from the ignored-field lists, so it stays true
@@ -319,6 +379,21 @@ export function validateLoopGroupProseCompletion(
     );
     if (outputNode !== undefined) {
       return `loop_group '${node.id}': node '${outputNode.id}', which the group's output is read from, declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read that node's structured field instead`;
+    }
+  }
+  return null;
+}
+
+/** A declared tool's input must be an object, and both of its schemas must compile. */
+function scriptToolsCompileError(node: DagNode): string | null {
+  if (node.kind !== 'agent') return null;
+  for (const [name, tool] of Object.entries(node.tools ?? {})) {
+    if (tool.input_schema.type !== 'object')
+      return `Node '${node.id}', tool '${name}': input_schema must declare type: object`;
+    for (const field of ['input_schema', 'output_schema'] as const) {
+      const error = compileOutputSchema(tool[field]);
+      if (error !== null)
+        return `Node '${node.id}', tool '${name}': ${field} cannot be compiled: ${error}`;
     }
   }
   return null;

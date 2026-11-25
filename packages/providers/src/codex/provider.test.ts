@@ -336,7 +336,7 @@ describe('CodexProvider', () => {
           })
         ).isError
       ).not.toBe(true);
-      expect(handler.mock.calls).toEqual([[input]]);
+      expect(handler.mock.calls).toEqual([[input, { providerCallId: 'call-1' }]]);
       expect(paramsOf(server, 'initialize')?.capabilities).toMatchObject({ experimentalApi: true });
       expect(paramsOf(server, 'thread/start')).toMatchObject({
         model: 'gpt-user',
@@ -458,7 +458,7 @@ describe('CodexProvider', () => {
       expect(resumed.sessionId).toBe(failed.sessionId);
       expect(paramsOf(server, 'thread/resume')?.threadId).toBe(THREAD_ID);
       expect(server.processes[0].methods).not.toContain('thread/start');
-      expect(handler.mock.calls).toEqual([[input]]);
+      expect(handler.mock.calls).toEqual([[input, { providerCallId: 'call-1' }]]);
       expect(server.processes[0].toolResponses[0].result).toEqual({
         success: true,
         contentItems: [{ type: 'inputText', text: 'resumed' }],
@@ -477,7 +477,7 @@ describe('CodexProvider', () => {
       expect(result.isError).not.toBe(true);
       expect(result.sessionId).toBe(savedId);
       expect(paramsOf(server, 'thread/resume')?.threadId).toBe('thread-1');
-      expect(handler.mock.calls).toEqual([[input]]);
+      expect(handler.mock.calls).toEqual([[input, { providerCallId: 'call-1' }]]);
     });
 
     test('legacy threads fail visibly before a model turn instead of silently lacking tools', async () => {

@@ -91,7 +91,7 @@ export async function connectProvider(
   const rpc = new PluginRpc(io);
   const turns = new Map<string, Turn>();
   rpc.handle('_archon/tool_call', async raw => {
-    const { sessionId, name, input } = rpc.parse(toolCallRequestSchema, raw);
+    const { sessionId, name, input, providerCallId } = rpc.parse(toolCallRequestSchema, raw);
     const turn = turns.get(sessionId);
     if (!turn || turn.ended || turn.cancelled || turn.settled)
       throw rpc.error('tool call names an inactive session');
@@ -99,7 +99,8 @@ export async function connectProvider(
     if (!tool) throw rpc.error('tool call names an unknown tool');
     const parsed = nativeToolInputParser(tool.inputSchema).safeParse(input);
     if (!parsed.success) throw rpc.error('invalid tool input');
-    return { text: await tool.handler(parsed.data) };
+    const call = providerCallId === undefined ? undefined : { providerCallId };
+    return { text: await tool.handler(parsed.data, call) };
   });
   rpc.on('_archon/log', raw => {
     const record = rpc.parse(logNotificationSchema, raw);

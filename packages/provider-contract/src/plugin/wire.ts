@@ -137,6 +137,7 @@ export const chunkNotificationSchema = cancelNotificationSchema.extend({
 export const toolCallRequestSchema = cancelNotificationSchema.extend({
   name: z.string().min(1),
   input: z.record(z.string(), z.json()),
+  providerCallId: z.string().min(1).optional(),
 });
 export const toolCallResponseSchema = z.object({ text: z.string() });
 export const logNotificationSchema = z.object({

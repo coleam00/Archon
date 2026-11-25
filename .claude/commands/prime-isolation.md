@@ -35,14 +35,14 @@ Read `packages/git/src/branch.ts` first 40 lines — `checkout`, `getDefaultBran
 ### 4. Understand the Isolation Resolver
 
 Read `packages/isolation/src/resolver.ts` first 130 lines — `IsolationResolver` class with
-the 7-step resolution order:
+the resolution order:
 1. Existing environment reference (from conversation)
 2. No codebase → skip isolation
+2b. Folder project → in-place folder path, no worktree
 3. Workflow reuse (same codebase + workflow identity)
 4. Linked issue sharing (cross-conversation)
 5. PR branch adoption (skill symbiosis)
-6. Limit check with auto-cleanup (default: 25 worktrees per codebase)
-7. Create new worktree
+6. Create new worktree
 
 ### 5. Understand Error Classification
 
@@ -50,7 +50,7 @@ Read `packages/isolation/src/errors.ts` in full — failures carry a typed kind 
 are thrown, and `classifyIsolationError()` maps that kind (permission denied, no space, timeout,
 not a git repo, Docker unreachable, ...) to a user-friendly message. `isKnownIsolationError`
 blocks typed kinds; unclassified failures crash with their evidence. `IsolationBlockedError`
-for limit-exceeded cases.
+stops message handling when isolation is required but cannot be provided.
 
 ### 6. Understand the Worktree Provider
 
@@ -99,9 +99,7 @@ try {
 - Always use `toRepoPath()`, `toBranchName()`, `toWorktreePath()` — never cast plain strings
 - Prevents mixing repo paths and worktree paths at compile time
 
-### Key Limits
-- Default max 25 worktrees per codebase
+### Key Defaults
 - Default stale threshold: 14 days
-- Auto-cleanup before creating new if at limit
 
 ### Recent Changes

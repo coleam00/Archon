@@ -14,7 +14,8 @@ export async function workflowTypesCommand(
 ): Promise<number> {
   const { resolveDiscoveryCwd } = await import('../utils/project-cwd');
   const cwd = await resolveDiscoveryCwd(invokingCwd);
-  const config = await loadConfig(cwd);
+  // `--check` leaves a missing global config missing; generating creates it on first use.
+  const config = await loadConfig(cwd, { readOnly: options.check === true });
   const result = await generateOutputTypes({
     cwd,
     targetCwd: invokingCwd,

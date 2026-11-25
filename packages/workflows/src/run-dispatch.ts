@@ -179,7 +179,10 @@ async function resolveRunPacks(
   isContinuation: boolean,
   recordedDispatch: RunDispatchMetadata | undefined
 ): Promise<{
-  metadata: Pick<RunDispatchMetadata, 'pack' | 'pack_workflow' | 'inputs_resolved'>;
+  metadata: Pick<
+    RunDispatchMetadata,
+    'pack' | 'pack_workflow' | 'inputs_resolved' | 'supplied_inputs'
+  >;
   startInputs: Record<string, JsonValue> | undefined;
 }> {
   if (isContinuation) {
@@ -204,6 +207,9 @@ async function resolveRunPacks(
         ? { pack: workflow.pack.key, pack_workflow: workflow.pack.workflow }
         : {}),
       inputs_resolved: true,
+      ...(supplied !== undefined && Object.keys(supplied).length > 0
+        ? { supplied_inputs: Object.keys(supplied) }
+        : {}),
     },
     startInputs: inputs,
   };

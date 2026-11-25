@@ -90,6 +90,8 @@ export const cliArgOptions: CliArgOptions = {
   'by-model': { type: 'string' },
   'by-dimension': { type: 'string' },
   install: { type: 'boolean' },
+  // `archon skill add --pack <id>`: install the skill an installed workflow pack ships.
+  pack: { type: 'string' },
   raw: { type: 'boolean' },
   values: { type: 'boolean' },
   lease: { type: 'boolean' },

@@ -176,4 +176,82 @@ describe('native tool input schema conformance', () => {
     expect(() => buildArchonMcpServer([tool])).toThrow('Required tool keys');
     expect(() => buildPiNativeToolDefinitions([tool])).toThrow('Required tool keys');
   });
+
+  test('a JSON Schema tool is advertised as written, called with the provider call id, and its failure is returned as a tool error', async () => {
+    const jsonSchema = {
+      type: 'object',
+      properties: { pr: { type: 'integer' }, labels: { type: 'array', items: { type: 'string' } } },
+      required: ['pr'],
+      additionalProperties: false,
+    };
+    const calls: unknown[] = [];
+    const tool: NativeTool = {
+      name: 'lookup',
+      description: 'fixture',
+      inputSchema: { jsonSchema },
+      handler: async (input, call) => {
+        calls.push({ input, call });
+        if (input.pr === 0) throw new Error('lookup failed');
+        return 'found';
+      },
+    };
+    const args = { pr: 7, labels: ['bug'] };
+
+    const codex = buildCodexNativeTools([tool]);
+    const codexCall = (input: unknown) =>
+      codex.call(
+        {
+          threadId: 't',
+          turnId: 'u',
+          callId: 'codex-1',
+          namespace: null,
+          tool: 'lookup',
+          arguments: input,
+        },
+        't',
+        'u'
+      );
+    expect(codex.specs[0]).toMatchObject({ inputSchema: jsonSchema });
+    expect((await codexCall(args)).success).toBe(true);
+    expect((await codexCall({ pr: 0 })).success).toBe(false);
+
+    const pi = buildPiNativeToolDefinitions([tool])[0];
+    expect(pi.parameters).toMatchObject(jsonSchema);
+    await Reflect.apply(pi.execute, undefined, ['pi-1', args]);
+
+    const server = buildArchonMcpServer([tool]);
+    type Transport = Parameters<typeof server.instance.connect>[0];
+    let response = Promise.withResolvers<unknown>();
+    const transport: Transport = {
+      start: async () => {},
+      close: async () => {},
+      send: async message => {
+        if ('id' in message) response.resolve(message);
+      },
+    };
+    const request = async (id: number, method: string, params: Record<string, unknown>) => {
+      response = Promise.withResolvers<unknown>();
+      transport.onmessage?.({ jsonrpc: '2.0', id, method, params });
+      return (await response.promise) as { result: Record<string, unknown> };
+    };
+    await server.instance.connect(transport);
+    try {
+      const listed = await request(1, 'tools/list', {});
+      expect(listed.result.tools).toMatchObject([{ name: 'lookup', inputSchema: jsonSchema }]);
+      const ok = await request(2, 'tools/call', { name: 'lookup', arguments: args });
+      expect(ok.result.isError).not.toBe(true);
+      const failed = await request(3, 'tools/call', { name: 'lookup', arguments: { pr: 0 } });
+      expect(failed.result.isError).toBe(true);
+    } finally {
+      await server.instance.close();
+    }
+
+    expect(calls).toEqual([
+      { input: args, call: { providerCallId: 'codex-1' } },
+      { input: { pr: 0 }, call: { providerCallId: 'codex-1' } },
+      { input: args, call: { providerCallId: 'pi-1' } },
+      { input: args, call: { providerCallId: '2' } },
+      { input: { pr: 0 }, call: { providerCallId: '3' } },
+    ]);
+  });
 });

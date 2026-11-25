@@ -102,6 +102,30 @@ describe('resumeWorkflow', () => {
     expect(refusal.message).not.toContain('secret-value');
   });
 
+  test('a cancelled run is refused with the line that restarts it, but a child whose parent was deleted gets none', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'cancelled' }));
+    const top = (await resumeWorkflow('run-1', operator).catch((e: unknown) => e)) as InstanceType<
+      typeof ResumeRefusedError
+    >;
+    expect(top.restartCommand).toBe('archon workflow run --supersedes run-1');
+    expect(top.message).toEndWith('with: archon workflow run --supersedes run-1');
+
+    // Deleting the parent clears parent_run_id; the spawning node's id stays.
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'cancelled',
+        parent_run_id: null,
+        metadata: { parent_node_id: 'child-node' },
+      })
+    );
+    const orphan = (await resumeWorkflow('run-1', operator).catch(
+      (e: unknown) => e
+    )) as InstanceType<typeof ResumeRefusedError>;
+    expect(orphan).toBeInstanceOf(ResumeRefusedError);
+    expect(orphan.restartCommand).toBeUndefined();
+    expect(orphan.message).not.toContain('--supersedes');
+  });
+
   test('throws wrapped message when DB throws', async () => {
     mockGetWorkflowRun.mockRejectedValueOnce(new Error('connection reset'));
 

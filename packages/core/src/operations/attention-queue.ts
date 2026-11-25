@@ -2,8 +2,9 @@
  * Host wiring for the attention queue (`@archon/workflows/attention-queue`): the branch
  * lookup it reads from isolation records, and the project a query is scoped to.
  */
-import { canonicalizeProjectPath } from '@archon/paths';
+import { canonicalizeProjectPath, createLogger } from '@archon/paths';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import type { LimitBindingsReader } from '@archon/workflows/start-limit';
 import {
   projectRef,
   type AttentionQueueSource,
@@ -14,39 +15,67 @@ import {
   type WaitItemStore,
   openAskItems,
   type AskItemStore,
+  stoppedItems,
+  type StoppedItemStore,
+  preparationLostItems,
+  type PreparingItemStore,
+  refusedStartItems,
+  type RefusedStartItemStore,
 } from '@archon/workflows/queue-items-without-run';
 import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { observeRunOwner, observeStartExecutor } from '../services/run-attention-watch';
-import type { StartExecutorObserver } from '@archon/workflows/resource-start-store';
+import {
+  awaitingExecution,
+  type StartExecutorObserver,
+} from '@archon/workflows/resource-start-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { IWorkflowHostStore } from '../workflows/host-store';
+import { getTriggersPath, readOnBindings } from '../workflows/run-ended';
+
+// Lazy logger: never at module scope.
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('operations.attention-queue');
+  return cachedLog;
+}
 
 /**
  * The queue's source on a host, keeping the store's type so a reader that needs more of
  * the store (`readItem`) takes the same source. A run's branch is the newest isolation record for its
  * checkout path; a paused run holds that path, so no later checkout can have taken it.
- * The items no run holds are the open asks completed runs left and their overdue waits. An item holder's owner is
- * observed by the rule `workflow wait` uses (`observeRunOwner`), so the queue lists a
- * holder whose owner is gone and an item read says so; observing never changes the run.
- * A pending admitted start's executor is observed by `observeStartExecutor`, so an item
- * read tells a start that is starting from one nobody runs.
+ * The items no run holds are the open asks completed runs left, their overdue waits and the
+ * items they stopped. A running or paused run's owner is observed by the rule
+ * `workflow wait` uses (`observeRunOwner`), and a pending admitted start's executor by
+ * `observeStartExecutor`, so the queue lists every run whose owner is provably gone and an
+ * item read tells a start that is starting from one nobody runs; observing never changes
+ * the run.
  */
 export function attentionQueueSource<
   Store extends AttentionQueueSource['store'] &
     AskItemStore &
     WaitItemStore &
-    Pick<IWorkflowStore, 'listWaitedItemHolders'>,
+    StoppedItemStore &
+    PreparingItemStore &
+    RefusedStartItemStore &
+    Pick<IWorkflowStore, 'listUnfinishedRuns' | 'getResourceStartRequest'>,
 >(
   store: Store,
   isolation: Pick<IWorkflowHostStore['isolation'], 'findLatestByCodebaseAndWorkingPath'>
-): AttentionQueueSource & { store: Store; startExecutor: StartExecutorObserver } {
+): AttentionQueueSource & {
+  store: Store;
+  startExecutor: StartExecutorObserver;
+  limitBindings: LimitBindingsReader;
+} {
   return {
     store,
     itemsWithoutRun: async () => [
       ...(await openAskItems(store)),
       ...(await overdueWaitItems(store)),
+      ...(await stoppedItems(store)),
+      ...(await refusedStartItems(store)),
+      ...(await preparationLostItems(store)),
     ],
     branchOf: async run =>
       run.codebase_id === null || run.working_path === null
@@ -59,10 +88,38 @@ export function attentionQueueSource<
             )
           )?.branch_name ?? null),
     ownerLost: {
-      holders: () => store.listWaitedItemHolders(),
+      runs: () => store.listUnfinishedRuns(),
       observe: run => observeRunOwner(store, run),
+      awaitingExecution: async run =>
+        awaitingExecution(await store.getResourceStartRequest(run.id), run, {
+          observe: pending => observeStartExecutor(store, pending),
+        }),
     },
     startExecutor: { observe: run => observeStartExecutor(store, run) },
+    // A broken trigger file already fails the run end that reads it; an item read reports
+    // the limits without their bindings instead of failing.
+    limitBindings: async () => {
+      try {
+        return (await readOnBindings(getTriggersPath())).flatMap(file =>
+          file.binding.limit === undefined
+            ? []
+            : [
+                {
+                  limit: file.binding.limit.name,
+                  bindingId: file.binding.bindingId,
+                  workflow: file.binding.launch.workflowName,
+                  runEnded:
+                    'runEnded' in file
+                      ? { workflowName: file.runEnded.workflowName, outcome: file.runEnded.outcome }
+                      : null,
+                },
+              ]
+        );
+      } catch (error) {
+        getLog().warn({ err: error }, 'item_read.limit_bindings_unreadable');
+        return null;
+      }
+    },
   };
 }
 
