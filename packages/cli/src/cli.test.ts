@@ -41,6 +41,7 @@ import {
   rejectConfigOutsideRun,
   rejectInputFileOutsideRun,
   rejectRunFlagsOnContinue,
+  rejectWorkflowSourceOutsideReaders,
 } from './dispatch-guards';
 import { loadCliEnv } from './load-cli-env';
 
@@ -798,6 +799,25 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     expect(rejectInputFileOutsideRun('workflow', 'run', files)).toBeUndefined();
     expect(rejectInputFileOutsideRun('workflow', 'resume', files)).toBeUndefined();
     expect(rejectInputFileOutsideRun('trigger', 'fire', undefined)).toBeUndefined();
+  });
+
+  it('refuses --workflow-source on every command but the ones that read it', () => {
+    for (const [command, subcommand] of [
+      ['workflow', 'list'],
+      ['workflow', 'get'],
+      ['validate', 'commands'],
+    ]) {
+      expect(rejectWorkflowSourceOutsideReaders(command, subcommand, 'src')).toBeDefined();
+    }
+    for (const [command, subcommand] of [
+      ['workflow', 'run'],
+      ['validate', 'workflows'],
+      ['pack', 'bindings'],
+      ['pack', 'graph'],
+    ]) {
+      expect(rejectWorkflowSourceOutsideReaders(command, subcommand, 'src')).toBeUndefined();
+    }
+    expect(rejectWorkflowSourceOutsideReaders('workflow', 'list', undefined)).toBeUndefined();
   });
 
   it('accepts config flags on their owning commands', () => {
@@ -3030,6 +3050,59 @@ mock.module(setupPath, () => ({
     });
   }
 });
+
+// An operator validates a staged pack before installing it; the project's own clean
+// workflows must not stand in for the source's broken one.
+it('validate workflows --workflow-source reports the source and its broken workflow', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-validate-source-'));
+  const repo = join(root, 'repo');
+  const source = join(root, 'source');
+  const home = join(root, 'home');
+  mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+  mkdirSync(join(source, '.archon', 'workflows', 'broken'), { recursive: true });
+  mkdirSync(join(home, 'archon.db'), { recursive: true });
+  expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0);
+  writeFileSync(
+    join(repo, '.archon', 'config.yaml'),
+    'defaults:\n  loadDefaultCommands: false\n  loadDefaultWorkflows: false\n'
+  );
+  writeFileSync(
+    join(repo, '.archon', 'workflows', 'clean.yaml'),
+    'name: clean\ndescription: Clean\nnodes:\n  - id: probe\n    bash: echo probe\n'
+  );
+  writeFileSync(
+    join(source, '.archon', 'workflows', 'broken', 'broken.yaml'),
+    'name: broken\ndescription: Broken\nnodes:\n  - id: probe\n    command: does-not-exist\n'
+  );
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'validate', 'workflows', '--workflow-source', source, '--json'],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      }
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const report = JSON.parse(result.stdout) as {
+      source: string;
+      results: { workflowName: string; valid: boolean }[];
+    };
+    expect(report.source).toBe(source);
+    const names = report.results.map(r => r.workflowName);
+    expect(names).not.toContain('clean');
+    expect(report.results.find(r => r.workflowName === 'broken')?.valid).toBe(false);
+  } finally {
+    await removeTempTree(root);
+  }
+}, 30_000);
 
 // The route resolves cwd to the Git root before validate runs, and a named workflow
 // filters results; neither may hide a plugin manifest's unknown keys.

@@ -98,28 +98,34 @@ function formatWorkflowResult(result: WorkflowValidationResult): string {
  * `pluginRoot` is the directory whose `archon-plugin.json` is checked: the directory
  * the operator ran from, before `cwd` was resolved to the project root, so a plugin in
  * a repository subdirectory is checked too.
+ *
+ * `source` is an explicit `--workflow-source`. Workflows, commands, scripts and the
+ * manifest are then read from it, as `workflow run --workflow-source` reads them, while
+ * config and pack settings stay with the project at `cwd` the pack runs against.
  */
 export async function validateWorkflowsCommand(
   cwd: string,
   name?: string,
   json?: boolean,
   forgeTrustedEnv: NodeJS.ProcessEnv = process.env,
-  pluginRoot: string = cwd
+  pluginRoot: string = cwd,
+  source?: string
 ): Promise<number> {
-  const config = await buildValidationConfig(cwd);
-  const results = await collectWorkflowResults(cwd, config, forgeTrustedEnv);
+  const definitionRoot = source ?? cwd;
+  const config = await buildValidationConfig(definitionRoot);
+  const results = await collectWorkflowResults(cwd, definitionRoot, config, forgeTrustedEnv);
 
   let filteredResults = results;
   if (name) {
     filteredResults = results.filter(r => r.workflowName === name);
 
     if (filteredResults.length === 0) {
-      await reportMissingWorkflow(name, results, json);
+      await reportMissingWorkflow(name, results, json, source);
       return 1;
     }
   }
   // The manifest is not a workflow, so the name filter does not apply to it.
-  filteredResults.push(...(await manifestResults(pluginRoot)));
+  filteredResults.push(...(await manifestResults(source ?? pluginRoot)));
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -129,20 +135,21 @@ export async function validateWorkflowsCommand(
   });
 
   const totalErrors = filteredResults.filter(r => !r.valid).length;
-  await writeWorkflowResults(cwd, filteredResults, totalErrors, json);
+  await writeWorkflowResults(cwd, source, filteredResults, totalErrors, json);
 
   return totalErrors > 0 ? 1 : 0;
 }
 
 async function collectWorkflowResults(
   cwd: string,
+  definitionRoot: string,
   config: ValidationConfig,
   forgeTrustedEnv: NodeJS.ProcessEnv
 ): Promise<WorkflowValidationResult[]> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
   const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(
-    cwd,
+    definitionRoot,
     loadConfig,
     providerRegistry
   );
@@ -164,7 +171,7 @@ async function collectWorkflowResults(
   for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(
       workflow,
-      cwd,
+      definitionRoot,
       providerRegistry,
       {
         ...workflowValidationConfig(mergedConfig, config),
@@ -286,7 +293,8 @@ function packForgeIssues(
 async function reportMissingWorkflow(
   name: string,
   results: WorkflowValidationResult[],
-  json: boolean | undefined
+  json: boolean | undefined,
+  source: string | undefined
 ): Promise<void> {
   const allNames = results.map(r => r.workflowName);
   const similar = suggestWorkflowNames(
@@ -296,13 +304,15 @@ async function reportMissingWorkflow(
   if (json) {
     await writeStdout(
       `${JSON.stringify({
-        error: `Workflow '${name}' not found`,
+        error: `Workflow '${name}' not found${source === undefined ? '' : ` in --workflow-source ${source}`}`,
         suggestions: similar,
         available: allNames,
       })}\n`
     );
   } else {
-    console.error(`Workflow '${name}' not found.`);
+    console.error(
+      `Workflow '${name}' not found${source === undefined ? '' : ` in --workflow-source ${source}`}.`
+    );
     if (similar.length > 0) {
       console.error(`Did you mean: ${similar.map(s => `'${s}'`).join(', ')}?`);
     }
@@ -312,6 +322,7 @@ async function reportMissingWorkflow(
 
 async function writeWorkflowResults(
   cwd: string,
+  source: string | undefined,
   results: WorkflowValidationResult[],
   totalErrors: number,
   json: boolean | undefined
@@ -321,6 +332,7 @@ async function writeWorkflowResults(
   if (json) {
     await writeStdout(
       `${JSON.stringify({
+        ...(source === undefined ? {} : { source }),
         results,
         summary: {
           total: results.length,
@@ -331,7 +343,11 @@ async function writeWorkflowResults(
       })}\n`
     );
   } else {
-    console.log(`\nValidating workflows in ${cwd}\n`);
+    console.log(
+      source === undefined
+        ? `\nValidating workflows in ${cwd}\n`
+        : `\nValidating workflows from --workflow-source ${source} (project ${cwd})\n`
+    );
     for (const result of results) {
       console.log(formatWorkflowResult(result));
     }

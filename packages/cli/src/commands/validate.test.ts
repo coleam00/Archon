@@ -618,6 +618,40 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test.each([false, true])(
+    'reads workflows from --workflow-source and names it, JSON=%s',
+    async json => {
+      const source = await mkdtemp(join(tmpdir(), 'archon-cli-validate-source-'));
+      mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+        workflows: [],
+        errors: [{ filename: 'broken.yaml', errorType: 'parse_error', error: 'Bad YAML' }],
+      });
+      const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+      try {
+        expect(
+          await validateWorkflowsCommand(
+            validationCwd,
+            undefined,
+            json,
+            process.env,
+            validationCwd,
+            source
+          )
+        ).toBe(1);
+        expect(mockDiscoverWorkflowsWithConfig.mock.calls[0]?.[0]).toBe(source);
+        if (json) {
+          const payload = JSON.parse(String(write.mock.calls[0]?.[0])) as { source?: string };
+          expect(payload.source).toBe(source);
+        } else {
+          expect(mockConsoleLog.mock.calls.flat().join('\n')).toContain(source);
+        }
+      } finally {
+        write.mockRestore();
+        await removeTempTree(source);
+      }
+    }
+  );
+
   test('missing default assistant fails an unqualified prompt and passes bash and script', async () => {
     mockLoadConfig.mockResolvedValue({
       assistant: undefined,

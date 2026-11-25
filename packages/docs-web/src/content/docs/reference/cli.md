@@ -2329,7 +2329,10 @@ Validate workflow YAML definitions, project pack settings, and referenced resour
 archon validate workflows                 # Validate all workflows
 archon validate workflows my-workflow     # Validate a single workflow
 archon validate workflows my-workflow --json  # Machine-readable JSON output
+archon validate workflows --workflow-source ~/dev/my-pack  # Validate a staged pack
 ```
+
+With `--workflow-source <dir>`, workflows, commands, scripts and the `archon-plugin.json` manifest are read from that directory, as [`workflow run --workflow-source`](#running-a-workflow-from-another-checkout) reads them, including [a pack's own folder](#a-pack-folder-as-the-source). Config and project pack settings still come from the project (`--cwd`), as they do for a run. The output names the source it read, and `--json` carries it as a top-level `source`. Only `workflow run`, `validate workflows`, `pack bindings` and `pack graph` accept `--workflow-source`; every other command refuses it and exits 1.
 
 Checks: YAML syntax, DAG structure (cycles, dependency refs), command file existence, MCP config files, skill directories, provider compatibility, tier/alias model refs, and supported static environment reads in inline or named exec sources. An unprovided `INPUTS_*` read is an error when the workflow declares an input contract; other unprovided Python or JavaScript/TypeScript environment reads warn. See [Variables](/reference/variables/#shell-quoting-in-bash-vs-script) for the supported forms and fixes. For bundled and global workflows, validation rejects a bare `@custom` model alias because it isn't portable across projects; use `small`, `medium`, `large`, a literal provider model string, or a preference list that ends in one, such as `['@reviewer', medium]`. Returns actionable error messages with "did you mean?" suggestions for typos.
 
