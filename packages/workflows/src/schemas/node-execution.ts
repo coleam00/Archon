@@ -164,8 +164,8 @@ export type NodeFailureKind = z.infer<typeof nodeFailureKindSchema>;
 
 /**
  * A provider's typed failure as a failed node carries it: the provider's own report,
- * unchanged, plus `provider`, the provider that reported it, which the engine adds where it
- * receives the report. An aggregate node forwards the limiting failure of its descendants as
+ * unchanged, plus, on a rate or usage limit, `provider`, the provider that reported it, which
+ * the engine adds where it receives the report. An aggregate node forwards the limiting failure of its descendants as
  * it is, so the provider survives to the run's usage-limit wait. Absent on a failure an older
  * Archon version recorded.
  */

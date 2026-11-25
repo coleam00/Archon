@@ -90,10 +90,12 @@ test('the list shows one entry per provider limit, naming each run it holds and 
     limited('b', 'codex'),
     limited('c', 'claude'),
     limited('d', undefined),
+    limited('e', undefined),
   ]).map(block => block.join('\n'));
-  // Each provider's limit is one entry, at its first run's place; other items stay their own.
-  expect(blocks).toHaveLength(4);
-  const [claude, asked, codex, unrecorded] = blocks;
+  // Each provider's limit is one entry, at its first run's place; other items stay their own,
+  // and so does each wait that recorded no provider, since nothing says they share a limit.
+  expect(blocks).toHaveLength(5);
+  const [claude, asked, codex, unrecorded, alsoUnrecorded] = blocks;
   expect(asked).toContain('Merge pull request 42?');
   expect(claude).toContain('claude usage or rate limit, holding 2 runs');
   for (const id of ['a', 'c']) {
@@ -102,7 +104,13 @@ test('the list shows one entry per provider limit, naming each run it holds and 
   }
   expect(claude).not.toContain('node-b');
   expect(codex).toContain('codex usage or rate limit, holding 1 run');
-  expect(unrecorded).toContain('provider not recorded');
+  for (const [block, id] of [
+    [unrecorded, 'd'],
+    [alsoUnrecorded, 'e'],
+  ] as const) {
+    expect(block).toContain('usage or rate limit (provider not recorded), holding 1 run');
+    expect(block).toContain(`archon workflow resume ${id}`);
+  }
   // The single read names the provider too.
   expect(attentionItemLines(limited('a', 'claude'), 'full').join('\n')).toContain(
     'node-a: claude usage or rate limit reached'
