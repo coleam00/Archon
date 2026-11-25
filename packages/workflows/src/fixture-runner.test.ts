@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { readBundleIndex } from './defaults/bundle-inventory';
+import { dryRunIterationStubsSchema } from './dry-run/stubs';
 
 // Every invocation captures bundled source, but these tests only exercise its scope:
 // cross-scope discovery supplies its own roots. Empty indexed directories preserve that
@@ -156,6 +157,12 @@ function writeTempProject(options: TempFixtureOptions): { cwd: string; fixturePa
 }
 
 describe('parseFixtureFile', () => {
+  it('rejects a sparse iteration sequence', () => {
+    const sparse: unknown[] = [];
+    sparse.length = 1;
+    expect(dryRunIterationStubsSchema.safeParse({ verdict: sparse }).success).toBe(false);
+  });
+
   it('keeps literal arrays and wrapper objects separate from iteration metadata', () => {
     const parsed = parseFixtureFile(
       'fixture:\n  iteration-stubs:\n    verdict: [null, false, 7, [one, two], {done: true}]\nresults: [one, two]\nwrapper: {iterations: [one, two]}',

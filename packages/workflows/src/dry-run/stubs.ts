@@ -69,7 +69,12 @@ export const dryRunIterationStubsSchema = z.unknown().transform((value, ctx) => 
   }
   const entries: [string, DryRunStubValue[]][] = [];
   for (const [id, candidate] of Object.entries(value)) {
-    if (!Array.isArray(candidate) || candidate.length === 0 || !candidate.every(isStubValue)) {
+    // `every` skips holes, so a sparse array would pass and later execute for real.
+    if (
+      !Array.isArray(candidate) ||
+      candidate.length === 0 ||
+      !Array.from(candidate).every(isStubValue)
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: [id],
