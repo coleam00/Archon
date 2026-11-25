@@ -101,11 +101,12 @@ binding reads when no webhook delivers labels.
 
 ### 2. Settings and policy
 
-The pack has one setting, in `.archon/packs/sdlc.yaml`:
+The pack has two settings, in `.archon/packs/sdlc.yaml`:
 
 ```yaml
 settings:
   ci: forge   # forge: the pull request's checks are the full validation; none: no CI
+  land_policy: .archon/sdlc/policy/merge.md   # the project's land policy; empty: the default alone
 ```
 
 Everything else a project holds an opinion on is policy text. Each stage reads the
@@ -118,7 +119,7 @@ pack's default in [`.shared/policy/`](.shared/policy) and then the project's
 | `build.md` | build | when the builder acts and when it asks |
 | `propose.md` | build, host | how a pull request is written |
 | `review-lens.md` | review lenses | how a lens works and reports, and which risks earn full review |
-| `merge.md` | land | which pull requests merge by themselves and which are asked, and how they merge |
+| `merge.md` | land | which pull requests merge by themselves and which are asked, and how they merge; the project's file is the one the `land_policy` setting names |
 | `discoveries.md` | discoveries | what is filed, tracked, dropped or held |
 | `rulings.md` | plan, review, discoveries | answers the maintainers already gave |
 | `asks.md` | every stage | how a question to an operator is written |
@@ -126,7 +127,10 @@ pack's default in [`.shared/policy/`](.shared/policy) and then the project's
 | `ui-check.md` | the ux lens | how the project's app is started safely |
 
 The default land policy merges clear changes without asking. A project that wants every
-merge asked says so in its `merge.md`; this repository's does.
+merge asked says so in the file its `land_policy` setting names; this repository's does. The
+land policy is named by a setting rather than found by name because a policy that goes
+missing lets merges through unasked: `archon validate workflows` reports a path that does
+not exist, and the land stage asks rather than merges when it cannot read the file.
 
 ### 3. Models
 

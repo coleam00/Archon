@@ -10,6 +10,17 @@ inputs:
       Where a change's full validation comes from. forge: the checks the forge runs on
       the pull request. none: the project has no CI, so the host stage runs the full
       validation itself and the land stage merges only the commit it validated.
+  land_policy:
+    type: string
+    file: true
+    default: ""
+    description: >-
+      The project's land policy, a path from the project root, read after the pack's
+      default `.shared/policy/merge.md`. It says which pull requests merge on their own
+      and which are asked. Empty: the default alone applies. It is a setting, not a policy
+      file found by name, because a policy that goes missing silently lets merges through
+      that the project would have asked about; `archon validate workflows` reports a path
+      that does not exist.
 
 # The forge operations the pack's agents call. The engine checks
 # them when a run of any pack workflow starts, before a worktree, a slot or a node: the

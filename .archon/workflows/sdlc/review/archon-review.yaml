@@ -88,7 +88,15 @@ nodes:
                   required: [host, path]
                 number: { type: integer, minimum: 1 }
               required: [repo, number]
-      required: [head, continuation, prior_report, head_matches, pr]
+        report:
+          type: object
+          additionalProperties: false
+          properties:
+            type: { const: archon_artifact }
+            run_id: { type: string }
+            path: { type: string }
+          required: [type, run_id, path]
+      required: [head, continuation, prior_report, head_matches, pr, report]
 
   - id: route
     command: route-review
@@ -109,43 +117,63 @@ nodes:
       required: [seams, code, tests, errors, docs, ux, reason]
 
   # Lenses run side by side in one checkout. The engine fails one that changes it, so a
-  # reviewer that edits cannot mislead the others.
+  # reviewer that edits cannot mislead the others. Each declares its report as an artifact
+  # pointer, so the engine also fails a lens that ends without writing it.
   - id: seams
     model: ['@review-seams', '@reviewer', medium]
     command: review-seams
     context: fresh
     depends_on: [route]
     when: "$route.output.seams == true"
+    output_format: &lens-report
+      type: object
+      additionalProperties: false
+      properties:
+        findings: { type: integer, minimum: 0 }
+        report:
+          type: object
+          additionalProperties: false
+          properties:
+            type: { const: archon_artifact }
+            run_id: { type: string }
+            path: { type: string }
+          required: [type, run_id, path]
+      required: [findings, report]
   - id: code
     model: ['@review-code', '@reviewer', large]
     command: review-code
     context: fresh
     depends_on: [route]
     when: "$route.output.code == true"
+    output_format: *lens-report
   - id: tests
     model: ['@review-tests', '@reviewer', medium]
     command: review-tests
     context: fresh
     depends_on: [route]
     when: "$route.output.tests == true"
+    output_format: *lens-report
   - id: errors
     model: ['@review-errors', '@reviewer', medium]
     command: review-errors
     context: fresh
     depends_on: [route]
     when: "$route.output.errors == true"
+    output_format: *lens-report
   - id: docs
     model: ['@review-docs', '@reviewer', medium]
     command: review-docs
     context: fresh
     depends_on: [route]
     when: "$route.output.docs == true"
+    output_format: *lens-report
   - id: ux
     model: ['@review-ux', '@reviewer', large]
     command: review-ux
     context: fresh
     depends_on: [route]
     when: "$route.output.ux == true"
+    output_format: *lens-report
 
   # Beside the lenses, so its smaller shapes reach the builder with the review's findings.
   # A later round judges only a large or reshaping delta (see commands/simplify.md). Its

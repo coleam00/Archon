@@ -25,4 +25,4 @@ Write `$ARTIFACTS_DIR/review/ux.md`: each finding begins with `sources: [ux]`, t
 
 A UX problem you meet that the change did not cause is a discovery: write `$ARTIFACTS_DIR/discoveries/review-ux.json` as a JSON array of records with `title`, `claim`, `evidence`, `relation` (`unrelated` or `scope_conflict`) and `source_node` (`ux`). Write no file for no discovery.
 
-Verify the file exists, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/ux.md` and the findings count.
+Verify the file exists, then declare `findings`, the number of findings in it, and `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/ux.md"}`. The engine fails this lens when that file is missing, so write it before you declare.

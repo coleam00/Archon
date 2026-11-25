@@ -13,6 +13,8 @@ Every finding needs: the changed line that causes it, the reachable path (caller
 
 For each new branch, predicate, log line or interpolation, list the states and inputs that reach it beyond the work order's examples (other lifecycle statuses, wrong file type, whitespace or separators in configured values, each capability variant, throw versus return) and judge each. Trace cleanup, cancellation and logging for already-terminal states as well as in-flight work. A predicate's name is not evidence of status or capability gating; quote the checks it actually makes. For an enumerated state, start from its defining type, list every member, and trace each to the changed guard. Keep independent dimensions separate: event causes or UI modes do not stand in for lifecycle statuses.
 
+For each output the change adds or changes that an operator observes (a log record, a message, a file, an exit code), trace it from the changed line to where the operator sees it, and quote each step on the way that can drop or rewrite it: a process boundary, a log sink, a level or field filter. An output that never arrives is a behavioral defect, whatever its unit test shows.
+
 For changed returns whose consumers require accumulated state, start at the final consumer and trace backwards through every enclosing wrapper to the work that accumulates it. Write the expression that consumer receives for a nonzero value on each exit, including defaults for absent fields. Distinguish a snapshot constructed before the work from a result constructed after it: quote the construction and the writes that put accumulated values into the actual returned object. An inner return carrying totals does not clear an outer return that serializes the original snapshot. Compare success, pause/defer, failure and retry paths; nonterminal outcomes are still observed by callers. Finish this exit inventory even when another defect is already proved.
 
 When several rules guard one invariant, such as admitting, draining and resuming the same work, or two authentication modes for one action, write their predicates side by side. A difference you cannot explain is a finding. After a predicate fix, check the reverse case: the input the old predicate handled that the new one must still handle.
@@ -55,7 +57,7 @@ Write `$ARTIFACTS_DIR/review/code.md`: each in-scope finding begins with `source
 
 Your discoveries file is `$ARTIFACTS_DIR/discoveries/review-code.json`, and your `source_node` is `code`.
 
-Verify the file exists and every `file:line` in it is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/code.md` and the findings count.
+Verify the file exists and every `file:line` in it is real, then declare `findings`, the number of findings in it, and `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/code.md"}`. The engine fails this lens when that file is missing, so write it before you declare.
 
 ## Docker verification builds
 

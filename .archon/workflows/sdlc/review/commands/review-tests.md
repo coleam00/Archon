@@ -41,4 +41,4 @@ Write `$ARTIFACTS_DIR/review/tests.md`: each in-scope finding begins with `sourc
 
 Your discoveries file is `$ARTIFACTS_DIR/discoveries/review-tests.json`, and your `source_node` is `tests`.
 
-Verify every cited `file:line` is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/tests.md` and the findings count.
+Verify every cited `file:line` is real, then declare `findings`, the number of findings in it, and `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/tests.md"}`. The engine fails this lens when that file is missing, so write it before you declare.
