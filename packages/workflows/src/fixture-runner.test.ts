@@ -160,10 +160,19 @@ describe('parseFixtureFile', () => {
   it('rejects a sparse or undefined iteration sequence', () => {
     const sparse: unknown[] = [];
     sparse.length = 1;
-    const disguised = [undefined] as unknown[];
-    disguised[Symbol.iterator] = function* () {
-      yield 'ok';
-    };
+    const disguised: unknown[] = [undefined];
+    Object.defineProperty(disguised, Symbol.iterator, {
+      value() {
+        let done = false;
+        return {
+          next() {
+            if (done) return { done: true as const, value: undefined };
+            done = true;
+            return { done: false as const, value: 'ok' };
+          },
+        };
+      },
+    });
     expect(dryRunIterationStubsSchema.safeParse({ verdict: sparse }).success).toBe(false);
     expect(dryRunIterationStubsSchema.safeParse({ verdict: [undefined] }).success).toBe(false);
     expect(dryRunIterationStubsSchema.safeParse({ verdict: disguised }).success).toBe(false);
