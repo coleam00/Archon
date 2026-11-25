@@ -599,9 +599,11 @@ describe('workflow continuation scanner', () => {
       sourceError,
     });
     mockListDueWorkflowContinuations.mockResolvedValue([paused]);
+    const updateWorkflowRun = mock(async () => undefined);
     const store = {
       listDueWorkflowContinuations: mockListDueWorkflowContinuations,
       deferWorkflowContinuation: mockDeferWorkflowContinuation,
+      updateWorkflowRun,
     };
     for (let attempt = 0; attempt < 4; attempt++) {
       await wakeDueWorkflowContinuations(
@@ -622,6 +624,18 @@ describe('workflow continuation scanner', () => {
     }
     expect(mockResolveRunWorkflow).toHaveBeenCalledTimes(3);
     expect(mockDeferWorkflowContinuation).toHaveBeenCalledTimes(2);
+    // The give-up is recorded on the run once, naming the continuation it gave up on.
+    expect(updateWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(updateWorkflowRun).toHaveBeenCalledWith(paused.id, {
+      metadata: {
+        continuation_given_up: {
+          at: expect.any(String),
+          attempts: 3,
+          path: '/foreign/source/manifest.json',
+          cursor: expect.objectContaining({ kind: 'wait', nodeId: 'delay' }),
+        },
+      },
+    });
     expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();

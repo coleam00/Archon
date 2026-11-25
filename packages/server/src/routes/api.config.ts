@@ -146,7 +146,9 @@ function configUpdateFailed(
   logEvent: string,
   message: string
 ): Response {
-  if (error instanceof InvalidConfigError) {
+  // A refused value, or a file on disk the save cannot be made to (invalid YAML, or YAML it
+  // cannot patch in place): the operator must act, so say what is wrong without the path.
+  if (error instanceof InvalidConfigError || error instanceof ConfigParseError) {
     return apiError(c, 400, error.summary);
   }
   getLog().error({ err: error }, logEvent);

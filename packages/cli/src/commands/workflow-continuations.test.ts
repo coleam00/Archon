@@ -901,6 +901,7 @@ function observation(receipts: string[]) {
             labels: [],
             openedIssues: [],
             unservedBindings,
+            wakes: [],
           },
         ],
         pass,
