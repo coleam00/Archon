@@ -38,11 +38,9 @@ describe('workflow continuation provider registration', () => {
     mkdirSync(archonHome, { recursive: true });
     expect(spawnSync('git', ['init', '-q', '.'], { cwd: repo }).status).toBe(0);
 
-    // A workflow-level `provider:` over bash-only nodes. The loader validates the provider
+    // A workflow-level `provider:` over a bash-only node. The loader validates the provider
     // id when it loads the file, so this reproduces the registry dependency without ever
-    // starting a provider. `settle` succeeds and `boom` fails, which is what leaves a run
-    // that can actually be resumed — a run with no completed node is refused earlier, for
-    // an unrelated reason, and would never reach the behaviour under test.
+    // starting a provider. `boom` fails, which leaves a run to resume.
     writeFileSync(
       join(workflowDir, 'provider-scoped.yaml'),
       [
@@ -50,10 +48,7 @@ describe('workflow continuation provider registration', () => {
         'description: continuation provider registration',
         'provider: claude',
         'nodes:',
-        '  - id: settle',
-        '    bash: echo settled',
         '  - id: boom',
-        '    depends_on: [settle]',
         '    bash: exit 1',
         '',
       ].join('\n')

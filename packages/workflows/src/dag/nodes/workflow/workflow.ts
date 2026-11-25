@@ -186,10 +186,23 @@ export async function executeWorkflowNode(
   // — the block reason lives on the run itself (metadata.approval), and there
   // is no human decision to audit for a gate that resolves automatically on
   // child completion.
-  const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
-    const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
+  // A paused child waits on its own gate, so approving it unblocks the parent. A child
+  // still marked running lost its owner with the parent (a crash during the parent's
+  // first node, say) or is still being driven; resume refuses while an owner is live, so
+  // naming resume is safe either way, and approve would be refused for a running child.
+  const pauseParentOnChild = async (
+    childRunId: string,
+    childStatus: WorkflowRunStatus = 'paused'
+  ): Promise<NodeExecutionResult> => {
+    const childLabel = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`)`;
+    const blocked =
+      childStatus === 'paused'
+        ? `${childLabel} is paused awaiting review. `
+        : `${childLabel} is still ${childStatus}. `;
     const approveChild = (surface: WorkflowCommandSurface): string =>
-      `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
+      childStatus === 'paused'
+        ? `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``
+        : `${blocked}If its process stopped, resume it by run id: \`${spellWorkflowCommand(surface, `resume ${childRunId}`)}\``;
     const suspended = finishNodeExecution(
       execution,
       { status: 'suspended', point: 'child_workflow' },
@@ -289,7 +302,7 @@ export async function executeWorkflowNode(
     if (LIVE_CHILD_STATUSES.includes(existing.status)) {
       // Still in progress (awaiting a human or a concurrent run). Re-pause the
       // parent; NEVER resume a paused child.
-      return await pauseParentOnChild(existing.id);
+      return await pauseParentOnChild(existing.id, existing.status);
     }
     // completed / cancelled — thread the outcome through the same state table a
     // freshly-run child uses (interpret handles both).
