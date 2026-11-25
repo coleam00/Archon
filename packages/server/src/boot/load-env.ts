@@ -1,7 +1,7 @@
 import { config } from 'dotenv';
 import { resolve } from 'node:path';
 import { BUNDLED_IS_BINARY } from '@archon/paths/bundled-build';
-import { loadArchonEnv } from '@archon/paths/env-loader';
+import { loadArchonEnv, reportCwdEnvStrip } from '@archon/paths/env-loader';
 
 // import.meta.dir is frozen at build time; compiled binaries use Archon env files.
 export const envPath = BUNDLED_IS_BINARY
@@ -17,3 +17,5 @@ if (envPath) {
 }
 
 loadArchonEnv(process.cwd());
+// The server logs with the level the env files set, so it reports right away.
+reportCwdEnvStrip();

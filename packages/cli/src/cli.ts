@@ -104,6 +104,7 @@ import {
   canonicalizeProjectPath,
 } from '@archon/paths';
 import { publishArchonCliCommand } from '@archon/paths/cli-command';
+import { reportCwdEnvStrip } from '@archon/paths/env-loader';
 
 publishArchonCliCommand();
 
@@ -259,6 +260,7 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   // Apply output policy before install discovery: its best-effort debug logs
   // must never prefix a machine-readable response.
   applyOutputPolicy(values, command, subcommand);
+  reportCwdEnvStrip();
   refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
 
   // Handle help flag — route through the scoped renderer using the already-

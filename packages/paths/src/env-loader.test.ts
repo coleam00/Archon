@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { writeFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { getArchonEnvNames, getPluginsPath, loadArchonEnv } from './env-loader';
+import { getArchonEnvNames, getPluginsPath, loadArchonEnv, reportCwdEnvStrip } from './env-loader';
 import { spawnSync } from 'child_process';
 import { pathToFileURL } from 'url';
 import { getLogLevel, resetLogLevelOverride, rootLogger, setLogLevel, setLogSink } from './logger';
@@ -383,6 +383,7 @@ describe('loadArchonEnv — stripped-keys notice (#6362)', () => {
     stderrWrites.length = 0;
     stripCwdEnv(cwd);
     loadArchonEnv(cwd);
+    reportCwdEnvStrip();
     return stderrWrites.filter(s => s.startsWith('[archon] stripped'));
   }
 
@@ -439,11 +440,11 @@ describe('loadArchonEnv — stripped-keys notice (#6362)', () => {
     expect(boot()).toEqual([]);
   });
 
-  it('prints on every boot under verbose boot', () => {
+  it('does not repeat under verbose boot', () => {
     writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=a\n');
     process.env.ARCHON_VERBOSE_BOOT = '1';
     expect(boot()).toHaveLength(1);
-    expect(boot()).toHaveLength(1);
+    expect(boot()).toEqual([]);
   });
 
   it('still prints when the Archon home cannot be written', () => {
@@ -455,12 +456,12 @@ describe('loadArchonEnv — stripped-keys notice (#6362)', () => {
     expect(boot()).toHaveLength(1);
   });
 
-  describe('debug log record', () => {
+  describe('log record', () => {
     let events: Array<Record<string, unknown>>;
     beforeEach(() => {
       events = [];
       setLogSink(line => events.push(JSON.parse(line) as Record<string, unknown>));
-      setLogLevel('debug');
+      setLogLevel('info');
     });
     afterEach(() => {
       setLogSink(undefined);
@@ -516,8 +517,8 @@ describe('loadArchonEnv — stripped-keys notice (#6362)', () => {
     writeFileSync(
       probe,
       `import '${pathToFileURL(join(import.meta.dir, 'strip-cwd-env-boot.ts')).href}';\n` +
-        `import { loadArchonEnv } from '${pathToFileURL(join(import.meta.dir, 'env-loader.ts')).href}';\n` +
-        'loadArchonEnv(process.cwd());\n'
+        `import { loadArchonEnv, reportCwdEnvStrip } from '${pathToFileURL(join(import.meta.dir, 'env-loader.ts')).href}';\n` +
+        'loadArchonEnv(process.cwd());\nreportCwdEnvStrip();\n'
     );
     const run = (cwd: string): number =>
       spawnSync(process.execPath, [probe], {

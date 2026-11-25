@@ -55,16 +55,16 @@ packages/cli/
 │   2. <cwd>/.archon/.env    (repo scope, exceptions below)       │
 │   Emits one [archon] loaded N keys from <path> line per file    │
 │   when N > 0 and ARCHON_VERBOSE_BOOT=1 or LOG_LEVEL=debug/trace.│
-│   Between 1 and 2, emits [archon] stripped N keys from <cwd>    │
-│   (...) when the project's stripped files or keys are new or    │
-│   changed (state in <ARCHON_HOME>/cwd-env-notice.json), or on   │
-│   every run when verbose; logs cwd_env.stripped at debug.       │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ cli.ts  Parse arguments                                         │
 │                 --cwd, --branch, --no-worktree, --help          │
+│   Sets the log level, then reportCwdEnvStrip(): logs            │
+│   cwd_env.stripped at info, and prints [archon] stripped N keys │
+│   from <cwd> (...) when the project's stripped files or keys    │
+│   are new or changed (<ARCHON_HOME>/cwd-env-notice.json).       │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼

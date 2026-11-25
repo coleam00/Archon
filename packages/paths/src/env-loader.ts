@@ -14,14 +14,9 @@
  * Directory ownership (`.archon/`) is the security boundary, not the filename.
  *
  * Logging rules:
- *   - The `[archon] stripped N keys from <cwd> …` line (what stripCwdEnv() removed)
- *     prints the first time a project's set of stripped files and key names is
- *     seen, and again when it changes. A fingerprint per project is kept in
- *     `<ARCHON_HOME>/cwd-env-notice.json`. Verbose boot prints it every time, and
- *     a `cwd_env.stripped` debug log event records it on every boot. It is
- *     reported here, not in stripCwdEnv(), because only after the user-scope load
- *     are ARCHON_HOME and the verbosity switches final. A repo-scope
- *     `.archon/.env` loads after it and does not change its verbosity.
+ *   - What stripCwdEnv() removed is reported by reportCwdEnvStrip(), which each
+ *     entry point calls once its logging is configured, and which a refused or
+ *     malformed env file calls before startup exits. See that function.
  *   - Each `[archon] loaded N keys from …` line prints only when N > 0 AND
  *     the operator has opted into verbose boot output via `ARCHON_VERBOSE_BOOT=1`
  *     or `LOG_LEVEL=debug`/`trace`. Silent by default — these run before
@@ -112,9 +107,11 @@ export function loadArchonEnv(
   if (existsSync(homePath)) {
     const result = config({ path: homePath, processEnv: env, override: true, quiet: true });
     if (result.error) {
-      console.error(`Error loading .env from ${homePath}: ${result.error.message}`);
-      console.error('Hint: Check for syntax errors in your .env file.');
-      process.exit(1);
+      exitBoot(
+        env,
+        `Error loading .env from ${homePath}: ${result.error.message}`,
+        'Hint: Check for syntax errors in your .env file.'
+      );
     }
     const count = Object.keys(result.parsed ?? {}).length;
     if (count > 0 && isVerboseBoot()) {
@@ -124,33 +121,39 @@ export function loadArchonEnv(
 
   options.afterUserLoad?.();
 
+  loadRepoEnv(cwd, homePath, env);
+
   // The logger fixed its level before these files loaded; hand it a LOG_LEVEL they set.
   if (process.env.LOG_LEVEL !== logLevelBefore) applyEnvLogLevel();
-  // Before the repo scope, which can refuse startup: the strip is reported or logged
-  // even then. ARCHON_HOME is already final, because the repo scope cannot set it.
-  reportCwdEnvStrip(env);
+}
 
-  const logLevelBeforeRepo = process.env.LOG_LEVEL;
-  loadRepoEnv(cwd, homePath, env);
-  if (process.env.LOG_LEVEL !== logLevelBeforeRepo) applyEnvLogLevel();
+/** Stop startup on a bad env file, reporting the strip first so the evidence survives. */
+function exitBoot(env: NodeJS.ProcessEnv, ...lines: string[]): never {
+  reportCwdEnvStrip(env);
+  for (const line of lines) console.error(line);
+  process.exit(1);
 }
 
 const CWD_ENV_NOTICE_FILE = 'cwd-env-notice.json';
 
 /**
- * Report what stripCwdEnv() removed. A debug log event records it on every boot. The
- * operator line prints once per project and again when the stripped files or key names
- * change, including after a boot that stripped nothing. The state file holds a hash per
- * project, not the key names. A missing or corrupt state file means "not shown yet", so
- * the line prints; a failed write only means it prints again next time.
+ * Report what stripCwdEnv() removed, once per boot. Call it after loadArchonEnv() once the
+ * entry point has set its log level and destination, so the `cwd_env.stripped` info event
+ * follows them (the CLI's `--verbose`, `--json` and `--quiet`, a LOG_LEVEL from either env
+ * file). The event names the files and keys on every boot; never values.
+ *
+ * The operator line on stderr prints once per project and again when the stripped files
+ * or key names change, including after a boot that stripped nothing. The state file
+ * holds a hash per project, not the key names. A missing or corrupt state file means
+ * "not shown yet", so the line prints; a failed write only means it prints again.
  */
-function reportCwdEnvStrip(env: NodeJS.ProcessEnv): void {
+export function reportCwdEnvStrip(env: NodeJS.ProcessEnv = process.env): void {
   const strip = takeCwdEnvStrip();
   if (!strip) return;
   // Created here, not at module load: a child logger keeps the level it was created with.
   const log = createLogger('env-loader');
   if (strip.keys.length > 0) {
-    log.debug({ cwd: strip.cwd, files: strip.files, keys: strip.keys }, 'cwd_env.stripped');
+    log.info({ cwd: strip.cwd, files: strip.files, keys: strip.keys }, 'cwd_env.stripped');
   }
 
   const archonHome = getArchonHome(env);
@@ -165,7 +168,7 @@ function reportCwdEnvStrip(env: NodeJS.ProcessEnv): void {
       : undefined;
   const changed = shown !== fingerprint;
 
-  if (fingerprint && (changed || isVerboseBoot())) {
+  if (fingerprint && changed) {
     const count = strip.keys.length;
     process.stderr.write(
       `[archon] stripped ${count} ${count === 1 ? 'key' : 'keys'} from ${strip.cwd} (${strip.files.join(', ')}). ` +
@@ -213,9 +216,11 @@ function loadRepoEnv(cwd: string, homePath: string, env: NodeJS.ProcessEnv): voi
     // Parse without applying, so a refused file changes nothing.
     const result = config({ path: repoPath, processEnv: {}, quiet: true });
     if (result.error) {
-      console.error(`Error loading .env from ${repoPath}: ${result.error.message}`);
-      console.error('Hint: Check for syntax errors in your .env file.');
-      process.exit(1);
+      exitBoot(
+        env,
+        `Error loading .env from ${repoPath}: ${result.error.message}`,
+        'Hint: Check for syntax errors in your .env file.'
+      );
     }
     const parsed = result.parsed ?? {};
     // Windows env names are case-insensitive, so `Path=` there is PATH.
@@ -223,12 +228,12 @@ function loadRepoEnv(cwd: string, homePath: string, env: NodeJS.ProcessEnv): voi
       REPO_SCOPE_REFUSED_KEYS.includes(process.platform === 'win32' ? key.toUpperCase() : key)
     );
     if (refused.length > 0) {
-      console.error(
+      exitBoot(
+        env,
         `${repoPath} sets ${refused.join(', ')}. A repository's .archon/.env cannot set ` +
           `${REPO_SCOPE_REFUSED_KEYS.join(', ')}; set them in the environment or in ` +
           `${displayPath(homePath)} instead.`
       );
-      process.exit(1);
     }
     Object.assign(env, parsed);
     const count = Object.keys(parsed).length;
