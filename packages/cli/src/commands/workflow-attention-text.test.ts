@@ -279,4 +279,21 @@ test('a stopped item names its stage and outcome, and its commands work from any
   expect(limited).toContain("'build-rounds'");
   expect(limited).toContain('3 of 3');
   expect(limited).toContain("archon workflow run build --item 'release 1' --cwd '/srv/acme web'");
+
+  // A refused start says what was refused, never that nothing started: a sibling may have.
+  const refusal = (bindingId: string) => ({
+    receiptId: `r-${bindingId}`,
+    bindingId,
+    workflow: 'triage',
+    reason: 'no_default_provider' as const,
+    refusedAt: '2026-11-25T08:00:00.000Z',
+  });
+  const one = attentionItemLines({ ...stopped, refused: [refusal('a')] }, 'brief').join('\n');
+  expect(one).toContain("deliver ended as 'replan'; a start it caused was refused");
+  expect(one).not.toContain('nothing started');
+  const two = attentionItemLines(
+    { ...stopped, refused: [refusal('a'), refusal('b')] },
+    'brief'
+  ).join('\n');
+  expect(two).toContain('2 starts it caused were refused');
 });
