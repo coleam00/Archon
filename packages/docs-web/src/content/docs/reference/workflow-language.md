@@ -2480,10 +2480,11 @@ nodes:
   write that completes the run records the same end
   [`archon workflow end`](/reference/cli/#workflow-end) records, `via: engine`, from the run
   and its `returns:` node, with the reason `Workflow '<name>' ended the item with outcome
-  '<value>'`, followed by the `returns.summary` value when the run gave one. The same write
-  closes every ask and wait still open on the item, the run's own included, as replaced by
-  the run; that settles nothing, so no asks-settled binding starts from it. The item leaves
-  the attention queue and the item read shows the end. A stage the outcome starts does not
+  '<value>'`, followed by the `returns.summary` value when the run gave one. It does so even
+  when the run also leaves an ask or a wait. The item leaves the attention queue, the asks
+  and waits still open on it included (they stay open, and show again if a newer step opens
+  the item), and the item read shows the end. The end sees the steps up to the finishing
+  run, so a step started on the item after it, even one already finished, opens it. A stage the outcome starts does not
   keep the end from being written: an observing stage (a check after the merge) leaves it
   holding, and a step started on the item opens it, as any new step opens an end.
 
@@ -2649,9 +2650,9 @@ What the engine does with them:
 - **Only a top-level run opens them.** A `workflow:` child has no item of its own; its asks stay
   data in the result it hands its parent.
 - **A newer set replaces the open one.** A later completed run of the same workflow on the same
-  item closes that workflow's open asks as `replaced`, even when it leaves none itself. A run
-  whose outcome ends the item ([`returns.ends`](#workflow-signature-inputs-returns-and-inputs))
-  closes every open ask on the item the same way.
+  item closes that workflow's open asks as `replaced`, even when it leaves none itself. While
+  an end holds on the item ([`returns.ends`](#workflow-signature-inputs-returns-and-inputs), or
+  `archon workflow end`), its open asks stay open and out of the attention queue.
 - **They are answered by ref.** Open asks are listed in the attention queue with no run behind
   them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
   --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
@@ -2714,8 +2715,8 @@ What the engine does with them:
   no item, is refused before any node runs, as for asks. The file store holds no items.
 - **They open with the completion.** The waits open on the run's item in the write that
   completes the run, and a later completed run of the same workflow on the same item closes the
-  ones still open as `replaced`, even when it leaves none. A run whose outcome ends the item
-  closes every open wait on it the same way. Only a top-level run opens them.
+  ones still open as `replaced`, even when it leaves none. While an end holds on the item, its
+  open waits stay open and out of the attention queue. Only a top-level run opens them.
 - **They are one set, met once.** The waits a run leaves are alternatives. The first event that
   meets one closes the whole set as met and starts the binding's stage on the item, in the
   transaction that records the event. Another delivery of the same event, or a second event

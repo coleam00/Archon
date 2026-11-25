@@ -4,6 +4,7 @@
  * on its binding row, and attention lists it while it is its item's newest step.
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -125,7 +126,19 @@ test('a start refused at its limit lists its item with the limit until a run sta
     }),
   ]);
 
-  // A run on the item after the refusal moves it on.
+  // A run that observes the item after the refusal moves nothing on; a step does.
+  const shadow = await store().createWorkflowRun({
+    workflow_name: 'shadow',
+    user_message: '',
+    codebase_id: CODEBASE_ID,
+    item_key: 'issue-1',
+    metadata: observesItemMetadata({ observes: true }),
+  });
+  await getDatabase().query(
+    "UPDATE remote_agent_workflow_runs SET started_at = datetime(started_at, '+1 minute') WHERE id = $1",
+    [shadow.id]
+  );
+  expect(await refused()).toHaveLength(1);
   await store().createWorkflowRun({
     workflow_name: 'build',
     user_message: '',

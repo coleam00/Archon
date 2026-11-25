@@ -57,10 +57,21 @@ function claim(alias: string): string {
   return getDialect().jsonText(`${alias}.metadata`, EXECUTION_CLAIM_METADATA_KEY);
 }
 
-/** The steps of item `itemId` (SQL) and every run below them, as a recursive `tree(id)`. */
-function runTree(itemId: string): string {
+/**
+ * The steps of item `itemId` (SQL) and every run below them, as a recursive `tree(id)`. With
+ * `through` (SQL naming a run), only the steps that started no later than that run, in the
+ * order `listStoppedItemRuns` reads them.
+ */
+function runTree(itemId: string, through?: string): string {
+  const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
+  const notAfter =
+    through === undefined
+      ? ''
+      : ` AND NOT EXISTS (SELECT 1 FROM remote_agent_workflow_runs f WHERE f.id = ${through}
+            AND (s.started_at > f.started_at OR (s.started_at = f.started_at AND s.${tie} > f.${tie})))`;
   return `WITH RECURSIVE tree(id) AS (
-      SELECT s.id FROM remote_agent_workflow_runs s WHERE s.item_id = ${itemId} AND ${stepRun('s')}
+      SELECT s.id FROM remote_agent_workflow_runs s
+       WHERE s.item_id = ${itemId} AND ${stepRun('s')}${notAfter}
       UNION SELECT c.id FROM remote_agent_workflow_runs c JOIN tree t ON c.parent_run_id = t.id
     )`;
 }
@@ -154,7 +165,9 @@ async function blockerOf(query: TransactionQuery, itemId: string): Promise<ItemE
  */
 async function insertItemEnd(
   query: TransactionQuery,
-  input: { itemId: string; reason: string } & ItemAct
+  input: { itemId: string; reason: string } & ItemAct,
+  /** The run the end is the outcome of: steps started after it stay unseen, so they open it. */
+  through?: string
 ): Promise<EndRow> {
   const result = await query<EndRow>(
     `INSERT INTO remote_agent_item_ends
@@ -167,22 +180,23 @@ async function insertItemEnd(
   if (row === undefined) throw new Error('The end was not written');
   // Copied in SQL, so each time compares exactly with the column it came from.
   await query(
-    `${runTree('$2')}
+    `${runTree('$2', through === undefined ? undefined : '$3')}
      INSERT INTO remote_agent_item_end_runs
        (end_id, run_id, execution_claim)
      SELECT $1, CAST(r.id AS TEXT), ${claim('r')}
      FROM remote_agent_workflow_runs r JOIN tree t ON t.id = r.id`,
-    [row.id, input.itemId]
+    through === undefined ? [row.id, input.itemId] : [row.id, input.itemId, through]
   );
   return row;
 }
 
 /**
  * The end a run's finishing outcome records on its item (`returns.ends`), inside the
- * transaction that completes the run and only when that write won, after the run's own asks
- * and waits are written. It is the end `archon workflow end` writes, from the engine: no
- * blocker refuses it, it closes what is still asked or awaited on the item, and a step on the
- * item still live, or a step queued on it, keeps it from holding as for any end.
+ * transaction that completes the run and only when that write won. It is the end
+ * `archon workflow end` writes, from the engine, and no blocker refuses it. It sees the steps
+ * up to the finishing run only: a step started after it is newer work, which opens the end,
+ * as does a step still live or one queued on the item. Asks and waits stay as they are; the
+ * attention queue leaves them out while the end holds.
  */
 export async function recordCompletedRunEnd(
   query: TransactionQuery,
@@ -196,23 +210,11 @@ export async function recordCompletedRunEnd(
   const itemId = found.rows[0]?.item_id ?? null;
   if (itemId === null)
     throw new Error(`Run '${runId}' ended its item but has no item; an end belongs to an item`);
-  await insertItemEnd(query, {
-    itemId,
-    reason: end.reason,
-    via: 'engine',
-    by: null,
-    fromRun: { runId, nodePath: end.node },
-  });
-  // The item rests, so nothing on it is still asked or awaited: the ending run replaces what
-  // is open, its own included, as a later run of a workflow replaces that workflow's set.
-  // Replacing settles nothing, so no asks-settled binding starts from it.
-  const now = new Date().toISOString();
-  for (const table of ['remote_agent_item_asks', 'remote_agent_item_waits'])
-    await query(
-      `UPDATE ${table} SET closed_as = 'replaced', closed_at = $1, replaced_by_run_id = $2
-       WHERE item_id = $3 AND closed_as IS NULL`,
-      [now, runId, itemId]
-    );
+  await insertItemEnd(
+    query,
+    { itemId, reason: end.reason, via: 'engine', by: null, fromRun: { runId, nodePath: end.node } },
+    runId
+  );
 }
 
 /**

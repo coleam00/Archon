@@ -321,8 +321,9 @@ export const workflowResultContractSchema = z.strictObject({
   /**
    * The outcomes that finish the run's item: each one of the values `outcome` can take (the
    * enum's values, or `succeeded`/`failed` for a boolean). A top-level run on an item that
-   * completes with one, starting nothing and leaving no ask or wait, records an end on the
-   * item in the write that completes it, the same end `archon workflow end` records.
+   * completes with one records an end on the item in the write that completes it, the same
+   * end `archon workflow end` records, whatever it starts and even when it leaves an ask or a
+   * wait (`itemFate`).
    */
   ends: z.array(z.string().min(1)).min(1).optional(),
   /**

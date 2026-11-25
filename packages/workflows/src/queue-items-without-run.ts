@@ -7,7 +7,8 @@
  * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
  * `readItemStopped`), or a failed top-level run, is listed while it is the newest run on the
  * item, the item's end does not hold (`item-end.ts`) and no merge is recorded on it
- * (`getItemMerge`); it takes no answer.
+ * (`getItemMerge`); it takes no answer. Asks and waits on an item whose end holds are left
+ * out too: an item at rest asks nothing.
  */
 import { createLogger } from '@archon/paths';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
@@ -51,6 +52,23 @@ export type AskItemStore = Pick<
   IWorkflowStore,
   'listOpenItemAsks' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
 >;
+
+/**
+ * Whether the end on item `itemId` holds, read once per item for one listing. An item at
+ * rest asks nothing: its open asks and waits stay recorded, and show again if a newer step
+ * opens it.
+ */
+function endHoldsOn(store: ItemEndStore): (itemId: string) => Promise<boolean> {
+  const read = new Map<string, Promise<boolean>>();
+  return itemId => {
+    let holds = read.get(itemId);
+    if (holds === undefined) {
+      holds = readHoldingItemEnd(store, itemId).then(end => end !== null && !('type' in end));
+      read.set(itemId, holds);
+    }
+    return holds;
+  };
+}
 
 /**
  * The queue item an ask is: a `select` question with the reserved `other` option, held by
@@ -101,12 +119,20 @@ export async function askQueueItem(
   };
 }
 
-/** The open asks as queue items, for `AttentionQueueSource.itemsWithoutRun`. */
-export async function openAskItems(store: AskItemStore): Promise<AttentionRead<AskQueueItem>[]> {
+/**
+ * The open asks as queue items, for `AttentionQueueSource.itemsWithoutRun`, but for those on
+ * an item whose end holds (`readHoldingItemEnd`).
+ */
+export async function openAskItems(
+  store: AskItemStore & ItemEndStore
+): Promise<AttentionRead<AskQueueItem>[]> {
   const codebases: CodebaseCache = new Map();
+  const ended = endHoldsOn(store);
   const items: AttentionRead<AskQueueItem>[] = [];
-  for (const ask of await store.listOpenItemAsks())
-    items.push(isAttentionDegraded(ask) ? ask : await askQueueItem(store, ask, codebases));
+  for (const ask of await store.listOpenItemAsks()) {
+    if (isAttentionDegraded(ask)) items.push(ask);
+    else if (!(await ended(ask.itemId))) items.push(await askQueueItem(store, ask, codebases));
+  }
   return items;
 }
 
@@ -163,17 +189,22 @@ export function waitSets(
 
 /**
  * The sets of open waits past their deadline at `now`, as queue items, for
- * `AttentionQueueSource.itemsWithoutRun`. A wait's deadline raises attention and wakes
- * nothing: the set stays open, and a later event still meets it.
+ * `AttentionQueueSource.itemsWithoutRun`, but for those on an item whose end holds. A wait's
+ * deadline raises attention and wakes nothing: the set stays open, and a later event still
+ * meets it.
  */
 export async function overdueWaitItems(
-  store: WaitItemStore,
+  store: WaitItemStore & ItemEndStore,
   now: Date = new Date()
 ): Promise<AttentionQueueItemWithoutRun[]> {
   const codebases: CodebaseCache = new Map();
+  const ended = endHoldsOn(store);
   const items: AttentionQueueItemWithoutRun[] = [];
   for (const set of waitSets(await store.listOpenItemWaits()))
-    if (set.some(wait => Date.parse(wait.deadlineAt) <= now.getTime()))
+    if (
+      set.some(wait => Date.parse(wait.deadlineAt) <= now.getTime()) &&
+      !(await ended(set[0].itemId))
+    )
       items.push(await waitQueueItem(store, set, codebases));
   return items;
 }

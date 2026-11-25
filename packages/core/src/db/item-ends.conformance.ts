@@ -48,6 +48,18 @@ async function startOnItem(harness: Harness, parent?: string): Promise<string> {
   return id;
 }
 
+/** A running step of another workflow on item `pr-7`, which the first one's hold allows. */
+async function startOtherStep(harness: Harness): Promise<string> {
+  const run = await harness.store.createWorkflowRun({
+    workflow_name: 'review',
+    user_message: '',
+    codebase_id: CONFORMANCE_CODEBASE_ID,
+    item_key: 'pr-7',
+  });
+  await harness.store.claimPendingWorkflowRun(run.id);
+  return run.id;
+}
+
 async function stopOnItem(harness: Harness): Promise<string> {
   const id = await startOnItem(harness);
   await harness.store.completeWorkflowRun(id, { duration_ms: 1 }, itemStoppedMetadata('stop'), {
@@ -169,7 +181,7 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
     }
   });
 
-  test('a finishing outcome closes what is still asked or awaited on the item, settling nothing', async () => {
+  test('asks and waits on an item whose end holds stay open and out of attention', async () => {
     const harness = await makeHarness();
     try {
       const planned = await completeWithAsks(harness, [ask('Keep the flag?')], { item: 'pr-7' });
@@ -178,7 +190,16 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       await harness.store.completeWorkflowRun(waiting, { duration_ms: 1 }, undefined, {
         waits: [wait],
       });
+      // Move the deadline into the past, as the passing of the hour would.
+      await harness.db.query('UPDATE remote_agent_item_waits SET deadline_at = $1', [
+        new Date(Date.now() - 60_000).toISOString(),
+      ]);
+      const overdue = async () =>
+        (await listAttentionQueue(itemDeps(harness).queue)).filter(
+          item => 'kind' in item && item.kind === 'overdue_wait'
+        );
       expect(await openRefs(harness)).toHaveLength(1);
+      expect(await overdue()).toHaveLength(1);
 
       const ending = await startOnItem(harness);
       await harness.store.completeWorkflowRun(ending, { duration_ms: 1 }, undefined, {
@@ -188,12 +209,69 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       });
       expect(await holding(harness)).not.toBeNull();
       expect(await openRefs(harness)).toEqual([]);
-      const open = await harness.db.query<{ n: number | string }>(
-        'SELECT COUNT(*) AS n FROM remote_agent_item_waits WHERE closed_as IS NULL'
-      );
-      expect(Number(open.rows[0]?.n)).toBe(0);
-      // Replaced, not withdrawn: no asks-settled binding starts from the end.
+      expect(await overdue()).toEqual([]);
+      // Nothing was closed, so nothing settled; a newer step shows them again.
       expect(await settledEvents(harness, planned)).toEqual([]);
+      await createOnItem(harness);
+      expect(await openRefs(harness)).toHaveLength(2);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a step started before a finishing run completes opens its end, and its stop shows', async () => {
+    const harness = await makeHarness();
+    try {
+      const finishing = await startOnItem(harness);
+      const newer = await startOtherStep(harness);
+      const finish = () =>
+        harness.store.completeWorkflowRun(finishing, { duration_ms: 1 }, undefined, {
+          outcome: { kind: 'enum', value: 'close' },
+          end: { reason: "Workflow 'deliver' ended the item with outcome 'close'", node: 'decide' },
+        });
+      await finish();
+      expect(await holding(harness)).toBeNull();
+      await harness.store.completeWorkflowRun(newer, { duration_ms: 1 }, itemStoppedMetadata('x'), {
+        outcome: { kind: 'enum', value: 'replan' },
+      });
+      expect(await holding(harness)).toBeNull();
+      expect(await stoppedRefs(harness)).toEqual([`stopped:${newer}`]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a finishing run that completes after a newer step stopped leaves that stop listed', async () => {
+    const harness = await makeHarness();
+    try {
+      const finishing = await startOnItem(harness);
+      const newer = await startOtherStep(harness);
+      await harness.store.completeWorkflowRun(newer, { duration_ms: 1 }, itemStoppedMetadata('x'), {
+        outcome: { kind: 'enum', value: 'replan' },
+      });
+      await harness.store.completeWorkflowRun(finishing, { duration_ms: 1 }, undefined, {
+        outcome: { kind: 'enum', value: 'close' },
+        end: { reason: "Workflow 'deliver' ended the item with outcome 'close'", node: 'decide' },
+      });
+      expect(await holding(harness)).toBeNull();
+      expect(await stoppedRefs(harness)).toEqual([`stopped:${newer}`]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('an observing run that leaves asks on an ended item leaves them out of attention', async () => {
+    const harness = await makeHarness();
+    try {
+      await stopOnItem(harness);
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      const shadow = await createOnItem(harness, undefined, true);
+      await harness.store.claimPendingWorkflowRun(shadow);
+      await harness.store.completeWorkflowRun(shadow, { duration_ms: 1 }, undefined, {
+        asks: [ask('Advice nobody needs now?')],
+      });
+      expect(await holding(harness)).not.toBeNull();
+      expect(await openRefs(harness)).toEqual([]);
     } finally {
       await harness.close();
     }

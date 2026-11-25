@@ -129,7 +129,7 @@ export function readCompletedOutcome(
  * - `observes`: the workflow declares `observes: true`; its runs act on the item without
  *   being one of its steps, so its ending neither moves, ends nor stops the item.
  * - `ends`: the outcome is one the workflow lists in `returns.ends`. The engine records an
- *   end on the item and closes the asks and waits still open on it, so the item rests. A
+ *   end on the item, even when the run leaves an ask or a wait, and the item rests. A
  *   start the ending causes does not keep the end from being written: a start of an
  *   observing workflow (a check after a merge) leaves it holding, and a step started on the
  *   item opens it, as a run after `archon workflow end` does.

@@ -14,6 +14,7 @@ import {
 } from '@archon/workflows/schemas/binding-refusal';
 import { getDatabase } from './connection';
 import { heldIntent } from './install-hold';
+import { stepRun } from './item-step';
 import { parseStoredJson } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
 import { getLog } from './workflow-run-shared';
@@ -97,8 +98,8 @@ function causedByRun(stored: unknown): boolean {
 }
 
 /**
- * True when a top-level run started on item `itemId` after the start was refused: the item
- * moved on. Compared with the binding's own timestamp in SQL, so both sides share a format;
+ * True when a top-level step started on item `itemId` after the start was refused: the item
+ * moved on. A run that observes the item (`stepRun`) moves nothing on. Compared with the binding's own timestamp in SQL, so both sides share a format;
  * SQLite records seconds, so a run in the refusal's second leaves it listed.
  */
 export async function itemRanSince(
@@ -107,7 +108,7 @@ export async function itemRanSince(
 ): Promise<boolean> {
   const result = await getDatabase().query(
     `SELECT 1 FROM remote_agent_workflow_runs w
-      WHERE w.item_id = $1 AND w.parent_run_id IS NULL
+      WHERE w.item_id = $1 AND w.parent_run_id IS NULL AND ${stepRun('w')}
         AND w.started_at > (SELECT b.updated_at FROM remote_agent_start_receipt_bindings b
                              WHERE b.receipt_id = $2 AND b.binding_id = $3)
       LIMIT 1`,

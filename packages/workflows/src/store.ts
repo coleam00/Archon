@@ -369,8 +369,10 @@ export interface IWorkflowStore
    */
   withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
   /**
-   * Runs that stopped their item (`readItemStopped`, or a failed top-level run) and are still
-   * its last run; any run started on the item after one ends its stop. Itemless stores: none.
+   * Steps that stopped their item (`readItemStopped`, or a failed top-level run) and are still
+   * its last step; any step started on the item after one ends its stop. A run that observes
+   * its item (`observes: true`) is no step: never listed, and it ends no stop. Itemless
+   * stores: none.
    */
   listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]>;
   /** Top-level `pending`, `running` or `paused` runs, oldest first; see `OwnerObserver`. */

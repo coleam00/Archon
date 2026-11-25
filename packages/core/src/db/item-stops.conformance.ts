@@ -136,19 +136,19 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
           'kind' in item && item.kind === 'stopped' ? [item.ref] : []
         );
       // A failed observing run alone is no stop.
-      const failedShadow = await createOnItem(harness, 'shadow', true);
+      const failedShadow = await createOnItem(harness, 'shadow', 'pr-7', true);
       await harness.store.claimPendingWorkflowRun(failedShadow);
       await harness.store.failWorkflowRun(failedShadow, 'boom');
       expect(await stopped()).toEqual([]);
 
       const stop = await completeOnItem(harness, 'review', 'not_ready', 'Tests are missing.');
-      const live = await createOnItem(harness, 'shadow', true);
+      const live = await createOnItem(harness, 'shadow', 'pr-7', true);
       expect(await stopped()).toEqual([`stopped:${stop}`]);
       await harness.store.claimPendingWorkflowRun(live);
       await harness.store.completeWorkflowRun(live, { duration_ms: 1 }, undefined, {
         outcome: { kind: 'enum', value: 'agree' },
       });
-      const failed = await createOnItem(harness, 'advice', true);
+      const failed = await createOnItem(harness, 'advice', 'pr-7', true);
       await harness.store.claimPendingWorkflowRun(failed);
       await harness.store.failWorkflowRun(failed, 'boom');
       expect(await stopped()).toEqual([`stopped:${stop}`]);
