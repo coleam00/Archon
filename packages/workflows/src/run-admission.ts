@@ -35,11 +35,7 @@ import {
   runLimitHold,
   waitForTurn,
 } from './resource-hold';
-import {
-  refuseResultInputsWithoutItem,
-  resolveResultInputs,
-  unsuppliedResultInputs,
-} from './run-result';
+import { resolveResultInputs, unsuppliedResultInputs } from './run-result';
 import {
   ConcurrencyConfigError,
   InstallHeldError,
@@ -149,16 +145,15 @@ async function startFreshRun(
   opts: ExecuteWorkflowOptions,
   dispatch: RunDispatch
 ): Promise<RunPhase<AdmittedRun>> {
-  const resultInputs = unsuppliedResultInputs(workflow, dispatch.startInputs);
-  const itemless = await refuseResultInputsWithoutItem(
+  const notStarted = await refuseRunBeforeClaim(
     deps,
     platform,
     conversationId,
     workflow,
     workflowRun,
-    resultInputs
+    dispatch.startInputs
   );
-  if (itemless) return { stopped: true, result: itemless };
+  if (notStarted) return { stopped: true, result: notStarted };
   const claimed = await claimPendingRun(
     deps,
     platform,
@@ -189,7 +184,7 @@ async function startFreshRun(
     platform,
     conversationId,
     run,
-    resultInputs,
+    unsuppliedResultInputs(workflow, dispatch.startInputs),
     claimed.value
   );
   if (resolved.stopped) return resolved;
@@ -295,9 +290,10 @@ async function refuseRunBeforeClaim(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflow: ResolvedWorkflow,
-  workflowRun: WorkflowRun
+  workflowRun: WorkflowRun,
+  startInputs: RunDispatch['startInputs']
 ): Promise<WorkflowExecutionResult | undefined> {
-  const reason = await refusePendingStart(deps, workflow, workflowRun);
+  const reason = await refusePendingStart(deps, workflow, workflowRun, startInputs);
   if (reason === undefined) return undefined;
   await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
   return { success: false, workflowRunId: workflowRun.id, error: reason };
@@ -319,14 +315,6 @@ async function claimPendingRun(
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
   { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
-  const notStarted = await refuseRunBeforeClaim(
-    deps,
-    platform,
-    conversationId,
-    workflow,
-    workflowRun
-  );
-  if (notStarted) return { stopped: true, result: notStarted };
   const refused = await holdWorkflowResource(
     deps,
     platform,

@@ -1056,7 +1056,7 @@ async function pendingForgeBinding() {
   });
 
   const started: string[] = [];
-  const drain = () =>
+  const drain = (engineChanged?: () => boolean) =>
     drainResourceStartHost({
       ...host,
       hostId: 'host',
@@ -1064,6 +1064,7 @@ async function pendingForgeBinding() {
         started.push(id);
         return null;
       },
+      ...(engineChanged ? { engineChanged } : {}),
     });
   return { store, receiptId, started, drain };
 }
@@ -1092,6 +1093,21 @@ test('a binding whose pack forge this checkout cannot reach is refused before ad
         failures: [{ reason: 'no_forge_remote', remedy: expect.any(String) }],
       },
     },
+  ]);
+});
+
+test('a preparation that fails in a process whose engine changed stays pending for a current one', async () => {
+  const { store, receiptId, started, drain } = await pendingForgeBinding();
+  const error = await drain(() => true).catch((caught: unknown) => caught);
+
+  if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+  expect(String(error.failures[0]?.error)).toContain('Left pending');
+  expect(started).toEqual([]);
+  expect(await store.listPendingStartBindings({ hostId: 'host' })).toMatchObject([{ receiptId }]);
+  // A process on the installed engine prepares it as any pending start: here it is refused.
+  await drain().catch(() => undefined);
+  expect((await store.getStartReceipt(receiptId))?.bindings).toMatchObject([
+    { status: 'rejected', error: 'launch_preparation_failed' },
   ]);
 });
 

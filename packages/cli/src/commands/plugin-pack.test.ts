@@ -158,6 +158,32 @@ beforeAll(async () => {
     },
     'crafted-compat'
   );
+  const skillManifest = blob(
+    `${JSON.stringify({
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: 'review-kit',
+      description: 'fixture',
+      entrypoints: { review: 'review/review.yaml' },
+      skill: { name: 'review-kit', path: 'skill' },
+    })}\n`
+  );
+  commitTree(
+    {
+      ...pack,
+      'packs/review-kit/archon-plugin.json': skillManifest,
+      'packs/review-kit/skill/SKILL.md': blob('# Review kit\n'),
+    },
+    'crafted-skill'
+  );
+  commitTree(
+    {
+      ...pack,
+      'packs/review-kit/archon-plugin.json': skillManifest,
+      'packs/review-kit/skill/notes.md': blob('no SKILL.md here\n'),
+    },
+    'crafted-skill-missing'
+  );
   // The pack's own attributes ask for CRLF endings and `$Id$` expansion on checkout.
   commitTree(
     {
@@ -525,12 +551,27 @@ describe('archon plugin: workflow packs', () => {
       `${ID}@crafted-compat`,
       'requires Archon >=99.0.0; this is Archon 0.11.0',
     ],
+    [
+      'a declared skill folder without SKILL.md',
+      `${ID}@crafted-skill-missing`,
+      'skill "review-kit" names skill, which has no SKILL.md',
+    ],
   ])('refuses a pack with %s and writes nothing', async (_case, target, message) => {
     const env = await environment();
     const result = await run(env, 'add', target);
     expect(result.code).toBe(1);
     expect(result.err).toContain(message);
     expect(await snapshot(env.pluginsDir)).toEqual({});
+  });
+
+  test('names the skill a pack ships and the command that adds it, writing nothing into a project', async () => {
+    const env = await environment();
+    const result = await run(env, 'add', `${ID}@crafted-skill`);
+    expect(result.err).toBe('');
+    expect(result.out).toContain(
+      `  Ships the agent skill review-kit. Add it to a project: archon skill add --pack ${ID}`
+    );
+    expect(await snapshot(env.projectDir)).toEqual({});
   });
 
   // Windows runners and many Windows users set core.autocrlf=true globally. The
