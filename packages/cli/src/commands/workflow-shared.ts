@@ -374,19 +374,23 @@ export function shortRunIdNeedsProject(runId: string): string {
  * is global, so full ids keep working from any directory. A caller that already resolved a project can
  * provide its id; otherwise `cwd` is the project gate's effective directory, and the
  * project is looked up exactly as `findRunsCodebase` looks it up, so a prefix listed by
- * `workflow runs` resolves to the same run. By
- * default, an omitted cwd and an unmatched prefix pass through unchanged so the
- * downstream exact lookup keeps its existing error surface; callers without a
- * downstream lookup can require a match instead. A prefix from a cwd in no
- * registered project is refused, naming the full id.
+ * `workflow runs` resolves to the same run.
+ *
+ * `onPrefixMiss` says what happens to a prefix that does not resolve. By default an
+ * omitted or unregistered cwd and an unmatched prefix pass through unchanged, so the
+ * downstream exact lookup keeps its existing error surface. `require-match` refuses
+ * both, for callers without a downstream lookup. `refuse-outside-project` refuses a
+ * prefix from a cwd in no registered project, naming the full id: the by-id reads,
+ * which run from any directory, use it so an existing run is not reported missing.
  */
 export async function resolveRunIdArg(
   host: WorkflowHost,
   runId: string,
   cwd?: string,
-  requirePrefixMatch = false,
+  onPrefixMiss: 'pass-through' | 'require-match' | 'refuse-outside-project' = 'pass-through',
   codebaseId?: string
 ): Promise<string> {
+  const requirePrefixMatch = onPrefixMiss === 'require-match';
   const scope = readChatProjectScope();
   if (scope !== undefined) return resolveProjectScopedRunId(host, runId, scope);
   if (isFullRunId(runId)) return runId;
@@ -401,9 +405,13 @@ export async function resolveRunIdArg(
     (cwd === undefined
       ? undefined
       : (await findCodebaseForCheckoutPath(cwd, host.records.codebases))?.id);
-  // Prefixes are project-scoped: outside a registered project there is nothing to resolve
-  // one in, and passing it on would report an existing run as missing.
-  if (!resolvedCodebaseId) throw new Error(shortRunIdNeedsProject(runId));
+  if (!resolvedCodebaseId) {
+    if (requirePrefixMatch) {
+      throw new Error(`Cannot resolve run id prefix '${runId}' outside a registered project.`);
+    }
+    if (onPrefixMiss === 'refuse-outside-project') throw new Error(shortRunIdNeedsProject(runId));
+    return runId;
+  }
   const matches = await findProjectRunsByReference(host.deps.store, runId, resolvedCodebaseId);
   if (matches.length > 1) {
     const candidates = matches.map(match => `  ${match.id}`).join('\n');

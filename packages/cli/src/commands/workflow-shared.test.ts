@@ -658,7 +658,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
         undefined,
         '/unregistered'
       )
-    ).rejects.toThrow("Short run id 'deadbeef' resolves only in the run's project.");
+    ).rejects.toThrow("Cannot resolve run id prefix 'deadbeef' outside a registered project.");
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
   });
 

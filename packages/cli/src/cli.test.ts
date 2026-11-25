@@ -632,12 +632,8 @@ describe('workflow answer flag rejection and command discovery', () => {
     });
   }
 
-  // A short id outside a registered project is refused before lookup, so a missing run
-  // is named by a full id.
-  const MISSING_FULL_RUN_ID = '7b50458b-0000-4000-8000-000000000000';
-
   it('returns nonzero when a JSON answer cannot find its run', () => {
-    const result = invoke(['answer', MISSING_FULL_RUN_ID, '--occurrence', 'x', '--json']);
+    const result = invoke(['answer', 'missing-run', '--occurrence', 'x', '--json']);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
       error: expect.stringContaining('Workflow run not found'),
@@ -646,7 +642,7 @@ describe('workflow answer flag rejection and command discovery', () => {
   });
 
   it('routes end-turn to its run lookup', () => {
-    const result = invoke(['end-turn', MISSING_FULL_RUN_ID, '--json']);
+    const result = invoke(['end-turn', 'missing-run', '--json']);
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
