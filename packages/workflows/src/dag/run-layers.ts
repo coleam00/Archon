@@ -30,6 +30,7 @@ import { getLog } from './log';
 import { incrementalLoopUsage, sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settleSequentially, settledValuesOrThrow } from './node-source';
 import type { OperatorPauseBoundary } from './operator-pause-boundary';
+import type { OutcomeUnknownBoundary } from './outcome-unknown-boundary';
 import {
   beginExecution,
   ownsBodySessionCursor,
@@ -52,14 +53,16 @@ import { getStaleCachedDependencies } from './stale-dependencies';
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
  * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
  * The top-level walk also stops at `pause`: before each layer dispatches, or before the
- * next node of a layer it runs one node at a time.
+ * next node of a layer it runs one node at a time. It stops before each layer at `held` too,
+ * once a node recorded an `outcome_unknown` failure; that wins over a pause request.
  *
  * Shared by the top-level DAG, `executeLoopGroupNode`'s per-iteration body and each
  * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
 export async function runLayers(
   ctx: RunLayersContext,
-  pause?: OperatorPauseBoundary
+  pause?: OperatorPauseBoundary,
+  held?: OutcomeUnknownBoundary
 ): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
@@ -67,6 +70,7 @@ export async function runLayers(
     if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
       break;
     await ctx.toolAttention.refresh();
+    if (await held?.stopsHere()) break;
     if (await pause?.stopsHere()) break;
     const layer = ctx.layers[layerIdx];
     await runLayer(ctx, layer, layerIdx, pause);

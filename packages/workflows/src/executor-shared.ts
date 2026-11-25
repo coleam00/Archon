@@ -222,6 +222,8 @@ const RETRY_CLASS = {
   // `fatal` is the class retry never re-runs, even under `on_error: all`.
   config: 'fatal',
   cancelled: 'fatal',
+  // A side effect may or may not have happened: nothing runs the node again by itself.
+  outcome_unknown: 'fatal',
   // Loop and child failures never reach a retry decision; listed for totality.
   max_iterations: 'unknown',
   child_failed: 'unknown',

@@ -39,6 +39,7 @@ import { safeSendMessage } from '../platform-messages';
 import type { ContainerRunContext } from '../container-context';
 import { randomUUID } from 'node:crypto';
 import { getLog } from './log';
+import { outcomeUnknownMessage } from '../outcome-unknown';
 import type { RunLayersContext } from './run-context';
 import { runContainerWriteBackGate } from './container-gate';
 import { type ContainerPauseReceipt, statusAfterPauseFailure } from './pause';
@@ -65,6 +66,8 @@ export type RunTerminalContext = Pick<
   containerCtx: ContainerRunContext | undefined;
   /** When this pass began (`Date.now()`); the completion write records its duration. */
   startedAt: number;
+  /** Steps whose failure recorded `outcome_unknown`: any fail the run, and nothing waits. */
+  outcomeUnknownSteps: readonly string[];
 };
 
 type NodeCounts = { completed: number; failed: number; skipped: number; total: number };
@@ -98,7 +101,8 @@ export async function finishRun(
     'dag_workflow_finished'
   );
 
-  if (!anyCompleted || anyFailed) {
+  // An `all_done` fan-out can complete past an instance whose outcome is unknown.
+  if (!anyCompleted || anyFailed || ctx.outcomeUnknownSteps.length > 0) {
     await failOnNodeOutcome(ctx, nodeCounts, runTranscriptUsage);
     return;
   }
@@ -335,7 +339,10 @@ function countNodeStates(nodeOutputs: ReadonlyMap<string, NodeOutput>, total: nu
   return nodeCounts;
 }
 
-/** Fail a pass that completed no node or had a node fail, unless it waits on a provider limit. */
+/**
+ * Fail a pass that completed no node, had a node fail or holds an unknown outcome, unless it
+ * waits on a provider limit: a held run never does, since the wait re-runs failed nodes.
+ */
 async function failOnNodeOutcome(
   ctx: RunTerminalContext,
   nodeCounts: NodeCounts,
@@ -344,12 +351,15 @@ async function failOnNodeOutcome(
   const { deps, platform, conversationId, workflow, workflowRun, logDir, nodeOutputs } = ctx;
   const noneCompleted = nodeCounts.completed === 0;
   const anyFailed = nodeCounts.failed > 0;
+  const held = ctx.outcomeUnknownSteps.length > 0;
   if (await skipIfStatusChanged(deps, workflowRun, 'dag.skip_fail_status_changed')) return;
-  if ((!noneCompleted || anyFailed) && (await pauseForUsageLimit(ctx))) return;
+  if (!held && (!noneCompleted || anyFailed) && (await pauseForUsageLimit(ctx))) return;
 
-  const failMsg = noneCompleted
-    ? noSuccessfulNodesMessage(workflow.name, nodeOutputs, nodeCounts.skipped)
-    : partialFailureMessage(workflow.name, nodeOutputs);
+  const failMsg = held
+    ? outcomeUnknownMessage(workflow.name, ctx.outcomeUnknownSteps)
+    : noneCompleted
+      ? noSuccessfulNodesMessage(workflow.name, nodeOutputs, nodeCounts.skipped)
+      : partialFailureMessage(workflow.name, nodeOutputs);
   await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
     (logErr: Error) => {
       getLog().error(
@@ -373,7 +383,7 @@ async function failOnNodeOutcome(
     workflow.name,
     failMsg,
     // A first-node failure completes nothing, but it is still a node failure.
-    noneCompleted && !anyFailed ? 'no_nodes_completed' : 'node_error',
+    held ? 'outcome_unknown' : noneCompleted && !anyFailed ? 'no_nodes_completed' : 'node_error',
     noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail',
     changeSize
   );

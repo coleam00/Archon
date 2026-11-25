@@ -42,6 +42,7 @@ import { type RunInputs, type RunLayersContext } from './dag/run-context';
 import { assertRunCapabilities } from './dag/capability-preflight';
 import { runLayers } from './dag/run-layers';
 import { OperatorPauseBoundary } from './dag/operator-pause-boundary';
+import { OutcomeUnknownBoundary } from './dag/outcome-unknown-boundary';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
@@ -377,9 +378,10 @@ export async function executeDagWorkflow(
   };
 
   const pauseBoundary = new OperatorPauseBoundary(deps.store, workflowRun.id);
+  const heldBoundary = new OutcomeUnknownBoundary(deps.store, workflowRun.id);
   let sourceUnreadable: RunSourceUnreadableError | undefined;
   try {
-    await runLayers(runCtx, pauseBoundary);
+    await runLayers(runCtx, pauseBoundary, heldBoundary);
   } catch (error) {
     const unwound = await unwindRunLayers(error);
     if (unwound === 'budget_failed') return;
@@ -389,6 +391,18 @@ export async function executeDagWorkflow(
   }
 
   await persistRunUsage();
+  // A node whose outcome is unknown ends the run here, ahead of everything that would let
+  // it go on: the source release, a published pause and the operator's pause. Read again,
+  // since the failure may come from the walk's last layer.
+  if (await heldBoundary.stopsHere()) {
+    return finishRun({
+      ...runCtx,
+      workflow,
+      containerCtx,
+      startedAt: dagStartTime,
+      outcomeUnknownSteps: heldBoundary.held,
+    });
+  }
   if (sourceUnreadable !== undefined) {
     return {
       kind: 'source_release',
@@ -418,7 +432,13 @@ export async function executeDagWorkflow(
     return undefined;
   }
 
-  return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
+  return finishRun({
+    ...runCtx,
+    workflow,
+    containerCtx,
+    startedAt: dagStartTime,
+    outcomeUnknownSteps: [],
+  });
 }
 
 /** Refuses a run no node could work in, then announces a container run. */

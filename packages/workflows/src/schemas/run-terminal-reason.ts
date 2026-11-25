@@ -25,6 +25,9 @@ export const runExitReasonSchema = z.enum([
   'launch_failed',
   // No run row could be written, so the run never existed.
   'run_not_created',
+  // A node failure recorded `outcome_unknown`: a side effect may or may not have happened,
+  // so the run stopped at the next top-level layer and does not continue by itself.
+  'outcome_unknown',
 ]);
 export type RunExitReason = z.infer<typeof runExitReasonSchema>;
 

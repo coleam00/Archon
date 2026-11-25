@@ -125,6 +125,22 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
       await store.pauseWorkflowRun(abandoned.id, approval, undefined, suspended(abandoned.id));
       await commits(abandoned.id, () => store.cancelWorkflowRun(abandoned.id));
     });
+    test('a failed run whose outcome is unknown is a stopped run, with no item or as a child, until resumed or abandoned', async () => {
+      const top = await running(store);
+      const parent = await running(store);
+      const child = await running(store, { parent_run_id: parent.id });
+      const ordinary = await running(store);
+      for (const { id } of [top, child])
+        await store.failWorkflowRun(id, 'write timed out', { exitReason: 'outcome_unknown' });
+      await store.failWorkflowRun(ordinary.id, 'boom', { exitReason: 'node_error' });
+      const listed = async (): Promise<string[]> =>
+        (await store.listStoppedItemRuns()).flatMap(run => ('id' in run ? [run.id] : []));
+      expect(await listed()).toEqual([top.id, child.id]);
+      await store.resumeWorkflowRun(top.id);
+      await store.cancelWorkflowRun(child.id);
+      expect(await listed()).toEqual([]);
+    });
+
     test('rejecting a paused run that records no gate cancels it, exactly once', async () => {
       const run = await running(store);
       await store.updateWorkflowRun(run.id, { status: 'paused' });

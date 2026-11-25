@@ -907,7 +907,9 @@ For a `failed` run, human output adds a `Stopped:` line naming the interrupt and
 signal, above the usual `Error:` line. JSON carries the same fact as `metadata.stop_reason`, an object with the
 categorical `reason` and the `signal` that arrived. Resuming the run clears it, so a run
 that resumed and then completed does not keep reporting an interrupt. Runs that stopped
-before this field existed carry no `stop_reason`.
+before this field existed carry no `stop_reason`. A run whose node failed with an
+[unknown outcome](/reference/workflow-language/#a-failure-whose-outcome-is-unknown) carries
+reason `outcome_unknown`.
 
 After recording why the run stopped, the owner ends the process tree of every `bash:` or
 `script:` node still running, including an `until_bash` check, so a resume does not overlap the
@@ -1270,7 +1272,10 @@ Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_lim
 continues automatically after reset, and `unreadable` needs inspection. `stopped` is an
 item whose last run ended in an outcome nothing starts from and left no ask; it takes no
 answer, and a new run on the item, or [ending the item](#workflow-end), closes it
-([kinds](/getting-started/operate/)). Read-only.
+([kinds](/getting-started/operate/)). A run that failed with stop reason
+[`outcome_unknown`](/reference/workflow-language/#a-failure-whose-outcome-is-unknown) is a
+`stopped` item too, also as a child run or with no item; it names the node and closes only
+when the run is resumed or abandoned. Read-only.
 
 ```bash
 archon workflow attention --json                                   # this project

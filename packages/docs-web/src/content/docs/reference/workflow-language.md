@@ -1020,6 +1020,7 @@ Archon puts a failure it detects itself in a bucket by its kind:
 | A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
 | A cancelled node | FATAL | Never |
 | A provider error without a typed class | UNKNOWN | No (unless `on_error: all`) |
+| A failure recorded as `outcome_unknown`: the node may have had a side effect whose outcome Archon cannot know | FATAL | Never, and the run stops. See [A failure whose outcome is unknown](#a-failure-whose-outcome-is-unknown) |
 
 A failure recorded before Archon stored failure kinds counts as UNKNOWN.
 
@@ -1131,6 +1132,28 @@ Plain `archon workflow run` never resumes implicitly.
 **Session context on resume**: Handles required by an explicit `context: { resume: node-id }` selector are restored for completed nodes. The ambient sequential cursor is not reconstructed; a downstream node that relies on implicit inherited context should use an explicit selector or re-read durable artifacts.
 
 **Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip).
+
+### A failure whose outcome is unknown
+
+A node failure can record the kind `outcome_unknown`: the node may have had a side effect (a write, a call that timed out after sending) and Archon cannot know whether it happened. Nothing may run such a node again by itself. No built-in node records this kind yet; a node that writes through a tool is the intended first use.
+
+- The node is never retried, whatever its `retry.on_error` says.
+- The run starts no further top-level layer. Nodes already running in that layer finish; a node in a later layer does not start, including a `wait:`, an `always_run` node and one whose `trigger_rule` is `all_done`. A `loop`, `loop_group`, `workflow:` or fan-out node is one unit here, as for an [operator pause](/reference/cli/#workflow-pause).
+- The run ends `failed` with stop reason `outcome_unknown`. It does not wait out a provider usage limit, it is not released to another host when a sibling's source is unreadable, and it does not complete, so nothing bound to its outcome starts. A run that a wait in the same layer had paused fails when it is continued, before its first layer.
+- `archon workflow attention` lists it as `stopped`, naming the node, child runs and runs with no item included, until it is resumed or abandoned. A new run on its item does not close it.
+
+The operator decides what happens next: check what the node did, then resume the run with `archon workflow resume <run-id>`, which runs the node again, or discard it with `archon workflow abandon <run-id>`. A run whose first node failed this way has no completed nodes, so resume starts nothing; abandon it, or start fresh.
+
+What each join does with a node or instance that fails this way:
+
+| Where it fails | What happens |
+|---|---|
+| A composed fan-out instance under `join: all_success` | The fan-out node fails, as for any failed instance. Then the run stops |
+| A composed fan-out instance under `join: all_done` | The other instances finish and the fan-out node completes with the `archon_failed` marker in that slot, as for any failed instance. Then the run stops |
+| A child run of a `workflow:` fan-out | The child run fails with stop reason `outcome_unknown` and is the run attention lists. The parent's join treats it as any failed child |
+| A `loop_group` body node | The group fails at that iteration, as for any failed body node |
+
+This is separate from `retryable: false`, which a `bash:`/`script:` contract failure records and which only stops the immediate retry of that node. A failure with `retryable: false` keeps the usage-limit wait, source release, later layers and stop reason of any other failure.
 
 ### Opting Out of Resume Caching
 
