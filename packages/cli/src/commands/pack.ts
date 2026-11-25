@@ -248,6 +248,7 @@ function generate(
       ...(target.configSource === undefined ? {} : { configSource: target.configSource }),
       isolation: binding.isolation,
     },
+    ...limitFields(id, binding, pack, target),
   };
   const kinded = kindedPackBinding(binding);
   if (kinded.kind === 'asks_settled' || kinded.kind === 'run_ended')
@@ -304,6 +305,35 @@ function generate(
         },
       ];
   }
+}
+
+/**
+ * A binding's `limit` and `grants` as the engine reads them. The limit is named after the
+ * binding without an outcome or option, so every file it is written as counts under one
+ * name, and a grant names the granted binding the same way.
+ */
+function limitFields(
+  id: string,
+  binding: PackBinding,
+  pack: DeclaredPack,
+  target: Target
+): Record<string, unknown> {
+  const { limit } = binding;
+  const grants = 'grants' in binding ? binding.grants : undefined;
+  return {
+    ...(limit === undefined
+      ? {}
+      : {
+          limit: {
+            name: bindingName(target, id),
+            starts: limit.starts,
+            ...(limit.reset_on === undefined
+              ? {}
+              : { resetOn: workflowNameFor(pack, id, limit.reset_on) }),
+          },
+        }),
+    ...(grants === undefined ? {} : { grants: bindingName(target, grants) }),
+  };
 }
 
 /** The plugin's `wake` for a binding that declares one, with its workflow's installed name. */
@@ -740,8 +770,8 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
   for (const arrow of graph.arrows) lines.push(arrowText(arrow));
   const nothing = graph.stages.flatMap(stage =>
     (stage.outcome?.values ?? [])
-      .filter(v => v.startsNothing)
-      .map(v => `  ${stage.name}:${v.value}${stage.asks ? '' : ' (no asks: ends in silence)'}`)
+      .filter(v => v.startsNothing && !v.final)
+      .map(v => `  ${stage.name}:${v.value}${stage.asks || stage.waits ? '' : ' (item stops)'}`)
   );
   if (nothing.length > 0) lines.push('', 'Outcomes that start nothing:', ...nothing);
   if (graph.discoveryErrors.length > 0)

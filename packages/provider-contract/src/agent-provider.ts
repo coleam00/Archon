@@ -156,20 +156,24 @@ export const nativeToolPropertySchema = z.discriminatedUnion('kind', [
 export type NativeToolProperty = z.infer<typeof nativeToolPropertySchema>;
 
 /**
- * The closed input shape a native tool may declare: a flat object of string /
- * string-enum / boolean properties, plus the names of the required ones. Every
- * provider maps this to its SDK's schema form, so the supported subset lives
- * here once instead of being re-derived by each converter.
+ * The input shape a native tool may declare. The flat form is a closed object of
+ * string / string-enum / boolean properties plus the names of the required ones, which
+ * every provider maps to its SDK's schema form. The `jsonSchema` form is an authored
+ * JSON Schema: a provider advertises it to the model as written and passes the call's
+ * arguments through, and the tool's handler is the one place they are validated.
  */
-export const nativeToolInputSchema = z
-  .object({
-    properties: z.record(z.string(), nativeToolPropertySchema),
-    required: z.array(z.string()).readonly(),
-  })
-  .refine(input => input.required.every(key => Object.hasOwn(input.properties, key)), {
-    message: 'Required tool keys must be declared in properties',
-    path: ['required'],
-  });
+export const nativeToolInputSchema = z.union([
+  z
+    .object({
+      properties: z.record(z.string(), nativeToolPropertySchema),
+      required: z.array(z.string()).readonly(),
+    })
+    .refine(input => input.required.every(key => Object.hasOwn(input.properties, key)), {
+      message: 'Required tool keys must be declared in properties',
+      path: ['required'],
+    }),
+  z.object({ jsonSchema: z.record(z.string(), z.json()) }),
+]);
 export type NativeToolInputSchema = z.infer<typeof nativeToolInputSchema>;
 
 /**
@@ -191,16 +195,15 @@ export function defineNativeToolInputSchema<P extends Record<string, NativeToolP
  * `@archon/providers` never imports `@archon/core` — the tool crosses the
  * boundary as data + a function on the request options.
  *
- * `inputSchema` is the closed typed shape each provider maps to its SDK's
- * schema form. Handlers should return a text result rather than throw; an
- * uncaught throw may surface into the agent loop. (core's `buildManageRunTool` guarantees this with
- * an outer try/catch around its dispatch.)
+ * `inputSchema` is the shape each provider maps to its SDK's schema form. A handler
+ * that throws returns its message to the model as a failed tool call; the turn goes on.
+ * `call.providerCallId` is the provider's own id for the call, for the handler's records.
  */
 export interface NativeTool {
   name: string;
   description: string;
   inputSchema: NativeToolInputSchema;
-  handler: (input: Record<string, unknown>) => Promise<string>;
+  handler: (input: Record<string, unknown>, call?: { providerCallId: string }) => Promise<string>;
 }
 
 /**

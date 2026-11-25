@@ -26,6 +26,12 @@ import {
 import { describeSqlItemAskStartConformance } from './item-ask-starts.conformance';
 import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { describeSqlRunDeleteConformance } from './workflow-run-delete.conformance';
+import { describeSqlItemStopConformance } from './item-stops.conformance';
+import {
+  describePostgresItemEndOverlap,
+  describeSqlItemEndConformance,
+} from './item-ends.conformance';
+import { describeSqlStartLimitConformance } from './start-limits.conformance';
 import {
   HEAD,
   accept,
@@ -405,8 +411,12 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   });
   describeSqlItemAskConformance(makeHarness);
   describeSqlItemWaitConformance(makeHarness);
+  describeSqlItemStopConformance(makeHarness);
+  describeSqlItemEndConformance(makeHarness);
+  describePostgresItemEndOverlap(makeHarness);
   describeSqlItemAskStartConformance(makeHarness);
   describeSqlRunDeleteConformance(makeHarness);
+  describeSqlStartLimitConformance(makeHarness);
   test('age cleanup does not delete a run that resumes while cleanup selects it', async () => {
     const harness = await makeHarness();
     const gate = new Pool({ connectionString: harness.url, max: 1 });

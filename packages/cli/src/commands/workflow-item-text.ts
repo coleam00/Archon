@@ -133,6 +133,12 @@ function runLines(run: ItemRun): string[] {
       `            result: archon workflow get ${run.id} --json${holds ? `, ${holds}` : ''}`
     );
   else if (holds) lines.push(`            result: ${holds}`);
+  if (run.changeSize) {
+    const { files, added, removed, base, commit } = run.changeSize;
+    lines.push(
+      `            change: ${files} file${files === 1 ? '' : 's'}, +${added} -${removed} at ${commit.slice(0, 12)} from ${base.slice(0, 12)}`
+    );
+  }
   if (run.operatorPause) lines.push(`            ${describeOperatorPause(run.operatorPause)}`);
   if (run.awaitingExecution)
     lines.push(`            ${awaitingExecutionText(run.awaitingExecution)}`);
@@ -148,14 +154,16 @@ function runLines(run: ItemRun): string[] {
 
 /**
  * Which drain will try a start waiting on `hostId`. A CLI run end and each `workflow wake`
- * pass drain the hosts this install's trigger files name (`served`); any other host is
- * another machine's, whose own drain tries it. A drain admits a start only once its slot,
- * checkout and item are free, so the text never promises that one admits it at once.
+ * pass drain the hosts this install's trigger files name (`served`). Any other host is
+ * another machine's, whose own drain tries it, except the host of a label start: a wake
+ * watcher that observes the label drains it on each pass while the label is on the item.
+ * A drain admits a start only once its slot, checkout and item are free, so the text never
+ * promises that one admits it at once.
  */
 export function admittedByText(hostId: string, served: ReadonlySet<string>): string {
   return served.has(hostId)
     ? `admitted once its slot, checkout and item are free, at the next run end on this install or the wake watcher's next pass (archon workflow wake --watch); archon trigger drain --host ${hostId} tries again now`
-    : `no trigger file on this install names host ${hostId}; that host's own drain tries it (archon trigger drain --host ${hostId} where it runs)`;
+    : `no trigger file on this install names host ${hostId}; for a start from an observed label, the wake watcher's next pass tries it while the label is on the item (archon workflow wake --watch), otherwise that host's own drain does (archon trigger drain --host ${hostId} where it runs)`;
 }
 
 /**
@@ -179,7 +187,12 @@ function queuedLines(
     `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, ${waits}, queued ${minute(start.queuedAt)}`,
   ];
   if (start.heldBehind) lines.push(...heldBehindLines('waits behind', start.heldBehind));
-  if (!held) lines.push(`            ${admittedByText(start.hostId, served)}`);
+  // Admission keeps queue order: nothing admits it while an unreadable request is ahead.
+  if (start.blockedBy !== null)
+    lines.push(
+      `            not admitted while request ${start.blockedBy} ahead of it cannot be read; withdraw that one: archon trigger withdraw ${start.blockedBy}`
+    );
+  else if (!held) lines.push(`            ${admittedByText(start.hostId, served)}`);
   return lines;
 }
 
@@ -218,7 +231,24 @@ function startSectionLines(read: ItemRead, served: ReadonlySet<string>): string[
     lines.push('', 'Refused starts:');
     for (const start of read.skipped) lines.push(...skippedLines(start));
   }
+  if (read.startLimits.length > 0) {
+    lines.push('', 'Start limits:');
+    for (const limit of read.startLimits) lines.push(startLimitLine(limit));
+  }
   return lines;
+}
+
+/** One binding's start limit on the item; at 0 left its next start is refused. */
+function startLimitLine(limit: ItemRead['startLimits'][number]): string {
+  const allowed = limit.starts + limit.granted;
+  const granted = limit.granted === 0 ? '' : ` (${String(limit.granted)} granted)`;
+  const since =
+    limit.since === null ? '' : `, since ${limit.resetOn ?? 'the reset'} ${minute(limit.since)}`;
+  const left =
+    limit.left === 0
+      ? 'reached: its next start is refused until a grant or a reset'
+      : `${String(limit.left)} left`;
+  return `  ${limit.name}: ${String(limit.used)} of ${String(allowed)} starts${granted}${since}; ${left}`;
 }
 
 /**
@@ -261,9 +291,15 @@ function waitLines(read: ItemRead): string[] {
   );
 }
 
-/** The facts under the item's name: its merge and the branch it lands on. */
+/** The facts under the item's name: its end, its merge and the branch it lands on. */
 function itemFactLines(read: ItemRead): string[] {
   const lines: string[] = [];
+  if (read.ended !== null)
+    lines.push(
+      `Ended ${minute(read.ended.at)}${answererText(read.ended.by)} via ${read.ended.via}: ${read.ended.reason}`
+    );
+  if (read.degraded.some(report => report.reason === 'end_unreadable'))
+    lines.push('The end recorded on this item could not be read.');
   if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
   if (read.degraded.some(report => report.reason === 'merge_unreadable'))
     lines.push('The merge recorded on this item could not be read.');

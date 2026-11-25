@@ -35,14 +35,11 @@ import {
   runLimitHold,
   waitForTurn,
 } from './resource-hold';
-import {
-  refuseResultInputsWithoutItem,
-  resolveResultInputs,
-  unsuppliedResultInputs,
-} from './run-result';
+import { resolveResultInputs, unsuppliedResultInputs } from './run-result';
 import {
   ConcurrencyConfigError,
   InstallHeldError,
+  PendingClaimRefusedError,
   RunLimitError,
   WorkflowItemHeldError,
 } from './store/errors';
@@ -149,16 +146,15 @@ async function startFreshRun(
   opts: ExecuteWorkflowOptions,
   dispatch: RunDispatch
 ): Promise<RunPhase<AdmittedRun>> {
-  const resultInputs = unsuppliedResultInputs(workflow, dispatch.startInputs);
-  const itemless = await refuseResultInputsWithoutItem(
+  const notStarted = await refuseRunBeforeClaim(
     deps,
     platform,
     conversationId,
     workflow,
     workflowRun,
-    resultInputs
+    dispatch.startInputs
   );
-  if (itemless) return { stopped: true, result: itemless };
+  if (notStarted) return { stopped: true, result: notStarted };
   const claimed = await claimPendingRun(
     deps,
     platform,
@@ -189,7 +185,7 @@ async function startFreshRun(
     platform,
     conversationId,
     run,
-    resultInputs,
+    unsuppliedResultInputs(workflow, dispatch.startInputs),
     claimed.value
   );
   if (resolved.stopped) return resolved;
@@ -295,9 +291,10 @@ async function refuseRunBeforeClaim(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflow: ResolvedWorkflow,
-  workflowRun: WorkflowRun
+  workflowRun: WorkflowRun,
+  startInputs: RunDispatch['startInputs']
 ): Promise<WorkflowExecutionResult | undefined> {
-  const reason = await refusePendingStart(deps, workflow, workflowRun);
+  const reason = await refusePendingStart(deps, workflow, workflowRun, startInputs);
   if (reason === undefined) return undefined;
   await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
   return { success: false, workflowRunId: workflowRun.id, error: reason };
@@ -319,14 +316,6 @@ async function claimPendingRun(
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
   { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
-  const notStarted = await refuseRunBeforeClaim(
-    deps,
-    platform,
-    conversationId,
-    workflow,
-    workflowRun
-  );
-  if (notStarted) return { stopped: true, result: notStarted };
   const refused = await holdWorkflowResource(
     deps,
     platform,
@@ -357,6 +346,9 @@ async function claimPendingRun(
           return {
             done: await refuseStart(deps, platform, conversationId, workflowRun, error.message),
           };
+        // No claimant can start it, so this process, which knows why, ends it with the reason.
+        if (error instanceof PendingClaimRefusedError)
+          return { done: await failRefusedClaim(deps, platform, conversationId, error) };
         claim.error = error;
       }
       return { done: undefined };
@@ -384,14 +376,14 @@ async function claimPendingRun(
   }
   const claimed = claim.run;
   if (!claimed) {
+    // The run left pending first: whoever moved it owns it, so this process writes nothing.
     getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.pending_claim_lost');
     return {
       stopped: true,
       result: {
         success: false,
         workflowRunId: workflowRun.id,
-        error:
-          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
+        error: 'Workflow run is no longer pending',
       },
     };
   }
@@ -404,6 +396,31 @@ async function claimPendingRun(
   // Its manifest is written, and the baseline persisted, once the run's artifacts
   // directory exists. A resume never samples: it keeps the baseline the run started with.
   return { stopped: false, value: await sampleCheckout(cwd, execContext) };
+}
+
+/**
+ * Fail a run whose claim was refused for a reason no claimant gets past, while it is still
+ * pending, so it ends with that reason instead of staying pending and holding its slot.
+ */
+async function failRefusedClaim(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  refusal: PendingClaimRefusedError
+): Promise<WorkflowExecutionResult> {
+  getLog().warn(
+    { workflowRunId: refusal.runId, reason: refusal.reason },
+    'workflow.pending_claim_refused'
+  );
+  const { failed } = await requireTerminalStatusWrite(
+    deps.store.failWorkflowRun(refusal.runId, refusal.message, {
+      pendingOnly: true,
+      exitReason: 'launch_failed',
+    }),
+    { workflowRunId: refusal.runId, site: 'workflow.pending_claim_refused', failure: refusal }
+  );
+  if (failed) await sendCriticalMessage(platform, conversationId, `❌ ${refusal.message}`);
+  return { success: false, workflowRunId: refusal.runId, error: refusal.message };
 }
 
 async function stampPreCreatedRun(

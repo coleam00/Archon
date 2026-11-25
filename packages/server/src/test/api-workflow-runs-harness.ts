@@ -454,6 +454,7 @@ const unusedItemRulings = unusedExports(await import('@archon/core/db/item-rulin
 const unusedItemMerges = unusedExports(await import('@archon/core/db/item-merges'));
 const unusedItemLinks = unusedExports(await import('@archon/core/db/item-links'));
 const unusedItemLandings = unusedExports(await import('@archon/core/db/item-landings'));
+const unusedItemEnds = unusedExports(await import('@archon/core/db/item-ends'));
 const unusedItemAsks = unusedExports(await import('@archon/core/db/item-asks'));
 export const mockGetItemRuns = mock<typeof import('@archon/core/db/items')['getItemRuns']>(
   async () => null
@@ -483,6 +484,7 @@ mock.module('@archon/core/db/resource-starts', () => ({
   ...realResourceStarts,
   listQueuedItemStarts: mockListQueuedItemStarts,
   listSkippedItemStarts: mockListSkippedItemStarts,
+  readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
 }));
 // The item read reads the install hold; no hold is set here.
 const realInstallHold = { ...(await import('@archon/core/db/install-hold')) };
@@ -511,6 +513,13 @@ mock.module('@archon/core/db/item-merges', () => ({
 mock.module('@archon/core/db/item-landings', () => ({
   ...unusedItemLandings,
   getItemLanding: mock(async () => null),
+}));
+type ItemEndsDb = typeof import('@archon/core/db/item-ends');
+export const mockRecordItemEnd = mock<ItemEndsDb['recordItemEnd']>(unexpected('recordItemEnd'));
+mock.module('@archon/core/db/item-ends', () => ({
+  ...unusedItemEnds,
+  getHoldingItemEnd: mock(async () => null),
+  recordItemEnd: mockRecordItemEnd,
 }));
 
 type ItemLinksDb = typeof import('@archon/core/db/item-links');
@@ -744,7 +753,7 @@ export function makeApp(lockManager?: ConversationLockManager): {
   const mockLockManager = {
     acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
       await fn();
-      return { status: 'started' };
+      return { status: 'started', turnId: 'turn-1' };
     }),
     getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;

@@ -152,6 +152,7 @@ describe('readPackGraph', () => {
     expect(graph.stages.find(s => s.name === 'chain-a')?.outcome?.values).toContainEqual({
       value: 'ready',
       startsNothing: true,
+      final: false,
     });
   });
 
@@ -170,6 +171,7 @@ describe('readPackGraph', () => {
     expect(graph.stages.find(s => s.name === 'chain-a')?.outcome?.values).toContainEqual({
       value: 'ready',
       startsNothing: true,
+      final: false,
     });
   });
 

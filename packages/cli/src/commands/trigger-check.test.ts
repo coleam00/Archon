@@ -3,11 +3,12 @@
 /**
  * `archon trigger check` reads the bindings this install can start, wherever a timer's
  * config lives, and reports a start that would be refused for its inputs, reading only.
+ * `trigger schedule` finds the timer it installed by the same reading of `ARCHON_HOME`.
  */
-import { afterEach, expect, spyOn, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
@@ -284,6 +285,25 @@ test('a fire-only file may leave a required input to --inputs, but not pass an u
   ]);
 });
 
+test('reports the outcomes after which a stage a fire-only file starts would stop its item', async () => {
+  const { root, archonHome, config, check } = await fixture();
+  // The fixture's stage, with an outcome nothing binds and no asks, waits or final.
+  await writeFile(
+    join(root, 'project', '.archon', 'workflows', 'stage.yaml'),
+    'name: stage\ndescription: A stage\ninputs:\n  a: { required: true }\nreturns: { node: one, outcome: stage }\nnodes:\n  - id: one\n    bash: echo \'{"stage":"replan"}\'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [replan] }\n      required: [stage]\n'
+  );
+  await writeFile(
+    join(archonHome, 'triggers', 'fire-only.json'),
+    JSON.stringify(config({}, false))
+  );
+
+  const checked = (await check()) as unknown as { stops: { workflow: string; outcome: string }[] };
+
+  expect(checked.stops).toEqual([
+    expect.objectContaining({ workflow: 'stage', outcome: 'replan' }),
+  ]);
+});
+
 test('names the observing sources nothing watches with the fix, and the watcher once installed', async () => {
   const { root, check, schedules } = await fixture();
   const plugin = join(root, 'source.mjs');
@@ -369,4 +389,83 @@ test('names the observing sources nothing watches with the fix, and the watcher 
   delete process.env.ARCHON_WEBHOOK_SOURCES;
   await writeWakeLastPass(lastPass, { ...failed, ok: true, parts: {}, sources });
   expect((await check()).observing).toMatchObject({ sources: observed, unwatched: false });
+});
+
+describe('schedule finds the binding timer however ARCHON_HOME is spelled', () => {
+  async function scheduleFixture() {
+    const base = await fixture();
+    const host = hostForTest();
+    const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'me');
+    if (!user) throw new Error('No run-as user');
+    const path = join(base.root, 'timer.json');
+    const timerConfig = base.config({ a: 1 });
+    timerConfig.binding.runAsUserId = user.id;
+    await writeFile(path, JSON.stringify(timerConfig));
+    const alias = join(base.root, 'home-link');
+    await symlink(base.archonHome, alias, 'junction');
+    const schedule = async (operation: string): Promise<Record<string, unknown>> => {
+      let printed = '';
+      const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+        chunk: unknown,
+        encodingOrCallback?: unknown,
+        callback?: () => void
+      ) => {
+        printed += String(chunk);
+        (typeof encodingOrCallback === 'function'
+          ? (encodingOrCallback as () => void)
+          : callback)?.();
+        return true;
+      }) as typeof process.stdout.write);
+      try {
+        await triggerCommand(
+          host,
+          'schedule',
+          [operation],
+          { config: path },
+          { schedules: base.schedules }
+        );
+      } finally {
+        stdout.mockRestore();
+      }
+      return JSON.parse(printed) as Record<string, unknown>;
+    };
+    const timerFiles = async (): Promise<string[]> =>
+      (await readdir(dirname(base.timerPrefix))).filter(name =>
+        name.startsWith(basename(base.timerPrefix))
+      );
+    return { ...base, path, alias, schedule, timerFiles };
+  }
+
+  test('status and remove find a timer installed under another spelling of the home', async () => {
+    const { archonHome, alias, schedule, timerFiles } = await scheduleFixture();
+    process.env.ARCHON_HOME = `${archonHome}${sep}`;
+    await schedule('install');
+    expect(await timerFiles()).not.toEqual([]);
+
+    process.env.ARCHON_HOME = archonHome;
+    expect(await schedule('status')).toMatchObject({ installed: true });
+    process.env.ARCHON_HOME = alias;
+    expect(await schedule('status')).toMatchObject({ installed: true });
+    expect(await schedule('remove')).toMatchObject({ removed: true });
+    expect(await timerFiles()).toEqual([]);
+    expect(await schedule('status')).toMatchObject({ installed: false });
+  });
+
+  test('install under another spelling keeps the one timer the binding has', async () => {
+    const { archonHome, alias, schedule, timerFiles } = await scheduleFixture();
+    process.env.ARCHON_HOME = `${archonHome}${sep}`;
+    await schedule('install');
+    const installed = await timerFiles();
+
+    for (const spelling of [`${archonHome}${sep}`, archonHome, alias]) {
+      process.env.ARCHON_HOME = spelling;
+      await schedule('install');
+      expect(await timerFiles()).toEqual(installed);
+    }
+  });
+
+  test('remove with no timer installed says nothing was removed', async () => {
+    const { schedule } = await scheduleFixture();
+    expect(await schedule('remove')).toMatchObject({ removed: false });
+  });
 });

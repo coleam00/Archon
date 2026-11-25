@@ -8,6 +8,7 @@
 import {
   isHeldByRun,
   type AttentionQueueItem,
+  type AttentionQueueItemWithoutRun,
   type AttentionQueueScope,
   type RunAttentionQueueItem,
 } from '@archon/workflows/attention-queue';
@@ -19,6 +20,7 @@ import {
   type AttentionAnswerer,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowNotice } from '@archon/workflows/workflow-notice';
+import type { StoppedRefusal } from '@archon/workflows/schemas/run-metadata';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { formatAge } from './workflow-shared';
 
@@ -116,9 +118,14 @@ function refItemLines(item: Ask): string[] {
     const [head = '', ...rest] = item.context.trim().split('\n');
     lines.push(`context: ${head}`, ...rest.map(line => `  ${line}`));
   }
-  // An ask that has no recommendation says so, so a reader does not look for one.
+  // An ask that has no recommendation says so, and why when its stage said, so a reader
+  // does not look for one.
   if (item.askedIn !== undefined && item.recommendation === undefined)
-    lines.push('recommended: none (choose an option)');
+    lines.push(
+      item.noRecommendation === undefined
+        ? 'recommended: none (choose an option)'
+        : `no recommendation: ${oneLine(item.noRecommendation)}`
+    );
   lines.push(...offerLines(item));
   for (const artifact of item.artifacts ?? [])
     lines.push(`artifact: ${artifact.path} (run ${artifact.run_id})`);
@@ -144,6 +151,102 @@ function overdueWaitLines(item: Extract<AttentionQueueItem, { kind: 'overdue_wai
   ];
 }
 
+/** Why a start was refused before launch, by the code its stop recorded. */
+const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
+  checkout_refused: 'the checkout could not be handed on',
+  inputs_unmapped: 'an input the binding maps named nothing',
+  link_refused: 'the items it links to could not be read or hold no such link',
+  no_default_provider: 'no default AI provider is set',
+  run_as_user_failed: "the binding's run-as user could not be found",
+  run_configuration_failed: "the item's or the binding's run configuration could not be read",
+  launch_preparation_failed: 'preparing its launch failed',
+};
+
+/**
+ * What starts refused before launch say, wherever they show: the causing stage's own output,
+ * `workflow get`, the item read and attention. Each names its receipt for `trigger inspect`.
+ */
+export function refusedStartLines(refused: readonly StoppedRefusal[]): string[] {
+  return refused.flatMap(start => [
+    `the start of ${start.workflow} (binding ${start.bindingId}) was refused before launch at ${start.refusedAt}: ${REFUSAL_REASONS[start.reason]}`,
+    ...(start.reason === 'no_default_provider' ? ['set one: archon ai default <provider>'] : []),
+    `see the refusal: archon trigger inspect ${start.receiptId}`,
+  ]);
+}
+
+/** How a stopped item's run ended: a run that settled asks may have no outcome. */
+const ended = (workflow: string, outcome: string | null): string =>
+  outcome === null ? `${workflow} ended` : `${workflow} ended as '${outcome}'`;
+
+/** A path as one shell word: quoted only when it holds a character a shell would split on. */
+const shellWord = (text: string): string =>
+  /^[\w@%+=:,./-]+$/u.test(text) ? text : `'${text.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * What a stopped item says: the stage, the outcome it ended in and its summary, and the
+ * commands that read the item and move it, each working from any directory: the item is
+ * read through its run, and a start names the project's checkout. A new run closes it.
+ */
+function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
+  const { runId, workflow, outcome } = item.stoppedIn;
+  const { limit, refused } = item;
+  // A limit and refusals before launch can come from one run's end; each keeps its lines.
+  const lines =
+    limit !== undefined
+      ? [
+          `${ended(workflow, outcome)}; its start of ${limit.workflow} was refused at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
+          `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
+        ]
+      : [
+          // A refused start says only what was refused: others the end caused may have started.
+          refused === undefined
+            ? `${ended(workflow, outcome)}; nothing started and it left no ask`
+            : `${ended(workflow, outcome)}; ${refused.length === 1 ? 'a start it caused was' : `${String(refused.length)} starts it caused were`} refused`,
+        ];
+  lines.push(...refusedStartLines(refused ?? []));
+  if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
+  lines.push(
+    `show the run: ${command(`get ${runId}`)}`,
+    `read the item: ${command(`runs --item-of ${runId}`)}`
+  );
+  if (item.item !== undefined) {
+    const cwd = item.checkout === null ? '' : ` --cwd ${shellWord(item.checkout)}`;
+    // Not a refused start's workflow: a bare run lacks the inputs and checkout its binding
+    // would have passed.
+    const next = limit?.workflow;
+    const start = command(
+      `run ${next === undefined ? '<workflow>' : shellWord(next)} --item ${shellWord(item.item.key)}${cwd}`
+    );
+    lines.push(
+      `run a stage on it, which closes this: ${start}${item.checkout === null ? ", from the item's project" : ''}`
+    );
+  }
+  return lines;
+}
+
+/** A stopped item's lines: a failed run's, or a stop's. */
+function stoppedItemLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
+  return item.failed === undefined ? stoppedLines(item) : failedLines(item, item.failed.error);
+}
+
+/**
+ * A failed run that is the newest on its item: its error, and the restarts. A restart from
+ * the run's record repeats its inputs; naming the workflow passes others.
+ */
+function failedLines(
+  item: Extract<AttentionQueueItem, { kind: 'stopped' }>,
+  error: string | null
+): string[] {
+  const { runId, workflow } = item.stoppedIn;
+  return [
+    `${workflow} failed${error === null ? '' : `: ${oneLine(error)}`}`,
+    `start it again from its record, which closes this: ${command(`run --supersedes ${runId}`)}`,
+    `or with other inputs: ${command(`run ${shellWord(workflow)} --supersedes ${runId} --input <name>=<value>`)}`,
+    `show the run: ${command(`get ${runId}`)}`,
+    `read the item: ${command(`runs --item-of ${runId}`)}`,
+  ];
+}
+
 /** What an item a paused run holds says under its heading line. */
 function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): string[] {
   const { run } = item;
@@ -166,11 +269,19 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
         `needs a look: ${item.detail}`,
         `show more: ${command(`get ${run.id}`)}, then resume or abandon it`,
       ];
-    case 'owner_lost':
+    case 'owner_lost': {
+      // It still holds what it took: its item, and the slot of a resource it runs under.
+      const holding = item.item === undefined ? '' : `, holding item ${item.item.key}`;
+      if (item.start !== undefined)
+        return [
+          `admitted but not started, and no process runs it${holding}`,
+          `start it: archon trigger execute ${item.start.requestId} --host ${item.start.hostId}, or end it: ${command(`abandon ${run.id}`)}`,
+        ];
       return [
-        `${item.observedStatus} but its owner is gone, holding item ${item.item?.key ?? '(unread)'}: later starts of ${run.workflow} on it wait behind it`,
+        `${item.observedStatus} but its owner is gone${holding}`,
         `continue it: ${command(`resume ${run.id}`)}, or end it: ${command(`abandon ${run.id}`)}`,
       ];
+    }
   }
 }
 
@@ -189,12 +300,24 @@ function headingLine(item: AttentionQueueItem): string {
           : `paused ${formatAge(item.pausedAt)} ago`;
     return `  ${item.run.id}  ${item.run.workflow}  ${project}  ${paused}`;
   }
-  const opened =
-    item.pausedAt === null ? 'open time not recorded' : `opened ${formatAge(item.pausedAt)} ago`;
   const key = item.item === undefined ? '' : `  item ${item.item.key}`;
-  const what = item.kind === 'overdue_wait' ? 'overdue wait' : 'open ask';
-  return `  ${item.ref}  ${what}  ${project}${key}  ${opened}`;
+  const [what, event] = withoutRunHeading[item.kind];
+  const at =
+    item.pausedAt === null
+      ? `${event} time not recorded`
+      : `${event} ${formatAge(item.pausedAt)} ago`;
+  return `  ${item.ref}  ${what}  ${project}${key}  ${at}`;
 }
+
+/** What the heading of an item no run holds calls it, and the event its time is of. */
+const withoutRunHeading: Record<AttentionQueueItemWithoutRun['kind'], [string, string]> = {
+  attention: ['open ask', 'opened'],
+  overdue_wait: ['overdue wait', 'opened'],
+  stopped: ['stopped', 'ended'],
+  refused_start: ['refused start', 'refused'],
+  preparation_lost: ['preparer gone', 'claimed'],
+  unreadable_start: ['unreadable start', 'queued'],
+};
 
 /** One queue item as a block of text lines. */
 export function attentionItemLines(
@@ -211,13 +334,91 @@ export function attentionItemLines(
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
   // No run holds it, so no run command answers it: it is answered by its ref.
-  const body = isHeldByRun(item)
-    ? itemBody(item, detail)
-    : item.kind === 'overdue_wait'
-      ? overdueWaitLines(item)
-      : refItemLines(item);
+  const body = isHeldByRun(item) ? itemBody(item, detail) : withoutRunBody(item);
   for (const line of body) lines.push(`    ${line}`);
   return lines;
+}
+
+/** What an item no run holds says under its heading line; a run's kinds never reach it. */
+function withoutRunBody(item: AttentionQueueItem): string[] {
+  switch (item.kind) {
+    case 'overdue_wait':
+      return overdueWaitLines(item);
+    case 'stopped':
+      return stoppedItemLines(item);
+    case 'refused_start':
+      return refusedStartItemLines(item);
+    case 'preparation_lost':
+      return preparationLostLines(item);
+    case 'unreadable_start':
+      return unreadableStartLines(item);
+    case 'attention':
+      return refItemLines(item);
+    default:
+      return [];
+  }
+}
+
+/**
+ * A start no run caused that was refused and is its item's newest step: what it was for,
+ * why, and what moves the item on. A run on the item, or the binding starting on it, closes it.
+ */
+function refusedStartItemLines(
+  item: Extract<AttentionQueueItem, { kind: 'refused_start' }>
+): string[] {
+  const { receiptId, bindingId, workflow, itemKey, reason, limit } = item.start;
+  const what = `the start of ${workflow ?? 'its workflow'} on item ${itemKey} (binding ${bindingId}) was refused`;
+  const lines =
+    limit !== undefined
+      ? [
+          `${what} at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
+          `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
+        ]
+      : [`${what}: ${refusalText(reason)}`];
+  if (reason === 'no_default_provider') lines.push('set one: archon ai default <provider>');
+  lines.push(`see the refusal: archon trigger inspect ${receiptId}`);
+  return lines;
+}
+
+/** A stored refusal code as text; a code a newer binary wrote is shown as it is. */
+function refusalText(reason: string): string {
+  if (reason === 'rejected_by_source') return 'its source rejected the event';
+  return Object.hasOwn(REFUSAL_REASONS, reason)
+    ? REFUSAL_REASONS[reason as StoppedRefusal['reason']]
+    : reason;
+}
+
+/**
+ * A binding start whose preparer is gone: what it was for, and the recovery that returns it
+ * to pending so the next drain of its host prepares it again.
+ */
+function preparationLostLines(
+  item: Extract<AttentionQueueItem, { kind: 'preparation_lost' }>
+): string[] {
+  const { receiptId, bindingId, hostId, workflow, itemKey, ownerId } = item.start;
+  const on = itemKey === null ? '' : ` on item ${itemKey}`;
+  return [
+    `the start of ${workflow ?? 'its workflow'}${on} (binding ${bindingId}) is still preparing, and the process preparing it is gone`,
+    `return it to pending: archon trigger recover-preparation ${receiptId} ${bindingId} --owner ${ownerId} --yes`,
+    `then prepare it: archon trigger drain --host ${hostId ?? '<host-id>'}`,
+    `show the receipt: archon trigger inspect ${receiptId}`,
+  ];
+}
+
+/**
+ * A queued request whose launch does not read: what it holds behind it, and the withdrawal
+ * that frees them.
+ */
+function unreadableStartLines(
+  item: Extract<AttentionQueueItem, { kind: 'unreadable_start' }>
+): string[] {
+  const { requestId, resource, hostId, behind } = item.start;
+  return [
+    behind === 0
+      ? `a start queued on ${resource} (host ${hostId}) cannot be read; nothing is queued behind it yet`
+      : `a start queued on ${resource} (host ${hostId}) cannot be read, so ${behind === 1 ? 'the start queued behind it waits' : `the ${String(behind)} starts queued behind it wait`}`,
+    `withdraw it: archon trigger withdraw ${requestId}`,
+  ];
 }
 
 /** How a line names the item that closed: by the run that held it, else by its ref. */
@@ -301,11 +502,8 @@ export function attentionStreamText(
     case 'notice':
       return [noticeText(line)];
     case 'owner_lost': {
-      // A run on an item holds it, so the later starts of its workflow on it wait behind it.
-      const held =
-        line.item == null
-          ? ''
-          : ` It holds item ${line.item}: later starts of ${line.workflow ?? 'its workflow'} on it wait behind it.`;
+      // It still holds what it took: its item, and the slot of a resource it runs under.
+      const held = line.item == null ? '' : ` It still holds item ${line.item}.`;
       return [
         `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)}${held} ` +
           `Show more with ${command(`get ${line.runId}`)}, continue it with ${command(`resume ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,

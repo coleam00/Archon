@@ -179,7 +179,7 @@ function optionLine(option: { id: string; label?: string; does?: string }): stri
 export function renderAsk(ask: StoredItemAsk): TrackerComment {
   const commentMarker = marker('ask', ask.id);
   const ref = `ask:${ask.id}`;
-  const { question, context, options, recommendation } = ask.ask;
+  const { question, context, options, recommendation, no_recommendation } = ask.ask;
   return {
     marker: commentMarker,
     body: [
@@ -196,7 +196,9 @@ export function renderAsk(ask: StoredItemAsk): TrackerComment {
       ),
       '',
       recommendation === null
-        ? 'No recommendation: choose an option.'
+        ? no_recommendation === undefined
+          ? 'No recommendation: choose an option.'
+          : `No recommendation: ${line(no_recommendation)}`
         : `Recommended: \`${recommendation.option}\`. ${line(recommendation.why)}`,
       '',
       `Answer with \`archon workflow answer --ref ${ref} --choose <option>\`, or in your own words with \`--choose other --text "<answer>"\`. Withdraw it with \`archon workflow answer --withdraw ${ref}\`.`,

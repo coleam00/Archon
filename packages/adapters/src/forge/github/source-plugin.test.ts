@@ -506,10 +506,10 @@ describe('GitHub source plugin observing open waits', () => {
     item: { field: 'subject.number', prefix: 'pr-' },
     wake: { workflow: 'host', wait: 'review', about: { field: 'review.commit' } },
   });
-  const unit = (id: string, status: 'in_progress' | 'completed') => ({
+  const unit = (id: string, status: 'in_progress' | 'completed' | 'unknown') => ({
     unit: { kind: 'check' as const, id, name: 'build' },
     nativeState: status,
-    phase: status === 'completed' ? ('completed' as const) : ('running' as const),
+    phase: status === 'in_progress' ? ('running' as const) : status,
     nativeResult: status === 'completed' ? 'success' : null,
     result: status === 'completed' ? ('success' as const) : null,
     state: status === 'completed' ? ('green' as const) : ('pending' as const),
@@ -713,6 +713,126 @@ describe('GitHub source plugin observing open waits', () => {
       },
     ]);
     expect(observed.acceptances.map(a => a.bindings[0]?.itemKey)).toEqual(['pr-7']);
+  });
+
+  test('a re-run at the same commit is a new delivery', async () => {
+    const { observe } = await observer([checksWake]);
+    let calls = 0;
+    const forge = {
+      async commitChecks(input: { remote: string; revision: string }) {
+        calls += 1;
+        const id = calls === 1 ? '77' : '88';
+        return {
+          repo: { host: 'github.com', path: 'owner/repo' },
+          branch: null,
+          revision: input.revision,
+          units: [unit(id, 'completed')],
+          summary: {
+            state: 'green' as const,
+            counts: { total: 1, green: 1, red: 0, pending: 0, gated: 0, unknown: 0 },
+          },
+        };
+      },
+      async prReviews(): Promise<never> {
+        throw new Error('no review read expected');
+      },
+      async issuesWithLabel(): Promise<never> {
+        throw new Error('no label read expected');
+      },
+      async labelAdded(): Promise<never> {
+        throw new Error('no label read expected');
+      },
+    };
+    const first = await observe({ labels: [], waits: [wait], forge });
+    const second = await observe({ labels: [], waits: [wait], forge });
+    expect(calls).toBe(2);
+    expect(first.acceptances[0]?.receipt.deliveryId).toContain(':77:');
+    expect(second.acceptances[0]?.receipt.deliveryId).toContain(':88:');
+    expect(second.acceptances[0]?.receipt.deliveryId).not.toBe(
+      first.acceptances[0]?.receipt.deliveryId
+    );
+  });
+
+  test('pending, empty, failed, and unknown checks are read again, and so are reviews', async () => {
+    const pending = await observer([checksWake]);
+    const pendingRead = reader([unit('77', 'in_progress')]);
+    await pending.observe({ labels: [], waits: [wait], forge: pendingRead.forge });
+    await pending.observe({ labels: [], waits: [wait], forge: pendingRead.forge });
+    expect(pendingRead.reads).toHaveLength(2);
+
+    const empty = await observer([checksWake]);
+    const emptyRead = reader([]);
+    await empty.observe({ labels: [], waits: [wait], forge: emptyRead.forge });
+    await empty.observe({ labels: [], waits: [wait], forge: emptyRead.forge });
+    expect(emptyRead.reads).toHaveLength(2);
+
+    const unknown = await observer([checksWake]);
+    const unknownRead = reader([unit('77', 'unknown')]);
+    await unknown.observe({ labels: [], waits: [wait], forge: unknownRead.forge });
+    await unknown.observe({ labels: [], waits: [wait], forge: unknownRead.forge });
+    expect(unknownRead.reads).toHaveLength(2);
+
+    const missing = await observer([checksWake]);
+    const missingRead = reader([unit('77', 'completed')]);
+    const gone = { ...wait, about: 'gone' };
+    await missing.observe({ labels: [], waits: [gone], forge: missingRead.forge });
+    await missing.observe({ labels: [], waits: [gone], forge: missingRead.forge });
+    expect(missingRead.reads).toHaveLength(2);
+
+    const reviews = await observer([reviewWake]);
+    const reviewRead = reader([], [review('300', 'APPROVED', revision)]);
+    await reviews.observe({ labels: [], waits: [reviewWait], forge: reviewRead.forge });
+    await reviews.observe({ labels: [], waits: [reviewWait], forge: reviewRead.forge });
+    expect(reviewRead.reads).toHaveLength(2);
+  });
+
+  test('a commit that leaves the plan is read again when it returns', async () => {
+    const { observe } = await observer([checksWake]);
+    const { forge, reads } = reader([unit('77', 'completed')]);
+    await observe({ labels: [], waits: [wait], forge });
+    await observe({ labels: [], waits: [{ ...wait, about: 'other-revision' }], forge });
+    await observe({ labels: [], waits: [wait], forge });
+    expect(reads).toEqual([
+      { remote, revision },
+      { remote, revision: 'other-revision' },
+      { remote, revision },
+    ]);
+  });
+
+  test('checks on another host are not remembered', async () => {
+    const { observe } = await observer([checksWake]);
+    const { forge, reads } = reader([unit('77', 'completed')], [], 'gitlab.example.com');
+    await observe({ labels: [], waits: [wait], forge });
+    await observe({ labels: [], waits: [wait], forge });
+    expect(reads).toHaveLength(2);
+  });
+
+  test('a rate-limited check read is reported as a failure', async () => {
+    const { observe } = await observer([checksWake]);
+    const observed = await observe({
+      labels: [],
+      waits: [wait],
+      forge: {
+        commitChecks: async () => {
+          throw Object.assign(new Error('slow down'), { kind: 'rate_limited' });
+        },
+        prReviews: async () => {
+          throw new Error('no review read expected');
+        },
+        issuesWithLabel: async () => {
+          throw new Error('no label read expected');
+        },
+        labelAdded: async () => {
+          throw new Error('no label read expected');
+        },
+      },
+    });
+    expect(observed.failed).toEqual([
+      {
+        wait: { workflowName: 'host', event: 'checks', about: revision, itemKey: 'pr-7' },
+        reason: 'slow down',
+      },
+    ]);
   });
 
   test('names each wait it binds but cannot read, and evaluates no binding nobody waits on', async () => {
@@ -1014,6 +1134,38 @@ describe('GitHub source plugin observing label bindings', () => {
     );
   });
 
+  test('a labelled issue whose input mapping fails is recorded once as a refused start on its item', async () => {
+    const broken = onlyKind('issue', {
+      inputMapping: { labelId: { source: 'field', field: 'label.id' } },
+    });
+    const plugin = await labelSource([broken]);
+    const read = { bindingId: 'factory-intake', repo, label: 'factory' };
+    const observed = await plugin.observe?.({
+      waits: [],
+      labels: [{ ...read, seenSince: '2026-11-01T00:00:00Z' }],
+      forge: labelReader().forge,
+    });
+    // Recorded, not reported as a pass failure: the receipt holds the refusal and its item.
+    expect(observed?.labelFailures.map(failure => failure.reason)).toEqual([
+      'the forge records no add',
+    ]);
+    expect(observed?.labelAcceptances.map(entry => entry.acceptance)).toMatchObject([
+      {
+        outcome: 'unmatched',
+        bindings: [],
+        receipt: { deliveryId: 'observe:label:github.com/owner/repo#8:555:factory-intake' },
+        evaluatedBindings: [
+          {
+            bindingId: 'factory-intake',
+            status: 'rejected',
+            itemKey: 'issue-8',
+            reason: expect.stringContaining('label.id'),
+          },
+        ],
+      },
+    ]);
+  });
+
   test('a labelled pull request is the start its webhook would make; an issue is not read', async () => {
     const prs = onlyKind('pr', { item: { field: 'subject.number', prefix: 'pr-' } });
     const plugin = await labelSource([prs]);
@@ -1101,6 +1253,8 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
     const receipts = new Map<string, SourceReceiptAcceptance>();
     const issues = new Map<number, { id: string; at: string; kind?: 'pr' }>();
     const reads: string[] = [];
+    // Items whose label events the forge cannot read.
+    const failing = new Set<number>();
     const known = { users: (_id: string) => true };
     const forge = {
       commitChecks: async (): Promise<never> => {
@@ -1128,6 +1282,7 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
         label: string;
       }) {
         reads.push(`added ${String(input.number)}`);
+        if (failing.has(input.number)) throw new Error('events unavailable');
         const added = issues.get(input.number);
         return {
           subject: { kind: input.kind, ref: { repo, number: input.number } },
@@ -1185,7 +1340,7 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
       [...receipts.values()]
         .filter(receipt => receipt.outcome === 'matched')
         .map(receipt => receipt.receipt.deliveryId);
-    return { receipts, issues, reads, known, pass, matched };
+    return { receipts, issues, failing, reads, known, pass, matched };
   }
 
   test('an issue reopened after the first sight does not start the label it already had', async () => {
@@ -1199,6 +1354,19 @@ describe('GitHub source plugin label bindings, observed through the engine', () 
     observed.issues.set(7, { id: 'event-8', at: later() });
     await observed.pass([intake()]);
     expect(observed.matched()).toEqual(['observe:label:github.com/owner/repo#7:event-8:intake']);
+  });
+
+  test('a label added while the first pass has a failed read starts once the read recovers', async () => {
+    const observed = install();
+    // Issue 5 carries the label before the binding is first seen, and its events fail to read.
+    observed.issues.set(5, { id: 'event-5', at: '2020-01-01T00:00:00Z' });
+    observed.failing.add(5);
+    expect((await observed.pass([intake()]))?.error).toContain('events unavailable');
+    // Issue 7 is labelled before the pass on which issue 5 reads again.
+    observed.issues.set(7, { id: 'event-7', at: later() });
+    observed.failing.clear();
+    expect((await observed.pass([intake()]))?.error).toBeUndefined();
+    expect(observed.matched()).toEqual(['observe:label:github.com/owner/repo#7:event-7:intake']);
   });
 
   test('changing the item mapping does not start an add already recorded', async () => {

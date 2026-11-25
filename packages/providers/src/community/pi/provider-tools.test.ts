@@ -306,4 +306,31 @@ describe('PiProvider tools', () => {
       | undefined;
     expect(typeof powershellOptions?.spawnHook).toBe('function');
   });
+
+  test.each(['read', 'structured_output'])(
+    'a declared tool named %s is refused before a session starts',
+    async name => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      resetScript(scriptedAgentEnd());
+      mockCreateAgentSession.mockClear();
+
+      const { failure } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'google/gemini-2.5-pro',
+          outputFormat: { type: 'json_schema', schema: { type: 'object' } },
+          nativeTools: [
+            {
+              name,
+              description: 'A declared tool',
+              inputSchema: { jsonSchema: { type: 'object' } },
+              handler: async () => 'ran',
+            },
+          ],
+        })
+      );
+
+      expect(failure?.class).toBe('misconfigured');
+      expect(mockCreateAgentSession).not.toHaveBeenCalled();
+    }
+  );
 });

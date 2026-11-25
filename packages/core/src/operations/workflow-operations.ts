@@ -96,7 +96,11 @@ export {
   type PauseRefusal,
   type PauseWorkflowResult,
 } from './workflow/pause';
-export { ResumeRefusedError, type WorkflowStatusData } from './workflow/run-actions';
+export {
+  ResumeRefusedError,
+  restartCommandFor,
+  type WorkflowStatusData,
+} from './workflow/run-actions';
 
 export interface WorkflowOperations {
   assertRunActionAllowed: (run: WorkflowRun, actor: RunActor, action: RunAction) => Promise<void>;

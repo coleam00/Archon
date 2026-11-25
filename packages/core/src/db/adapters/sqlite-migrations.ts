@@ -157,6 +157,12 @@ const sqliteMigrations: readonly Migration[] = [
   {
     kind: 'tolerated',
     scope: 'schema',
+    failureEvent: 'db.sqlite_migration_start_limit_columns_failed',
+    apply: addStartLimitColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
     failureEvent: 'db.sqlite_migration_completed_outcome_column_failed',
     apply: addCompletedOutcomeColumn,
   },
@@ -475,6 +481,25 @@ function addReceiptBindingColumns(db: Database): void {
   if (!columns.has('forge_refusal')) {
     db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN forge_refusal TEXT');
   }
+  if (!columns.has('preparation_process')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN preparation_process TEXT');
+  }
+  if (!columns.has('refusal')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN refusal TEXT');
+  }
+}
+
+// A binding's start limit and the limit it grants, beside the intent for the same reason,
+// and what each start request counted under or granted; see migrations/000_combined.sql.
+function addStartLimitColumns(db: Database): void {
+  const bindings = columnNames(db, 'remote_agent_start_receipt_bindings');
+  for (const column of ['start_limit', 'grants_limit'])
+    if (!bindings.has(column))
+      db.run(`ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN ${column} TEXT`);
+  const requests = columnNames(db, 'remote_agent_resource_start_requests');
+  for (const column of ['start_limit', 'grants_limit'])
+    if (!requests.has(column))
+      db.run(`ALTER TABLE remote_agent_resource_start_requests ADD COLUMN ${column} TEXT`);
 }
 
 // A receipt records the key a start named; its start request and the run point at the item.
@@ -491,6 +516,13 @@ function addItemColumns(db: Database): void {
     db.run(
       'ALTER TABLE remote_agent_workflow_runs ADD COLUMN item_id TEXT REFERENCES remote_agent_items(id)'
     );
+  }
+  // The run order's tie-break on SQLite is the rowid; see migrations/000_combined.sql.
+  if (!columnNames(db, 'remote_agent_items').has('moved_on_at')) {
+    db.run('ALTER TABLE remote_agent_items ADD COLUMN moved_on_at TEXT');
+  }
+  if (!columnNames(db, 'remote_agent_items').has('moved_on_tie')) {
+    db.run('ALTER TABLE remote_agent_items ADD COLUMN moved_on_tie INTEGER');
   }
   db.run(
     'CREATE INDEX IF NOT EXISTS idx_workflow_runs_item ON remote_agent_workflow_runs(item_id) WHERE item_id IS NOT NULL'

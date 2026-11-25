@@ -370,7 +370,8 @@ const INGRESSES: readonly Ingress[] = [
     call: (app, user) =>
       app.request(`/api/conversations/${PLATFORM_ID}/cancel`, {
         method: 'POST',
-        headers: headersFor(user),
+        headers: headersFor(user, json),
+        body: JSON.stringify({ turnId: 'turn-1' }),
       }),
     effects: () => [mockCancel],
   },

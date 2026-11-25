@@ -3,6 +3,28 @@
  * (`betas`, `sandbox`), the Pi extension posture (`pi`), and the `mcp:` declaration.
  */
 import { z } from 'zod';
+import { isInlineScript } from '../executor-shared';
+
+/**
+ * One tool an agent node offers its model: a named script the engine runs per call, the
+ * way a `script:` node runs. The call's arguments arrive as JSON on stdin and stdout is
+ * the result; both are checked against the schemas declared here.
+ */
+export const scriptToolSchema = z.strictObject({
+  description: z.string().trim().min(1),
+  script: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(script => !isInlineScript(script), 'Tool script must name a script'),
+  input_schema: z.record(z.string(), z.unknown()),
+  output_schema: z.record(z.string(), z.unknown()),
+  timeout: z.number().positive().finite().optional(),
+  deps: z.array(z.string().min(1)).optional(),
+});
+export const scriptToolsSchema = z
+  .record(z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/), scriptToolSchema)
+  .refine(tools => Object.keys(tools).length > 0, 'tools must declare at least one tool');
 
 /**
  * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
@@ -113,4 +135,31 @@ export function mcpDeclaration(mcp: NodeMcp | undefined): McpDeclaration | undef
   return typeof mcp === 'string'
     ? { path: mcp, optional: false }
     : { path: mcp.path, optional: mcp.optional === true };
+}
+
+/**
+ * One `skills:` entry: a name the node requires, or `{ name, optional: true }` for a
+ * skill the node runs without when its provider cannot load skills or no SKILL.md
+ * exists in the known skill roots. Strict so a misspelled key fails
+ * the load instead of silently meaning required. Only `optional: true` is optional.
+ */
+export const nodeSkillSchema = z.union([
+  z.string().min(1, 'each skill must be a non-empty string'),
+  z.strictObject({
+    name: z.string().min(1, "'skills.name' must be a non-empty string"),
+    optional: z.boolean().optional(),
+  }),
+]);
+
+export type NodeSkill = z.infer<typeof nodeSkillSchema>;
+
+export interface SkillDeclaration {
+  name: string;
+  optional: boolean;
+}
+
+export function skillDeclaration(skill: NodeSkill): SkillDeclaration {
+  return typeof skill === 'string'
+    ? { name: skill, optional: false }
+    : { name: skill.name, optional: skill.optional === true };
 }

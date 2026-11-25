@@ -17,6 +17,7 @@ import {
   nodeExecutionMetadataPayloadSchema,
   nodeFailureKindSchema,
   mcpUnavailableSchema,
+  skillUnavailableSchema,
   type ExecutionDiagnostics,
   type NodeCacheRecord,
   type NodeCostScope,
@@ -91,6 +92,7 @@ export const serializedNodeDataSchema = z.object({
   ordinal: z.number().optional(),
   approval_decision: z.string().optional(),
   mcp_unavailable: mcpUnavailableSchema.optional(),
+  skills_unavailable: z.array(skillUnavailableSchema).optional(),
   /** The full provider session id; only this durable row carries it. */
   session_id: z.string().optional(),
 });
@@ -367,6 +369,7 @@ function diagnosticFields(d: ExecutionDiagnostics): SerializedNodeData {
     ...(d.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),
     ...(d.expr !== undefined ? { expr: d.expr } : {}),
     ...(d.mcpUnavailable !== undefined ? { mcp_unavailable: d.mcpUnavailable } : {}),
+    ...(d.skillsUnavailable !== undefined ? { skills_unavailable: d.skillsUnavailable } : {}),
   };
 }
 

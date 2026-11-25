@@ -30,6 +30,7 @@ import {
   type SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
+import { OTHER_ATTENTION_OPTION } from '@archon/workflows/schemas/wait-node';
 import { readAsksResult, readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
@@ -304,13 +305,38 @@ function askingWorkflowProblems(
   if (asking.result?.asks === undefined)
     return [`workflow '${asksSettled.workflowName}' declares no returns.asks`];
   const declared = declaredInputNames(asking);
-  return Object.entries(asksSettled.inputs ?? {}).flatMap(([target, source]) =>
-    'input' in source && !declared.includes(source.input)
-      ? [
-          `input '${target}' reads '${source.input}', which '${asksSettled.workflowName}' does not declare`,
-        ]
-      : []
-  );
+  return [
+    ...undeclaredOptionProblems(asksSettled, asking),
+    ...Object.entries(asksSettled.inputs ?? {}).flatMap(([target, source]) =>
+      'input' in source && !declared.includes(source.input)
+        ? [
+            `input '${target}' reads '${source.input}', which '${asksSettled.workflowName}' does not declare`,
+          ]
+        : []
+    ),
+  ];
+}
+
+/**
+ * A binding's `option` that no ask of the asking workflow can offer, when the workflow
+ * declares its options: no answer would ever choose it, so the binding never starts.
+ * Every ask also offers the reserved `other`. Without declared options, each ask carries
+ * the options its run wrote, so there is nothing to check against.
+ */
+function undeclaredOptionProblems(
+  asksSettled: AsksSettledTrigger,
+  asking: ResolvedWorkflow
+): string[] {
+  const option = asksSettled.option;
+  const options = asking.result?.options;
+  if (option === undefined || options === undefined || option === OTHER_ATTENTION_OPTION.id)
+    return [];
+  const ids = options.map(declared => declared.id);
+  return ids.includes(option)
+    ? []
+    : [
+        `option '${option}' is not one workflow '${asking.name}' declares in returns.options (declared: ${ids.join(', ')}), so no answer starts this binding`,
+      ];
 }
 
 /**

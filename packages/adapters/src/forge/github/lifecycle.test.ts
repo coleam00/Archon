@@ -6,7 +6,15 @@ import {
   type ForgeMutationRequest,
 } from '@archon/forge/operations';
 import { githubPluginMetadata, handleGithubOperation } from './operations';
-import { json, pull, fakeGitHub, mergeGitHub, rerunGitHub, run } from './lifecycle-fixture';
+import {
+  json,
+  pull,
+  fakeGitHub,
+  MERGED_AT,
+  mergeGitHub,
+  rerunGitHub,
+  run,
+} from './lifecycle-fixture';
 import { prRecord } from './pull-requests';
 
 const repo = { host: 'github.com', path: 'archon/test' };
@@ -320,7 +328,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     });
   });
 
-  test('verification failed: the read-back after an acknowledged write could not run', async () => {
+  test('verification failed: a read-back that could not run reports its own error', async () => {
     let submitted = false;
     const github = fakeGitHub({
       status: (url, method) => {
@@ -328,7 +336,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
           submitted = true;
           return undefined;
         }
-        return submitted && url.includes('/pulls/7') ? 500 : undefined;
+        return submitted && url.includes('/pulls/7') ? 429 : undefined;
       },
     });
     const response = await run(
@@ -337,9 +345,48 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     );
     expect(response).toMatchObject({
       ok: false,
-      mutation: { op: 'pr.edit-body', outcome: 'verification_failed' },
+      error: { kind: 'rate_limited' },
+      mutation: {
+        op: 'pr.edit-body',
+        outcome: 'verification_failed',
+        leaveBehind: 'the pull request body may have changed',
+      },
     });
   });
+
+  test.each([
+    ['pr.create', create, 'pull request 7 may exist'],
+    [
+      'pr.draft',
+      { operationId: 'draft', op: 'pr.draft', ref } as const,
+      'the pull request draft state may have changed',
+    ],
+    [
+      'comment.upsert',
+      { operationId: 'comment', op: 'comment.upsert', ref, marker, body: report } as const,
+      'comment 900 may have changed',
+    ],
+  ] satisfies [string, ForgeMutationRequest, string][])(
+    'verification failed: a %s read-back that fails keeps its error and leaveBehind',
+    async (_op, request, leaveBehind) => {
+      const github = fakeGitHub({ pull: pull({ draft: false }) });
+      let wrote = false;
+      const response = await run(request, {
+        ...github,
+        fetch: async (input, init) => {
+          const method = init?.method ?? 'GET';
+          if (method !== 'GET') wrote = true;
+          else if (wrote) return json({ message: 'gone' }, 404);
+          return github.fetch(input, init);
+        },
+      });
+      expect(response).toMatchObject({
+        ok: false,
+        error: { kind: 'not_found', status: 404 },
+        mutation: { op: request.op, outcome: 'verification_failed', leaveBehind },
+      });
+    }
+  );
 
   test('outcome unknown: the request was submitted and its answer was lost', async () => {
     const dropped = await run(create, fakeGitHub({ network: (_url, method) => method === 'POST' }));
@@ -513,6 +560,8 @@ test.each(['merge', 'squash'] as const)(
         value: {
           landed: { commit: 'landed', tree: 'landed-tree', parents: ['base', 'headsha'] },
           enforcedConditions: ['head'],
+          // The merge time comes from the read-back after the merge, not from the host.
+          merged_at: MERGED_AT,
         },
       },
     });
@@ -520,13 +569,13 @@ test.each(['merge', 'squash'] as const)(
 );
 
 test('merge refuses stale and unsupported conditions before writing', async () => {
-  for (const conditions of [
-    {},
-    { head: 'headsha', base: 'base' },
-    { head: 'headsha', tree: 'tree' },
-    { head: 'headsha' },
-  ]) {
-    const github = mergeGitHub({ stale: true });
+  // Unsupported conditions at the current head, so only the condition check can refuse them.
+  for (const [conditions, stale] of [
+    [{ head: 'headsha', base: 'base' }, false],
+    [{ head: 'headsha', tree: 'tree' }, false],
+    [{ head: 'headsha' }, true],
+  ] as const) {
+    const github = mergeGitHub({ stale });
     const response = await handleGithubOperation(
       { ...mergeRequest, conditions },
       { token: 'token', fetch: github.fetch }
@@ -534,6 +583,30 @@ test('merge refuses stale and unsupported conditions before writing', async () =
     expect(response).toMatchObject({ ok: false, mutation: { outcome: 'refused' } });
     expect(github.writes).toEqual([]);
   }
+});
+
+test('merge refuses a pull request merged earlier and reports the facts of that merge', async () => {
+  const github = mergeGitHub({ alreadyMerged: true });
+  const response = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: github.fetch,
+  });
+  expect(forgeResponseSchema.parse(response)).toMatchObject({
+    ok: false,
+    mutation: {
+      outcome: 'refused',
+      observed: { state: 'merged' },
+      merge: { landed: { commit: 'landed' }, merged_at: MERGED_AT },
+    },
+  });
+  expect(github.writes).toEqual([]);
+  // Without a merge time from the forge, none is supplied; a close time never stands in.
+  const untimed = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: mergeGitHub({ alreadyMerged: true, noMergeTime: true }).fetch,
+  });
+  expect(untimed).toMatchObject({ ok: false, mutation: { observed: { state: 'merged' } } });
+  expect(untimed.ok ? undefined : untimed.mutation?.merge).not.toHaveProperty('merged_at');
 });
 
 test.each([
@@ -557,6 +630,19 @@ test.each([
   expect(github.writes).toHaveLength(1);
 });
 
+test('a merge whose read-back fails keeps the read-back error on verification_failed', async () => {
+  // pr.merge has no read-back catch of its own, so this goes through lifecycle's.
+  const response = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: mergeGitHub({ readFailed: true }).fetch,
+  });
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'unavailable', status: 500 },
+    mutation: { outcome: 'verification_failed', leaveBehind: 'the acknowledged write may remain' },
+  });
+});
+
 test('unavailable supplemental merge evidence remains explicitly null', async () => {
   expect(
     await handleGithubOperation(mergeRequest, {
@@ -565,7 +651,9 @@ test('unavailable supplemental merge evidence remains explicitly null', async ()
     })
   ).toMatchObject({
     ok: true,
-    result: { value: { landed: { commit: 'landed', tree: null, parents: null } } },
+    result: {
+      value: { landed: { commit: 'landed', tree: null, parents: null }, merged_at: MERGED_AT },
+    },
   });
 });
 

@@ -15,6 +15,7 @@ facts:
   continues: 1
   branch: "build/7-stub-fixture"
   related: []
+  answered: null
 route:
   decision: launch
   route: deliver
@@ -65,17 +66,12 @@ answer:
 apply:
   decision: ready
   summary: "stub: Issue 7: ready."
-  question: ""
-  options: []
-  recommendation: null
-  class: ""
-  item: "7"
-  pr: "1"
+  asks: []
   asked: null
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }
   expect: completed
-  reached: [facts, route, ship__continues, ship__report, answer, apply, ruling]
+  reached: [facts, route, ship__continues, ship__report, answer, apply]
   resolved-text-contains:
     answer: '"pr_url":"https://github.com/example/repo/pull/1"'
 exec-code: true

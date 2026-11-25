@@ -57,7 +57,7 @@ expect(
 const registration = await registerRepository(repository);
 const secret = 'test-secret';
 const adapter = new GitHubAdapter({ kind: 'pat', token: 'unused' }, secret, {
-  acquireLock: async () => ({ status: 'started' as const }),
+  acquireLock: async () => ({ status: 'started' as const, turnId: 'turn-1' }),
 });
 
 afterAll(async () => {

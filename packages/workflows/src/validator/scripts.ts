@@ -42,6 +42,7 @@ export async function validateScriptNode(
   validation: ResourceValidation,
   node: DagNode
 ): Promise<void> {
+  await validateToolScripts(validation, node);
   if (!isExecNode(node) || node.runtime === 'sh') return;
   const { issues } = validation;
   const script = node.script;
@@ -50,7 +51,7 @@ export async function validateScriptNode(
   // Precedence mirrors dag-executor: repo > home. Subfolders up to 1 level deep
   // are searched by discoverScriptsForCwd, matching the workflows/commands convention.
   if (!isInlineScript(script)) {
-    const scripts = await discoverScriptsForCwd(validation.cwd);
+    const scripts = await discoverScriptsForCwd(validation.sourceRoot);
     const entry = scripts.get(script);
     const scriptExists =
       entry !== undefined &&
@@ -147,4 +148,15 @@ export async function validateScript(
     valid: issues.filter(i => i.level === 'error').length === 0,
     issues,
   };
+}
+
+/** Each tool an agent node declares names a script that exists. */
+async function validateToolScripts(validation: ResourceValidation, node: DagNode): Promise<void> {
+  if (node.kind !== 'agent') return;
+  for (const [name, tool] of Object.entries(node.tools ?? {})) {
+    const { issues } = await validateScript(tool.script, validation.sourceRoot);
+    validation.issues.push(
+      ...issues.map(issue => ({ ...issue, nodeId: node.id, field: `tools.${name}.script` }))
+    );
+  }
 }

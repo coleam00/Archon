@@ -176,6 +176,8 @@ server on their own, and a `DATABASE_URL` in `.env` is not read.
 
 If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.postgres_schema_init_failed`.
 
+Prisma Postgres works with the connection string it issues. Keep `sslmode=require` in it: without the parameter the first database operation fails with `read ECONNRESET`. Point a server at the direct host (`db.prisma.io`). The pooled host (`pooled.db.prisma.io`) pools in transaction mode: schema initialization, CLI commands and the API work through it, but it does not deliver `LISTEN` notifications, so the server logs `pg_notify.listening` and the console still shows runs started from the CLI only when the dashboard poller's 10-second backstop reads them.
+
 ## Local PostgreSQL via Docker
 
 Use the `with-db` Docker Compose profile for automatic PostgreSQL setup.
@@ -235,6 +237,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Nullable `user_id` records which user triggered the run
   - Nullable `item_id` references the [item](/reference/cli/#items) the run belongs to. Written once at creation; null for a run started with no item
   - Nullable `completed_outcome` is the outcome the run completed with, from its workflow's [`returns.outcome`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs): an enum value as it is, a boolean as `succeeded` or `failed`. Written only by the write that completes the run, so it is null on any run that has not completed. Nullable `outcome` holds the boolean form only (its constraint admits `succeeded` and `failed`) and is written by that same write; binaries before `completed_outcome` wrote it while the run was still running
+  - The `item_stopped` key of `metadata`, `{ summary }`, is written by the write that completes a top-level run on an item that stopped the item: its outcome is not in [`returns.final`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs), its end started nothing, and it left no ask or wait. The attention queue lists the item as `stopped` while that run is the item's last. Older binaries ignore the key
   - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.
   - `conversation_id` cascades on conversation delete: a hard `DELETE` of a conversation would erase its run rows and silently drop the live-run cleanup pin for their isolation environments (#2868). Soft delete is the only supported path — a future hard-delete must resolve live runs first.
 
@@ -329,6 +332,13 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `item_id`, `text`, `by_declared` or `by_user_id` (who, when they said), `via` (the surface), `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
   - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
 
+- **`remote_agent_item_ends`** - Ends of an item: an operator's statement that nothing more will happen on it (`archon workflow end`)
+  - Append-only: no row is updated or deleted, and nothing writes one by itself. `seq` is the recording order and `id` is text in both dialects
+  - `item_id`, `reason`, `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at`, as for rulings
+  - A binary that predates the table never reads it and shows the item as before
+- **`remote_agent_item_end_runs`** - The runs an end saw on its item and below its runs, copied in the transaction that records the end
+  - One row per run: `end_id`, `run_id` (no foreign key) and `execution_claim`, the run's metadata claim, which every resume writes fresh
+  - An end holds while every run on its item or below its runs is one it saw and not resumed since, none of them is live, and no start is queued on the item. A new run or a resume, even from a transaction that overlapped the end's, opens the item while that run exists. The rule reads only the runs that exist, so deleting runs the end saw leaves it holding, and deleting the run that opened the item makes it hold again
 - **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
   - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
   - `change` (the forge's identity of the merged change, never parsed), `merge_commit` (nullable), `merged_at` (the forge's merge time), `via`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
@@ -340,7 +350,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `pass_owner_host`, `pass_owner_pid`, `pass_owner_instance` and `pass_started_at` name the process running the destination's pass, all null when none runs; one pass runs at a time across the server and CLI processes. `pass_requested` is 1 when another process asked the holder for one more pass
   - What the tracker showed stays in its `attention_notice_sent` ledger rows, not here
 - **`remote_agent_item_links`** - Links between items: accepted, directed relations
-  - One row per link, read from `from_item_id` to `to_item_id`, with `kind` one of `depends_on`, `part_of` or `duplicate_of`. The engine acts only on an active `part_of`, which carries the landing branch of the item it points at (`remote_agent_item_landings`). The kind is checked in code, not by a database constraint, so a later kind needs no schema change; a binary that reads a kind it does not know reports that link as unreadable and reads the rest of the item
+  - One row per link, read from `from_item_id` to `to_item_id`, with `kind` one of `depends_on`, `part_of` or `duplicate_of`. The engine acts on a link as the [CLI reference](/reference/cli/#workflow-link) describes; an active `part_of` carries the landing branch of the item it points at (`remote_agent_item_landings`). The kind is checked in code, not by a database constraint, so a later kind needs no schema change; a binary that reads a kind it does not know reports that link as unreadable and reads the rest of the item
   - `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at` record who recorded the link, as for rulings. They and the link itself are never updated
   - Ending a link writes the `ended_*` columns once (`ended_at`, `ended_via`, who, and the calling run); the row is kept, never deleted. `ended_at` and `ended_via` are set together
   - While `ended_at` is null, `(from_item_id, to_item_id, kind)` is unique (a partial unique index), so an active link is stored once. A link joins two different items. The schema allows the two items to be in different projects; the CLI records links within one
@@ -358,6 +368,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Keyed by `(receipt_id, binding_id)`; deleted with the owning receipt
   - Tracks binding revision, host, intent, preparation status, owner, and error
   - `event_input_names` lists which of the intent's inputs came from the source event; preparation passes those only to a workflow that declares them
+  - `start_limit` holds the binding's start limit (JSON) and `grants_limit` the name of the limit it grants; kept beside the intent, which older binaries parse strictly. A start refused at its limit is `rejected` with the reason in `preparation_error`
 
 - **`remote_agent_resource_slots`** - Keyed resource capacity
   - Stores capacity per `resource_key` for workflow and provider-attempt admission
@@ -375,6 +386,12 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Prepared launches are versioned. Version 2 carries the run's `origin`; version 1 launches queued by older binaries are still admitted, with their conversation and user read as the origin. Older binaries cannot read version 2, so before downgrading, drain or withdraw any queued or admitted request whose run has not started
   - `queue_position` orders waiting requests; optional receipt and binding linkage preserves source provenance
   - Nullable `item_id` references the item a start named, resolved when the binding is prepared, so a start that waits for capacity already has its item. The run takes it at admission
+  - Nullable `start_limit` (JSON, read tolerantly since more than one binary reads it) and `grants_limit` (a limit name) record the start limit a binding start counted under and the limit it granted. A binding's start limit on an item is derived from these rows, their `status` and `queue_position`, at admission and in the item read; it is never kept as a counter. Rows are never deleted
+
+- **`remote_agent_start_limit_resets`** - When a start limit on an item last reset
+  - One row per run that completed on an item that has a start limit or a grant, written under the admission lock in the transaction that completes the run: `item_id`, the run's `workflow_name`, its completion as `reset_at` (for display), `after_position`, the highest request `queue_position` at that moment, and `queued_ids`, a JSON array of the item's limit requests still queued then
+  - A limit whose `resetOn` names that workflow counts, from its latest row (highest `id`), only requests above `after_position` or listed in `queued_ids`. Event order, not time, so a start and a reset in the same second still order
+  - Kept apart from the run row so run cleanup does not bring earlier rounds back. Rows are only inserted
 
 - **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
   - **PostgreSQL only.** Always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled (`DATABASE_URL` + `BETTER_AUTH_SECRET`)

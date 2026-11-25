@@ -50,7 +50,10 @@ export function buildCodexNativeTools(tools: readonly NativeTool[]): {
       if (!input.success)
         return toolResponse(`Invalid arguments for ${call.tool}: ${input.error.message}`, false);
       try {
-        return toolResponse(await entry.tool.handler(input.data), true);
+        return toolResponse(
+          await entry.tool.handler(input.data, { providerCallId: call.callId }),
+          true
+        );
       } catch (error) {
         return toolResponse(
           `${call.tool} failed: ${error instanceof Error ? error.message : String(error)}`,

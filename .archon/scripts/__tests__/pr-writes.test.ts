@@ -330,11 +330,38 @@ describe('publish-pr writes the description section a delivery round prepared', 
     }
   );
 
-  it.each([START, END, `${START}\nnested\n${END}`])('refuses reserved structural markers in prepared content before pushing: %s', section => {
-    const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+  // Elevate #78 / software-factory#43: a round's description quoted a marker while
+  // describing the factory's own PR mechanics, and the refusal came before the push, so
+  // the round's commits died with the abandoned worktree.
+  it.each([START, END, `${START}\nnested\n${END}`, `How rounds publish:\n\n${START}\n\nthen the evidence.`])(
+    'pushes first and escapes reserved markers written outside Markdown code: %s', section => {
+      const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+      expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
+      expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+      expect(result.stderr).toContain('escaped');
+      const [body] = result.bodies;
+      expect(body).toBeDefined();
+      // Exactly one structural pair: the one publish-pr wrote around the section.
+      expect(body?.split(START).length).toBe(2);
+      expect(body?.split(END).length).toBe(2);
+      expect(body).toContain('&lt;!-- ');
+    }
+  );
+
+  it('keeps the push when the prepared section cannot be composed, naming the pull request', () => {
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: '```\nunfinished' } });
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain('reserved description markers');
-    expect(spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: result.cwd, encoding: 'utf8' }).stdout).toBe('');
+    expect(result.stderr).toContain(`pushed and published ${PR_URL}`);
+    expect(result.stderr).toContain('composed description');
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+    expect(result.bodies).toEqual([]);
+  });
+
+  it('keeps the push when the prepared section is empty', () => {
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: '  \n' } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('empty pr-description.md');
+    expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
   });
 
   it('publishes and reads back the section when creating a pull request', () => {

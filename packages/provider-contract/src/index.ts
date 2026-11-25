@@ -16,6 +16,13 @@ export {
   type ProviderLifecycleEvent,
 } from './lifecycle';
 export {
+  providerCredentialInputSchema,
+  providerCredentialKeySchema,
+  providerCredentialKeysSchema,
+  type ProviderCredentialInput,
+  type ProviderCredentialKey,
+} from './credential-input';
+export {
   credentialSourceSchema,
   credentialStatusSchema,
   type CredentialSource,
@@ -164,6 +171,7 @@ export {
 } from './config-schema';
 
 export { nativeToolInputParser } from './native-tools';
+export { nativeToolInputSchema } from './agent-provider';
 
 export {
   normalizeJsonSchemaForOpenAiStrict,

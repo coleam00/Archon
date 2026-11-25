@@ -1,7 +1,9 @@
 // @archon-test-isolated
 /**
  * The item commands against a real SQLite store, in-process: `workflow run --item` and
- * `--supersedes`, `workflow runs --item` and `--item-of`, `workflow rule`, `workflow merged`,
+ * `--supersedes`, `workflow runs --item` and `--item-of`, `workflow rule`, `workflow end`,
+ * `workflow merged`,
+ * the merge record an applied forge `pr.merge` writes,
  * `workflow items` and `workflow link`. The store's conformance tests prove what is
  * recorded; these prove each command's request, refusal codes and JSON and text output.
  * Which item a trigger start lands on needs detached runs and stays in the trigger spec.
@@ -30,8 +32,11 @@ import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
 import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
+import { itemEndSchema } from '@archon/workflows/schemas/item-end';
+import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
 import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
+import { recordRunMerge } from './forge-merge-record';
 import { projectAddCommand } from './project';
 import { workflowLinkCommand } from './workflow-link';
 import { workflowItemsCommand } from './workflow-items';
@@ -39,6 +44,9 @@ import { workflowLandingCommand } from './workflow-landing';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
+import { runWorkflowEnd } from '../routes/workflow';
+import * as workflowCommands from './workflow';
+import { workflowAttentionCommand } from './workflow-attention';
 import { workflowRunCommand } from './workflow-run-owned';
 
 mock.module('@archon/core/services/title-generator', () => ({
@@ -270,12 +278,75 @@ test.serial(
       workflowRunsCommand(host, projectRoot, { item: 'item-9', json: true })
     );
     expect(unknown.exitCode).toBe(1);
-    expect(JSON.parse(unknown.stdout)).toEqual({ ok: false, error: 'not_found', item: 'item-9' });
+    expect(JSON.parse(unknown.stdout)).toEqual({
+      ok: false,
+      error: 'not_found',
+      item: 'item-9',
+      refused: [],
+    });
     const textUnknown = await invoke(host =>
       workflowRunsCommand(host, projectRoot, { item: 'item-9' })
     );
     expect(textUnknown.exitCode).toBe(1);
     expect(textUnknown.stderr).toContain("No item 'item-9'");
+
+    // A start refused before any start made its item names it all the same.
+    await invoke(async host => {
+      const receiptId = crypto.randomUUID();
+      const { store } = host.deps;
+      await store.acceptStartReceipt({
+        receipt: {
+          id: receiptId,
+          sourceInstanceId: 'fire',
+          deliveryId: null,
+          contentDigest: receiptId,
+          receivedAt: new Date().toISOString(),
+          occurredAt: null,
+          sourceActor: null,
+          itemKey: 'item-8',
+        },
+        outcome: 'matched',
+        bindings: [
+          {
+            bindingId: 'triage',
+            bindingRevision: null,
+            hostId: 'host',
+            runAsUserId: 'operator',
+            resource: 'pool',
+            overlap: 'queue',
+            launch: {
+              cwd: projectRoot,
+              workflowName: 'triage',
+              inputs: {},
+              isolation: { kind: 'in-place' },
+            },
+          },
+        ],
+      });
+      const identity = { receiptId, bindingId: 'triage', ownerId: crypto.randomUUID() };
+      await store.claimStartBindingPreparation(identity);
+      await store.failStartBindingPreparation({
+        ...identity,
+        error: 'launch_preparation_failed',
+        retryable: false,
+        refusal: 'no_default_provider',
+      });
+    });
+    const refusedJson = await invoke(host =>
+      workflowRunsCommand(host, projectRoot, { item: 'item-8', json: true })
+    );
+    expect(refusedJson.exitCode).toBe(1);
+    expect(JSON.parse(refusedJson.stdout)).toMatchObject({
+      error: 'not_found',
+      refused: [
+        { kind: 'refused_start', start: { itemKey: 'item-8', reason: 'no_default_provider' } },
+      ],
+    });
+    const refusedText = await invoke(host =>
+      workflowRunsCommand(host, projectRoot, { item: 'item-8' })
+    );
+    expect(refusedText.stderr).toContain('no start has made it yet');
+    expect(refusedText.stderr).toContain('archon ai default <provider>');
     const writable = new Database(database);
     try {
       writable.run(
@@ -303,6 +374,127 @@ test.serial(
         .filter(row => row.continues !== null)
         .map(({ continues, item_key }) => ({ continues, item_key }))
     ).toEqual([{ continues: bare.id, item_key: 'item-2' }]);
+  }
+);
+
+/** A run of `item-proof` on `key`: still running, or ended at once, stopping the item or failed. */
+async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Promise<string> {
+  let id = '';
+  const result = await captureWorkflowCommand(archonHome, async host => {
+    const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
+    if (!codebase) throw new Error('The seed run did not register the project');
+    const seeded = await host.deps.store.createWorkflowRun({
+      workflow_name: 'item-proof',
+      user_message: 'go',
+      codebase_id: codebase.id,
+      working_path: projectRoot,
+      item_key: key,
+    });
+    id = seeded.id;
+    await host.deps.store.claimPendingWorkflowRun(seeded.id, projectRoot);
+    if (end === 'failed') await host.deps.store.failWorkflowRun(seeded.id, 'boom');
+    else if (end === 'stopped')
+      await host.deps.store.completeWorkflowRun(
+        seeded.id,
+        { duration_ms: 1 },
+        itemStoppedMetadata('Folded into another item.'),
+        { outcome: { kind: 'enum', value: 'fold' } }
+      );
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return id;
+}
+
+test.serial(
+  'workflow end takes a stopped item out of attention, and the item read says who ended it and why',
+  async () => {
+    const attention = async () =>
+      (
+        await invoke(host =>
+          workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+        )
+      ).stdout;
+    // `archon workflow end --item <key> [--as <name>] --json -- <reason>`, as argv routes it.
+    const end = (key: string, as: string | undefined, env: NodeJS.ProcessEnv = callerEnv) =>
+      invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'A duplicate of item-2.'],
+          values: { item: key, ...(as === undefined ? {} : { as }), json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: env,
+          forgeTrustedEnv: env,
+        })
+      );
+    const stopped = await seedEnded('item-stop', 'stopped');
+    expect(await attention()).toContain(`stopped:${stopped}`);
+    // The real command, through the CLI's own dispatch and argument parsing.
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, '..', 'cli.ts'),
+        ...['workflow', 'end', '--item', 'item-stop', '--as', 'triage-agent', '--json'],
+        ...['--', 'A duplicate of item-2.'],
+      ],
+      {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          ...callerEnv,
+          ARCHON_HOME: archonHome,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const [code, out, err] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(code, err || out).toBe(0);
+    itemEndSchema.parse(JSON.parse(out));
+    expect(await attention()).not.toContain(`stopped:${stopped}`);
+    expect((await readItemJson('item-stop')).ended).toMatchObject({
+      reason: 'A duplicate of item-2.',
+      by: { declared: 'triage-agent' },
+      via: 'cli',
+    });
+
+    // A failed item is ended by its key alone, and without --as the CLI identity says who.
+    await seedEnded('item-fail', 'failed');
+    succeeded(await end('item-fail', undefined, { ...callerEnv, ARCHON_USER_ID: 'ops' }));
+    expect((await readItemJson('item-fail')).ended).toMatchObject({
+      by: { declared: 'ops' },
+    });
+
+    // Refusals exit 1 with a code: a live run named, nobody named, an unknown key.
+    const running = await seedEnded('item-live', 'running');
+    const refusal = async (result: Promise<{ exitCode: number; stdout: string }>) => {
+      const { exitCode, stdout } = await result;
+      expect(exitCode).toBe(1);
+      return JSON.parse(stdout) as unknown;
+    };
+    expect(await refusal(end('item-live', 'triage-agent'))).toMatchObject({
+      error: 'run',
+      blocker: { kind: 'run', runId: running, status: 'running' },
+    });
+    const nobody = { ...callerEnv, ARCHON_USER_ID: '', USER: '', USERNAME: '' };
+    expect(await refusal(end('item-stop', undefined, nobody))).toMatchObject({
+      error: 'unattributed',
+    });
+    expect(await refusal(end('item-none', 'triage-agent'))).toEqual({
+      ok: false,
+      error: 'not_found',
+    });
   }
 );
 
@@ -821,5 +1013,144 @@ test.serial(
       expect(JSON.parse(refused.stdout)).toEqual({ ok: false, error: 'no_item' });
     }
     expect(facts()).toBe(before);
+  }
+);
+
+test.serial(
+  "a forge merge records itself on the run's item, and the script calls after it keep it",
+  async () => {
+    const onItem = runsWithItems().find(row => row.item_key === 'item-1');
+    const bare = runsWithItems().find(row => row.item_key === null);
+    if (!onItem || !bare) throw new Error('Expected a run on item-1 and a run with no item');
+    const facts = {
+      change: 'https://github.com/acme/web/pull/3',
+      commit: 'a'.repeat(40),
+      at: '2026-11-20T09:30:00Z',
+      branch: 'dev',
+    };
+    const nodeEnv = (runId: string): NodeJS.ProcessEnv => ({
+      WORKFLOW_ID: runId,
+      ARCHON_NODE_EXECUTION: JSON.stringify({ runId, path: 'land' }),
+    });
+    const record = async (runId: string, at: string | undefined) => {
+      let outcome: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
+      const result = await invoke(async () => {
+        outcome = await recordRunMerge(runId, { ...facts, at }, nodeEnv(runId));
+      });
+      expect(result.exitCode, result.stderr).toBe(0);
+      return outcome;
+    };
+    const merges = () => rows<{ n: number }>('SELECT count(*) AS n FROM remote_agent_item_merges');
+
+    // A plugin that reports no merge time leaves the item as it was, merge and landing alike.
+    expect(await record(onItem.id, undefined)).toBe('no_merge_time');
+    const untouched = await readItemJson('item-1');
+    expect(untouched.merged).toBeNull();
+    expect(untouched.landing).toBeNull();
+
+    // A landing the operator set before the merge is recorded is kept, and the result says so.
+    const env = nodeEnv(onItem.id);
+    succeeded(
+      await invoke(host =>
+        workflowLandingCommand(
+          host,
+          projectRoot,
+          { itemOf: onItem.id, branch: 'release/planned' },
+          true,
+          env
+        )
+      )
+    );
+    expect(await record(onItem.id, facts.at)).toBe('landing_kept');
+    const item = await readItemJson('item-1');
+    expect(item.merged).toMatchObject({
+      change: facts.change,
+      commit: facts.commit,
+      at: '2026-11-20T09:30:00.000Z',
+      via: 'forge',
+      fromRun: { runId: onItem.id, nodePath: 'land' },
+    });
+    expect(item.landing).toMatchObject({ branch: 'release/planned', from: { kind: 'own' } });
+
+    // A pack that still records the merge afterwards keeps the first; its own landing call
+    // sets the branch, as `workflow landing` always does.
+    const merged = await invoke(host =>
+      workflowMergedCommand(
+        host,
+        projectRoot,
+        { itemOf: onItem.id, change: facts.change, at: facts.at, commit: facts.commit },
+        true,
+        env
+      )
+    );
+    expect(succeeded(merged)).toMatchObject({ recorded: false, merge: { via: 'forge' } });
+    succeeded(
+      await invoke(host =>
+        workflowLandingCommand(host, projectRoot, { itemOf: onItem.id, branch: 'dev' }, true, env)
+      )
+    );
+    const after = await readItemJson('item-1');
+    expect(after.merged).toEqual(item.merged);
+    expect(after.landing?.branch).toBe('dev');
+    expect(merges()).toEqual([{ n: 1 }]);
+
+    // A repeat, or the merge of another pull request, keeps both records as they are,
+    // including a landing the operator corrected since.
+    succeeded(
+      await invoke(host =>
+        workflowLandingCommand(
+          host,
+          projectRoot,
+          { itemOf: onItem.id, branch: 'release/next' },
+          true,
+          env
+        )
+      )
+    );
+    for (const repeat of [facts, { ...facts, change: 'https://github.com/acme/web/pull/5' }]) {
+      let outcome: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
+      await invoke(async () => {
+        outcome = await recordRunMerge(onItem.id, { ...repeat, branch: 'main' }, env);
+      });
+      expect(outcome).toBe('already_recorded');
+      const repeated = await readItemJson('item-1');
+      expect(repeated.merged).toEqual(item.merged);
+      expect(repeated.landing?.branch).toBe('release/next');
+    }
+
+    // A run on no item writes nothing.
+    expect(await record(bare.id, facts.at)).toBe('no_item');
+    expect(merges()).toEqual([{ n: 1 }]);
+
+    // A merge recorded by hand, which writes no landing, gets its landing from the forge's
+    // answer for that same change; the merge stays as it was recorded.
+    const second = runsWithItems().find(row => row.item_key === 'item-2');
+    if (!second) throw new Error('Expected a run on item-2');
+    succeeded(
+      await invoke(host =>
+        workflowMergedCommand(
+          host,
+          projectRoot,
+          { item: 'item-2', change: facts.change, at: facts.at },
+          true,
+          env
+        )
+      )
+    );
+    const byHand = (await readItemJson('item-2')).merged;
+    expect(byHand).toMatchObject({ change: facts.change, via: 'cli' });
+    let filled: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
+    const fill = await invoke(async () => {
+      filled = await recordRunMerge(
+        second.id,
+        { ...facts, branch: 'release/1' },
+        nodeEnv(second.id)
+      );
+    });
+    expect(fill.exitCode, fill.stderr).toBe(0);
+    expect(filled).toBe('recorded');
+    const recovered = await readItemJson('item-2');
+    expect(recovered.merged).toEqual(byHand);
+    expect(recovered.landing?.branch).toBe('release/1');
   }
 );

@@ -564,6 +564,8 @@ export class SqliteAdapter implements IDatabase {
         project_key TEXT NOT NULL,
         key TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        moved_on_at TEXT,
+        moved_on_tie INTEGER,
         UNIQUE(project_key, key)
       );
 
@@ -584,6 +586,29 @@ export class SqliteAdapter implements IDatabase {
         CHECK ((withdraws IS NULL) = (text IS NOT NULL))
       );
       CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id ON remote_agent_item_rulings(item_id);
+
+      -- Ends of an item, append-only; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
+        -- Recording order; timestamps tie and the id is random.
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
+        item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        reason TEXT NOT NULL,
+        by_declared TEXT,
+        by_user_id TEXT,
+        via TEXT NOT NULL,
+        from_run_id TEXT,
+        from_node_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_item_ends_item_id ON remote_agent_item_ends(item_id);
+      -- The runs an end saw on its item; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_end_runs (
+        end_id TEXT NOT NULL REFERENCES remote_agent_item_ends(id),
+        run_id TEXT NOT NULL,
+        execution_claim TEXT,
+        PRIMARY KEY (end_id, run_id)
+      );
 
       -- An item's merged fact, recorded once; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
@@ -662,6 +687,16 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_asks_open ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
       CREATE INDEX IF NOT EXISTS idx_item_asks_run_id ON remote_agent_item_asks(run_id);
+      -- Start-limit resets; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_start_limit_resets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        workflow_name TEXT NOT NULL,
+        reset_at TEXT NOT NULL,
+        after_position INTEGER NOT NULL,
+        queued_ids TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_start_limit_resets_item ON remote_agent_start_limit_resets(item_id, workflow_name);
       -- Waits a completed run left on its item; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_waits (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -724,10 +759,14 @@ export class SqliteAdapter implements IDatabase {
         event_input_names TEXT,
         item_key TEXT,
         checkout_from TEXT,
+        start_limit TEXT,
+        grants_limit TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
+        preparation_process TEXT,
         preparation_error TEXT,
         forge_refusal TEXT,
+        refusal TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         PRIMARY KEY (receipt_id, binding_id)
@@ -762,6 +801,8 @@ export class SqliteAdapter implements IDatabase {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         admitted_at TEXT,
         item_id TEXT REFERENCES remote_agent_items(id),
+        start_limit TEXT,
+        grants_limit TEXT,
         FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
       );
 

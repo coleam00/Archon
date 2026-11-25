@@ -77,6 +77,9 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow.checkout_shared',
   ...DURABLE_WORKFLOW_EVENT_TYPES,
   'node_retry_scheduled',
+  // One per call of a tool an agent node declares under `tools:`. A record of the call,
+  // not node state: resume does not read it.
+  'script_tool_call',
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',

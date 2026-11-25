@@ -18,15 +18,16 @@ import type { IWorkflowStore } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
-import type {
-  ObservedItemWait,
-  ObservedLabelRead,
-  SourceForgeReader,
-  SourceObservation,
-  WebhookSourcePlugin,
-  WebhookSourcePluginFactory,
-  WebhookSourceRequest,
+import {
+  type ObservedItemWait,
+  type ObservedLabelRead,
+  type SourceForgeReader,
+  type SourceObservation,
+  type WebhookSourcePlugin,
+  type WebhookSourcePluginFactory,
+  type WebhookSourceRequest,
 } from '@archon/workflows/webhook-source-plugin';
+import { declaredWakes, freshOverdue, isTemporaryForgeFailure, nextBackoff } from './observe-read';
 import {
   observedLabelsSchema,
   sourceObservationSchema,
@@ -72,6 +73,7 @@ export interface ObservingSource {
   everySeconds: number;
   labels: readonly ObservedLabelRead[];
   unservedBindings: readonly UnservedBinding[];
+  wakes: readonly { workflow: string; wait: string }[];
 }
 
 /**
@@ -248,6 +250,7 @@ export async function loadWebhookSourcePlugins(
         sourceInstanceId: source.sourceInstanceId,
         everySeconds: source.observe.everySeconds,
         ...declaredLabels(source.sourceInstanceId, plugin),
+        wakes: declaredWakes(source.config),
       });
   }
 
@@ -379,31 +382,23 @@ export async function loadWebhookSourcePlugins(
           ),
         ],
       };
-      const record = async (acceptance: SourceReceiptAcceptance): Promise<boolean> => {
+      const record = async (acceptance: SourceReceiptAcceptance): Promise<void> => {
         try {
           const admitted = await admit(sourceInstanceId, acceptance);
           if (admitted.outcome === 'conflict') result.conflicts += 1;
           else result.admitted.push({ receiptId: admitted.receiptId, replay: admitted.replay });
-          return admitted.outcome === 'accepted';
         } catch (error) {
           result.failures.push(causeChain(error));
-          return false;
         }
       };
       for (const acceptance of observation.acceptances) await record(acceptance);
-      // A read is seen once every issue it listed is recorded: no read of it failed and each
-      // of its acceptances was admitted. Another read's failure does not hold it back. Until
-      // then the next pass sees it for the first time again, which is safe because that
-      // records only unmatched receipts; an issue whose read failed must not start later as
-      // though its label were new.
-      const unrecorded = new Set(
-        observation.labelFailures.map(({ bindingId, label }) => JSON.stringify([bindingId, label]))
-      );
-      for (const { bindingId, label, acceptance } of observation.labelAcceptances)
-        if (!(await record(acceptance))) unrecorded.add(JSON.stringify([bindingId, label]));
+      for (const { acceptance } of observation.labelAcceptances) await record(acceptance);
+      // A read is seen after its first pass even when some of that pass's reads failed: the
+      // marker's time is the cutoff, and a label added after it starts on a later pass. An
+      // issue whose read failed is compared with the same cutoff when it reads, so a label
+      // it already carried still starts nothing.
       for (const read of labels) {
-        if (read.seenSince !== null || unrecorded.has(JSON.stringify([read.bindingId, read.label])))
-          continue;
+        if (read.seenSince !== null) continue;
         const deliveryId = labelSeenMarker(read);
         await record({
           receipt: {
@@ -457,6 +452,12 @@ export interface ObservedSourceReport {
   reads: number;
   /** Receipts first recorded by this pass; a replay of an earlier pass is not one. */
   receipts: string[];
+  /**
+   * Receipts this pass observed again that an earlier pass, or an earlier process, recorded,
+   * such as a label still on its item. They start nothing new, but a start one recorded may
+   * still be waiting for capacity on its host.
+   */
+  replayed: string[];
   conflicts: number;
   unserved: SourceObservation['unserved'];
   /** The label bindings the source declared it cannot observe. */
@@ -488,7 +489,7 @@ export function createItemWaitObserver(input: {
   const { sources, store, forge } = input;
   if (sources.observing.length === 0) return undefined;
   const lastObserved = new Map<string, number>();
-  // The forge's last answer to when a label was added to an issue, with the issue's
+  // The forge's last answer naming when a label was added to an issue, with the issue's
   // `updatedAt` from the list it was read for. A later label add bumps `updatedAt`, so an
   // unchanged value means the answer is unchanged: replaying it rebuilds the same delivery,
   // which admission records as a replay. Only this process remembers, so its first pass
@@ -500,9 +501,40 @@ export function createItemWaitObserver(input: {
   >();
   // Each unserved wait is logged once per process, not on every pass.
   const warned = new Set<string>();
+  const seenOverdue = new Set<string>();
+  const backoff = new Map<string, { failures: number; retryAt: number }>();
   let running = false;
 
-  const openWaits = async (): Promise<ObservedItemWait[]> => {
+  const ready = (source: ObservingSource, now: Date): boolean => {
+    const held = backoff.get(source.sourceInstanceId);
+    if (held !== undefined && now.getTime() < held.retryAt) return false;
+    const last = lastObserved.get(source.sourceInstanceId);
+    return last === undefined || now.getTime() - last >= source.everySeconds * 1000;
+  };
+
+  const settleBackoff = (source: ObservingSource, now: Date, temporary: boolean): void => {
+    if (!temporary) {
+      backoff.delete(source.sourceInstanceId);
+      return;
+    }
+    const next = nextBackoff(
+      backoff.get(source.sourceInstanceId)?.failures ?? 0,
+      source.everySeconds,
+      now.getTime()
+    );
+    backoff.set(source.sourceInstanceId, next);
+    log.warn(
+      { sourceInstanceId: source.sourceInstanceId, retryAt: new Date(next.retryAt).toISOString() },
+      'source_observe_backoff'
+    );
+  };
+
+  const openWaits = async (
+    now: Date
+  ): Promise<{
+    active: ObservedItemWait[];
+    overdue: Array<{ wait: ObservedItemWait; deadlineAt: string }>;
+  }> => {
     const remotes = new Map<string, Promise<string | null>>();
     const remoteOf = async (runId: string): Promise<string | null> => {
       const run = await store.getWorkflowRun(runId);
@@ -514,7 +546,9 @@ export function createItemWaitObserver(input: {
       remotes.set(codebaseId, remote);
       return remote;
     };
-    const waits = new Map<string, ObservedItemWait>();
+    const active = new Map<string, ObservedItemWait>();
+    const overdue: Array<{ wait: ObservedItemWait; deadlineAt: string }> = [];
+    const nowTime = now.getTime();
     for (const wait of await store.listOpenItemWaits()) {
       const item = await store.getItem(wait.itemId);
       if (item === null) continue;
@@ -525,9 +559,15 @@ export function createItemWaitObserver(input: {
         itemKey: item.key,
         remote: await remoteOf(wait.runId),
       };
-      waits.set(JSON.stringify(observed), observed);
+      // Partition by deadline: deadlineAt <= now means overdue
+      const deadlineTime = new Date(wait.deadlineAt).getTime();
+      if (deadlineTime <= nowTime) {
+        overdue.push({ wait: observed, deadlineAt: wait.deadlineAt });
+      } else {
+        active.set(JSON.stringify(observed), observed);
+      }
     }
-    return [...waits.values()];
+    return { active: [...active.values()], overdue };
   };
 
   const warnUnserved = (sourceInstanceId: string, bindings: readonly UnservedBinding[]): void => {
@@ -542,7 +582,7 @@ export function createItemWaitObserver(input: {
   const observeSource = async (
     source: ObservingSource,
     waits: readonly ObservedItemWait[]
-  ): Promise<ObservedSourceReport> => {
+  ): Promise<{ report: ObservedSourceReport; temporary: boolean }> => {
     // The forge is asked only about what an open wait names: the item's invariant, held
     // here at the boundary rather than trusted to each plugin. A pull request is named when
     // its number ends the key of an item a wait is on in that repository. How the number is
@@ -563,13 +603,27 @@ export function createItemWaitObserver(input: {
     const read = new Set<string>();
     const listKey = (host: string, path: string, label: string): string =>
       JSON.stringify([source.sourceInstanceId, host, path, label]);
+    let stopped = false;
+    let temporary = false;
+    const call = async <T>(key: string, run: () => Promise<T>): Promise<T> => {
+      if (stopped) throw new Error('forge reads paused after a temporary failure');
+      read.add(key);
+      try {
+        return await run();
+      } catch (error) {
+        if (isTemporaryForgeFailure(error)) {
+          stopped = true;
+          temporary = true;
+        }
+        throw error;
+      }
+    };
     const guarded: SourceForgeReader = {
       commitChecks: async request => {
         const key = JSON.stringify(['commit', request.remote, request.revision]);
         if (!commits.has(JSON.stringify([request.remote, request.revision])))
           throw new Error(`No open wait names commit '${request.revision}' of '${request.remote}'`);
-        read.add(key);
-        return forge.commitChecks(request);
+        return call(key, () => forge.commitChecks(request));
       },
       prReviews: async request => {
         const key = JSON.stringify(['pr', request.remote, String(request.number)]);
@@ -577,8 +631,7 @@ export function createItemWaitObserver(input: {
           throw new Error(
             `No open wait is on pull request ${String(request.number)} of '${request.remote}'`
           );
-        read.add(key);
-        return forge.prReviews(request);
+        return call(key, () => forge.prReviews(request));
       },
       issuesWithLabel: async request => {
         const { host, path } = request.repo;
@@ -587,8 +640,9 @@ export function createItemWaitObserver(input: {
           throw new Error(
             `No binding of this source names label '${request.label}' in '${host}/${path}'`
           );
-        read.add(JSON.stringify(['label', host, path, request.label]));
-        const result = await forge.issuesWithLabel({ repo: { host, path }, label: request.label });
+        const result = await call(JSON.stringify(['label', host, path, request.label]), () =>
+          forge.issuesWithLabel({ repo: { host, path }, label: request.label })
+        );
         const key = listKey(host, path, request.label);
         const items = listed.get(key) ?? new Map<string, string | undefined>();
         for (const item of result.items)
@@ -614,14 +668,19 @@ export function createItemWaitObserver(input: {
         const remembered = labelAddedMemo.get(key)?.get(item);
         if (updatedAt !== undefined && remembered?.updatedAt === updatedAt)
           return remembered.answer;
-        read.add(JSON.stringify(['label-added', host, path, request.label, item]));
-        const answer = await forge.labelAdded({
-          repo: { host, path },
-          kind: request.kind,
-          number: request.number,
-          label: request.label,
-        });
-        if (updatedAt !== undefined) {
+        const answer = await call(
+          JSON.stringify(['label-added', host, path, request.label, item]),
+          () =>
+            forge.labelAdded({
+              repo: { host, path },
+              kind: request.kind,
+              number: request.number,
+              label: request.label,
+            })
+        );
+        // An answer that names no add is not kept: the event can become readable after the
+        // label shows in the list, with no change to `updatedAt` to say so.
+        if (updatedAt !== undefined && answer.added !== null) {
           const memo = labelAddedMemo.get(key) ?? new Map();
           memo.set(item, { updatedAt, answer });
           labelAddedMemo.set(key, memo);
@@ -639,6 +698,9 @@ export function createItemWaitObserver(input: {
       reads: read.size,
       receipts: (admitted?.admitted ?? [])
         .filter(receipt => !receipt.replay)
+        .map(receipt => receipt.receiptId),
+      replayed: (admitted?.admitted ?? [])
+        .filter(receipt => receipt.replay)
         .map(receipt => receipt.receiptId),
       conflicts: admitted?.conflicts ?? 0,
       unserved: admitted?.unserved ?? [],
@@ -666,7 +728,7 @@ export function createItemWaitObserver(input: {
       log.warn({ sourceInstanceId, ...wait, reason }, 'source_observe_unserved');
     }
     warnUnserved(sourceInstanceId, result.unservedBindings);
-    return result;
+    return { report: result, temporary };
   };
 
   /** The report of a source that is not called: only the label bindings it cannot observe. */
@@ -678,36 +740,55 @@ export function createItemWaitObserver(input: {
       labels: 0,
       reads: 0,
       receipts: [],
+      replayed: [],
       conflicts: 0,
       unserved: [],
       unservedBindings: source.unservedBindings,
     };
   };
 
+  const readSource = async (
+    source: ObservingSource,
+    waits: readonly ObservedItemWait[],
+    overdue: readonly { wait: ObservedItemWait; deadlineAt: string }[],
+    now: Date
+  ): Promise<ObservedSourceReport | undefined> => {
+    const due = freshOverdue(source.sourceInstanceId, source.wakes, overdue, seenOverdue);
+    for (const { wait, deadlineAt } of due)
+      log.warn({ ...wait, deadlineAt }, 'source_observe_overdue');
+    const fresh = due.map(({ wait, deadlineAt }) => ({
+      wait,
+      reason: `deadline passed at ${deadlineAt}; polling stopped`,
+    }));
+    const idle = waits.length === 0 && source.labels.length === 0;
+    if (idle && source.unservedBindings.length === 0 && fresh.length === 0) return undefined;
+    lastObserved.set(source.sourceInstanceId, now.getTime());
+    if (idle) {
+      settleBackoff(source, now, false);
+      const report = unobserved(source);
+      if (fresh.length > 0) report.unserved = fresh;
+      return report;
+    }
+    const observed = await observeSource(source, waits);
+    settleBackoff(source, now, observed.temporary);
+    const report = observed.report;
+    if (fresh.length > 0) report.unserved = [...report.unserved, ...fresh];
+    return report;
+  };
+
   return {
     observing: sources.observing,
     async pass(now) {
       if (running) return [];
-      const due = sources.observing.filter(source => {
-        const last = lastObserved.get(source.sourceInstanceId);
-        return last === undefined || now.getTime() - last >= source.everySeconds * 1000;
-      });
+      const due = sources.observing.filter(source => ready(source, now));
       if (due.length === 0) return [];
       running = true;
       try {
-        const waits = await openWaits();
+        const { active: waits, overdue } = await openWaits(now);
         const reports: ObservedSourceReport[] = [];
         for (const source of due) {
-          // A source with nothing to observe is not called, so it reads nothing; the label
-          // bindings it cannot observe are still reported, so the operator learns why.
-          if (waits.length === 0 && source.labels.length === 0) {
-            if (source.unservedBindings.length === 0) continue;
-            lastObserved.set(source.sourceInstanceId, now.getTime());
-            reports.push(unobserved(source));
-            continue;
-          }
-          lastObserved.set(source.sourceInstanceId, now.getTime());
-          reports.push(await observeSource(source, waits));
+          const report = await readSource(source, waits, overdue, now);
+          if (report !== undefined) reports.push(report);
         }
         return reports;
       } finally {

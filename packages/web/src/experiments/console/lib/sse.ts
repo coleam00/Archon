@@ -22,11 +22,14 @@ import { K } from './../store/keys';
 import { SSE_BASE_URL } from './http';
 import { ATTENTION_SSE_PATH, DASHBOARD_SSE_PATH } from './sse-endpoints';
 import { providerEventStore, type ProviderEventRecord } from './provider-events';
+import { createThrottledInvalidator } from './throttled-invalidator';
 
 interface ParsedEvent {
   type?: string;
   runId?: string;
   locked?: boolean;
+  /** On a `conversation_lock` that a starting reply emits: the turn a Stop names. */
+  turnId?: string;
   nodeId?: string;
   status?: string;
 }
@@ -54,19 +57,35 @@ export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
   useEffect(() => {
     // Use SSE_BASE_URL so dev bypasses the Vite proxy (which buffers SSE).
     const es = new EventSource(`${SSE_BASE_URL}${DASHBOARD_SSE_PATH}`);
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const throttled = createThrottledInvalidator({
+      invalidate,
+      isHidden: () => document.hidden,
+      setTimer: (callback, ms) => {
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          callback();
+        }, ms);
+        timers.add(timer);
+      },
+    });
+    const onVisibility = (): void => {
+      if (!document.hidden) throttled.shown();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
 
     es.onmessage = (e: MessageEvent<string>): void => {
       const ev = parse(e.data);
       if (ev?.type === undefined || ev.type === 'heartbeat') return;
       if (ev.type === 'workflow_status' || ev.type === 'dag_node') {
         // Refetch every runs:* key (runs:all, runs:project:<id>).
-        invalidate('runs');
+        throttled.invalidate('runs');
         // Node outputs record metrics, so every metrics:* report may have changed.
-        invalidate('metrics');
+        throttled.invalidate('metrics');
         // Also refresh any open run-detail cache so the detail page picks
         // up status / node-transition changes without its own SSE round-trip.
         if (typeof ev.runId === 'string') {
-          invalidate(K.run(ev.runId));
+          throttled.invalidate(K.run(ev.runId));
           onRunChanged(ev.runId);
         }
       }
@@ -84,6 +103,8 @@ export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
 
     return (): void => {
       es.close();
+      document.removeEventListener('visibilitychange', onVisibility);
+      for (const timer of timers) clearTimeout(timer);
     };
   }, [onRunChanged]);
 }
@@ -249,12 +270,12 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
  * conversation lock so the composer can disable while the agent is responding.
  *
  *   text / tool_call / tool_result → messages changed (debounced refetch)
- *   conversation_lock              → refetch on unlock + onLockChange(locked)
+ *   conversation_lock              → refetch on unlock + onLockChange(locked, turnId)
  *   stream closed for good         → onStreamClosed(): no further lock event will arrive
  */
 export function useConversationSSE(
   conversationPlatformId: string | null,
-  onLockChange?: (locked: boolean) => void,
+  onLockChange?: (locked: boolean, turnId: string | undefined) => void,
   onStreamClosed?: () => void
 ): void {
   useEffect(() => {
@@ -293,7 +314,7 @@ export function useConversationSSE(
           // The server awaits its unlock flush; earlier text/tool events can
           // trigger refetches before the buffered reply is persisted.
           if (ev.locked === false) invalidate(K.messages(conversationPlatformId));
-          if (typeof ev.locked === 'boolean') onLockChange?.(ev.locked);
+          if (typeof ev.locked === 'boolean') onLockChange?.(ev.locked, ev.turnId);
           break;
         // No run-detail cache here; ignore workflow_* and everything else.
         default:

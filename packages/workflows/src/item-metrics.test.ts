@@ -14,11 +14,13 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
     completedAt: startedAt,
     cause: null,
     awaitingExecution: null,
+    startLimit: null,
     spend: { usd: null, inputTokens: null, outputTokens: null },
     heldBehind: null,
     operatorPause: null,
     hasResult: false,
     resultCommit: null,
+    changeSize: null,
   };
 }
 
@@ -30,12 +32,14 @@ function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
     skipped: [],
     hold: null,
     runLimit: null,
+    startLimits: [],
     waits: [],
     held: [],
     questions: [],
     answers: [],
     links: [],
     landing: null,
+    ended: null,
     merged:
       mergedAt === null
         ? null

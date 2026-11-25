@@ -6,9 +6,10 @@ import { isAgentNode, isExecNode, workflowDefinitionSchema, type DagNode } from 
 import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from '../loader';
 import { resolveWorkflow } from '../graph-plan';
 import { findPreparedStrictSchemaIssues } from '@archon/provider-contract';
-import { itemAsksJsonSchema, parseItemAsks } from '../schemas/item-ask';
+import { itemAsksJsonSchema, parseItemAsks, storedItemAskSchema } from '../schemas/item-ask';
 import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { validateWorkflowResultContract } from './contracts';
+import { validateStructuredOutput } from '../structured-output';
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
 clearRegistry();
@@ -501,6 +502,24 @@ nodes:${node}
     expect(findPreparedStrictSchemaIssues(itemAsksJsonSchema())).toEqual([]);
   });
 
+  it('opens an ask that recommends no option with no recommendation and the reason beside it', () => {
+    const ask = {
+      question: 'Which way?',
+      context: 'Nothing settles it.',
+      options: [
+        { id: 'drop', does: 'Drops it.', cost: 'The work is lost.' },
+        { id: 'reshape', does: 'Plans it again.', cost: 'A round.' },
+      ],
+      recommendation: { option: null, why: 'Only you can weigh the deadline.' },
+      artifacts: [],
+    };
+    // Stored with `recommendation: null`, so a binary that reads a recommendation as always
+    // naming an option still reads the ask, and the reason in its own key.
+    const opened = { ...ask, recommendation: null, no_recommendation: ask.recommendation.why };
+    expect(parseItemAsks([ask])).toEqual({ asks: [opened] });
+    expect(storedItemAskSchema.safeParse(opened).success).toBe(true);
+  });
+
   it('refuses a property the author declared under the asks name', () => {
     const { workflow, error } = parseAsks(
       'returns: { node: decide, asks: asks }',
@@ -564,6 +583,91 @@ nodes:${node}
   });
 });
 
+describe('workflow result contract: returns.options', () => {
+  const OPTIONS = `[
+      { id: send-back, does: The builder continues., cost: A round. },
+      { id: take-as-is, does: The change goes on as it is., cost: Nothing more is built. }
+    ]`;
+  const parse = (returns: string): ParseResult =>
+    parseWorkflow(
+      `
+name: declares-options
+description: every ask offers the same options
+returns: ${returns}
+nodes:
+  - id: decide
+    prompt: decide
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+`,
+      'declares-options.yaml'
+    );
+  const ask = {
+    question: 'Which way?',
+    context: 'Nothing settles it.',
+    recommendation: { option: 'take-as-is', why: 'It is done.' },
+    artifacts: [],
+  };
+
+  it('gives the agent a schema with no options and a recommendation limited to the declared ids', () => {
+    const { workflow, error } = parse(`{ node: decide, asks: asks, options: ${OPTIONS} }`);
+    expect(error).toBeNull();
+    if (workflow === null) throw new Error('Expected the workflow to load');
+    const declared = workflow.result?.options ?? [];
+    expect(declared.map(option => option.id)).toEqual(['send-back', 'take-as-is']);
+    const resolved = resolveWorkflow(workflow);
+    expect(validateWorkflowResultContract(resolved)).toBeNull();
+    const schema = resolved.nodes.find(node => node.id === 'decide')?.output_format;
+    if (schema === undefined) throw new Error('Expected an output_format');
+    expect(findPreparedStrictSchemaIssues(itemAsksJsonSchema(declared))).toEqual([]);
+
+    const check = (asks: unknown[]) => validateStructuredOutput({ summary: 's', asks }, schema);
+    const errors = (asks: unknown[]) => {
+      const result = check(asks);
+      return result.valid ? [] : result.errors;
+    };
+    expect(check([ask])).toEqual({ valid: true });
+    expect(check([{ ...ask, recommendation: null }])).toEqual({ valid: true });
+    // Both refusals name the declared ids, so a retry can correct the output. Options the
+    // writer added are refused whether the recommendation is valid or null.
+    const namesDeclaredIds = expect.stringMatching(/^\/asks\/0.*send-back.*take-as-is/);
+    expect(errors([{ ...ask, recommendation: { option: 'drop', why: 'x' } }])).toContainEqual(
+      namesDeclaredIds
+    );
+    for (const recommendation of [ask.recommendation, null])
+      expect(errors([{ ...ask, recommendation, options: declared }])).toEqual([namesDeclaredIds]);
+
+    // At run end each ask gets the declared options, with does and cost from the YAML.
+    expect(parseItemAsks([ask], declared)).toEqual({
+      asks: [{ ...ask, options: declared }],
+    });
+  });
+
+  it.each([
+    ['without asks', `{ node: decide, options: ${OPTIONS} }`],
+    ['with one option', '{ node: decide, asks: asks, options: [{ id: land, does: d, cost: c }] }'],
+    [
+      'with an id twice',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d, cost: c }, { id: land, does: d, cost: c }] }',
+    ],
+    [
+      'with the reserved other',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d, cost: c }, { id: other, does: d, cost: c }] }',
+    ],
+    [
+      'with an option missing its cost',
+      '{ node: decide, asks: asks, options: [{ id: land, does: d }, { id: drop, does: d, cost: c }] }',
+    ],
+  ])('refuses options %s', (_case, returns) => {
+    // The same workflow loads with a valid set (the test above), so the options are why.
+    const { workflow, error } = parse(returns);
+    expect(workflow).toBeNull();
+    expect(error).not.toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Declared contract schemas compile at load time (#2453)
 // ---------------------------------------------------------------------------
@@ -609,6 +713,62 @@ nodes:
     expect(parse('returns: { node: host, asks: next, waits: next }').error?.error).toContain(
       "returns.waits: 'next' names the same property as returns.asks"
     );
+  });
+});
+
+describe('workflow result contract: returns.final and returns.summary', () => {
+  const parse = (
+    declaration: string,
+    properties = `stage: { type: string, enum: [approve, replan, landed] }
+        why: { type: string }`,
+    required = 'stage'
+  ): ParseResult =>
+    parseWorkflow(
+      `
+name: deliver
+description: delivers a change
+${declaration}
+nodes:
+  - id: result
+    prompt: report
+    output_format:
+      type: object
+      properties:
+        ${properties}
+      required: [${required}]
+`,
+      'deliver.yaml'
+    );
+
+  it('loads final outcomes of an enum and a declared string summary', () => {
+    const { workflow, error } = parse(
+      'returns: { node: result, outcome: stage, final: [landed], summary: why }'
+    );
+    expect(error).toBeNull();
+    expect(workflow?.result).toEqual({ outcome: 'stage', final: ['landed'], summary: 'why' });
+  });
+
+  it('takes the boolean form by its outcome names', () => {
+    const { error } = parse(
+      'returns: { node: result, outcome: green, final: [succeeded] }',
+      'green: { type: boolean }',
+      'green'
+    );
+    expect(error).toBeNull();
+  });
+
+  it.each([
+    ['a value the outcome cannot take', 'outcome: stage, final: [merged]', "names 'merged'"],
+    ['a value named twice', 'outcome: stage, final: [landed, landed]', "'landed' twice"],
+    ['final without an outcome', 'final: [landed]', 'needs returns.outcome'],
+    ['an undeclared summary', 'outcome: stage, summary: reason', "returns.summary: 'reason'"],
+    [
+      'a summary that is not a string',
+      'outcome: stage, summary: stage',
+      "returns.summary: 'stage'",
+    ],
+  ])('refuses %s', (_, declaration, message) => {
+    expect(parse(`returns: { node: result, ${declaration} }`).error?.error).toContain(message);
   });
 });
 

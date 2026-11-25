@@ -2,12 +2,34 @@ import { describe, it, expect } from 'bun:test';
 import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { cliForgeJsonSchemas } from '@archon/forge';
 import { forgeRequestSchema } from '@archon/forge/operations';
+import { convertOutputSchema } from '@archon/workflows/output-types/schema-to-ts';
 import { formatSpecLine, helpEntries, renderHelp, renderHelpFor } from './help';
+import { forgeRequestHelp } from './help-table/forge-request';
 import { cliArgOptions } from './args';
 import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
+
+function indentType(type: string): string {
+  return type.replace(/^/gm, '  ');
+}
+
+/** The `--data` template of the request example in a forge operation's scoped help. */
+function exampleTemplate(help: string, subcommand: string): string {
+  const prefix = `  archon forge ${subcommand} --data '`;
+  const line = help.split('\n').find(l => l.startsWith(prefix));
+  expect(line, `no request example in forge ${subcommand} --help`).toBeDefined();
+  return (line ?? '').slice(prefix.length, -1);
+}
+
+/** The template as a tree, each bare `<...>` placeholder read as the string it shows. */
+function exampleData(help: string, subcommand: string): unknown {
+  return JSON.parse(
+    exampleTemplate(help, subcommand).replace(/<[^<>"]+>/g, token => JSON.stringify(token))
+  );
+}
 
 /**
  * The `Options:` block that `archon <argv...> --help` prints.
@@ -114,13 +136,151 @@ describe('CLI help output', () => {
     expect(scoped).not.toContain('--follow');
   });
 
-  for (const request of forgeRequestSchema.options) {
-    const op = request.shape.op.value;
-    it(`renders scoped help for the admitted forge operation ${op}`, () => {
-      expect(renderHelp('forge', op)).toContain(`forge ${op}`);
-      expect(scopedHelpOptions(['forge', op])).toContain('--data <json>');
+  type Schema = Record<string, unknown>;
+
+  /** The alternative whose `const` properties the example names, such as a subject's `kind`. */
+  function chosenAlternative(alternatives: Schema[], value: unknown): Schema {
+    const chosen = alternatives.find(alternative => {
+      const properties = alternative.properties as Record<string, Schema> | undefined;
+      if (typeof value !== 'object' || value === null) return properties === undefined;
+      return Object.entries(properties ?? {}).every(
+        ([key, child]) => !('const' in child) || (value as Schema)[key] === child.const
+      );
+    });
+    expect(chosen, `no alternative matches ${JSON.stringify(value)}`).toBeDefined();
+    return chosen ?? {};
+  }
+
+  /** Every value of an example but a `const` is a placeholder; none can be copied as real. */
+  function expectPlaceholders(schema: Schema, value: unknown): void {
+    if ('const' in schema) return void expect(value).toBe(schema.const);
+    const alternatives = (schema.anyOf ?? schema.oneOf) as Schema[] | undefined;
+    if (alternatives) return expectPlaceholders(chosenAlternative(alternatives, value), value);
+    if (schema.type === 'object') {
+      const properties = schema.properties as Record<string, Schema>;
+      for (const [key, child] of Object.entries(value as Schema))
+        expectPlaceholders(properties[key] ?? {}, child);
+      return;
+    }
+    if (schema.type === 'array') {
+      for (const item of value as unknown[]) expectPlaceholders(schema.items as Schema, item);
+      return;
+    }
+    expect(String(value), 'example value is not a placeholder').toMatch(/^<[^<>]+>$/);
+  }
+
+  // Every operation's request type and template come from its schema, and every value the
+  // caller supplies is a bare placeholder, so an unfilled template is not JSON at all.
+  for (const { op, request } of cliForgeJsonSchemas().operations) {
+    for (const subcommand of op === 'checks.state' ? [op, 'checks'] : [op]) {
+      it(`renders the request and a template example in forge ${subcommand} --help`, () => {
+        const scoped = renderHelpFor(['forge', subcommand]);
+        expect(scopedHelpOptions(['forge', subcommand])).toContain('--data <json>');
+        expect(scoped).toContain(
+          `Request (--data):\n${indentType(convertOutputSchema(request).type)}`
+        );
+        expectPlaceholders(request as Schema, exampleData(scoped, subcommand));
+        expect(() => JSON.parse(exampleTemplate(scoped, subcommand))).toThrow();
+      });
+    }
+  }
+
+  // Filling a template with deliberate values, keyed by field path, gives a request the
+  // host accepts.
+  const repo = { 'repo.host': '"forge.example"', 'repo.path': '"a/b"' };
+  const ref = { 'ref.repo.host': '"forge.example"', 'ref.repo.path': '"a/b"', 'ref.number': '4' };
+  const filled: Record<string, Record<string, string>> = {
+    'pr.merge': { ...ref, method: '"squash"', 'conditions.head': '"abc123"' },
+    'pr.close': ref,
+    'workitem.create': {
+      ...repo,
+      title: '"Title"',
+      marker: '"<!-- item-31 -->"',
+      body: '"<!-- item-31 -->\\nBody"',
+    },
+    'workitem.edit-body': { ...ref, body: '"New body"' },
+    'workitem.label.add': {
+      'subject.ref.repo.host': '"forge.example"',
+      'subject.ref.repo.path': '"a/b"',
+      'subject.ref.number': '4',
+      name: '"queued"',
+    },
+  };
+  for (const [op, values] of Object.entries(filled)) {
+    it(`fills the forge ${op} template into a request the host accepts`, () => {
+      const template = exampleTemplate(renderHelpFor(['forge', op]), op);
+      const tree = exampleData(renderHelpFor(['forge', op]), op);
+      // Walk the tree for each placeholder's path, then write that path's value in its place.
+      const paths: string[] = [];
+      const walk = (value: unknown, path: string): void => {
+        if (typeof value === 'object' && value !== null)
+          for (const [key, child] of Object.entries(value))
+            walk(child, path ? `${path}.${key}` : key);
+        else if (typeof value === 'string' && value.startsWith('<')) paths.push(path);
+      };
+      walk(tree, '');
+      let index = 0;
+      const request = template.replace(/<[^<>"]+>/g, () => {
+        const value = values[paths[index++] ?? ''];
+        expect(value, `no deliberate value for ${paths[index - 1]}`).toBeDefined();
+        return value ?? '';
+      });
+      const parsed = { ...JSON.parse(request), op, operationId: 'help' };
+      expect(forgeRequestSchema.safeParse(parsed).success).toBe(true);
     });
   }
+
+  it('shows the pull request and the head pr.merge is pinned to, and only what it needs', () => {
+    const scoped = renderHelp('forge', 'pr.merge');
+    expect(scoped).toMatch(/readonly ref: \{\n\s+readonly repo: \{/);
+    expect(scoped).toContain('readonly number: number;');
+    expect(scoped).toContain('readonly head: string;');
+    expect(exampleData(renderHelpFor(['forge', 'pr.merge']), 'pr.merge')).toEqual({
+      ref: { repo: { host: '<host>', path: '<path>' }, number: '<number: integer>' },
+      method: '<method: merge|squash>',
+      conditions: { head: '<head>' },
+    });
+  });
+
+  it('states a field added to a request schema in both the type and the example', () => {
+    const base = {
+      type: 'object',
+      properties: { ref: { type: 'integer' }, note: { type: 'string' } },
+      required: ['ref'],
+      additionalProperties: false,
+    };
+    const added = {
+      ...base,
+      properties: { ...base.properties, pinned: { type: 'string' } },
+      required: ['ref', 'pinned'],
+    };
+    expect(forgeRequestHelp('op', base)).toEqual({
+      type: '{\n  readonly ref: number;\n  readonly note?: string;\n}',
+      notes: [],
+      example: `archon forge op --data '{"ref":<ref: integer>}'`,
+    });
+    const help = forgeRequestHelp('op', {
+      ...added,
+      properties: { ...added.properties, pinned: { type: 'string', description: 'Pinned value' } },
+    });
+    expect(help.type).toContain('readonly pinned: string;');
+    expect(help.notes).toEqual(['pinned: Pinned value']);
+    expect(help.example).toBe(`archon forge op --data '{"ref":<ref: integer>,"pinned":<pinned>}'`);
+  });
+
+  it('says in forge workitem.create --help that the marker is chosen per item', () => {
+    expect(renderHelpFor(['forge', 'workitem.create'])).toContain(
+      'marker: Chosen for this one item and used by no other'
+    );
+  });
+
+  it('points forge --help to each operation without printing every request', () => {
+    const forge = renderHelp('forge');
+    expect(forge).toContain('archon forge <operation> --help');
+    expect(forge).not.toContain('Request (--data):');
+    for (const forgeName of ['github', 'gitlab', 'gitea', 'forgejo', 'bitbucket'])
+      expect(forge.toLowerCase()).not.toContain(forgeName);
+  });
 
   const EXPECTED_GLOBAL_HELP = `
 Archon CLI - Run AI workflows from the command line
@@ -190,6 +350,10 @@ Commands:
   workflow rule --item <key> -- <text>
                              Record a ruling on an item of this project: a decision made without a question.
                              Every later read of the item shows it with the answers; prints the ruling's id
+  workflow end --item <key> -- <reason>
+                             End an item of this project: nothing more will happen on it. Its stop leaves attention and
+                             reads show who ended it and why; a newer run or start opens it again. Refused while anything
+                             on the item is active or waiting, naming it
   workflow link --item <key> --kind <kind> --to <key>
                              Record a link from one item of this project to another: depends_on, part_of or
                              duplicate_of, read from --item to --to. Recording it again leaves one link; prints the link's id
@@ -282,7 +446,8 @@ Options:
   --config-from-run <run-id> Start a fresh run with the run config another run was started with
   --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
   --supersedes <run-id>      Record this fresh run as replacing the prior run's open item; with a workflow name, no lane inheritance.
-                             With no name, start that run again from its record: workflow, source, inputs and checkout hand-off
+                             With no name, start that run again from its record: project, workflow, source, base, inputs and
+                             checkout hand-off; an explicit --base wins over the recorded base
   --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
   --stubs <path>             YAML node-output map for --dry-run
   --stubs-init <path>        Write a dry-run stub scaffold and exit; omits child workflows.
@@ -302,15 +467,15 @@ Options:
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
                              and attention label)
-  --as <name>                For 'workflow approve/reject/respond/answer/rule/link/pause': the name the answerer declares for itself,
-                             recorded with an attention wait's answer, a ruling, a link or a pause as a claim (never checked; refused at a gate)
+  --as <name>                For 'workflow approve/reject/respond/answer/rule/end/link/pause': the name the answerer declares for itself,
+                             recorded with an attention wait's answer, a ruling, an end, a link or a pause as a claim (never checked; refused at a gate)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --no-wait                  For 'workflow run': refuse instead of waiting, naming the resource when the workflow's
                              resource is full, or the holding run when another run of the workflow on the same --item
                              is not terminal (with or without a resource:), or who set the install hold while it is set
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
   --no-item                  For 'trigger fire': start the run on no item instead of inheriting the firing run's item
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20); for 'workflow items': items a page (default 20, at most 100)
@@ -328,10 +493,10 @@ Options:
 Examples:
   archon chat "What does the orchestrator do?"
   archon workflow list
-  archon workflow run investigate-issue "Fix the login bug"
+  archon workflow run archon-investigate "Why does login fail?"
   archon workflow run archon-plan --cwd /path/to/repo "Add dark mode"
   archon workflow run archon-implement --branch feature-auth "Implement auth"
-  archon workflow run quick-fix --no-worktree "Fix typo"
+  archon workflow run archon-implement --no-worktree "Fix the typo in the README"
   archon workflow run archon-investigate --folder "Explain how the repos under this root fit together"
   archon workflow run archon-investigate --detach "Investigate the flaky test"
   archon workflow run archon-investigate --dry-run --stubs ./stubs.yaml --json
@@ -350,8 +515,10 @@ Examples:
   archon workflow cancel --item issue-42
   archon workflow runs --open
   archon workflow run archon-review --adopt <run-id> "Review the changes"
+  archon forge <operation> --help    # that operation's request fields and an example
   archon skill add
   archon skill add /path/to/project
+  archon skill add --pack owner/repo
   archon plugin add coleam00/Archon/plugins/forge-github
 
 `;
@@ -440,6 +607,5 @@ it('every supported attachment verb has scoped help, with aliases scoped only', 
 it('documents host metadata separately from plugin operations', () => {
   const scoped = renderHelp('forge', 'metadata');
   expect(scoped).toContain('without credentials or forge operations');
-  expect(scoped).toContain('"host":"github.com"');
   expect(renderHelp()).not.toContain('forge metadata');
 });

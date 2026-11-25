@@ -7,6 +7,8 @@ import {
   readAdmissionCheckoutGuard,
 } from './schemas/resource-start';
 import type { RunLimitState } from './schemas/run-limit';
+import type { StartRefusalReason } from './schemas/run-metadata';
+import type { BindingRefusal } from './schemas/binding-refusal';
 import type { z } from 'zod';
 import type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 import type {
@@ -27,13 +29,15 @@ import {
   pendingWorkflowWaitDeadline,
   workflowWaitDue,
   readCapacityWait,
+  type WorkflowItem,
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
+import type { ProcessOwner } from '@archon/paths/process-owner';
 import type { WorkflowResource } from './schemas/resource-name';
 import type { ResumeClaimCursor, ResumeRefusal } from './store';
 import { itemHolder } from './item-hold';
-import type { AttentionRead } from './schemas/attention-degraded';
+import type { StartLimitStanding } from './start-limit';
 
 export type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 
@@ -204,6 +208,53 @@ export type HeldStart =
       queuedAt: string;
     };
 
+/**
+ * A binding start refused for a stored reason (`refusal`) that no run caused: a fire, a
+ * schedule, a webhook or a label made it. Its `codebase` is the project its checkout is
+ * registered as, and `item` the item its key names there once that exists.
+ */
+export interface RefusedStart {
+  receiptId: string;
+  bindingId: string;
+  hostId: string | null;
+  workflow: string | null;
+  itemKey: string;
+  refusal: BindingRefusal;
+  refusedAt: string;
+  codebase: { id: string; name: string; default_cwd: string } | null;
+  item: WorkflowItem | null;
+}
+
+/**
+ * A binding preparation a process claimed and has not finished: the binding is `preparing`.
+ * `preparer` is the process that claimed it, or null when an older binary claimed it or the
+ * record does not read; only with it can a reader prove the preparer gone. `codebase` is the
+ * project its checkout is registered as, and `item` the item it starts on once that exists.
+ */
+export interface PreparingStart {
+  receiptId: string;
+  bindingId: string;
+  hostId: string | null;
+  ownerId: string;
+  preparer: ProcessOwner | null;
+  workflow: string | null;
+  itemKey: string | null;
+  codebase: { id: string; name: string; default_cwd: string } | null;
+  item: WorkflowItem | null;
+  claimedAt: string;
+}
+
+/** A queued request whose stored launch does not read, and what it holds behind it. */
+export interface UnreadableQueuedStart {
+  requestId: string;
+  resource: string;
+  hostId: string;
+  itemId: string | null;
+  queuedAt: string;
+  /** How many requests are queued behind it on its resource and host. */
+  behind: number;
+}
+
 /** A held `trigger` start on one item, as the item read lists it. */
 export type HeldItemStart = Pick<
   Extract<HeldStart, { kind: 'trigger' }>,
@@ -214,6 +265,26 @@ export type HeldItemStart = Pick<
 export interface HeldPreparation {
   status: 'held';
   hold: InstallHold;
+}
+
+/**
+ * A binding start admission refused at its binding's start limit on the item (`limit`), or
+ * because a limited start names no item to count on. The binding is `rejected` with
+ * `reason`; no request or run is written.
+ */
+export interface RefusedPreparation {
+  status: 'refused';
+  reason: string;
+}
+
+/**
+ * The start limits on one item: each limit a start request on it counted under or raised,
+ * with where it stands (`startLimitStanding`), and for each request that counted under a
+ * limit, that limit's name by request id, which is the run id of its run.
+ */
+export interface ItemStartLimits {
+  limits: StartLimitStanding[];
+  countedUnder: Record<string, string>;
 }
 
 /**
@@ -587,6 +658,13 @@ export interface IResourceStartStore {
   listHeldStarts(): Promise<HeldStart[]>;
   /** The unprepared binding starts on item `itemId`. A store without items returns none. */
   listHeldItemStarts(itemId: string): Promise<HeldItemStart[]>;
+  /** Every binding a process is preparing now. A store that records no preparer returns none. */
+  listPreparingStarts(): Promise<PreparingStart[]>;
+  /**
+   * The refused starts no run caused that are still their item's newest step: neither the
+   * same binding nor any run has started on the item since. A store without items has none.
+   */
+  listRefusedStarts(): Promise<RefusedStart[]>;
   /**
    * The install's run limit (`concurrency.runs`), how many run trees count against it now and
    * the queued starts only it holds (`RunLimitState`); null when none is set. A store without
@@ -650,16 +728,25 @@ export interface IResourceStartStore {
    * store without items returns none.
    */
   listSkippedItemStarts(itemId: string): Promise<SkippedItemStart[]>;
-  /**
-   * The runs that hold their item (`holdsItem`) while a later start of their workflow on
-   * it waits: a queued start request, or a pending hand start that holds nothing. A holder
-   * the store cannot read is reported `run_unreadable`. A store without items returns none.
-   */
-  listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
+  /** The start limits on item `itemId`. A store without items reports none. */
+  readItemStartLimits(itemId: string): Promise<ItemStartLimits>;
   /** The starts on item `itemId` whose status is `queued`, in queue order. */
   listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]>;
-  withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
+  /**
+   * Withdraw a queued request: the launch it held, `launch: null` when its stored launch does
+   * not read (it is withdrawn all the same, so it no longer holds the queue behind it), or
+   * null when the request is not queued.
+   */
+  withdrawQueuedResourceStart(
+    id: string
+  ): Promise<{ launch: PreparedWorkflowLaunch | null } | null>;
+  /**
+   * The queued requests whose stored launch does not read, oldest first. Admission keeps
+   * queue order, so each holds every request queued behind it on its resource and host until
+   * it is withdrawn. A store that parses every request when it reads it has none.
+   */
+  listUnreadableQueuedStarts(): Promise<UnreadableQueuedStart[]>;
   claimStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;
@@ -668,11 +755,13 @@ export interface IResourceStartStore {
   /**
    * Admit a prepared binding start. `resource` is the bound workflow's declaration; see
    * `preparedBindingStart` for what it changes. Under the install hold nothing is admitted
-   * and the binding is pending again, so the lift prepares it anew.
+   * and the binding is pending again, so the lift prepares it anew. A binding at its start
+   * limit on the item is refused (`RefusedPreparation`) in the same transaction that would
+   * admit it, so two starts cannot both take the last one.
    */
   completeStartBindingPreparation(
     input: PreparedBindingInput & { ownerId: string }
-  ): Promise<ResourceStartDisposition | HeldPreparation | null>;
+  ): Promise<ResourceStartDisposition | HeldPreparation | RefusedPreparation | null>;
   failStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;
@@ -681,6 +770,12 @@ export interface IResourceStartStore {
     error: string;
     /** The one preparation failure whose detail is stored: a refusal for the pack's forge needs. */
     forgeRefusal?: ForgeRefusal;
+    /**
+     * Why a rejected start was refused. When the start was caused by a run's end or settled
+     * asks, the SQL store records it as a stop on that run in the same write, so the run, its
+     * item and attention show it; the file store records no stop.
+     */
+    refusal?: StartRefusalReason;
   }): Promise<boolean>;
   resetStartBindingPreparation(input: {
     receiptId: string;

@@ -12,7 +12,7 @@ import { STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
-import { loadNodeCommandPrompt } from '../../node-source';
+import { loadNodeCommandPrompt, RunSourceUnreadableError } from '../../node-source';
 import {
   aiNodeEnvironment,
   type RunLayersContext,
@@ -33,6 +33,7 @@ import { loadAgentPrompt } from './agent-prompt';
 import { createAttemptState, type AgentAttemptState, type AgentPassContext } from './agent-stream';
 import { createStallMessenger } from '../../../stall-message';
 import { runUntilStructuredOutputValid } from './agent-reask';
+import { createScriptTools } from './script-tools';
 
 export async function executeAgentNode(
   ctx: RunLayersContext,
@@ -177,6 +178,11 @@ export async function executeAgentNode(
     }),
   };
 
+  const toolsError = await offerDeclaredTools(pc, execution);
+  if (toolsError !== undefined) {
+    return failAgentNode(toolsError, 'config', { providerNotCalled: true });
+  }
+
   let result: WorkloadResult;
   try {
     result = await runWorkload(pc, state, prompt.prompt, session);
@@ -237,6 +243,25 @@ export async function executeAgentNode(
   return completed;
 }
 
+/**
+ * Add the node's `tools:` to the attempt's request. Returns why the node cannot start when
+ * a tool's script cannot be resolved; an unreadable source is thrown for the run to recover.
+ */
+async function offerDeclaredTools(
+  pc: AgentPassContext,
+  execution: AgentBinding['execution']
+): Promise<string | undefined> {
+  if (!pc.node.tools) return undefined;
+  try {
+    const tools = await createScriptTools(pc.ctx, pc.node, execution);
+    pc.queryOptions.nativeTools = [...(pc.queryOptions.nativeTools ?? []), ...tools];
+    return undefined;
+  } catch (error) {
+    if (error instanceof RunSourceUnreadableError) throw error;
+    return (error as Error).message;
+  }
+}
+
 /** The session the attempt resumes, and what it must prove about the session it ends on. */
 interface AttemptSession {
   resumeSessionId: string | undefined;
@@ -271,17 +296,25 @@ function attemptFailure(
 
 function attemptQueryOptions(
   ctx: RunLayersContext,
-  { nodeMcp, execution }: AgentBinding,
+  { nodeMcp, nodeSkills, execution }: AgentBinding,
   nodeOptions: SendQueryOptions | undefined,
   { resumeSessionId, resumeIntent }: AttemptSession,
   abortController: AbortController
 ): SendQueryOptions {
   const shouldForkSession = resumeSessionId !== undefined && resumeIntent !== 'owner-continuation';
+  const loadMcp = nodeMcp.kind === 'load' || nodeMcp.kind === 'missing';
+  const declaredSkills = nodeSkills.names !== undefined;
   return {
     ...nodeOptions,
     env: { ...nodeOptions?.env, ...aiNodeEnvironment(ctx, execution) },
-    ...(nodeMcp.kind === 'load' || nodeMcp.kind === 'missing'
-      ? { nodeConfig: { ...nodeOptions?.nodeConfig, mcp: nodeMcp.path } }
+    ...(declaredSkills || loadMcp
+      ? {
+          nodeConfig: {
+            ...nodeOptions?.nodeConfig,
+            ...(declaredSkills ? { skills: nodeSkills.names } : {}),
+            ...(loadMcp ? { mcp: nodeMcp.path } : {}),
+          },
+        }
       : {}),
     abortSignal: abortController.signal,
     ...(resumeIntent === 'owner-continuation'

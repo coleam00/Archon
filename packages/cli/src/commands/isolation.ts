@@ -35,7 +35,7 @@ import {
 } from '@archon/core/services/cleanup/run-lock';
 import {
   listEnvironments,
-  cleanupMergedEnvironments,
+  cleanupMergedWorktrees,
   type CleanupOperationResult,
   type MergedCleanupOutcome,
 } from '@archon/core/operations/isolation-operations';
@@ -304,11 +304,7 @@ async function cleanupMergedCodebase(
     path: codebase.defaultCwd,
   };
   try {
-    const outcome = await cleanupMergedEnvironments(
-      codebase.codebaseId,
-      codebase.defaultCwd,
-      options
-    );
+    const outcome = await cleanupMergedWorktrees(codebase.codebaseId, codebase.defaultCwd, options);
     return { ...identity, ...outcome };
   } catch (error) {
     const err = error as Error;

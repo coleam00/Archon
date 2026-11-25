@@ -82,7 +82,7 @@ curl http://localhost:3090/api/health
 | DELETE | `/api/conversations/{id}` | Soft-delete a conversation |
 | GET | `/api/conversations/{id}/messages` | List messages in a conversation |
 | POST | `/api/conversations/{id}/message` | Send a message to a conversation |
-| POST | `/api/conversations/{id}/cancel` | Stop the in-flight chat reply; returns whether a reply was stopped |
+| POST | `/api/conversations/{id}/cancel` | Stop the chat reply a turn id names; returns whether it was stopped |
 
 ### List Conversations
 
@@ -123,15 +123,17 @@ curl -X POST http://localhost:3090/api/conversations/{id}/message \
   -d '{"message": "What does this codebase do?"}'
 ```
 
-The message is dispatched to the orchestrator asynchronously. The response confirms dispatch -- actual AI responses arrive via SSE streaming or can be polled via the messages endpoint.
+The message is dispatched to the orchestrator asynchronously. The response confirms dispatch -- actual AI responses arrive via SSE streaming or can be polled via the messages endpoint. Its `turnId` names the reply this message started or queued; a stop names the reply by it. A conversation created with a `message` returns the same `turnId`, and the SSE `conversation_lock` event a reply emits when it starts carries its `turnId` too.
 
 ### Stop a Reply
 
 ```bash
-curl -X POST http://localhost:3090/api/conversations/{id}/cancel
+curl -X POST http://localhost:3090/api/conversations/{id}/cancel \
+  -H "Content-Type: application/json" \
+  -d '{"turnId": "<turnId from the send>"}'
 ```
 
-Aborts the provider call of the reply in progress, so it stops spending. The partial reply stays in the conversation, followed by a `Response stopped.` message with category `chat_interrupted`, and the next message continues the same conversation. Messages already queued behind the stopped reply still run. The response is `{"cancelled": true}` when a reply was stopped and `{"cancelled": false}` when nothing was in flight. It needs the same access as sending a message.
+Aborts the provider call of the reply `turnId` names while it is in progress, so it stops spending. The partial reply stays in the conversation, followed by a `Response stopped.` message with category `chat_interrupted`, and the next message continues the same conversation. Messages already queued behind the stopped reply still run, and a stop never stops them: it stops only the reply it names. The response is `{"cancelled": true}` when that reply was stopped and `{"cancelled": false}` when it is not in progress (it ended, has not started, or was already stopped). A request without `turnId` is refused with 400. It needs the same access as sending a message.
 
 ### Get Messages
 
@@ -499,9 +501,10 @@ These routes record the decision and return. The server's continuation scheduler
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
 | POST | `/api/attention/answer` | Answer the item a queue `ref` names, from `{ ref, choose?, recommended?, text? }`; `recommended: true` takes the place of `choose`. The only way to answer an [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left. 200 with `{ ref, action: "answer", unchanged, settled?, nothingStarted? }`, where `settled` is true when the answer closed the last open ask of its set and `nothingStarted: true` when that settlement started no [asks-settled binding](/guides/workflow-triggers/#start-a-different-stage-for-each-option), or with `runId`, `continues` and `cancelled` for an item a paused run holds; 400 when the answer does not fit the item; 404 when nothing the caller may answer has the ref; 409 when the item is closed, moved, takes no answer, or was answered differently |
 | POST | `/api/attention/withdraw` | Withdraw an ask, or the open [waits](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) a run left (`wait:<run-id>`), by its `ref`, from `{ ref }`; it closes unanswered, or unmet, and a withdrawn wait starts nothing. 200 with `{ ref, action: "withdraw", unchanged, settled?, nothingStarted? }`, as for an answer; 400 for an item a paused run holds, which is answered instead; 404 when nothing the caller may withdraw has the ref; 409 when the ask was already answered or replaced, or the waits already met or replaced |
-| GET | `/api/items` | Read the [item](/reference/cli/#items) named by `key` in `project`: its runs, open waits, open questions, answers with rulings, and links, as `archon workflow runs --item --json` prints them; 404 when nothing has named the key. `project` takes a codebase id, a codebase name or a project key |
+| GET | `/api/items` | Read the [item](/reference/cli/#items) named by `key` in `project`: its runs, open waits, open questions, answers with rulings, links, and its end while it holds, as `archon workflow runs --item --json` prints them; 404 when nothing has named the key. `project` takes a codebase id, a codebase name or a project key |
 | GET | `/api/items/window` | A page of the project's items with a run started in a window, as `archon workflow items --json` prints it: `{ window, items, next }`. Takes `project`, and either `since`/`until` (`archon metrics` syntax, default the last 30 days) or the `after` cursor a page returned, and `limit` (1 to 100, default 20). 400 for an unknown project, a malformed window or limit, or a cursor that is not one this read returned or is for another project |
 | POST | `/api/items/rulings` | Record a ruling on the item named by `key` in `project`, from `{ project, key, text, as? }`: a decision made without a question, which every later read of the item shows with the answers. Writes the item if nothing named it yet. 201 with the ruling; 403 unless the caller is the operator or an admin; `as` declares the operator's name and is ignored for an identified user |
+| POST | `/api/items/ends` | [End](/reference/cli/#workflow-end) the item named by `key` in `project`, from `{ project, key, reason, as? }`: nothing more will happen on it, so its stop leaves the attention queue and the item read shows the end under `ended` until a run created or resumed on the item since, or a waiting start, opens it again. Never writes an item. 201 with the end; 400 for a blank reason, an unknown project, or an operator request without `as`; 403 unless the caller is the operator or an admin; 404 when nothing has named the key; 409 with `{ error, blocker }` while a run, a start, an ask or a wait on the item is active or waiting, `blocker` naming the first one; `as` declares the operator's name and is ignored for an identified user |
 | POST | `/api/items/rulings/{rulingId}/withdraw` | Withdraw a ruling, from `{ project?, as? }`. The ruling stays in the item read with `withdrawn` set. With `project`, a ruling on another project's item is refused with 400 and stays as it was; without it the id alone names the ruling. 200 with the ruling; 400 for an unknown project; 404 for no such ruling; 409 when it was already withdrawn; 403 unless the caller is the operator or an admin |
 
 List and count responses add a `degraded` array when a paused row or a descendant needed
