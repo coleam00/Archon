@@ -331,11 +331,10 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     expect(parsed.error).toContain('matches more than one run');
   });
 
-  it('passes the id through unchanged when cwd is not a registered project', async () => {
+  it('refuses a prefix from a cwd in no registered project, naming the full id', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
     const code = await workflowGetCommand(
       createTestWorkflowHost(),
@@ -346,7 +345,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     );
 
     expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
-    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith('deadbeef');
+    expect(workflowDb.getWorkflowRun).not.toHaveBeenCalled();
     expect(code).toBe(1);
   });
 
@@ -659,7 +658,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
         undefined,
         '/unregistered'
       )
-    ).rejects.toThrow("Cannot resolve run id prefix 'deadbeef' outside a registered project.");
+    ).rejects.toThrow("Short run id 'deadbeef' resolves only in the run's project.");
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
   });
 

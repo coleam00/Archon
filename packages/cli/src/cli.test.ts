@@ -626,8 +626,12 @@ describe('workflow answer flag rejection and command discovery', () => {
     });
   }
 
+  // A short id outside a registered project is refused before lookup, so a missing run
+  // is named by a full id.
+  const MISSING_FULL_RUN_ID = '7b50458b-0000-4000-8000-000000000000';
+
   it('returns nonzero when a JSON answer cannot find its run', () => {
-    const result = invoke(['answer', 'missing-run', '--occurrence', 'x', '--json']);
+    const result = invoke(['answer', MISSING_FULL_RUN_ID, '--occurrence', 'x', '--json']);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
       error: expect.stringContaining('Workflow run not found'),
@@ -636,7 +640,7 @@ describe('workflow answer flag rejection and command discovery', () => {
   });
 
   it('routes end-turn to its run lookup', () => {
-    const result = invoke(['end-turn', 'missing-run', '--json']);
+    const result = invoke(['end-turn', MISSING_FULL_RUN_ID, '--json']);
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
@@ -1908,25 +1912,33 @@ describe('pre-dispatch gates --json error envelope', () => {
     }
   });
 
-  it('lets by-id run reads past the git gate, and keeps it for wait --item and run', async () => {
-    const outside = mkdtempSync(join(tmpdir(), 'archon-by-id-outside-'));
-    const bare = mkdtempSync(join(tmpdir(), 'archon-by-id-bare-'));
-    const project = mkdtempSync(join(tmpdir(), 'archon-by-id-project-'));
-    // A private copy of the seeded registry, so the run below stays out of other cases.
-    const home = mkdtempSync(join(tmpdir(), 'archon-by-id-home-'));
+  // `get`, `logs`, `artifacts` and `wait <run-id>` read one run by id. A full id needs no
+  // project; a short prefix resolves only in a project and is refused elsewhere.
+  describe('by-id run reads', () => {
     const runId = '6b50458b-0000-4000-8000-000000000000';
+    const prefix = runId.slice(0, 8);
     const missing = '7b50458b-0000-4000-8000-000000000000';
-    try {
-      spawnSync('git', ['init', '-q', '--bare', '.'], { cwd: bare });
-      copyFileSync(join(jsonEnvelopeHome, 'archon.db'), join(home, 'archon.db'));
-      const db = new Database(join(home, 'archon.db'));
+    const reads = ['get', 'logs', 'artifacts', 'wait'];
+    // Scratch directories: only `project` is a registered (folder) project.
+    const dirs = { home: '', plain: '', bare: '', checkout: '', project: '' };
+
+    beforeAll(async () => {
+      for (const key of Object.keys(dirs) as (keyof typeof dirs)[]) {
+        dirs[key] = mkdtempSync(join(tmpdir(), `archon-by-id-${key}-`));
+      }
+      mkdirSync(join(dirs.project, 'sub'));
+      const bare = spawnSync('git', ['init', '-q', '--bare', '.'], { cwd: dirs.bare });
+      const checkout = spawnSync('git', ['init', '-q', '.'], { cwd: dirs.checkout });
+      if (bare.status !== 0 || checkout.status !== 0) throw new Error('git init failed');
+      // A private copy of the seeded registry, so the run stays out of other cases.
+      copyFileSync(join(jsonEnvelopeHome, 'archon.db'), join(dirs.home, 'archon.db'));
+      const db = new Database(join(dirs.home, 'archon.db'));
       try {
-        // The run belongs to a registered project that the caller is not standing in.
-        db.run('INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)', [
-          'codebase',
-          'fixture/by-id',
-          await canonicalizeProjectPath(project),
-        ]);
+        // The run belongs to the registered folder project; the other directories are outside it.
+        db.run(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd, kind) VALUES (?, ?, ?, ?)',
+          ['codebase', 'fixture/by-id', await canonicalizeProjectPath(dirs.project), 'folder']
+        );
         db.run(
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
           ['conversation', 'cli', 'by-id-test', 'codebase']
@@ -1938,58 +1950,91 @@ describe('pre-dispatch gates --json error envelope', () => {
       } finally {
         db.close();
       }
-      // The caller's own directory, with no --cwd, as an operator runs it.
-      const spawnIn = (cwd: string, args: string[]) => {
-        const result = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', ...args], {
+    });
+
+    afterAll(async () => {
+      for (const dir of Object.values(dirs)) if (dir) await removeTempTree(dir);
+    });
+
+    // The caller's own directory, with no --cwd, as an operator runs it. `logs` takes no
+    // --json, so its answer is read from stderr.
+    function read(cwd: string, args: string[]) {
+      const json = args[0] !== 'logs';
+      const result = spawnSync(
+        process.execPath,
+        [CLI_ENTRY, 'workflow', ...args, ...(json ? ['--json'] : [])],
+        {
           cwd,
           encoding: 'utf8',
-          env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: home },
-        });
-        return { ...result, envelope: () => JSON.parse(result.stdout) };
+          env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: dirs.home },
+        }
+      );
+      return {
+        status: result.status,
+        answer: json ? (JSON.parse(result.stdout) as Record<string, unknown>) : null,
+        text: json ? result.stdout : result.stderr,
       };
-      const read = (args: string[]) => spawnIn(outside, [...args, '--json']);
+    }
 
-      for (const cwd of [outside, bare]) {
-        const found = spawnIn(cwd, ['get', runId, '--json']);
-        expect({ cwd, status: found.status, envelope: found.envelope() }).toMatchObject({
+    it('reads a full id from a plain directory and a bare repository', () => {
+      for (const cwd of [dirs.plain, dirs.bare]) {
+        const { status, answer } = read(cwd, ['get', runId]);
+        expect({ cwd, status, answer }).toMatchObject({
           cwd,
           status: 0,
-          envelope: { id: runId, codebase_id: 'codebase' },
+          answer: { id: runId, codebase_id: 'codebase' },
         });
       }
-      // A short prefix resolves only in a project: refused here with the full id named,
-      // and resolved when the caller selects the run's project.
-      const prefix = read(['get', runId.slice(0, 8)]);
-      expect(prefix.status).toBe(1);
-      expect(prefix.envelope().error).toContain('pass the full run id');
-      const scoped = read(['get', runId.slice(0, 8), '--chat-project-id', 'codebase']);
-      expect({ status: scoped.status, envelope: scoped.envelope() }).toMatchObject({
-        status: 0,
-        envelope: { id: runId },
-      });
-      // Each read answered for the run; the gate would have refused the directory.
-      const missingGet = read(['get', missing]);
-      expect({ status: missingGet.status, envelope: missingGet.envelope() }).toMatchObject({
-        status: 1,
-        envelope: { ok: false, error: 'not_found' },
-      });
-      expect(read(['wait', missing]).envelope()).toMatchObject({ ok: false, error: 'not_found' });
-      expect(read(['artifacts', missing]).envelope().error).toContain('Workflow run not found');
-      const logs = spawnIn(outside, ['logs', missing]);
-      expect(logs.status).toBe(1);
-      expect(logs.stderr).toContain('Workflow run not found');
+    });
 
+    it('lets logs, artifacts and wait reach the run by full id from a bare repository', () => {
+      expect(read(dirs.bare, ['wait', runId])).toMatchObject({
+        status: 0,
+        answer: { ok: true, runId },
+      });
+      expect(read(dirs.bare, ['artifacts', runId]).answer).toMatchObject({ runId });
+      // The seeded run has no transcript; the answer is about the run, not the directory.
+      expect(read(dirs.bare, ['logs', runId]).text).toContain(runId);
+    });
+
+    it.each([
+      ['a plain directory', 'plain'],
+      ['an unregistered checkout', 'checkout'],
+      ['a bare repository', 'bare'],
+    ] as const)('refuses a short prefix from %s and names the full id', (_, dir) => {
+      for (const subcommand of reads) {
+        const { status, text } = read(dirs[dir], [subcommand, prefix]);
+        expect({ subcommand, status }).toEqual({ subcommand, status: 1 });
+        expect(text).toContain('pass the full run id');
+      }
+    });
+
+    it("resolves a short prefix from a subdirectory of the run's folder project", () => {
+      const { status, answer } = read(join(dirs.project, 'sub'), ['get', prefix]);
+      expect({ status, answer }).toMatchObject({ status: 0, answer: { id: runId } });
+    });
+
+    it('resolves a short prefix in the selected chat project, even from a bare repository', () => {
+      const { status, answer } = read(dirs.bare, ['get', prefix, '--chat-project-id', 'codebase']);
+      expect({ status, answer }).toMatchObject({ status: 0, answer: { id: runId } });
+    });
+
+    it('still answers not_found for a full id that names no run', () => {
+      const get = read(dirs.plain, ['get', missing]);
+      expect(get).toMatchObject({ status: 1, answer: { ok: false, error: 'not_found' } });
+      expect(read(dirs.plain, ['wait', missing]).answer).toMatchObject({ error: 'not_found' });
+    });
+
+    it('keeps the project gate for wait --item and run', () => {
       // `wait --item` resolves its item in the directory's project, and `run` acts on a
       // checkout, so both still need one.
       for (const args of [
         ['wait', '--item', 'x'],
         ['run', 'any-workflow', 'go'],
       ]) {
-        expect(read(args).envelope().error).toContain('Not in a git repository');
+        expect(read(dirs.plain, args).answer?.error).toContain('Not in a git repository');
       }
-    } finally {
-      for (const dir of [outside, bare, project, home]) await removeTempTree(dir);
-    }
+    });
   });
 
   it('leaves the default home untouched when the gate opens the registry', async () => {

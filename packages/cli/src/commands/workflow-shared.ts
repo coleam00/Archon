@@ -366,9 +366,10 @@ export async function assertInheritedWorkflowCodebase(
  * is global, so full ids keep working from any directory. A caller that already resolved a project can
  * provide its id; otherwise project lookup preserves an exact checkout
  * registration, then falls back to a linked worktree's canonical checkout. By
- * default, an omitted or unregistered cwd and an unmatched prefix pass through
- * unchanged so the downstream exact lookup keeps its existing error surface.
- * Callers without a downstream lookup can require a match instead.
+ * default, an omitted cwd and an unmatched prefix pass through unchanged so the
+ * downstream exact lookup keeps its existing error surface; callers without a
+ * downstream lookup can require a match instead. A prefix from a cwd in no
+ * registered project is refused, naming the full id.
  */
 export async function resolveRunIdArg(
   host: WorkflowHost,
@@ -391,11 +392,13 @@ export async function resolveRunIdArg(
     (cwd === undefined
       ? undefined
       : (await findCodebaseForCheckoutPath(cwd, host.records.codebases))?.id);
+  // Prefixes are project-scoped: outside a registered project there is nothing to resolve
+  // one in, and passing it on would report an existing run as missing.
   if (!resolvedCodebaseId) {
-    if (requirePrefixMatch) {
-      throw new Error(`Cannot resolve run id prefix '${runId}' outside a registered project.`);
-    }
-    return runId;
+    throw new Error(
+      `Short run id '${runId}' resolves only in the run's project.\n` +
+        'Run from the project directory, or pass the full run id.'
+    );
   }
   const matches = await findProjectRunsByReference(host.deps.store, runId, resolvedCodebaseId);
   if (matches.length > 1) {

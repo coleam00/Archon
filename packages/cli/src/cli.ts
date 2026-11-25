@@ -11,7 +11,7 @@
 // any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
 import '@archon/paths/strip-cwd-env-boot';
 // Capture explicit chat scope before loading Archon env or command modules.
-import { readChatProjectScope } from './workflow-scope';
+import './workflow-scope';
 // Load Archon env before command imports. loadCliEnv preserves inherited workflow
 // identity and prevents repository env from redirecting the user's stored gh login.
 import { loadCliEnv } from './load-cli-env';
@@ -423,10 +423,11 @@ const NO_GIT_COMMANDS = [
 const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing'];
 
 /**
- * Reads of one run by id. A full run id names one run in the whole store, so these
- * resolve no project for it and run from any directory. A short prefix resolves only in
- * the directory's project or the selected chat project. `wait --item`
- * resolves its item in the project, so it is not one.
+ * Reads of one run by id. A full run id names one run in the whole store, so the gate
+ * never refuses these: it maps the directory to its project when it has one, so a short
+ * prefix resolves there (folder subdirectories included), and otherwise passes the
+ * directory on. `resolveRunIdArg` then refuses a prefix that has no project to resolve
+ * in. `wait --item` resolves its item in the project, so it is not one.
  */
 const BY_ID_READS = ['get', 'logs', 'artifacts', 'wait'];
 function isByIdRead({ command, subcommand, values }: CliRouteContext): boolean {
@@ -450,10 +451,6 @@ function requiresGitRepo({ command, subcommand, values }: CliRouteContext): bool
 async function resolveEffectiveCwd(ctx: CliRouteContext): Promise<string | number> {
   const { command, subcommand, values, cwd, json } = ctx;
   if (!requiresGitRepo(ctx)) return cwd;
-  if (isByIdRead(ctx)) {
-    const { isFullRunId } = await import('@archon/core/workflows/run-id');
-    if (isFullRunId(ctx.positionals[2] ?? '')) return cwd;
-  }
   if (!existsSync(cwd)) {
     return await fail(json, `Error: Directory does not exist: ${cwd}`);
   }
@@ -481,18 +478,10 @@ async function resolveRegisteredCwd(
     );
     const host = await createCliWorkflowHost();
     const { codebase, repoRoot } = await resolveCodebaseForPath(realCwd, host.records.codebases);
+    // With no project, the command checks its arguments and `resolveRunIdArg` refuses a
+    // short prefix after them; a full id needs no project.
+    if (isByIdRead(ctx) && !codebase) return realCwd;
     if (!repoRoot && codebase?.kind !== 'folder') {
-      // Full ids returned before project resolution, so a by-id read here names a short
-      // prefix. Prefixes resolve within one project: the selected chat project when one is
-      // named, otherwise there is no project to resolve it in.
-      if (isByIdRead(ctx)) {
-        if (readChatProjectScope() !== undefined) return realCwd;
-        return await fail(
-          ctx.json,
-          `Error: Short run id '${ctx.positionals[2] ?? ''}' resolves only in the run's project.\n` +
-            'Run from the project directory, or pass the full run id.'
-        );
-      }
       return await fail(
         ctx.json,
         'Error: Not in a git repository.\n' +
@@ -507,10 +496,18 @@ async function resolveRegisteredCwd(
 
 /** Workflow discovery still works in an unverifiable checkout when its git root is known. */
 async function fallBackToRepoRoot(
-  { command, subcommand, json }: CliRouteContext,
+  ctx: CliRouteContext,
   realCwd: string,
   error: Error
 ): Promise<string | number> {
+  const { command, subcommand, json } = ctx;
+  // A bare repository, for one, has no checkout for the gate to resolve. A by-id read does
+  // not need one: `resolveRunIdArg` looks up a prefix's project itself and fails there with
+  // its own error, and a full id goes to the store, which reports its own failures.
+  if (isByIdRead(ctx)) {
+    getLog().debug({ err: error, cwd: realCwd }, 'cli.by_id_read_project_unresolved');
+    return realCwd;
+  }
   if (command === 'validate' || (command === 'workflow' && subcommand === 'list')) {
     const { findRepoRoot } = await import('@archon/git');
     const repoRoot = await findRepoRoot(realCwd);
