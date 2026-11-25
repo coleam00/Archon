@@ -49,7 +49,7 @@ If `request.codebase` is `null` → `{ status: 'none', cwd: '/workspace' }`.
 ### Step 2b: Folder Project
 If `request.codebase.kind === 'folder'`, calls `resolveFolderBackend(codebase, { container: false })` and then `backend.prepare()`. Returns `{ status: 'none', cwd }` with the real folder path, not the `/workspace` sentinel; no worktree is created. Only `prepared.cwd` is passed on, because the `'none'` result has no execution-context field.
 
-Before Step 3, the resolver resolves the codebase's canonical repository path. A known isolation error → `blocked` with classified message; an unknown error re-throws.
+Before Step 3, `resolveCanonicalPath()` finds the codebase's repository path; it can return `blocked`.
 
 ### Step 3: Workflow Reuse
 `store.findActiveByWorkflow(codebaseId, workflowType, workflowId)` — finds existing env with same workflow identity. If filesystem valid → reuse it. If filesystem gone → mark destroyed, fall through.
@@ -200,9 +200,9 @@ After environment cleanup: `sessionDb.deleteOldSessions(30)` (session retention)
 
 ## Merged Cleanup
 
-`cleanupMergedWorktrees()` in `services/cleanup/merged-sweep.ts` runs from chat `/worktree cleanup merged` and `archon isolation cleanup --merged`. It never removes stale environments. For each environment:
+`cleanupMergedWorktrees()` in `services/cleanup/merged-sweep.ts` runs from chat `/worktree cleanup merged` and `archon isolation cleanup --merged`. For each environment:
 - Judge the merge (below). It acts on a `merged` verdict, or on `pr-closed` when the CLI passes `--include-closed`
-- Skip if uncommitted changes, a running, pending or paused run, or a start that was handed the checkout and still waits. A failed run does not block: the qualifying verdict releases its lock, and the result reports it
+- Skip if uncommitted changes, a running, pending or paused run, or a start that was handed the checkout and still waits. A failed run does not block: the qualifying verdict releases its lock
 - Remove with `deleteRemoteBranch: true`
 
 ### How cleanup decides a branch is merged
