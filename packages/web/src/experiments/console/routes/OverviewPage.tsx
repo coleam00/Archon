@@ -158,12 +158,12 @@ export function OverviewPage(): ReactElement {
             {...itemAsks}
             asks={itemAsks.asks.slice(0, TOP_ASKS)}
             showProject={false}
-            compact={{ openAt: `/console/p/${projectId}/board` }}
+            compact={{ openAt: `/console/p/${projectId}/needs-you` }}
           />
         </div>
         {itemAsks.asks.length > TOP_ASKS ? (
           <Link
-            to="/console/needs-you"
+            to={`/console/p/${projectId}/needs-you`}
             className="mt-2 inline-block text-console-12 text-accent-bright underline"
           >
             {itemAsks.asks.length - TOP_ASKS} more on Needs you
