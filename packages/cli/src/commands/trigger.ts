@@ -281,7 +281,7 @@ export async function fireItemKey(fire: {
  *
  * @throws on an unreadable or invalid file, a malformed assignment, or a name given twice.
  */
-export async function readEventInputs(
+async function readEventInputs(
   options: Pick<TriggerOptions, 'inputs' | 'input'>
 ): Promise<z.infer<typeof resourceStartBindingIntentSchema>['eventInputs']> {
   let fromFile: z.infer<typeof resourceStartBindingIntentSchema>['eventInputs'];

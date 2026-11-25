@@ -439,7 +439,7 @@ Options:
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the target directory (the project add path, else the current directory), with or without git, as a folder project; workflow run runs in place
   --container                Run a folder project in container isolation
-  --input <name>=<value>     Supply a declared workflow input; repeat per input
+  --input <name>=<value>     Supply a declared workflow input; for 'trigger fire': set one event input as text; repeat per input
   --input-file <name>=<path> Supply a declared workflow input from a file's contents; repeat per input
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run

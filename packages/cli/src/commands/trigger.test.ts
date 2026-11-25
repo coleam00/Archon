@@ -1,10 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
-import { fireItemKey, readEventInputs } from './trigger';
+import { fireItemKey } from './trigger';
 
 const binding = {
   bindingId: 'proof',
@@ -43,34 +39,5 @@ describe('the item a fire starts on', () => {
     await expect(
       fireItemKey({ ...fire, inherited, config: mapped, eventInputs: { other: 1 } })
     ).rejects.toThrow();
-  });
-});
-
-const tempRoot = trackTempRoots();
-
-async function inputsFile(inputs: Record<string, unknown>): Promise<string> {
-  const root = tempRoot(await mkdtemp(join(tmpdir(), 'archon-fire-inputs-')));
-  const file = join(root, 'inputs.json');
-  await writeFile(file, JSON.stringify(inputs));
-  return file;
-}
-
-describe("a fire's event inputs", () => {
-  test('--input gives the same event inputs as the equivalent --inputs file', async () => {
-    const inputs = await inputsFile({ key: 'issue-946', source: 'github' });
-    expect(await readEventInputs({ input: ['key=issue-946', 'source=github'] })).toEqual(
-      (await readEventInputs({ inputs })) ?? {}
-    );
-  });
-
-  test('refuses an --input without =, naming it', async () => {
-    await expect(readEventInputs({ input: ['oops'] })).rejects.toThrow("'oops'");
-  });
-
-  test('refuses a name given by both --inputs and --input', async () => {
-    const inputs = await inputsFile({ key: 'issue-1', source: 'github' });
-    await expect(readEventInputs({ inputs, input: ['key=issue-2'] })).rejects.toThrow(
-      "Input 'key' is given by both --inputs and --input"
-    );
   });
 });

@@ -70,7 +70,8 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--input <name>=<value>',
-    description: 'Supply a declared workflow input; repeat per input',
+    description:
+      "Supply a declared workflow input; for 'trigger fire': set one event input as text; repeat per input",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
