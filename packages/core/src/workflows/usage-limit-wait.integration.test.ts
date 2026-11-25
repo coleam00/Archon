@@ -8,6 +8,7 @@ import type { MessageChunk } from '@archon/provider-contract';
 import { getProviderCapabilities, providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
+import { attentionQueueItemForRun } from '@archon/workflows/attention-queue';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { RUN_STOP_REASON_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
@@ -149,7 +150,7 @@ test('a typed usage limit with a reset waits on the provider it hit, then the co
   const resetAt = new Date(Date.now() + 3_600_000).toISOString();
   const { engine, store, calls } = harness([{ resetAt }, 'ok']);
 
-  // The node runs on another provider than the configured default, and the wait names it.
+  // The node runs on another provider than the configured default, and its queue item names it.
   const onCodex = makeTestResolvedWorkflow({
     name: 'usage-limit',
     nodes: [{ id: 'implement', prompt: 'Implement it', provider: 'codex' }],
@@ -162,8 +163,11 @@ test('a typed usage limit with a reset waits on the provider it hit, then the co
     kind: 'quota',
     nodeId: 'implement',
     resumeAt: resetAt,
-    provider: 'codex',
   });
+  if (waiting === null) return;
+  expect(
+    await attentionQueueItemForRun({ store, branchOf: async () => null }, waiting)
+  ).toMatchObject({ kind: 'usage_limit', run: { node: 'implement' }, provider: 'codex' });
 
   // Nothing is due before the reset: one continuation, at the reset time.
   expect(await wake(engine, store, new Date(Date.parse(resetAt) - 1000), onCodex)).toEqual([]);

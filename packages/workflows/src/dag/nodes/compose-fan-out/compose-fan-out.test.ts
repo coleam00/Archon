@@ -845,14 +845,15 @@ ${
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
         'compose-quota-run',
-        expect.objectContaining({
-          kind: 'quota',
-          nodeId: 'fan',
-          resumeAt: resetAt,
-          provider: 'claude',
-        }),
+        expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
         { kind: 'started', stepName: 'fan' }
       );
+      // The fan-out's failure record names the provider of the instance's limit, which the
+      // attention queue reads for the wait.
+      const fanFailed = persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'fan'
+      );
+      expect(fanFailed?.data?.provider_failure).toMatchObject({ provider: 'claude' });
     }
   );
 

@@ -12,7 +12,6 @@ import {
   parseAttentionQueueOrder,
   parseAttentionQueueRequest,
   projectRefForRun,
-  toAttentionQueueItem,
 } from './attention-queue';
 import { OWNER_OBSERVATION_CONCURRENCY, OWNER_OBSERVATION_DEADLINE_MS } from './owner-observation';
 import { queuedRunAttention, type WorkflowRun } from './schemas/workflow-run';
@@ -104,7 +103,7 @@ describe('queue item identity', () => {
 });
 
 describe('a usage-limit wait', () => {
-  test('is an item naming its provider, node, reset time and pause time, with nothing to answer', () => {
+  test('is an item naming its provider, node, reset time and pause time, with nothing to answer', async () => {
     const run: WorkflowRun = {
       origin: null,
       id: 'limited',
@@ -124,7 +123,6 @@ describe('a usage-limit wait', () => {
           pauseId: 'limit-1',
           waitingSince: '2026-10-15T09:00:00.000Z',
           resumeAt: '2026-10-15T14:00:00.000Z',
-          provider: 'claude',
         },
       },
       active_phase_started_at: null,
@@ -145,11 +143,43 @@ describe('a usage-limit wait', () => {
       runId: 'limited',
       nodeId: 'implement',
       resumeAt: '2026-10-15T14:00:00.000Z',
-      provider: 'claude',
     });
-    if (attention === undefined) return;
+    // The provider is read from the waiting node's latest failure record, not the wait.
+    const failed = (stepName: string, provider?: string) => ({
+      id: `${stepName}-${provider ?? 'none'}`,
+      workflow_run_id: 'limited',
+      event_type: 'node_failed',
+      step_index: null,
+      step_name: stepName,
+      data: {
+        provider_failure: {
+          class: 'quota_exhausted',
+          evidence: 'limit',
+          ...(provider ? { provider } : {}),
+        },
+      },
+      created_at: '2026-10-15T09:00:00.000Z',
+    });
+    const source = (events: ReturnType<typeof failed>[]): AttentionQueueSource => ({
+      store: {
+        listAttentionQueueRows: async () => [],
+        getWorkflowRun: async () => null,
+        getWorkflowRunForAttention: async () => null,
+        getCodebase: async () => null,
+        getItem: async () => null,
+        listEventsForRuns: async () => new Map([['limited', events]]),
+      },
+      branchOf: async () => null,
+    });
     expect(
-      toAttentionQueueItem(run, attention, { codebase: null, branch: null, item: null })
+      await attentionQueueItemForRun(
+        source([
+          failed('implement', 'codex'),
+          failed('review', 'pi'),
+          failed('implement', 'claude'),
+        ]),
+        run
+      )
     ).toMatchObject({
       kind: 'usage_limit',
       ref: 'limited',
@@ -158,6 +188,11 @@ describe('a usage-limit wait', () => {
       provider: 'claude',
       pausedAt: '2026-10-15T09:00:00.000Z',
     });
+    // A failure an older Archon version recorded names no provider.
+    expect(await attentionQueueItemForRun(source([failed('implement')]), run)).not.toHaveProperty(
+      'provider',
+      expect.anything()
+    );
   });
 });
 
@@ -199,6 +234,7 @@ describe('owner observations', () => {
         getWorkflowRunForAttention: async () => null,
         getCodebase: async () => null,
         getItem: async () => null,
+        listEventsForRuns: async () => new Map(),
       },
       branchOf: async () => null,
       ownerLost: {
@@ -274,6 +310,7 @@ describe('a continuation a host gave up on', () => {
       getWorkflowRunForAttention: async () => null,
       getCodebase: async () => null,
       getItem: async () => null,
+      listEventsForRuns: async () => new Map(),
     },
     branchOf: async () => null,
   };

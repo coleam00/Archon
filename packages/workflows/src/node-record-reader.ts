@@ -6,6 +6,7 @@ import {
   nodeExecutionMetadataSchema,
   nodeExecutionMetadataPayloadSchema,
   nodeInvocationSchema,
+  nodeProviderFailureSchema,
   type NodeExecutionMetadata,
   type NodeInvocation,
 } from './schemas/node-execution';
@@ -116,6 +117,23 @@ export function readableRequestEvidence(
 }
 
 const recordUsageKeys = { tokens: ['tokens'], spend: ['spend', 'loopBaseline'] };
+
+/**
+ * The provider a node's latest failure record names for its provider failure, from a run's
+ * `node_failed` events. Undefined when the node has none, or its failure was recorded before
+ * failures named their provider.
+ */
+export function limitFailureProvider(
+  events: ReadonlyMap<
+    string,
+    readonly { step_name: string | null; data: Record<string, unknown> }[]
+  >,
+  runId: string,
+  nodeId: string
+): string | undefined {
+  const latest = (events.get(runId) ?? []).filter(event => event.step_name === nodeId).at(-1);
+  return nodeProviderFailureSchema.safeParse(latest?.data.provider_failure).data?.provider;
+}
 
 export function readNodeRecordData(value: unknown): Record<string, unknown> {
   return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));

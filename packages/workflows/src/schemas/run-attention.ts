@@ -123,8 +123,6 @@ const nonTerminalRunAttentionSchemas = [
     runId: z.string(),
     nodeId: z.string(),
     resumeAt: z.string().datetime(),
-    /** The provider whose limit was hit; absent on a wait written before it was recorded. */
-    provider: z.string().optional(),
   }),
   z.object({
     kind: z.literal('blocked_on_child'),
@@ -295,13 +293,7 @@ function pausedAttention(run: RunAttentionInput): RunAttention | null {
 
   const wait = run.metadata?.wait;
   if (isWorkflowWaitContext(wait) && wait.kind === 'quota') {
-    return {
-      kind: 'usage_limit',
-      runId: run.id,
-      nodeId: wait.nodeId,
-      resumeAt: wait.resumeAt,
-      ...(wait.provider === undefined ? {} : { provider: wait.provider }),
-    };
+    return { kind: 'usage_limit', runId: run.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt };
   }
   if (isWorkflowWaitContext(wait) && wait.kind === 'attention') {
     // Answered: like a resolved gate, it waits on the machine, not on an answer.

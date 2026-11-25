@@ -267,7 +267,6 @@ export function registerQuotaWaitTests(fixture: ReturnType<typeof setupCreditExh
         pauseId: expect.any(String),
         waitingSince: expect.any(String),
         resumeAt: resetAt,
-        provider: 'claude',
       },
       { kind: 'started', stepName: 'investigate' }
     );

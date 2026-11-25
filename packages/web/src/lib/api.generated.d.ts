@@ -5784,7 +5784,6 @@ export interface components {
           nodeId: string;
           /** Format: date-time */
           resumeAt: string;
-          provider?: string;
         }
       | {
           /** @enum {string} */
@@ -7537,7 +7536,6 @@ export interface components {
           waitingSince: string;
           /** Format: date-time */
           resumeAt: string;
-          provider?: string;
         }
       | {
           /** @enum {string} */
