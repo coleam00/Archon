@@ -42,12 +42,23 @@ async function native(root: string, args: string[]): Promise<number> {
   ]);
   return code;
 }
-async function runResult(root: string, args: string[] = [], part = '') {
+async function runResult(
+  root: string,
+  args: string[] = [],
+  part = '',
+  env: Record<string, string> = {}
+) {
   const child = Bun.spawn([process.execPath, 'run', runner, ...args], {
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_TEST_PART: part },
+    env: {
+      ...process.env,
+      ARCHON_TELEMETRY_DISABLED: '1',
+      ARCHON_TEST_PART: part,
+      ARCHON_TEST_GROUP_LIMIT_SECONDS: '',
+      ...env,
+    },
   });
   const [status, stdout, stderr] = await Promise.all([
     child.exited,
@@ -330,6 +341,39 @@ test(
     );
   },
   testTimeout(10000)
+);
+
+for (const concurrency of [1, 2]) {
+  test(
+    `a group that outlives its limit is killed and named: concurrency ${String(concurrency)}`,
+    async () => {
+      const root = fixture({ testConcurrency: concurrency });
+      // Bun's --timeout cannot break a synchronous spin; only the runner's limit can.
+      testFile(
+        root,
+        'spins',
+        `test('passes', () => {}); test('spins', () => { while (true) {} });`
+      );
+      const startedAt = performance.now();
+      const result = await runResult(root, [], '', { ARCHON_TEST_GROUP_LIMIT_SECONDS: '2' });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/group exceeded 2s and was killed \(pid \d+\): .*spins/);
+      expect(performance.now() - startedAt).toBeLessThan(8000);
+    },
+    testTimeout(10000)
+  );
+}
+
+test(
+  'a group limit that is not a positive number fails the run instead of disabling the limit',
+  async () => {
+    const root = fixture();
+    testFile(root, 'a', `test('passes', () => {});`);
+    const result = await runResult(root, [], '', { ARCHON_TEST_GROUP_LIMIT_SECONDS: '10m' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('ARCHON_TEST_GROUP_LIMIT_SECONDS');
+  },
+  testTimeout(5000)
 );
 
 test(

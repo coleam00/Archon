@@ -34,6 +34,12 @@ import { runReportedGroup, writeCombinedReport, type TestReport } from './packag
  * `◀ <package> <first selector> <seconds>s` line, which `update-test-weights.ts` reads back
  * from a CI run to refresh the weights.
  *
+ * Each group gets ten minutes of wall clock, or `ARCHON_TEST_GROUP_LIMIT_SECONDS` when set.
+ * Bun's own `--timeout` bounds a pending await and names the case, but a case that spins or
+ * deadlocks the runtime outlives it and would hold a CI job until the job is cancelled, with
+ * buffered output lost. At the limit the runner kills the group's process by its handle,
+ * names the group's files on stderr, prints the output it had so far, and fails the group.
+ *
  * `--windows` runs only the package's files marked `WINDOWS_TEST_DIRECTIVE`, each named by its
  * exact path, in the package's isolation groups. A package with none runs nothing and passes.
  */
@@ -42,13 +48,47 @@ const packageDir = process.cwd();
 const manifestPath = join(packageDir, 'package.json');
 const manifest: unknown = await Bun.file(manifestPath).json();
 
+/** Fails loudly on a bad override: a typo that disabled the limit would bring the hang back. */
+const groupLimitSeconds = (raw: string | undefined): number => {
+  if (raw === undefined || raw === '') return 600;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(`ARCHON_TEST_GROUP_LIMIT_SECONDS must be a positive number, got "${raw}"`);
+  }
+  return seconds;
+};
+const groupLimit = groupLimitSeconds(process.env.ARCHON_TEST_GROUP_LIMIT_SECONDS);
+
+/**
+ * Waits for a group's process and kills it at the group limit. Returns the exit code and
+ * whether the limit was hit; a killed group always fails.
+ */
+const exitWithinLimit = async (
+  child: Bun.Subprocess,
+  group: string[]
+): Promise<{ code: number; killed: boolean }> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limitHit = new Promise<'limit'>(resolve => {
+    timer = setTimeout(() => resolve('limit'), groupLimit * 1000);
+  });
+  const first = await Promise.race([child.exited, limitHit]);
+  clearTimeout(timer);
+  if (first !== 'limit') return { code: first, killed: false };
+  child.kill('SIGKILL');
+  await child.exited;
+  console.error(
+    `✖ ${packageName} group exceeded ${String(groupLimit)}s and was killed (pid ${String(child.pid)}): ${selectedFiles(group).join(' ') || 'Test process'}`
+  );
+  return { code: 1, killed: true };
+};
+
 const run = async (args: string[]): Promise<number> => {
   const child = Bun.spawn(bunTestCommand(args), {
     cwd: packageDir,
     env: bunTestEnv(),
     stdio: ['inherit', 'inherit', 'inherit'],
   });
-  return await child.exited;
+  return (await exitWithinLimit(child, args)).code;
 };
 
 const requested = Bun.argv.slice(2);
@@ -110,7 +150,11 @@ if (groups.length > 1 && singleGroupOption !== undefined) {
 }
 const reports: TestReport[] = [];
 
-/** Runs one group and reports how long it took, for `update-test-weights.ts`. */
+/**
+ * Runs one group and reports how long it took, for `update-test-weights.ts`. A killed group
+ * prints its line too; that script reads only jobs that succeeded, so the limit never
+ * becomes a weight.
+ */
 const timed = async (group: string[], runGroup: (group: string[]) => Promise<number>) => {
   const startedAt = performance.now();
   let result: number;
@@ -136,14 +180,27 @@ const runBuffered = async (group: string[]): Promise<number> => {
     stdout: 'pipe',
     stderr: 'pipe',
   });
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  process.stdout.write(stdout);
-  process.stderr.write(stderr);
+  const stdout = collect(child.stdout);
+  const stderr = collect(child.stderr);
+  const { code, killed } = await exitWithinLimit(child, group);
+  // After a kill, a grandchild that inherited a pipe can hold it open, so EOF may never come:
+  // print what arrived instead of waiting for the rest.
+  if (!killed) await Promise.all([stdout.done, stderr.done]);
+  for (const chunk of stdout.chunks) process.stdout.write(chunk);
+  for (const chunk of stderr.chunks) process.stderr.write(chunk);
   return code;
+};
+
+/** Reads a stream as it arrives, so a killed group's partial output can still be printed. */
+const collect = (stream: ReadableStream<Uint8Array>) => {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+  const done = (async () => {
+    for (let read = await reader.read(); !read.done; read = await reader.read()) {
+      chunks.push(read.value);
+    }
+  })();
+  return { chunks, done };
 };
 
 /**
