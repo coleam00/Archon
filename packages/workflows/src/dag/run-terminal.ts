@@ -10,7 +10,7 @@ import type {
   WorkflowRun,
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
-import { SUBRUN_METADATA_KEYS } from '../schemas';
+import { SUBRUN_METADATA_KEYS, subrunSummaryMetadata } from '../schemas';
 import { keptAsksResult, stoppedItem } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import { CHANGE_SIZE_METADATA_KEY, type ChangeSize } from '../schemas/change-size';
@@ -506,12 +506,13 @@ async function completeRun(
           // `$<node>.output` on re-entry. Gated on parent_run_id to bound metadata
           // growth to child runs only (top-level runs return the summary directly).
           // `summary_value` is the additive logical sibling (#2637): old binaries keep
-          // reading `summary`, new parents prefer the typed value when present.
+          // reading `summary`, new parents prefer the typed value when present. A null
+          // value is written as a marker instead, because the merge drops a null key.
           ...(workflowRun.parent_run_id && terminal.output ? { summary: terminal.output } : {}),
           ...(workflowRun.parent_run_id &&
           terminal.output &&
           terminal.structuredOutput !== undefined
-            ? { [SUBRUN_METADATA_KEYS.summaryValue]: terminal.structuredOutput }
+            ? subrunSummaryMetadata(terminal.structuredOutput)
             : {}),
           // The callee-owned field contract (#2453). Gated on the same terminal output as
           // the two keys above, so a blank/incomplete `returns:` node stamps no contract
