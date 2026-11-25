@@ -670,7 +670,7 @@ declare module 'archon:script' {
         };
         readonly method: 'merge' | 'squash';
         readonly conditions: {
-          readonly head?: string;
+          readonly head: string;
           readonly base?: string;
           readonly tree?: string;
         };
@@ -2538,6 +2538,10 @@ declare module 'archon:script' {
         };
       };
       readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      readonly start?: {
+        readonly requestId: string;
+        readonly hostId: string;
+      };
     } | {
       readonly kind: 'overdue_wait';
       readonly ref: string;
@@ -2600,6 +2604,9 @@ declare module 'archon:script' {
         readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
         readonly refusedAt: string;
       }>;
+      readonly failed?: {
+        readonly error: string | null;
+      };
       readonly checkout: string | null;
     } | {
       readonly kind: 'preparation_lost';
@@ -2788,6 +2795,22 @@ declare module 'archon:script' {
         };
       };
     } | null;
+    readonly ended: {
+      readonly kind: 'ended';
+      readonly id: string;
+      readonly reason: string;
+      readonly at: string;
+      readonly via: string;
+      readonly by: {
+        readonly declared: string;
+      } | {
+        readonly userId: string;
+      } | null;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+    } | null;
     readonly degraded: ReadonlyArray<{
       readonly type: 'degraded';
       readonly reason: 'run_unreadable';
@@ -2808,6 +2831,10 @@ declare module 'archon:script' {
       readonly type: 'degraded';
       readonly reason: 'landing_unresolved';
       readonly message: string;
+    } | {
+      readonly type: 'degraded';
+      readonly reason: 'end_unreadable';
+      readonly endId: string;
     }>;
   };
 
@@ -3162,6 +3189,10 @@ declare module 'archon:script' {
           };
         };
         readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly start?: {
+          readonly requestId: string;
+          readonly hostId: string;
+        };
       } | {
         readonly kind: 'overdue_wait';
         readonly ref: string;
@@ -3224,6 +3255,9 @@ declare module 'archon:script' {
           readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
           readonly refusedAt: string;
         }>;
+        readonly failed?: {
+          readonly error: string | null;
+        };
         readonly checkout: string | null;
       } | {
         readonly kind: 'preparation_lost';
@@ -3412,6 +3446,22 @@ declare module 'archon:script' {
           };
         };
       } | null;
+      readonly ended: {
+        readonly kind: 'ended';
+        readonly id: string;
+        readonly reason: string;
+        readonly at: string;
+        readonly via: string;
+        readonly by: {
+          readonly declared: string;
+        } | {
+          readonly userId: string;
+        } | null;
+        readonly fromRun: {
+          readonly runId: string;
+          readonly nodePath: string;
+        } | null;
+      } | null;
       readonly degraded: ReadonlyArray<{
         readonly type: 'degraded';
         readonly reason: 'run_unreadable';
@@ -3432,6 +3482,10 @@ declare module 'archon:script' {
         readonly type: 'degraded';
         readonly reason: 'landing_unresolved';
         readonly message: string;
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'end_unreadable';
+        readonly endId: string;
       }>;
     }>;
     readonly next: string | null;

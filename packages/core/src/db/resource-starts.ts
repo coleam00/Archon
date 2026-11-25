@@ -19,7 +19,6 @@ import type {
   QueuedResourceStartInspection,
   SkippedItemStart,
 } from '@archon/workflows/resource-start-store';
-import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 export type {
   StartBindingInspection,
@@ -47,7 +46,6 @@ import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run'
 import { getDatabase, getDialect } from './connection';
 import {
   addResourceSlotHolder,
-  liveItemRuns,
   lockAdmission,
   lockResourceSlot,
   lockResourceSlotForAdmission,
@@ -60,10 +58,6 @@ import {
 import { drainAdmits, runLimitBlocker } from './run-room';
 import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
-import { getLog } from './workflow-run-shared';
-import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
-import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
 import { currentProcessOwner } from '@archon/paths/process-owner';
 import { WorkflowStatusReadError } from './workflow-run-reads';
@@ -570,57 +564,6 @@ export async function listSkippedItemStarts(itemId: string): Promise<SkippedItem
     resource: row.resource_key,
     blockerRunId: row.blocker_kind === 'run' ? row.blocker_run_id : null,
   }));
-}
-
-/** Runs by id; a row that cannot be normalized is reported `run_unreadable`. */
-async function readRunsForAttention(ids: readonly string[]): Promise<AttentionRead<WorkflowRun>[]> {
-  const runs: AttentionRead<WorkflowRun>[] = [];
-  for (const id of ids) {
-    const row = (
-      await getDatabase().query<WorkflowRunRow>(
-        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
-        [id]
-      )
-    ).rows[0];
-    if (row === undefined) continue;
-    try {
-      runs.push(normalizeWorkflowRun(row));
-    } catch {
-      // Parser errors can quote stored data, including message text.
-      getLog().error({ workflowRunId: id }, 'attention_run_normalization_failed');
-      runs.push({ type: 'degraded', reason: 'run_unreadable', runId: id });
-    }
-  }
-  return runs;
-}
-
-export async function listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]> {
-  const db = getDatabase();
-  const runs = await liveItemRuns(db.query.bind(db));
-  const queued = await db.query<{ id: string; item_id: string; launch: unknown }>(
-    `SELECT id, item_id, launch FROM remote_agent_resource_start_requests
-      WHERE status = 'queued' AND item_id IS NOT NULL`
-  );
-  const held = itemHolders(runs);
-  const waiting = [
-    ...runs
-      .filter(run => !holdsItem(run))
-      .map(run => ({ runId: run.id, workflow: run.workflow_name, itemId: run.item_id })),
-    ...queued.rows.flatMap(row => {
-      const launch = preparedWorkflowLaunchSchema.safeParse(parseStoredJson(row.launch));
-      // A damaged request is reported by the trigger reads; it names no workflow here.
-      if (!launch.success) return [];
-      const workflow = launch.data.run.workflow_name;
-      return [{ runId: String(row.id), workflow, itemId: String(row.item_id) }];
-    }),
-  ];
-  const ids = new Set(
-    waiting.flatMap(start => {
-      const holder = itemHolder(held, start);
-      return holder === undefined ? [] : [holder];
-    })
-  );
-  return readRunsForAttention([...ids]);
 }
 
 export async function listQueuedResourceStartsForHost(

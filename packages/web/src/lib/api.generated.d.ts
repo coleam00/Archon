@@ -2498,6 +2498,91 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/items/ends': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** End an item: nothing more will happen on it, so it rests until a new run or start */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['RecordItemEndBody'];
+        };
+      };
+      responses: {
+        /** @description The end as recorded */
+        201: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemEnd'];
+          };
+        };
+        /** @description Bad request, an unknown project, or an operator request with no `as` */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Only the operator or an admin may end an item */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description No item under that key in the project */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Something on the item is still active or waiting; the blocker names it */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemEndRefused'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/items/rulings/{rulingId}/withdraw': {
     parameters: {
       query?: never;
@@ -7845,6 +7930,10 @@ export interface components {
           };
           /** @enum {string} */
           observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          start?: {
+            requestId: string;
+            hostId: string;
+          };
         }
       | {
           /** @enum {string} */
@@ -7926,6 +8015,9 @@ export interface components {
               | 'launch_preparation_failed';
             refusedAt: string;
           }[];
+          failed?: {
+            error: string | null;
+          };
           checkout: string | null;
         }
       | {
@@ -8257,6 +8349,10 @@ export interface components {
             };
             /** @enum {string} */
             observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            start?: {
+              requestId: string;
+              hostId: string;
+            };
           }
         | {
             /** @enum {string} */
@@ -8338,6 +8434,9 @@ export interface components {
                 | 'launch_preparation_failed';
               refusedAt: string;
             }[];
+            failed?: {
+              error: string | null;
+            };
             checkout: string | null;
           }
         | {
@@ -8801,6 +8900,10 @@ export interface components {
             };
             /** @enum {string} */
             observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            start?: {
+              requestId: string;
+              hostId: string;
+            };
           }
         | {
             /** @enum {string} */
@@ -8882,6 +8985,9 @@ export interface components {
                 | 'launch_preparation_failed';
               refusedAt: string;
             }[];
+            failed?: {
+              error: string | null;
+            };
             checkout: string | null;
           }
         | {
@@ -9125,6 +9231,27 @@ export interface components {
               };
             };
       } | null;
+      ended: {
+        /** @enum {string} */
+        kind: 'ended';
+        id: string;
+        reason: string;
+        /** Format: date-time */
+        at: string;
+        via: string;
+        by:
+          | {
+              declared: string;
+            }
+          | {
+              userId: string;
+            }
+          | unknown;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+      } | null;
       degraded: (
         | {
             /** @enum {string} */
@@ -9160,6 +9287,13 @@ export interface components {
             /** @enum {string} */
             reason: 'landing_unresolved';
             message: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'end_unreadable';
+            endId: string;
           }
       )[];
     };
@@ -9591,6 +9725,10 @@ export interface components {
                 | 'failed'
                 | 'cancelled'
                 | 'paused';
+              start?: {
+                requestId: string;
+                hostId: string;
+              };
             }
           | {
               /** @enum {string} */
@@ -9672,6 +9810,9 @@ export interface components {
                   | 'launch_preparation_failed';
                 refusedAt: string;
               }[];
+              failed?: {
+                error: string | null;
+              };
               checkout: string | null;
             }
           | {
@@ -9915,6 +10056,27 @@ export interface components {
                 };
               };
         } | null;
+        ended: {
+          /** @enum {string} */
+          kind: 'ended';
+          id: string;
+          reason: string;
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        } | null;
         degraded: (
           | {
               /** @enum {string} */
@@ -9950,6 +10112,13 @@ export interface components {
               /** @enum {string} */
               reason: 'landing_unresolved';
               message: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'end_unreadable';
+              endId: string;
             }
         )[];
       }[];
@@ -9997,6 +10166,64 @@ export interface components {
       project: string;
       key: string;
       text: string;
+      as?: string;
+    };
+    ItemEnd: {
+      /** @enum {string} */
+      kind: 'ended';
+      id: string;
+      reason: string;
+      /** Format: date-time */
+      at: string;
+      via: string;
+      by:
+        | {
+            declared: string;
+          }
+        | {
+            userId: string;
+          }
+        | unknown;
+      fromRun: {
+        runId: string;
+        nodePath: string;
+      } | null;
+    };
+    ItemEndRefused: {
+      error: string;
+      blocker:
+        | {
+            /** @enum {string} */
+            kind: 'run';
+            runId: string;
+            /** @enum {string} */
+            status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          }
+        | {
+            /** @enum {string} */
+            kind: 'queued_start';
+            requestId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'held_start';
+            receiptId: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'open_ask';
+            ref: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'open_wait';
+            runId: string;
+          };
+    };
+    RecordItemEndBody: {
+      project: string;
+      key: string;
+      reason: string;
       as?: string;
     };
     WithdrawItemRulingBody: {
@@ -10257,6 +10484,10 @@ export interface components {
                   | 'failed'
                   | 'cancelled'
                   | 'paused';
+                start?: {
+                  requestId: string;
+                  hostId: string;
+                };
               }
             | {
                 /** @enum {string} */
@@ -10338,6 +10569,9 @@ export interface components {
                     | 'launch_preparation_failed';
                   refusedAt: string;
                 }[];
+                failed?: {
+                  error: string | null;
+                };
                 checkout: string | null;
               }
             | {

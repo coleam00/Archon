@@ -813,6 +813,37 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
   CHECK ((withdraws IS NULL) = (text IS NOT NULL))
 );
 
+-- Ends of an item: an operator's statement that nothing more will happen on it. Append-only,
+-- like rulings: no row is updated or deleted, and nothing writes one by itself. from_run_id
+-- has no foreign key, so run cleanup keeps the end.
+CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  -- Recording order; timestamps tie within a millisecond and `id` is random.
+  seq BIGSERIAL NOT NULL UNIQUE,
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  reason TEXT NOT NULL,
+  by_declared TEXT,
+  by_user_id TEXT,
+  via TEXT NOT NULL,
+  from_run_id TEXT,
+  from_node_path TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- The runs an end saw on its item and below its runs, copied in the transaction that records
+-- it, each with its execution_claim, the run's metadata claim that every resume writes fresh.
+-- The end holds while every run in the item's tree is one it saw, unresumed since, and none is live: a run created or resumed later, even by a
+-- transaction that overlapped the end's, opens the item while that run exists. The rule reads
+-- only the runs that exist, so deleting a run changes nothing stored: deleting runs the end
+-- saw leaves it holding, and deleting the run that opened the item makes it hold again.
+-- run_id has no foreign key, so run cleanup keeps the row.
+CREATE TABLE IF NOT EXISTS remote_agent_item_end_runs (
+  end_id TEXT NOT NULL REFERENCES remote_agent_item_ends(id),
+  run_id TEXT NOT NULL,
+  execution_claim TEXT,
+  PRIMARY KEY (end_id, run_id)
+);
+
 -- The merge of an item's change, as the forge reported it to the caller that recorded it.
 -- An append-only fact beside the item, like a ruling: the primary key on item_id makes it
 -- recorded once, so a second report keeps the first. change is the forge's identity of
@@ -1000,6 +1031,8 @@ CREATE INDEX IF NOT EXISTS idx_start_limit_resets_item
 -- Item rulings
 CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id
   ON remote_agent_item_rulings(item_id);
+CREATE INDEX IF NOT EXISTS idx_item_ends_item_id
+  ON remote_agent_item_ends(item_id);
 
 -- Item links
 CREATE UNIQUE INDEX IF NOT EXISTS idx_item_links_active

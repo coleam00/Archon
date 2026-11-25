@@ -8,7 +8,7 @@ export const orderedExamples: ExampleHelp[] = [
   { text: 'archon chat "What does the orchestrator do?"', owner: { command: 'chat' } },
   { text: 'archon workflow list', owner: { command: 'workflow', subcommand: 'list' } },
   {
-    text: 'archon workflow run investigate-issue "Fix the login bug"',
+    text: 'archon workflow run archon-investigate "Why does login fail?"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
@@ -20,7 +20,7 @@ export const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run quick-fix --no-worktree "Fix typo"',
+    text: 'archon workflow run archon-implement --no-worktree "Fix the typo in the README"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
@@ -73,6 +73,10 @@ export const orderedExamples: ExampleHelp[] = [
   {
     text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',
     owner: { command: 'workflow', subcommand: 'run' },
+  },
+  {
+    text: "archon forge <operation> --help    # that operation's request fields and an example",
+    owner: { command: 'forge' },
   },
   { text: 'archon skill add', owner: { command: 'skill', subcommand: 'add' } },
   {

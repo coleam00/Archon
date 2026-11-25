@@ -345,7 +345,6 @@ export function createInMemoryResourceStartStore(
     listPreparingStarts: async () => [],
     listSkippedItemStarts: async () => [],
     readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
-    listWaitedItemHolders: async () => [],
     getResourceStartRequest: async (
       id
     ): ReturnType<IResourceStartStore['getResourceStartRequest']> => {

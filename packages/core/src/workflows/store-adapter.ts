@@ -23,12 +23,14 @@ import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
 import * as itemRulingsDb from '../db/item-rulings';
+import * as itemEndsDb from '../db/item-ends';
 import * as itemMergesDb from '../db/item-merges';
 import * as itemLandingsDb from '../db/item-landings';
 import * as itemAsksDb from '../db/item-asks';
 import * as itemWaitsDb from '../db/item-waits';
 import * as itemStopsDb from '../db/item-stops';
 import * as workflowDb from '../db/workflows';
+import { listUnfinishedRuns } from '../db/unfinished-runs';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
 import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
@@ -230,7 +232,6 @@ export function createWorkflowStore(): IWorkflowStore {
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
     getResourceStartRequest: resourceStarts.getResourceStartRequest,
     listSkippedItemStarts: resourceStarts.listSkippedItemStarts,
-    listWaitedItemHolders: resourceStarts.listWaitedItemHolders,
     listQueuedResourceStartsForHost: resourceStarts.listQueuedResourceStartsForHost,
     listQueuedItemStarts: resourceStarts.listQueuedItemStarts,
     readItemStartLimits: resourceStarts.readItemStartLimits,
@@ -250,6 +251,8 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemRulings: itemRulingsDb.listItemRulings,
     recordItemRuling: itemRulingsDb.recordItemRuling,
     withdrawItemRuling: itemRulingsDb.withdrawItemRuling,
+    getHoldingItemEnd: itemEndsDb.getHoldingItemEnd,
+    recordItemEnd: itemEndsDb.recordItemEnd,
     listItemsInWindow: itemsDb.listItemsInWindow,
     getItemMerge: itemMergesDb.getItemMerge,
     recordItemMerge: itemMergesDb.recordItemMerge,
@@ -268,6 +271,7 @@ export function createWorkflowStore(): IWorkflowStore {
     listOpenItemWaits: itemWaitsDb.listOpenItemWaits,
     withdrawItemWaits: itemWaitsDb.withdrawItemWaits,
     listStoppedItemRuns: itemStopsDb.listStoppedItemRuns,
+    listUnfinishedRuns,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),

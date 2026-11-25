@@ -198,7 +198,10 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
           `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
         ]
       : [
-          `${ended(workflow, outcome)}; nothing started${refused === undefined ? ' and it left no ask' : ''}`,
+          // A refused start says only what was refused: others the end caused may have started.
+          refused === undefined
+            ? `${ended(workflow, outcome)}; nothing started and it left no ask`
+            : `${ended(workflow, outcome)}; ${refused.length === 1 ? 'a start it caused was' : `${String(refused.length)} starts it caused were`} refused`,
         ];
   lines.push(...refusedStartLines(refused ?? []));
   if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
@@ -219,6 +222,29 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
     );
   }
   return lines;
+}
+
+/** A stopped item's lines: a failed run's, or a stop's. */
+function stoppedItemLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
+  return item.failed === undefined ? stoppedLines(item) : failedLines(item, item.failed.error);
+}
+
+/**
+ * A failed run that is the newest on its item: its error, and the restarts. A restart from
+ * the run's record repeats its inputs; naming the workflow passes others.
+ */
+function failedLines(
+  item: Extract<AttentionQueueItem, { kind: 'stopped' }>,
+  error: string | null
+): string[] {
+  const { runId, workflow } = item.stoppedIn;
+  return [
+    `${workflow} failed${error === null ? '' : `: ${oneLine(error)}`}`,
+    `start it again from its record, which closes this: ${command(`run --supersedes ${runId}`)}`,
+    `or with other inputs: ${command(`run ${shellWord(workflow)} --supersedes ${runId} --input <name>=<value>`)}`,
+    `show the run: ${command(`get ${runId}`)}`,
+    `read the item: ${command(`runs --item-of ${runId}`)}`,
+  ];
 }
 
 /** What an item a paused run holds says under its heading line. */
@@ -243,11 +269,19 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
         `needs a look: ${item.detail}`,
         `show more: ${command(`get ${run.id}`)}, then resume or abandon it`,
       ];
-    case 'owner_lost':
+    case 'owner_lost': {
+      // It still holds what it took: its item, and the slot of a resource it runs under.
+      const holding = item.item === undefined ? '' : `, holding item ${item.item.key}`;
+      if (item.start !== undefined)
+        return [
+          `admitted but not started, and no process runs it${holding}`,
+          `start it: archon trigger execute ${item.start.requestId} --host ${item.start.hostId}, or end it: ${command(`abandon ${run.id}`)}`,
+        ];
       return [
-        `${item.observedStatus} but its owner is gone, holding item ${item.item?.key ?? '(unread)'}: later starts of ${run.workflow} on it wait behind it`,
+        `${item.observedStatus} but its owner is gone${holding}`,
         `continue it: ${command(`resume ${run.id}`)}, or end it: ${command(`abandon ${run.id}`)}`,
       ];
+    }
   }
 }
 
@@ -309,7 +343,7 @@ function withoutRunBody(item: AttentionQueueItem): string[] {
     case 'overdue_wait':
       return overdueWaitLines(item);
     case 'stopped':
-      return stoppedLines(item);
+      return stoppedItemLines(item);
     case 'preparation_lost':
       return preparationLostLines(item);
     case 'attention':
@@ -417,11 +451,8 @@ export function attentionStreamText(
     case 'notice':
       return [noticeText(line)];
     case 'owner_lost': {
-      // A run on an item holds it, so the later starts of its workflow on it wait behind it.
-      const held =
-        line.item == null
-          ? ''
-          : ` It holds item ${line.item}: later starts of ${line.workflow ?? 'its workflow'} on it wait behind it.`;
+      // It still holds what it took: its item, and the slot of a resource it runs under.
+      const held = line.item == null ? '' : ` It still holds item ${line.item}.`;
       return [
         `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)}${held} ` +
           `Show more with ${command(`get ${line.runId}`)}, continue it with ${command(`resume ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`,

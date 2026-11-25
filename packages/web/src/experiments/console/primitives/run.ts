@@ -321,16 +321,19 @@ export function isItemAsk(item: AttentionQueueItem): item is ItemAsk {
 }
 
 /**
- * A run that holds its item while its owner is gone (the queue's `owner_lost` item): later
- * starts of its workflow on the item wait behind it until the operator resumes or abandons it.
+ * A run whose owner is gone (the queue's `owner_lost` item). It keeps what it holds, its
+ * item and its resource slot among them, until the operator resumes or abandons it, or, for
+ * a pending start no process runs, starts it with `archon trigger execute`.
  */
 export interface OwnerLostHolder {
   runId: string;
   workflow: string;
   projectId: string | null;
   projectName: string | null;
-  /** The item's key; null when the item could not be read. */
+  /** The item's key; null when the run is on no item or its item could not be read. */
   itemKey: string | null;
+  /** Set for a pending admitted start no process runs: what starts it once. */
+  start: { requestId: string; hostId: string } | null;
   /** The run's stored status, unchanged: the engine never ends it by itself. */
   observedStatus: Extract<AttentionQueueItem, { kind: 'owner_lost' }>['observedStatus'];
 }
@@ -357,6 +360,7 @@ export function toOwnerLostHolders(items: AttentionQueueItem[]): OwnerLostHolder
             projectName: item.project?.name ?? null,
             itemKey: item.item?.key ?? null,
             observedStatus: item.observedStatus,
+            start: item.start ?? null,
           },
         ]
       : []

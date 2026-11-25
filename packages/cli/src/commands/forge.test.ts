@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { getPluginsPath } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { sourceForgePlugins } from '@archon/forge/host-plugins';
+import { renderHelp } from '../help';
 import { forgeCommand } from './forge';
 import {
   forgeAuditResponse,
@@ -363,6 +364,43 @@ test('an invalid mutation request is refused before dispatch begins', async () =
     }
   );
   expect(code).toBe(1);
+  expect(output[0]).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
+  expect(output[0]).not.toHaveProperty('mutation');
+});
+
+test('a help template left partly unfilled is refused before anything runs', async () => {
+  // Every value of the help's template is a bare placeholder, so filling only the target
+  // still leaves a request that is not JSON.
+  const line = renderHelp('forge', 'workitem.edit-body')
+    .split('\n')
+    .find(l => l.includes("archon forge workitem.edit-body --data '"));
+  const template = (line ?? '').slice((line ?? '').indexOf("'") + 1, -1);
+  const partial = template
+    .replace('<host>', '"forge.example"')
+    .replace('<path>', '"a/b"')
+    .replace('<number: integer>', '4');
+  expect(partial).toContain('<body>');
+  const output: unknown[] = [];
+  let configRead = false;
+  const code = await forgeCommand(
+    'workitem.edit-body',
+    { data: partial },
+    {
+      readConfig: async () => {
+        configRead = true;
+        return {};
+      },
+      dispatch: async () => {
+        throw new Error('must not dispatch');
+      },
+      write: async value => {
+        output.push(value);
+      },
+      env: {},
+    }
+  );
+  expect(code).toBe(1);
+  expect(configRead).toBe(false);
   expect(output[0]).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
   expect(output[0]).not.toHaveProperty('mutation');
 });

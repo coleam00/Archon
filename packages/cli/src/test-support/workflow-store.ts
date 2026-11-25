@@ -264,7 +264,6 @@ export function createInMemoryWorkflowStore(
     listHeldStarts: admit(admission.listHeldStarts.bind(admission)),
     listHeldItemStarts: admit(admission.listHeldItemStarts.bind(admission)),
     listPreparingStarts: admit(admission.listPreparingStarts.bind(admission)),
-    listWaitedItemHolders: admit(admission.listWaitedItemHolders.bind(admission)),
     listQueuedResourceStartsForHost: admit(
       admission.listQueuedResourceStartsForHost.bind(admission)
     ),
@@ -431,6 +430,7 @@ export function createInMemoryWorkflowStore(
     answerAttentionWait: (id, answered) => write(view => view.answerAttentionWait(id, answered)),
     labelAttentionWait: (id, labelWrite) => write(view => view.labelAttentionWait(id, labelWrite)),
     listAttentionQueueRows: () => write(view => view.listAttentionQueueRows()),
+    listUnfinishedRuns: () => write(view => view.listUnfinishedRuns()),
     signalWorkflowWait: (id, wait, payload) =>
       write(view => view.signalWorkflowWait(id, wait, payload)),
     deleteOldWorkflowRuns: days => write(view => view.deleteOldWorkflowRuns(days)),

@@ -24,7 +24,10 @@ import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { observeRunOwner, observeStartExecutor } from '../services/run-attention-watch';
-import type { StartExecutorObserver } from '@archon/workflows/resource-start-store';
+import {
+  awaitingExecution,
+  type StartExecutorObserver,
+} from '@archon/workflows/resource-start-store';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { IWorkflowHostStore } from '../workflows/host-store';
 import { getTriggersPath, readOnBindings } from '../workflows/run-ended';
@@ -41,11 +44,11 @@ function getLog(): ReturnType<typeof createLogger> {
  * the store (`readItem`) takes the same source. A run's branch is the newest isolation record for its
  * checkout path; a paused run holds that path, so no later checkout can have taken it.
  * The items no run holds are the open asks completed runs left, their overdue waits and the
- * items they stopped. An item holder's owner is
- * observed by the rule `workflow wait` uses (`observeRunOwner`), so the queue lists a
- * holder whose owner is gone and an item read says so; observing never changes the run.
- * A pending admitted start's executor is observed by `observeStartExecutor`, so an item
- * read tells a start that is starting from one nobody runs.
+ * items they stopped. A running or paused run's owner is observed by the rule
+ * `workflow wait` uses (`observeRunOwner`), and a pending admitted start's executor by
+ * `observeStartExecutor`, so the queue lists every run whose owner is provably gone and an
+ * item read tells a start that is starting from one nobody runs; observing never changes
+ * the run.
  */
 export function attentionQueueSource<
   Store extends AttentionQueueSource['store'] &
@@ -53,7 +56,7 @@ export function attentionQueueSource<
     WaitItemStore &
     StoppedItemStore &
     PreparingItemStore &
-    Pick<IWorkflowStore, 'listWaitedItemHolders'>,
+    Pick<IWorkflowStore, 'listUnfinishedRuns' | 'getResourceStartRequest'>,
 >(
   store: Store,
   isolation: Pick<IWorkflowHostStore['isolation'], 'findLatestByCodebaseAndWorkingPath'>
@@ -81,8 +84,12 @@ export function attentionQueueSource<
             )
           )?.branch_name ?? null),
     ownerLost: {
-      holders: () => store.listWaitedItemHolders(),
+      runs: () => store.listUnfinishedRuns(),
       observe: run => observeRunOwner(store, run),
+      awaitingExecution: async run =>
+        awaitingExecution(await store.getResourceStartRequest(run.id), run, {
+          observe: pending => observeStartExecutor(store, pending),
+        }),
     },
     startExecutor: { observe: run => observeStartExecutor(store, run) },
     // A broken trigger file already fails the run end that reads it; an item read reports
