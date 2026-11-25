@@ -19,9 +19,8 @@ import {
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
 } from '../schemas/terminal-record';
-import { readCompletingResult, resultCommitFromSample, sampleResultCommit } from '../run-result';
-import { sampleCheckout } from '../checkout-observation';
-import { measureChangeSize } from '../change-size';
+import { readCompletingResult, sampleResultCommit } from '../run-result';
+import { measureChangeSize, measureFailedChangeSize } from '../change-size';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
@@ -362,17 +361,11 @@ async function failOnNodeOutcome(
   await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
     workflowId: workflowRun.id,
   });
-  // A build can commit before a later node fails: the failed run still ended at that commit.
-  // Only an item run is sized, so no other run pays for the checkout sample.
-  const ended =
-    workflowRun.item_id === null
-      ? null
-      : resultCommitFromSample(await sampleCheckout(ctx.cwd, ctx.execContext));
-  const changeSize = await measureChangeSize(
+  const changeSize = await measureFailedChangeSize(
     deps.store,
     workflowRun,
     ctx.cwd,
-    ended?.held ? ended.commit : null
+    ctx.execContext
   );
   await failRun(
     deps,
@@ -539,7 +532,7 @@ async function completeRun(
             : {}),
           [RESULT_COMMIT_METADATA_KEY]: resultCommit,
           // Written even when absent, so a size an earlier failed pass left does not stay.
-          [CHANGE_SIZE_METADATA_KEY]: changeSize ?? null,
+          [CHANGE_SIZE_METADATA_KEY]: changeSize,
           // An asks-settled binding reads the result when the asks settle, by then from
           // the row alone. Gated on the asks a top-level run declares, like the asks.
           ...keptAsksResult(result, returnedValue),
@@ -730,14 +723,14 @@ export async function failRun(
   failMsg: string,
   exitReason: RunExitReason,
   site: string,
-  changeSize?: ChangeSize
+  changeSize: ChangeSize | null = null
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
     const { failed, failureKind } = await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, {
         exitReason,
-        ...(changeSize ? { changeSize } : {}),
+        ...(changeSize && { changeSize }),
       }),
       { workflowRunId: workflowRun.id, site }
     );

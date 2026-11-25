@@ -15,7 +15,7 @@ export interface WorkflowRunFailureOptions {
   /** Restrict failure to this running claim; null matches the initial execution. Mismatches do not write. */
   expectedExecutionClaim?: string | null;
   /** The item run's change size at the clean commit its checkout ended on (#6261). */
-  changeSize?: ChangeSize;
+  changeSize?: ChangeSize | null;
 }
 
 export function prepareWorkflowRunFailure(
@@ -46,9 +46,9 @@ export function prepareWorkflowRunFailure(
   delete run.metadata.scheduled_resume;
   delete run.metadata.stop_reason;
   delete run.metadata[PAUSE_CAUSE_METADATA_KEY];
-  delete run.metadata[CHANGE_SIZE_METADATA_KEY];
+  // Replaces any size an earlier pass left; undefined drops the key when the run is written.
+  run.metadata[CHANGE_SIZE_METADATA_KEY] = options?.changeSize;
   run.metadata.error = error;
-  if (options?.changeSize) run.metadata[CHANGE_SIZE_METADATA_KEY] = options.changeSize;
   if (options?.exitReason)
     run.metadata.stop_reason = {
       reason: options.exitReason,

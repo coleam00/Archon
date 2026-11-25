@@ -80,7 +80,8 @@ import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 import { readCompletedRunResult, resultCommitOf } from './run-result';
 import { getTerminalRecord } from './terminal-record';
-import { changeSizeSchema, recordedChangeSize } from './schemas/change-size';
+import { changeSizeSchema } from './schemas/change-size';
+import { readChangeSize } from './change-size';
 import { runPack, runPackSchema } from './run-pack';
 import { itemStartLimitSchema, type LimitBindingsReader, withLimitBindings } from './start-limit';
 
@@ -163,13 +164,7 @@ export const itemRunSchema = z.object({
    * held at commits.
    */
   resultCommit: z.string().nullable(),
-  /**
-   * How large the change was when the run completed or failed: files changed and lines
-   * added and removed from `base`, the commit the item's work was cut from, to `commit`, the
-   * clean commit it ended on, recorded then. Null when the checkout ended on no clean commit,
-   * no cut-from is known for its work (an in-place run, or a branch reused with `--branch`),
-   * or the run ended before sizes were recorded. Read from the run's row, not its events.
-   */
+  /** The change the run ended with, as `archon workflow runs --item` documents it; null when unknown, never zero. */
   changeSize: changeSizeSchema.nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
@@ -409,16 +404,6 @@ function readResult(
     // One unreadable record must not fail the whole item read.
     getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.terminal_record_unreadable');
     return { hasResult: false, resultCommit: null };
-  }
-}
-
-/** The size the run's row recorded when it ended; an unreadable one reads as none. */
-function readChangeSize(run: WorkflowRun): ItemRun['changeSize'] {
-  try {
-    return recordedChangeSize(run);
-  } catch (error) {
-    getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.change_size_unreadable');
-    return null;
   }
 }
 

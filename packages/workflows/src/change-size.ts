@@ -4,7 +4,9 @@
  * survives a deleted worktree, and keeps an old run's size from changing when a branch moves.
  */
 import { createLogger } from '@archon/paths';
-import { runGit } from './checkout-observation';
+import type { ExecutionContext } from '@archon/provider-contract';
+import { runGit, sampleCheckout } from './checkout-observation';
+import { resultCommitFromSample } from './run-result';
 import { readCheckoutHandoff } from './schemas/resource-start';
 import { type ChangeSize, recordedChangeSize } from './schemas/change-size';
 import { continuationInheritsEstate, readContinuationMode } from './schemas/run-metadata';
@@ -22,7 +24,7 @@ type SizedRun = Pick<WorkflowRun, 'id' | 'checkout_baseline' | 'metadata' | 'ado
 
 /**
  * The change at `endCommit` against the commit the run's work was cut from. Only a run of
- * an item is measured: nothing else reads the size. Returns undefined, never zeros, when the
+ * an item is measured: nothing else reads the size. Returns null, never zeros, when the
  * run has no item, its checkout ended on no clean commit, or no cut-from is known for its
  * work. Never throws.
  */
@@ -31,8 +33,8 @@ export async function measureChangeSize(
   run: SizedRun & Pick<WorkflowRun, 'item_id'>,
   cwd: string,
   endCommit: string | null
-): Promise<ChangeSize | undefined> {
-  if (run.item_id === null || endCommit === null) return undefined;
+): Promise<ChangeSize | null> {
+  if (run.item_id === null || endCommit === null) return null;
   try {
     const base = await workBase(store, run);
     if (base === undefined) return unavailable(run.id, 'no_cut_from');
@@ -50,13 +52,38 @@ export async function measureChangeSize(
     return { base, commit: endCommit, ...sumNumstat(diff.stdout.toString('utf8')) };
   } catch (error) {
     getLog().warn({ err: error, workflowRunId: run.id }, 'workflow.change_size_failed');
-    return undefined;
+    return null;
   }
 }
 
-function unavailable(workflowRunId: string, step: string, code?: number): undefined {
+/**
+ * The size of a failing run's change. A build can commit before a later node fails: the
+ * failed run still ended at that commit. Only an item run pays for the checkout sample.
+ */
+export async function measureFailedChangeSize(
+  store: RunReader,
+  run: SizedRun & Pick<WorkflowRun, 'item_id'>,
+  cwd: string,
+  execContext: ExecutionContext
+): Promise<ChangeSize | null> {
+  if (run.item_id === null) return null;
+  const ended = resultCommitFromSample(await sampleCheckout(cwd, execContext));
+  return measureChangeSize(store, run, cwd, ended.held ? ended.commit : null);
+}
+
+/** The size a run's row recorded when it ended, for a reader: an unreadable one reads as none. */
+export function readChangeSize(run: WorkflowRun): ChangeSize | null {
+  try {
+    return recordedChangeSize(run);
+  } catch (error) {
+    getLog().warn({ err: error, workflowRunId: run.id }, 'workflow.change_size_unreadable');
+    return null;
+  }
+}
+
+function unavailable(workflowRunId: string, step: string, code?: number): null {
   getLog().info({ workflowRunId, step, code }, 'workflow.change_size_unavailable');
-  return undefined;
+  return null;
 }
 
 /**

@@ -146,7 +146,7 @@ describe('measureChangeSize', () => {
       base: cutFrom,
       added: 40,
     });
-    expect(await measureChangeSize(runs, superseding, dir, head)).toBeUndefined();
+    expect(await measureChangeSize(runs, superseding, dir, head)).toBeNull();
   });
 
   test('records no size, not zero, without an item, a clean end commit or a cut-from', async () => {
@@ -155,10 +155,10 @@ describe('measureChangeSize', () => {
     // A run in place, or on a checkout reused outside a hand-off, has no cut-from.
     const inPlace = itemRun('run-2');
 
-    expect(await measureChangeSize(store([own]), { ...own, item_id: null }, dir, cutFrom)).toBe(
-      undefined
-    );
-    expect(await measureChangeSize(store([own]), own, dir, null)).toBeUndefined();
-    expect(await measureChangeSize(store([inPlace]), inPlace, dir, cutFrom)).toBeUndefined();
+    expect(
+      await measureChangeSize(store([own]), { ...own, item_id: null }, dir, cutFrom)
+    ).toBeNull();
+    expect(await measureChangeSize(store([own]), own, dir, null)).toBeNull();
+    expect(await measureChangeSize(store([inPlace]), inPlace, dir, cutFrom)).toBeNull();
   });
 });
