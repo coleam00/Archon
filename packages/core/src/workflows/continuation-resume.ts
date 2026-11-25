@@ -1,3 +1,4 @@
+import { CONTINUATION_GIVEN_UP_METADATA_KEY } from '@archon/workflows/schemas/continuation-give-up';
 import * as runSource from '@archon/workflows/run-source';
 import {
   CONTINUATION_RETRY_MS,
@@ -218,7 +219,7 @@ export type ContinuationWakeOutcome = { runId: string; deferError?: unknown } & 
 
 type ContinuationStore = Pick<
   IWorkflowStore,
-  'listDueWorkflowContinuations' | 'deferWorkflowContinuation'
+  'listDueWorkflowContinuations' | 'deferWorkflowContinuation' | 'updateWorkflowRun'
 >;
 const structuralFailures = new Map<string, { cursor: WorkflowResumeCursor; count: number }>();
 const warnedRuns = new Set<string>();
@@ -269,7 +270,7 @@ export async function wakeDueWorkflowContinuations(
         );
       if (outcome.kind === 'run_limit_full')
         log.info({ runId: run.id, kind: outcome.kind }, 'workflow_continuation_capacity_refused');
-      if (sourceFailureLimitReached(outcome, cursor)) return outcome;
+      if (await sourceFailureLimitReached(store, outcome, cursor)) return outcome;
       if (outcome.kind === 'accepted') structuralFailures.delete(run.id);
       if (outcome.kind !== 'accepted') {
         try {
@@ -288,10 +289,36 @@ export async function wakeDueWorkflowContinuations(
   );
 }
 
-function sourceFailureLimitReached(
+/** Record on the run that this host gave up on it, so attention shows it after a restart. */
+async function recordGiveUp(
+  store: Pick<ContinuationStore, 'updateWorkflowRun'>,
+  runId: string,
+  attempts: number,
+  path: string | null,
+  cursor: WorkflowResumeCursor
+): Promise<void> {
+  try {
+    await store.updateWorkflowRun(runId, {
+      metadata: {
+        [CONTINUATION_GIVEN_UP_METADATA_KEY]: {
+          at: new Date().toISOString(),
+          attempts,
+          path,
+          cursor,
+        },
+      },
+    });
+  } catch (error) {
+    // The host still stops resuming it; only the record attention reads is missing.
+    log.error({ err: error, runId }, 'workflow_continuation_give_up_record_failed');
+  }
+}
+
+async function sourceFailureLimitReached(
+  store: Pick<ContinuationStore, 'updateWorkflowRun'>,
   outcome: ContinuationWakeOutcome,
   cursor: WorkflowResumeCursor
-): boolean {
+): Promise<boolean> {
   const runId = outcome.runId;
   const sourceError =
     outcome.kind === 'unavailable'
@@ -309,6 +336,7 @@ function sourceFailureLimitReached(
           { err: sourceError, runId, path: sourceError.path, attempts: count },
           `This host stopped automatically resuming run ${runId}: ${unverifiableSourceGuidance(runId, sourceError)}`
         );
+        await recordGiveUp(store, runId, count, sourceError.path ?? null, cursor);
       }
       return true;
     }

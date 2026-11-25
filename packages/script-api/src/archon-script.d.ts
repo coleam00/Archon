@@ -2504,7 +2504,7 @@ declare module 'archon:script' {
           readonly branch: string | null;
         };
       };
-      readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued';
+      readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued' | 'continuation_given_up';
       readonly detail: string;
     } | {
       readonly kind: 'owner_lost';
@@ -3210,7 +3210,7 @@ declare module 'archon:script' {
             readonly branch: string | null;
           };
         };
-        readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued';
+        readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued' | 'continuation_given_up';
         readonly detail: string;
       } | {
         readonly kind: 'owner_lost';
