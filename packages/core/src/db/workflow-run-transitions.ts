@@ -65,6 +65,7 @@ import { insertStartReceipt } from './start-receipt-writes';
 import { recordStartLimitReset } from './start-limits';
 import { insertLinkedStarts } from './linked-starts';
 import { openItemAsksForCompletedRun } from './item-asks';
+import { recordRefusedHandoffStops } from './item-stops';
 import { openItemWaitsForCompletedRun } from './item-waits';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
@@ -437,6 +438,8 @@ export async function completeWorkflowRun(
         // And the waits, replacing its workflow's open set of waits on the item.
         if (result?.waits !== undefined)
           await openItemWaitsForCompletedRun(query, id, result.waits);
+        // A start refused at the hand-off is recorded on this run, as the stop it causes.
+        await recordRefusedHandoffStops(query, started);
       }
       return { update, started };
     });

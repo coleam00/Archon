@@ -44,7 +44,7 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { workflowRunStatusSchema } from './schemas/run-status';
-import { stoppedLimitSchema } from './schemas/run-metadata';
+import { stoppedLimitSchema, stoppedRefusalSchema } from './schemas/run-metadata';
 import type { RunOwnerObservation } from './schemas/workflow-run-listing';
 import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
@@ -193,11 +193,16 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     kind: z.literal('stopped'),
     ...itemBase,
     /** The completed run that stopped the item and its outcome; `pausedAt` is when it ended. */
-    stoppedIn: z.object({ runId: z.string(), workflow: z.string(), outcome: z.string() }),
+    stoppedIn: z.object({
+      runId: z.string(),
+      workflow: z.string(),
+      outcome: z.string().nullable(),
+    }),
     /** The run's declared `returns.summary`, or null when it declares or gave none. */
     summary: z.string().nullable(),
-    /** Set when a start refused at its limit stopped the item; see `stoppedLimitSchema`. */
+    /** Set when the start the run caused was refused: at its limit, or before launch. */
     limit: stoppedLimitSchema.optional(),
+    refused: z.array(stoppedRefusalSchema).optional(),
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),
