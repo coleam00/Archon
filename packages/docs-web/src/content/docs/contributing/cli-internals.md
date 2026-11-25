@@ -44,8 +44,8 @@ packages/cli/
 ┌─────────────────────────────────────────────────────────────────┐
 │ strip-cwd-env-boot  (first import, side-effect)                 │
 │   stripCwdEnv(): deletes Bun-auto-loaded <cwd>/.env* keys from  │
-│   process.env + CLAUDE_CODE_* session markers. Emits            │
-│   [archon] stripped N keys from <cwd> (...) when N > 0.         │
+│   process.env + CLAUDE_CODE_* session markers. Silent;          │
+│   loadArchonEnv logs env.cwd_keys_stripped at debug.            │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
