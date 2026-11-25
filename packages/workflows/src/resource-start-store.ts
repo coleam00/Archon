@@ -8,6 +8,7 @@ import {
 } from './schemas/resource-start';
 import type { RunLimitState } from './schemas/run-limit';
 import type { StartRefusalReason } from './schemas/run-metadata';
+import type { BindingRefusal } from './schemas/binding-refusal';
 import type { z } from 'zod';
 import type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 import type {
@@ -28,6 +29,7 @@ import {
   pendingWorkflowWaitDeadline,
   workflowWaitDue,
   readCapacityWait,
+  type WorkflowItem,
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
@@ -205,6 +207,23 @@ export type HeldStart =
       workflow: string | null;
       queuedAt: string;
     };
+
+/**
+ * A binding start refused for a stored reason (`refusal`) that no run caused: a fire, a
+ * schedule, a webhook or a label made it. Its `codebase` is the project its checkout is
+ * registered as, and `item` the item its key names there once that exists.
+ */
+export interface RefusedStart {
+  receiptId: string;
+  bindingId: string;
+  hostId: string | null;
+  workflow: string | null;
+  itemKey: string;
+  refusal: BindingRefusal;
+  refusedAt: string;
+  codebase: { id: string; name: string; default_cwd: string } | null;
+  item: WorkflowItem | null;
+}
 
 /** A held `trigger` start on one item, as the item read lists it. */
 export type HeldItemStart = Pick<
@@ -609,6 +628,11 @@ export interface IResourceStartStore {
   listHeldStarts(): Promise<HeldStart[]>;
   /** The unprepared binding starts on item `itemId`. A store without items returns none. */
   listHeldItemStarts(itemId: string): Promise<HeldItemStart[]>;
+  /**
+   * The refused starts no run caused that are still their item's newest step: neither the
+   * same binding nor any run has started on the item since. A store without items has none.
+   */
+  listRefusedStarts(): Promise<RefusedStart[]>;
   /**
    * The install's run limit (`concurrency.runs`), how many run trees count against it now and
    * the queued starts only it holds (`RunLimitState`); null when none is set. A store without

@@ -611,6 +611,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   preparation_owner TEXT,
   preparation_error TEXT,
   forge_refusal TEXT,
+  refusal TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   PRIMARY KEY (receipt_id, binding_id)
@@ -749,6 +750,10 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS item_ke
 -- A binding refused for its pack's forge needs: the typed reasons and remedies, beside
 -- preparation_error, which keeps only the failed boundary.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS forge_refusal TEXT;
+
+-- Why a binding start was refused (JSON: a reason code, and a start limit's standing), written
+-- by the write that refuses it, so a read names the reason without parsing preparation_error.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS refusal TEXT;
 
 -- A binding's start limit (JSON) and the name of the limit it grants (#6109), beside the
 -- intent for the same reason as event_input_names. On each start request, the limit it

@@ -126,7 +126,8 @@ const itemBase = {
  * open past their deadline, which the awaited event, another run of the waiting workflow
  * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
  * an outcome that is not final (`returns.final`), started nothing and left no ask or wait,
- * so nothing moves it: it takes no answer, and any newer run on the item closes it.
+ * so nothing moves it: it takes no answer, and any newer run on the item closes it;
+ * `refused_start` is a start no run caused that was refused and is its item's newest step.
  *
  * `run` is the paused run that holds the item. A gate, a usage-limit wait and an
  * unreadable pause are always a run. A question may have none: then nothing is paused on
@@ -206,12 +207,31 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),
+  z.object({
+    kind: z.literal('refused_start'),
+    ...itemBase,
+    /**
+     * A binding start that no run caused (a fire, a schedule, a webhook or a label), refused
+     * for `reason`: a start-refusal code, `start_limit` with the limit's standing in `limit`,
+     * or `rejected_by_source`. `pausedAt` is when it was refused. It takes no answer; a run on
+     * the item, or a later start of the same binding on it, closes it.
+     */
+    start: z.object({
+      receiptId: z.string(),
+      bindingId: z.string(),
+      hostId: z.string().nullable(),
+      workflow: z.string().nullable(),
+      itemKey: z.string(),
+      reason: z.string(),
+      limit: stoppedLimitSchema.optional(),
+    }),
+  }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
 /** An item a paused run holds. */
 export type RunAttentionQueueItem = Exclude<
   AttentionQueueItem,
-  { kind: 'overdue_wait' | 'stopped' }
+  { kind: 'overdue_wait' | 'stopped' | 'refused_start' }
 > & {
   run: object;
 };
@@ -244,11 +264,13 @@ export type AskQueueItem = Extract<AttentionQueueItem, { kind: 'attention' }> & 
 /** An item no run holds: an ask, an overdue wait, or a stopped item. */
 export type AttentionQueueItemWithoutRun =
   | AskQueueItem
-  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' }>;
+  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' | 'refused_start' }>;
 /** An overdue wait's queue item. */
 export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
 /** A stopped item's queue item. */
 export type StoppedQueueItem = Extract<AttentionQueueItem, { kind: 'stopped' }>;
+/** A refused start's queue item. */
+export type RefusedStartQueueItem = Extract<AttentionQueueItem, { kind: 'refused_start' }>;
 
 const RUN_REF_SEPARATOR = ':';
 

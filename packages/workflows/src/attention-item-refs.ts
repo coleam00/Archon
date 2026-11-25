@@ -52,11 +52,19 @@ export function stoppedRunIdOfRef(ref: string): string | undefined {
     : undefined;
 }
 
+const REFUSED_REF_PREFIX = 'refused:';
+
+/** The ref of a refused start no run caused; nothing reads it back. */
+export function refusedStartRef(receiptId: string, bindingId: string): string {
+  return `${REFUSED_REF_PREFIX}${receiptId}:${bindingId}`;
+}
+
 /** True when `ref` has the form of an item no run holds, open or closed. */
 export function isItemWithoutRunRef(ref: string): boolean {
   return (
     askIdOfRef(ref) !== undefined ||
     waitRunIdOfRef(ref) !== undefined ||
-    stoppedRunIdOfRef(ref) !== undefined
+    stoppedRunIdOfRef(ref) !== undefined ||
+    (ref.startsWith(REFUSED_REF_PREFIX) && ref.length > REFUSED_REF_PREFIX.length)
   );
 }

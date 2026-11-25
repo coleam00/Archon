@@ -1,3 +1,4 @@
+import { storedBindingRefusal } from '@archon/workflows/schemas/binding-refusal';
 import { WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import { insertWorkflowEvent } from './workflow-events';
 import { z } from 'zod';
@@ -759,9 +760,15 @@ export async function completeStartBindingPreparation(
     const counted = await countStartLimits(query, item, limit, grants, { ...input, persisted });
     if ('refused' in counted) {
       await query(
-        `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'rejected', preparation_error = $4, forge_refusal = NULL, updated_at = ${getDialect().now()}
+        `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'rejected', preparation_error = $4, forge_refusal = NULL, refusal = $5, updated_at = ${getDialect().now()}
           WHERE receipt_id = $1 AND binding_id = $2 AND preparation_owner = $3`,
-        [input.receiptId, input.bindingId, input.ownerId, counted.refused]
+        [
+          input.receiptId,
+          input.bindingId,
+          input.ownerId,
+          counted.refused,
+          storedBindingRefusal('start_limit', counted.limit),
+        ]
       );
       return { status: 'refused', reason: counted.refused };
     }

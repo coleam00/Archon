@@ -139,6 +139,8 @@ export function createFileAdmissionStore(
     liftInstallHold: async () => null,
     listHeldStarts: async () => [],
     listHeldItemStarts: async () => [],
+    // The file store keeps no items, so no refused start is any item's step.
+    listRefusedStarts: async () => [],
     // The file store keeps no run limit: `assertFileStoreConfiguration` refuses the key.
     getRunLimit: async () => null,
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),

@@ -69,7 +69,7 @@ const heldIntentSchema = z.object({
 });
 
 /** The stored intent's workflow and checkout, or null when it does not read. */
-function heldIntent(intent: unknown): { workflow: string; cwd: string } | null {
+export function heldIntent(intent: unknown): { workflow: string; cwd: string } | null {
   try {
     const parsed = heldIntentSchema.safeParse(parseStoredJson(intent));
     return parsed.success

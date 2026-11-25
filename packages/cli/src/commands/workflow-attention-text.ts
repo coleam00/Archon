@@ -265,16 +265,71 @@ function headingLine(item: AttentionQueueItem): string {
           : `paused ${formatAge(item.pausedAt)} ago`;
     return `  ${item.run.id}  ${item.run.workflow}  ${project}  ${paused}`;
   }
-  const opened =
-    item.pausedAt === null ? 'open time not recorded' : `opened ${formatAge(item.pausedAt)} ago`;
   const key = item.item === undefined ? '' : `  item ${item.item.key}`;
-  if (item.kind === 'stopped') {
-    const ended =
-      item.pausedAt === null ? 'end time not recorded' : `ended ${formatAge(item.pausedAt)} ago`;
-    return `  ${item.ref}  stopped  ${project}${key}  ${ended}`;
+  const [what, event] = withoutRunHeading[item.kind];
+  const at =
+    item.pausedAt === null
+      ? `${event} time not recorded`
+      : `${event} ${formatAge(item.pausedAt)} ago`;
+  return `  ${item.ref}  ${what}  ${project}${key}  ${at}`;
+}
+
+/** What the heading of an item no run holds calls it, and the event its time is of. */
+const withoutRunHeading: Record<AttentionQueueItem['kind'], [string, string]> = {
+  attention: ['open ask', 'opened'],
+  overdue_wait: ['overdue wait', 'opened'],
+  stopped: ['stopped', 'ended'],
+  refused_start: ['refused start', 'refused'],
+  // Held by a run, so headed by it instead; listed only so every kind has a heading.
+  awaiting_response: ['gate', 'paused'],
+  usage_limit: ['usage limit', 'paused'],
+  unreadable: ['unreadable', 'paused'],
+  owner_lost: ['owner gone', 'paused'],
+};
+
+/** What an item no run holds says under its heading line; a run's kinds never reach it. */
+function withoutRunBody(item: AttentionQueueItem): string[] {
+  switch (item.kind) {
+    case 'overdue_wait':
+      return overdueWaitLines(item);
+    case 'stopped':
+      return stoppedLines(item);
+    case 'refused_start':
+      return refusedStartItemLines(item);
+    case 'attention':
+      return refItemLines(item);
+    default:
+      return [];
   }
-  const what = item.kind === 'overdue_wait' ? 'overdue wait' : 'open ask';
-  return `  ${item.ref}  ${what}  ${project}${key}  ${opened}`;
+}
+
+/**
+ * A start no run caused that was refused and is its item's newest step: what it was for,
+ * why, and what moves the item on. A run on the item, or the binding starting on it, closes it.
+ */
+function refusedStartItemLines(
+  item: Extract<AttentionQueueItem, { kind: 'refused_start' }>
+): string[] {
+  const { receiptId, bindingId, workflow, itemKey, reason, limit } = item.start;
+  const what = `the start of ${workflow ?? 'its workflow'} on item ${itemKey} (binding ${bindingId}) was refused`;
+  const lines =
+    limit !== undefined
+      ? [
+          `${what} at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
+          `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
+        ]
+      : [`${what}: ${refusalText(reason)}`];
+  if (reason === 'no_default_provider') lines.push('set one: archon ai default <provider>');
+  lines.push(`see the refusal: archon trigger inspect ${receiptId}`);
+  return lines;
+}
+
+/** A stored refusal code as text; a code a newer binary wrote is shown as it is. */
+function refusalText(reason: string): string {
+  if (reason === 'rejected_by_source') return 'its source rejected the event';
+  return Object.hasOwn(REFUSAL_REASONS, reason)
+    ? REFUSAL_REASONS[reason as StoppedRefusal['reason']]
+    : reason;
 }
 
 /** One queue item as a block of text lines. */
@@ -292,13 +347,7 @@ export function attentionItemLines(
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
   // No run holds it, so no run command answers it: it is answered by its ref.
-  const body = isHeldByRun(item)
-    ? itemBody(item, detail)
-    : item.kind === 'overdue_wait'
-      ? overdueWaitLines(item)
-      : item.kind === 'stopped'
-        ? stoppedLines(item)
-        : refItemLines(item);
+  const body = isHeldByRun(item) ? itemBody(item, detail) : withoutRunBody(item);
   for (const line of body) lines.push(`    ${line}`);
   return lines;
 }
