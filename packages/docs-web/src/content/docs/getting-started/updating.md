@@ -86,13 +86,20 @@ Commit or stash your changes before updating. Then follow one of two branches:
 `main` holds releases and is the recommended branch, and `dev` is the working
 development branch.
 
+The commands below use Bash syntax (`&&` and `\` line continuations). On native
+Windows, run them in Git Bash in the same checkout.
+
 ### Follow releases
 
 If `git branch --list main` prints nothing, your checkout has no local `main`
-yet. Create it once from origin's `main`:
+yet. Create it once from origin's `main`, with origin's `main` as its upstream
+so a plain `git pull` on it also works:
 
 ```bash
-git fetch origin main && git branch main FETCH_HEAD
+git fetch origin main && \
+  git branch main FETCH_HEAD && \
+  git config branch.main.remote origin && \
+  git config branch.main.merge refs/heads/main
 ```
 
 Then update. Each step runs only if the one before it succeeded:
