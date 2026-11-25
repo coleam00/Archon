@@ -371,57 +371,63 @@ async function cleanupWorktrees(
   }
 
   try {
-    let result: CleanupOperationResult;
-    if (cleanupType === 'merged') {
-      const outcome = await cleanupMergedWorktrees(codebaseId, mainPath);
-      if (outcome.kind === 'repository-gone') {
-        return {
-          success: true,
-          message: await repositoryGoneMessage(mainPath, codebaseId, outcome),
-        };
-      }
-      result = outcome.result;
-    } else {
-      result = await cleanupStaleWorktrees(codebaseId, mainPath);
+    if (cleanupType === 'stale') {
+      return await cleanupReport(
+        codebaseId,
+        cleanupType,
+        await cleanupStaleWorktrees(codebaseId, mainPath)
+      );
     }
-
-    let msg = '';
-
-    if (result.removed.length > 0) {
-      msg += `Cleaned up ${String(result.removed.length)} ${cleanupType} worktree(s):\n`;
-      for (const branch of result.removed) {
-        msg += `  • ${branch}\n`;
-      }
-      for (const { branchName, runId, reason } of result.releasedFailedRuns) {
-        msg += `  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}\n`;
-      }
-    } else {
-      msg += `No ${cleanupType} worktrees to clean up.\n`;
+    const outcome = await cleanupMergedWorktrees(codebaseId, mainPath);
+    if (outcome.kind === 'repository-gone') {
+      return { success: true, message: await repositoryGoneMessage(mainPath, codebaseId, outcome) };
     }
-
-    for (const { branchName, message } of result.warnings) {
-      msg += `  Warning: ${branchName}: ${message}\n`;
-    }
-
-    if (result.skipped.length > 0) {
-      msg += `\nSkipped ${String(result.skipped.length)} (protected):\n`;
-      for (const { branchName, reason } of result.skipped) {
-        msg += `  • ${branchName} (${reason})\n`;
-      }
-    }
-
-    msg += result.errors
-      .map(({ branchName, error }) => `  Failed: ${branchName} (${error})\n`)
-      .join('');
-
-    msg += `\n${await activeWorktreeCountMessage(codebaseId)}`;
-
-    return { success: result.errors.length === 0, message: msg.trim() };
+    return await cleanupReport(codebaseId, cleanupType, outcome.result);
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cleanupType, codebaseId: codebaseId }, 'cmd.worktree_cleanup_failed');
     return { success: false, message: `Failed to cleanup: ${err.message}` };
   }
+}
+
+/** What one cleanup sweep removed, kept and failed on. */
+async function cleanupReport(
+  codebaseId: string,
+  cleanupType: string,
+  result: CleanupOperationResult
+): Promise<CommandResult> {
+  let msg = '';
+
+  if (result.removed.length > 0) {
+    msg += `Cleaned up ${String(result.removed.length)} ${cleanupType} worktree(s):\n`;
+    for (const branch of result.removed) {
+      msg += `  • ${branch}\n`;
+    }
+    for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+      msg += `  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}\n`;
+    }
+  } else {
+    msg += `No ${cleanupType} worktrees to clean up.\n`;
+  }
+
+  for (const { branchName, message } of result.warnings) {
+    msg += `  Warning: ${branchName}: ${message}\n`;
+  }
+
+  if (result.skipped.length > 0) {
+    msg += `\nSkipped ${String(result.skipped.length)} (protected):\n`;
+    for (const { branchName, reason } of result.skipped) {
+      msg += `  • ${branchName} (${reason})\n`;
+    }
+  }
+
+  msg += result.errors
+    .map(({ branchName, error }) => `  Failed: ${branchName} (${error})\n`)
+    .join('');
+
+  msg += `\n${await activeWorktreeCountMessage(codebaseId)}`;
+
+  return { success: result.errors.length === 0, message: msg.trim() };
 }
 
 /** A gone checkout is reported, not a failure: nothing was checked or removed. */
