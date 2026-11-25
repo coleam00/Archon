@@ -125,10 +125,10 @@ describe('stripCwdEnv — strip record (#1302)', () => {
     expect(takeCwdEnvStrip()).toBeUndefined();
   });
 
-  it('records nothing when no CWD .env file names a key', () => {
+  it('records an empty strip when no CWD .env file names a key', () => {
     writeFileSync(join(tmpDir, '.env'), '');
     stripCwdEnv(tmpDir);
-    expect(takeCwdEnvStrip()).toBeUndefined();
+    expect(takeCwdEnvStrip()).toEqual({ cwd: tmpDir, files: [], keys: [] });
   });
 });
 

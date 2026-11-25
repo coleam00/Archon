@@ -40,7 +40,11 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
   'CLAUDE_CODE_USE_VERTEX',
 ]);
 
-/** What the last stripCwdEnv() removed from a project's env files. Key names only, never values. */
+/**
+ * What the last stripCwdEnv() removed from a project's env files: key names only, never
+ * values. Empty `files` and `keys` when nothing was stripped, so the reporter can forget a
+ * project whose env files are gone and explain them again when they return.
+ */
 export interface CwdEnvStrip {
   cwd: string;
   files: string[];
@@ -85,8 +89,7 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
 
   // Recorded, not printed: loadArchonEnv tells the operator once the Archon home
   // and verbosity are final (see #1302, #6362).
-  lastStrip =
-    cwdKeys.size > 0 ? { cwd, files: strippedFiles, keys: [...cwdKeys].sort() } : undefined;
+  lastStrip = { cwd, files: strippedFiles, keys: [...cwdKeys].sort() };
 
   stripNestedSessionMarkers();
   stripDebuggerEnv();

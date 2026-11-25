@@ -816,10 +816,10 @@ A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFI
 **Operator log lines** (stderr, emitted only when there is something to report):
 
 ```
-[archon] stripped 2 keys from /path/to/target-repo (.env, .env.local). Archon does not load a project's .env files into its own processes, so a key there cannot override Archon settings or credentials (an ANTHROPIC_API_KEY would bill the API instead of your Claude subscription). Shown again only when these keys or files change.
+[archon] stripped 2 keys from /path/to/target-repo (.env, .env.local). Archon does not load a target repository's .env files into its own processes, so a key there cannot override Archon settings or credentials (an ANTHROPIC_API_KEY would bill the API instead of your Claude subscription).
 ```
 
-The stripping happens on every command; the line does not. It appears on the first command in a project, and again when the files or key names it would list change. Later commands with the same keys print nothing about it. Archon keeps a hash per project in `~/.archon/cwd-env-notice.json`; delete the file to see the line again. To print it on every command, set `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug`. The line names keys by count only and never prints a value.
+The stripping happens on every command; by default the line does not. It appears on the first command in a project, and again when the files or key names it lists change, including when they come back after a command that found none. Changing only a value does not print it again. Archon keeps a hash per project in `cwd-env-notice.json` under the Archon home (`~/.archon` unless `ARCHON_HOME` or Docker sets another); delete that file to see the line again. With `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug` set in the shell or `~/.archon/.env`, the line prints on every command, and `LOG_LEVEL=debug` also logs a `cwd_env.stripped` event naming the project, files and keys. Neither the line nor the event contains a value.
 
 The `[archon] loaded N keys from …` lines are suppressed by default (they would otherwise interleave with `archon setup`/`archon doctor` checklist output). To enable them, set `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug` before running:
 

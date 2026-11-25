@@ -314,7 +314,6 @@ cd "$LEAKREPO"
 git init -q
 git commit -q --allow-empty -m init
 printf 'ANTHROPIC_API_KEY=sk-ant-test-fake\n' > .env
-"$BINARY" workflow run archon-investigate --no-worktree "hello" 2>&1 | tee /tmp/archon-test-leak.log
 ```
 
 **Pass criteria** (current behaviour — the guard **strips**, it does not refuse):
@@ -327,7 +326,8 @@ printf 'ANTHROPIC_API_KEY=sk-ant-test-fake\n' > .env
   means the file was not read at all, which is a real regression
 - The workflow is then allowed to proceed and complete normally
 
-Assert on the strip line — pinned to **this** repo and **this** key count, so a
+Run the workflow once and assert on that capture: a second command in the same
+repo is expected to print no strip line. Assert on the strip line — pinned to **this** repo and **this** key count, so a
 strip from some other directory cannot produce a false pass. Capture the exit
 status too: under the strip design the workflow is expected to succeed, so a
 non-zero exit is its own failure.

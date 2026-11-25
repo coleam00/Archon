@@ -3,7 +3,9 @@ import { writeFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { getArchonEnvNames, getPluginsPath, loadArchonEnv } from './env-loader';
-import { getLogLevel, resetLogLevelOverride, rootLogger, setLogLevel } from './logger';
+import { spawnSync } from 'child_process';
+import { pathToFileURL } from 'url';
+import { getLogLevel, resetLogLevelOverride, rootLogger, setLogLevel, setLogSink } from './logger';
 import { stripCwdEnv } from './strip-cwd-env';
 
 /**
@@ -377,36 +379,63 @@ describe('getArchonEnvNames', () => {
 
 describe('loadArchonEnv — stripped-keys notice (#6362)', () => {
   /** One boot: strip the project's env files, then load Archon's, as each entry point does. */
-  function boot(): string[] {
+  function boot(cwd: string = repoDir): string[] {
     stderrWrites.length = 0;
-    stripCwdEnv(repoDir);
-    loadArchonEnv(repoDir);
+    stripCwdEnv(cwd);
+    loadArchonEnv(cwd);
     return stderrWrites.filter(s => s.startsWith('[archon] stripped'));
   }
 
   it('explains the strip on the first boot in a project, then stays quiet while still stripping', () => {
-    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=secret-value-6362\n');
+    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=a\n');
 
     const [line, ...rest] = boot();
     expect(rest).toEqual([]);
     expect(line).toStartWith(`[archon] stripped 1 key from ${repoDir} (.env). `);
-    expect(line).toContain("does not load a project's .env files");
+    expect(line).toContain("does not load a target repository's .env files");
 
     process.env.TEST_EL_OTHER = 'from-shell';
     expect(boot()).toEqual([]);
     expect(process.env.TEST_EL_OTHER).toBeUndefined();
   });
 
-  it('prints again when the stripped keys or files change', () => {
+  it('prints again when a key or file is added or renamed, but not when only a value changes', () => {
+    const env = join(repoDir, '.env');
+    writeFileSync(env, 'TEST_EL_OTHER=a\n');
+    expect(boot()).toHaveLength(1);
+
+    writeFileSync(env, 'TEST_EL_OTHER=changed\n');
+    expect(boot()).toEqual([]);
+
+    writeFileSync(env, 'TEST_EL_OVERLAP=a\n');
+    expect(boot()).toHaveLength(1);
+
+    rmSync(env);
+    writeFileSync(join(repoDir, '.env.local'), 'TEST_EL_OVERLAP=a\n');
+    expect(boot()[0]).toContain('(.env.local)');
+
+    writeFileSync(env, 'TEST_EL_OTHER=a\n');
+    expect(boot()[0]).toContain('(.env, .env.local)');
+    expect(boot()).toEqual([]);
+  });
+
+  it('prints again when the env files come back after a boot without them', () => {
+    const env = join(repoDir, '.env');
+    writeFileSync(env, 'TEST_EL_OTHER=a\n');
+    expect(boot()).toHaveLength(1);
+    rmSync(env);
+    expect(boot()).toEqual([]);
+    writeFileSync(env, 'TEST_EL_OTHER=a\n');
+    expect(boot()).toHaveLength(1);
+  });
+
+  it('gives each project its own first notice', () => {
+    const otherRepo = join(tmpRoot, 'other-repo');
+    mkdirSync(otherRepo, { recursive: true });
     writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=a\n');
+    writeFileSync(join(otherRepo, '.env'), 'TEST_EL_OTHER=a\n');
     expect(boot()).toHaveLength(1);
-
-    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=a\nTEST_EL_OVERLAP=b\n');
-    expect(boot()).toHaveLength(1);
-
-    writeFileSync(join(repoDir, '.env.local'), 'TEST_EL_OTHER=c\n');
-    const [line] = boot();
-    expect(line).toContain('(.env, .env.local)');
+    expect(boot(otherRepo)).toHaveLength(1);
     expect(boot()).toEqual([]);
   });
 
@@ -426,13 +455,79 @@ describe('loadArchonEnv — stripped-keys notice (#6362)', () => {
     expect(boot()).toHaveLength(1);
   });
 
-  it('never writes a key value to stderr or the state file', () => {
-    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=secret-value-6362\n');
-    process.env.ARCHON_VERBOSE_BOOT = '1';
-    boot();
-    expect(stderrWrites.join('')).not.toContain('secret-value-6362');
-    const state = readFileSync(join(archonHomeDir, 'cwd-env-notice.json'), 'utf-8');
-    expect(state).not.toContain('secret-value-6362');
-    expect(state).not.toContain('TEST_EL_OTHER');
+  describe('debug log record', () => {
+    let events: Array<Record<string, unknown>>;
+    beforeEach(() => {
+      events = [];
+      setLogSink(line => events.push(JSON.parse(line) as Record<string, unknown>));
+      setLogLevel('debug');
+    });
+    afterEach(() => {
+      setLogSink(undefined);
+      setLogLevel('info');
+      resetLogLevelOverride();
+    });
+
+    const stripped = (): Array<Record<string, unknown>> =>
+      events.filter(e => e.msg === 'cwd_env.stripped');
+
+    it('logs the strip on a boot whose operator line is suppressed, without values', () => {
+      writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=secret-value-6362\n');
+      expect(boot()).toHaveLength(1);
+      events.length = 0;
+
+      expect(boot()).toEqual([]);
+      expect(stripped()).toEqual([
+        expect.objectContaining({ cwd: repoDir, files: ['.env'], keys: ['TEST_EL_OTHER'] }),
+      ]);
+      const state = readFileSync(join(archonHomeDir, 'cwd-env-notice.json'), 'utf-8');
+      for (const out of [JSON.stringify(events), stderrWrites.join(''), state]) {
+        expect(out).not.toContain('secret-value-6362');
+      }
+      expect(state).not.toContain('TEST_EL_OTHER');
+    });
+
+    it('logs the strip before a refused repo-scope env file stops startup', () => {
+      writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=a\n');
+      writeFileSync(join(repoDir, '.archon', '.env'), 'PATH=/tmp/evil\n');
+      const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+      const exitSpy = spyOn(process, 'exit').mockImplementation((() => {
+        throw new Error('process.exit called');
+      }) as never);
+      try {
+        stripCwdEnv(repoDir);
+        expect(() => loadArchonEnv(repoDir)).toThrow('process.exit called');
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+      expect(stripped()).toHaveLength(1);
+    });
+  });
+
+  it('is shown once per project across separate processes', () => {
+    const home = join(tmpRoot, 'process-home');
+    const projects = [join(tmpRoot, 'project-a'), join(tmpRoot, 'project-b')];
+    for (const project of projects) {
+      mkdirSync(project, { recursive: true });
+      writeFileSync(join(project, '.env'), 'TEST_EL_OTHER=a\n');
+    }
+    const probe = join(tmpRoot, 'probe.ts');
+    writeFileSync(
+      probe,
+      `import '${pathToFileURL(join(import.meta.dir, 'strip-cwd-env-boot.ts')).href}';\n` +
+        `import { loadArchonEnv } from '${pathToFileURL(join(import.meta.dir, 'env-loader.ts')).href}';\n` +
+        'loadArchonEnv(process.cwd());\n'
+    );
+    const run = (cwd: string): number =>
+      spawnSync(process.execPath, [probe], {
+        cwd,
+        encoding: 'utf8',
+        env: { ...process.env, ARCHON_HOME: home, ARCHON_VERBOSE_BOOT: '', LOG_LEVEL: '' },
+      })
+        .stderr.split('\n')
+        .filter(line => line.startsWith('[archon] stripped')).length;
+
+    expect([run(projects[0]), run(projects[0]), run(projects[1])]).toEqual([1, 0, 1]);
   });
 });

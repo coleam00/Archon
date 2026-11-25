@@ -957,11 +957,18 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       join(repoRoot, 'packages', 'paths', 'src', 'strip-cwd-env-boot.ts')
     ).href;
     const pathsUrl = pathToFileURL(join(repoRoot, 'packages', 'paths', 'src', 'index.ts')).href;
+    const stripUrl = pathToFileURL(
+      join(repoRoot, 'packages', 'paths', 'src', 'strip-cwd-env.ts')
+    ).href;
     const probe = join(repo, 'probe.ts');
     writeFileSync(
       probe,
       `import '${stripBootUrl}';\n` +
         `import { captureDetachedInstallContext, getArchonHome, isDocker, loadArchonEnv, restoreDetachedInstallContext } from '${pathsUrl}';\n` +
+        `import { takeCwdEnvStrip } from '${stripUrl}';\n` +
+        // The home resolves to the real /.archon; consume the strip record so the
+        // notice writes no state there.
+        'takeCwdEnvStrip();\n' +
         'const inherited = captureDetachedInstallContext();\n' +
         'loadArchonEnv(process.cwd());\n' +
         'restoreDetachedInstallContext(inherited);\n' +
@@ -988,7 +995,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       );
       expect({ status: result.status, stderr: result.stderr }).toEqual({
         status: 0,
-        stderr: expect.stringContaining('[archon] stripped 5 keys'),
+        stderr: expect.any(String),
       });
       expect(JSON.parse(result.stdout)).toEqual({
         docker: true,
