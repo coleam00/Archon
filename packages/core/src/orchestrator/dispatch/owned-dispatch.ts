@@ -137,7 +137,6 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
     preparedAiConfiguration,
     resolvedInputs: launchInputs,
     deferredInputError,
-    prepareLaunchAiConfiguration: prepareLaunch,
   });
 }
 

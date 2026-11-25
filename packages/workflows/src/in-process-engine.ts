@@ -80,7 +80,6 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       workflow = input.legacyWorkflow;
     }
     const hydrated = await hydrateResumableRun(this.deps, input.run, input.cursor);
-    if (hydrated === null) return { accepted: false, reason: 'nothing-to-resume' };
 
     let context: Pick<WorkflowResumeInput, 'cwd' | 'options'> = input;
     if (input.prepareExecution) {
@@ -119,7 +118,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       hydrated.preCreatedRun.origin ?? undefined,
       { ...context.options, ...hydrated }
     );
-    return { accepted: true, runId: hydrated.preCreatedRun.id, settled };
+    return { runId: hydrated.preCreatedRun.id, settled };
   }
 
   subscribe(

@@ -16,7 +16,7 @@ import {
 import type { RunActor } from '../run-authorization';
 import { hostname } from 'node:os';
 import { getLog, type OperationContext } from './context';
-import { isSubrun, rootRunIdOf } from './teardown';
+import { isSubrun } from './teardown';
 import { removeRunFiles, type RunFilesReport } from '../../services/cleanup/run-files';
 
 export interface WorkflowStatusData {
@@ -200,11 +200,12 @@ function assertHasCheckout(run: WorkflowRun): void {
 
 /**
  * Refuse to resume a `running` run unless this process can tell its owner is gone, the
- * same way cancel tells a live owner from a gone one. A sub-run executes inside its root
- * run's process and publishes no endpoint of its own, so its root's owner is asked too.
- * A recorded owner on another host or user cannot be asked from here, so it is refused
- * rather than assumed dead. A run with no recorded owner (from before owner recording)
- * and nothing answering resumes.
+ * same way cancel tells a live owner from a gone one. A sub-run executes inside the
+ * process of whichever ancestor is being driven, and publishes no endpoint of its own, so
+ * every ancestor's owner is asked too: the root, or an intermediate sub-run that was itself
+ * resumed after the root's process died. A recorded owner on another host or user cannot
+ * be asked from here, so it is refused rather than assumed dead. A run with no recorded
+ * owner (from before owner recording) and nothing answering resumes.
  */
 async function assertNoLiveOwner(ctx: OperationContext, run: WorkflowRun): Promise<void> {
   const recorded = readExecutionOwner(run.metadata);
@@ -218,12 +219,13 @@ async function assertNoLiveOwner(ctx: OperationContext, run: WorkflowRun): Promi
       `Run ${run.id} is still running: its owner (${ownerName}) answers on this host. ${notChanged}`
     );
   }
-  const rootRunId = run.parent_run_id ? await rootRunIdOf(ctx, run.id) : undefined;
-  if (rootRunId && (await ctx.isRunOwnerAnswering(rootRunId))) {
-    throw new ResumeRefusedError(
-      'live_owner',
-      `Run ${run.id} is a sub-run of ${rootRunId}, whose owner still answers on this host. ${notChanged}`
-    );
+  const ancestors = run.parent_run_id ? await ctx.store.getRunAncestry(run.id) : [];
+  for (const ancestor of ancestors) {
+    if (ctx.isRunOwnedByThisProcess(ancestor.id) || (await ctx.isRunOwnerAnswering(ancestor.id)))
+      throw new ResumeRefusedError(
+        'live_owner',
+        `Run ${run.id} is a sub-run of ${ancestor.id}, whose owner still answers on this host. ${notChanged}`
+      );
   }
   const where = unreachableOwner(recorded);
   if (where !== undefined) {

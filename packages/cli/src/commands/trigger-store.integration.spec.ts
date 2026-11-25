@@ -1786,7 +1786,6 @@ test('a triggered run pauses at a gate and an attention wait and continues after
         cwd: project,
         userMessage: '',
       });
-      if (!admission.accepted) throw new Error('The answered run was not resumed');
       await admission.settled;
     };
 
