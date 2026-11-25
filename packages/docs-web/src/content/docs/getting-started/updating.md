@@ -88,32 +88,27 @@ development branch.
 
 ### Follow releases
 
-A clone made with `--single-branch` fetches only the branch it cloned. If
-`git branch -r` does not list `origin/main`, run this once so `git fetch` also
-fetches `main`:
-
 ```bash
-git remote set-branches --add origin main
-```
-
-Then update:
-
-```bash
+git remote set-branches origin '*'
 git fetch origin
 git switch main
-git pull --ff-only
+git pull --ff-only origin main
 bun install --frozen-lockfile
 bun run cli version
 ```
 
-`git switch main` creates a local `main` that tracks `origin/main` the first
-time, and switches to it after that.
+A clone made with `--single-branch` fetches only the branch it cloned, so
+`git switch main` fails there with `invalid reference: main`. The
+`set-branches` line makes `git fetch` fetch every branch, as a normal clone
+does; on a normal clone it changes nothing. `git switch main` then creates a
+local `main` that tracks `origin/main` the first time, and switches to it after
+that.
 
 ### Follow development
 
 ```bash
 git switch dev
-git pull --ff-only
+git pull --ff-only origin dev
 bun install --frozen-lockfile
 bun run cli version
 ```
