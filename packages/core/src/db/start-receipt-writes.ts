@@ -143,7 +143,7 @@ async function insertReceiptBindings(
  * `start_limit` and `grants_limit`; an older binary admits such a start without counting
  * it. `readStoredIntent` reverses it.
  */
-function storableIntent(
+export function storableIntent(
   binding: ResourceStartBindingIntent
 ): [string, string | null, string | null] {
   // A wake is resolved before a binding is written (`resolveWakes`); none is ever stored.

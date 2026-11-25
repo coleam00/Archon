@@ -1,7 +1,9 @@
 /**
  * Refused starts that no run caused: binding starts a fire, a schedule, a webhook or a label
  * made, refused with a stored reason (`refusal`, see `bindingRefusalSchema`). A start a run's
- * end or settled asks caused is not here: its refusal is a stop on that run (`item-stops.ts`).
+ * end or settled asks caused is not here while that run exists: its refusal is a stop on
+ * that run (`item-stops.ts`). Once the run is deleted the stop has nowhere to show, so the
+ * refusal is listed here instead.
  */
 import {
   bindingRefusalSchema,
@@ -57,7 +59,7 @@ export async function listStoredRefusedStarts(): Promise<StoredRefusedStart[]> {
   const steppedSince = await laterStepStarts();
   const starts: StoredRefusedStart[] = [];
   for (const row of rows.rows) {
-    if (causingRun(row.source_actor) !== undefined) continue;
+    if (await causingRunExists(row.source_actor)) continue;
     if (steppedSince.has(JSON.stringify([String(row.receipt_id), row.binding_id]))) continue;
     const refusal = bindingRefusalSchema.safeParse(parseStoredJson(row.refusal));
     if (!refusal.success) {
@@ -109,6 +111,19 @@ async function laterStepStarts(): Promise<Set<string>> {
       .filter(row => launchRunsStep(row.launch ?? null))
       .map(row => JSON.stringify([String(row.receipt_id), row.binding_id]))
   );
+}
+
+/**
+ * True when a run's end or settled asks caused the receipt (`causingRun`) and that run still
+ * exists: its stop shows the refusal.
+ */
+async function causingRunExists(stored: unknown): Promise<boolean> {
+  const runId = causingRun(stored);
+  if (runId === undefined) return false;
+  const run = await getDatabase().query('SELECT 1 FROM remote_agent_workflow_runs WHERE id = $1', [
+    runId,
+  ]);
+  return run.rows.length > 0;
 }
 
 /**

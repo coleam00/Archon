@@ -322,6 +322,8 @@ export function createWorkflowStore(): IWorkflowStore {
     completeStartBindingPreparation: resourceStarts.completeStartBindingPreparation,
     failStartBindingPreparation: resourceStarts.failStartBindingPreparation,
     resetStartBindingPreparation: resourceStarts.resetStartBindingPreparation,
+    replaceStartBindingIntent: resourceStarts.replaceStartBindingIntent,
+    returnQueuedStartToPreparation: resourceStarts.returnQueuedStartToPreparation,
     resolveApprovalGate: workflowDb.resolveApprovalGate,
     resolveAndCancelApprovalGate: workflowDb.resolveAndCancelApprovalGate,
     cancelResumableRunsForConversation: workflowDb.cancelResumableRunsForConversation,

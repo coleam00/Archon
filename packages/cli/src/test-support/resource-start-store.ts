@@ -413,5 +413,30 @@ export function createInMemoryResourceStartStore(
       item.ownerId = null;
       return true;
     },
+    replaceStartBindingIntent: async (
+      input
+    ): ReturnType<IResourceStartStore['replaceStartBindingIntent']> => {
+      const item = owned(input);
+      if (!item?.intent) return false;
+      const { checkoutFrom } = item.intent;
+      const { checkoutFrom: _replaced, ...intent } = structuredClone(input.intent);
+      item.intent = checkoutFrom ? { ...intent, checkoutFrom } : intent;
+      item.bindingRevision = input.intent.bindingRevision;
+      item.hostId = input.intent.hostId;
+      return true;
+    },
+    returnQueuedStartToPreparation: async (
+      input
+    ): ReturnType<IResourceStartStore['returnQueuedStartToPreparation']> => {
+      const request = requests.get(input.requestId);
+      const item = binding(input);
+      if (request?.status !== 'queued' || item?.disposition?.requestId !== request.id) return null;
+      request.status = 'withdrawn';
+      item.status = 'pending';
+      item.ownerId = null;
+      item.disposition = null;
+      item.requestStatus = null;
+      return structuredClone(request.launch);
+    },
   };
 }

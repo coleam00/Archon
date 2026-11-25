@@ -243,9 +243,10 @@ export interface IWorkflowStore
     input: { rulingId: string; projectKey?: string } & ItemAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
   /**
-   * The newest end on an item while no run on it is live or started or resumed since, and
-   * no start is queued on it (`schemas/item-end.ts`), or null. Held trigger starts are left
-   * to `readHoldingItemEnd`. An unreadable row is reported, not thrown.
+   * The newest end on an item while no step on it is live or started or resumed since
+   * (`schemas/item-end.ts`), or null. It reads runs only: starts with no run yet are read by
+   * `listItemStarts`, and `readHoldingItemEnd` combines the two, so a reader of an end calls
+   * that, not this. An unreadable row is reported, not thrown.
    */
   getHoldingItemEnd(
     itemId: string
