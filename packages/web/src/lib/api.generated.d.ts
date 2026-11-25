@@ -11966,7 +11966,7 @@ export interface components {
               title: string;
               numerator: string;
               denominator: string;
-              denominator_label: string;
+              denominator_label?: string;
               calibration?: {
                 metric: string;
                 label: string;
@@ -12128,7 +12128,7 @@ export interface components {
               title: string;
               numerator: string;
               denominator: string;
-              denominator_label: string;
+              denominator_label?: string;
               calibration?: {
                 metric: string;
                 label: string;

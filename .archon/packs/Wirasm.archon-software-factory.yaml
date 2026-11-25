@@ -9,7 +9,6 @@ settings:
   review_policy: docs/factory-console/ENGINEERING.md
   test_policy: docs/factory-console/ENGINEERING.md
   product_policy: docs/factory-console/DESIGN.md
-  propose_policy: docs/factory-console/DESIGN.md
   # GitHub starts CI on every push by itself, so the host needs nothing started.
   host_policy: ""
   # Shadow in the pack: recorded, nothing acts on it.
@@ -17,6 +16,4 @@ settings:
   # The land gate decides by it, and the land stage merges on "land" (docs/factory-console/policy/land.md).
   land_policy: docs/factory-console/policy/land.md
   discoveries_policy: docs/factory-console/policy/discoveries.md
-  # Shadow in the pack: run by script each check round, recorded, nothing acts on them.
-  checks_file: docs/factory-console/factory-checks.yaml
   validate_command: "bun run validate --only generated-files,type-check,lint,format && bun run --cwd packages/web test && bun run --cwd packages/server test && bun run build:web"

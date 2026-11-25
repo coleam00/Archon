@@ -215,8 +215,8 @@ function RatioBody({ card }: { card: RatioCard }): ReactElement {
       )}
       <Line>
         {card.share === null
-          ? `${formatNumber(card.denominator)} ${card.denominatorLabel}`
-          : `${formatNumber(card.numerator)} of ${formatNumber(card.denominator)} ${card.denominatorLabel}`}
+          ? `${formatNumber(card.denominator)} ${card.denominatorLabel}`.trimEnd()
+          : `${formatNumber(card.numerator)} of ${formatNumber(card.denominator)} ${card.denominatorLabel}`.trimEnd()}
         {calibration?.state === 'calibrated'
           ? ` · ${calibration.label} ${calibration.caught.toString()} of ${calibration.of.toString()}`
           : null}

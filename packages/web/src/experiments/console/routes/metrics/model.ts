@@ -196,7 +196,7 @@ export function ratioCard(
   const base = {
     shape: 'ratio',
     title: view.title,
-    denominatorLabel: view.denominator_label,
+    denominatorLabel: view.denominator_label ?? '',
   } as const;
   const numeratorMetric = findCount(report, view.numerator);
   const numerator = numeratorMetric === undefined ? undefined : headlineOf(numeratorMetric);
