@@ -267,7 +267,8 @@ export const prReviewsRequestSchema = requestBase.extend({
 export const reviewKeySchema = z
   .string()
   .regex(/^[A-Za-z0-9._:-]{1,128}$/)
-  .meta({ examples: ['run-1'] });
+  // A key names one caller's review, so its help example reads as a value to replace.
+  .meta({ examples: ['REPLACE-WITH-KEY-FOR-THIS-RUN'] });
 /**
  * `submitKey` is the key a review was posted with through `pr.review.submit`; on a
  * `review_comment` it is that of the review the comment belongs to. Absent means the
