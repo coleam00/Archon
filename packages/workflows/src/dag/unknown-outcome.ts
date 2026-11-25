@@ -12,7 +12,7 @@ import { composeFanOutScopeSegment } from '../fan-out-identity';
 import { loopBodyStepNamePrefix } from '../graph-plan';
 import { readLiveUnknownOutcomes } from '../unknown-outcome';
 import { getLog } from './log';
-import type { DagNode } from '../schemas';
+import type { DagNode, NodeOutput } from '../schemas';
 import type { RunLayersContext } from './run-context';
 import { failRun } from './run-terminal';
 
@@ -74,16 +74,18 @@ export async function failRunOnUnknownOutcome(
 }
 
 /**
- * Called where `node` of a walk settled `failed`: whether the failure reached a live unknown
- * outcome, read from the stored records of the node and of what runs under it (a loop body,
- * a composed fan-out's instances). Only what this node just ran decides, never another
+ * Called where `node` of a walk settled: whether its `output` is a failure that reached a
+ * live unknown outcome, read from the stored records of the node and of what runs under it
+ * (a loop body, a composed fan-out's instances). Only what this node just ran decides, never another
  * node's older record, so a resume by hand reaches the uncertain node again. When it did,
  * the walk starts nothing more, and the top-level walk fails the run.
  */
 export async function reachedUnknownOutcome(
   ctx: RunLayersContext,
-  node: DagNode
+  node: DagNode,
+  output: NodeOutput
 ): Promise<boolean> {
+  if (output.state !== 'failed') return false;
   const step = ctx.stepNamePrefix + node.id;
   const body = loopBodyStepNamePrefix(step);
   const scope = `${ctx.stepNamePrefix}${composeFanOutScopeSegment(node.id, ctx.loopGroupPath)}__`;

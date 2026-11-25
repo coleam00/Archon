@@ -188,8 +188,8 @@ async function runLayerPhase(
         } finally {
           peers?.[index].finished();
         }
-        // Outside the handler: a failure here is the pass's, never recorded over the node's.
-        stopped ||= settled.output.state === 'failed' && (await reachedUnknownOutcome(ctx, node));
+        // Outside the handler: never over the node's record. Only true assigns: no peer clears it.
+        if (await reachedUnknownOutcome(ctx, node, settled.output)) stopped = true;
         return settled;
       }
   );

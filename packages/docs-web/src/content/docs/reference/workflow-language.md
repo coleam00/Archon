@@ -1152,7 +1152,7 @@ What each aggregate does with a node or instance that fails this way:
 | Where it fails | What happens |
 |---|---|
 | A composed fan-out instance under `join: all_success` | The fan-out node fails once its instances finish, and the run ends with the reason |
-| A composed fan-out instance under `join: all_done` | A failed instance, as today: the other instances run, the join completes with the `archon_failed` marker in that slot, and the run goes on. When a later pass recomputes the join, an instance whose failure the join already absorbed gets that failure back and is not run again; an instance that runs again is treated as on a first pass. A later failure is reported as any failure |
+| A composed fan-out instance under `join: all_done` | A failed instance, as today: the other instances run, the join completes with the `archon_failed` marker in that slot, and the run goes on. When a later pass recomputes the join, an instance whose failure this join already absorbed gets that failure back and is not run again; an instance whose failure only an inner join absorbed runs again, so its other failures are retried, and an instance that runs again is treated as on a first pass. A later failure is reported as any failure |
 | A `loop_group` body node | The body starts nothing more, the group fails, and the run ends with the reason. A loop group that completes over the failure still holds it |
 | A child run of a `workflow:` node or fan-out | The child run ends with the reason, and attention lists the child. The parent treats it as any failed child. A parent's own recovery that drives a failed child again is not covered yet and can run that child again |
 

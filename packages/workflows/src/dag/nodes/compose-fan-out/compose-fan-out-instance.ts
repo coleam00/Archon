@@ -29,7 +29,7 @@ import { aggregateProviderFailure, rootFailures } from '../../../executor-shared
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { RunSourceUnreadableError } from '../../node-source';
-import { readLiveUnknownOutcomes } from '../../../unknown-outcome';
+import { readUnknownOutcomes } from '../../../unknown-outcome';
 import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { type RunLayersContext } from '../../run-context';
 import { expandComposeInstance } from './compose-fan-out-expansion';
@@ -450,10 +450,11 @@ async function settleInstance(
 }
 
 /**
- * An instance whose node failed with an unknown outcome that the join's completed
- * occurrence absorbed (`liveUnknownOutcomes`): a recomputed join gets the recorded failure
- * back rather than running the uncertain node again. A live one runs again, which only a
- * resume by hand reaches.
+ * An instance whose node failed with an unknown outcome that this fan-out's own join
+ * absorbed (`unknownOutcomes`): a recomputed join gets the recorded failure back rather than
+ * running the uncertain node again. One an inner join absorbed leaves the instance to run
+ * again, so its other failures are retried; a live one runs again, which only a resume by
+ * hand reaches.
  */
 async function absorbedUnknownOutcome(
   scope: ComposeInstanceScope,
@@ -466,8 +467,11 @@ async function absorbedUnknownOutcome(
       step.startsWith(stepNamePrefix) && failure.failureKind === 'outcome_unknown'
   );
   if (!holds) return undefined;
-  const live = await readLiveUnknownOutcomes(scope.ctx.deps.store, scope.ctx.workflowRun);
-  if (live.some(step => step.startsWith(stepNamePrefix))) return undefined;
+  const under = (await readUnknownOutcomes(scope.ctx.deps.store, scope.ctx.workflowRun)).filter(
+    outcome => outcome.path.startsWith(stepNamePrefix)
+  );
+  const own = under.some(outcome => outcome.absorbedBy === scope.fanOutScopeName);
+  if (!own || under.some(outcome => outcome.absorbedBy === undefined)) return undefined;
   return {
     status: 'failed',
     output: '',

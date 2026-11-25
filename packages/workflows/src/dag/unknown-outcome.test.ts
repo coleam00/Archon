@@ -603,6 +603,76 @@ describe('a failure whose outcome is unknown', () => {
       expect((await readFile(cleaned, 'utf8')).trim().split('\n')).toHaveLength(2);
     });
 
+    it('a hand resume runs an outer instance again when only an inner join absorbed the uncertain write', async () => {
+      const workflows = join(testDir, '.archon', 'workflows');
+      await mkdir(workflows, { recursive: true });
+      const marker = join(testDir, 'tried');
+      await writeFile(
+        join(workflows, 'writer.yaml'),
+        [
+          'name: writer',
+          'description: block',
+          'mutates_checkout: false',
+          'inputs:',
+          '  item: { required: true }',
+          'nodes:',
+          '  - id: write',
+          '    bash: "exit 1"',
+        ].join('\n')
+      );
+      // The outer block: an inner all_done fan-out over the writer, and a step that fails once.
+      await writeFile(
+        join(workflows, 'outer.yaml'),
+        [
+          'name: outer',
+          'description: block',
+          'mutates_checkout: false',
+          'inputs:',
+          '  item: { required: true }',
+          'nodes:',
+          '  - id: inner',
+          '    include: writer',
+          "    fan_out: { items: '[2]', as: item, join: all_done }",
+          '  - id: step',
+          `    bash: "test -f '${marker}' || { touch '${marker}'; exit 1; }"`,
+        ].join('\n')
+      );
+      spy = failingWithOutcomeUnknown(['write']);
+      const workflow = {
+        name: 'unknown-nested',
+        nodes: [
+          {
+            id: 'fan',
+            kind: 'compose_fan_out',
+            include: 'outer',
+            fan_out: { items: '[1]', as: 'item', join: 'all_success' },
+          },
+        ] as DagNode[],
+      };
+      const { store, runId, deps } = await run(workflow.name, workflow.nodes);
+      expect((await store.getWorkflowRun(runId))?.metadata).toMatchObject({
+        stop_reason: { reason: 'node_error' },
+      });
+      const failed = await store.getWorkflowRun(runId);
+      if (failed === null) throw new Error('run vanished');
+      const hydrated = await hydrateResumableRun(deps, failed);
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflow,
+          workflowRun: hydrated.preCreatedRun,
+          priorCompletedNodes: hydrated.priorCompletedNodes,
+        })
+      );
+      const started = (await store.listWorkflowEvents(runId)).filter(
+        e => e.event_type === 'node_started'
+      );
+      expect(started.filter(e => e.step_name?.endsWith('__step'))).toHaveLength(2);
+      expect(started.filter(e => e.step_name?.endsWith('__write'))).toHaveLength(1);
+      expect((await store.getWorkflowRun(runId))?.status).toBe('completed');
+    });
+
     it('under all_done a later ordinary failure fails the run as today', async () => {
       const { store, runId } = await fanOut(true, 'all_done', { later: { script: 'exit 1' } });
       expect(await store.getWorkflowRun(runId)).toMatchObject({
@@ -664,6 +734,67 @@ describe('a failure whose outcome is unknown', () => {
       ] as DagNode[]);
       return { ...result, marker };
     };
+
+    it.each([
+      [0, 1],
+      [1, 0],
+    ])(
+      'a peer failing ordinarily does not clear the stop (scans released in order %d, %d)',
+      async (first, second) => {
+        spy = failingWithOutcomeUnknown(['write']);
+        const marker = join(testDir, 'cleaned');
+        const { store, runId } = await run(
+          'unknown-group-race',
+          [
+            {
+              id: 'refine',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                nodes: [
+                  { id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1' },
+                  { id: 'other', kind: 'exec', runtime: 'sh', script: 'exit 1' },
+                  {
+                    id: 'cleanup',
+                    kind: 'exec',
+                    runtime: 'sh',
+                    script: `touch '${marker}'`,
+                    depends_on: ['write', 'other'],
+                    trigger_rule: 'all_done',
+                  },
+                ],
+              },
+            },
+          ] as DagNode[],
+          {
+            // Hold both peers' settle scans, then let each finish, and its walk act, in turn.
+            prepare: store => {
+              const read = store.listEventsForRuns.bind(store);
+              const held: { release: () => void; read: Promise<unknown> }[] = [];
+              spyOn(store, 'listEventsForRuns').mockImplementation((ids, types) => {
+                if (held.length >= 2 || !types?.includes('fan_out_instances'))
+                  return read(ids, types);
+                const gate = Promise.withResolvers<void>();
+                const result = gate.promise.then(() => read(ids, types));
+                held.push({ release: gate.resolve, read: result });
+                if (held.length === 2)
+                  void (async () => {
+                    for (const index of [first, second]) {
+                      held[index]?.release();
+                      await held[index]?.read;
+                      await new Promise(resolve => setTimeout(resolve, 0));
+                    }
+                  })();
+                return result;
+              });
+            },
+          }
+        );
+        expect(existsSync(marker)).toBe(false);
+        await expectEnded(store, runId);
+      }
+    );
 
     it('starts no queued peer of the same body layer', async () => {
       spy = failingWithOutcomeUnknown(['write']);

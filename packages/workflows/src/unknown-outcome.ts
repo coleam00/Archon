@@ -30,15 +30,15 @@ export const UNKNOWN_OUTCOME_EVENT_TYPES = [
 ] as const;
 
 /**
- * The step paths whose latest record is a failure of kind `outcome_unknown`, but for those
- * inside a composed fan-out scope whose own join occurrence (its loop round) completed after
- * that record: that join absorbed the failure. A failure recorded after the join's last
- * completion, as when a recomputed join runs the instance again, is live.
+ * Every step path whose latest record is a failure of kind `outcome_unknown`, with the
+ * composed fan-out scope that absorbed it: the innermost scope whose own join occurrence (its
+ * loop round) completed after that record. A failure no join covered is live; one recorded
+ * after the join's last completion, as when a recomputed join runs the instance again, is too.
  */
-export function liveUnknownOutcomes(
+export function unknownOutcomes(
   run: Pick<WorkflowRun, 'id' | 'metadata'>,
   events: readonly TerminalRecordEvent[]
-): string[] {
+): { path: string; absorbedBy: string | undefined }[] {
   const scopes = events.flatMap(({ event_type, step_name }) =>
     event_type === 'fan_out_instances' && step_name
       ? [{ scope: step_name, ...composeFanOutScopeParts(step_name) }]
@@ -59,21 +59,30 @@ export function liveUnknownOutcomes(
       )
         joinedAt.set(scope, index);
   }
-  const absorbed = (path: string): boolean =>
-    scopes.some(
-      ({ scope }) =>
-        path.startsWith(`${scope}__`) &&
-        (joinedAt.get(scope) ?? -1) > (lastRecord.get(path) ?? Number.POSITIVE_INFINITY)
-    );
+  const absorbedBy = (path: string): string | undefined =>
+    scopes
+      .filter(
+        ({ scope }) =>
+          path.startsWith(`${scope}__`) &&
+          (joinedAt.get(scope) ?? -1) > (lastRecord.get(path) ?? Number.POSITIVE_INFINITY)
+      )
+      .map(({ scope }) => scope)
+      .sort((a, b) => b.length - a.length)[0];
   return buildRunNodeStates(run, events)
-    .filter(
-      node =>
-        node.state === 'failed' &&
-        node.failure_kind === 'outcome_unknown' &&
-        !absorbed(node.node_id)
-    )
-    .map(node => node.node_id);
+    .filter(node => node.state === 'failed' && node.failure_kind === 'outcome_unknown')
+    .map(node => ({ path: node.node_id, absorbedBy: absorbedBy(node.node_id) }));
 }
+
+/** The step paths of `unknownOutcomes` that no join absorbed. Empty when nothing holds the run. */
+export function liveUnknownOutcomes(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): string[] {
+  return livePaths(unknownOutcomes(run, events));
+}
+
+const livePaths = (outcomes: ReturnType<typeof unknownOutcomes>): string[] =>
+  outcomes.filter(outcome => outcome.absorbedBy === undefined).map(outcome => outcome.path);
 
 /** Failed with stop reason `outcome_unknown`: listed in attention until resumed or abandoned. */
 export function isOutcomeUnknownRun(
@@ -82,13 +91,21 @@ export function isOutcomeUnknownRun(
   return run.status === 'failed' && readRunStopReason(run.metadata)?.reason === 'outcome_unknown';
 }
 
+/** `unknownOutcomes` over the run's stored events. */
+export async function readUnknownOutcomes(
+  store: Pick<IWorkflowStore, 'listEventsForRuns'>,
+  run: Pick<WorkflowRun, 'id' | 'metadata'>
+): Promise<ReturnType<typeof unknownOutcomes>> {
+  const events = (await store.listEventsForRuns([run.id], UNKNOWN_OUTCOME_EVENT_TYPES)).get(run.id);
+  return unknownOutcomes(run, events ?? []);
+}
+
 /** `liveUnknownOutcomes` over the run's stored events. */
 export async function readLiveUnknownOutcomes(
   store: Pick<IWorkflowStore, 'listEventsForRuns'>,
   run: Pick<WorkflowRun, 'id' | 'metadata'>
 ): Promise<string[]> {
-  const events = (await store.listEventsForRuns([run.id], UNKNOWN_OUTCOME_EVENT_TYPES)).get(run.id);
-  return liveUnknownOutcomes(run, events ?? []);
+  return livePaths(await readUnknownOutcomes(store, run));
 }
 
 /**
