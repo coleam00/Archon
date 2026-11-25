@@ -6,7 +6,8 @@
  * nothing; the set stays open until an event meets it, a newer run of its workflow replaces
  * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
  * `readItemStopped`), or a failed top-level run, is listed while it is the newest run on the
- * item and the item's end does not hold (`item-end.ts`); it takes no answer.
+ * item, the item's end does not hold (`item-end.ts`) and no merge is recorded on it
+ * (`getItemMerge`); it takes no answer.
  */
 import { createLogger } from '@archon/paths';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
@@ -180,7 +181,7 @@ export async function overdueWaitItems(
 /** The store reads a stopped item's queue item needs. */
 export type StoppedItemStore = Pick<
   IWorkflowStore,
-  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase'
+  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase' | 'getItemMerge'
 > &
   ItemEndStore;
 
@@ -250,7 +251,9 @@ function failureReason(run: WorkflowRun, events: readonly WorkflowEventRow[]): s
 
 /**
  * The items runs stopped, for `AttentionQueueSource.itemsWithoutRun`, but for an item whose
- * end holds (`readHoldingItemEnd`): an operator said nothing more happens on it.
+ * end holds (`readHoldingItemEnd`), where an operator said nothing more happens on it, or
+ * whose merge is recorded (`getItemMerge`), where its change landed. Neither compares times:
+ * a run that failed after the merge leaves the item done.
  */
 export async function stoppedItems(
   store: StoppedItemStore
@@ -272,6 +275,9 @@ export async function stoppedItems(
     }
     const end = run.item_id === null ? null : await readHoldingItemEnd(store, run.item_id);
     if (end !== null && !('type' in end)) continue;
+    // An unreadable merge row, like an unreadable end, does not hide the stop.
+    const merge = run.item_id === null ? null : await store.getItemMerge(run.item_id);
+    if (merge !== null && !('type' in merge)) continue;
     const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
     if (item !== null) items.push(item);
   }

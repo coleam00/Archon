@@ -1269,8 +1269,8 @@ Batch reads report unreadable stored rows and affected paused parents through `d
 Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_limit`
 continues automatically after reset, and `unreadable` needs inspection. `stopped` is an
 item whose last run ended in an outcome nothing starts from and left no ask; it takes no
-answer, and a new run on the item, or [ending the item](#workflow-end), closes it
-([kinds](/getting-started/operate/)). Read-only.
+answer, and a new run on the item, [ending the item](#workflow-end) or
+[recording its merge](#workflow-merged) closes it ([kinds](/getting-started/operate/)). Read-only.
 
 ```bash
 archon workflow attention --json                                   # this project
@@ -1593,7 +1593,8 @@ node, it records the node's run and node as `fromRun`. It exits 1 for a key no r
 has named in the project (`error: "not_found"`: a merge never creates an item), a run on no
 item under `--item-of` (`error: "no_item"`), a malformed flag, or a directory with no
 registered project. Every later item read carries the fact as
-`merged`. It needs the database store.
+`merged`, and [`workflow attention`](#workflow-attention) no longer lists the item as
+stopped, whatever its runs did before or after the merge. It needs the database store.
 
 A run that merges through [`archon forge pr.merge`](/reference/forge/#workflow-host-integration-and-audit)
 records the merge on its item by itself (`via: forge`) when the forge plugin reports the
