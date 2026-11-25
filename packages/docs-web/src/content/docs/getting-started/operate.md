@@ -44,7 +44,7 @@ Each item names the run, its workflow, its project, how long it has waited, the 
 |---|---|---|
 | `attention` | A `wait: attention` node asked a question | Answer it in its form |
 | `awaiting_response` | An approval gate | `approve`, `reject` or `respond` |
-| `usage_limit` | A node hit a provider usage limit, or a rate limit that outlasted its retries | Nothing. It retries at `resetAt`. `resume` tries sooner |
+| `usage_limit` | A node hit a provider usage limit, or a rate limit that outlasted its retries; `provider` names whose | Nothing, or end the wait sooner: switch the credential, raise the limit or move the role to another provider, then `resume`. It retries at `resetAt` by itself |
 | `unreadable` | A paused run Archon cannot describe | Inspect it, then resume or abandon it |
 | `owner_lost` | A top-level run that needs an owner to move and whose owner this process can prove gone, on any [item](/reference/cli/#items) or none: a running or paused run whose owner process on this host is gone, or a pending start that was admitted but that no process runs. It still holds its item and its resource slot, so other starts can wait behind it | `archon workflow resume <run-id>` or `archon workflow abandon <run-id>`; for a pending start, `archon trigger execute <request-id> --host <host-id>` (its `start`) or `abandon`. Archon never ends it by itself |
 | `overdue_wait` | An item still [waiting for something outside Archon](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) past its deadline; no run holds it | Look at why the event has not come. It still wakes the item when it does. `archon workflow answer --withdraw <ref>` withdraws the waits |
@@ -53,7 +53,7 @@ Each item names the run, its workflow, its project, how long it has waited, the 
 | `preparation_lost` | A binding start still `preparing` whose preparing process ran on this host and no longer exists, so nothing prepares it again; the database store only | `archon trigger recover-preparation <receipt-id> <binding-id> --owner <owner-id> --yes`, then `archon trigger drain --host <host-id>`. Archon never resets it by itself |
 | `unreadable_start` | A queued start whose stored launch does not read. Admission keeps queue order, so every start queued behind it on its resource and host waits; it carries `start` (`requestId`, `resource`, `hostId`, `behind`) and its item when that reads | `archon trigger withdraw <request-id>`, after which the drain admits the starts behind it |
 
-A `usage_limit` wait retries from the node that hit the limit, at the provider's reset time or a 5 to 15 minute backoff, and pauses again if the limit is still there. With `workflows.autoResumeOnQuotaReset: false`, or for a container run, the run fails instead of waiting.
+A `usage_limit` wait retries from the node that hit the limit, at the provider's reset time or a 5 to 15 minute backoff, and pauses again if the limit is still there. With `workflows.autoResumeOnQuotaReset: false`, or for a container run, the run fails instead of waiting. The text list shows one entry per provider limit, naming each run it holds with its node, its retry time and its `resume` and `abandon` commands; `--json` keeps one item per run.
 
 An `overdue_wait` item carries `waitingIn` (the completed run that left the waits and its workflow), `waits` (each wait's `event` and `about`), `deadline` and, as `pausedAt`, when the waits opened. Its ref is `wait:<run-id>`.
 
@@ -274,7 +274,7 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
 }
 ```
 
-- **`kind`** is one of the kinds above. A `usage_limit` item carries `resetAt`, and its `run` has a `node` and no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
+- **`kind`** is one of the kinds above. A `usage_limit` item carries `resetAt` and `provider`, the provider whose limit was hit (absent on a wait an older Archon version wrote), and its `run` has a `node` and no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
 - **`ref`** is the item's identity: it names this item and no other, and changes when the run moves to another pause. Treat it as opaque.
 - **`run`** is the paused run that holds the item: its `id`, `workflow` and the fields below. Every item a workflow pauses for has one. The field is optional on an `attention` item, so read it as `item.run?.id`: an item that no paused run holds has no `run`, and its `ref` is all that names it.
 - **`item`** is `{ id, projectKey, key }` when the run was started for an item (`--item`), and absent otherwise.
@@ -343,10 +343,10 @@ Every JSON line carries `needs`, which says what the line asks of you:
 | `needs` | Meaning | Lines |
 |---|---|---|
 | `answer` | Someone has to answer | `attention` for an attention wait or a gate |
-| `look` | Someone has to look, and the action is run control | `attention` for an unreadable item; a `usage_limit` wait that replaces an item that needed someone; a failed `terminal`; `owner_lost`; `degraded`; `error` |
+| `look` | Someone has to look, and the action is run control | `attention` for an unreadable item or a `usage_limit` wait; a failed `terminal`; `owner_lost`; `degraded`; `error` |
 | `nothing` | Nobody has to act | every other line, including `resolved` and `unmatched`: a closed ask leaves nothing to do |
 
-`needs` says what someone must do; the level decides what is shown. The watch writes the `answer` and `look` lines, and the `resolved` or `unmatched` line of an item it wrote, so you stop working on an ask that closed. It writes nothing else. A run that completed with any other outcome or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. `--watch --notices` adds those `nothing` lines, for a reader that also wants to know what happened to the work: every run that ended or resumed, usage-limit waits opening and closing, and the [notices](#notices-what-the-work-did) runs emit. It still leaves out `ready` and `bookmark`, which only a program on `--protocol` reads. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
+`needs` says what someone must do; the level decides what is shown. The watch writes the `answer` and `look` lines, and the `resolved` or `unmatched` line of an item it wrote, so you stop working on an ask that closed. It writes nothing else. A run that completed with any other outcome or was cancelled, and a run that resumed, produce no line. A `usage_limit` wait is written when it opens and closes: it continues by itself, but it can last days and you can end it sooner. `--watch --notices` adds those `nothing` lines, for a reader that also wants to know what happened to the work: every run that ended or resumed, and the [notices](#notices-what-the-work-did) runs emit. It still leaves out `ready` and `bookmark`, which only a program on `--protocol` reads. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
 
 - **`--label` turns a queue or a class on or off.** Labels are the only routing: `--label stage=merge` writes only the items a wait labelled `stage=merge`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
 - **A silent stream proves nothing.** The watch has no heartbeat, so no line can mean that nothing needs you or that the stream stopped reading. A program that must tell the two apart uses `--protocol` and its `bookmark` lines.

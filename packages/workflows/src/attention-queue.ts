@@ -172,6 +172,8 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     ...itemBase,
     run: z.object({ ...heldRunFields, node: z.string() }),
     resetAt: z.string().datetime(),
+    /** The provider whose limit holds the run; absent on a wait written before it was recorded. */
+    provider: z.string().optional(),
   }),
   z.object({
     kind: z.literal('unreadable'),
@@ -466,6 +468,7 @@ export function toAttentionQueueItem(
         ...base,
         run: { ...held, node: attention.nodeId },
         resetAt: attention.resumeAt,
+        ...(attention.provider === undefined ? {} : { provider: attention.provider }),
       };
     case 'unreadable':
       return {

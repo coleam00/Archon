@@ -145,7 +145,7 @@ async function wake(
   return outcomes.filter(outcome => outcome.kind === 'accepted').map(outcome => outcome.runId);
 }
 
-test('a typed usage limit with a reset waits, then the continuation host continues the run after the reset', async () => {
+test('a typed usage limit with a reset waits on the provider it hit, then the continuation host continues the run after the reset', async () => {
   const resetAt = new Date(Date.now() + 3_600_000).toISOString();
   const { engine, store, calls } = harness([{ resetAt }, 'ok']);
 
@@ -156,6 +156,7 @@ test('a typed usage limit with a reset waits, then the continuation host continu
     kind: 'quota',
     nodeId: 'implement',
     resumeAt: resetAt,
+    provider: 'claude',
   });
 
   // Nothing is due before the reset: one continuation, at the reset time.

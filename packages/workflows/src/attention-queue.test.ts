@@ -104,7 +104,7 @@ describe('queue item identity', () => {
 });
 
 describe('a usage-limit wait', () => {
-  test('is an item naming its node, reset time and pause time, with nothing to answer', () => {
+  test('is an item naming its provider, node, reset time and pause time, with nothing to answer', () => {
     const run: WorkflowRun = {
       origin: null,
       id: 'limited',
@@ -124,6 +124,7 @@ describe('a usage-limit wait', () => {
           pauseId: 'limit-1',
           waitingSince: '2026-10-15T09:00:00.000Z',
           resumeAt: '2026-10-15T14:00:00.000Z',
+          provider: 'claude',
         },
       },
       active_phase_started_at: null,
@@ -144,6 +145,7 @@ describe('a usage-limit wait', () => {
       runId: 'limited',
       nodeId: 'implement',
       resumeAt: '2026-10-15T14:00:00.000Z',
+      provider: 'claude',
     });
     if (attention === undefined) return;
     expect(
@@ -153,6 +155,7 @@ describe('a usage-limit wait', () => {
       ref: 'limited',
       run: { id: 'limited', node: 'implement' },
       resetAt: '2026-10-15T14:00:00.000Z',
+      provider: 'claude',
       pausedAt: '2026-10-15T09:00:00.000Z',
     });
   });

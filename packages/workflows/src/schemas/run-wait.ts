@@ -43,13 +43,15 @@ const workflowWaitEventFields = {
  * A run whose failed nodes all hit a provider usage limit with a reported reset, or a rate
  * limit that outlasted its retries, waits until the latest of their deadlines
  * (`usageLimitWait` in the DAG executor). The resume claim clears it, and the nodes run
- * again; a repeat limit pauses on a new wait.
+ * again; a repeat limit pauses on a new wait. `provider` is the provider whose limit the
+ * waiting node hit; a wait written before it was recorded has none.
  */
 const workflowWaitQuotaFields = {
   pauseId: z.string().min(1),
   kind: z.literal('quota'),
   waitingSince: z.string().datetime(),
   resumeAt: z.string().datetime(),
+  provider: z.string().min(1).optional(),
 } as const;
 /**
  * The answer an attention wait received, as the next node reads it. Its shape is the

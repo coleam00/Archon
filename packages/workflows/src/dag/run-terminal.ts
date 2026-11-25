@@ -646,7 +646,12 @@ async function usageLimitWait(
   };
   const now = Date.now();
   let latest:
-    | { nodeId: string; resumeAt: number; cause: ProviderLimitFailure['class'] }
+    | {
+        nodeId: string;
+        resumeAt: number;
+        cause: ProviderLimitFailure['class'];
+        provider: string | undefined;
+      }
     | undefined;
   for (const { nodeId, output } of rootFailures(ctx.workflow.nodes, ctx.nodeOutputs)) {
     const failure = output.providerFailure;
@@ -654,7 +659,12 @@ async function usageLimitWait(
     const resumeAt = ctx.providerLimitDeadline(failure, now);
     if (resumeAt === undefined) return skip(nodeId, 'reset_unavailable');
     if (latest === undefined || resumeAt > latest.resumeAt)
-      latest = { nodeId, resumeAt, cause: failure.class };
+      latest = {
+        nodeId,
+        resumeAt,
+        cause: failure.class,
+        provider: output.execution?.binding.provider,
+      };
   }
   if (latest === undefined) return undefined;
   if (config.workflows?.autoResumeOnQuotaReset === false) return skip(latest.nodeId, 'disabled');
@@ -668,6 +678,7 @@ async function usageLimitWait(
       pauseId: randomUUID(),
       waitingSince: new Date(now).toISOString(),
       resumeAt: new Date(latest.resumeAt).toISOString(),
+      ...(latest.provider === undefined ? {} : { provider: latest.provider }),
     },
     cause: latest.cause,
   };
@@ -693,7 +704,13 @@ async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
     return true;
   }
   getLog().info(
-    { workflowRunId: workflowRun.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt, cause },
+    {
+      workflowRunId: workflowRun.id,
+      nodeId: wait.nodeId,
+      resumeAt: wait.resumeAt,
+      cause,
+      provider: wait.provider,
+    },
     'dag.usage_limit_wait_started'
   );
   await safeSendMessage(
