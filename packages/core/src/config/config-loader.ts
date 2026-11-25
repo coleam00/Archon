@@ -15,6 +15,7 @@ import type { OpencodeProviderDefaults } from '@archon/providers/types';
 import { readFile as fsReadFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { isDeepStrictEqual } from 'util';
+import { YAMLParseError } from 'yaml';
 import { createLogger, getArchonConfigPath } from '@archon/paths';
 import { buildAiProfile, TIER_NAMES } from '@archon/workflows/model-validation';
 import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation';
@@ -533,6 +534,16 @@ function patchInPlace(
   try {
     patched = patchYamlText(text, current, merged);
   } catch (error) {
+    if (error instanceof YAMLParseError) {
+      throw new ConfigParseError(
+        'Global config',
+        configPath,
+        `is not valid YAML (${error.message}).`,
+        {
+          cause: error,
+        }
+      );
+    }
     throw refuse(error);
   }
   // Compare with what a plain dump of `merged` loads as, so both sides go through Bun's

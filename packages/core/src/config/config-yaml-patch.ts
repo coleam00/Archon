@@ -15,7 +15,8 @@ type YamlMap = Record<string, unknown>;
  */
 export function patchYamlText(text: string, current: object, next: object): string {
   // uniqueKeys: false accepts a map with more than one `<<` merge key, which Bun reads.
-  const document = parseDocument(text, { uniqueKeys: false });
+  // Typed as a plain Document: the parsed type does not let a new map replace the root.
+  const document: Document = parseDocument(text, { uniqueKeys: false });
   if (document.errors.length > 0) throw document.errors[0];
   // The loader reads a `~` or `null` file as no settings; give it a map to write into,
   // keeping the comments that sat on the null.
