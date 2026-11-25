@@ -451,7 +451,7 @@ describe('validateWorkflowsCommand', () => {
     try {
       expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(1);
       const results = (output: unknown) =>
-        (JSON.parse(String(output)).results as { workflowName: string }[]).filter(
+        (JSON.parse(String(output)).results as validator.WorkflowValidationResult[]).filter(
           r => r.workflowName === 'archon-plugin.json'
         );
       expect(results(write.mock.calls[0]?.[0])).toEqual([
@@ -475,6 +475,23 @@ describe('validateWorkflowsCommand', () => {
       write.mockClear();
       expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(0);
       expect(results(write.mock.calls[0]?.[0])).toEqual([]);
+
+      // A qualified name for the pack's own listed stage is refused: the bare name is portable.
+      await writeFile(
+        join(source, '.pack', 'pack.yaml'),
+        'bindings:\n  plan:\n    workflow: acme/factory:plan\n    resource: plan\n    overlap: queue\n'
+      );
+      write.mockClear();
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(1);
+      expect(results(write.mock.calls[0]?.[0])[0]).toMatchObject({
+        issues: [
+          {
+            message:
+              "binding 'plan' in .pack/pack.yaml names workflow 'acme/factory:plan', which archon-plugin.json does not list as an entrypoint",
+            hint: 'Name a stage of this pack by its bare name, as the pack writes it; archon pack bindings adds the installed prefix. Bind one it lists: plan, triage.',
+          },
+        ],
+      });
     } finally {
       write.mockRestore();
       await removeTempTree(source);

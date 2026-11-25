@@ -304,6 +304,9 @@ async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]>
 /**
  * Each workflow a pack's bindings name that its manifest does not list as an entrypoint,
  * decided by `packWorkflowName`, the resolver `pack bindings` uses on an installed copy.
+ * A binding names its own pack's stage by the bare key; `pack bindings` adds the installed
+ * `owner/plugin:` prefix. A qualified name is refused, because the owner is set at install
+ * and a pack folder cannot say whether a prefix is its own.
  */
 async function bindingEntrypointIssues(
   cwd: string,
@@ -326,7 +329,9 @@ async function bindingEntrypointIssues(
           level: 'error',
           field: 'manifest_entrypoints',
           message: `binding '${id}' in ${PACK_DECLARATION_PATH} names workflow '${name}', which ${PLUGIN_MANIFEST_FILE} does not list as an entrypoint`,
-          hint: `An installed copy refuses this binding at archon pack bindings. List '${name}' under entrypoints, or bind one it lists: ${listed.join(', ')}.`,
+          hint: name.includes(':')
+            ? `Name a stage of this pack by its bare name, as the pack writes it; archon pack bindings adds the installed prefix. Bind one it lists: ${listed.join(', ')}.`
+            : `An installed copy refuses this binding at archon pack bindings. List '${name}' under entrypoints, or bind one it lists: ${listed.join(', ')}.`,
         })
       )
   );
