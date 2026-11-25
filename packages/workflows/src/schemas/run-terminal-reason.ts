@@ -25,6 +25,9 @@ export const runExitReasonSchema = z.enum([
   'launch_failed',
   // No run row could be written, so the run never existed.
   'run_not_created',
+  // A failed node, or a failed child run, recorded an `outcome_unknown` failure: the run
+  // must not continue automatically. An operator resumes or abandons it.
+  'outcome_unknown',
 ]);
 export type RunExitReason = z.infer<typeof runExitReasonSchema>;
 

@@ -425,10 +425,22 @@ function terminalText(line: Extract<AttentionStreamLine, { type: 'terminal' }>):
       ? ''
       : `: node ${line.cause.node} (${line.cause.errorClass ?? 'error class not recorded'})`;
   const more =
-    line.status === 'failed' || line.outcome === 'failed'
-      ? ` Show more with ${command(`get ${line.runId}`)}.`
-      : '';
+    line.cause?.errorClass === 'outcome_unknown'
+      ? outcomeUnknownText(line, line.cause.node)
+      : line.status === 'failed' || line.outcome === 'failed'
+        ? ` Show more with ${command(`get ${line.runId}`)}.`
+        : '';
   return `Run ${line.runId} ${line.status}${outcome}${cause}.${runContextText(line)}${more}`;
+}
+
+/** The next step for a run that holds a node whose outcome is unknown. */
+function outcomeUnknownText(
+  line: Extract<AttentionStreamLine, { type: 'terminal' }>,
+  node: string
+): string {
+  return line.status === 'failed'
+    ? ` Its outcome is unknown, so nothing continues it by itself: check what it did, then resume it with ${command(`resume ${line.runId}`)}, or abandon it with ${command(`abandon ${line.runId}`)}.`
+    : ` The outcome of node ${node} is unknown: check what it did with ${command(`get ${line.runId}`)}.`;
 }
 
 /** Who answered, as a trailing clause: a declared name is marked as the claim it is. */

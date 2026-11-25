@@ -534,6 +534,16 @@ export function firstFailedNodeState(
   return record.nodes.find(node => node.node_id === record.first_failed_node);
 }
 
+/**
+ * The nodes whose latest state is a failure recording `outcome_unknown`. A node that ran
+ * again and completed after a resume by hand drops out. Inner steps of loop groups and
+ * composed fan-out instances are recorded under their own step paths, so they are seen
+ * here although their aggregate records `child_failed`.
+ */
+export function outcomeUnknownNodes(nodes: readonly RunNodeState[]): RunNodeState[] {
+  return nodes.filter(node => node.state === 'failed' && node.failure_kind === 'outcome_unknown');
+}
+
 /** The failure kind a `node_failed` event recorded; undefined when it recorded none. */
 export function recordedFailureKind(event: TerminalRecordEvent): NodeFailureKind | undefined {
   const kind = nodeFailureKindSchema.safeParse(readNodeRecordData(event.data).failure_kind);
@@ -585,14 +595,16 @@ export function failedOutcomeReason(record: TerminalRecord | null): string[] {
 
 /**
  * Why a run that ended needs a look, for a reader of that one run: the failed-outcome
- * reason, or for a failed run the first line of its first failed node's error, or else of
- * the run's own, led by that node's recorded failure kind. Error text is whatever a
+ * reason, or for a failed run the first line of its first failed node's error (a node
+ * whose outcome is unknown before any other), or else of the run's own, led by that
+ * node's recorded failure kind. Error text is whatever a
  * command or provider printed, so it stays out of the attention stream, which uses
  * structured failure facts instead.
  */
 export function terminalReason(record: TerminalRecord | null): string[] {
   if (record?.status !== 'failed') return failedOutcomeReason(record);
-  const failed = firstFailedNodeState(record);
+  // A node whose outcome is unknown is why nothing continues the run, so it leads.
+  const failed = outcomeUnknownNodes(record.nodes)[0] ?? firstFailedNodeState(record);
   const reason = boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
   const kind = failed?.failure_kind;
   return kind === undefined

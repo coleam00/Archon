@@ -82,7 +82,7 @@ describe('executeDagWorkflow -- workflow: node', () => {
       };
       const snapshot = await foldDagResumeSnapshot([historical], 'parent');
       store.getDagResumeSnapshot.mockResolvedValue(snapshot);
-      store.findChildRuns.mockResolvedValue([
+      const children = [
         makeWorkflowRun('b', {
           status: 'failed',
           metadata: {
@@ -92,7 +92,15 @@ describe('executeDagWorkflow -- workflow: node', () => {
             total_tokens_out: 6,
           },
         }),
-      ]);
+      ];
+      // Whether `sub` had already failed at each read of the children.
+      const childReadsAfterFailure: boolean[] = [];
+      store.findChildRuns.mockImplementation(async () => {
+        childReadsAfterFailure.push(
+          eventsOf(store).some(e => e.event_type === 'node_failed' && e.step_name === 'sub')
+        );
+        return children;
+      });
       const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
         status: 'completed',
         childRunId: 'b',
@@ -120,7 +128,8 @@ describe('executeDagWorkflow -- workflow: node', () => {
       });
       await executeDagWorkflow(options);
       expect(runChildWorkflow).not.toHaveBeenCalled();
-      expect(store.findChildRuns).not.toHaveBeenCalled();
+      // The node never reads its children; the run end reads them once, after it failed.
+      expect(childReadsAfterFailure).toEqual([true]);
       expect(eventsOf(store)).toContainEqual({
         event_type: 'node_failed',
         step_name: 'sub',

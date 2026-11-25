@@ -144,6 +144,11 @@ export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
  * by the engine's own validation; the rest name engine-detected causes. Every kind maps to a retry class in
  * `executor-shared.ts`. Absent on records written before this field existed; retry
  * treats an absent kind as `unknown`.
+ *
+ * `outcome_unknown` says the node may have had a side effect whose outcome the engine
+ * cannot know, so nothing may run it again by itself: it is never retried, and the run
+ * it is in fails and is not continued automatically (`outcome-unknown.ts`). That is
+ * distinct from `retryable: false`, which only stops the immediate retry.
  */
 export const nodeFailureKindSchema = z.enum([
   'fatal',
@@ -159,6 +164,7 @@ export const nodeFailureKindSchema = z.enum([
   'child_failed',
   'cancelled',
   'config',
+  'outcome_unknown',
 ]);
 export type NodeFailureKind = z.infer<typeof nodeFailureKindSchema>;
 

@@ -3,13 +3,7 @@
  * usage-limit dispositions, the write-back gate, and the completion write.
  */
 import type { RunEndedFacts, RunEndedStarts, WorkflowDeps } from '../deps';
-import type {
-  NodeOutput,
-  ResolvedWorkflow,
-  RunCompletedOutcome,
-  WorkflowRun,
-  WorkflowUsageLimitWaitContext,
-} from '../schemas';
+import type { NodeOutput, ResolvedWorkflow, RunCompletedOutcome, WorkflowRun } from '../schemas';
 import { SUBRUN_METADATA_KEYS, subrunSummaryMetadata } from '../schemas';
 import { keptAsksResult, stoppedItem } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
@@ -34,14 +28,14 @@ import {
 import { keepHandedOff } from './handed-off-worktree';
 import { resolveRunInputs } from './references';
 import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../logger';
-import { isProviderLimit, rootFailures, type ProviderLimitFailure } from '../executor-shared';
 import { safeSendMessage } from '../platform-messages';
 import type { ContainerRunContext } from '../container-context';
-import { randomUUID } from 'node:crypto';
 import { getLog } from './log';
+import { pauseForUsageLimit } from './usage-limit-wait';
+import { outcomeUnknownText, readOutcomeUnknownHold } from '../outcome-unknown';
 import type { RunLayersContext } from './run-context';
 import { runContainerWriteBackGate } from './container-gate';
-import { type ContainerPauseReceipt, statusAfterPauseFailure } from './pause';
+import { type ContainerPauseReceipt } from './pause';
 
 /** What the terminal tally reads: the run's estate, and the outputs and usage its pass left. */
 export type RunTerminalContext = Pick<
@@ -302,15 +296,20 @@ function runEndedFacts(
 
 /**
  * Fail a run whose nodes all completed but that cannot complete: its returns node broke
- * its declared outcome, or the starts its end causes could not be read.
+ * its declared outcome, or the starts its end causes could not be read. A node an
+ * `all_done` aggregate let complete can still hold an unknown outcome, which the run
+ * records as its stop reason.
  */
 async function failAtCompletion(
   ctx: RunTerminalContext,
-  failMsg: string,
+  completionMsg: string,
   runTranscriptUsage: WorkflowUsage,
   site: string
 ): Promise<void> {
   const { deps, platform, conversationId, workflow, workflowRun, logDir } = ctx;
+  const hold = await readOutcomeUnknownHold(deps.store, workflowRun);
+  const failMsg =
+    hold === undefined ? completionMsg : `${completionMsg} ${outcomeUnknownText(hold)}`;
   await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
     (logErr: Error) => {
       getLog().error(
@@ -322,7 +321,14 @@ async function failAtCompletion(
   await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
     workflowId: workflowRun.id,
   });
-  await failRun(deps, workflowRun, workflow.name, failMsg, 'node_error', site);
+  await failRun(
+    deps,
+    workflowRun,
+    workflow.name,
+    failMsg,
+    hold === undefined ? 'node_error' : 'outcome_unknown',
+    site
+  );
 }
 
 function countNodeStates(nodeOutputs: ReadonlyMap<string, NodeOutput>, total: number): NodeCounts {
@@ -335,7 +341,10 @@ function countNodeStates(nodeOutputs: ReadonlyMap<string, NodeOutput>, total: nu
   return nodeCounts;
 }
 
-/** Fail a pass that completed no node or had a node fail, unless it waits on a provider limit. */
+/**
+ * Fail a pass that completed no node or had a node fail, unless it waits on a provider
+ * limit. A run holding an unknown outcome never waits and fails with that stop reason.
+ */
 async function failOnNodeOutcome(
   ctx: RunTerminalContext,
   nodeCounts: NodeCounts,
@@ -345,11 +354,13 @@ async function failOnNodeOutcome(
   const noneCompleted = nodeCounts.completed === 0;
   const anyFailed = nodeCounts.failed > 0;
   if (await skipIfStatusChanged(deps, workflowRun, 'dag.skip_fail_status_changed')) return;
-  if ((!noneCompleted || anyFailed) && (await pauseForUsageLimit(ctx))) return;
+  const hold = await readOutcomeUnknownHold(deps.store, workflowRun);
+  if ((!noneCompleted || anyFailed) && (await pauseForUsageLimit(ctx, hold))) return;
 
-  const failMsg = noneCompleted
+  const nodesMsg = noneCompleted
     ? noSuccessfulNodesMessage(workflow.name, nodeOutputs, nodeCounts.skipped)
     : partialFailureMessage(workflow.name, nodeOutputs);
+  const failMsg = hold === undefined ? nodesMsg : `${nodesMsg} ${outcomeUnknownText(hold)}`;
   await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
     (logErr: Error) => {
       getLog().error(
@@ -372,8 +383,12 @@ async function failOnNodeOutcome(
     workflowRun,
     workflow.name,
     failMsg,
-    // A first-node failure completes nothing, but it is still a node failure.
-    noneCompleted && !anyFailed ? 'no_nodes_completed' : 'node_error',
+    hold !== undefined
+      ? 'outcome_unknown'
+      : // A first-node failure completes nothing, but it is still a node failure.
+        noneCompleted && !anyFailed
+        ? 'no_nodes_completed'
+        : 'node_error',
     noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail',
     changeSize
   );
@@ -612,102 +627,6 @@ async function sendRetentionWarning(
     `⚠️ Kept worktree ${path}: ${why}. It stays listed by \`archon isolation list\`.`,
     { workflowId: ctx.workflowRun.id }
   );
-}
-
-/**
- * The wait a failed pass takes instead of failing, when every failed node with no failure
- * upstream of it ({@link rootFailures}) either hit a provider usage limit whose reset the provider
- * reported, or hit a rate limit that outlasted its retries (deadline: its reported reset
- * when still ahead, else a jittered backoff). The run cannot progress before the last of
- * those deadlines, so it waits for it if it is still ahead. An expired usage reset does not prevent waiting
- * for another node's later deadline: continuation retries both failed nodes. Any other
- * failure, a usage limit without a reported reset, no deadline still ahead,
- * `autoResumeOnQuotaReset: false`, or a container run (the continuation host does not
- * continue one) leaves the run to fail. Only the typed class says a limit is hit; the
- * error text never does.
- */
-async function usageLimitWait(
-  ctx: RunTerminalContext
-): Promise<
-  { wait: WorkflowUsageLimitWaitContext; cause: ProviderLimitFailure['class'] } | undefined
-> {
-  const { deps, workflowRun, config, execContext } = ctx;
-  const skip = async (
-    nodeId: string,
-    reason: 'reset_unavailable' | 'disabled' | 'reset_passed' | 'container_unsupported'
-  ): Promise<undefined> => {
-    await deps.store.createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'quota_resume_skipped',
-      step_name: nodeId,
-      data: { reason },
-    });
-    return undefined;
-  };
-  const now = Date.now();
-  let latest:
-    | { nodeId: string; resumeAt: number; cause: ProviderLimitFailure['class'] }
-    | undefined;
-  for (const { nodeId, output } of rootFailures(ctx.workflow.nodes, ctx.nodeOutputs)) {
-    const failure = output.providerFailure;
-    if (!isProviderLimit(failure)) return undefined;
-    const resumeAt = ctx.providerLimitDeadline(failure, now);
-    if (resumeAt === undefined) return skip(nodeId, 'reset_unavailable');
-    if (latest === undefined || resumeAt > latest.resumeAt)
-      latest = { nodeId, resumeAt, cause: failure.class };
-  }
-  if (latest === undefined) return undefined;
-  if (config.workflows?.autoResumeOnQuotaReset === false) return skip(latest.nodeId, 'disabled');
-  if (latest.resumeAt <= now) return skip(latest.nodeId, 'reset_passed');
-  if (execContext.kind === 'container') return skip(latest.nodeId, 'container_unsupported');
-  return {
-    wait: {
-      owner: 'node',
-      nodeId: latest.nodeId,
-      kind: 'quota',
-      pauseId: randomUUID(),
-      waitingSince: new Date(now).toISOString(),
-      resumeAt: new Date(latest.resumeAt).toISOString(),
-    },
-    cause: latest.cause,
-  };
-}
-
-/** Pause the run on a provider-limit wait. False when the pass must fail instead. */
-async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
-  const { deps, workflowRun, workflow, platform, conversationId } = ctx;
-  const limit = await usageLimitWait(ctx);
-  if (limit === undefined) return false;
-  const { wait, cause } = limit;
-  try {
-    await deps.store.pauseWorkflowRunForWait(workflowRun.id, wait, {
-      kind: 'started',
-      stepName: wait.nodeId,
-    });
-  } catch (pauseError) {
-    // A run cancelled or paused meanwhile keeps that status, exactly as the failure
-    // branches below leave it.
-    const status = await statusAfterPauseFailure(deps.store, workflowRun.id, pauseError);
-    if (status === 'running') throw pauseError;
-    getLog().warn({ workflowRunId: workflowRun.id }, 'dag.usage_limit_wait_status_changed');
-    return true;
-  }
-  getLog().info(
-    { workflowRunId: workflowRun.id, nodeId: wait.nodeId, resumeAt: wait.resumeAt, cause },
-    'dag.usage_limit_wait_started'
-  );
-  await safeSendMessage(
-    platform,
-    conversationId,
-    cause === 'rate_limited'
-      ? `⏸️ Workflow '${workflow.name}' hit a provider rate limit at node '${wait.nodeId}' ` +
-          `and ran out of retries. It tries again at ${wait.resumeAt}; resume it to try ` +
-          'sooner, or abandon it to stop it.'
-      : `⏸️ Workflow '${workflow.name}' hit a provider usage limit at node '${wait.nodeId}'. ` +
-          `It waits until the limit resets at ${wait.resumeAt}, then continues.`,
-    { workflowId: workflowRun.id }
-  );
-  return true;
 }
 
 /**

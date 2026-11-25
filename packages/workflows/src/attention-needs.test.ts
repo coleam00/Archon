@@ -93,6 +93,14 @@ test('every line type has a needs, and each level shows its lines and the close 
     [{ ...terminal, status: 'cancelled' }, 'nothing'],
     [{ ...terminal, status: 'failed' }, 'look'],
     [{ ...terminal, status: 'completed', outcome: 'failed' }, 'look'],
+    [
+      {
+        ...terminal,
+        status: 'completed',
+        cause: { node: 'fan__b__write', errorClass: 'outcome_unknown' },
+      },
+      'look',
+    ],
     [{ type: 'owner_lost', ...run, observedStatus: 'running' }, 'look'],
     [{ type: 'degraded', reason: 'run_unreadable', cursor }, 'look'],
     [{ type: 'error', error: 'cursor_invalid' }, 'look'],

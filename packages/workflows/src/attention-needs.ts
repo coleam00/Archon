@@ -79,9 +79,15 @@ export function attentionWatchReader(
           closesShown: shown.delete(line.ref) || options.resumed === true,
         };
       case 'terminal':
-        // A run that ran to the end and judged its work unsuccessful needs a look too.
+        // A run that ran to the end and judged its work unsuccessful needs a look too, and
+        // so does one that went on past a node whose outcome is unknown.
         return {
-          needs: line.status === 'failed' || line.outcome === 'failed' ? 'look' : 'nothing',
+          needs:
+            line.status === 'failed' ||
+            line.outcome === 'failed' ||
+            line.cause?.errorClass === 'outcome_unknown'
+              ? 'look'
+              : 'nothing',
         };
       case 'owner_lost':
       case 'degraded':

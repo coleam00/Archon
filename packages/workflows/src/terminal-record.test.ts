@@ -838,6 +838,20 @@ describe('why a run that ended needs a look', () => {
       nodes: [{ ...failed!.nodes[0]!, failure_kind: 'schema_unmet' as const }],
     };
     expect(terminalReason(kinded)).toEqual(['(schema_unmet) exit 2: tsc failed']);
+    // A node whose outcome is unknown leads over the first failed node.
+    const unknown = {
+      ...failed!,
+      nodes: [
+        ...failed!.nodes,
+        {
+          node_id: 'write',
+          state: 'failed' as const,
+          error: 'push timed out',
+          failure_kind: 'outcome_unknown' as const,
+        },
+      ],
+    };
+    expect(terminalReason(unknown)).toEqual(['(outcome_unknown) push timed out']);
   });
 
   it('a run that needs no look, and a run with no record, give none', () => {

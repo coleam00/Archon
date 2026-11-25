@@ -1020,6 +1020,7 @@ Archon puts a failure it detects itself in a bucket by its kind:
 | A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
 | A cancelled node | FATAL | Never |
 | A provider error without a typed class | UNKNOWN | No (unless `on_error: all`) |
+| A failure recorded as `outcome_unknown`: the node may have had a side effect whose outcome Archon cannot know | FATAL | Never, and the run is not continued automatically. See [A failure whose outcome is unknown](#a-failure-whose-outcome-is-unknown) |
 
 A failure recorded before Archon stored failure kinds counts as UNKNOWN.
 
@@ -1131,6 +1132,28 @@ Plain `archon workflow run` never resumes implicitly.
 **Session context on resume**: Handles required by an explicit `context: { resume: node-id }` selector are restored for completed nodes. The ambient sequential cursor is not reconstructed; a downstream node that relies on implicit inherited context should use an explicit selector or re-read durable artifacts.
 
 **Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip).
+
+### A failure whose outcome is unknown
+
+A node failure can record the kind `outcome_unknown`: the node may have had a side effect (a write, a call that timed out after sending) and Archon cannot know whether it happened. Nothing may run such a node again by itself. No built-in node records this kind yet; a node that writes through a tool is the intended first use.
+
+- The node is never retried, whatever its `retry.on_error` says.
+- The run ends `failed` with stop reason `outcome_unknown`. This holds when the node sits inside a loop group or a composed fan-out instance, whose node records `child_failed`, and when it sits in a `workflow:` child run: the child records the stop reason, and so does its parent when it fails.
+- The run does not wait out a provider usage limit, even when the limit hit another node first. A `quota_resume_skipped` event with reason `outcome_unknown` records the refusal.
+- A run whose source this host cannot read is failed instead of released to another host, since the host that continues a released run runs its failed nodes again.
+- In `archon workflow attention --watch`, the run's terminal line names the node with `(outcome_unknown)` and gives the resume and abandon commands.
+
+The operator decides what happens next: check what the node did, then continue with `archon workflow resume <run-id>`, which runs the node again, or discard the run with `archon workflow abandon <run-id>`.
+
+What each join does with a node or instance that fails this way:
+
+| Join | What happens |
+|------|--------------|
+| `trigger_rule`, or `join: all_success` on a fan-out | Same as any failure: the downstream node is skipped, or the fan-out node fails |
+| `join: all_done` on a `workflow:` or composed fan-out | Same as any failed instance: the other instances finish and the node completes with the `archon_failed` marker in that slot. The attention line names the instance that failed this way, including when the run then completes. If the run fails for any reason, its stop reason is `outcome_unknown` |
+| A `loop_group:` body node | Same as any body failure: the group fails at that iteration, and the iteration is not retried |
+
+This is separate from `retryable: false`, which a `bash:`/`script:` contract failure records and which only stops the immediate retry of that node. A failure with `retryable: false` keeps the usage-limit wait, source release, joins and stop reason of any other failure.
 
 ### Opting Out of Resume Caching
 
@@ -3595,6 +3618,8 @@ Consequences worth planning for:
 | `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
 | `first_success` | never (load error) | Racing: **rejected**, not deferred. See below. Rejected at load rather than silently treated as another join |
 
+A child that failed with an [unknown outcome](#a-failure-whose-outcome-is-unknown) is a failed child to both joins.
+
 Failure markers have `archon_failed: true`, a string `error`, and `status: "failed" | "cancelled"`.
 Collectors check `archon_failed === true`; `error` and `status` alone may also appear in a
 successful payload. The discriminator is reserved, so child payloads must avoid it.
@@ -3889,7 +3914,8 @@ What you get, compared with the `workflow:` fan-out above:
   **in item order**, not completion order; under `join: all_done` a failed instance
   contributes the `{ archon_failed: true, error, status }` marker. An empty item list
   completes immediately with `[]`. Under `join: all_success` any failed instance fails the
-  node.
+  node. An instance whose inner node failed with an
+  [unknown outcome](#a-failure-whose-outcome-is-unknown) is a failed instance to both joins.
 - **Content-addressed resume.** Each instance is keyed by a hash of its item value (plus an
   ordinal for byte-identical duplicates). The first ordered snapshot is persisted before
   anything schedules and remains authoritative: a resume ignores and logs a producer list

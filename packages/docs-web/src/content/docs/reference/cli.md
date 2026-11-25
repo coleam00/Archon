@@ -1368,7 +1368,10 @@ then `ready`, then follows changes any process commits, as
 Every run line carries the run's `workflow` and `parentRunId`, so a consumer can keep
 top-level runs or one parent's children. A failed `terminal` line carries `cause` with the
 failed node and its recorded error class when available; `cause` is null for failures
-outside a node, including launch failures, and for runs without terminal records. A recorded
+outside a node, including launch failures, and for runs without terminal records. A node
+whose failure recorded an [unknown outcome](/reference/workflow-language/#a-failure-whose-outcome-is-unknown)
+is named first, with error class `outcome_unknown`, on a failed line and on a completed one
+(an `all_done` join can let the run complete past it); such a line needs a look. A recorded
 `launch_failed` event carries `reason: ["launch failed before the first node"]` and the
 run ID, without error text. Read the full error with `archon workflow get <run-id>` or
 `archon trigger inspect <receipt-or-request-id>`

@@ -110,6 +110,26 @@ test('an unreadable item, a failed run and a lost owner say which run and what s
   });
   expect(red).toContain('summary: main is red: lint fails on dev.');
   expect(red).toContain(more);
+  // A run holding a node whose outcome is unknown says nothing continues it by itself.
+  const unknown = text({
+    type: 'terminal',
+    ...run,
+    status: 'failed',
+    outcome: null,
+    cause: { node: 'write', errorClass: 'outcome_unknown' },
+  });
+  expect(unknown).toContain('node write (outcome_unknown)');
+  expect(unknown).toContain('archon workflow resume run-1');
+  expect(unknown).toContain('archon workflow abandon run-1');
+  const completedPastUnknown = text({
+    type: 'terminal',
+    ...run,
+    status: 'completed',
+    outcome: null,
+    cause: { node: 'fan__b__write', errorClass: 'outcome_unknown' },
+  });
+  expect(completedPastUnknown).toContain('fan__b__write');
+  expect(completedPastUnknown).toContain(more);
   const lost = text({ type: 'owner_lost', ...run, observedStatus: 'running', item: 'issue-7' });
   expect(lost).toContain(more);
   expect(lost).toContain('item issue-7');

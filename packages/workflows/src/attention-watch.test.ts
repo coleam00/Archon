@@ -934,6 +934,42 @@ describe('watchAttentionQueue', () => {
     expect(terminals[1]).toMatchObject({ cause: { node: 'build', errorClass: 'timeout' } });
   });
 
+  test('a terminal line names a node whose outcome is unknown first, on a failed or completed run', async () => {
+    const store = await makeStore();
+    const stream = await watch(store);
+    const nodeFailed = (runId: string, step: string, failureKind: string): Promise<void> =>
+      store.persistWorkflowEvent({
+        workflow_run_id: runId,
+        event_type: 'node_failed',
+        step_name: step,
+        data: { error: 'boom', failure_kind: failureKind },
+      });
+    const failed = await running(store);
+    await nodeFailed(failed, 'lint', 'exec_failed');
+    await nodeFailed(failed, 'fan__b__write', 'outcome_unknown');
+    await store.failWorkflowRun(failed, 'node failed', { exitReason: 'outcome_unknown' });
+    // An `all_done` join completed the aggregate past the instance, so the run completed.
+    const completed = await running(store);
+    await nodeFailed(completed, 'fan__b__write', 'outcome_unknown');
+    await store.persistWorkflowEvent({
+      workflow_run_id: completed,
+      event_type: 'node_completed',
+      step_name: 'fan',
+      data: { node_output: '[]' },
+    });
+    await store.completeWorkflowRun(completed, { duration_ms: 1 });
+
+    expect(await stream.next(ofRun(failed, 'terminal'))).toMatchObject({
+      status: 'failed',
+      cause: { node: 'fan__b__write', errorClass: 'outcome_unknown' },
+    });
+    expect(await stream.next(ofRun(completed, 'terminal'))).toMatchObject({
+      status: 'completed',
+      cause: { node: 'fan__b__write', errorClass: 'outcome_unknown' },
+    });
+    await stream.close();
+  });
+
   test('a terminal line has no cause, or no class, when the engine recorded none', async () => {
     const store = await makeStore();
     const stream = await watch(store);

@@ -45,6 +45,7 @@ import { OperatorPauseBoundary } from './dag/operator-pause-boundary';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
+import { outcomeUnknownText, readOutcomeUnknownHold } from './outcome-unknown';
 import { readCheckoutMark } from './checkout-mark';
 import type { ReturnsCheckout } from './run-result';
 import {
@@ -272,10 +273,31 @@ export async function executeDagWorkflow(
    * The release compares status and execution claim, so an operator's abandon or a
    * sibling gate that already moved the row wins. It runs after the layer settled, so
    * nothing of this run still executes here when another host may claim it.
+   *
+   * The host that claims a released run runs every failed node again, so a run holding
+   * an unknown outcome is failed here instead, and is not released.
    */
   const releaseRunForUnreadableSource = async (
     error: RunSourceUnreadableError
   ): Promise<boolean> => {
+    const hold = await readOutcomeUnknownHold(deps.store, workflowRun);
+    if (hold !== undefined) {
+      if (await skipIfStatusChanged(deps, workflowRun, 'dag.source_release_status_changed'))
+        return false;
+      const failMsg = `Workflow '${workflow.name}' could not read the source of node '${error.nodeId}' and was not released to another host. ${outcomeUnknownText(hold)}`;
+      await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
+        workflowId: workflowRun.id,
+      });
+      await failRun(
+        deps,
+        workflowRun,
+        workflow.name,
+        failMsg,
+        'outcome_unknown',
+        'dag.source_release_refused_outcome_unknown'
+      );
+      return false;
+    }
     getLog().warn(
       { workflowRunId: workflowRun.id, nodeId: error.nodeId, path: error.path, err: error.cause },
       'dag.run_released_source_unreadable'
