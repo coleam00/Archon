@@ -1,3 +1,4 @@
+import { mergeRunMetadata } from './merge-run-metadata';
 import { resumeTransition } from '../resume-transition';
 import type { WorkflowRun } from '../schemas/workflow-run';
 import type { WorkflowEventInput } from '../store';
@@ -7,10 +8,7 @@ export function resumeRun(
   record: (input: WorkflowEventInput) => void
 ): WorkflowRun {
   const { metadataPatch, events } = resumeTransition(run);
-  for (const [key, value] of Object.entries(metadataPatch)) {
-    if (value === null) delete run.metadata[key];
-    else run.metadata[key] = value;
-  }
+  run.metadata = mergeRunMetadata(run.metadata, metadataPatch);
   for (const event of events) record(event);
   run.status = 'running';
   run.completed_at = null;

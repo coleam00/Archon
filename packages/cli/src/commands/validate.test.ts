@@ -374,6 +374,48 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test('refuses a declared pack skill folder without SKILL.md', async () => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
+    await writeFile(
+      join(validationCwd, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'review-kit',
+        description: 'Review workflows',
+        entrypoints: { review: 'review/review.yaml' },
+        skill: { name: 'review-kit', path: 'skill' },
+      })
+    );
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      await mkdir(join(validationCwd, 'skill'));
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(1);
+      expect(JSON.parse(String(write.mock.calls[0]?.[0])).results).toEqual([
+        {
+          workflowName: 'archon-plugin.json',
+          filename: 'archon-plugin.json',
+          valid: false,
+          issues: [
+            {
+              level: 'error',
+              field: 'manifest_skill',
+              message: 'skill "review-kit" names skill, which has no SKILL.md',
+              hint: 'archon plugin add refuses this pack until the folder holds a SKILL.md.',
+            },
+          ],
+        },
+      ]);
+
+      await writeFile(join(validationCwd, 'skill', 'SKILL.md'), '# Review kit\n');
+      write.mockClear();
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(0);
+      expect(JSON.parse(String(write.mock.calls[0]?.[0])).results).toEqual([]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('loose output schema warns and exits successfully', async () => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [

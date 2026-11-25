@@ -30,8 +30,12 @@ import { workflowValidationConfig } from '@archon/workflows/validation-config';
 import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
 import { discoverInstalledForgePlugins } from './forge';
-import { PLUGIN_MANIFEST_FILE, unknownManifestKeys } from '@archon/plugin-manifest';
-import { readFile } from 'node:fs/promises';
+import {
+  PLUGIN_MANIFEST_FILE,
+  unknownManifestKeys,
+  workflowPackManifestSchema,
+} from '@archon/plugin-manifest';
+import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -115,7 +119,7 @@ export async function validateWorkflowsCommand(
     }
   }
   // The manifest is not a workflow, so the name filter does not apply to it.
-  filteredResults.push(...(await unknownManifestKeyResults(pluginRoot)));
+  filteredResults.push(...(await manifestResults(pluginRoot)));
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -195,10 +199,12 @@ async function collectWorkflowResults(
 }
 
 /**
- * Manifest keys this Archon ignores. Readers strip them so a newer Archon can add a
- * field; the author still sees a typo here, as a warning that does not fail validate.
+ * The plugin root's own manifest. Keys this Archon ignores are warnings: readers strip
+ * them so a newer Archon can add a field, and the author still sees a typo. A declared
+ * skill folder without a `SKILL.md` is an error, because install refuses it. Schema
+ * failures are discovery load errors and are not repeated here.
  */
-async function unknownManifestKeyResults(cwd: string): Promise<WorkflowValidationResult[]> {
+async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]> {
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(join(cwd, PLUGIN_MANIFEST_FILE), 'utf-8'));
@@ -215,6 +221,23 @@ async function unknownManifestKeyResults(cwd: string): Promise<WorkflowValidatio
       hint: 'Check the spelling. A key a newer Archon reads is ignored by this one.',
     })
   );
+  const pack = workflowPackManifestSchema.safeParse(raw);
+  const skill = pack.success ? pack.data.skill : undefined;
+  if (skill) {
+    const skillFile = join(cwd, skill.path, 'SKILL.md');
+    const present = await stat(skillFile).then(
+      info => info.isFile(),
+      () => false
+    );
+    if (!present) {
+      issues.push({
+        level: 'error',
+        field: 'manifest_skill',
+        message: `skill "${skill.name}" names ${skill.path}, which has no SKILL.md`,
+        hint: 'archon plugin add refuses this pack until the folder holds a SKILL.md.',
+      });
+    }
+  }
   return issues.length > 0
     ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
     : [];

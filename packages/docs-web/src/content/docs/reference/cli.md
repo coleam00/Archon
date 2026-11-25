@@ -109,7 +109,7 @@ A provider plugin records its descriptor in the receipt and registers on the nex
 
 A chat plugin records its validated descriptor after an initialization-only handshake. On server restart, each usable chat receipt starts one supervised plugin process; a receipt that is unreadable or does not own its executable is logged and skipped until `update <id>` or `remove <id>` repairs it. Install, update, and removal take effect at the next restart. In Docker, `SLACK_BOT_TOKEN` declares offline provisioning of the image-provided Slack plugin: removing it while tokens remain configured reinstalls it on the next boot. Remove the tokens from every effective env source as well to keep Slack removed. Valid installed Slack releases are retained; image upgrades do not update them. See [Chat plugins](/guides/publishing-plugins/#chat-plugins) for release assets, platform-id collisions, and installation behavior.
 
-A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. With a readable receipt, `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. When repairing an unreadable receipt, `update` prints only the newly installed commit and cannot identify old trees at other commits. Inspect `ARCHON_HOME/plugins/packs/<id>/` and remove old trees manually only after confirming they are unused. Nothing updates in the background. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
+A workflow pack installs complete at one commit. The command fetches the tag, or the default branch head, with `git fetch --depth 1` into a private repository, reads the plugin directory of that commit, and refuses the pack if that directory holds a symlink, a submodule, a path that escapes it or a file name containing `\` or `:`, if an entrypoint is missing, if the manifest declares a `skill` whose folder holds no `SKILL.md`, or if another installed pack has the same owner and `name`. Git's credential setup applies to the fetch, but the manifest is first read unauthenticated from `raw.githubusercontent.com`, so a private repository cannot be installed. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. With a readable receipt, `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. When repairing an unreadable receipt, `update` prints only the newly installed commit and cannot identify old trees at other commits. Inspect `ARCHON_HOME/plugins/packs/<id>/` and remove old trees manually only after confirming they are unused. Nothing updates in the background. A pack that ships an agent skill gets one more line naming it and the command that adds it to a project, `archon skill add --pack <id>`; installing the pack writes nothing into a project. Installed entrypoints run as `owner/plugin:entrypoint`; see [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs) for the pack layout and how runs resolve them.
 
 `copy` writes the installed tree to `.archon/workflows/<name>/` at the root of the repository you run it in (or `--cwd`); in a folder project, the directory itself. It refuses when that directory exists. The copy is an ordinary project workflow pack from then on: you own and edit it, and `update` or `remove` do not touch it.
 
@@ -132,6 +132,46 @@ The unified skill covers running and watching workflows, answering runs that nee
 decision, driving the SDLC pack's queues, setup and configuration, authoring, and
 prompt guidance. It is also installed automatically during
 `archon setup`. The former `skill install` verb is a deprecated alias that prints a warning.
+
+#### `skill add --pack <id> [path]`
+
+Install the agent skill an installed workflow pack ships, instead of `archon-cli`.
+The command copies the folder the pack's manifest names in `skill.path` to
+`.claude/skills/<name>/` and `.agents/skills/<name>/`, where `<name>` is
+`skill.name`, and writes a `.archon-pack` file naming the pack into each. A rerun, for
+example after `archon plugin update <id>`, replaces both folders whole, so a file the
+pack dropped disappears. Each copy is finished beside the skill roots before it replaces
+the installed folder, so a copy that fails leaves the installed skill as it was and the
+command can simply be run again. It leaves `archon-cli` and every other skill folder alone.
+Like `archon plugin copy`, it takes the plugin mutation lock, so it refuses while
+another `archon plugin` command is changing installed plugins.
+
+```bash
+archon skill add --pack acme/tools/packs/review-kit
+```
+
+The skill is read from the installed pack's own `archon-plugin.json`, at the commit
+`archon plugin list` shows. The command exits 1 and writes nothing when the pack is not
+installed or its receipt is broken, when the plugin is not a workflow pack, when the
+pack declares no `skill`, when the skill folder holds no `SKILL.md`, when another
+installed pack ships a skill with the same name, and when a destination folder already
+exists and its `.archon-pack` does not name this pack. That last refusal covers a
+folder another pack installed before it was removed or renamed its skill, and a folder
+you copied by hand or wrote yourself; move or delete it, then run the command again. An installed pack skill is for your own
+agent: it does not change which skills a workflow node gets, which is still only the
+skills the node names.
+
+A pack declares its skill in its manifest:
+
+```json
+"skill": { "name": "review-kit", "path": "skill" }
+```
+
+`name` is the folder name in both skill roots, in lowercase words joined by `-`; the
+names `archon-cli`, `archon` and `manage-run` are refused, because `archon skill add`
+writes or deletes those folders. `path` is a folder relative to the plugin root, such as
+`skill` or `skills/review-kit`, holding a `SKILL.md` and any reference files. The field
+is optional.
 
 ### `serve`
 
@@ -2286,7 +2326,7 @@ Project pack settings in `.archon/packs/<pack>.yaml` are checked against each di
 
 A pack that declares [forge needs](/reference/workflow-language/#pack-forge-needs) gets a `pack_forge` warning for each listed capability no installed forge plugin advertises, and for a plugin that could not be discovered. It is a warning, not an error: which plugins are installed is a fact about this install, and a run of the pack is refused at start until one serves it.
 
-When the directory you run it in holds an `archon-plugin.json` (a plugin root, also one inside a repository), each key its manifest kind does not declare gets a `manifest_unknown_key` warning under the result named `archon-plugin.json`, with or without a workflow name, such as `unknown key 'compatibility.min' is ignored`. Archon ignores such keys when it installs or loads a plugin, so a manifest written for a newer Archon still works here; the warning is how a misspelled key shows up.
+When the directory you run it in holds an `archon-plugin.json` (a plugin root, also one inside a repository), each key its manifest kind does not declare gets a `manifest_unknown_key` warning under the result named `archon-plugin.json`, with or without a workflow name, such as `unknown key 'compatibility.min' is ignored`. Archon ignores such keys when it installs or loads a plugin, so a manifest written for a newer Archon still works here; the warning is how a misspelled key shows up. A workflow-pack manifest that declares a `skill` whose folder holds no `SKILL.md` gets a `manifest_skill` error there, because installing the pack would refuse it.
 
 Exit code: 0 = all valid, 1 = errors found.
 
@@ -3031,7 +3071,7 @@ archon trigger schedule status --config <timer-binding.json>
 archon trigger schedule remove --config <timer-binding.json>
 ```
 
-The job runs `archon trigger fire --config <absolute file>` every `schedule.intervalSeconds`, and once when the scheduler loads it if `schedule.runAtLoad` is true: at install and at each login. It runs as the installing user, from the binding's `launch.cwd`, with exactly two variables set: `ARCHON_HOME`, and the `PATH` of the shell that ran `install`. No other variables and no credentials are copied. The job's name is `com.archon.trigger.<id>`, where the id is derived from the Archon home, the source instance and the binding.
+The job runs `archon trigger fire --config <absolute file>` every `schedule.intervalSeconds`, and once when the scheduler loads it if `schedule.runAtLoad` is true: at install and at each login. It runs as the installing user, from the binding's `launch.cwd`, with exactly two variables set: `ARCHON_HOME`, and the `PATH` of the shell that ran `install`. No other variables and no credentials are copied. The job's name is `com.archon.trigger.<id>`, where the id is derived from `ARCHON_HOME` as written, the source instance and the binding. `install`, `status` and `remove` find the binding's job by the directory `ARCHON_HOME` names, as `trigger check` does, so another spelling of the same home (a trailing slash, a symlink) reaches the same job.
 
 | Platform | Scheduler | Files `install` writes |
 | --- | --- | --- |
@@ -3041,8 +3081,8 @@ The job runs `archon trigger fire --config <absolute file>` every `schedule.inte
 
 On every platform the job's standard output and error are appended to `ARCHON_HOME/schedules/<label>.log`. The log is never rotated, and `remove` keeps it.
 
-- `install` is idempotent. An identical job that is loaded is left alone, and one the scheduler has not loaded is loaded. A different job under the same name, for example after `PATH` changed or an upgrade changed the rendered job, is refused with the `remove` command to run first. A macOS timer installed before the log existed is refused this way once.
-- `remove` unloads the job and deletes only the files `install` wrote. It succeeds for a job the scheduler has not loaded, and prints `{"bindingId", "schedule": "remove"}` whether or not a job was installed.
+- `install` is idempotent. An identical job that is loaded is left alone, and one the scheduler has not loaded is loaded. A different job under the same name, for example after `PATH` changed or an upgrade changed the rendered job, is refused with the `remove` command to run first. A macOS timer installed before the log existed is refused this way once. Under another spelling of `ARCHON_HOME`, `install` acts on the job already installed with the spelling it recorded, so the binding never gets a second timer.
+- `remove` unloads the job and deletes only the files `install` wrote. It succeeds for a job the scheduler has not loaded, and prints `{"bindingId", "schedule": "remove", "removed"}`, where `removed` is false when no job was installed.
 - `status` prints `{"bindingId", "schedule": "status", "installed": false}`, or for an installed job `"installed": true` with `path` (the plist, the `.timer` unit or the task XML), `registered` (the scheduler has the job loaded), `log`, and `lastRunAt`: the log's last write time, or null before the job has written to it. A run the scheduler cannot start at all, such as one whose executable is gone, writes nothing to the log, so `lastRunAt` does not move. Read that failure from the scheduler's own record: `launchctl print gui/$(id -u)/<label>` on macOS, `systemctl --user status <label>.service` on Linux, and on Windows the task's history in Task Scheduler, which shows that `conhost.exe` started but not whether `archon` did, so when `lastRunAt` stops moving, check that the `archon` path in the task's action still exists.
 
 `remove` and `status` need no `schedule` in the file, so a timer installed before the file lost it can still be managed.
