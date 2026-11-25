@@ -1712,6 +1712,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
       readonly rerun?: {
         readonly revision: string;
@@ -1805,6 +1806,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
       readonly rerun?: {
         readonly revision: string;
@@ -1912,6 +1914,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
       readonly rerun?: {
         readonly revision: string;
@@ -1941,6 +1944,13 @@ declare module 'archon:script' {
       readonly outcome: 'outcome_unknown';
     };
     readonly credentialSource?: string;
+    readonly itemRecord?: {
+      readonly recorded: true;
+      readonly landing: 'recorded' | 'kept';
+    } | {
+      readonly recorded: false;
+      readonly reason: 'no_merge_time' | 'already_recorded' | 'write_failed';
+    };
     readonly unsupported?: ReadonlyArray<string>;
     readonly remedy?: string;
   };
