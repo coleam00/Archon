@@ -8,7 +8,11 @@ import { providerRegistry } from '@archon/providers';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/workflow-source';
 import { suggestWorkflowNames } from '@archon/workflows/router';
-import { workflowLoadErrorName } from '@archon/workflows/schemas/workflow';
+import {
+  workflowLoadErrorName,
+  type WorkflowLoadError,
+  type WorkflowWithSource,
+} from '@archon/workflows/schemas/workflow';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
@@ -149,6 +153,37 @@ export async function validateWorkflowsCommand(
   return totalErrors > 0 ? 1 : 0;
 }
 
+/**
+ * The workflows to report and the load errors. Under an explicit source this is the split a
+ * fresh run makes (`prepareWorkflowSource`): the project is discovery's cwd, the source
+ * supplies the roots and its own source settings, and only the source's own workflows are
+ * reported. Other scopes stay in discovery so source workflows still resolve against them.
+ */
+async function discoverForValidation(
+  cwd: string,
+  workflowSource: string | undefined
+): Promise<{
+  workflowEntries: readonly WorkflowWithSource[];
+  loadErrors: readonly WorkflowLoadError[];
+}> {
+  if (workflowSource === undefined) {
+    const { workflows, errors } = await discoverWorkflowsWithConfig(
+      cwd,
+      loadConfig,
+      providerRegistry
+    );
+    return { workflowEntries: workflows, loadErrors: errors };
+  }
+  const sourceConfig = workflowSourceConfigFrom(await loadConfig(workflowSource));
+  const { workflows, errors } = await discoverWorkflowsWithConfig(
+    cwd,
+    loadConfig,
+    providerRegistry,
+    liveSourceRoots(workflowSource, sourceConfig)
+  );
+  return { workflowEntries: workflows.filter(e => e.source === 'project'), loadErrors: errors };
+}
+
 async function collectWorkflowResults(
   cwd: string,
   workflowSource: string | undefined,
@@ -157,18 +192,7 @@ async function collectWorkflowResults(
 ): Promise<WorkflowValidationResult[]> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
-  // The split a fresh run makes (`prepareWorkflowSource`): the project is discovery's cwd,
-  // the source supplies the roots and its own source settings.
-  const { workflows: discovered, errors: loadErrors } = await discoverWorkflowsWithConfig(
-    cwd,
-    loadConfig,
-    providerRegistry,
-    workflowSource === undefined
-      ? undefined
-      : liveSourceRoots(workflowSource, workflowSourceConfigFrom(await loadConfig(workflowSource)))
-  );
-  const workflowEntries =
-    workflowSource === undefined ? discovered : discovered.filter(e => e.source === 'project');
+  const { workflowEntries, loadErrors } = await discoverForValidation(cwd, workflowSource);
 
   const results: WorkflowValidationResult[] = [];
   // Discovered once, and only when some pack declares forge needs: it starts each plugin.
@@ -191,7 +215,8 @@ async function collectWorkflowResults(
       providerRegistry,
       {
         ...workflowValidationConfig(mergedConfig, config),
-        ...(workflowSource === undefined ? {} : { sourceRoot: workflowSource }),
+        // Undefined without a source: the validator then reads commands and scripts from cwd.
+        sourceRoot: workflowSource,
         workflowSource: source,
       },
       defaultProvider
