@@ -8,7 +8,7 @@
  * the server.
  */
 import { readFile } from 'node:fs/promises';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { z } from '@hono/zod-openapi';
@@ -17,7 +17,9 @@ import type { StartReceiptInspection } from '@archon/workflows/resource-start-st
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { createLogger } from '@archon/paths';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
-import { openedIssueReads, openedSeenMarker } from './opened-issue-reads';
+import { configProblems, declaredReads } from './declared-reads';
+import { guardedOpenedLists, openedIssueReads, openedSeenMarker } from './opened-issue-reads';
+import { labelSeenMarker, seenMarkerAcceptance, seenMarkerId } from './seen-markers';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import {
   type ObservedItemWait,
@@ -32,10 +34,7 @@ import {
 } from '@archon/workflows/webhook-source-plugin';
 import { declaredWakes, freshOverdue, isTemporaryForgeFailure, nextBackoff } from './observe-read';
 import {
-  observedLabelsSchema,
-  observedOpenedIssuesSchema,
   sourceObservationSchema,
-  unservedBindingsSchema,
   webhookSourceResultSchema,
 } from '@archon/workflows/webhook-source-plugin';
 
@@ -80,25 +79,6 @@ export interface ObservingSource {
 }
 
 /**
- * The delivery id of the receipt that says a label read has been observed once, so the
- * labels already on issues then are recorded as seen and only a later add starts. A
- * persisted contract: changing it makes every label binding a first sight again.
- */
-function labelSeenMarker(read: ObservedLabelRead): string {
-  return `observe:label-seen:${read.bindingId}:${read.repo.host}/${read.repo.path}:${read.label}`;
-}
-
-/**
- * The receipt id of a read's seen marker, derived from the source and the marker's delivery
- * id so a pass can read the marker, and its time, by id. A persisted contract as the
- * delivery id is. Shaped as a version 8 UUID, the version for ids built this way.
- */
-function seenMarkerId(sourceInstanceId: string, deliveryId: string): string {
-  const hex = createHash('sha256').update(`${sourceInstanceId}\n${deliveryId}`).digest('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
-
-/**
  * What one source's observation admitted: each receipt, the waits it could not read, and
  * why an acceptance could not be admitted. One failed acceptance does not hide the others,
  * so their starts are still handed on.
@@ -139,15 +119,6 @@ function isWebhookSourcePlugin(value: unknown): value is WebhookSourcePlugin {
     'receive' in value &&
     typeof value.receive === 'function'
   );
-}
-
-/** What is wrong with a source configuration, by field for a schema failure. */
-function configProblems(error: unknown): string {
-  if (error instanceof z.ZodError)
-    return error.issues
-      .map(issue => `${issue.path.length ? issue.path.join('.') : '(root)'}: ${issue.message}`)
-      .join('; ');
-  return error instanceof Error ? error.message : String(error);
 }
 
 type SourceEntry = z.infer<typeof sourceConfigSchema>['sources'][number];
@@ -209,37 +180,6 @@ async function loadSourcePlugin(source: SourceEntry): Promise<WebhookSourcePlugi
       `Webhook source '${sourceInstanceId}' declares observe, but its plugin cannot observe waits`
     );
   return plugin;
-}
-
-/** The reads a loaded plugin declares, checked once so a malformed one fails the load. */
-function declaredReads(
-  sourceInstanceId: string,
-  plugin: WebhookSourcePlugin
-): Pick<ObservingSource, 'labels' | 'openedIssues' | 'unservedBindings'> {
-  const parse = <T>(
-    what: string,
-    schema: { safeParse(value: unknown): z.ZodSafeParseResult<T> },
-    value: unknown
-  ): T => {
-    const parsed = schema.safeParse(value);
-    if (!parsed.success)
-      throw new Error(
-        `Webhook source '${sourceInstanceId}' declares invalid ${what}: ${configProblems(parsed.error)}`
-      );
-    return parsed.data;
-  };
-  const labels = parse('label reads', observedLabelsSchema, plugin.observedLabels ?? { reads: [] });
-  const opened = parse(
-    'opened-issue reads',
-    observedOpenedIssuesSchema,
-    plugin.observedOpenedIssues ?? { reads: [] }
-  );
-  const other = parse('unserved bindings', unservedBindingsSchema, plugin.unservedBindings ?? []);
-  return {
-    labels: labels.reads,
-    openedIssues: opened.reads,
-    unservedBindings: [...labels.unserved, ...opened.unserved, ...other],
-  };
 }
 
 /**
@@ -452,23 +392,8 @@ export async function loadWebhookSourcePlugins(
           reason: 'opened-issue binding first observed',
         })),
       ];
-      for (const { deliveryId, reason } of markers) {
-        await record({
-          receipt: {
-            id: seenMarkerId(sourceInstanceId, deliveryId),
-            sourceInstanceId,
-            deliveryId,
-            contentDigest: createHash('sha256').update(deliveryId).digest('hex'),
-            receivedAt: new Date().toISOString(),
-            // The cutoff later passes compare a label's add with: when this pass began.
-            occurredAt: passStartedAt,
-            sourceActor: null,
-          },
-          outcome: 'unmatched',
-          reason,
-          bindings: [],
-        });
-      }
+      for (const marker of markers)
+        await record(seenMarkerAcceptance(sourceInstanceId, marker, passStartedAt));
       // A clean pass read every issue opened since each read's `since`.
       openedPass.settle(result.failures.length === 0);
       return result;
@@ -653,10 +578,6 @@ export function createItemWaitObserver(input: {
     const labelReads = new Set(
       source.labels.map(entry => JSON.stringify([entry.repo.host, entry.repo.path, entry.label]))
     );
-    // An opened-issue list must be of a repository a declared read names.
-    const openedReads = new Set(
-      source.openedIssues.map(entry => JSON.stringify([entry.repo.host, entry.repo.path]))
-    );
     // The items each label list returned in this pass, by kind and number, with their
     // `updatedAt`. Some forges number issues and pull requests apart, so both name an item.
     const listed = new Map<string, Map<string, string | undefined>>();
@@ -748,13 +669,7 @@ export function createItemWaitObserver(input: {
         }
         return answer;
       },
-      issuesOpened: async request => {
-        const { host, path } = request.repo;
-        if (!openedReads.has(JSON.stringify([host, path])))
-          throw new Error(`No binding of this source observes opened issues in '${host}/${path}'`);
-        read.add(JSON.stringify(['opened', host, path, request.since]));
-        return forge.issuesOpened({ repo: { host, path }, since: request.since });
-      },
+      issuesOpened: guardedOpenedLists(source.openedIssues, forge, key => read.add(key)),
     };
     const report = (
       admitted: SourceObservationAdmitted | undefined,

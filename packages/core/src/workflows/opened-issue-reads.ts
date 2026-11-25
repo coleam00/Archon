@@ -99,3 +99,22 @@ export function openedIssueReads(): {
     },
   };
 }
+
+/**
+ * The observer's `issuesOpened`: a list must be of a repository a declared read names.
+ * Each list it makes is counted through `counted`.
+ */
+export function guardedOpenedLists(
+  reads: readonly ObservedOpenedIssueRead[],
+  forge: SourceForgeReader,
+  counted: (key: string) => void
+): SourceForgeReader['issuesOpened'] {
+  const repos = new Set(reads.map(entry => JSON.stringify([entry.repo.host, entry.repo.path])));
+  return async request => {
+    const { host, path } = request.repo;
+    if (!repos.has(JSON.stringify([host, path])))
+      throw new Error(`No binding of this source observes opened issues in '${host}/${path}'`);
+    counted(JSON.stringify(['opened', host, path, request.since]));
+    return forge.issuesOpened({ repo: { host, path }, since: request.since });
+  };
+}
