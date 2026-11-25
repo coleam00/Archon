@@ -104,10 +104,8 @@ export const prCloseRequestSchema = requestBase.extend({
 });
 // The marker identifies the one canonical comment, so it has to survive a
 // first-line comparison against a body the forge may have re-wrapped.
-const commentMarker = text.refine(
-  value => !/[\r\n]/.test(value),
-  'comment marker must be one line'
-);
+const oneLine = (what: string) => text.refine(v => !/[\r\n]/.test(v), `${what} must be one line`);
+const commentMarker = oneLine('comment marker');
 /** The pull-request form, kept for callers and installed plugins that predate subjects. */
 export const commentUpsertRequestSchema = requestBase.extend({
   op: z.literal('comment.upsert'),
@@ -140,11 +138,9 @@ export const workItemCreateRequestSchema = requestBase
     repo: repoRefSchema,
     title: text,
     body: text,
-    marker: text
-      .refine(value => !/[\r\n]/.test(value), 'marker must be one line')
-      .describe(
-        "Chosen for this one item and used by no other; a create that repeats a marker returns the item it first created. The body's first line must be this marker."
-      ),
+    marker: oneLine('marker').describe(
+      "Chosen for this one item and used by no other; a create that repeats a marker returns the item it first created. The body's first line must be this marker."
+    ),
   })
   .refine(
     value => value.body.split(/\r?\n/, 1)[0] === value.marker,
@@ -243,7 +239,6 @@ export const prMergeRequestSchema = requestBase.extend({
   op: z.literal('pr.merge'),
   ref: prRefSchema,
   method: z.enum(['merge', 'squash']),
-  // A merge is always pinned to the approved head; base and tree pin it further.
   conditions: mergeConditionsSchema.extend({ head: gitObjectIdSchema }),
 });
 export const checksRerunRequestSchema = requestBase.extend({
