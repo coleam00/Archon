@@ -159,8 +159,10 @@ const source = () =>
 
 /** The item reads of a later start of `build` on issue-1 and the attention list. */
 async function readsOfHeldItem() {
-  const [first] = await store.listWaitedItemHolders();
-  if (first === undefined || 'type' in first) throw new Error('no readable holder is waited on');
+  const [first] = (await store.listUnfinishedRuns()).filter(
+    run => 'type' in run || run.status !== 'pending'
+  );
+  if (first === undefined || 'type' in first) throw new Error('no readable holder');
   const holder = first;
   const item = await store.getItem(String(holder.item_id));
   return {
@@ -171,7 +173,10 @@ async function readsOfHeldItem() {
 }
 
 /** A hand start of `build` on issue-1 from a test platform that calls `onMessage`. */
-function handStart(onMessage: (message: string) => Promise<void>) {
+function handStart(
+  onMessage: (message: string) => Promise<void>,
+  preCreatedRun?: Awaited<ReturnType<typeof getWorkflowRun>>
+) {
   registerBuiltinProviders();
   const platform: IWorkflowPlatform = {
     sendMessage: async (_conversation, message) => onMessage(message),
@@ -204,7 +209,12 @@ function handStart(onMessage: (message: string) => Promise<void>) {
       }),
       '',
       undefined,
-      { codebaseId: CODEBASE_ID, item: 'issue-1', noWait }
+      {
+        codebaseId: CODEBASE_ID,
+        item: 'issue-1',
+        noWait,
+        ...(preCreatedRun ? { preCreatedRun } : {}),
+      }
     );
 }
 
@@ -392,6 +402,42 @@ describe('one run of a workflow per item', () => {
     expect(read?.runs.find(run => run.id === older)?.heldBehind?.runId).toBe(newer);
   });
 
+  test('an executor whose claim is refused because its admission is gone fails its run with the reason', async () => {
+    const { runId, disposition } = await bindingStart({
+      workflow: 'build',
+      item: 'issue-1',
+      resource: 'builds',
+      overlap: 'queue',
+    });
+    expect(disposition).toMatchObject({ status: 'admitted' });
+    // The store refuses the claim and writes nothing: the run stays pending.
+    await getDatabase().query(
+      'DELETE FROM remote_agent_resource_slot_holders WHERE holder_id = $1',
+      [runId]
+    );
+    await expect(claimPendingWorkflowRun(runId)).rejects.toMatchObject({
+      name: 'PendingClaimRefusedError',
+      reason: 'admission_revoked',
+    });
+    expect((await getWorkflowRun(runId))?.status).toBe('pending');
+    // The executor that tried is the one that knows why, so it ends the run with the reason.
+    const messages: string[] = [];
+    const result = await handStart(
+      async message => {
+        messages.push(message);
+      },
+      await getWorkflowRun(runId)
+    )(false);
+    expect(result).toMatchObject({
+      success: false,
+      workflowRunId: runId,
+      error: expect.stringContaining('resource slot it was admitted to is no longer held'),
+    });
+    const failed = await getWorkflowRun(runId);
+    expect(failed?.status).toBe('failed');
+    expect(messages.join('\n')).toContain('no longer held for it');
+  });
+
   test('a failed run on an item resumes only while no other run of its workflow holds the item', async () => {
     const failed = await pending('build', 'issue-1');
     await claimPendingWorkflowRun(failed);
@@ -442,12 +488,12 @@ describe('one run of a workflow per item', () => {
     resetDatabase();
   });
 
-  test('a holder whose owner is gone is in the attention list, naming its item, while a start waits behind it', async () => {
+  test('a holder whose owner is gone is in the attention list, naming its item, whether or not a start waits behind it', async () => {
     const holder = await pending('build', 'issue-1');
     await claimPendingWorkflowRun(holder);
-    // Holding with nothing waiting behind it, it is not listed.
-    expect(await store.listWaitedItemHolders()).toEqual([]);
-    expect(await listAttentionQueue(source())).toEqual([]);
+    const lost = expect.objectContaining({ kind: 'owner_lost', ref: holder });
+    expect(await listAttentionQueue(source())).toEqual([lost]);
+    // A hand start waiting behind it has no executor record, so its owner is unknown.
     await pending('build', 'issue-1');
     const { queue, single } = await readsOfHeldItem();
     expect(queue).toEqual([
@@ -459,6 +505,41 @@ describe('one run of a workflow per item', () => {
       }),
     ]);
     expect(single).toMatchObject({ kind: 'owner_lost', ref: holder });
+  });
+
+  test('a run on no item whose owner is gone is listed too, since it still holds its resource slot', async () => {
+    const run = await pending('build');
+    await claimPendingWorkflowRun(run);
+    const queue = await listAttentionQueue(source());
+    expect(queue).toEqual([
+      expect.objectContaining({ kind: 'owner_lost', ref: run, observedStatus: 'running' }),
+    ]);
+    expect(queue[0]).not.toHaveProperty('item');
+    expect(await readAttentionQueueItem(source(), run)).toEqual(queue[0] as never);
+  });
+
+  test('a pending admitted start is listed once its executor is provably absent, with what starts it', async () => {
+    const { runId, disposition } = await bindingStart({
+      workflow: 'build',
+      item: 'issue-1',
+      resource: 'builds',
+      overlap: 'queue',
+    });
+    expect(disposition).toMatchObject({ status: 'admitted' });
+    // No hand-off recorded yet: an executor may still be booting, so nothing is listed.
+    expect(await listAttentionQueue(source())).toEqual([]);
+    await getDatabase().query('UPDATE remote_agent_workflow_runs SET metadata = $2 WHERE id = $1', [
+      runId,
+      JSON.stringify({ start_executor: { kind: 'hand_off_failed' } }),
+    ]);
+    expect(await listAttentionQueue(source())).toEqual([
+      expect.objectContaining({
+        kind: 'owner_lost',
+        observedStatus: 'pending',
+        item: expect.objectContaining({ key: 'issue-1' }),
+        start: { requestId: runId, hostId: 'host' },
+      }),
+    ]);
   });
 
   test('a paused parent whose sub-run lost its owner reads as a lost owner, not as waiting', async () => {
@@ -507,7 +588,7 @@ describe('one run of a workflow per item', () => {
     const waited = start(false);
     try {
       // Something waits behind the holder once the second start is held at its claim.
-      for (let tries = 0; (await store.listWaitedItemHolders()).length === 0; tries++) {
+      for (let tries = 0; (await store.listUnfinishedRuns()).length < 2; tries++) {
         if (tries > 100) throw new Error('the start did not wait for its item');
         await Bun.sleep(50);
       }

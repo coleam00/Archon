@@ -14,11 +14,11 @@ type RulingStore = Pick<
   'recordItemRuling' | 'withdrawItemRuling' | 'getWorkflowRun'
 >;
 
-/** Only the operator or an admin may record or withdraw a ruling. */
+/** Only the operator or an admin may record or withdraw a ruling, or end an item. */
 export class ItemRulingForbiddenError extends Error {
   constructor() {
     super(
-      'Only an admin can record or withdraw a ruling on an item. An operator can grant admin with `archon user role <user-id> admin`.'
+      'Only an admin can record or withdraw a ruling on an item, or end an item. An operator can grant admin with `archon user role <user-id> admin`.'
     );
     this.name = 'ItemRulingForbiddenError';
   }

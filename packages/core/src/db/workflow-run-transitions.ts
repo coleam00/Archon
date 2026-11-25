@@ -21,6 +21,7 @@ import {
   sourceReleasedEvent,
   operatorPauseRequestWrite,
   operatorPauseWrite,
+  PendingClaimRefusedError,
   RunLimitError,
   type FanOutCancelReason,
   type OperatorPauseRequest,
@@ -225,6 +226,40 @@ async function isPending(query: TransactionQuery, id: string): Promise<boolean> 
 }
 
 /**
+ * True when the checkout the run in `remote_agent_workflow_runs` starts from (its path, or
+ * `$2`) has worktree records and none is active, or one is being removed: no claim may start
+ * it. The claim and its refusal read the same fragment.
+ */
+function claimCheckoutReleased(): string {
+  return `EXISTS (
+            SELECT 1 FROM remote_agent_isolation_environments e
+             WHERE e.provider = 'worktree'
+               AND e.codebase_id = remote_agent_workflow_runs.codebase_id
+               AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
+             GROUP BY e.working_path
+            HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
+                OR SUM(CASE WHEN e.status = 'active' AND ${getDialect().jsonText('e.metadata', WORKTREE_REMOVAL_OWNER)} IS NOT NULL THEN 1 ELSE 0 END) > 0
+          )`;
+}
+
+/**
+ * True when run `$1` has no start request (a hand start), or its request is admitted and
+ * still holds its resource slot. The claim and its refusal read the same fragment.
+ */
+function claimAdmissionHeld(): string {
+  return `(
+            NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
+            OR EXISTS (
+              SELECT 1
+                FROM remote_agent_resource_start_requests q
+                JOIN remote_agent_resource_slot_holders h
+                  ON h.resource_key = q.resource_key AND h.holder_kind = 'run' AND h.holder_id = CAST(q.id AS TEXT)
+               WHERE q.id = $1 AND q.status = 'admitted'
+            )
+          )`;
+}
+
+/**
  * A run whose checkout belongs only to destroyed worktree records, or to any record
  * being removed, cannot start. Cleanup's removal claim commits before its final
  * claimant check, so a run that reused the checkout too late to be seen, even through
@@ -248,38 +283,38 @@ export async function claimPendingWorkflowRun(
       (await heldItemRefusal(query, id, ['pending'])) ??
       ((await isPending(query, id)) ? await runLimitRefusal(query, id) : undefined);
     if (held) throw held;
+    const checkoutReleased = claimCheckoutReleased();
+    const admissionHeld = claimAdmissionHeld();
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},
               working_path = COALESCE(working_path, CAST($2 AS TEXT)),
               metadata = ${getDialect().jsonMerge('metadata', 3)}
         WHERE id = $1 AND status = 'pending'
-          AND NOT EXISTS (
-            SELECT 1 FROM remote_agent_isolation_environments e
-             WHERE e.provider = 'worktree'
-               AND e.codebase_id = remote_agent_workflow_runs.codebase_id
-               AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
-             GROUP BY e.working_path
-            HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
-                OR SUM(CASE WHEN e.status = 'active' AND ${getDialect().jsonText('e.metadata', WORKTREE_REMOVAL_OWNER)} IS NOT NULL THEN 1 ELSE 0 END) > 0
-          )
-          AND (
-            NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
-            OR EXISTS (
-              SELECT 1
-                FROM remote_agent_resource_start_requests q
-                JOIN remote_agent_resource_slot_holders h
-                  ON h.resource_key = q.resource_key AND h.holder_kind = 'run' AND h.holder_id = CAST(q.id AS TEXT)
-               WHERE q.id = $1 AND q.status = 'admitted'
-            )
-          )`,
+          AND NOT ${checkoutReleased}
+          AND ${admissionHeld}`,
       [
         id,
         workingPath ?? null,
         JSON.stringify({ [EXECUTION_OWNER_METADATA_KEY]: currentExecutionOwner() }),
       ]
     );
-    if (claimed.rowCount !== 1) return null;
+    if (claimed.rowCount !== 1) {
+      // Read with the same predicates why a still-pending run was refused. A run that left
+      // pending belongs to whoever moved it (null); so does one whose refusal cleared since.
+      type Refusal = { released: boolean | number; held: boolean | number };
+      const row = (
+        await query<Refusal>(
+          `SELECT ${checkoutReleased} AS released, ${admissionHeld} AS held
+             FROM remote_agent_workflow_runs WHERE id = $1 AND status = 'pending'`,
+          [id, workingPath ?? null]
+        )
+      ).rows[0];
+      if (row === undefined) return null;
+      if (row.released) throw new PendingClaimRefusedError(id, 'checkout_released');
+      if (!row.held) throw new PendingClaimRefusedError(id, 'admission_revoked');
+      return null;
+    }
     const selected = await query<WorkflowRunRow>(
       'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [id]

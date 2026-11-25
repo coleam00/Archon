@@ -585,6 +585,29 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id ON remote_agent_item_rulings(item_id);
 
+      -- Ends of an item, append-only; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
+        -- Recording order; timestamps tie and the id is random.
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
+        item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        reason TEXT NOT NULL,
+        by_declared TEXT,
+        by_user_id TEXT,
+        via TEXT NOT NULL,
+        from_run_id TEXT,
+        from_node_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_item_ends_item_id ON remote_agent_item_ends(item_id);
+      -- The runs an end saw on its item; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_end_runs (
+        end_id TEXT NOT NULL REFERENCES remote_agent_item_ends(id),
+        run_id TEXT NOT NULL,
+        execution_claim TEXT,
+        PRIMARY KEY (end_id, run_id)
+      );
+
       -- An item's merged fact, recorded once; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
         item_id TEXT PRIMARY KEY REFERENCES remote_agent_items(id),
@@ -738,6 +761,7 @@ export class SqliteAdapter implements IDatabase {
         grants_limit TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
+        preparation_process TEXT,
         preparation_error TEXT,
         forge_refusal TEXT,
         refusal TEXT,

@@ -29,9 +29,10 @@ type LimitFields = Pick<ResourceStartBindingIntent, 'limit' | 'grants'>;
 /**
  * Starts on items through the real receipt, preparation and admission path. Nothing here
  * edits a timestamp: these run within one second, so on SQLite a start and the reset after
- * it share a timestamp, and the count must still order them.
+ * it share a timestamp, and the count must still order them. The item-end conformance
+ * uses them too.
  */
-function starts(harness: Harness) {
+export function starts(harness: Harness) {
   const { store } = harness;
   const { launch } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
   const claimed = async (
@@ -104,6 +105,34 @@ function starts(harness: Harness) {
 }
 
 export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harness>): void {
+  test('a start whose run ended before it was claimed does not count; one that ran does', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const { start, standing } = starts(harness);
+      const once = { limit: { name: 'once', starts: 1 } };
+      const admit = async () => {
+        const { result } = await start('u', once);
+        if (result?.status !== 'admitted')
+          throw new Error(`Expected admitted, got ${result?.status}`);
+        return result.runId;
+      };
+      // Abandoned while pending, as after an executor died before its claim: nothing ran.
+      const unstarted = await admit();
+      await store.cancelWorkflowRun(unstarted);
+      const itemId = (await store.getWorkflowRun(unstarted))?.item_id ?? '';
+      expect(await standing(itemId)).toMatchObject({ used: 0, left: 1 });
+      // Claimed, then cancelled: it ran, so it counts.
+      const ran = await admit();
+      await store.claimPendingWorkflowRun(ran);
+      await store.cancelWorkflowRun(ran);
+      expect(await standing(itemId)).toMatchObject({ used: 1, left: 0 });
+      expect((await start('u', once)).result).toMatchObject({ status: 'refused' });
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('a limited binding starts its stage three times on an item, then only after a grant or a reset', async () => {
     const harness = await makeHarness();
     try {

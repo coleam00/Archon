@@ -198,3 +198,40 @@ test('a start a run caused is shown on that run, and a source rejection with no 
   );
   expect(JSON.parse(String(stored.rows[0]?.refusal))).toEqual({ reason: 'rejected_by_source' });
 });
+
+test('a source rejection that names its item is listed on it, with no project to read it in', async () => {
+  const receiptId = crypto.randomUUID();
+  await store().acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'labels',
+      deliveryId: 'observe:label:github.com/owner/repo#8:555:triage',
+      contentDigest: receiptId,
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'unmatched',
+    bindings: [],
+    evaluatedBindings: [
+      {
+        bindingId: 'triage',
+        bindingRevision: null,
+        status: 'rejected',
+        reason: "Input 'labelId': missing",
+        itemKey: 'issue-8',
+      },
+    ],
+  });
+  expect(await refused()).toEqual([
+    expect.objectContaining({
+      ref: `refused:${receiptId}:triage`,
+      project: null,
+      start: expect.objectContaining({
+        itemKey: 'issue-8',
+        workflow: null,
+        reason: 'rejected_by_source',
+      }),
+    }),
+  ]);
+});

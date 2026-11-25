@@ -20,6 +20,7 @@ import type {
   ResourceStartBindingIntent,
   StartLimit,
 } from '@archon/workflows/schemas/resource-start';
+import { EXECUTION_OWNER_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import {
   startLimitRefusal,
   startLimitStanding,
@@ -27,7 +28,7 @@ import {
   type StartLimitReset,
   type StartLimitRow,
 } from '@archon/workflows/start-limit';
-import { getDatabase } from './connection';
+import { getDatabase, getDialect } from './connection';
 import { recordRefusedStartStop } from './item-stops';
 import { lockAdmission, type TransactionQuery as Query } from './resource-slots';
 import { toHydratedTimestamp } from './timestamps';
@@ -133,14 +134,26 @@ interface StartLimitRequestRow {
   id: string;
   queue_position: number | string;
   status: StartLimitRow['status'];
+  ended_unstarted: boolean | number;
   start_limit: unknown;
   grants_limit: unknown;
 }
 
-const startLimitRowsSql = `SELECT id, queue_position, status, start_limit, grants_limit
-       FROM remote_agent_resource_start_requests
-      WHERE item_id = $1 AND (start_limit IS NOT NULL OR grants_limit IS NOT NULL)
-      ORDER BY queue_position`;
+/**
+ * The item's limit requests. A binding start's run is written at admission with no execution
+ * owner, and the claim records one in the update that makes it running, so a terminal run
+ * without one ended while still pending: its start never ran (`endedUnstarted`). A request
+ * whose run row is gone keeps counting.
+ */
+const startLimitRowsSql =
+  (): string => `SELECT q.id, q.queue_position, q.status, q.start_limit, q.grants_limit,
+       CASE WHEN q.status = 'admitted' AND w.status IN ('completed', 'failed', 'cancelled')
+             AND ${getDialect().jsonText('w.metadata', EXECUTION_OWNER_METADATA_KEY)} IS NULL
+            THEN 1 ELSE 0 END AS ended_unstarted
+       FROM remote_agent_resource_start_requests q
+       LEFT JOIN remote_agent_workflow_runs w ON w.id = q.id
+      WHERE q.item_id = $1 AND (q.start_limit IS NOT NULL OR q.grants_limit IS NOT NULL)
+      ORDER BY q.queue_position`;
 
 function startLimitRow(row: StartLimitRequestRow): StartLimitRow {
   return {
@@ -148,6 +161,7 @@ function startLimitRow(row: StartLimitRequestRow): StartLimitRow {
     // PostgreSQL returns a BIGSERIAL as a string.
     position: Number(row.queue_position),
     status: row.status,
+    endedUnstarted: Number(row.ended_unstarted) === 1,
     counted:
       row.start_limit == null
         ? null
@@ -177,7 +191,7 @@ export async function countStartLimits(
     return {
       refused: `Start limit '${limit.name}' counts starts per item, and this start names no item.`,
     };
-  const rows = (await query<StartLimitRequestRow>(startLimitRowsSql, [item.id])).rows.map(
+  const rows = (await query<StartLimitRequestRow>(startLimitRowsSql(), [item.id])).rows.map(
     startLimitRow
   );
   const standing = startLimitStanding(
@@ -206,7 +220,7 @@ export async function countStartLimits(
 export async function readItemStartLimits(itemId: string): Promise<ItemStartLimits> {
   const db = getDatabase();
   const query: Query = (sql, params) => db.query(sql, params);
-  const found = (await query<StartLimitRequestRow>(startLimitRowsSql, [itemId])).rows;
+  const found = (await query<StartLimitRequestRow>(startLimitRowsSql(), [itemId])).rows;
   const rows = found.map(startLimitRow);
   const countedUnder: Record<string, string> = {};
   const specs = new Map<string, StartLimit>();

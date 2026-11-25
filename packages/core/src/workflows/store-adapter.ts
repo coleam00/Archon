@@ -18,19 +18,24 @@ import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { existsSync } from 'node:fs';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
-import type { HeldItemStart, RefusedStart } from '@archon/workflows/resource-start-store';
-import type { Codebase } from '../schemas/codebase';
+import type {
+  HeldItemStart,
+  PreparingStart,
+  RefusedStart,
+} from '@archon/workflows/resource-start-store';
 import * as refusedStartsDb from '../db/refused-starts';
 import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemLinksDb from '../db/item-links';
 import * as itemRulingsDb from '../db/item-rulings';
+import * as itemEndsDb from '../db/item-ends';
 import * as itemMergesDb from '../db/item-merges';
 import * as itemLandingsDb from '../db/item-landings';
 import * as itemAsksDb from '../db/item-asks';
 import * as itemWaitsDb from '../db/item-waits';
 import * as itemStopsDb from '../db/item-stops';
 import * as workflowDb from '../db/workflows';
+import { listUnfinishedRuns } from '../db/unfinished-runs';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
 import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
@@ -45,6 +50,7 @@ import {
   upsertWorkflowRunNodeSession,
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
+import type { Codebase } from '../schemas/codebase';
 import * as isolationEnvironmentsDb from '../db/isolation-environments';
 import type { IIsolationStore } from '@archon/isolation';
 import * as envVarDb from '../db/env-vars';
@@ -166,6 +172,23 @@ async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
   return held;
 }
 
+/**
+ * The bindings a process is preparing, each placed in the project its checkout is registered
+ * as and on its item when that exists. A checkout that no longer resolves has no project.
+ */
+async function listPreparingStarts(): Promise<PreparingStart[]> {
+  const starts: PreparingStart[] = [];
+  for (const { cwd, itemKey, ...start } of await installHold.listPreparingBindings()) {
+    const codebase = await bindingProject(cwd);
+    const item =
+      codebase === null || itemKey === null
+        ? null
+        : await itemsDb.findItem(projectKeyForCodebase(codebase, codebase.default_cwd), itemKey);
+    starts.push({ ...start, itemKey, codebase, item });
+  }
+  return starts;
+}
+
 /** The project a binding's checkout is registered as; one that fails to resolve has none. */
 async function bindingProject(cwd: string | null): Promise<Codebase | null> {
   if (cwd === null || !existsSync(cwd)) return null;
@@ -173,7 +196,7 @@ async function bindingProject(cwd: string | null): Promise<Codebase | null> {
     return await launchProjectOf(cwd);
   } catch (error) {
     // The start is still listed, with no project; the failure is in the log.
-    getLog().warn({ err: error as Error, cwd }, 'refused_start.project_unresolved');
+    getLog().warn({ err: error as Error, cwd }, 'binding_start.project_unresolved');
     return null;
   }
 }
@@ -224,6 +247,7 @@ export function createWorkflowStore(): IWorkflowStore {
     liftInstallHold: installHold.liftInstallHold,
     listHeldStarts: installHold.listHeldStarts,
     listHeldItemStarts,
+    listPreparingStarts,
     listRefusedStarts,
     getRunLimit: installHold.getRunLimit,
     admitResourceStart: resourceStarts.admitResourceStart,
@@ -236,7 +260,6 @@ export function createWorkflowStore(): IWorkflowStore {
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
     getResourceStartRequest: resourceStarts.getResourceStartRequest,
     listSkippedItemStarts: resourceStarts.listSkippedItemStarts,
-    listWaitedItemHolders: resourceStarts.listWaitedItemHolders,
     listQueuedResourceStartsForHost: resourceStarts.listQueuedResourceStartsForHost,
     listQueuedItemStarts: resourceStarts.listQueuedItemStarts,
     readItemStartLimits: resourceStarts.readItemStartLimits,
@@ -256,6 +279,8 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemRulings: itemRulingsDb.listItemRulings,
     recordItemRuling: itemRulingsDb.recordItemRuling,
     withdrawItemRuling: itemRulingsDb.withdrawItemRuling,
+    getHoldingItemEnd: itemEndsDb.getHoldingItemEnd,
+    recordItemEnd: itemEndsDb.recordItemEnd,
     listItemsInWindow: itemsDb.listItemsInWindow,
     getItemMerge: itemMergesDb.getItemMerge,
     recordItemMerge: itemMergesDb.recordItemMerge,
@@ -274,6 +299,7 @@ export function createWorkflowStore(): IWorkflowStore {
     listOpenItemWaits: itemWaitsDb.listOpenItemWaits,
     withdrawItemWaits: itemWaitsDb.withdrawItemWaits,
     listStoppedItemRuns: itemStopsDb.listStoppedItemRuns,
+    listUnfinishedRuns,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),

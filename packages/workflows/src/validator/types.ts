@@ -45,6 +45,12 @@ export interface CommandValidationResult {
 export interface ValidationConfig {
   loadDefaultCommands?: boolean;
   commandFolder?: string;
+  /**
+   * Where the workflow's commands and scripts are read, when that is not `cwd`: an explicit
+   * `--workflow-source`. MCP configs and skills still resolve from `cwd`, the project a run
+   * executes in.
+   */
+  sourceRoot?: string;
   workflowSource?: WorkflowSource;
   assistant?: string;
   aliases?: RawAliasesConfig;

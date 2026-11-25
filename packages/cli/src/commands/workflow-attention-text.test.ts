@@ -127,6 +127,18 @@ test('an unreadable item, a failed run and a lost owner say which run and what s
   expect(listed).toContain('item issue-7');
   expect(listed).toContain('archon workflow resume run-1');
   expect(listed).toContain('archon workflow abandon run-1');
+  // A pending start no process runs is started by its request, not resumed.
+  const unstarted = opened({
+    ...base,
+    kind: 'owner_lost',
+    ref: 'run-1',
+    run: held,
+    observedStatus: 'pending',
+    start: { requestId: 'run-1', hostId: 'h1' },
+  });
+  expect(unstarted).toContain('archon trigger execute run-1 --host h1');
+  expect(unstarted).toContain('archon workflow abandon run-1');
+  expect(unstarted).not.toContain('resume');
   // A run that ended well needs nobody, so it points nowhere.
   expect(
     text({ type: 'terminal', ...run, status: 'completed', outcome: null, cause: null })
@@ -275,6 +287,29 @@ test('a refused start names its item, its reason and what moves it on', () => {
   expect(lines('file_setting_missing')).toContain('file_setting_missing');
 });
 
+test('a lost preparation names its start and the recovery that returns it to pending', () => {
+  const block = attentionItemLines(
+    {
+      ...base,
+      kind: 'preparation_lost',
+      ref: 'preparing:r-1:build',
+      start: {
+        receiptId: 'r-1',
+        bindingId: 'build',
+        hostId: 'h1',
+        workflow: 'build',
+        itemKey: 'issue-1',
+        ownerId: 'o-1',
+      },
+    },
+    'brief'
+  ).join('\n');
+  expect(block).toContain('preparer gone');
+  expect(block).toContain('on item issue-1');
+  expect(block).toContain('archon trigger recover-preparation r-1 build --owner o-1 --yes');
+  expect(block).toContain('archon trigger drain --host h1');
+});
+
 test('a stopped item names its stage and outcome, and its commands work from any directory', () => {
   const stopped: Extract<AttentionQueueItem, { kind: 'stopped' }> = {
     ...base,
@@ -295,6 +330,20 @@ test('a stopped item names its stage and outcome, and its commands work from any
     "archon workflow run <workflow> --item 'release 1' --cwd '/srv/acme web'"
   );
 
+  // A failed run: its error, and the restart from its record that closes it.
+  const failed = attentionItemLines(
+    {
+      ...stopped,
+      stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
+      summary: null,
+      failed: { error: '(exec_failed) no pr input given' },
+    },
+    'brief'
+  ).join('\n');
+  expect(failed).toContain('check failed: (exec_failed) no pr input given');
+  expect(failed).toContain('archon workflow run --supersedes run-9');
+  expect(failed).toContain('archon workflow run check --supersedes run-9 --input');
+
   // Stopped by a start refused at its limit: it names the limit and starts that workflow.
   const limited = attentionItemLines(
     {
@@ -313,4 +362,21 @@ test('a stopped item names its stage and outcome, and its commands work from any
   expect(limited).toContain("'build-rounds'");
   expect(limited).toContain('3 of 3');
   expect(limited).toContain("archon workflow run build --item 'release 1' --cwd '/srv/acme web'");
+
+  // A refused start says what was refused, never that nothing started: a sibling may have.
+  const refusal = (bindingId: string) => ({
+    receiptId: `r-${bindingId}`,
+    bindingId,
+    workflow: 'triage',
+    reason: 'no_default_provider' as const,
+    refusedAt: '2026-11-25T08:00:00.000Z',
+  });
+  const one = attentionItemLines({ ...stopped, refused: [refusal('a')] }, 'brief').join('\n');
+  expect(one).toContain("deliver ended as 'replan'; a start it caused was refused");
+  expect(one).not.toContain('nothing started');
+  const two = attentionItemLines(
+    { ...stopped, refused: [refusal('a'), refusal('b')] },
+    'brief'
+  ).join('\n');
+  expect(two).toContain('2 starts it caused were refused');
 });
