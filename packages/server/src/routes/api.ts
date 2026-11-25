@@ -5,10 +5,14 @@ import { webPushPayloadSchema } from '@archon/core/schemas/web-push';
 import {
   createSqlWorkflowHost,
   createSqlWorkflowOperations,
+  createWorkflowHostStore,
 } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as codebaseDb from '@archon/core/db/codebases';
 import { listSlotOccupancy } from '@archon/core/db/resource-slots';
+import { attentionQueueSource } from '@archon/core/operations/attention-queue';
+import { changeMergeState, forgePluginsOnce, viewWorkItem } from '@archon/adapters/forge-host';
+import { getArchonHome } from '@archon/paths/archon-paths';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
@@ -30,6 +34,7 @@ import { registerCodebaseEnvironmentRoute, registerCodebaseRoutes } from './api.
 import { registerConfigRoutes } from './api.config';
 import { registerConversationRoutes } from './api.conversations';
 import { registerConversationProcessingRoute } from './api.conversation-processing';
+import { deliveredRunFrom, registerForgeRoutes } from './api.forge';
 import { registerHealthRoutes } from './api.health';
 import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
@@ -142,6 +147,26 @@ export function registerApiRoutes(
     loadConfig,
   });
   registerObservingRoute(app, { observing, lastPass: () => readWakeLastPass() });
+  // One forge plugin search for every lookup these routes make (`forgePluginsOnce`), made on
+  // the first lookup: registering the routes reads nothing, not even the home.
+  let forgePlugins: ReturnType<typeof forgePluginsOnce> | undefined;
+  const forgeOptions = {
+    plugins: () => (forgePlugins ??= forgePluginsOnce(getArchonHome(), process.env))(),
+    env: process.env,
+  };
+  const queueSource = attentionQueueSource(
+    createWorkflowStore(),
+    createWorkflowHostStore().isolation
+  );
+  registerForgeRoutes(app, {
+    remote: async id => {
+      const codebase = await codebaseDb.getCodebase(id);
+      return codebase === null ? undefined : codebase.repository_url;
+    },
+    deliveredRun: deliveredRunFrom(createWorkflowStore(), run => queueSource.branchOf(run)),
+    changeMergeState: (lookup, branches) => changeMergeState(lookup, branches, forgeOptions),
+    viewWorkItem: (number, remote) => viewWorkItem(number, remote, forgeOptions),
+  });
   registerPackGraphRoute(app, {
     codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
     readPackGraph: (cwd, pack, workflowSource) =>

@@ -65,6 +65,12 @@
       "src/routes/api.workflow-runs.test.ts"
     ],
     [
+      "src/routes/api.run-records.test.ts"
+    ],
+    [
+      "src/routes/api.forge.test.ts"
+    ],
+    [
       "src/routes/api.workflow-run-launch.test.ts"
     ],
     [
@@ -145,7 +151,8 @@
     [
       "src/boot/claude-auth-posture.test.ts",
       "src/boot/codex-auth-posture.test.ts",
-      "src/boot/cleanup-env.test.ts"
+      "src/boot/cleanup-env.test.ts",
+      "src/boot/live-home-guard.test.ts"
     ],
     [
       "src/github-auth-bootstrap.test.ts"

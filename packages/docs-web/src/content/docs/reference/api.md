@@ -327,6 +327,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart). A start the engine refuses (a workflow that does not resolve, a missing required input, an undeclared input, an unmet `requires:`) returns **400** with the engine's reason, and nothing is written or queued; for the input refusals it is the text `archon workflow run` prints. A start that names `adopt_run_id`, whose conversation sits in a worktree, or that continues a paused run of the same workflow in the conversation, is judged on the definition it will run and is answered on the conversation after a **200** |
 | GET | `/api/workflows/runs` | List workflow runs |
 | GET | `/api/workflows/runs/{runId}` | Get run details with events (provider events are served by the route below). `run.nodes[]` is the engine's per-node state; a `workflow:` fan-out node also carries `fan_out_outcome`, its [per-slot record and tally](/reference/workflow-language/#a-completed-fan-out-node-is-not-completed-child-work). A loop body node in `nodes[]` holds its latest round; `run.loop_rounds[]` lists every round of each `loop_group` the run entered, with its body nodes' state, timing and output, and is absent for a run with no loop. See [node execution records](/reference/node-execution/) for event fields, reporting availability, and cost scope |
+| GET | `/api/workflows/runs/records` | The records of up to 100 runs without their events: `?runId=` repeated once per run. Each record has the run's `status`, `completed_at`, its terminal record's `returns` (absent without one), `node_outcomes` (every node invocation with a completed node's structured output, as `$NODE_OUTCOMES_FILE` lists them), `loop_iterations` (each loop iteration started, its `group`, bound and whether it completed) and `running` (the steps running now, in start order). `?outputKey=` and `?resultKey=`, each repeatable, keep only those top-level fields of each output and of the result. An unknown id is listed under `missing`, a run whose events do not fold under `unreadable`. More than 100 ids returns **400** |
 | GET | `/api/workflows/runs/{runId}/provider-events` | The run's provider events as `{events: ProviderEventRecord[]}`: each is `{runId, stepName, attemptId, seq, observedAt, event}`, grouped by node and in emission order within one. `?step=` limits it to one node. `?attemptId=&afterSeq=` (both, and with `step`) returns only the events after that one: the attempt's later events and every later attempt's. Rows written before the engine recorded envelopes come back translated, with `attemptId: null`. Returns **400** for a partial cursor |
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/artifacts/{runId}/{filename}` | Read an artifact's text content; encode the complete relative filename, including slashes, as one path value |
@@ -613,6 +614,36 @@ source, `names` and `cards`) and the declarations that could not be read or did 
 validate as `errors[]`. With `codebaseId`, the codebase's project packs are included and its
 config decides whether bundled packs are; an unknown `codebaseId` returns **404**.
 See the [metrics guide](/guides/metrics/).
+
+---
+
+## Forge
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/forge/subjects` | What the project's forge says of some issues and of the changes runs delivered, as `ForgeSubjects` |
+
+`GET /api/forge/subjects?codebaseId=` asks the forge of the project's registered remote through
+Archon's forge seam, so the browser never calls it:
+
+- `issue=` (repeatable): an issue number. Each answers `{ number, title, state, url, pending }`;
+  the fields are null while the forge has not answered or could not.
+- `changeRun=` and `changeUrl=` (repeatable, paired by position): a run and the change URL it
+  delivered. `branchRun=` (repeatable): a run that delivered a change but named no URL; the
+  pull request is searched on the branches its item's runs recorded, newest first. Each answers
+  `{ run, url, merged, mergedAt, number }`. A change whose item recorded its merge (a land run,
+  or `archon workflow merged`) is merged at the recorded time without asking the forge whether.
+  Otherwise the forge's `pr.view` answers: by number for the pull request the run's forge
+  operations recorded, else by head on the item's run branches. A `branchRun` whose item
+  recorded no branch and no merge has no change and no entry.
+
+Answers are cached on the server: a change that has not merged for 60 seconds, a merge for
+good, an issue for 10 minutes, a stale answer served while it refreshes. A first lookup still
+running after 4 seconds answers `merged: "pending"` (a change) or `pending: true` (an issue) for
+that read only, so read again shortly; a lookup that failed answers `unknown` (a change) or
+null fields (an issue) and is cached like any other. A `changeRun` without its `changeUrl`, or a
+number that is not a positive whole number, returns **400**; an unknown `codebaseId` returns
+**404**.
 
 ---
 

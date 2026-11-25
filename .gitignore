@@ -129,3 +129,6 @@ main/
 
 # Personal per-run config overlays (workflow run --config) — never tracked
 .config.*.yaml
+
+# Throwaway Archon home for `bun run dev:console`
+.console-home/

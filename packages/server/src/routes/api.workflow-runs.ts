@@ -11,6 +11,7 @@ import {
   getTerminalRecord,
 } from '@archon/workflows/terminal-record';
 import { resolveAuthContext } from './api-request-auth';
+import { registerRunRecordsRoute } from './api.run-records';
 import { apiError, getLog, jsonError, openApiRouteRegistrar } from './api-route-kit';
 import { toApiDashboardWorkflowRun, toApiWorkflowRun } from './api-serializers';
 import {
@@ -213,6 +214,9 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
       return apiError(c, 500, 'Failed to look up workflow run');
     }
   });
+
+  // Before :runId, so "records" does not match as a runId.
+  registerRunRecordsRoute(app);
 
   // GET /api/workflows/runs/:runId - Get run details with events
   registerOpenApiRoute(getWorkflowRunRoute, async c => {

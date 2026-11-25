@@ -365,15 +365,31 @@ function resultAt(
   };
 }
 
+/**
+ * The run name a `result_of` reads. An installed pack's workflows run under their qualified
+ * name (`owner/pack:order`), while the pack's YAML names a sibling plainly (`order`), so a
+ * plain name read from a qualified workflow means the sibling in the same pack.
+ */
+export function resultOfRunName(workflowName: string | undefined, resultOf: string): string {
+  if (workflowName === undefined || resultOf.includes(':')) return resultOf;
+  const colon = workflowName.lastIndexOf(':');
+  return colon === -1 ? resultOf : `${workflowName.slice(0, colon + 1)}${resultOf}`;
+}
+
 /** The declared `result_of` inputs a fresh run was not supplied, by input name. */
 export function unsuppliedResultInputs(
-  workflow: Pick<ResolvedWorkflow, 'inputs'>,
+  workflow: Pick<ResolvedWorkflow, 'inputs'> & { name?: string },
   startInputs: Readonly<Record<string, JsonValue>> | undefined
 ): Map<string, ResultInputSpec> {
   return new Map(
     Object.entries(workflow.inputs ?? {}).flatMap(([name, spec]) =>
       spec.result_of !== undefined && !Object.hasOwn(startInputs ?? {}, name)
-        ? [[name, { workflow: spec.result_of, at: spec.at }] as const]
+        ? [
+            [
+              name,
+              { workflow: resultOfRunName(workflow.name, spec.result_of), at: spec.at },
+            ] as const,
+          ]
         : []
     )
   );

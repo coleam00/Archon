@@ -1,6 +1,6 @@
 # CI for the factory-console proof of concept. Upstream Archon's full CI (release, docs, e2e,
 # Windows and macOS legs) is not run here; this covers what the console work can break: the
-# static checks in `check` (the factory-view checks return with the curated view on `combined`), the suites of the packages the console
+# static checks and the console reopen-asks test in `check` (the factory-view checks return with the curated view on `combined`), the suites of the packages the console
 # touches in `package-tests`, and every store test that runs on Postgres in `postgres`.
 name: ci
 on:
@@ -32,6 +32,9 @@ jobs:
       # needs the packages checked one after another.
       - name: Type-check
         run: bun run type-check
+      # Guards `dev:console --reopen-asks`, which rewrites the scratch copy's asks.
+      - name: Console reopen-asks
+        run: bun test ./scripts/console-reopen-asks.test.ts
       - name: Web build
         run: bun run build:web
 
