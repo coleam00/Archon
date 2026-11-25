@@ -314,6 +314,7 @@ const withoutRunHeading: Record<AttentionQueueItemWithoutRun['kind'], [string, s
   attention: ['open ask', 'opened'],
   overdue_wait: ['overdue wait', 'opened'],
   stopped: ['stopped', 'ended'],
+  refused_start: ['refused start', 'refused'],
   preparation_lost: ['preparer gone', 'claimed'],
 };
 
@@ -344,6 +345,8 @@ function withoutRunBody(item: AttentionQueueItem): string[] {
       return overdueWaitLines(item);
     case 'stopped':
       return stoppedItemLines(item);
+    case 'refused_start':
+      return refusedStartItemLines(item);
     case 'preparation_lost':
       return preparationLostLines(item);
     case 'attention':
@@ -351,6 +354,35 @@ function withoutRunBody(item: AttentionQueueItem): string[] {
     default:
       return [];
   }
+}
+
+/**
+ * A start no run caused that was refused and is its item's newest step: what it was for,
+ * why, and what moves the item on. A run on the item, or the binding starting on it, closes it.
+ */
+function refusedStartItemLines(
+  item: Extract<AttentionQueueItem, { kind: 'refused_start' }>
+): string[] {
+  const { receiptId, bindingId, workflow, itemKey, reason, limit } = item.start;
+  const what = `the start of ${workflow ?? 'its workflow'} on item ${itemKey} (binding ${bindingId}) was refused`;
+  const lines =
+    limit !== undefined
+      ? [
+          `${what} at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
+          `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
+        ]
+      : [`${what}: ${refusalText(reason)}`];
+  if (reason === 'no_default_provider') lines.push('set one: archon ai default <provider>');
+  lines.push(`see the refusal: archon trigger inspect ${receiptId}`);
+  return lines;
+}
+
+/** A stored refusal code as text; a code a newer binary wrote is shown as it is. */
+function refusalText(reason: string): string {
+  if (reason === 'rejected_by_source') return 'its source rejected the event';
+  return Object.hasOwn(REFUSAL_REASONS, reason)
+    ? REFUSAL_REASONS[reason as StoppedRefusal['reason']]
+    : reason;
 }
 
 /**

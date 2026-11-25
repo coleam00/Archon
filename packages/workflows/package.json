@@ -74,6 +74,7 @@
     "./in-process-engine": "./src/in-process-engine.ts",
     "./engine-contract-tests": "./src/engine-contract-tests.ts",
     "./webhook-source-plugin": "./src/webhook-source-plugin.ts",
+    "./temporary-error-kinds": "./src/temporary-error-kinds.ts",
     "./output-ref": "./src/output-ref.ts",
     "./json-pointer": "./src/json-pointer.ts",
     "./completed-outcome": "./src/completed-outcome.ts",

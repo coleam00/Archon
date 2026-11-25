@@ -312,7 +312,15 @@ const REMOTE = 'https://github.com/owner/repo.git';
  * `about`) and returns `acceptances`, each with a fresh receipt id as a plugin would.
  */
 async function observingFixture(
-  plugin: { acceptances: unknown[]; revision?: string; prNumber?: number; failed?: unknown[] },
+  plugin: {
+    acceptances: unknown[];
+    revision?: string;
+    prNumber?: number;
+    failed?: unknown[];
+    failOnce?: boolean;
+    catchReads?: boolean;
+    reads?: number;
+  },
   observe: unknown = { everySeconds: 60 }
 ) {
   const root = await mkdtemp(join(tmpdir(), 'archon-webhook-source-'));
@@ -321,25 +329,48 @@ async function observingFixture(
   const configPath = join(root, 'sources.json');
   await writeFile(
     modulePath,
-    `export default ({ config }) => ({
+    `export default ({ config }) => {
+  let failedOnce = false;
+  return {
   receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
   observe: async ({ waits, forge }) => {
-    if (config.prNumber) await forge.prReviews({ remote: waits[0].remote, number: config.prNumber });
-    else await forge.commitChecks({ remote: waits[0].remote, revision: config.revision ?? waits[0].about });
+    const once = async () => {
+      if (config.prNumber) await forge.prReviews({ remote: waits[0].remote, number: config.prNumber });
+      else await forge.commitChecks({ remote: waits[0].remote, revision: config.revision ?? waits[0].about });
+    };
+    const caught = [];
+    if (config.catchReads) {
+      for (let i = 0; i < (config.reads ?? 1); i++) {
+        try { await once(); }
+        catch (error) {
+          caught.push({ wait: { workflowName: waits[0].workflowName, event: waits[0].event, about: waits[0].about, itemKey: waits[0].itemKey }, reason: error.message });
+        }
+      }
+    } else await once();
+    const failing = config.failOnce === true && !failedOnce;
+    failedOnce = true;
     return {
       acceptances: config.acceptances.map(a => ({ ...a, receipt: { ...a.receipt, id: crypto.randomUUID() } })),
       unserved: [],
-      failed: config.failed ?? [],
+      failed: [...(failing || config.failOnce !== true ? (config.failed ?? []) : []), ...caught],
     };
   },
-});\n`,
+};
+};\n`,
     'utf8'
   );
   await writeFile(
     configPath,
     JSON.stringify({
       version: 1,
-      sources: [{ sourceInstanceId: 'source-1', module: modulePath, config: plugin, observe }],
+      sources: [
+        {
+          sourceInstanceId: 'source-1',
+          module: modulePath,
+          config: { ...plugin, bindings: [{ wake: { workflow: 'host', wait: 'checks' } }] },
+          observe,
+        },
+      ],
     }),
     'utf8'
   );
@@ -358,7 +389,7 @@ function waitStore(waits: Partial<StoredItemWait>[], itemKey = 'pr-7'): ItemWait
         event: 'checks',
         about: REVISION,
         openedAt: '2026-01-01T00:00:00.000Z',
-        deadlineAt: '2026-01-01T01:00:00.000Z',
+        deadlineAt: new Date(Date.now() + 86_400_000).toISOString(),
         closed: null,
         ...wait,
       })),
@@ -402,7 +433,13 @@ describe('observing open item waits', () => {
     const forge = forgeReader();
     const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
     expect(observer?.observing).toEqual([
-      { sourceInstanceId: 'source-1', everySeconds: 60, labels: [], unservedBindings: [] },
+      {
+        sourceInstanceId: 'source-1',
+        everySeconds: 60,
+        labels: [],
+        unservedBindings: [],
+        wakes: [{ workflow: 'host', wait: 'checks' }],
+      },
     ]);
     expect(await observer?.pass(new Date())).toEqual([]);
     expect(forge.reads).toEqual([]);
@@ -629,6 +666,7 @@ async function labelFixture(
     asks?: { kind: 'issue' | 'pr'; number: number }[];
     reads?: unknown[];
     unserved?: unknown[];
+    failureKind?: string;
   } = {}
 ) {
   const root = await mkdtemp(join(tmpdir(), 'archon-webhook-source-'));
@@ -786,6 +824,273 @@ function receiptStore(knownUser: (id: string) => boolean = () => true) {
     },
   };
 }
+
+test('before-deadline waits are read normally, after-deadline waits are not read', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] });
+  const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt,
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+
+  // Test at exactly the deadline: should be overdue
+  const deadlineTime = new Date('2026-01-01T01:00:00.000Z');
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]),
+    forge,
+  });
+  const [report] = (await observer?.pass(deadlineTime)) ?? [];
+  expect(report?.waits).toBe(0);
+  expect(report?.reads).toBe(0);
+  expect(forge.reads).toEqual([]);
+  expect(report?.unserved).toHaveLength(1);
+  expect(report?.unserved?.[0]?.reason).toContain('deadline passed at');
+});
+
+test('one overdue report per observer process across repeated passes', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] });
+  const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt,
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+
+  const deadlineTime = new Date('2026-01-01T02:00:00.000Z');
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]),
+    forge,
+  });
+
+  // First pass: should report overdue
+  const [report1] = (await observer?.pass(deadlineTime)) ?? [];
+  expect(report1?.unserved).toHaveLength(1);
+  expect(report1?.unserved?.[0]?.reason).toContain('deadline passed at');
+
+  // Second pass: same overdue wait should not be reported again (once per process)
+  const again = (await observer?.pass(new Date(deadlineTime.getTime() + 60_000))) ?? [];
+  expect(again).toEqual([]);
+  expect(forge.reads).toEqual([]);
+});
+
+test('active and overdue waits mixed: only active are read', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] });
+  const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt,
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+
+  const now = new Date('2026-01-01T02:00:00.000Z');
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([
+      { deadlineAt: '2026-01-01T01:00:00.000Z' }, // overdue
+      { deadlineAt: '2026-01-01T03:00:00.000Z' }, // active
+    ]),
+    forge,
+  });
+
+  const [report] = (await observer?.pass(now)) ?? [];
+  expect(report?.waits).toBe(1); // only active
+  expect(report?.reads).toBe(1); // only active is read
+  expect(report?.unserved).toHaveLength(1); // overdue is reported
+});
+
+test('only-overdue waits with no labels perform zero plugin calls but report once', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] });
+  const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt,
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+
+  const now = new Date('2026-01-01T02:00:00.000Z');
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]), // only overdue
+    forge,
+  });
+
+  const [report] = (await observer?.pass(now)) ?? [];
+  expect(report?.waits).toBe(0);
+  expect(report?.reads).toBe(0);
+  expect(report?.unserved).toHaveLength(1);
+  expect(acceptReceipt).not.toHaveBeenCalled();
+});
+
+async function backedOff(kind: string, failOnce = false) {
+  const configPath = await observingFixture(
+    { acceptances: [acceptance()], catchReads: true },
+    { everySeconds: 15 }
+  );
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt: mock(async () => ({ receiptId: 'receipt-1', replay: false })),
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+  let calls = 0;
+  const throwing = {
+    ...forge,
+    commitChecks: async (input: { remote: string; revision: string }) => {
+      calls += 1;
+      forge.reads.push(input);
+      if (!failOnce || calls === 1) throw Object.assign(new Error('slow down'), { kind });
+      return {
+        repo: { host: 'github.com', path: 'owner/repo' },
+        branch: null,
+        revision: input.revision,
+        units: [],
+        summary: {
+          state: 'none' as const,
+          counts: { total: 0, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 },
+        },
+      };
+    },
+  };
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
+    forge: throwing,
+  });
+  return { forge, observer };
+}
+
+test.each(['rate_limited', 'unavailable'])(
+  'a %s read pauses the source, and a later clean pass resumes',
+  async kind => {
+    const { forge, observer } = await backedOff(kind, true);
+    const start = Date.parse('2026-06-01T00:00:00.000Z');
+    const [first] = (await observer?.pass(new Date(start))) ?? [];
+    expect(forge.reads).toHaveLength(1);
+    expect(first?.receipts).toEqual(['receipt-1']);
+    expect(first?.error).toContain('slow down');
+
+    await observer?.pass(new Date(start + 15_000));
+    expect(forge.reads).toHaveLength(1);
+
+    await observer?.pass(new Date(start + 60_000));
+    expect(forge.reads).toHaveLength(2);
+
+    await observer?.pass(new Date(start + 75_000));
+    expect(forge.reads).toHaveLength(3);
+  }
+);
+
+test('repeated temporary failures wait longer, once per pass', async () => {
+  const { forge, observer } = await backedOff('rate_limited');
+  const start = Date.parse('2026-06-01T00:00:00.000Z');
+  await observer?.pass(new Date(start));
+  await observer?.pass(new Date(start + 15_000));
+  expect(forge.reads).toHaveLength(1);
+  await observer?.pass(new Date(start + 60_000));
+  await observer?.pass(new Date(start + 120_000));
+  expect(forge.reads).toHaveLength(2);
+  await observer?.pass(new Date(start + 180_000));
+  expect(forge.reads).toHaveLength(3);
+});
+
+test('a temporary failure stops later forge reads in the same pass', async () => {
+  const configPath = await observingFixture(
+    { acceptances: [], catchReads: true, reads: 2 },
+    { everySeconds: 15 }
+  );
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt: mock(async () => ({ receiptId: 'unused', replay: false })),
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  let calls = 0;
+  const forge = {
+    ...forgeReader(),
+    commitChecks: async () => {
+      calls += 1;
+      throw Object.assign(new Error('slow down'), { kind: 'rate_limited' });
+    },
+  };
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
+    forge,
+  });
+  await observer?.pass(new Date('2026-06-01T00:00:00.000Z'));
+  expect(calls).toBe(1);
+});
+
+test.each(['not_found', 'unspecified'] as const)(
+  'a %s failure does not pause the source',
+  async label => {
+    const kind = label === 'unspecified' ? undefined : label;
+    const configPath = await observingFixture(
+      { acceptances: [acceptance()], catchReads: true },
+      { everySeconds: 15 }
+    );
+    const sources = await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt: mock(async () => ({ receiptId: 'receipt-1', replay: false })),
+      isKnownUser: async () => true,
+      hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
+    });
+    const forge = forgeReader();
+    const throwing = {
+      ...forge,
+      commitChecks: async (input: { remote: string; revision: string }) => {
+        forge.reads.push(input);
+        const error = new Error('missing');
+        if (kind !== undefined) Object.assign(error, { kind });
+        throw error;
+      },
+    };
+    const observer = createItemWaitObserver({
+      sources,
+      store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
+      forge: throwing,
+    });
+    const start = Date.parse('2026-06-01T00:00:00.000Z');
+    await observer?.pass(new Date(start));
+    await observer?.pass(new Date(start + 15_000));
+    expect(forge.reads).toHaveLength(2);
+  }
+);
+
+test('an admission error does not pause the source', async () => {
+  const configPath = await observingFixture({ acceptances: [acceptance()] }, { everySeconds: 15 });
+  const sources = await loadWebhookSourcePlugins(configPath, {
+    acceptReceipt: mock(async () => {
+      throw new Error('store down');
+    }),
+    isKnownUser: async () => true,
+    hasDeliveryReceipt: async () => false,
+    getReceipt: async () => null,
+  });
+  const forge = forgeReader();
+  const observer = createItemWaitObserver({
+    sources,
+    store: waitStore([{ deadlineAt: '2026-12-31T23:59:59.000Z' }]),
+    forge,
+  });
+  const start = Date.parse('2026-06-01T00:00:00.000Z');
+  const [first] = (await observer?.pass(new Date(start))) ?? [];
+  expect(first?.error).toContain('store down');
+  await observer?.pass(new Date(start + 15_000));
+  expect(forge.reads).toHaveLength(2);
+});
 
 describe('observing label bindings', () => {
   const MARKER = 'observe:label-seen:binding-1:github.com/owner/repo:factory';
@@ -1061,5 +1366,31 @@ describe('observing label bindings', () => {
       },
     ]);
     expect(forge.reads).toEqual([]);
+  });
+
+  test('a rate_limited label read pauses the source', async () => {
+    const configPath = await labelFixture();
+    const sources = await loadWebhookSourcePlugins(configPath, receiptStore().dependencies);
+    const inner = labelForge(new Map([[5, 'event-1']]), new Set([5]));
+    const forge = {
+      ...inner,
+      labelAdded: async (input: Parameters<typeof inner.labelAdded>[0]) => {
+        try {
+          return await inner.labelAdded(input);
+        } catch (error) {
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+            kind: 'rate_limited',
+          });
+        }
+      },
+    };
+    const observer = createItemWaitObserver({ sources, store: waitStore([]), forge });
+    const start = Date.parse('2026-06-01T00:00:00.000Z');
+    const [first] = (await observer?.pass(new Date(start))) ?? [];
+    expect(first?.error).toContain('events unavailable');
+    const reads = forge.reads.length;
+    expect(reads).toBeGreaterThan(0);
+    await observer?.pass(new Date(start + 15_000));
+    expect(forge.reads).toHaveLength(reads);
   });
 });

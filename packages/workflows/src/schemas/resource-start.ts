@@ -591,6 +591,8 @@ const sourceReceiptAcceptanceBaseSchema = z
             status: startBindingPreparationStatusSchema.extract(['unmatched', 'rejected']),
             reason: z.string(),
             refused: handoffRefusalSchema.optional(),
+            /** The item the binding maps the event to, when it got that far before refusing. */
+            itemKey: z.string().min(1).optional(),
           })
           .strict()
       )
