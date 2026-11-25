@@ -16,6 +16,7 @@ import {
   parsePackDeclaration,
   PackSettingsError,
   FileSettingError,
+  assertReadFileSettings,
   resolveRunStartInputs,
 } from './pack-settings';
 import type { PackSettingOrigin, PackSettingSpec } from './schemas/pack-settings';
@@ -542,6 +543,31 @@ describe('validateProjectPackSettings file settings', () => {
     expect(await resolveRunStartInputs(cwd, policy, undefined)).toEqual({
       inputs: { policy: 'docs/review.md' },
     });
+  });
+
+  it('the check before launch refuses only a missing file, leaving other pack errors to start', async () => {
+    const required = packWith({
+      policy: { type: 'string', file: true },
+      token: { type: 'string', required: true },
+    });
+    await writeProject('settings:\n  policy: docs/review.md\n');
+    await expect(assertReadFileSettings(cwd, required, undefined)).rejects.toBeInstanceOf(
+      FileSettingError
+    );
+    // An unset required setting, or a workflow reading no file setting, is start's to refuse.
+    const unread: PackWorkflow = {
+      pack: { ...(required.pack as NonNullable<PackWorkflow['pack']>), fileSettingReads: [] },
+    };
+    await expect(assertReadFileSettings(cwd, unread, undefined)).resolves.toBeUndefined();
+    await expect(resolveRunStartInputs(cwd, unread, undefined)).rejects.toThrow(
+      "requires setting 'token'"
+    );
+    // A project file start cannot read is reported by start, with its message.
+    await writeProject('settings:\n  colour: red\n');
+    await expect(assertReadFileSettings(cwd, required, undefined)).resolves.toBeUndefined();
+    await expect(resolveRunStartInputs(cwd, required, undefined)).rejects.toThrow(
+      "unknown setting 'colour'"
+    );
   });
 
   it('starts with an empty value, as validate accepts it', async () => {

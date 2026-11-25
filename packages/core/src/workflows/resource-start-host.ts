@@ -14,7 +14,7 @@ import {
   WorkflowCredentialPreflightError,
 } from '@archon/workflows/run-preflight';
 import { assertRunForgeAccess, ForgeRequirementError } from '@archon/workflows/run-forge-access';
-import { FileSettingError, resolveRunStartInputs } from '@archon/workflows/pack-settings';
+import { assertReadFileSettings, FileSettingError } from '@archon/workflows/pack-settings';
 import {
   requireTerminalStatusWrite,
   TerminalStatusWriteError,
@@ -246,9 +246,8 @@ async function prepareBinding(
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
     await assertBindingRequirements(host, intent, workflow);
     const bindingInputs = resolveBindingInputs(intent, workflow);
-    // A start its pack settings refuse (a missing file, an unset required setting) is
-    // refused here, before it takes a slot, not when its run dispatches.
-    await resolveRunStartInputs(cwd, workflow, bindingInputs);
+    // Before it takes a slot, so the refusal lands on the item's stop with the setting.
+    await assertReadFileSettings(cwd, workflow, bindingInputs);
 
     let isolation: PreparedWorkflowLaunch['execution']['isolation'];
     let handoff: CheckoutHandoffRunMetadata | undefined;

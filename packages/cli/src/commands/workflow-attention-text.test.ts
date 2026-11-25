@@ -2,7 +2,11 @@ import { expect, test } from 'bun:test';
 import type { AttentionQueueItem, AttentionQueueScope } from '@archon/workflows/attention-queue';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { workflowEventCursor } from '@archon/workflows/store';
-import { attentionItemLines, attentionStreamText } from './workflow-attention-text';
+import {
+  attentionItemLines,
+  attentionStreamText,
+  refusedStartLines,
+} from './workflow-attention-text';
 
 const scope: AttentionQueueScope = { kind: 'all' };
 const cursor = workflowEventCursor('c');
@@ -279,4 +283,21 @@ test('a stopped item names its stage and outcome, and its commands work from any
   expect(limited).toContain("'build-rounds'");
   expect(limited).toContain('3 of 3');
   expect(limited).toContain("archon workflow run build --item 'release 1' --cwd '/srv/acme web'");
+});
+
+test('a missing file setting points the fix at whoever owns the value', () => {
+  const refused = (origin: 'supplied' | 'project') =>
+    refusedStartLines([
+      {
+        receiptId: 'r-1',
+        bindingId: 'build',
+        workflow: 'chain-build',
+        reason: 'file_setting_missing',
+        refusedAt: '2026-11-25T00:00:00.000Z',
+        fileSetting: { setting: 'policy', path: '/p/docs/policy.md', origin },
+      },
+    ]).join('\n');
+  // A supplied value beats the project file, so editing that file would not clear it.
+  expect(refused('supplied')).not.toContain('.archon/packs');
+  expect(refused('project')).toContain('.archon/packs');
 });

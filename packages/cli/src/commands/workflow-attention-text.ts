@@ -20,7 +20,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowNotice } from '@archon/workflows/workflow-notice';
 import { PACK_SETTING_ORIGIN_TEXT } from '@archon/workflows/pack-settings';
-import type { StoppedRefusal } from '@archon/workflows/schemas/run-metadata';
+import type { FileSettingRefusal, StoppedRefusal } from '@archon/workflows/schemas/run-metadata';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { formatAge } from './workflow-shared';
 
@@ -171,13 +171,19 @@ export function refusedStartLines(refused: readonly StoppedRefusal[]): string[] 
   return refused.flatMap(start => [
     `the start of ${start.workflow} (binding ${start.bindingId}) was refused before launch at ${start.refusedAt}: ${refusalReason(start)}`,
     ...(start.reason === 'no_default_provider' ? ['set one: archon ai default <provider>'] : []),
-    ...(start.fileSetting === undefined
-      ? []
-      : [
-          `restore the file, or set '${start.fileSetting.setting}' to an existing file under 'settings:' in the project's .archon/packs/ file; archon validate workflows checks it`,
-        ]),
+    ...(start.fileSetting === undefined ? [] : [fileSettingFix(start.fileSetting)]),
     `see the refusal: archon trigger inspect ${start.receiptId}`,
   ]);
+}
+
+/**
+ * A supplied value beats the project file and validate never sees it, so only the binding
+ * that supplies it can change it; any other origin the project file overrides.
+ */
+function fileSettingFix({ setting, origin }: FileSettingRefusal): string {
+  return origin === 'supplied'
+    ? `restore the file, or change the value the binding supplies for '${setting}' in its inputs`
+    : `restore the file, or set '${setting}' to an existing file under 'settings:' in the project's .archon/packs/ file; archon validate workflows checks it`;
 }
 
 function refusalReason(start: StoppedRefusal): string {
