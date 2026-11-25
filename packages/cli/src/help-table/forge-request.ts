@@ -10,29 +10,30 @@ function isSchema(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The shape of the smallest request `schema` admits: only required properties and the
- * first alternative. Every value the caller supplies is a `"<name>"` placeholder, with
- * its type or choices when it is not a string (`"<number: integer>"`,
- * `"<method: merge|squash>"`), so no example value can be copied as a real one. Only a
- * `const`, which the caller cannot choose, is printed as itself. Throws on a schema shape
- * it cannot build from rather than printing a wrong example.
+ * The template of the smallest request `schema` admits: only required properties and the
+ * first alternative. Every value the caller supplies is a bare token outside JSON quotes,
+ * `<name>`, or `<name: type>` and `<name: a|b>` when it is not a free string, so a
+ * template with any value left unfilled is not JSON and the CLI refuses it before
+ * dispatch. Only a `const`, which the caller cannot choose, prints as JSON. Throws on a
+ * schema shape it cannot build from rather than printing a wrong template.
  */
-export function exampleRequest(schema: unknown, name = 'value'): unknown {
+export function exampleTemplate(schema: unknown, name = 'value'): string {
   if (!isSchema(schema)) throw new Error(`request schema at '${name}' is not an object`);
-  if ('const' in schema) return schema.const;
+  if ('const' in schema) return JSON.stringify(schema.const);
   if (Array.isArray(schema.enum)) return `<${name}: ${schema.enum.join('|')}>`;
   const alternatives = schema.anyOf ?? schema.oneOf;
-  if (Array.isArray(alternatives)) return exampleRequest(alternatives[0], name);
+  if (Array.isArray(alternatives)) return exampleTemplate(alternatives[0], name);
   switch (schema.type) {
     case 'object': {
       const properties = isSchema(schema.properties) ? schema.properties : {};
       const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
-      return Object.fromEntries(
-        required.map(property => [property, exampleRequest(properties[property], property)])
+      const fields = required.map(
+        property => `${JSON.stringify(property)}:${exampleTemplate(properties[property], property)}`
       );
+      return `{${fields.join(',')}}`;
     }
     case 'array':
-      return [exampleRequest(schema.items, name)];
+      return `[${exampleTemplate(schema.items, name)}]`;
     case 'string':
       return `<${name}>`;
     case 'integer':
@@ -45,10 +46,25 @@ export function exampleRequest(schema: unknown, name = 'value'): unknown {
   }
 }
 
-/** The request type and a minimal example `--data` value for one operation's schema. */
+/** Every described property as `dotted.path: description`, from all alternatives, once each. */
+function fieldNotes(schema: unknown, path: string, notes: Map<string, string>): void {
+  if (!isSchema(schema)) return;
+  if (path && typeof schema.description === 'string') notes.set(path, schema.description);
+  for (const alternative of [schema.anyOf, schema.oneOf].flat())
+    if (alternative !== undefined) fieldNotes(alternative, path, notes);
+  if (isSchema(schema.properties))
+    for (const [property, child] of Object.entries(schema.properties))
+      fieldNotes(child, path ? `${path}.${property}` : property, notes);
+  if (schema.items !== undefined) fieldNotes(schema.items, path, notes);
+}
+
+/** The request type, its field notes and a template `--data` value for one operation. */
 export function forgeRequestHelp(op: string, schema: unknown): HelpRequest {
+  const notes = new Map<string, string>();
+  fieldNotes(schema, '', notes);
   return {
     type: convertOutputSchema(schema).type,
-    example: `archon forge ${op} --data '${JSON.stringify(exampleRequest(schema))}'`,
+    notes: [...notes].map(([path, description]) => `${path}: ${description}`),
+    example: `archon forge ${op} --data '${exampleTemplate(schema)}'`,
   };
 }

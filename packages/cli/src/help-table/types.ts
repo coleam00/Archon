@@ -34,9 +34,11 @@ export interface HelpEntry {
   request?: HelpRequest;
 }
 
-/** A request type and one example invocation, rendered in that entry's own scoped help. */
+/** A request type, notes on its fields and one template invocation, shown in its own help. */
 export interface HelpRequest {
   type: string;
+  /** `path: description` for each field whose schema describes it. */
+  notes: string[];
   example: string;
 }
 

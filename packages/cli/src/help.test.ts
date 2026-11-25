@@ -2,11 +2,7 @@ import { describe, it, expect } from 'bun:test';
 import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import {
-  cliForgeCheckRequestSchema,
-  cliForgeJsonSchemas,
-  cliForgeMetadataRequestSchema,
-} from '@archon/forge';
+import { cliForgeJsonSchemas } from '@archon/forge';
 import { forgeRequestSchema } from '@archon/forge/operations';
 import { convertOutputSchema } from '@archon/workflows/output-types/schema-to-ts';
 import { formatSpecLine, helpEntries, renderHelp, renderHelpFor } from './help';
@@ -20,12 +16,19 @@ function indentType(type: string): string {
   return type.replace(/^/gm, '  ');
 }
 
-/** The `--data` value of the request example in a forge operation's scoped help. */
-function exampleData(help: string, subcommand: string): unknown {
+/** The `--data` template of the request example in a forge operation's scoped help. */
+function exampleTemplate(help: string, subcommand: string): string {
   const prefix = `  archon forge ${subcommand} --data '`;
   const line = help.split('\n').find(l => l.startsWith(prefix));
   expect(line, `no request example in forge ${subcommand} --help`).toBeDefined();
-  return JSON.parse((line ?? '').slice(prefix.length, -1));
+  return (line ?? '').slice(prefix.length, -1);
+}
+
+/** The template as a tree, each bare `<...>` placeholder read as the string it shows. */
+function exampleData(help: string, subcommand: string): unknown {
+  return JSON.parse(
+    exampleTemplate(help, subcommand).replace(/<[^<>"]+>/g, token => JSON.stringify(token))
+  );
 }
 
 /**
@@ -133,65 +136,98 @@ describe('CLI help output', () => {
     expect(scoped).not.toContain('--follow');
   });
 
-  // The parser `archon forge <op>` reads each request with, once the host adds op and id.
-  const hostParsers: Record<string, { safeParse(value: unknown): { success: boolean } }> = {
-    metadata: cliForgeMetadataRequestSchema,
-    check: cliForgeCheckRequestSchema,
-  };
+  type Schema = Record<string, unknown>;
 
-  /**
-   * Fills an example along its schema. Every value but a `const` (a discriminator such as a
-   * subject's `kind`) must be a placeholder, so none can be copied as a real value. Each is
-   * filled with a value of its stated type; a string also fits the field's `pattern`.
-   */
-  function fillPlaceholders(schema: unknown, value: unknown): unknown {
-    const node = schema as Record<string, unknown>;
-    if ('const' in node) {
-      expect(value).toBe(node.const);
-      return value;
-    }
-    const alternatives = (node.anyOf ?? node.oneOf) as unknown[] | undefined;
-    if (alternatives) return fillPlaceholders(alternatives[0], value);
-    if (node.type === 'object') {
-      const properties = node.properties as Record<string, unknown>;
-      return Object.fromEntries(
-        Object.entries(value as object).map(([k, v]) => [k, fillPlaceholders(properties[k], v)])
+  /** The alternative whose `const` properties the example names, such as a subject's `kind`. */
+  function chosenAlternative(alternatives: Schema[], value: unknown): Schema {
+    const chosen = alternatives.find(alternative => {
+      const properties = alternative.properties as Record<string, Schema> | undefined;
+      if (typeof value !== 'object' || value === null) return properties === undefined;
+      return Object.entries(properties ?? {}).every(
+        ([key, child]) => !('const' in child) || (value as Schema)[key] === child.const
       );
-    }
-    if (node.type === 'array')
-      return (value as unknown[]).map(v => fillPlaceholders(node.items, v));
-    const placeholder = typeof value === 'string' ? /^<[^:>]+(?:: (.+))?>$/.exec(value) : null;
-    expect(
-      placeholder,
-      `example value ${JSON.stringify(value)} is not a placeholder`
-    ).not.toBeNull();
-    const kind = placeholder?.[1];
-    if (Array.isArray(node.enum)) return node.enum[0];
-    if (kind === 'integer' || kind === 'number') return 1;
-    if (kind === 'boolean') return true;
-    if (kind === 'null') return null;
-    const pattern = typeof node.pattern === 'string' ? new RegExp(node.pattern) : /./;
-    return ['aaaaaaaa', 'aaaaaa'].find(candidate => pattern.test(candidate));
+    });
+    expect(chosen, `no alternative matches ${JSON.stringify(value)}`).toBeDefined();
+    return chosen ?? {};
   }
 
-  // Every operation's request type and example come from its schema, and the example is a
-  // request the host accepts once the placeholders are filled in. `checks` is an alias.
+  /** Every value of an example but a `const` is a placeholder; none can be copied as real. */
+  function expectPlaceholders(schema: Schema, value: unknown): void {
+    if ('const' in schema) return void expect(value).toBe(schema.const);
+    const alternatives = (schema.anyOf ?? schema.oneOf) as Schema[] | undefined;
+    if (alternatives) return expectPlaceholders(chosenAlternative(alternatives, value), value);
+    if (schema.type === 'object') {
+      const properties = schema.properties as Record<string, Schema>;
+      for (const [key, child] of Object.entries(value as Schema))
+        expectPlaceholders(properties[key] ?? {}, child);
+      return;
+    }
+    if (schema.type === 'array') {
+      for (const item of value as unknown[]) expectPlaceholders(schema.items as Schema, item);
+      return;
+    }
+    expect(String(value), 'example value is not a placeholder').toMatch(/^<[^<>]+>$/);
+  }
+
+  // Every operation's request type and template come from its schema, and every value the
+  // caller supplies is a bare placeholder, so an unfilled template is not JSON at all.
   for (const { op, request } of cliForgeJsonSchemas().operations) {
     for (const subcommand of op === 'checks.state' ? [op, 'checks'] : [op]) {
-      it(`renders the request and an accepted example in forge ${subcommand} --help`, () => {
-        const scoped = renderHelp('forge', subcommand);
+      it(`renders the request and a template example in forge ${subcommand} --help`, () => {
+        const scoped = renderHelpFor(['forge', subcommand]);
         expect(scopedHelpOptions(['forge', subcommand])).toContain('--data <json>');
         expect(scoped).toContain(
           `Request (--data):\n${indentType(convertOutputSchema(request).type)}`
         );
-        const example = {
-          ...(fillPlaceholders(request, exampleData(scoped, subcommand)) as object),
-          op,
-          operationId: 'help',
-        };
-        expect((hostParsers[op] ?? forgeRequestSchema).safeParse(example).success).toBe(true);
+        expectPlaceholders(request as Schema, exampleData(scoped, subcommand));
+        expect(() => JSON.parse(exampleTemplate(scoped, subcommand))).toThrow();
       });
     }
+  }
+
+  // Filling a template with deliberate values, keyed by field path, gives a request the
+  // host accepts.
+  const repo = { 'repo.host': '"forge.example"', 'repo.path': '"a/b"' };
+  const ref = { 'ref.repo.host': '"forge.example"', 'ref.repo.path': '"a/b"', 'ref.number': '4' };
+  const filled: Record<string, Record<string, string>> = {
+    'pr.merge': { ...ref, method: '"squash"', 'conditions.head': '"abc123"' },
+    'pr.close': ref,
+    'workitem.create': {
+      ...repo,
+      title: '"Title"',
+      marker: '"<!-- item-31 -->"',
+      body: '"<!-- item-31 -->\\nBody"',
+    },
+    'workitem.edit-body': { ...ref, body: '"New body"' },
+    'workitem.label.add': {
+      'subject.ref.repo.host': '"forge.example"',
+      'subject.ref.repo.path': '"a/b"',
+      'subject.ref.number': '4',
+      name: '"queued"',
+    },
+  };
+  for (const [op, values] of Object.entries(filled)) {
+    it(`fills the forge ${op} template into a request the host accepts`, () => {
+      const template = exampleTemplate(renderHelpFor(['forge', op]), op);
+      const tree = exampleData(renderHelpFor(['forge', op]), op);
+      // Walk the tree for each placeholder's path, then write that path's value in its place.
+      const paths: string[] = [];
+      const walk = (value: unknown, path: string): void => {
+        if (typeof value === 'object' && value !== null)
+          for (const [key, child] of Object.entries(value))
+            walk(child, path ? `${path}.${key}` : key);
+        else if (typeof value === 'string' && value.startsWith('<')) paths.push(path);
+      };
+      walk(tree, '');
+      let index = 0;
+      const request = template.replace(/<[^<>"]+>/g, () => {
+        const value = values[paths[index++] ?? ''];
+        expect(value, `no deliberate value for ${paths[index - 1]}`).toBeDefined();
+        return value ?? '';
+      });
+      const parsed = { ...JSON.parse(request), op, operationId: 'help' };
+      expect(forgeRequestSchema.safeParse(parsed).success).toBe(true);
+    });
   }
 
   it('shows the pull request and the head pr.merge is pinned to, and only what it needs', () => {
@@ -199,7 +235,7 @@ describe('CLI help output', () => {
     expect(scoped).toMatch(/readonly ref: \{\n\s+readonly repo: \{/);
     expect(scoped).toContain('readonly number: number;');
     expect(scoped).toContain('readonly head: string;');
-    expect(exampleData(scoped, 'pr.merge')).toEqual({
+    expect(exampleData(renderHelpFor(['forge', 'pr.merge']), 'pr.merge')).toEqual({
       ref: { repo: { host: '<host>', path: '<path>' }, number: '<number: integer>' },
       method: '<method: merge|squash>',
       conditions: { head: '<head>' },
@@ -220,12 +256,21 @@ describe('CLI help output', () => {
     };
     expect(forgeRequestHelp('op', base)).toEqual({
       type: '{\n  readonly ref: number;\n  readonly note?: string;\n}',
-      example: `archon forge op --data '{"ref":"<ref: integer>"}'`,
+      notes: [],
+      example: `archon forge op --data '{"ref":<ref: integer>}'`,
     });
-    const help = forgeRequestHelp('op', added);
+    const help = forgeRequestHelp('op', {
+      ...added,
+      properties: { ...added.properties, pinned: { type: 'string', description: 'Pinned value' } },
+    });
     expect(help.type).toContain('readonly pinned: string;');
-    expect(help.example).toBe(
-      `archon forge op --data '{"ref":"<ref: integer>","pinned":"<pinned>"}'`
+    expect(help.notes).toEqual(['pinned: Pinned value']);
+    expect(help.example).toBe(`archon forge op --data '{"ref":<ref: integer>,"pinned":<pinned>}'`);
+  });
+
+  it('says in forge workitem.create --help that the marker is chosen per item', () => {
+    expect(renderHelpFor(['forge', 'workitem.create'])).toContain(
+      'marker: Chosen for this one item and used by no other'
     );
   });
 

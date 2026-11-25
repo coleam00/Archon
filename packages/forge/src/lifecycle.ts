@@ -140,7 +140,11 @@ export const workItemCreateRequestSchema = requestBase
     repo: repoRefSchema,
     title: text,
     body: text,
-    marker: text.refine(value => !/[\r\n]/.test(value), 'marker must be one line'),
+    marker: text
+      .refine(value => !/[\r\n]/.test(value), 'marker must be one line')
+      .describe(
+        "Chosen for this one item and used by no other; a create that repeats a marker returns the item it first created. The body's first line must be this marker."
+      ),
   })
   .refine(
     value => value.body.split(/\r?\n/, 1)[0] === value.marker,

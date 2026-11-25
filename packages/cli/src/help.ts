@@ -154,6 +154,10 @@ export function renderHelp(command?: string, subcommand?: string): string {
     sections.push('');
     sections.push('Request (--data):');
     sections.push(request.type.replace(/^/gm, '  '));
+    if (request.notes.length > 0) {
+      sections.push('');
+      sections.push(request.notes.map(note => `  ${note}`).join('\n'));
+    }
   }
   const examples = command === undefined ? orderedExamples : selectExamplesFor(entries);
   const exampleLines = [...(request ? [request.example] : []), ...examples.map(ex => ex.text)];
