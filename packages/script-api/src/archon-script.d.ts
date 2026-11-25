@@ -2282,6 +2282,7 @@ declare module 'archon:script' {
       readonly hostId: string;
       readonly queuedAt: string;
       readonly ahead: number;
+      readonly blockedBy: string | null;
       readonly heldBehind: {
         readonly runId: string;
         readonly workflow: string;
@@ -2605,6 +2606,28 @@ declare module 'archon:script' {
         readonly refusedAt: string;
       }>;
       readonly checkout: string | null;
+    } | {
+      readonly kind: 'unreadable_start';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly start: {
+        readonly requestId: string;
+        readonly resource: string;
+        readonly hostId: string;
+        readonly behind: number;
+      };
     }>;
     readonly answers: ReadonlyArray<{
       readonly kind: 'attention';
@@ -2906,6 +2929,7 @@ declare module 'archon:script' {
         readonly hostId: string;
         readonly queuedAt: string;
         readonly ahead: number;
+        readonly blockedBy: string | null;
         readonly heldBehind: {
           readonly runId: string;
           readonly workflow: string;
@@ -3229,6 +3253,28 @@ declare module 'archon:script' {
           readonly refusedAt: string;
         }>;
         readonly checkout: string | null;
+      } | {
+        readonly kind: 'unreadable_start';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly start: {
+          readonly requestId: string;
+          readonly resource: string;
+          readonly hostId: string;
+          readonly behind: number;
+        };
       }>;
       readonly answers: ReadonlyArray<{
         readonly kind: 'attention';

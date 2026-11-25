@@ -265,6 +265,11 @@ export const queuedItemStartSchema = z.object({
   hostId: z.string(),
   queuedAt: z.string().datetime(),
   ahead: z.number().int().nonnegative(),
+  /**
+   * The first request queued ahead of it whose stored launch does not read, or null: admission
+   * keeps queue order, so nothing behind that request is admitted until it is withdrawn.
+   */
+  blockedBy: z.string().nullable(),
 });
 export type QueuedItemStart = z.infer<typeof queuedItemStartSchema>;
 

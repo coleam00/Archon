@@ -203,8 +203,10 @@ export function createFileAdmissionStore(
         tx.documents[pathFor('requests', id)] = row;
         const resource = await tx.slot(row.resource);
         resource.queue = resource.queue.filter(key => key !== id);
-        return row.launch;
+        return { launch: row.launch };
       }),
+    // Every request document is parsed when it is read, so none sits unreadable in a queue.
+    listUnreadableQueuedStarts: async () => [],
     ...createReceiptOperations(root, write, query),
   };
 }

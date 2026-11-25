@@ -205,6 +205,17 @@ export type HeldStart =
       queuedAt: string;
     };
 
+/** A queued request whose stored launch does not read, and what it holds behind it. */
+export interface UnreadableQueuedStart {
+  requestId: string;
+  resource: string;
+  hostId: string;
+  itemId: string | null;
+  queuedAt: string;
+  /** How many requests are queued behind it on its resource and host. */
+  behind: number;
+}
+
 /** A held `trigger` start on one item, as the item read lists it. */
 export type HeldItemStart = Pick<
   Extract<HeldStart, { kind: 'trigger' }>,
@@ -676,7 +687,20 @@ export interface IResourceStartStore {
   readItemStartLimits(itemId: string): Promise<ItemStartLimits>;
   /** The starts on item `itemId` whose status is `queued`, in queue order. */
   listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]>;
-  withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
+  /**
+   * Withdraw a queued request: the launch it held, `launch: null` when its stored launch does
+   * not read (it is withdrawn all the same, so it no longer holds the queue behind it), or
+   * null when the request is not queued.
+   */
+  withdrawQueuedResourceStart(
+    id: string
+  ): Promise<{ launch: PreparedWorkflowLaunch | null } | null>;
+  /**
+   * The queued requests whose stored launch does not read, oldest first. Admission keeps
+   * queue order, so each holds every request queued behind it on its resource and host until
+   * it is withdrawn. A store that parses every request when it reads it has none.
+   */
+  listUnreadableQueuedStarts(): Promise<UnreadableQueuedStart[]>;
   claimStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;

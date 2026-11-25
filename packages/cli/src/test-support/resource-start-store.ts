@@ -367,8 +367,9 @@ export function createInMemoryResourceStartStore(
       const request = requests.get(id);
       if (request?.status !== 'queued') return null;
       request.status = 'withdrawn';
-      return structuredClone(request.launch);
+      return { launch: structuredClone(request.launch) };
     },
+    listUnreadableQueuedStarts: async () => [],
     claimStartBindingPreparation: async (
       input
     ): ReturnType<IResourceStartStore['claimStartBindingPreparation']> => {

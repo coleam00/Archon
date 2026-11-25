@@ -52,11 +52,19 @@ export function stoppedRunIdOfRef(ref: string): string | undefined {
     : undefined;
 }
 
+const UNREADABLE_START_REF_PREFIX = 'unreadable-start:';
+
+/** The ref of a queued request whose launch does not read; nothing reads it back. */
+export function unreadableStartRef(requestId: string): string {
+  return `${UNREADABLE_START_REF_PREFIX}${requestId}`;
+}
+
 /** True when `ref` has the form of an item no run holds, open or closed. */
 export function isItemWithoutRunRef(ref: string): boolean {
   return (
     askIdOfRef(ref) !== undefined ||
     waitRunIdOfRef(ref) !== undefined ||
-    stoppedRunIdOfRef(ref) !== undefined
+    stoppedRunIdOfRef(ref) !== undefined ||
+    (ref.startsWith(UNREADABLE_START_REF_PREFIX) && ref.length > UNREADABLE_START_REF_PREFIX.length)
   );
 }

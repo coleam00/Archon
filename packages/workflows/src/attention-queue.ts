@@ -214,12 +214,27 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),
+  z.object({
+    kind: z.literal('unreadable_start'),
+    ...itemBase,
+    /**
+     * A queued request whose stored launch does not read. Admission keeps queue order, so
+     * the `behind` requests queued after it on its resource and host wait until it is
+     * withdrawn (`archon trigger withdraw <requestId>`). `pausedAt` is when it was queued.
+     */
+    start: z.object({
+      requestId: z.string(),
+      resource: z.string(),
+      hostId: z.string(),
+      behind: z.number().int().nonnegative(),
+    }),
+  }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
 /** An item a paused run holds. */
 export type RunAttentionQueueItem = Exclude<
   AttentionQueueItem,
-  { kind: 'overdue_wait' | 'stopped' }
+  { kind: 'overdue_wait' | 'stopped' | 'unreadable_start' }
 > & {
   run: object;
 };
@@ -252,11 +267,13 @@ export type AskQueueItem = Extract<AttentionQueueItem, { kind: 'attention' }> & 
 /** An item no run holds: an ask, an overdue wait, or a stopped item. */
 export type AttentionQueueItemWithoutRun =
   | AskQueueItem
-  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' }>;
+  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' | 'unreadable_start' }>;
 /** An overdue wait's queue item. */
 export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
 /** A stopped item's queue item. */
 export type StoppedQueueItem = Extract<AttentionQueueItem, { kind: 'stopped' }>;
+/** An unreadable queued request's queue item. */
+export type UnreadableStartQueueItem = Extract<AttentionQueueItem, { kind: 'unreadable_start' }>;
 
 const RUN_REF_SEPARATOR = ':';
 

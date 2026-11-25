@@ -35,6 +35,7 @@ const read: ItemRead = {
       hostId: 'host',
       queuedAt: '2026-11-01T09:35:00.000Z',
       ahead: 12,
+      blockedBy: null,
       heldBehind: null,
       waitsForRunLimit: false,
     },
@@ -287,6 +288,16 @@ test('a start refused for a held item keeps naming the run that held it', () => 
     SERVED
   ).join('\n');
   expect(text).toContain(`refused, held by run ${holder.slice(0, 8)}`);
+});
+
+test('a queued start behind an unreadable request names it instead of what would admit it', () => {
+  const [queued] = read.queued;
+  if (queued === undefined) throw new Error('no queued start');
+  const lines = itemReadLines({ ...read, queued: [{ ...queued, blockedBy: 'q-head' }] }, SERVED);
+  const section = lines.slice(lines.indexOf('Waiting to start:') + 1, lines.indexOf('Links:'));
+  expect(section.join('\n')).toContain('request q-head ahead of it cannot be read');
+  expect(section.join('\n')).toContain('archon trigger withdraw q-head');
+  expect(section.join('\n')).not.toContain('wake watcher');
 });
 
 test('an item read prints a start waiting for capacity with the id that withdraws it', () => {

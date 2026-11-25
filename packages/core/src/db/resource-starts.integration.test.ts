@@ -780,7 +780,7 @@ describe('durable resource starts', () => {
 
     const writer = await holdSqliteWriterLock();
     try {
-      expect((await withdrawQueuedResourceStart(queuedId))?.run.id).toBe(queuedId);
+      expect((await withdrawQueuedResourceStart(queuedId))?.launch?.run.id).toBe(queuedId);
     } finally {
       expect(await writer.exited).toBe(0);
     }
@@ -1314,7 +1314,7 @@ test('a persisted malformed guard stays inspectable without stalling independent
   });
   expect(await getWorkflowRun(malformed.run.id)).toBeNull();
   expect(await withdrawQueuedResourceStart(malformed.run.id)).toMatchObject({
-    run: { id: malformed.run.id },
+    launch: { run: { id: malformed.run.id } },
   });
 });
 

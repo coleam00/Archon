@@ -273,16 +273,42 @@ function headingLine(item: AttentionQueueItem): string {
           : `paused ${formatAge(item.pausedAt)} ago`;
     return `  ${item.run.id}  ${item.run.workflow}  ${project}  ${paused}`;
   }
-  const opened =
-    item.pausedAt === null ? 'open time not recorded' : `opened ${formatAge(item.pausedAt)} ago`;
   const key = item.item === undefined ? '' : `  item ${item.item.key}`;
-  if (item.kind === 'stopped') {
-    const ended =
-      item.pausedAt === null ? 'end time not recorded' : `ended ${formatAge(item.pausedAt)} ago`;
-    return `  ${item.ref}  stopped  ${project}${key}  ${ended}`;
+  const [what, event] = withoutRunHeading[item.kind];
+  const at =
+    item.pausedAt === null
+      ? `${event} time not recorded`
+      : `${event} ${formatAge(item.pausedAt)} ago`;
+  return `  ${item.ref}  ${what}  ${project}${key}  ${at}`;
+}
+
+/** What the heading of an item no run holds calls it, and the event its time is of. */
+const withoutRunHeading: Record<AttentionQueueItem['kind'], [string, string]> = {
+  attention: ['open ask', 'opened'],
+  overdue_wait: ['overdue wait', 'opened'],
+  stopped: ['stopped', 'ended'],
+  unreadable_start: ['unreadable start', 'queued'],
+  // Held by a run, so headed by it instead; listed only so every kind has a heading.
+  awaiting_response: ['gate', 'paused'],
+  usage_limit: ['usage limit', 'paused'],
+  unreadable: ['unreadable', 'paused'],
+  owner_lost: ['owner gone', 'paused'],
+};
+
+/** What an item no run holds says under its heading line; a run's kinds never reach it. */
+function withoutRunBody(item: AttentionQueueItem): string[] {
+  switch (item.kind) {
+    case 'overdue_wait':
+      return overdueWaitLines(item);
+    case 'stopped':
+      return stoppedLines(item);
+    case 'unreadable_start':
+      return unreadableStartLines(item);
+    case 'attention':
+      return refItemLines(item);
+    default:
+      return [];
   }
-  const what = item.kind === 'overdue_wait' ? 'overdue wait' : 'open ask';
-  return `  ${item.ref}  ${what}  ${project}${key}  ${opened}`;
 }
 
 /** One queue item as a block of text lines. */
@@ -300,15 +326,25 @@ export function attentionItemLines(
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
   // No run holds it, so no run command answers it: it is answered by its ref.
-  const body = isHeldByRun(item)
-    ? itemBody(item, detail)
-    : item.kind === 'overdue_wait'
-      ? overdueWaitLines(item)
-      : item.kind === 'stopped'
-        ? stoppedLines(item)
-        : refItemLines(item);
+  const body = isHeldByRun(item) ? itemBody(item, detail) : withoutRunBody(item);
   for (const line of body) lines.push(`    ${line}`);
   return lines;
+}
+
+/**
+ * A queued request whose launch does not read: what it holds behind it, and the withdrawal
+ * that frees them.
+ */
+function unreadableStartLines(
+  item: Extract<AttentionQueueItem, { kind: 'unreadable_start' }>
+): string[] {
+  const { requestId, resource, hostId, behind } = item.start;
+  return [
+    behind === 0
+      ? `a start queued on ${resource} (host ${hostId}) cannot be read; nothing is queued behind it yet`
+      : `a start queued on ${resource} (host ${hostId}) cannot be read, so ${behind === 1 ? 'the start queued behind it waits' : `the ${String(behind)} starts queued behind it wait`}`,
+    `withdraw it: archon trigger withdraw ${requestId}`,
+  ];
 }
 
 /** How a line names the item that closed: by the run that held it, else by its ref. */

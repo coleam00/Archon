@@ -59,6 +59,8 @@ import { drainAdmits, runLimitBlocker } from './run-room';
 import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
 import { ensureItem } from './items';
+import { readableLaunch, unreadableQueued } from './unreadable-queue';
+export { listUnreadableQueuedStarts } from './unreadable-queue';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { toHydratedTimestamp } from './timestamps';
 import { InstallHeldError } from '@archon/workflows/store';
@@ -602,7 +604,7 @@ export function storedWorkflowName(launch: unknown): string | null {
   }
 }
 
-export const queuedItemStartsSql = `SELECT r.id, r.resource_key, r.host_id, r.launch, r.created_at,
+export const queuedItemStartsSql = `SELECT r.id, r.resource_key, r.host_id, r.launch, r.created_at, r.queue_position,
        (SELECT COUNT(*) FROM remote_agent_resource_start_requests q
          WHERE q.resource_key = r.resource_key AND q.host_id = r.host_id
            AND q.status = 'queued' AND q.queue_position < r.queue_position) AS ahead
@@ -617,8 +619,10 @@ export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemSt
     host_id: string;
     launch: unknown;
     created_at: string | Date;
+    queue_position: number | string;
     ahead: number | string;
   }>(queuedItemStartsSql, [itemId]);
+  const unreadable = await unreadableQueued();
   return result.rows.map(row => ({
     requestId: row.id,
     workflow: storedWorkflowName(row.launch),
@@ -627,12 +631,19 @@ export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemSt
     queuedAt: toHydratedTimestamp(row.created_at).toISOString(),
     // Postgres returns COUNT(*) as a string.
     ahead: Number(row.ahead),
+    blockedBy:
+      unreadable.find(
+        head =>
+          head.resource === row.resource_key &&
+          head.hostId === row.host_id &&
+          head.position < Number(row.queue_position)
+      )?.requestId ?? null,
   }));
 }
 
 export async function withdrawQueuedResourceStart(
   id: string
-): Promise<PreparedWorkflowLaunch | null> {
+): Promise<{ launch: PreparedWorkflowLaunch | null } | null> {
   return getDatabase().withTransaction(async query => {
     // SQLite transactions are deferred. Write before taking the snapshot so a
     // concurrent commit cannot make the later write fail its lock upgrade.
@@ -648,9 +659,8 @@ export async function withdrawQueuedResourceStart(
       "UPDATE remote_agent_resource_start_requests SET status = 'withdrawn' WHERE id = $1 AND status = 'queued'",
       [id]
     );
-    return updated.rowCount === 1
-      ? preparedWorkflowLaunchSchema.parse(parseStoredJson(selected.rows[0].launch))
-      : null;
+    if (updated.rowCount !== 1) return null;
+    return { launch: readableLaunch(selected.rows[0].launch) };
   });
 }
 
