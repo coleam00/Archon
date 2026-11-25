@@ -256,12 +256,27 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
       ownerId: z.string(),
     }),
   }),
+  z.object({
+    kind: z.literal('unreadable_start'),
+    ...itemBase,
+    /**
+     * A queued request whose stored launch does not read. Admission keeps queue order, so
+     * the `behind` requests queued after it on its resource and host wait until it is
+     * withdrawn (`archon trigger withdraw <requestId>`). `pausedAt` is when it was queued.
+     */
+    start: z.object({
+      requestId: z.string(),
+      resource: z.string(),
+      hostId: z.string(),
+      behind: z.number().int().nonnegative(),
+    }),
+  }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
 /** An item a paused run holds. */
 export type RunAttentionQueueItem = Exclude<
   AttentionQueueItem,
-  { kind: 'overdue_wait' | 'stopped' | 'refused_start' | 'preparation_lost' }
+  { kind: 'overdue_wait' | 'stopped' | 'refused_start' | 'preparation_lost' | 'unreadable_start' }
 > & {
   run: object;
 };
@@ -296,7 +311,14 @@ export type AttentionQueueItemWithoutRun =
   | AskQueueItem
   | Extract<
       AttentionQueueItem,
-      { kind: 'overdue_wait' | 'stopped' | 'refused_start' | 'preparation_lost' }
+      {
+        kind:
+          | 'overdue_wait'
+          | 'stopped'
+          | 'refused_start'
+          | 'preparation_lost'
+          | 'unreadable_start';
+      }
     >;
 /** An overdue wait's queue item. */
 export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
@@ -306,6 +328,8 @@ export type StoppedQueueItem = Extract<AttentionQueueItem, { kind: 'stopped' }>;
 export type RefusedStartQueueItem = Extract<AttentionQueueItem, { kind: 'refused_start' }>;
 /** A lost binding preparation's queue item. */
 export type PreparationLostQueueItem = Extract<AttentionQueueItem, { kind: 'preparation_lost' }>;
+/** An unreadable queued request's queue item. */
+export type UnreadableStartQueueItem = Extract<AttentionQueueItem, { kind: 'unreadable_start' }>;
 
 const RUN_REF_SEPARATOR = ':';
 

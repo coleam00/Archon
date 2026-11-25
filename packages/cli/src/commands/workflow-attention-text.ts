@@ -316,6 +316,7 @@ const withoutRunHeading: Record<AttentionQueueItemWithoutRun['kind'], [string, s
   stopped: ['stopped', 'ended'],
   refused_start: ['refused start', 'refused'],
   preparation_lost: ['preparer gone', 'claimed'],
+  unreadable_start: ['unreadable start', 'queued'],
 };
 
 /** One queue item as a block of text lines. */
@@ -349,6 +350,8 @@ function withoutRunBody(item: AttentionQueueItem): string[] {
       return refusedStartItemLines(item);
     case 'preparation_lost':
       return preparationLostLines(item);
+    case 'unreadable_start':
+      return unreadableStartLines(item);
     case 'attention':
       return refItemLines(item);
     default:
@@ -399,6 +402,22 @@ function preparationLostLines(
     `return it to pending: archon trigger recover-preparation ${receiptId} ${bindingId} --owner ${ownerId} --yes`,
     `then prepare it: archon trigger drain --host ${hostId ?? '<host-id>'}`,
     `show the receipt: archon trigger inspect ${receiptId}`,
+  ];
+}
+
+/**
+ * A queued request whose launch does not read: what it holds behind it, and the withdrawal
+ * that frees them.
+ */
+function unreadableStartLines(
+  item: Extract<AttentionQueueItem, { kind: 'unreadable_start' }>
+): string[] {
+  const { requestId, resource, hostId, behind } = item.start;
+  return [
+    behind === 0
+      ? `a start queued on ${resource} (host ${hostId}) cannot be read; nothing is queued behind it yet`
+      : `a start queued on ${resource} (host ${hostId}) cannot be read, so ${behind === 1 ? 'the start queued behind it waits' : `the ${String(behind)} starts queued behind it wait`}`,
+    `withdraw it: archon trigger withdraw ${requestId}`,
   ];
 }
 

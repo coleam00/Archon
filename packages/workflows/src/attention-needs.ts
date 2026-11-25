@@ -66,6 +66,7 @@ export function attentionWatchReader(
           case 'stopped':
           case 'refused_start':
           case 'preparation_lost':
+          case 'unreadable_start':
             shown.add(line.item.ref);
             return { needs: 'look' };
           case 'usage_limit':

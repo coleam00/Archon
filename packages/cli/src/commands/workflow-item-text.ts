@@ -187,7 +187,12 @@ function queuedLines(
     `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, ${waits}, queued ${minute(start.queuedAt)}`,
   ];
   if (start.heldBehind) lines.push(...heldBehindLines('waits behind', start.heldBehind));
-  if (!held) lines.push(`            ${admittedByText(start.hostId, served)}`);
+  // Admission keeps queue order: nothing admits it while an unreadable request is ahead.
+  if (start.blockedBy !== null)
+    lines.push(
+      `            not admitted while request ${start.blockedBy} ahead of it cannot be read; withdraw that one: archon trigger withdraw ${start.blockedBy}`
+    );
+  else if (!held) lines.push(`            ${admittedByText(start.hostId, served)}`);
   return lines;
 }
 
