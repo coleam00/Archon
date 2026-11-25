@@ -37,6 +37,7 @@ import {
   validateAssistantDefaults,
   validateGlobalConfigBlocks,
   validateModelBindingConfig,
+  validateProviderConcurrencyConfig,
   validateWorkflowContinuationConfig,
 } from './config-validation';
 import {
@@ -433,9 +434,9 @@ async function readGlobalConfigForUpdate(configPath: string): Promise<GlobalConf
 }
 
 /**
- * Apply a `tiers`/`aliases` patch per key: `null` unsets, a value sets, an
- * absent key keeps the existing entry as-is. Collapses to `undefined` when
- * nothing is left, so no empty block is serialized.
+ * Apply a `tiers`, `aliases` or `concurrency.providers` patch per key: `null`
+ * unsets, a value sets, an absent key keeps the existing entry as-is. Collapses
+ * to `undefined` when nothing is left, so no empty block is serialized.
  */
 function mergeBindingPatch<T>(
   existing: unknown,
@@ -454,9 +455,18 @@ function mergeBindingPatch<T>(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-type GlobalConfigUpdates = Partial<Omit<GlobalConfig, 'tiers' | 'aliases'>> & {
+/**
+ * A per-key patch for `concurrency.providers` — `null` explicitly UNSETS a cap, and a
+ * provider the patch does not name keeps its cap.
+ */
+type ProviderCapsPatch = Record<string, number | null>;
+
+type ConcurrencyConfig = NonNullable<GlobalConfig['concurrency']>;
+
+type GlobalConfigUpdates = Partial<Omit<GlobalConfig, 'tiers' | 'aliases' | 'concurrency'>> & {
   tiers?: TiersPatch;
   aliases?: AliasesPatch;
+  concurrency?: Omit<ConcurrencyConfig, 'providers'> & { providers?: ProviderCapsPatch };
 };
 
 /**
@@ -473,9 +483,12 @@ export async function updateGlobalConfig(updates: GlobalConfigUpdates): Promise<
 
     // Refuse to persist what the loaders would then refuse to read: a bad value
     // from the settings UI would otherwise brick every later config load, and a
-    // bad block already on disk must be repaired, not kept.
+    // bad block already on disk must be repaired, not kept. A write also refuses provider
+    // caps that admission would refuse; that check is write-only so a bad cap on disk
+    // refuses provider attempts without breaking config loads.
     validateGlobalConfigBlocks(merged, configPath);
     validateAssistantDefaults(merged, configPath);
+    validateProviderConcurrencyConfig(merged, configPath);
 
     // Serialize to YAML and write
     const yaml = Bun.YAML.stringify(merged);
@@ -509,7 +522,12 @@ function applyGlobalConfigUpdates(
   }
 
   if (updates.concurrency) {
-    merged.concurrency = { ...current.concurrency, ...updates.concurrency };
+    const { providers, ...rest } = updates.concurrency;
+    merged.concurrency = { ...current.concurrency, ...rest };
+    // Per-key, like tiers: repairing one cap must not drop another provider's cap.
+    if (providers) {
+      merged.concurrency.providers = mergeBindingPatch(current.concurrency?.providers, providers);
+    }
   }
 
   if (updates.workflows) {

@@ -28,6 +28,7 @@ import {
  */
 import { randomUUID } from 'node:crypto';
 import { createLogger, canonicalizeProjectPath } from '@archon/paths';
+import { NoDefaultProviderError } from '@archon/provider-contract';
 import type { WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -93,7 +94,7 @@ const PREPARATION_STAGES = ['run_as_user', 'run_configuration', 'launch_preparat
 type PreparationStage = (typeof PREPARATION_STAGES)[number];
 
 /** The error a binding stores when its preparation fails at `stage`. */
-function preparationStageFailure(stage: PreparationStage): string {
+function preparationStageFailure(stage: PreparationStage): `${PreparationStage}_failed` {
   return `${stage}_failed`;
 }
 
@@ -346,6 +347,10 @@ async function prepareClaimedBinding(
         ...identity,
         retryable: false,
         error: preparationStageFailure(stage),
+        refusal:
+          error instanceof NoDefaultProviderError
+            ? 'no_default_provider'
+            : preparationStageFailure(stage),
         ...(error instanceof ForgeRequirementError
           ? { forgeRefusal: { pack: error.packKey, failures: error.failures } }
           : {}),

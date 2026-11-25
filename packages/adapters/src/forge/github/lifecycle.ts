@@ -12,7 +12,7 @@
 import type { ForgeMutationRequest, ForgeResponse } from '@archon/forge/operations';
 import { GitHubError, githubErrorDetail, type Fetch, type Sleep } from './api';
 import { handleGithubChecksRerun } from './checks-rerun';
-import { refused, unknown, unverified, type Submit } from './mutation-outcome';
+import { refused, unknown, unreadable, type Submit } from './mutation-outcome';
 import {
   closePullRequest,
   createPullRequest,
@@ -88,9 +88,15 @@ export async function handleGithubMutation(
         return await putAttachment(request, fetchImpl, token, submit);
     }
   } catch (cause) {
-    const error = githubErrorDetail(cause);
+    // An acknowledged write whose read-back has no catch of its own lands here.
     if (progress.phase === 'acknowledged')
-      return unverified(request, error.message, 'the acknowledged write may remain');
+      return unreadable(
+        request,
+        'The acknowledged write could not be confirmed',
+        cause,
+        'the acknowledged write may remain'
+      );
+    const error = githubErrorDetail(cause);
     if (
       progress.phase === 'submitted' &&
       !(cause instanceof GitHubError && cause.definitiveRefusal)

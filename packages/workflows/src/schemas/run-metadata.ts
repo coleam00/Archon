@@ -208,7 +208,8 @@ export function readAsksResult(metadata: Record<string, unknown>): JsonValue | u
  * Admission also sets it, with `limit`, on the completed run whose end or settled asks
  * caused a start it refused at the start's limit (see `stoppedLimitSchema`): that start
  * was the item's next step, so nothing follows the run either. An older binary reads that
- * stop without its limit.
+ * stop without its limit. Preparation sets it the same way, with `refused`, when it rejects
+ * such a start before launch (see `stoppedRefusalSchema`).
  */
 export const ITEM_STOPPED_METADATA_KEY = 'item_stopped';
 
@@ -230,32 +231,80 @@ export const stoppedLimitSchema = z.object({
 });
 export type StoppedLimit = z.infer<typeof stoppedLimitSchema>;
 
+/**
+ * Why a start was refused before launch. At the hand-off a run's end or settled asks make:
+ * the checkout could not be handed on (`checkout_refused`), a mapped input named nothing
+ * (`inputs_unmapped`), or the items it links to could not be read or hold no such link
+ * (`link_refused`). In preparation: the cause when the engine types it
+ * (`no_default_provider`), else the stage that failed, as the binding's `error` stores it.
+ * Never the exception text, which can hold secret values.
+ */
+export const startRefusalReasonSchema = z.enum([
+  'checkout_refused',
+  'inputs_unmapped',
+  'link_refused',
+  'no_default_provider',
+  'run_as_user_failed',
+  'run_configuration_failed',
+  'launch_preparation_failed',
+]);
+export type StartRefusalReason = z.infer<typeof startRefusalReasonSchema>;
+
+/**
+ * A binding a run's end or settled asks refused at the hand-off: the workflow it would have
+ * started and why, carried on the evaluated binding for the stop on that run. Not stored.
+ */
+export const handoffRefusalSchema = z.object({
+  workflow: z.string(),
+  reason: startRefusalReasonSchema,
+});
+
+/**
+ * A start refused before launch: its receipt and binding (`archon trigger inspect`), the
+ * workflow it was for, why, and when.
+ */
+export const stoppedRefusalSchema = z.object({
+  receiptId: z.string(),
+  bindingId: z.string(),
+  workflow: z.string(),
+  reason: startRefusalReasonSchema,
+  refusedAt: z.string(),
+});
+export type StoppedRefusal = z.infer<typeof stoppedRefusalSchema>;
+
+/** The metadata that marks a completed run as having stopped its item. */
+/** A recorded stop: why the run stopped its item, and the starts its end caused that were refused. */
+export interface ItemStopped {
+  summary: string | null;
+  limit?: StoppedLimit;
+  /** Every start refused before launch, one per binding, in the order they were refused. */
+  refused?: StoppedRefusal[];
+}
+
 /** The metadata that marks a completed run as having stopped its item. */
 export function itemStoppedMetadata(
   summary: string | null,
-  limit?: StoppedLimit
+  refusals: Omit<ItemStopped, 'summary'> = {}
 ): Record<string, unknown> {
   const line = summary?.trim().slice(0, ITEM_STOPPED_SUMMARY_MAX) ?? '';
-  return {
-    [ITEM_STOPPED_METADATA_KEY]: {
-      summary: line === '' ? null : line,
-      ...(limit === undefined ? {} : { limit }),
-    },
-  };
+  return { [ITEM_STOPPED_METADATA_KEY]: { summary: line === '' ? null : line, ...refusals } };
 }
 
 /** The stop a completed run recorded, or undefined when it stopped nothing. */
-export function readItemStopped(
-  metadata: Record<string, unknown>
-): { summary: string | null; limit?: StoppedLimit } | undefined {
+export function readItemStopped(metadata: Record<string, unknown>): ItemStopped | undefined {
   const value = metadata[ITEM_STOPPED_METADATA_KEY];
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const { summary, limit } = value as Record<string, unknown>;
-  // A newer binary may add keys to the limit; they are stripped, not refused.
-  const read = stoppedLimitSchema.safeParse(limit);
+  const { summary, limit, refused } = value as Record<string, unknown>;
+  // A newer binary may add keys or reasons; an entry that does not read is dropped, not refused.
+  const readLimit = stoppedLimitSchema.safeParse(limit);
+  const readRefused = (Array.isArray(refused) ? refused : []).flatMap(entry => {
+    const read = stoppedRefusalSchema.safeParse(entry);
+    return read.success ? [read.data] : [];
+  });
   return {
     summary: typeof summary === 'string' ? summary : null,
-    ...(read.success ? { limit: read.data } : {}),
+    ...(readLimit.success ? { limit: readLimit.data } : {}),
+    ...(readRefused.length > 0 ? { refused: readRefused } : {}),
   };
 }
 
@@ -501,6 +550,13 @@ export const runDispatchMetadataSchema = z.object({
    * defaults over them. Absent on rows from older builds.
    */
   inputs_resolved: z.literal(true).optional(),
+  /**
+   * Names of the inputs the run was supplied with (`--input`, the run route's `inputs`, a
+   * parent's `with:`), as opposed to the pack settings and declared defaults `inputs` also
+   * holds. A re-run restores only these, so an unsupplied input keeps taking its default.
+   * Absent on rows from older builds.
+   */
+  supplied_inputs: z.array(z.string()).optional(),
 });
 
 export type RunDispatchMetadata = z.infer<typeof runDispatchMetadataSchema>;
@@ -511,6 +567,28 @@ export function readRunDispatchMetadata(
 ): RunDispatchMetadata | undefined {
   const parsed = runDispatchMetadataSchema.safeParse(metadata?.[RUN_DISPATCH_METADATA_KEY]);
   return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The inputs a run was invoked with, as text by name: what re-running it supplies again.
+ * Empty for a run whose dispatch record names none, including every run started before
+ * the record did. Reads the canonical text map only, so a run list never depends on the
+ * rest of a row's sub-run metadata parsing.
+ */
+export function readSuppliedRunInputs(
+  metadata: Record<string, unknown> | undefined
+): Record<string, string> {
+  const names = readRunDispatchMetadata(metadata)?.supplied_inputs ?? [];
+  const text = metadata?.[SUBRUN_METADATA_KEYS.inputs];
+  if (typeof text !== 'object' || text === null) return {};
+  const supplied: Record<string, string> = {};
+  for (const name of names) {
+    const value: unknown = Object.hasOwn(text, name)
+      ? (text as Record<string, unknown>)[name]
+      : undefined;
+    if (typeof value === 'string') supplied[name] = value;
+  }
+  return supplied;
 }
 
 /**

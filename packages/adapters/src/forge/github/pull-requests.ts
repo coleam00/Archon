@@ -11,16 +11,17 @@ import {
   type ForgeResponse,
 } from '@archon/forge/operations';
 import type { PrRef, RepoRef } from '@archon/forge';
-import {
-  GitHubError,
-  githubErrorDetail,
-  githubRequest,
-  location,
-  repositoryPath,
-  type Fetch,
-} from './api';
+import { GitHubError, githubRequest, location, repositoryPath, type Fetch } from './api';
 import { authorField, userSchema } from './actor';
-import { applied, failure, refused, unknown, unverified, type Submit } from './mutation-outcome';
+import {
+  applied,
+  failure,
+  refused,
+  unknown,
+  unreadable,
+  unverified,
+  type Submit,
+} from './mutation-outcome';
 
 const repoSchema = z.object({ full_name: z.string().min(1) });
 const pullSchema = z.object({
@@ -155,8 +156,8 @@ export async function createPullRequest(
   let observed: Pull;
   try {
     observed = await readPull(fetchImpl, token, { repo: request.repo, number: created.number });
-  } catch {
-    return unverified(request, 'Created pull request could not be read back', leaveBehind);
+  } catch (cause) {
+    return unreadable(request, 'Created pull request could not be read back', cause, leaveBehind);
   }
   const pr = prRecord(request.repo, observed);
   if (
@@ -206,8 +207,8 @@ export async function editPullRequestBody(
   let after: Pull;
   try {
     after = await readPull(fetchImpl, token, request.ref);
-  } catch {
-    return unverified(request, 'Updated pull request could not be read back', leaveBehind);
+  } catch (cause) {
+    return unreadable(request, 'Updated pull request could not be read back', cause, leaveBehind);
   }
   const pr = prRecord(request.ref.repo, after);
   return (after.body ?? '') === request.body
@@ -270,8 +271,13 @@ export async function setDraftState(
   let after: Pull;
   try {
     after = await readPull(fetchImpl, token, request.ref);
-  } catch {
-    return unverified(request, `${request.op} pull request could not be read back`, leaveBehind);
+  } catch (cause) {
+    return unreadable(
+      request,
+      `${request.op} pull request could not be read back`,
+      cause,
+      leaveBehind
+    );
   }
   const pr = prRecord(request.ref.repo, after);
   return pr.state === 'open' && pr.is_draft === draft
@@ -312,12 +318,7 @@ export async function closePullRequest(
   try {
     after = await readPull(fetchImpl, token, request.ref);
   } catch (cause) {
-    const error = githubErrorDetail(cause);
-    return unverified(
-      request,
-      { ...error, message: `Closed pull request could not be read back: ${error.message}` },
-      leaveBehind
-    );
+    return unreadable(request, 'Closed pull request could not be read back', cause, leaveBehind);
   }
   // prRecord reads a merged pull request as merged, so a merge that raced the
   // close cannot pass as closed.
