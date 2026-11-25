@@ -179,22 +179,29 @@ describe('resumeWorkflow on a running run', () => {
     }
   });
 
-  test("refuses a sub-run whose root run's owner answers", async () => {
-    const rootRunId = `resume-root-${crypto.randomUUID()}`;
-    const rootOwner = await startRunLiveOwner(rootRunId);
-    try {
-      const run = runningRun({ parent_run_id: rootRunId });
-      mockGetRunAncestry.mockResolvedValueOnce([
-        makePausedRun({ id: rootRunId, status: 'running' }),
-      ]);
-      mockGetWorkflowRun.mockResolvedValueOnce(run);
-      const error = await refusal(run.id);
-      expect(error.reason).toBe('live_owner');
-      expect(error.message).toContain(rootRunId);
-    } finally {
-      await rootOwner.close();
-    }
-  });
+  // A sub-run runs in the process driving any of its ancestors: the root, or an
+  // intermediate sub-run resumed on its own after the root's process died.
+  for (const live of ['parent', 'root'] as const) {
+    test(`refuses a sub-run whose ${live} run's owner answers`, async () => {
+      const parentRunId = `resume-parent-${crypto.randomUUID()}`;
+      const rootRunId = `resume-root-${crypto.randomUUID()}`;
+      const liveRunId = live === 'parent' ? parentRunId : rootRunId;
+      const liveOwner = await startRunLiveOwner(liveRunId);
+      try {
+        const run = runningRun({ parent_run_id: parentRunId });
+        mockGetRunAncestry.mockResolvedValueOnce([
+          makePausedRun({ id: parentRunId, status: 'running', parent_run_id: rootRunId }),
+          makePausedRun({ id: rootRunId, status: 'running' }),
+        ]);
+        mockGetWorkflowRun.mockResolvedValueOnce(run);
+        const error = await refusal(run.id);
+        expect(error.reason).toBe('live_owner');
+        expect(error.message).toContain(liveRunId);
+      } finally {
+        await liveOwner.close();
+      }
+    });
+  }
 
   test('refuses a running run whose recorded owner is on another host', async () => {
     const run = runningRun({ metadata: { execution_owner: { host: 'build-box', pid: 7 } } });
