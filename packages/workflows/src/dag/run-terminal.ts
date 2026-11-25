@@ -51,7 +51,6 @@ export type RunTerminalContext = Pick<
   | 'platform'
   | 'conversationId'
   | 'cwd'
-  | 'baseBranch'
   | 'returnsCheckout'
   | 'config'
   | 'workflowRun'
@@ -482,15 +481,8 @@ async function completeRun(
     result,
     asksCheckout
   );
-  const resultCommit = await sampleResultCommit(ctx, workflowRun.id);
-  const changeSize = await measureChangeSize(
-    ctx.cwd,
-    ctx.execContext,
-    resultCommit,
-    ctx.baseBranch,
-    ctx.config.remote,
-    workflowRun.id
-  );
+  const { resultCommit, endCommit } = await sampleResultCommit(ctx, workflowRun.id);
+  const changeSize = await measureChangeSize(deps.store, workflowRun, ctx.cwd, endCommit);
 
   let written: Awaited<ReturnType<WorkflowDeps['store']['completeWorkflowRun']>>;
   try {

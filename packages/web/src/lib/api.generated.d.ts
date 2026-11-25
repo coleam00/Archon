@@ -8391,6 +8391,7 @@ export interface components {
         resultCommit: string | null;
         changeSize: {
           base: string;
+          commit: string;
           files: number;
           added: number;
           removed: number;
@@ -9130,6 +9131,7 @@ export interface components {
           resultCommit: string | null;
           changeSize: {
             base: string;
+            commit: string;
             files: number;
             added: number;
             removed: number;
@@ -10803,6 +10805,7 @@ export interface components {
               };
           change_size?: {
             base: string;
+            commit: string;
             files: number;
             added: number;
             removed: number;

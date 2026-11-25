@@ -4,10 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { measureChangeSize } from './change-size';
-import type { ResultCommit } from './schemas/terminal-record';
+import type { WorkflowRun } from './schemas/workflow-run';
 
 const trackTempRoot = trackTempRoots();
-const HOST = { kind: 'host' } as const;
 
 function git(cwd: string, ...args: string[]): string {
   const result = Bun.spawnSync(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
@@ -19,15 +18,16 @@ function lines(count: number): string {
   return Array.from({ length: count }, (_, index) => `line ${index}\n`).join('');
 }
 
-/** A repository on `main` with one commit, which is the base. */
-function repo(): { dir: string; base: string } {
+/** A repository with one commit, which the work is cut from. */
+function repo(): { dir: string; cutFrom: string } {
   const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'change-size-')));
   git(dir, 'init', '-q', '-b', 'main');
   git(dir, 'config', 'user.email', 'test@example.com');
   git(dir, 'config', 'user.name', 'Test');
   git(dir, 'config', 'commit.gpgsign', 'false');
-  writeFileSync(join(dir, 'README.md'), 'readme\n');
-  return { dir, base: commit(dir) };
+  writeFileSync(join(dir, 'moved.txt'), lines(30));
+  writeFileSync(join(dir, 'old.txt'), lines(2));
+  return { dir, cutFrom: commit(dir) };
 }
 
 function commit(dir: string): string {
@@ -36,53 +36,78 @@ function commit(dir: string): string {
   return git(dir, 'rev-parse', 'HEAD');
 }
 
-function heldAt(commitId: string): ResultCommit {
-  return { held: true, commit: commitId };
+type Run = Pick<WorkflowRun, 'id' | 'item_id' | 'working_path' | 'checkout_baseline'>;
+
+function itemRun(id: string, path: string, cutFromCommit?: string): Run {
+  return {
+    id,
+    item_id: 'item-1',
+    working_path: path,
+    checkout_baseline: {
+      kind: 'git',
+      sampledAt: '2026-11-25T10:00:00.000Z',
+      commit: null,
+      tree: null,
+      worktree: { status: 'clean' },
+      ...(cutFromCommit === undefined ? {} : { cutFromCommit }),
+    },
+  };
+}
+
+/** A store holding the item's runs, oldest first. */
+function store(runs: Run[]) {
+  return {
+    getItem: async () => ({ id: 'item-1', projectKey: 'acme/web', key: 'issue-1' }),
+    getItemRuns: async () => ({
+      item: { id: 'item-1', projectKey: 'acme/web', key: 'issue-1' },
+      runs: runs as WorkflowRun[],
+      descendantIds: [],
+    }),
+  };
 }
 
 describe('measureChangeSize', () => {
-  test('counts files and lines from the merge-base with the base branch to the result commit', async () => {
-    const { dir, base } = repo();
-    git(dir, 'checkout', '-q', '-b', 'work');
+  test('counts the change from the cut-from commit, with renames, deletions and binary files', async () => {
+    const { dir, cutFrom } = repo();
+    git(dir, 'mv', 'moved.txt', 'renamed.txt');
+    git(dir, 'rm', '-q', 'old.txt');
     writeFileSync(join(dir, 'a.txt'), lines(40));
     writeFileSync(join(dir, 'image.bin'), Buffer.from([0, 1, 2, 0, 255]));
     const head = commit(dir);
+    const run = itemRun('run-1', dir, cutFrom);
 
-    expect(await measureChangeSize(dir, HOST, heldAt(head), 'main', undefined, 'run')).toEqual({
-      base,
-      files: 2,
+    expect(await measureChangeSize(store([run]), run, dir, head)).toEqual({
+      base: cutFrom,
+      commit: head,
+      // The rename is one file with no lines; the deletion removes two.
+      files: 4,
       added: 40,
-      removed: 0,
+      removed: 2,
     });
   });
 
-  test('measures against the remote base, not a stale local branch', async () => {
-    const { dir, base } = repo();
-    writeFileSync(join(dir, 'upstream.txt'), lines(5));
-    const upstream = commit(dir);
-    git(dir, 'remote', 'add', 'origin', dir);
-    git(dir, 'update-ref', 'refs/remotes/origin/main', upstream);
-    git(dir, 'reset', '-q', '--hard', base);
-    git(dir, 'checkout', '-q', '-b', 'work', upstream);
-    writeFileSync(join(dir, 'a.txt'), lines(3));
+  test('a later run on the same checkout keeps the cut-from the creating run recorded', async () => {
+    const { dir, cutFrom } = repo();
+    writeFileSync(join(dir, 'a.txt'), lines(40));
     const head = commit(dir);
+    const creator = itemRun('run-1', dir, cutFrom);
+    const elsewhere = itemRun('run-2', '/elsewhere', head);
+    const later = itemRun('run-3', dir);
 
-    expect(await measureChangeSize(dir, HOST, heldAt(head), 'main', undefined, 'run')).toEqual({
-      base: upstream,
-      files: 1,
-      added: 3,
-      removed: 0,
-    });
+    expect(
+      await measureChangeSize(store([creator, elsewhere, later]), later, dir, head)
+    ).toMatchObject({ base: cutFrom, added: 40 });
   });
 
-  test('records no size, not zero, when there is no commit or no base to measure from', async () => {
-    const { dir, base } = repo();
-    const notHeld: ResultCommit = { held: false, reason: 'dirty' };
+  test('records no size, not zero, without an item, a clean end commit or a cut-from', async () => {
+    const { dir, cutFrom } = repo();
+    const own = itemRun('run-1', dir, cutFrom);
+    const inPlace = itemRun('run-2', dir);
 
-    expect(await measureChangeSize(dir, HOST, notHeld, 'main', undefined, 'run')).toBeUndefined();
-    expect(await measureChangeSize(dir, HOST, heldAt(base), '', undefined, 'run')).toBeUndefined();
-    expect(
-      await measureChangeSize(dir, HOST, heldAt(base), 'no-such-branch', undefined, 'run')
-    ).toBeUndefined();
+    expect(await measureChangeSize(store([own]), { ...own, item_id: null }, dir, cutFrom)).toBe(
+      undefined
+    );
+    expect(await measureChangeSize(store([own]), own, dir, null)).toBeUndefined();
+    expect(await measureChangeSize(store([inPlace]), inPlace, dir, cutFrom)).toBeUndefined();
   });
 });

@@ -164,10 +164,10 @@ export const itemRunSchema = z.object({
    */
   resultCommit: z.string().nullable(),
   /**
-   * How large the change is at `resultCommit`: files changed and lines added and removed
-   * from `base`, the merge-base of that commit with the run's base branch, recorded when the
-   * run completed. Null when `resultCommit` is null, the base did not resolve, or the run was
-   * recorded before sizes were. Renames count as a removal plus an addition.
+   * How large the change was when the run completed: files changed and lines added and
+   * removed from `base`, the commit the item's checkout was cut from, to `commit`, the clean
+   * commit it ended on, recorded then. Null when the checkout ended on no clean commit, no
+   * cut-from is recorded for it (an in-place run), or the run was recorded before sizes were.
    */
   changeSize: changeSizeSchema.nullable(),
 });
@@ -400,11 +400,10 @@ function readResult(
 ): Pick<ItemRun, 'hasResult' | 'resultCommit' | 'changeSize'> {
   try {
     const record = run.status === 'completed' ? getTerminalRecord(run.status, events) : null;
-    const resultCommit = resultCommitOf(record);
     return {
       hasResult: readCompletedRunResult(run, events).kind === 'result',
-      resultCommit,
-      changeSize: resultCommit === null ? null : (record?.change_size ?? null),
+      resultCommit: resultCommitOf(record),
+      changeSize: record?.change_size ?? null,
     };
   } catch (error) {
     // One unreadable record must not fail the whole item read.

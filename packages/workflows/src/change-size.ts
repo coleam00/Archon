@@ -1,13 +1,14 @@
 /**
- * How large a completed run's change is at the commit its result holds at (#6261), measured
- * once when the run completes. Recording it then keeps an item read free of git, survives a
- * deleted worktree, and keeps an old run's size from changing when its base branch moves.
+ * How large an item run's change is at the clean commit its checkout ended on (#6261),
+ * measured once when the run completes. Recording it then keeps an item read free of git,
+ * survives a deleted worktree, and keeps an old run's size from changing when a branch moves.
  */
 import { createLogger } from '@archon/paths';
-import { getDefaultRemote, toRepoPath } from '@archon/git';
-import type { ExecutionContext } from '@archon/provider-contract';
 import { runGit } from './checkout-observation';
-import type { ChangeSize, ResultCommit } from './schemas/terminal-record';
+import { isAttentionDegraded } from './schemas/attention-degraded';
+import type { ChangeSize } from './schemas/terminal-record';
+import type { WorkflowRun } from './schemas/workflow-run';
+import type { IWorkflowStore } from './store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -15,64 +16,93 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+type ItemRunsStore = Pick<IWorkflowStore, 'getItem' | 'getItemRuns'>;
+
 /**
- * The change at the result commit against its merge-base with the run's base branch, the
- * same diff a pull request from that commit shows. The base branch is read where a worktree
- * is cut from: `<remote>/<base>` when the repository has a remote, else the local branch.
- * Returns undefined, never zeros, when the result holds at no commit, the run has no base
- * branch, or git cannot resolve the base. Never throws.
+ * The change at `endCommit` against the commit the run's checkout was cut from. Only a run
+ * of an item is measured: nothing else reads the size. Returns undefined, never zeros, when
+ * the run has no item, its checkout ended on no clean commit, or no cut-from is recorded
+ * for its checkout. Never throws.
  */
 export async function measureChangeSize(
+  store: ItemRunsStore,
+  run: Pick<WorkflowRun, 'id' | 'item_id' | 'working_path' | 'checkout_baseline'>,
   cwd: string,
-  execContext: ExecutionContext,
-  resultCommit: ResultCommit,
-  baseBranch: string,
-  configuredRemote: string | undefined,
-  workflowRunId: string
+  endCommit: string | null
 ): Promise<ChangeSize | undefined> {
-  if (!resultCommit.held || baseBranch === '' || execContext.kind === 'container') return undefined;
-  const unavailable = (step: string, code?: number): undefined => {
-    getLog().info({ workflowRunId, step, code }, 'workflow.change_size_unavailable');
-    return undefined;
-  };
-
-  let remote: string | null;
+  if (run.item_id === null || endCommit === null) return undefined;
   try {
-    remote = configuredRemote?.trim() || (await getDefaultRemote(toRepoPath(cwd)));
-  } catch {
-    return unavailable('remote');
+    const base = await cutFromOf(store, run, run.item_id);
+    if (base === undefined) return unavailable(run.id, 'no_cut_from');
+    const diff = await runGit(cwd, [
+      'diff',
+      '--numstat',
+      '-z',
+      '--find-renames',
+      '--no-ext-diff',
+      '--no-textconv',
+      base,
+      endCommit,
+    ]);
+    if (diff.code !== 0) return unavailable(run.id, 'diff', diff.code);
+    return { base, commit: endCommit, ...sumNumstat(diff.stdout.toString('utf8')) };
+  } catch (error) {
+    getLog().warn({ err: error, workflowRunId: run.id }, 'workflow.change_size_failed');
+    return undefined;
   }
-  const baseRef = remote ? `refs/remotes/${remote}/${baseBranch}` : `refs/heads/${baseBranch}`;
+}
 
-  const mergeBase = await runGit(cwd, ['merge-base', baseRef, resultCommit.commit]);
-  if (mergeBase.code !== 0) return unavailable('merge_base', mergeBase.code);
-  const base = mergeBase.stdout.toString('utf8').trim();
-
-  const diff = await runGit(cwd, [
-    'diff',
-    '--numstat',
-    '-z',
-    '--no-renames',
-    '--no-ext-diff',
-    '--no-textconv',
-    base,
-    resultCommit.commit,
-  ]);
-  if (diff.code !== 0) return unavailable('diff', diff.code);
-  return { base, ...sumNumstat(diff.stdout.toString('utf8')) };
+function unavailable(workflowRunId: string, step: string, code?: number): undefined {
+  getLog().info({ workflowRunId, step, code }, 'workflow.change_size_unavailable');
+  return undefined;
 }
 
 /**
- * Sum `git diff --numstat -z --no-renames` output: one `<added>\t<removed>\t<path>` entry per
- * file, each ended by NUL. A binary file reports `-` for both counts.
+ * The commit the run's checkout was cut from. Only the run that created a worktree records
+ * it, so a later run of the item on the same checkout takes it from the latest run of the
+ * item at that path that did: the size of a reused checkout keeps one base across rounds.
  */
-function sumNumstat(output: string): Omit<ChangeSize, 'base'> {
+async function cutFromOf(
+  store: ItemRunsStore,
+  run: Pick<WorkflowRun, 'id' | 'working_path' | 'checkout_baseline'>,
+  itemId: string
+): Promise<string | undefined> {
+  const own = cutFromCommit(run);
+  if (own !== undefined || run.working_path === null) return own;
+  const item = await store.getItem(itemId);
+  if (item === null) return undefined;
+  const read = await store.getItemRuns(item.projectKey, item.key);
+  const runs = (read?.runs ?? []).filter(
+    (other): other is WorkflowRun =>
+      !isAttentionDegraded(other) && other.id !== run.id && other.working_path === run.working_path
+  );
+  for (const other of runs.reverse()) {
+    const cutFrom = cutFromCommit(other);
+    if (cutFrom !== undefined) return cutFrom;
+  }
+  return undefined;
+}
+
+function cutFromCommit(run: Pick<WorkflowRun, 'checkout_baseline'>): string | undefined {
+  return run.checkout_baseline?.kind === 'git' ? run.checkout_baseline.cutFromCommit : undefined;
+}
+
+/**
+ * Sum `git diff --numstat -z --find-renames` output. A file is `<added>\t<removed>\t<path>`
+ * ended by NUL; a rename leaves the path empty and its old and new paths follow as two more
+ * NUL-ended fields. A binary file reports `-` for both counts.
+ */
+function sumNumstat(output: string): Pick<ChangeSize, 'files' | 'added' | 'removed'> {
+  const fields = output.split('\0');
   let files = 0;
   let added = 0;
   let removed = 0;
-  for (const entry of output.split('\0')) {
-    if (entry === '') continue;
-    const [add, remove] = entry.split('\t');
+  for (let index = 0; index < fields.length; index++) {
+    const field = fields[index];
+    if (field === undefined || field === '') continue;
+    const parts = field.split('\t');
+    const [add, remove] = parts;
+    if (parts.length === 3 && parts[2] === '') index += 2;
     files++;
     if (add !== '-') added += Number(add);
     if (remove !== '-') removed += Number(remove);

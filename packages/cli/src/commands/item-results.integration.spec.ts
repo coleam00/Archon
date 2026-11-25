@@ -5,7 +5,15 @@
  */
 import { afterEach, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -121,7 +129,10 @@ interface Fixture {
   /** Overwrite a run's terminal event data, as a damaged row reads. */
   corruptTerminalEvent: (runId: string, data: string) => void;
   cli: (args: string[]) => Promise<string>;
-  attempt: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  attempt: (
+    args: string[],
+    extraEnv?: Record<string, string>
+  ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 const WORKFLOWS: Record<string, string> = {
@@ -147,7 +158,8 @@ async function makeFixture(
     writeFileSync(join(workflows, `${name}.yaml`), body);
   expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
   const attempt = async (
-    args: string[]
+    args: string[],
+    extraEnv: Record<string, string> = {}
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
     const child = Bun.spawn([process.execPath, CLI_PATH, ...args], {
       cwd: projectRoot,
@@ -161,6 +173,7 @@ async function makeFixture(
         GITHUB_TOKEN: '',
         GH_TOKEN: '',
         GITHUB_APP_ID: '',
+        ...extraEnv,
       },
       stdin: 'ignore',
       stdout: 'pipe',
@@ -625,51 +638,97 @@ test('a land stage merges the commit its approval was read at, not where its che
   expect(await landed()).toBe(x);
 }, 240_000);
 
-// Appends `lines` lines to `file` and commits them, then returns: the result holds at the
-// commit the build made.
+// Adds `lines` lines to `file` and commits them, removing `drop` when it is set. It
+// declares no `returns:`: a run that only commits still has a size.
 const BUILD = `name: build
 description: Add lines to the change.
 inputs:
   file: { required: true }
   lines: { required: true }
-returns: done
+  drop: { default: '' }
 nodes:
   - id: write
     bash: |
       seq "$INPUTS_LINES" >> "$INPUTS_FILE"
+      if [ -n "$INPUTS_DROP" ]; then git rm -q "$INPUTS_DROP"; fi
       git add -A
       git -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m build
-  - id: done
-    depends_on: [write]
-    bash: |
-      echo '{"built": true}'
-    output_format: { type: object, properties: { built: { type: boolean } }, required: [built] }
 `;
 
-test('each run that ended at a commit shows the size of the change there against its base', async () => {
-  const { fixture, commit } = await makeLandFixture('change-size');
-  writeFileSync(join(fixture.projectRoot, '.archon', 'workflows', 'build.yaml'), BUILD);
-  writeFileSync(
-    join(fixture.projectRoot, '.archon', 'config.yaml'),
-    'worktree:\n  baseBranch: main\n'
-  );
-  const git = (...args: string[]) =>
-    Bun.spawn(['git', ...args], { cwd: fixture.projectRoot }).exited;
-  expect(await git('symbolic-ref', 'HEAD', 'refs/heads/main')).toBe(0);
-  const base = await commit('base.txt');
-  expect(await git('checkout', '-q', '-b', 'work')).toBe(0);
+// Returns the sizes \`item()\` reads for the item's earlier runs.
+const SIZES = `name: sizes
+description: Read the item's change sizes.
+mutates_checkout: false
+returns: read
+nodes:
+  - id: read
+    runtime: bun
+    script: |
+      import { emit, item } from 'archon:script';
+      emit({ added: (item()?.runs ?? []).map(run => run.changeSize?.added ?? null) });
+    output_format: { type: object, properties: { added: { type: array } }, required: [added] }
+`;
 
-  await fixture.cli(run('build', 'file=a.txt', 'lines=40'));
-  await fixture.cli(run('build', 'file=b.txt', 'lines=80'));
-  // A review changes nothing: it holds at the commit the last build made.
+test('each run that ended at a commit shows the size of its change from where the work was cut', async () => {
+  const fixture = await makeFixture('change-size', { build: BUILD, review: REVIEW, sizes: SIZES });
+  const git = (cwd: string, ...args: string[]): string => {
+    const result = Bun.spawnSync(
+      ['git', '-c', 'user.name=test', '-c', 'user.email=test@example.com', ...args],
+      { cwd }
+    );
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    return result.stdout.toString().trim();
+  };
+  const root = fixture.projectRoot;
+  writeFileSync(join(root, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: main\n');
+  writeFileSync(join(root, 'base.txt'), 'base\n');
+  git(root, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'base');
+  const cutFrom = git(root, 'rev-parse', 'HEAD');
+  const item = (workflow: string, ...inputs: string[]) =>
+    fixture.cli([
+      ...run(workflow, ...inputs).filter(arg => arg !== '--no-worktree'),
+      '--branch',
+      'feature',
+    ]);
+
+  await item('build', 'file=a.txt', 'lines=40');
+  // The base moves on after the work was cut; the size does not count it.
+  writeFileSync(join(root, 'later-on-main.txt'), 'later\n');
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'main moves');
+  await item('build', 'file=b.txt', 'lines=80', 'drop=base.txt');
+  // A review changes nothing: it shows the size the build before it left.
+  await item('review');
+  await item('sizes');
+
+  // A run in place has no cut-from to measure from, so it shows no size.
   await fixture.cli(run('review'));
 
   const runs = await itemRuns(fixture);
+  const built = { base: cutFrom, files: 3, added: 120, removed: 1 };
   expect(runs.map(read => [read.workflow, read.changeSize])).toEqual([
-    ['build', { base, files: 1, added: 40, removed: 0 }],
-    ['build', { base, files: 2, added: 120, removed: 0 }],
-    ['review', { base, files: 2, added: 120, removed: 0 }],
+    ['build', expect.objectContaining({ base: cutFrom, files: 1, added: 40, removed: 0 })],
+    ['build', expect.objectContaining(built)],
+    ['review', expect.objectContaining(built)],
+    ['sizes', expect.objectContaining(built)],
+    ['review', null],
   ]);
-  const text = await fixture.cli(['workflow', 'runs', '--item', 'issue-1']);
-  expect(text).toContain(`holds at ${runs[0]?.resultCommit?.slice(0, 12)} · 1 file, +40 -0`);
+  expect(runs[2]?.changeSize).toEqual(runs[1]?.changeSize ?? null);
+  // A script's item() read carries the sizes the earlier runs recorded.
+  expect((await detail(fixture, runs[3]?.id)).terminal_record.returns.value).toEqual({
+    added: [40, 120, 120, null],
+  });
+
+  // The read takes the recorded sizes and runs no diff.
+  const trace = join(root, '..', 'git-trace');
+  const read = await fixture.attempt(['workflow', 'runs', '--item', 'issue-1'], {
+    GIT_TRACE: trace,
+  });
+  expect(read.exitCode).toBe(0);
+  expect(existsSync(trace) ? readFileSync(trace, 'utf8') : '').not.toContain('git diff');
+  const text = read.stdout;
+  expect(text).toContain('change: 1 file, +40 -0');
+  expect(text).toContain('change: 3 files, +120 -1');
 }, 240_000);

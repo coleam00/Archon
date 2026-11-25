@@ -2259,6 +2259,7 @@ declare module 'archon:script' {
       readonly resultCommit: string | null;
       readonly changeSize: {
         readonly base: string;
+        readonly commit: string;
         readonly files: number;
         readonly added: number;
         readonly removed: number;
@@ -2851,6 +2852,7 @@ declare module 'archon:script' {
         readonly resultCommit: string | null;
         readonly changeSize: {
           readonly base: string;
+          readonly commit: string;
           readonly files: number;
           readonly added: number;
           readonly removed: number;

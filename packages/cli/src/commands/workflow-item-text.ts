@@ -127,15 +127,18 @@ function runLines(run: ItemRun): string[] {
     `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`,
   ];
   // A result can hold at a commit without being readable (a truncated untyped result).
-  const size = run.changeSize
-    ? ` · ${run.changeSize.files} file${run.changeSize.files === 1 ? '' : 's'}, +${run.changeSize.added} -${run.changeSize.removed}`
-    : '';
-  const holds = run.resultCommit ? `holds at ${run.resultCommit.slice(0, 12)}${size}` : null;
+  const holds = run.resultCommit ? `holds at ${run.resultCommit.slice(0, 12)}` : null;
   if (run.hasResult)
     lines.push(
       `            result: archon workflow get ${run.id} --json${holds ? `, ${holds}` : ''}`
     );
   else if (holds) lines.push(`            result: ${holds}`);
+  if (run.changeSize) {
+    const { files, added, removed, base, commit } = run.changeSize;
+    lines.push(
+      `            change: ${files} file${files === 1 ? '' : 's'}, +${added} -${removed} at ${commit.slice(0, 12)} from ${base.slice(0, 12)}`
+    );
+  }
   if (run.operatorPause) lines.push(`            ${describeOperatorPause(run.operatorPause)}`);
   if (run.awaitingExecution)
     lines.push(`            ${awaitingExecutionText(run.awaitingExecution)}`);

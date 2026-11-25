@@ -76,15 +76,16 @@ export type ResultCommit = z.infer<typeof resultCommitSchema>;
 /** Run metadata key where a completed run's change size waits for the record. */
 export const CHANGE_SIZE_METADATA_KEY = 'change_size';
 /**
- * How large the change is at the commit a completed run's result holds at (#6261): the
- * files changed and lines added and removed from `base`, the merge-base of that commit with
- * the run's base branch, to the commit. The diff a pull request from the commit would show.
- * Recorded only when the result holds at a commit and the base resolved, so absent means
- * unknown, never zero. Renames are not detected: a moved file counts as one file removed and
- * one added. A binary file counts as a file with no lines.
+ * How large an item run's change is at the clean commit its checkout ended on (#6261): the
+ * files changed and lines added and removed from `base`, the commit the checkout was cut
+ * from, to `commit`. A later run on the same checkout keeps the base the creating run
+ * recorded. Recorded only on a completed run of an item whose checkout ended clean at a
+ * commit with a recorded cut-from, so absent means unknown, never zero. Renames are
+ * detected, as `git diff` does by default. A binary file counts as a file with no lines.
  */
 export const changeSizeSchema = z.object({
   base: gitObjectIdSchema,
+  commit: gitObjectIdSchema,
   files: z.number().int().nonnegative(),
   added: z.number().int().nonnegative(),
   removed: z.number().int().nonnegative(),
@@ -173,8 +174,8 @@ export const terminalRecordSchema = z.object({
    */
   result_commit: resultCommitSchema.optional(),
   /**
-   * Absent on records written before #6261 and whenever no size was recorded: the result
-   * holds at no commit, or the run's base did not resolve.
+   * Absent on records written before #6261 and whenever no size was recorded: the run has
+   * no item, its checkout ended on no clean commit, or no cut-from is recorded for it.
    */
   change_size: changeSizeSchema.optional(),
 });
