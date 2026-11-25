@@ -63,18 +63,21 @@ The factory building this repository runs Archon from another checkout, on the h
   has, and a stage's `returns` agree with its outcomes that read `returned`. The Wirasm pack's file is kept at
   `docs/factory-console/pack-view/` until the owner's pack ships it.
 - Factory web code stays under `packages/web/src/experiments/console/factory/` (components, pure
-  `lib/`, the page routes), and nothing outside that folder imports from it, except the three
-  files that mount it: `ConsoleApp.tsx` (its routes and `factory.css`), `ProjectRail.tsx` (the
-  sidebar entry) and `ProjectViewTabs.tsx` (the Factory tab). `bun run lint` enforces it
-  (`scripts/check-factory-imports.ts`). On `combined` that script is not ported and the factory
-  folder holds the board card's layer and the board furniture (work orders, Merged, Set aside,
-  the Table and the number tiles); its importers outside it are Rasmus's board and overview
-  (`routes/BoardPage.tsx`, `routes/board/ItemCard.tsx`, which draws the card, and
-  `routes/OverviewPage.tsx`, which draws the number tiles). Every other file under `packages/web/src` (the answer
-  panel, the ask card, the project tabs apart from that one tab, every generic page and
-  component, `theme.css`) stays as it is on Archon dev.
+  `lib/`, the page routes). On `combined` it holds the curated map, How it works and the stage
+  modal, the board card's layer and the board furniture (work orders, Merged, Set aside, the
+  Table and the number tiles). It is mounted from Rasmus's pages, and only these files outside
+  the folder import from it, tests included: `ConsoleApp.tsx` (the How it works routes and
+  `factory.css`), `routes/OverviewPage.tsx` (the number tiles and the map, through
+  `factory/PackMap.tsx`), and Rasmus's board, `routes/BoardPage.tsx`,
+  `routes/board/ItemCard.tsx` and its test. `ProjectRail.tsx` carries the sidebar Factory entry
+  without importing the folder. No lint checks this on `combined` (`scripts/check-factory-imports.ts`
+  is not ported); keep the list true when a change adds a mount point. The curated map, How it
+  works and the stage modal are drawn only when the pack ships a view file the server read
+  without an error; `factory/lib/map-source.ts` is the one place that decides, and everything
+  else draws the map derived from the pack graph.
 - Server code is the view-file read (`GET /api/packs/{pack}/view` in `api.packs.ts`, beside the
-  graph route), and two generic reads with no pack words that the web cannot get from older routes:
+  graph route; the two share one graph read while it runs, `shareWhileRunning`, and keep nothing
+  once it settles), and two generic reads with no pack words that the web cannot get from older routes:
   `GET /api/workflows/runs/records` (`api.run-records.ts`, run records without events) and
   `GET /api/forge/subjects` (`api.forge.ts`, issue titles and change merge state). The server
   asks the change host through `packages/adapters/src/forge-host.ts`, which finds plugins

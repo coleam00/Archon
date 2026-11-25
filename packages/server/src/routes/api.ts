@@ -18,7 +18,7 @@ import {
   registeredProjectKeyForPath,
 } from '@archon/core/services/codebase-checkout-resolver';
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
-import { readPackView } from '@archon/core/workflows/pack-view';
+import { packViewOf } from '@archon/core/workflows/pack-view';
 import { getTriggersPath, launchProjectKey } from '@archon/core/workflows/run-ended';
 import { providerRegistry } from '@archon/providers';
 import type { WebAdapter } from '../adapters/web';
@@ -41,7 +41,7 @@ import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
 import { registerObservingRoute } from './api.observing';
 import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
-import { registerPackGraphRoute, registerPackViewRoute } from './api.packs';
+import { registerPackGraphRoute, registerPackViewRoute, shareWhileRunning } from './api.packs';
 import { registerProviderKeyRoutes } from './api.provider-keys';
 import { registerProviderRoutes } from './api.providers';
 import { registerAttentionStreamRoute, registerRunAttentionRoutes } from './api.run-attention';
@@ -180,15 +180,15 @@ export function registerApiRoutes(
   };
   const packSource = (workflowSource?: string) =>
     workflowSource === undefined ? {} : { workflowSource };
-  registerPackGraphRoute(app, {
-    codebaseCwd: packCodebaseCwd,
-    readPackGraph: (cwd, pack, workflowSource) =>
-      readPackGraph(cwd, pack, packGraphDeps, packSource(workflowSource)),
-  });
+  // One graph read for a page that asks for the graph and the view together (api.packs.ts).
+  const packGraphRead = shareWhileRunning((cwd: string, pack: string, workflowSource?: string) =>
+    readPackGraph(cwd, pack, packGraphDeps, packSource(workflowSource))
+  );
+  registerPackGraphRoute(app, { codebaseCwd: packCodebaseCwd, readPackGraph: packGraphRead });
   registerPackViewRoute(app, {
     codebaseCwd: packCodebaseCwd,
-    readPackView: (cwd, pack, workflowSource) =>
-      readPackView(cwd, pack, packGraphDeps, packSource(workflowSource)),
+    readPackView: async (cwd, pack, workflowSource) =>
+      packViewOf(await packGraphRead(cwd, pack, workflowSource), cwd, packSource(workflowSource)),
   });
   registerWorkflowDefinitionRoutes(app);
   registerArtifactRoutes(app);

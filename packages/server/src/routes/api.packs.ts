@@ -3,6 +3,11 @@
  * project (`readPackGraph`), the same read `archon pack graph` prints.
  * GET /api/packs/{pack}/view: the factory view that pack ships, checked against that graph
  * (`readPackView`).
+ *
+ * A page that draws the factory map asks for both at once, and the view needs the graph, so
+ * the two routes share one graph read while it runs (`shareWhileRunning`): the server computes
+ * a pack's graph once per page, not twice. Nothing is kept once the read settles, so a later
+ * request always reads the pack as it is then.
  */
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { isAbsolute } from 'node:path';
@@ -33,6 +38,25 @@ const packGraphQuerySchema = z.object({
       "An absolute directory the pack's workflows are discovered from instead of the codebase, as a binding's launch.discoveryCwd names it",
   }),
 });
+
+/**
+ * `read`, with calls for the same arguments made while one is running answered by that one.
+ * Once it settles, resolved or rejected, the next call reads again: this shares work between
+ * concurrent requests and caches nothing.
+ */
+export function shareWhileRunning<A extends unknown[], T>(
+  read: (...args: A) => Promise<T>
+): (...args: A) => Promise<T> {
+  const running = new Map<string, Promise<T>>();
+  return (...args: A): Promise<T> => {
+    const key = JSON.stringify(args);
+    const current = running.get(key);
+    if (current !== undefined) return current;
+    const started = read(...args).finally(() => running.delete(key));
+    running.set(key, started);
+    return started;
+  };
+}
 
 /** The graph read's failures, as both routes answer them. */
 const packReadErrors = {

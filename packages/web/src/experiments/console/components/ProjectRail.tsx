@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router';
-import { ChartLine, Inbox, Settings, PenTool, type LucideIcon } from 'lucide-react';
+import { ChartLine, Factory, Inbox, Settings, PenTool, type LucideIcon } from 'lucide-react';
 import { SessionMenu } from '@/components/auth/SessionMenu';
 import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
@@ -393,6 +393,10 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
           title="Visual workflow builder (beta)"
           badge="beta"
         />
+        {/* How it works of the packs projects stage: shown once a project stages one. */}
+        {(projects ?? []).some(project => project.itemPacks.length > 0) ? (
+          <RailNavLink to="/console/factory" icon={Factory} label="Factory" />
+        ) : null}
         <RailNavLink
           to="/console/settings"
           icon={Settings}

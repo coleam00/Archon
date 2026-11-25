@@ -17,6 +17,7 @@ import { MetricsPage } from './routes/metrics/MetricsPage';
 import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
 import { SettingsPage } from './routes/SettingsPage';
+import { FactoryHome, HowItWorksPage } from './factory/how-it-works/HowItWorksPage';
 import { invalidate } from './store/cache';
 import { K } from './store/keys';
 import { useKeymap, type Binding } from './lib/keymap';
@@ -24,6 +25,7 @@ import { useAttentionStreamSSE, useDashboardSSE } from './lib/sse';
 import { useRunAttentionAlerts } from './lib/attention-alerts';
 import { SHORTCUTS } from './lib/shortcuts';
 import './theme.css';
+import './factory/factory.css';
 
 // console-token-exception max-w-[calc(100vw-3rem)] -- Leave a dismissible strip beside the mobile navigation rail.
 const MOBILE_RAIL = 'fixed inset-y-0 left-0 z-30 flex max-w-[calc(100vw-3rem)] shadow-xl';
@@ -124,6 +126,9 @@ export function ConsoleApp(): ReactElement {
             <Route path="builder/:name" element={<BuilderConnected />} />
             <Route path="_preview" element={<PreviewPage />} />
             <Route path="r/:runId" element={<RunDetailPage />} />
+            <Route path="factory" element={<FactoryHome />} />
+            <Route path="factory/:pack" element={<Navigate to="how-it-works" replace />} />
+            <Route path="factory/:pack/how-it-works" element={<HowItWorksPage />} />
             <Route path="*" element={<Navigate to="/console" replace />} />
             <Route path="p/:projectId" element={<RunsPage />} />
             <Route path="p/:projectId/overview" element={<OverviewPage />} />

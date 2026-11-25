@@ -13,7 +13,7 @@ import { K } from '../store/keys';
 import {
   forgePending,
   getForgeSubjects,
-  getPackView,
+  getPackViewRead,
   getRunRecords,
   type ForgeSubjects,
   type RunRecord,
@@ -54,11 +54,12 @@ function PackRead({
   const stages = graph.data?.stages;
   const view = useEntity(
     stages === undefined ? 'pack-view:none' : K.packView(projectId, pack),
-    () => (stages === undefined ? Promise.resolve(null) : getPackView(projectId, pack))
+    () => (stages === undefined ? Promise.resolve(null) : getPackViewRead(projectId, pack))
   );
   const failed = graph.error !== undefined || (stages !== undefined && view.error !== undefined);
   const viewRead = stages !== undefined && view.data !== undefined;
-  const viewData = view.data;
+  // The map reads the whole view read under this key; a card reads only its view.
+  const viewData = view.data?.view ?? null;
   useEffect(() => {
     if (failed) onRead(pack, 'error');
     else if (stages !== undefined && viewRead) onRead(pack, { stages, view: viewData ?? null });
@@ -75,7 +76,8 @@ export function FactoryCardsProvider({
   projectId: string;
   /** The project's packs; null while the project is still being read. */
   packs: readonly string[] | null;
-  itemAsks: ItemAsks;
+  /** The project's asks for the cards' ask lines; null where none are shown (the map). */
+  itemAsks: ItemAsks | null;
   children: ReactNode;
 }): ReactElement {
   const [read, setRead] = useState<ReadonlyMap<string, PackReadResult>>(new Map());

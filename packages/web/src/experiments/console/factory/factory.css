@@ -1,0 +1,140 @@
+/*
+ * The factory's own styles, on top of Archon's theme.css: the map's flow dot and the canvases'
+ * identity. Kept here so Archon's theme.css stays as it is on dev; ConsoleApp imports it.
+ */
+
+/* The factory map's flow dot (factory/map/MapFlow.tsx): it runs along a hand-off into the card
+   a run works an item on, then fades as the card's running chip takes over. Off under reduced
+   motion, where the dot also carries `motion-reduce:hidden` (Visual standard, rule 7). */
+@keyframes map-flow {
+  0% {
+    offset-distance: 0%;
+    opacity: 1;
+  }
+  60% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+.console-root .map-flow-dot {
+  offset-rotate: 0deg;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .console-root .map-flow-dot {
+    animation: map-flow 2.4s ease-out infinite;
+  }
+}
+
+/*
+ * The canvases' identity (DESIGN.md, "Visual identity, 2026-11-19"): the map, How it works and
+ * the stage drill-down's cards, and the two canvas viewports. Every value is static: no filter,
+ * no animation, nothing a pan repaints. Named "depth", never "shadow": a shadow is a step that
+ * does nothing (Visual standard, rule 10).
+ */
+.console-root {
+  /* Intake's group colour: lime, about 27 degrees from warning (85) and 28 from land (140). */
+  --tone-intake: oklch(0.8 0.15 112);
+
+  /* A card's depth: an all-round inner rim (the 3 px accent bar covers the top edge), a hairline
+     contact shadow, and a soft fall-off that lets the card sit above the canvas. */
+  --card-depth:
+    inset 0 0 0 1px oklch(1 0 0 / 0.05), 0 1px 0 0 oklch(0 0 0 / 0.4),
+    0 6px 16px -4px oklch(0 0 0 / 0.55);
+  --card-depth-hover:
+    inset 0 0 0 1px oklch(1 0 0 / 0.07), 0 1px 0 0 oklch(0 0 0 / 0.4),
+    0 10px 24px -6px oklch(0 0 0 / 0.65);
+
+  /* The running mark, held still (the items read carries no owner liveness): a stage
+     drill-down's card with items on its steps (.factory-card[data-running]). */
+  --running-border: color-mix(in oklch, var(--running), transparent 40%);
+  --running-ring: 0 0 0 3px color-mix(in oklch, var(--running), transparent 85%);
+
+  /* The canvas: a gentle vignette over a 24 px dot grid on the inset surface. */
+  --canvas-texture:
+    radial-gradient(ellipse at 50% 40%, transparent 55%, oklch(0 0 0 / 0.3) 100%),
+    radial-gradient(circle, oklch(1 0 0 / 0.06) 1px, transparent 1.5px) 0 0 / 24px 24px,
+    var(--surface-inset);
+}
+
+/*
+ * One box-shadow, composed from the card's ring (selected), light (holds work) and depth, so no
+ * state erases another. Unlayered, like the rest of this file, so it outranks Tailwind's border
+ * and shadow utilities: a card's border colour and ring are set here, never by a utility.
+ */
+.console-root .factory-card {
+  --card-tone: var(--border-bright);
+  /* Light, on a card that holds work: a ring and a soft glow in the card's colour. This and the
+     tint are declared here, not on .console-root: a custom property resolves the var() it holds
+     where it is declared, and only a card has a --card-tone. */
+  --card-glow:
+    0 0 0 1px color-mix(in oklch, var(--card-tone) 30%, transparent),
+    0 8px 28px -8px color-mix(in oklch, var(--card-tone) 45%, transparent);
+  /* The card's fill: its colour, faint, under the accent bar, fading to the surface. */
+  --card-tint: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--card-tone) 7%, var(--surface)) 0,
+    var(--surface) 48px
+  );
+  --card-ring: 0 0 transparent;
+  --card-light: 0 0 transparent;
+  --card-lift: var(--card-depth);
+  border-color: var(--border);
+  background: var(--card-tint);
+  box-shadow: var(--card-ring), var(--card-light), var(--card-lift);
+  transition:
+    box-shadow 150ms ease-out,
+    border-color 150ms ease-out,
+    background-color 150ms ease-out;
+}
+
+/* Only a card that does something on click answers hover. */
+.console-root .factory-card:not([data-static]):hover {
+  --card-lift: var(--card-depth-hover);
+  border-color: var(--border-bright);
+}
+
+.console-root .factory-card[data-lit] {
+  --card-light: var(--card-glow);
+}
+
+/* A stage drill-down card with items on its steps wears the running border and ring; its tint stays its kind's colour, under its bar. Held against hover, as the inline
+   style it replaces was. */
+.console-root .factory-card[data-running],
+.console-root .factory-card[data-running]:not([data-static]):hover {
+  --card-light: var(--running-ring);
+  border-color: var(--running-border);
+}
+
+/* A selected card: a muted accent ring, never an accent border (owner change 1). On the
+   canvases it is the one use of the accent. */
+.console-root .factory-card[data-selected] {
+  --card-ring: 0 0 0 2px var(--accent-muted);
+}
+
+.console-root .factory-canvas {
+  background: var(--canvas-texture);
+}
+
+/* The map's flow dot and its legend swatch carry a soft halo in the running colour. */
+.console-root .map-flow-dot,
+.console-root .map-flow-swatch {
+  box-shadow:
+    0 0 0 3px color-mix(in oklch, var(--running) 22%, transparent),
+    0 0 10px 1px color-mix(in oklch, var(--running) 45%, transparent);
+}
+
+/*
+ * A document page's panel (factory/document.tsx; DESIGN.md, owner change 5 of 2026-11-21): the
+ * canvases' card depth, so a panel sits above the page as a card does. An inset row box sits in
+ * its panel and takes none.
+ */
+.console-root [data-doc-panel="panel"] {
+  box-shadow: var(--card-depth);
+}

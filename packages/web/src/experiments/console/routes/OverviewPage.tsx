@@ -6,6 +6,9 @@
  * metric cards come from the pack graph read; where an item is comes from the item read's
  * `standing`, the same placement the board draws; the asks are the attention list's. Its
  * numbers are `packBoard`'s over the board's own every-item read, so they match the board.
+ *
+ * The map is `factory/PackMap.tsx`'s: the pack's curated map when it ships a view file, else the
+ * flow derived from the graph.
  */
 import type { ReactElement, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -13,7 +16,8 @@ import { Link, useParams } from 'react-router';
 import { ItemAsksSection, useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { FactoryNumbers } from '../factory/FactoryNumbers';
-import { MERGED_DAYS, packBoard, type BoardNumbers } from '../factory/lib/board-numbers';
+import { packBoard } from '../factory/lib/board-numbers';
+import { PackMap } from '../factory/PackMap';
 import { useBoardItems } from '../factory/useBoardItems';
 import type { Project } from '../primitives/project';
 import * as skill from '../skills';
@@ -21,30 +25,13 @@ import { getPackGraph, listItems, type ItemRead, type PackGraph } from '../skill
 import type { MetricsReport } from '../skills/metrics';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
-import { MOVING, chipOf, columnsOf, type StageGroup } from './BoardPage';
-import { stageAt } from './board/standing';
+import { MOVING } from './BoardPage';
 import { MetricCards } from './metrics/MetricsOverview';
 import { metricsRequests } from './metrics/model';
 
 const HEADLINE_CARDS = 3;
 const HEADLINE_DAYS = 7;
 const TOP_ASKS = 3;
-
-/** How many of a pack's items sit in each column, and how many of those wait on the operator. */
-export function flowCounts(
-  columns: readonly StageGroup[],
-  items: readonly ItemRead[],
-  stages: PackGraph['stages'] | undefined
-): { name: string; stages: string[]; count: number; needYou: number }[] {
-  return columns.map(column => {
-    const here = items.filter(read => column.stages.includes(stageAt(read, stages) ?? ''));
-    return {
-      ...column,
-      count: here.length,
-      needYou: here.filter(read => chipOf(read) === 'needs_you').length,
-    };
-  });
-}
 
 /** The pack's own numbers: the first cards it declares, over the last week of its metrics. */
 function Headline({
@@ -97,76 +84,7 @@ function Headline({
   );
 }
 
-/** The pack's columns as a row of boxes with their counts, then the board's Merged. */
-function Flow({
-  board,
-  flow,
-  numbers,
-  failed,
-}: {
-  board: string;
-  flow: ReturnType<typeof flowCounts>;
-  numbers: BoardNumbers | undefined;
-  /** The every-item read failed: the numbers tiles say so, and the box shows no count. */
-  failed: boolean;
-}): ReactElement {
-  return (
-    <div data-flow>
-      <h2 className="text-sm font-medium text-text-primary">The flow</h2>
-      <ol className="mt-3 flex flex-col gap-2 md:flex-row md:flex-wrap md:items-stretch">
-        {flow.map(column => (
-          <li key={column.name} className="flex items-center gap-2">
-            <Link
-              data-flow-group={column.name}
-              to={`${board}?group=${encodeURIComponent(column.name)}`}
-              className="block min-w-36 rounded-console-12 border border-border px-4 py-3 hover:border-border-bright"
-            >
-              <span className="text-console-12 font-medium text-text-secondary">{column.name}</span>
-              <span data-count className="ml-2 text-base tabular-nums text-text-primary">
-                {column.count}
-              </span>
-              <span className="mt-1 block font-mono text-console-10 text-text-tertiary">
-                {column.stages.join(' · ')}
-              </span>
-              {column.needYou > 0 ? (
-                <span data-need-you className="mt-1 block text-console-11 text-warning">
-                  {column.needYou} need you
-                </span>
-              ) : null}
-            </Link>
-            <span aria-hidden className="text-text-tertiary">
-              →
-            </span>
-          </li>
-        ))}
-        <li>
-          <Link
-            data-flow-group="merged"
-            to={board}
-            className="block min-w-36 rounded-console-12 border border-border px-4 py-3 hover:border-border-bright"
-          >
-            <span className="text-console-12 font-medium text-text-secondary">Merged</span>
-            {numbers === undefined ? (
-              failed ? null : (
-                <span className="ml-2 inline-block h-3 w-6 rounded bg-surface-elevated motion-safe:animate-pulse" />
-              )
-            ) : (
-              <span data-count className="ml-2 text-base tabular-nums text-text-primary">
-                {numbers.mergedRecent}
-              </span>
-            )}
-            <span className="mt-1 block text-console-12 text-text-tertiary">
-              last {MERGED_DAYS} days
-              {numbers === undefined ? '' : ` · ${String(numbers.mergedToday)} today`}
-            </span>
-          </Link>
-        </li>
-      </ol>
-    </div>
-  );
-}
-
-function PackOverview({
+export function PackOverview({
   projectId,
   pack,
   items,
@@ -181,13 +99,12 @@ function PackOverview({
   itemsError: Error | undefined;
   /** The project's open asks; undefined until the attention list answers. */
   needYou: number | undefined;
-  /** The top asks, drawn under the flow and the pack's numbers. */
+  /** The top asks, drawn under the tiles and above the map (DESIGN.md, Overview page). */
   children?: ReactNode;
 }): ReactElement {
   const { data: graph, error } = useEntity<PackGraph>(K.packGraph(projectId, pack), () =>
     getPackGraph(projectId, pack)
   );
-  const columns = columnsOf(graph);
   const board = items === undefined ? undefined : packBoard(items, pack, new Date());
   const heading = 'text-sm font-medium text-text-primary';
   // As on the board: a pack with nothing on its board has nothing to show.
@@ -210,16 +127,11 @@ function PackOverview({
       </div>
 
       <FactoryNumbers numbers={board?.numbers} needYou={needYou} error={itemsError} />
-      <Flow
-        board={`/console/p/${projectId}/board`}
-        flow={flowCounts(columns, board?.moving ?? [], graph?.stages)}
-        numbers={board?.numbers}
-        failed={itemsError !== undefined}
-      />
+      {children}
+      <PackMap projectId={projectId} pack={pack} board={board} itemsError={itemsError} />
       {graph?.metricViews == null ? null : (
         <Headline projectId={projectId} views={graph.metricViews} />
       )}
-      {children}
     </section>
   );
 }

@@ -446,7 +446,7 @@ test('the board filter finds a card by the issue title and the key the card prin
   const reads = [untitled('issue-2', 'plan'), untitled('issue-3', 'check')];
   seedBoard(reads);
   set(K.packGraph('web', 'flow'), graph);
-  set(K.packView('web', 'flow'), null);
+  set(K.packView('web', 'flow'), { path: null, view: null, problems: [] });
   // The titles the board's filter reads, and those each column's cards read.
   const titles = [issue(2, 'Asks show in full'), issue(3, 'Board furniture')];
   set(K.forgeTitles('web', [2, 3]), { issues: titles, changes: [] });
@@ -581,6 +581,8 @@ test('the Overview tiles and the Board count the same items: in flight, merged a
   // The stage-only read holds the moving items alone, as the server answers it.
   set(K.board('web'), reads.slice(0, 2));
   set(K.packGraph('web', 'flow'), graph);
+  // The pack ships no curated view file, so the Overview draws the derived flow it counts in.
+  set(K.packView('web', 'flow'), { path: null, view: null, problems: [] });
   const board = render('/console/p/web/board', <BoardPage />);
   const overview = render('/console/p/web', <OverviewPage />);
   const tile = (name: string): string | null | undefined =>

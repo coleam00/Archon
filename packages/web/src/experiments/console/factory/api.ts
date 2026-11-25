@@ -1,5 +1,5 @@
 /**
- * The generic reads a board card's progress is composed from: a pack's factory view, run
+ * The factory's generic reads, for the map and the board cards: a pack's factory view, run
  * records without events, and what the project's forge says of issues and changes. Types come
  * from the generated API; nothing here knows a pack's words.
  */
@@ -8,6 +8,8 @@ import { HttpError, requestJson } from '../lib/http';
 
 export type PackView = components['schemas']['PackView'];
 export type FactoryView = NonNullable<PackView['view']>;
+/** The How it works picture of a factory view. */
+export type HowItWorks = FactoryView['howItWorks'];
 export type RunRecords = components['schemas']['RunRecords'];
 export type RunRecord = RunRecords['records'][number];
 export type ForgeSubjects = components['schemas']['ForgeSubjects'];
@@ -15,13 +17,16 @@ export type ForgeSubjects = components['schemas']['ForgeSubjects'];
 /** At most this many runs, or issues and changes, per read: what the two routes take. */
 export const READ_MAX = 100;
 
-/** The factory view the pack ships, or null when it ships none or the file does not read. */
-export async function getPackView(projectId: string, pack: string): Promise<FactoryView | null> {
-  const read = await requestJson('/api/packs/{pack}/view', 'get', {
+/**
+ * The one read of the factory view a pack ships, whole: its path (null when the pack ships
+ * none), the view (null when the file does not read) and its problems against the graph. The
+ * map chooses curated or derived from all three (`lib/map-source.ts`); board cards read `.view`.
+ */
+export async function getPackViewRead(projectId: string, pack: string): Promise<PackView> {
+  return requestJson('/api/packs/{pack}/view', 'get', {
     params: { pack },
     query: { codebaseId: projectId },
   });
-  return read.view;
 }
 
 function refusal(body: string): { error?: string; detail?: string } {

@@ -28,7 +28,10 @@ export const K = {
    * overview's numbers count from; under `board:` so the same events refetch it.
    */
   boardOrders: (projectId: string): string => `board:${projectId}:orders`,
-  /** The factory view a pack ships, which board cards read their words and declarations from. */
+  /**
+   * A pack's whole factory view read (`GET /api/packs/{pack}/view`: path, view, problems): the
+   * map chooses by it and board cards read their words from its view. A run never changes it.
+   */
   packView: (projectId: string, pack: string): string =>
     `pack-view:${projectId}:${encodeURIComponent(pack)}`,
   /**

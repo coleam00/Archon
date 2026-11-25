@@ -12,6 +12,7 @@ import {
   type FactoryViewProblem,
 } from '@archon/workflows/schemas/factory-view';
 import { installedPackKey, liveSourceRoots } from '@archon/workflows/workflow-source';
+import type { PackGraph } from '@archon/workflows/pack-graph';
 import { readPackGraph } from './pack-graph';
 
 export interface PackViewRead {
@@ -40,7 +41,19 @@ export async function readPackView(
   deps: Parameters<typeof readPackGraph>[2],
   options: { workflowSource?: string } = {}
 ): Promise<PackViewRead> {
-  const graph = await readPackGraph(cwd, packKey, deps, options);
+  return packViewOf(await readPackGraph(cwd, packKey, deps, options), cwd, options);
+}
+
+/**
+ * The view file of the pack `graph` was read for, from the same copy, checked against that
+ * graph. A caller that has the graph already (the server, which shares one graph read between
+ * the graph and view routes) checks the view without reading the graph again.
+ */
+export async function packViewOf(
+  graph: PackGraph,
+  cwd: string,
+  options: { workflowSource?: string } = {}
+): Promise<PackViewRead> {
   const loaded = graph.loaded[0];
   const reads = await readPackDeclarations(
     liveSourceRoots(options.workflowSource ?? cwd),

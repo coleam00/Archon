@@ -390,10 +390,12 @@ Geist for everything a person reads; Geist Mono for workflow, step and key names
 - **Floor: nothing a person reads is under 12 px on screen at 1440x900.** `--text-console-9`,
   `--text-console-10` and `--text-console-11` are not used for anything a person reads. Their
   existing uses are fixed by the redesign items, not by this one.
-- The floor holds on the map and the How it works canvas at their fitted zoom. The opening zoom
-  and the Fit button never scale below the zoom at which the smallest canvas text renders at
-  12 px; with canvas text at 12 px or more, that zoom is 1.0. Where the drawing does not fit at
-  that zoom, the canvas pans. A person may still zoom out by hand.
+- The floor holds on the How it works canvas at its fitted zoom. Its opening zoom and the Fit
+  button never scale below the zoom at which the smallest canvas text renders at 12 px; with
+  canvas text at 12 px or more, that zoom is 1.0. Where the drawing does not fit at that zoom,
+  the canvas pans. A person may still zoom out by hand. The Overview's map is the exception
+  (owner ruling 33a557aa, 2026-11-25): it opens fitted to its frame, down to a scale of 0.75
+  (`LIVE_MIN_K`), so the whole row shows at 1440; a person zooms in to read closer.
 
 ### 2. Cards
 
@@ -935,11 +937,11 @@ Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row,
   column left with none is not drawn. Without `columns`, one card per stage, as the board. For
   the shipped file: Intake, Plan & build, Checks & review, Ready to merge, Merged. `col` and
   `row` on a card are accepted, so an older view file still loads, and ignored.
-- **Always one row**, left to right, at zoom 1 (the type floor; rule 1). Where the row does not
-  fit the frame, the map pans sideways, opening (and Fit returning) at the row's start, so the
-  flow reads left to right from Intake (owner ruling on #71). The shipped map is about 1345 px
-  wide with its padding, so at 1440x900 Intake shows whole and Merged is partly off the right;
-  it pans more on smaller screens.
+- **Always one row**, left to right. It opens (and Fit returns) fitted to its frame, down to a
+  scale of 0.75 (owner ruling 33a557aa, 2026-11-25, over the earlier zoom-1 rule): the shipped
+  map is about 1313 px wide, so at 1440x900 every card shows, Merged included. Where the row
+  does not fit even at 0.75, the map opens at that scale at the row's start and pans sideways,
+  so the flow reads left to right from Intake (owner ruling on #71).
 - **Cards in the card language** (rule 2), 184 px wide and at least 168 tall, the height set
   by the card holding the most stages (216 for the shipped file, whose Intake holds Order,
   Triage and Link), every card one size so the lane under them is straight: a 3 px top bar in the group colour, the group's icon and kind
