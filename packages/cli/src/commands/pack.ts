@@ -756,6 +756,13 @@ function linkText(link: PackGraphLink): string {
   return ` ${parts.join(', ')}`;
 }
 
+/** How a stopping outcome is marked: a stage that can leave an ask or wait stops only without one. */
+function stopsNote(stage: PackGraph['stages'][number]): string {
+  return stage.asks || stage.waits
+    ? ' (item stops unless the run leaves an ask or wait)'
+    : ' (item stops)';
+}
+
 /** The graph as plain lines; `--json` prints the read itself, which is the contract. */
 function graphText(graph: PackGraph, source: string, explicitSource: boolean): string {
   const lines = [
@@ -771,7 +778,7 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
   const nothing = graph.stages.flatMap(stage =>
     (stage.outcome?.values ?? [])
       .filter(v => v.startsNothing && !v.ends)
-      .map(v => `  ${stage.name}:${v.value}${v.stops ? ' (item stops)' : ''}`)
+      .map(v => `  ${stage.name}:${v.value}${v.stops ? stopsNote(stage) : ''}`)
   );
   if (nothing.length > 0) lines.push('', 'Outcomes that start nothing:', ...nothing);
   if (graph.discoveryErrors.length > 0)

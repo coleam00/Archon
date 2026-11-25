@@ -3,7 +3,7 @@ import { expandWorkflowIncludes } from './include-expander';
 import { mapOf, wf } from './include-expander.fixtures';
 import {
   buildPackGraph,
-  declaredPackStops,
+  declaredStops,
   type InstalledArrow,
   packGraphSchema,
   packWorkflowIdentities,
@@ -175,7 +175,7 @@ describe('a pack graph', () => {
     ]);
     // An asks arrow starts on answers, not on an outcome.
     expect(graph.stages[0]?.outcome?.values).toEqual([
-      { value: 'ready', startsNothing: true, ends: false, stops: false },
+      { value: 'ready', startsNothing: true, ends: false, stops: true },
     ]);
   });
 
@@ -225,7 +225,7 @@ describe('a pack graph', () => {
       [{ stage: 'a', settled: 'answered' }, true],
     ]);
     expect(graph.stages[0]?.outcome?.values).toEqual([
-      { value: 'asks:answered', startsNothing: true, ends: false, stops: false },
+      { value: 'asks:answered', startsNothing: true, ends: false, stops: true },
     ]);
   });
 
@@ -535,8 +535,22 @@ describe('a pack graph', () => {
       result: { outcome: 'outcome' },
       observes: true,
     });
-    const staged = stages(review, shadow, stage('build', ['done']));
-    const declared = { 'build-after-review': runEnded('build', 'review', 'ready') };
+    const staged = stages(
+      review,
+      shadow,
+      stage('build', ['done']),
+      stage('host', ['open'], false, true)
+    );
+    const declared = {
+      'build-after-review': runEnded('build', 'review', 'ready'),
+      // Starts on linked items, so it starts nothing on the ended run's own item.
+      'build-linked': packRunEndedBindingSchema.parse({
+        workflow: 'build',
+        resource: 'build',
+        overlap: 'queue',
+        run_ended: { workflow: 'review', outcome: 'not_ready', linked: partOfOrder },
+      }),
+    };
     const graph = graphOf(staged, {
       declared,
       installed: [installed('review', 'ready', 'build', 'file-build')],
@@ -551,9 +565,12 @@ describe('a pack graph', () => {
     expect(shadowed?.observes).toBe(true);
     expect(shadowed?.outcome?.values.map(v => v.stops)).toEqual([false, false]);
     // Read from the declared bindings alone, as `archon validate workflows` reads them.
-    expect(declaredPackStops('chain', staged, declared)).toEqual([
-      { stage: 'review', outcome: 'not_ready' },
-      { stage: 'build', outcome: 'done' },
+    // A stage that can leave a wait stops its item only when a run leaves none.
+    expect(graph.stages[3]?.outcome?.values.map(v => v.stops)).toEqual([true]);
+    expect(declaredStops('chain', staged, declared)).toEqual([
+      { stage: 'review', outcome: 'not_ready', unless: [] },
+      { stage: 'build', outcome: 'done', unless: [] },
+      { stage: 'host', outcome: 'open', unless: ['waits'] },
     ]);
   });
 

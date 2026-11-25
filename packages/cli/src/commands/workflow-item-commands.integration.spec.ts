@@ -451,6 +451,51 @@ nodes:
   }
 );
 
+test.serial('a run of an observing workflow leaves a stopped item listed as stopped', async () => {
+  const decide = (name: string, observes: boolean) =>
+    `name: ${name}
+description: ${name}
+mutates_checkout: false
+${observes ? 'observes: true\n' : ''}returns: { node: decide, outcome: outcome }
+nodes:
+  - id: decide
+    bash: |
+      echo '{"outcome": "not_ready"}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [not_ready, ready] }
+      required: [outcome]
+`;
+  const workflows = join(projectRoot, '.archon', 'workflows');
+  writeFileSync(join(workflows, 'review.yaml'), decide('review', false));
+  writeFileSync(join(workflows, 'shadow.yaml'), decide('shadow', true));
+  const stopsOnItem = async () => {
+    const read = await invoke(host =>
+      workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+    );
+    const items = (JSON.parse(read.stdout) as { items: { kind: string; item?: { key: string } }[] })
+      .items;
+    return items.filter(item => item.kind === 'stopped' && item.item?.key === 'item-observed');
+  };
+  const runOn = async (workflow: string) => {
+    const result = await invoke(host =>
+      workflowRunCommand(host, projectRoot, workflow, 'go', {
+        noWorktree: true,
+        item: 'item-observed',
+      })
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+  };
+
+  // `not_ready` starts nothing and ends nothing, so the step stops its item.
+  await runOn('review');
+  expect(await stopsOnItem()).toHaveLength(1);
+  // The observing run on the item completes with the same quiet outcome; the stop stays.
+  await runOn('shadow');
+  expect(await stopsOnItem()).toMatchObject([{ stoppedIn: { workflow: 'review' } }]);
+});
+
 test.serial(
   'workflow end takes a stopped item out of attention, and the item read says who ended it and why',
   async () => {

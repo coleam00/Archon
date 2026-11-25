@@ -706,7 +706,7 @@ describe('the hosts trigger files name', () => {
 });
 
 describe('the outcomes after which an item stops', () => {
-  test('are those of a named step workflow that neither end the item, are bound, nor can leave an ask', async () => {
+  test('are those of a named step workflow that neither end the item nor start a stage on it', async () => {
     const root = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-stops-')));
     const workflows = join(root, '.archon', 'workflows');
     await mkdir(workflows, { recursive: true });
@@ -748,6 +748,26 @@ describe('the outcomes after which an item stops', () => {
           runEnded: { workflowName: 'deliver', outcome: 'approve' },
         },
         {
+          file: 'l.json',
+          sourceInstanceId: 'l',
+          binding: { ...binding, bindingId: 'l' },
+          runEnded: {
+            workflowName: 'deliver',
+            outcome: 'replan',
+            linked: { kind: 'part_of' as const, holder: 'to' as const },
+          },
+        },
+        {
+          file: 'm.json',
+          sourceInstanceId: 'm',
+          binding: {
+            ...binding,
+            bindingId: 'm',
+            launch: { ...binding.launch, workflowName: 'gone' },
+          },
+          runEnded: { workflowName: 'review', outcome: 'approve' },
+        },
+        {
           file: 's.json',
           sourceInstanceId: 's',
           binding: {
@@ -770,9 +790,20 @@ describe('the outcomes after which an item stops', () => {
       }
     );
 
-    // `approve` is bound and `landed` ends the item; `review` can leave an ask, and
+    // `deliver:approve` is bound and `landed` ends the item; `replan` is bound only to a start
+    // on linked items. `review:approve` is bound by a file that starts a missing workflow, so
+    // its runs start nothing, and `review` stops its item only when a run leaves no ask.
     // `shadow` observes its item, so none of its outcomes stops it.
-    expect(stops).toEqual([{ project: 'acme/widgets', workflow: 'deliver', outcome: 'replan' }]);
+    const project = 'acme/widgets';
+    expect(stops).toEqual([
+      { project, workflow: 'deliver', outcome: 'replan', unless: [] },
+      ...['approve', 'replan', 'landed'].map(outcome => ({
+        project,
+        workflow: 'review',
+        outcome,
+        unless: ['asks' as const],
+      })),
+    ]);
   });
 });
 

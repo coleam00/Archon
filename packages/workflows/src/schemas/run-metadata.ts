@@ -237,6 +237,15 @@ export function observesItemMetadata(workflow: { readonly observes?: boolean }):
   return workflow.observes === true ? { [OBSERVES_ITEM_METADATA_KEY]: true } : {};
 }
 
+/** Whether run metadata records the run as observing its item (`observesItemMetadata`). */
+export function observesItemRecorded(metadata: unknown): boolean {
+  return (
+    metadata !== null &&
+    typeof metadata === 'object' &&
+    (metadata as Record<string, unknown>)[OBSERVES_ITEM_METADATA_KEY] === true
+  );
+}
+
 /**
  * Set by the completing write of a top-level run on an item that stopped the item: its
  * ending started nothing, left no ask or wait and ended nothing (`itemFate` is `stops`).

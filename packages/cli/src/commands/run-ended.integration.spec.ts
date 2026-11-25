@@ -1625,7 +1625,12 @@ describe('a start refused before launch', () => {
 
     await cli(['ai', 'default', 'claude']);
     await run('stage-ai');
-    expect(await stopped()).toEqual({ onItem: [], inAttention: [] });
+    // The later run closes that stop. It declares no outcome and starts nothing, so it stops
+    // the item itself, with nothing refused.
+    const after = await stopped();
+    expect(after.onItem.map(item => [item.stoppedIn.workflow, item.refused])).toEqual([
+      ['stage-ai', undefined],
+    ]);
   }, 90_000);
 
   test('for a pack file setting the started stage reads that names no file, naming the setting and path, until the file is restored', async () => {
@@ -1696,7 +1701,10 @@ describe('a start refused before launch', () => {
       ['chain-plan', 'completed'],
       ['chain-build', 'completed'],
     ]);
-    expect(await stoppedOnItem()).toEqual([]);
+    // The refused start's stop is closed; the run that declares no outcome stops the item.
+    expect((await stoppedOnItem()).map(item => [item.stoppedIn.workflow, item.refused])).toEqual([
+      ['chain-build', undefined],
+    ]);
   }, 90_000);
 
   test('is recorded on a run that also left an ask, and stops its item once the ask is answered', async () => {

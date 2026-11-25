@@ -2114,7 +2114,9 @@ describe('executeDagWorkflow -- what a run on an item records about it as it com
     value: Record<string, unknown>,
     options: {
       asks?: boolean;
+      waits?: boolean;
       observes?: boolean;
+      noOutcome?: boolean;
       workflowRun?: WorkflowRun;
       receipts?: readonly SourceReceiptAcceptance[];
     } = {}
@@ -2150,10 +2152,13 @@ describe('executeDagWorkflow -- what a run on an item records about it as it com
           ],
           returns: 'result',
           result: {
-            outcome: 'stage',
-            ...(options.observes === true ? {} : { ends: ['landed'] }),
+            ...(options.noOutcome === true ? {} : { outcome: 'stage' }),
+            ...(options.observes === true || options.noOutcome === true
+              ? {}
+              : { ends: ['landed'] }),
             summary: 'why',
             ...(options.asks === true ? { asks: 'asks' } : {}),
+            ...(options.waits === true ? { waits: 'waits' } : {}),
           },
           ...(options.observes === true ? { observes: true } : {}),
         },
@@ -2203,6 +2208,23 @@ describe('executeDagWorkflow -- what a run on an item records about it as it com
     });
   });
 
+  it('records the end for an outcome that ends the item, even when the run also left an ask', async () => {
+    const store = createMockStore();
+    await run(store, { stage: 'landed', why: 'merged', asks: [anAsk] }, { asks: true });
+
+    expect(completedMetadata(store)).not.toHaveProperty('item_stopped');
+    expect(completedResult(store)?.end?.reason).toBe(
+      "Workflow 'deliver' ended the item with outcome 'landed': merged"
+    );
+  });
+
+  it('records the stop for a run on an item that completes with no outcome', async () => {
+    const store = createMockStore();
+    await run(store, { stage: 'replan' }, { noOutcome: true });
+
+    expect(completedMetadata(store)?.item_stopped).toEqual({ summary: null });
+  });
+
   it('records the stop with its declared summary when the outcome starts nothing and ends nothing', async () => {
     const store = createMockStore();
     await run(store, { stage: 'replan', why: '  The plan missed the schema change.  ' });
@@ -2215,7 +2237,15 @@ describe('executeDagWorkflow -- what a run on an item records about it as it com
   it.each([
     ['observes its item', { stage: 'replan', why: 'x' }, { observes: true }],
     ['left an ask', { stage: 'replan', why: 'x', asks: [anAsk] }, { asks: true }],
-    ['left an ask with an outcome that ends', { stage: 'landed', asks: [anAsk] }, { asks: true }],
+    [
+      'left a wait',
+      {
+        stage: 'replan',
+        why: 'x',
+        waits: [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 60 }],
+      },
+      { waits: true },
+    ],
     [
       'started the next stage',
       { stage: 'replan', why: 'x' },

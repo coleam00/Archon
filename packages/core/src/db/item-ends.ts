@@ -24,9 +24,11 @@ import {
 import { askItemRef } from '@archon/workflows/attention-item-refs';
 import type { ItemAct } from '@archon/workflows/schemas/item-act';
 import { EXECUTION_CLAIM_METADATA_KEY } from '@archon/workflows/store';
+import { observesItemRecorded } from '@archon/workflows/schemas/run-metadata';
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import { actColumns, actRead, type ActColumns } from './item-act';
 import { stepRun } from './item-step';
+import { parseStoredJson } from './resource-starts';
 import type { TransactionQuery } from './resource-slots';
 import { getLog } from './workflow-run-shared';
 
@@ -81,20 +83,40 @@ function opened(): string {
 }
 
 /**
- * SQL true while end `e` holds: no run in its item's tree opened it, none is live, and no
- * start is queued on the item.
+ * SQL true while no step in the tree of end `e`'s item opened it and none is live. An end
+ * holds while this is true and no step is queued on the item (`queuedStep`).
  */
-function holds(): string {
+function holdsOverRuns(): string {
   return `NOT ${opened()}
     AND NOT EXISTS (
       ${runTree('e.item_id')}
       SELECT 1 FROM remote_agent_workflow_runs n JOIN tree t ON t.id = n.id
       WHERE n.status IN ${LIVE}
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM remote_agent_resource_start_requests q
-      WHERE q.item_id = e.item_id AND q.status = 'queued'
     )`;
+}
+
+/**
+ * The oldest start queued on item `itemId` that will run a step, by request id, or undefined.
+ * A queued start has no run row yet; whether it observes is in the run its prepared launch
+ * will create (`observes_item` in `launch.run.metadata`), read here because the launch is
+ * stored as text. A launch that does not read counts as a step, as every start did before.
+ */
+async function queuedStep(query: TransactionQuery, itemId: string): Promise<string | undefined> {
+  const queued = await query<{ id: string; launch: unknown }>(
+    `SELECT CAST(id AS TEXT) AS id, launch FROM remote_agent_resource_start_requests
+     WHERE item_id = $1 AND status = 'queued' ORDER BY created_at`,
+    [itemId]
+  );
+  return queued.rows.find(row => !launchObservesItem(row.launch))?.id;
+}
+
+function launchObservesItem(launch: unknown): boolean {
+  try {
+    const run = (parseStoredJson(launch) as { run?: { metadata?: unknown } } | null)?.run;
+    return observesItemRecorded(run?.metadata);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -110,12 +132,8 @@ async function blockerOf(query: TransactionQuery, itemId: string): Promise<ItemE
   );
   const live = run.rows[0];
   if (live) return itemEndBlockerSchema.parse({ kind: 'run', runId: live.id, status: live.status });
-  const queued = await query<{ id: string }>(
-    `SELECT CAST(id AS TEXT) AS id FROM remote_agent_resource_start_requests
-     WHERE item_id = $1 AND status = 'queued' ORDER BY created_at LIMIT 1`,
-    [itemId]
-  );
-  if (queued.rows[0]) return { kind: 'queued_start', requestId: queued.rows[0].id };
+  const queued = await queuedStep(query, itemId);
+  if (queued !== undefined) return { kind: 'queued_start', requestId: queued };
   const ask = await query<{ id: string }>(
     'SELECT id FROM remote_agent_item_asks WHERE item_id = $1 AND closed_as IS NULL LIMIT 1',
     [itemId]
@@ -161,9 +179,10 @@ async function insertItemEnd(
 
 /**
  * The end a run's finishing outcome records on its item (`returns.ends`), inside the
- * transaction that completes the run and only when that write won. It is the end
- * `archon workflow end` writes, from the engine: no blocker refuses it, and a step on the
- * item still live, or a start queued on it, keeps it from holding as for any end.
+ * transaction that completes the run and only when that write won, after the run's own asks
+ * and waits are written. It is the end `archon workflow end` writes, from the engine: no
+ * blocker refuses it, it closes what is still asked or awaited on the item, and a step on the
+ * item still live, or a step queued on it, keeps it from holding as for any end.
  */
 export async function recordCompletedRunEnd(
   query: TransactionQuery,
@@ -184,6 +203,16 @@ export async function recordCompletedRunEnd(
     by: null,
     fromRun: { runId, nodePath: end.node },
   });
+  // The item rests, so nothing on it is still asked or awaited: the ending run replaces what
+  // is open, its own included, as a later run of a workflow replaces that workflow's set.
+  // Replacing settles nothing, so no asks-settled binding starts from it.
+  const now = new Date().toISOString();
+  for (const table of ['remote_agent_item_asks', 'remote_agent_item_waits'])
+    await query(
+      `UPDATE ${table} SET closed_as = 'replaced', closed_at = $1, replaced_by_run_id = $2
+       WHERE item_id = $3 AND closed_as IS NULL`,
+      [now, runId, itemId]
+    );
 }
 
 /**
@@ -212,10 +241,13 @@ export async function recordItemEnd(
 export async function getHoldingItemEnd(itemId: string): Promise<ItemEnd | ItemEndDegraded | null> {
   const result = await pool.query<EndRow>(
     `SELECT e.* FROM remote_agent_item_ends e
-     WHERE e.item_id = $1 AND ${holds()}
+     WHERE e.item_id = $1 AND ${holdsOverRuns()}
      ORDER BY e.seq DESC LIMIT 1`,
     [itemId]
   );
   const row = result.rows[0];
-  return row === undefined ? null : endRead(row);
+  if (row === undefined) return null;
+  if ((await queuedStep((sql, params) => pool.query(sql, params), itemId)) !== undefined)
+    return null;
+  return endRead(row);
 }

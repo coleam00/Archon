@@ -10,13 +10,26 @@ import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
 import { ItemEndRefusedError } from '@archon/workflows/schemas/item-end';
 import { itemStoppedMetadata, observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
-import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
+import {
+  CONFORMANCE_CODEBASE_ID,
+  CONFORMANCE_CONVERSATION_ID,
+  resourceStartFixtures,
+} from '@archon/workflows/store-conformance';
 import { recordItemEnd } from '../operations/item-ends';
-import { itemDeps, operator, type Harness } from './item-asks.conformance';
+import {
+  ask,
+  completeWithAsks,
+  itemDeps,
+  openRefs,
+  operator,
+  settledEvents,
+  type Harness,
+} from './item-asks.conformance';
 import { starts } from './start-limits.conformance';
 
 const projectKey = projectKeyForCodebase({ name: 'conformance', default_cwd: '/conformance' }, '');
 const end = { projectKey, key: 'pr-7', reason: 'Done by hand in another repository.' };
+const { launch } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
 
 async function createOnItem(harness: Harness, parent?: string, observes = false): Promise<string> {
   const run = await harness.store.createWorkflowRun({
@@ -150,6 +163,96 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
 
       // A step opens it, as it opens an operator's end.
       await createOnItem(harness);
+      expect(await holding(harness)).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a finishing outcome closes what is still asked or awaited on the item, settling nothing', async () => {
+    const harness = await makeHarness();
+    try {
+      const planned = await completeWithAsks(harness, [ask('Keep the flag?')], { item: 'pr-7' });
+      const waiting = await startOnItem(harness);
+      const wait = { event: 'checks', about: 'a'.repeat(40), within_minutes: 60 };
+      await harness.store.completeWorkflowRun(waiting, { duration_ms: 1 }, undefined, {
+        waits: [wait],
+      });
+      expect(await openRefs(harness)).toHaveLength(1);
+
+      const ending = await startOnItem(harness);
+      await harness.store.completeWorkflowRun(ending, { duration_ms: 1 }, undefined, {
+        outcome: { kind: 'enum', value: 'close' },
+        asks: [ask('Its own, left beside the finishing outcome.')],
+        end: { reason: "Workflow 'deliver' ended the item with outcome 'close'", node: 'decide' },
+      });
+      expect(await holding(harness)).not.toBeNull();
+      expect(await openRefs(harness)).toEqual([]);
+      const open = await harness.db.query<{ n: number | string }>(
+        'SELECT COUNT(*) AS n FROM remote_agent_item_waits WHERE closed_as IS NULL'
+      );
+      expect(Number(open.rows[0]?.n)).toBe(0);
+      // Replaced, not withdrawn: no asks-settled binding starts from the end.
+      expect(await settledEvents(harness, planned)).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a stop recorded on a finishing run stays out of attention while its end holds', async () => {
+    const harness = await makeHarness();
+    try {
+      // A start its end caused was refused at the hand-off, which records a stop on the run.
+      const refused = {
+        receiptId: crypto.randomUUID(),
+        bindingId: 'landed',
+        workflow: 'landed',
+        reason: 'no_default_provider' as const,
+        refusedAt: new Date().toISOString(),
+      };
+      const ending = await startOnItem(harness);
+      await harness.store.completeWorkflowRun(
+        ending,
+        { duration_ms: 1 },
+        itemStoppedMetadata(null, { refused: [refused] }),
+        {
+          outcome: { kind: 'enum', value: 'close' },
+          end: { reason: "Workflow 'deliver' ended the item with outcome 'close'", node: 'decide' },
+        }
+      );
+      expect((await harness.store.listStoppedItemRuns()).map(run => 'id' in run && run.id)).toEqual(
+        [ending]
+      );
+      expect(await stoppedRefs(harness)).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a queued start of an observing workflow leaves an end holding; a queued step opens it', async () => {
+    const harness = await makeHarness();
+    try {
+      await stopOnItem(harness);
+      const recorded = await recordItemEnd(harness.store, end, operator, 'cli');
+      // A start on another item holds the resource, so the starts on this item queue.
+      const { start, claimed } = starts(harness);
+      const holder = (await start('other', {})).result;
+      if (holder?.status !== 'admitted') throw new Error('Expected the holder admitted');
+      const base = launch();
+      const observing = await harness.store.completeStartBindingPreparation({
+        ...(await claimed('pr-7', {}, null)),
+        launch: {
+          ...base,
+          run: { ...base.run, metadata: observesItemMetadata({ observes: true }) },
+        },
+      });
+      expect(observing?.status).toBe('queued');
+      expect(await holding(harness)).toEqual(recorded);
+      // Nor does it keep the item from being ended again.
+      await recordItemEnd(harness.store, end, operator, 'cli');
+
+      const step = (await start('pr-7', {})).result;
+      expect(step?.status).toBe('queued');
       expect(await holding(harness)).toBeNull();
     } finally {
       await harness.close();

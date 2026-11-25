@@ -2476,20 +2476,23 @@ nodes:
   outcome cannot take or one listed twice fails the workflow at load. A workflow that declares
   `observes: true` cannot declare it.
 
-  A top-level run on an item that completes with one of these outcomes, leaving no ask and no
-  wait, ends the item. The write that completes the run records the same end
+  A top-level run on an item that completes with one of these outcomes ends the item. The
+  write that completes the run records the same end
   [`archon workflow end`](/reference/cli/#workflow-end) records, `via: engine`, from the run
   and its `returns:` node, with the reason `Workflow '<name>' ended the item with outcome
-  '<value>'`, followed by the `returns.summary` value when the run gave one. The item leaves
+  '<value>'`, followed by the `returns.summary` value when the run gave one. The same write
+  closes every ask and wait still open on the item, the run's own included, as replaced by
+  the run; that settles nothing, so no asks-settled binding starts from it. The item leaves
   the attention queue and the item read shows the end. A stage the outcome starts does not
   keep the end from being written: an observing stage (a check after the merge) leaves it
   holding, and a step started on the item opens it, as any new step opens an end.
 
   Every other ending of a step stops its item. A top-level run on an item, of a workflow that
   does not declare `observes: true`, stops the item when it completes with an outcome that
-  is not in `returns.ends`, its end starts nothing (no
-  [run-ended binding](/guides/workflow-triggers/) starts from that outcome), and it leaves no
-  ask and no wait. What the outcome is called does not matter, and no timer is involved.
+  is not in `returns.ends`, or with no outcome at all, its end starts nothing on the item (no
+  [run-ended binding](/guides/workflow-triggers/) starts a stage on the item from that
+  outcome; a `linked` binding starts on other items), and it leaves no ask and no wait. What
+  the outcome is called does not matter, and no timer is involved.
   Nothing follows such a run, so [`archon workflow attention`](/reference/cli/#workflow-attention)
   lists the item as `stopped` until another step starts on the item, whatever its status. A
   run on no item, an observing run, a run that ended its item, and a run that left an ask or
@@ -2498,8 +2501,9 @@ nodes:
   [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item), or
   when that start is refused before launch, once the run's own asks and waits are closed; the
   listing then names the limit or the refusal. `archon validate workflows` warns for each
-  outcome of a pack stage that the pack's bindings start nothing on and that asks nothing
-  and ends nothing.
+  outcome of a step workflow that does not end the item and that no binding its pack
+  declares starts a stage on, saying when an ask or wait the workflow can leave would keep
+  the item moving instead.
 
   `returns.final`, which marked an outcome as never stopping its item, was removed. A
   workflow that declares it fails to load with a message naming `returns.ends` and
@@ -2644,7 +2648,9 @@ What the engine does with them:
 - **Only a top-level run opens them.** A `workflow:` child has no item of its own; its asks stay
   data in the result it hands its parent.
 - **A newer set replaces the open one.** A later completed run of the same workflow on the same
-  item closes that workflow's open asks as `replaced`, even when it leaves none itself.
+  item closes that workflow's open asks as `replaced`, even when it leaves none itself. A run
+  whose outcome ends the item ([`returns.ends`](#workflow-signature-inputs-returns-and-inputs))
+  closes every open ask on the item the same way.
 - **They are answered by ref.** Open asks are listed in the attention queue with no run behind
   them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
   --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
@@ -2707,7 +2713,8 @@ What the engine does with them:
   no item, is refused before any node runs, as for asks. The file store holds no items.
 - **They open with the completion.** The waits open on the run's item in the write that
   completes the run, and a later completed run of the same workflow on the same item closes the
-  ones still open as `replaced`, even when it leaves none. Only a top-level run opens them.
+  ones still open as `replaced`, even when it leaves none. A run whose outcome ends the item
+  closes every open wait on it the same way. Only a top-level run opens them.
 - **They are one set, met once.** The waits a run leaves are alternatives. The first event that
   meets one closes the whole set as met and starts the binding's stage on the item, in the
   transaction that records the event. Another delivery of the same event, or a second event
