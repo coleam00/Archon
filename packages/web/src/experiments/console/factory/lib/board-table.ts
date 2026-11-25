@@ -21,7 +21,6 @@ export const TABLE_COLUMNS = [
   { id: 'change', label: 'Change' },
   { id: 'merged', label: 'Merged' },
   { id: 'toMerge', label: 'To merge' },
-  { id: 'asks', label: 'Asks' },
 ] as const;
 export type TableColumnId = (typeof TABLE_COLUMNS)[number]['id'];
 
@@ -61,7 +60,8 @@ function sortValue(
     case 'column':
       return row.columnOrder;
     case 'state':
-      return CHIP_ORDER.indexOf(chipOf(read));
+      // As the cell shows it: open asks read Needs you whatever the chip says.
+      return CHIP_ORDER.indexOf(progress.asks === null ? chipOf(read) : 'needs_you');
     case 'round':
       return progress.round?.dots.length ?? 0;
     case 'returned':
@@ -73,8 +73,6 @@ function sortValue(
       return read.merged?.at ?? '';
     case 'toMerge':
       return timeToMerged(read);
-    case 'asks':
-      return progress.asks?.count ?? 0;
   }
 }
 

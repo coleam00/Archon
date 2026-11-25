@@ -2,6 +2,8 @@ import { afterEach, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
+import { NO_ITEM_ASKS } from '../components/ItemAsksSection';
+import type { ItemAsk } from '../primitives/run';
 import { CardList } from '../routes/board/ItemCard';
 import type { ItemRead } from '../skills/items';
 import { invalidate, set } from '../store/cache';
@@ -58,8 +60,6 @@ test("a Table row's round and returned cells are the card's own for the same ite
           packs: new Map([['flow', PACK]]),
           packsError: false,
           itemAsks: null,
-          open: null,
-          setOpen: () => undefined,
         }}
       >
         <CardList reads={reads} projectId="web" className="" />
@@ -99,4 +99,60 @@ test('sorting by To merge orders rows by the time from the first run to the merg
   }));
   const sorted = sortRows(rows, { by: 'toMerge', descending: false }, () => ({}) as CardProgress);
   expect(sorted.map(row => row.read.item.key)).toEqual(['fast', 'mid', 'slow']);
+});
+
+test('an item with open asks shows one Needs you link in its State cell, to the filtered tab', () => {
+  const [read] = reads;
+  if (read === undefined) throw new Error('the fixture has no items');
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <CardsContext.Provider
+        value={{
+          projectId: 'web',
+          packs: new Map([['flow', PACK]]),
+          packsError: false,
+          itemAsks: {
+            ...NO_ITEM_ASKS,
+            asks: [
+              {
+                kind: 'attention',
+                ref: 'ask:a1',
+                project: null,
+                item: { id: read.item.id, projectKey: read.item.projectKey, key: read.item.key },
+                revision: 1,
+                labels: {},
+                pausedAt: null,
+                message: 'Land it?',
+                form: 'select',
+                options: [{ id: 'land', does: 'Lands it.', cost: 'Nothing.' }],
+              } as ItemAsk,
+            ],
+          },
+        }}
+      >
+        <BoardTable
+          projectId="web"
+          rows={reads.map(each => ({ read: each, column: 'Merged', columnOrder: 0 }))}
+          earlier={[]}
+        />
+      </CardsContext.Provider>
+    </MemoryRouter>
+  );
+  const page = new Window().document;
+  page.body.innerHTML = html;
+  const row = page.querySelector(`[data-row="${read.item.key}"]`);
+  const links = row?.querySelectorAll('[data-needs-you-link]') ?? [];
+  expect(links.length).toBe(1);
+  expect(links[0]?.closest('[data-cell="state"]')).not.toBeNull();
+  expect(links[0]?.textContent).toBe('Needs you · 1');
+  expect(links[0]?.getAttribute('href')).toBe(
+    `/console/p/web/needs-you?item=${encodeURIComponent(read.item.key)}`
+  );
+  // One Needs you per row: no state pill beside it, and no separate Asks column.
+  expect(row?.querySelector('[data-row-state]')).toBeNull();
+  expect(page.querySelector('thead')?.textContent).not.toContain('Asks');
+  // A row with no ask keeps its state pill and has no link.
+  const other = page.querySelector(`[data-row="${reads[1]?.item.key ?? ''}"]`);
+  expect(other?.querySelector('[data-needs-you-link]')).toBeNull();
+  expect(other?.querySelector('[data-row-state]')).not.toBeNull();
 });

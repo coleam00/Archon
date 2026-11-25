@@ -1,7 +1,7 @@
 /**
  * What a board card shows of an item beyond its standing: its title, the step running now,
- * its check rounds, how often it was sent back and why, its pull request, and its open asks
- * with the option the newest one recommends. Composed here, in the web, from generic reads:
+ * its check rounds, how often it was sent back and why, its pull request, and how many asks
+ * are open on it. Composed here, in the web, from generic reads:
  * the item read, run records, the forge's answers, the attention list's asks, and the pack's
  * factory view for every name and word. The engine knows none of these words.
  *
@@ -45,8 +45,8 @@ export interface CardProgress {
   returned: { count: number; text: string; reason: string | null } | null;
   /** The pull request, with the run that named it (null for the merge the item recorded). */
   pr: { url: string; number: number | null; run: string | null } | null;
-  /** The open asks: the newest one's question and recommended option, and how many there are. */
-  asks: { count: number; question: string; recommended: { label: string } | 'none' } | null;
+  /** How many asks are open on the item; null when none are. */
+  asks: { count: number } | null;
   /** A run record the card needs could not be read: its rounds and returns are unknown. */
   unread: boolean;
 }
@@ -233,36 +233,6 @@ export function humaniseId(id: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/**
- * The item's open asks, newest first. An item ask records no time of its own, so it is as new
- * as the run that asked it (`askedIn`), by that run's start in the item read; an ask whose run
- * is not among the item's runs comes last, in the list's order.
- */
-export function newestFirst(read: ItemRead, asks: readonly ItemAsk[]): ItemAsk[] {
-  const started = new Map(read.runs.map(run => [run.id, Date.parse(run.startedAt)]));
-  const at = (ask: ItemAsk): number =>
-    (ask.askedIn === undefined ? undefined : started.get(ask.askedIn.runId)) ?? -Infinity;
-  return [...asks].sort((a, b) => at(b) - at(a));
-}
-
-/** The asks open on the item, and what the newest one recommends by its option's label. */
-function asksField(read: ItemRead, asks: readonly ItemAsk[]): CardProgress['asks'] {
-  const [first] = newestFirst(read, asks);
-  if (first === undefined) return null;
-  const chosen =
-    first.recommendation === undefined
-      ? undefined
-      : first.options.find(option => option.id === first.recommendation?.option);
-  return {
-    count: asks.length,
-    question: first.message,
-    recommended:
-      first.recommendation === undefined
-        ? 'none'
-        : { label: chosen?.label ?? humaniseId(first.recommendation.option) },
-  };
-}
-
 /** The item's own title, else its issue's title as the forge names it; null when neither is known. */
 function titleOf(read: ItemRead, issues: ForgeIssues, keyText: string): string | null {
   const own = read.item.title?.trim();
@@ -373,7 +343,7 @@ export function cardProgress(
       : null,
     returned: counted ? returnedField(view, progressRuns) : null,
     pr: prOf(read, progressRuns, reads.forge),
-    asks: asksField(read, asks),
+    asks: asks.length === 0 ? null : { count: asks.length },
     unread,
   };
 }

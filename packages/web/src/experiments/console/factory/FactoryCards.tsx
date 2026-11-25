@@ -1,9 +1,8 @@
 /**
  * What board cards read beyond the item read, shared by every card list of a board: each of the
- * project's packs' graph and factory view, the project's open asks by item, and which item's
- * asks are open in the popover. A card list reads the run records and forge answers its own
- * cards need in batches (`useCardList`). With no provider (a test drawing a pack board alone)
- * cards show what the item read alone gives.
+ * project's packs' graph and factory view, and the project's open asks by item. A card list
+ * reads the run records and forge answers its own cards need in batches (`useCardList`). With no
+ * provider (a test drawing a pack board alone) cards show what the item read alone gives.
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import type { ItemAsks } from '../components/ItemAsksSection';
@@ -19,8 +18,7 @@ import {
   type RunRecord,
   type RunRecords,
 } from './api';
-import { CardsContext, useFactoryCards, type FactoryCards, type OpenAsks } from './cards-context';
-import { ItemAsksPopover } from './ItemAsksPopover';
+import { CardsContext, useFactoryCards, type FactoryCards } from './cards-context';
 import { issueNumber } from '../lib/item-key';
 import {
   cardProgress,
@@ -76,7 +74,7 @@ export function FactoryCardsProvider({
   projectId: string;
   /** The project's packs; null while the project is still being read. */
   packs: readonly string[] | null;
-  /** The project's asks for the cards' ask lines; null where none are shown (the map). */
+  /** The project's asks, which the cards count; null where none are shown (the map). */
   itemAsks: ItemAsks | null;
   children: ReactNode;
 }): ReactElement {
@@ -84,7 +82,6 @@ export function FactoryCardsProvider({
   const onRead = useCallback((pack: string, result: PackReadResult): void => {
     setRead(prev => (prev.get(pack) === result ? prev : new Map(prev).set(pack, result)));
   }, []);
-  const [open, setOpen] = useState<OpenAsks | null>(null);
   const readPacks = new Map<string, CardPack>();
   for (const [pack, result] of read)
     if (result !== 'error' && packs?.includes(pack) === true) readPacks.set(pack, result);
@@ -95,8 +92,6 @@ export function FactoryCardsProvider({
     packs: packs !== null && packs.every(pack => read.has(pack)) ? readPacks : null,
     packsError: [...read.values()].includes('error'),
     itemAsks,
-    open,
-    setOpen,
   };
   return (
     <CardsContext.Provider value={value}>
@@ -104,7 +99,6 @@ export function FactoryCardsProvider({
         <PackRead key={pack} projectId={projectId} pack={pack} onRead={onRead} />
       ))}
       {children}
-      <ItemAsksPopover />
     </CardsContext.Provider>
   );
 }

@@ -34,8 +34,12 @@ http://127.0.0.1:3195/console). Rules:
   "Full workflow" view.
 - **No item page.** A board card opens the item's run log (Rasmus's behaviour). The CARD carries
   the item's iteration detail as v1's cards did: title, running step, check-round dots and
-  "N of M check rounds", returned / "sent back Nx", PR link, the green "Recommended: <label>"
-  line from the ask record and "N open asks".
+  "N of M check rounds", returned / "sent back Nx", PR link. An item with open asks shows one
+  "Needs you · N" control (N, its open asks) in the chip's place at the card's top right, a link
+  to the project's Needs you tab filtered to the item (`?item=<key>`, below); the Table row shows
+  the same link in its State cell (owner, 11/25, #217). The card shows no ask question,
+  recommendation or ask count anywhere else, and opens no ask popover: answering happens on the
+  Needs you tab. A press elsewhere on the card still opens the run log.
 - **The project's Needs you tab** (`routes/ProjectNeedsYouPage.tsx`, the first project tab; owner
   after the 11/25 review). `?item=<key>` shows only that item's asks; the value is the raw key or
   the issue number (`198` and `issue-198` name one item; a parent's number does not take in its
@@ -45,7 +49,7 @@ http://127.0.0.1:3195/console). Rules:
   does (`#171`, members `#199 · board card`, the forge issue's title when the `title` column is
   empty). The recommendation reads "Suggested: <label>" in `--text-secondary`, never green,
   because a green line read as if the ask were already answered. Answering stays in Archon's
-  ask section. The board card's green "Recommended" line above is not changed by this.
+  ask section.
 - **Keep, all required:** the stage modal ("What this stage does" curated cards, "Items here
   now", "The real workflow" step list); rich board cards; work orders "N of N merged" with split
   parents resolved when their pieces merged and run-less work orders listed; the Merged column
@@ -248,7 +252,7 @@ not polish: reshape a page when restyling it would not make it read well.
 
 From the owner's review of the finished work order #64. The section is close; these make it presentable.
 
-1. **Less purple and pink, more green.** The brand magenta is an accent, not the page's colour. In the factory section, purple and pink are for one thing each (the running state, the active tab), not for card borders, headings or chips; a recommended option the factory names (the board card's "Recommended: <label>") is green (`--success`), never the accent. Archon's ask card keeps its own look (v2 direction).
+1. **Less purple and pink, more green.** The brand magenta is an accent, not the page's colour. In the factory section, purple and pink are for one thing each (the running state, the active tab), not for card borders, headings or chips; a recommended option the factory names is green (`--success`), never the accent. Archon's ask card keeps its own look (v2 direction).
 2. **Text never leaves its box.** Every card, tile, chip and heading in the section wraps long unbroken text (paths, URLs, ids: `overflow-wrap: anywhere`, `min-width: 0` on flex and grid children) and clamps where the standard says; checked in the browser with a long unbroken path.
 3. **The Factory tab has two pages: Overview and Board.** Its sub-navigation has no How it works (the sidebar Factory entry is that page). Old links keep redirecting.
 4. **The board is tall enough to use.** At 1440x900 every column shows at least two full cards without scrolling the page; the work-order strip collapses to one line (expand on click) and the found-by panel stays one line.
@@ -281,7 +285,7 @@ file, no pack names in code) and reads well to someone who has never seen Archon
    card shows the newest question on its line, then the ask's declared recommendation as
    "Recommended: <label>" in green and how many asks are open ("N open asks"); with no
    recommendation declared there is no recommendation line. After an answer the card says
-   nothing of it: the item page tells it.*
+   nothing of it: the item page tells it.* *Superseded on `combined` by the COMBINED direction (#217): a card with open asks shows one "Needs you · N" control linking to the project's Needs you tab filtered to the item, and nothing else of its asks; there is no ask popover over the board.*
 4. **Fewer board columns.** The view file groups stages into columns; the board draws one column
    per group, not per stage. For this pack: **Intake** (order, triage) | **Plan & build** |
    **Checks & review** (the check rounds, CI and PR reviews) | **Ready to merge** | **Merged**.
@@ -539,7 +543,7 @@ One 4/8 px grid: Tailwind's 4 px scale, every value a multiple of 4.
 **The ask** is Archon's own ask section and answer panel (`ItemAsksSection`,
 `AttentionAnswerPanel`, `ApprovalPanel`), exactly as on Archon dev, wherever the factory section
 answers an ask (the board popover and the item page)
-(v2 direction).
+(v2 direction). *On `combined` (#217) there is neither: asks are answered on the project's Needs you tab.*
 The factory section does not restyle, wrap, replace or parse it: its options, recommendation,
 confidence and cost come from what the ask's workflow declares (#6139), never from the ask's
 text. The factory's own surfaces that point at an ask follow the rules above:
@@ -553,6 +557,7 @@ text. The factory's own surfaces that point at an ask follow the rules above:
   bordered chip reading "N open asks". The card's title then takes 2 lines, not 3.
 - The popover that holds Archon's ask section over the board is at most 480 px wide; under
   520 px (a 390 px phone) it is a sheet from the bottom.
+- *Superseded on `combined` by the COMBINED direction (#217): a card with open asks shows one "Needs you · N" control linking to the project's Needs you tab filtered to the item, and nothing else of its asks; there is no ask popover over the board.*
 
 **The column header** (owner change 4), one per board column:
 
@@ -1127,7 +1132,8 @@ A card, in this order:
    column only while a start waits for it, else it is set aside),
    **Waiting** (queued or idle between stages), **Merged**.
 2. Title (from the item record or the forge, never read out of a run input's markdown; else the
-   key), at most 3 lines; 2 on a card showing its open asks (rule 7).
+   key), at most 3 lines; 2 on a card showing its open asks (rule 7). *On `combined` always 3
+   (#217).*
 3. The stage line, so a card names its stage inside a column that groups several. While a run
    works it: its stage, the running step's name and the round when the step is of the declared
    rounds loop, "Checks · Code review · round 2", linking to the run in the console
@@ -1165,7 +1171,7 @@ A card, in this order:
    outside closes it; focus returns to the card unless the press landed on another control. An
    answered ask stays in it as Archon's section shows it ("Answered: <label>") until it is
    closed, and the card's count drops at once. A merged card keeps its compact form and no ask
-   control.
+   control. *Superseded on `combined` by the COMBINED direction (#217): a card with open asks shows one "Needs you · N" control linking to the project's Needs you tab filtered to the item, and nothing else of its asks; there is no ask popover over the board.*
 
 A merged card, in the Merged column, is compact: its key and pill, its title, then the change
 and when it merged, in local time; no stage line, order chip, rounds or returned count. The
@@ -1187,7 +1193,7 @@ columns take the rest of the window. A card opens the item page, except its link
 row per item in a column (the items set aside are no rows) with the same fields as columns, a Work order, a Column and a Stage column among
 them (a running item's step and round under its stage, as the card's stage line reads; a merged
 item's Stage empty, as its card names no stage; Merged as
-a short local time, the full one on hover), sortable; a row with open asks has an Answer button beside its state pill opening the same popover. A filter
+a short local time, the full one on hover), sortable; a row with open asks has an Answer button beside its state pill opening the same popover (on `combined`, #217: one "Needs you · N" link to the filtered Needs you tab in place of the state pill, and no Asks column). A filter
 box narrows by key, title or work order key, matching the raw key (`136` finds `issue-136`). The
 Item and Work order columns sort by the key as it reads, so `#9` comes before `#111` whichever form
 each is stored in. A key never breaks inside itself (`#136 · pack view` is one line): its column

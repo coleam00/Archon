@@ -1,12 +1,11 @@
 import { afterAll, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
-import { act, useState, type ReactElement } from 'react';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router';
+import { act, type ReactElement } from 'react';
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import { NO_ITEM_ASKS } from '../../components/ItemAsksSection';
 import type { FactoryView, RunRecord } from '../../factory/api';
-import { CardsContext, type OpenAsks } from '../../factory/cards-context';
+import { CardsContext } from '../../factory/cards-context';
 import type { CardPack } from '../../factory/lib/item-card';
-import { ItemAsksPopover } from '../../factory/ItemAsksPopover';
 import type { ItemAsk } from '../../primitives/run';
 import type { ItemRead } from '../../skills/items';
 import { invalidate, set } from '../../store/cache';
@@ -105,7 +104,12 @@ function RunLog(): ReactElement {
   return <p data-run-log>{useParams().runId}</p>;
 }
 
-/** The board's card list under the cards' shared state, with the popover, as BoardPage mounts them. */
+/** Stands in for the project's Needs you tab: where a card's Needs you control lands. */
+function NeedsYouTab(): ReactElement {
+  return <p data-needs-you-tab>{useLocation().search}</p>;
+}
+
+/** The board's card list under the cards' shared state, as BoardPage mounts it. */
 function Board({
   reads,
   packs = new Map(),
@@ -113,7 +117,6 @@ function Board({
   reads: ItemRead[];
   packs?: Map<string, CardPack>;
 }): ReactElement {
-  const [open, setOpen] = useState<OpenAsks | null>(null);
   return (
     <CardsContext.Provider
       value={{
@@ -121,12 +124,9 @@ function Board({
         packs,
         packsError: false,
         itemAsks: { ...NO_ITEM_ASKS, asks: [ask], itemIds: new Set(['id-issue-2']) },
-        open,
-        setOpen,
       }}
     >
       <CardList reads={reads} projectId="web" className="" />
-      <ItemAsksPopover />
     </CardsContext.Provider>
   );
 }
@@ -144,6 +144,7 @@ async function mount(reads: ItemRead[], packs?: Map<string, CardPack>) {
             element={<Board reads={reads} packs={packs} />}
           />
           <Route path="/console/p/:projectId/r/:runId" element={<RunLog />} />
+          <Route path="/console/p/:projectId/needs-you" element={<NeedsYouTab />} />
         </Routes>
       </MemoryRouter>
     )
@@ -171,27 +172,61 @@ const READS = [
   item('issue-48', []),
 ];
 
-test('a card with an open ask shows the recommended label from the ask record and the count', async () => {
+test('a card with an open ask has one Needs you control, to the Needs you tab filtered to it', async () => {
   const view = await mount(READS);
   try {
     const card = view.container.querySelector('[data-item="issue-2"]');
-    expect(card?.querySelector('[data-card-recommended]')?.textContent).toBe(
-      'Recommended: Land it now'
-    );
-    expect(card?.querySelector('[data-card-open-asks]')?.textContent).toBe('1 open ask');
+    const links = card?.querySelectorAll('[data-needs-you-link]') ?? [];
+    expect(links.length).toBe(1);
+    expect(links[0]?.textContent).toBe('Needs you · 1');
+    expect(links[0]?.getAttribute('href')).toBe('/console/p/web/needs-you?item=issue-2');
+    // It stands in the chip's place: the card has no other chip.
+    expect(card?.querySelectorAll('[data-chip]').length).toBe(1);
+    // The card shows no ask question, recommendation or count beside it.
+    expect(card?.textContent).not.toContain('Land it?');
+    expect(card?.textContent).not.toContain('Recommended');
+    expect(card?.textContent).not.toContain('open ask');
     expect(card?.querySelector('[data-card-pr]')?.textContent).toBe('Pull request');
   } finally {
     await view.unmount();
   }
 });
 
-test('the asks button opens Archon’s ask section in a popover and does not open the run log', async () => {
+test('a card with no open ask has no Needs you control', async () => {
   const view = await mount(READS);
   try {
-    await view.click(view.container.querySelector('[data-card-asks]'));
+    const card = view.container.querySelector('[data-item="issue-48"]');
+    expect(card?.querySelector('[data-needs-you-link]')).toBeNull();
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('an item that stands needing you with no open ask shows the chip, not a control', async () => {
+  const base = READS[0]!;
+  const read: ItemRead = {
+    ...base,
+    item: { ...base.item, id: 'id-issue-9', key: 'issue-9' },
+    questions: [{ kind: 'ask', id: 'q1', message: 'Which way?' }],
+  } as unknown as ItemRead;
+  const view = await mount([read]);
+  try {
+    const card = view.container.querySelector('[data-item="issue-9"]');
+    expect(card?.querySelector('[data-needs-you-link]')).toBeNull();
+    const chip = card?.querySelector('[data-chip]');
+    expect(chip?.tagName).toBe('SPAN');
+    expect(chip?.getAttribute('data-chip')).toBe('needs_you');
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('the Needs you control opens the filtered Needs you tab, not the run log', async () => {
+  const view = await mount(READS);
+  try {
+    await view.click(view.container.querySelector('[data-needs-you-link]'));
     expect(view.container.querySelector('[data-run-log]')).toBeNull();
-    const popover = document.querySelector('[data-item-asks-popover="id-issue-2"]');
-    expect(popover?.querySelector('[data-ask-ref="ask:a1"]')?.textContent).toContain('Land it?');
+    expect(view.container.querySelector('[data-needs-you-tab]')?.textContent).toBe('?item=issue-2');
   } finally {
     await view.unmount();
   }
@@ -203,7 +238,7 @@ test('the PR link is not the run log; a press elsewhere on the card opens the ru
     const card = view.container.querySelector('[data-item="issue-2"]');
     // The card-wide link is the card's sibling layer, never an ancestor of its inner controls.
     expect(card?.querySelector('[data-card-pr]')?.closest('a[data-card-link]')).toBeNull();
-    expect(card?.querySelector('[data-card-asks]')?.closest('a')).toBeNull();
+    expect(card?.querySelector('[data-needs-you-link]')?.closest('a[data-card-link]')).toBeNull();
     await view.click(card?.querySelector('[data-card-link]'));
     // It opens the run the item stands at.
     expect(view.container.querySelector('[data-run-log]')?.textContent).toBe('run-old');

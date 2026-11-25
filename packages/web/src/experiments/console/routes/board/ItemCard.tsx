@@ -1,15 +1,17 @@
 /**
  * One item on the board, and a list of them. The card is Rasmus's (its chip, how its run
  * stands, why it needs a decision, the link to a run that waits for an answer) with the
- * iteration detail v1's cards carried (`factory/BoardCardProgress.tsx`). There is no item page:
- * the whole card opens the run log of the run the item stands at, else its newest run.
+ * iteration detail v1's cards carried (`factory/BoardCardProgress.tsx`). An item with open asks
+ * shows one "Needs you · N" control in the chip's place, linking to the project's Needs you tab
+ * filtered to it (`factory/NeedsYouLink.tsx`). There is no item page: the rest of the card opens
+ * the run log of the run the item stands at, else its newest run.
  */
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
 import { BoardCardProgress, INNER } from '../../factory/BoardCardProgress';
 import { useCardList } from '../../factory/FactoryCards';
-import { useFactoryCards } from '../../factory/cards-context';
 import type { CardProgress } from '../../factory/lib/item-card';
+import { NeedsYouLink } from '../../factory/NeedsYouLink';
 import { relativeTime } from '../../lib/format';
 import type { ItemRead } from '../../skills/items';
 import {
@@ -58,7 +60,6 @@ export function ItemCard({
   const open = runToOpen(read);
   const chip = chipOf(read);
   const shade = litShade(lit, read.item.id);
-  const cards = useFactoryCards();
   const chipText = chip === 'done' ? howItEnded(read) : CHIP[chip].label;
   const chipClass = `shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-console-12 font-medium ${CHIP[chip].tone}`;
   const [heldByRun] = read.questions.flatMap(question =>
@@ -98,25 +99,11 @@ export function ItemCard({
         <span data-item-key className="truncate font-mono text-console-12 text-text-tertiary">
           {progress.keyText}
         </span>
-        {chip === 'needs_you' && progress.asks !== null && cards !== null ? (
-          <button
-            type="button"
-            data-chip={chip}
-            aria-haspopup="dialog"
-            aria-expanded={cards.open?.read.item.id === read.item.id}
-            aria-label={`${chipText}: open its asks`}
-            onClick={event => {
-              cards.setOpen({
-                read,
-                title: progress.title,
-                keyText: progress.keyText,
-                trigger: event.currentTarget,
-              });
-            }}
-            className={`${INNER} ${chipClass} cursor-pointer transition-[filter] hover:brightness-110 hover:ring-2 hover:ring-warning/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
-          >
-            {chipText}
-          </button>
+        {/* Open asks take the chip's place whatever the chip says: an item that waits on the
+            operator says so (`chipOf`). Keyed on the asks, not the chip: an item can wait with
+            an open ask its standing names no question for. */}
+        {progress.asks !== null ? (
+          <NeedsYouLink projectId={projectId} itemKey={read.item.key} count={progress.asks.count} />
         ) : (
           <span data-chip={chip} className={chipClass}>
             {chipText}
@@ -126,7 +113,7 @@ export function ItemCard({
       {progress.titleIsKey ? null : (
         <p
           data-item-title
-          className={`${progress.asks === null ? 'line-clamp-3' : 'line-clamp-2'} text-console-15 font-semibold leading-snug text-text-primary`}
+          className={`line-clamp-3 text-console-15 font-semibold leading-snug text-text-primary`}
         >
           {progress.title}
         </p>
@@ -134,7 +121,7 @@ export function ItemCard({
       {meta.length === 0 ? null : (
         <p className="text-console-13 text-text-tertiary">{meta.join(' · ')}</p>
       )}
-      <BoardCardProgress read={read} progress={progress} />
+      <BoardCardProgress progress={progress} />
       {reason === undefined ? null : (
         <p data-item-reason className="text-console-13 text-text-secondary">
           {reason}

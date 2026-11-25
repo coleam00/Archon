@@ -2,7 +2,8 @@
  * The board's Table view (v1's `BoardTable.tsx`): one row per item the pack's board shows,
  * with the card's own values as columns; a header click sorts. The rows' values come from the
  * same `useCardList` read the cards use. Merges before the Merged column's window are listed
- * only on request, so the first read stays the size of the board.
+ * only on request, so the first read stays the size of the board. An item with open asks shows
+ * the card's one Needs you control in its State cell (`NeedsYouLink.tsx`).
  */
 import { useState, type ReactElement, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -20,6 +21,7 @@ import {
 } from './lib/board-table';
 import { durationWords } from './lib/duration';
 import type { CardProgress } from './lib/item-card';
+import { NeedsYouLink } from './NeedsYouLink';
 import { orderOf } from './lib/work-orders';
 
 export function BoardTable({
@@ -159,13 +161,17 @@ function BoardRow({
         {order === undefined ? null : displayItemKey(order.key)}
       </Cell>
       <Cell className="text-text-secondary">{row.column}</Cell>
-      <Cell>
-        <span
-          data-row-state={chip}
-          className={`whitespace-nowrap rounded-full px-2 py-0.5 text-console-12 font-medium ${CHIP[chip].tone}`}
-        >
-          {chip === 'done' ? howItEnded(read) : CHIP[chip].label}
-        </span>
+      <Cell name="state">
+        {progress.asks !== null ? (
+          <NeedsYouLink projectId={projectId} itemKey={read.item.key} count={progress.asks.count} />
+        ) : (
+          <span
+            data-row-state={chip}
+            className={`whitespace-nowrap rounded-full px-2 py-0.5 text-console-12 font-medium ${CHIP[chip].tone}`}
+          >
+            {chip === 'done' ? howItEnded(read) : CHIP[chip].label}
+          </span>
+        )}
       </Cell>
       <Cell name="round" className="whitespace-nowrap text-text-secondary">
         {progress.round?.text}
@@ -190,11 +196,6 @@ function BoardRow({
       </Cell>
       <Cell name="to-merge" className="whitespace-nowrap text-text-secondary">
         {toMerge === null ? null : durationWords(toMerge)}
-      </Cell>
-      <Cell className="whitespace-nowrap text-warning">
-        {progress.asks === null
-          ? null
-          : `${String(progress.asks.count)} open ask${progress.asks.count === 1 ? '' : 's'}`}
       </Cell>
     </tr>
   );

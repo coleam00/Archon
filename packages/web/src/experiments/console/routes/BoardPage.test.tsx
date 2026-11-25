@@ -208,15 +208,13 @@ test('each open item is under the stage it stands at, in the order the pack grap
   // Until every item is read, the work orders are a skeleton: no total that may be wrong.
   expect(page.querySelector('[data-work-orders-loading]')).not.toBeNull();
   expect(page.querySelector('[data-work-order]')).toBeNull();
-  // The Board has no Needs you section (that is its own tab); the item that has an ask opens it
-  // over its card.
+  // The Board has no Needs you section (that is its own tab); the item that has an ask links to
+  // that tab, filtered to it, from one control on its card.
   expect(page.querySelector('[data-needs-you]')).toBeNull();
-  const asks = page.querySelector('[data-item="issue-2"] [data-card-asks]');
-  expect(asks?.textContent).toContain('1 open ask');
-  // The ask declares no recommendation, which the card says without reading its text.
-  expect(asks?.querySelector('[data-card-no-recommendation]')?.textContent).toBe(
-    'No recommendation'
-  );
+  const links = page.querySelectorAll('[data-item="issue-2"] [data-needs-you-link]');
+  expect(links.length).toBe(1);
+  expect(links[0]?.textContent).toBe('Needs you · 1');
+  expect(links[0]?.getAttribute('href')).toBe('/console/p/web/needs-you?item=issue-2');
 });
 
 /** An active `part_of` link from an item to work order `key`. */

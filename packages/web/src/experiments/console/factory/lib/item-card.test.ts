@@ -224,42 +224,13 @@ const ask = (over: Partial<ItemAsk>): ItemAsk =>
   }) as ItemAsk;
 
 describe('open asks', () => {
-  test('the count is the open asks, the label the recommended option’s', () => {
-    const card = cardProgress(byKey('125'), PACK, allRead(), [
-      ask({ recommendation: { option: 'send-back', why: 'x' } }),
-      ask({ ref: 'r2' }),
-    ]);
-    expect(card.asks).toEqual({
-      count: 2,
-      question: 'Which way?',
-      recommended: { label: 'Send it back' },
-    });
-  });
-
-  test('the newest ask, by the start of the run that asked it, gives the line', () => {
-    const read = byKey('125');
-    const [older, newer] = [read.runs[0]!, read.runs[read.runs.length - 1]!];
-    const card = cardProgress(read, PACK, allRead(), [
-      ask({ ref: 'old', message: 'Older?', askedIn: { runId: older.id, workflow: 'x' } }),
-      ask({
-        ref: 'new',
-        message: 'Newer?',
-        askedIn: { runId: newer.id, workflow: 'x' },
-        recommendation: { option: 'send-back', why: 'x' },
-      }),
-    ]);
-    expect(card.asks).toMatchObject({ question: 'Newer?', recommended: { label: 'Send it back' } });
-  });
-
-  test('an option with no label reads as its id in words', () => {
-    const card = cardProgress(byKey('125'), PACK, allRead(), [
-      ask({ recommendation: { option: 'take-as-is', why: 'x' } }),
-    ]);
-    expect(card.asks?.recommended).toEqual({ label: 'Take as is' });
-  });
-
-  test('an ask with no recommendation reads "none"; no asks, no line', () => {
-    expect(cardProgress(byKey('125'), PACK, allRead(), [ask({})]).asks?.recommended).toBe('none');
+  test('the count is the open asks; no asks, null', () => {
+    expect(
+      cardProgress(byKey('125'), PACK, allRead(), [
+        ask({ recommendation: { option: 'send-back', why: 'x' } }),
+        ask({ ref: 'r2' }),
+      ]).asks
+    ).toEqual({ count: 2 });
     expect(cardProgress(byKey('125'), PACK, allRead(), []).asks).toBeNull();
   });
 });
