@@ -121,6 +121,16 @@ export const resourceStartReceiptOriginSchema = z
   .strict();
 export type ResourceStartRunMetadata = z.infer<typeof resourceStartReceiptOriginSchema>;
 
+/** The receipt and binding that requested this run's start, from its `resource_start` metadata. */
+export function readResourceStartOrigin(
+  metadata: Readonly<Record<string, unknown>> | undefined
+): ResourceStartRunMetadata | undefined {
+  const origin = resourceStartReceiptOriginSchema.safeParse(
+    metadata?.[RESOURCE_START_METADATA_KEY]
+  );
+  return origin.success ? origin.data : undefined;
+}
+
 /**
  * The receipt that requested this run's start, from its `resource_start` metadata.
  * Attribution only: a missing or malformed origin reads as no receipt.
@@ -128,10 +138,7 @@ export type ResourceStartRunMetadata = z.infer<typeof resourceStartReceiptOrigin
 export function readResourceStartReceiptId(
   metadata: Readonly<Record<string, unknown>> | undefined
 ): string | undefined {
-  const origin = resourceStartReceiptOriginSchema.safeParse(
-    metadata?.[RESOURCE_START_METADATA_KEY]
-  );
-  return origin.success ? origin.data.receiptId : undefined;
+  return readResourceStartOrigin(metadata)?.receiptId;
 }
 
 /**

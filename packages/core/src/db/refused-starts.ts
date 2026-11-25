@@ -1,7 +1,9 @@
 /**
  * Refused starts that no run caused: binding starts a fire, a schedule, a webhook or a label
  * made, refused with a stored reason (`refusal`, see `bindingRefusalSchema`). A start a run's
- * end or settled asks caused is not here: its refusal is a stop on that run (`item-stops.ts`).
+ * end or settled asks caused is not here while that run exists: its refusal is a stop on
+ * that run (`item-stops.ts`). Once the run is deleted the stop has nowhere to show, so the
+ * refusal is listed here instead.
  */
 import {
   ASKS_SETTLED_SOURCE_ACTOR,
@@ -63,7 +65,7 @@ export async function listStoredRefusedStarts(): Promise<StoredRefusedStart[]> {
   );
   const starts: StoredRefusedStart[] = [];
   for (const row of rows.rows) {
-    if (causedByRun(row.source_actor)) continue;
+    if (await causingRunExists(row.source_actor)) continue;
     const refusal = bindingRefusalSchema.safeParse(parseStoredJson(row.refusal));
     if (!refusal.success) {
       getLog().warn(
@@ -87,13 +89,21 @@ export async function listStoredRefusedStarts(): Promise<StoredRefusedStart[]> {
   return starts;
 }
 
-/** True when a run's end or settled asks caused the receipt: its stop shows the refusal. */
-function causedByRun(stored: unknown): boolean {
+/**
+ * True when a run's end or settled asks caused the receipt and that run still exists: its
+ * stop shows the refusal.
+ */
+async function causingRunExists(stored: unknown): Promise<boolean> {
   const actor = sourceReceiptInputSchema.shape.sourceActor.safeParse(
     parseStoredJson(stored ?? null)
   );
-  const source = actor.success ? actor.data?.source : undefined;
-  return source === RUN_ENDED_SOURCE_ACTOR || source === ASKS_SETTLED_SOURCE_ACTOR;
+  const cause = actor.success ? actor.data : null;
+  if (cause?.source !== RUN_ENDED_SOURCE_ACTOR && cause?.source !== ASKS_SETTLED_SOURCE_ACTOR)
+    return false;
+  const run = await getDatabase().query('SELECT 1 FROM remote_agent_workflow_runs WHERE id = $1', [
+    cause.id,
+  ]);
+  return run.rows.length > 0;
 }
 
 /**

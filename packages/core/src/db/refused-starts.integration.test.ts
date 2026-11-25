@@ -162,10 +162,13 @@ test('a start refused in preparation names its reason and detail until the bindi
 });
 
 test('a start a run caused is shown on that run, and a source rejection with no item nowhere', async () => {
-  const caused = await claimed(intent(), {
-    source: RUN_ENDED_SOURCE_ACTOR,
-    id: crypto.randomUUID(),
+  const run = await store().createWorkflowRun({
+    workflow_name: 'plan',
+    user_message: '',
+    codebase_id: CODEBASE_ID,
+    item_key: 'issue-1',
   });
+  const caused = await claimed(intent(), { source: RUN_ENDED_SOURCE_ACTOR, id: run.id });
   await store().failStartBindingPreparation({
     ...caused,
     error: 'launch_preparation_failed',

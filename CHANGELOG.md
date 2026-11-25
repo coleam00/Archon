@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A start a run's end or settled asks caused follows its trigger file while it waits. Registering the file again with another mapping rebuilds a start not yet prepared with the new inputs, and a queued one leaves its queue and is prepared again; a file that no longer binds the start refuses it on its item. A queued start whose workflow alone changed runs as prepared. Re-registering bindings no longer needs the install hold. (#6225)
+
 ## [0.15.0] - 2026-11-25
 
 Runs belong to items, a stage hands off to the next through a binding instead of pausing, and an install with no server or webhooks can run the whole loop.
