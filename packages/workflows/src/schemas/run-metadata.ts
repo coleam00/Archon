@@ -550,6 +550,13 @@ export const runDispatchMetadataSchema = z.object({
    * defaults over them. Absent on rows from older builds.
    */
   inputs_resolved: z.literal(true).optional(),
+  /**
+   * Names of the inputs the run was supplied with (`--input`, the run route's `inputs`, a
+   * parent's `with:`), as opposed to the pack settings and declared defaults `inputs` also
+   * holds. A re-run restores only these, so an unsupplied input keeps taking its default.
+   * Absent on rows from older builds.
+   */
+  supplied_inputs: z.array(z.string()).optional(),
 });
 
 export type RunDispatchMetadata = z.infer<typeof runDispatchMetadataSchema>;
@@ -560,6 +567,28 @@ export function readRunDispatchMetadata(
 ): RunDispatchMetadata | undefined {
   const parsed = runDispatchMetadataSchema.safeParse(metadata?.[RUN_DISPATCH_METADATA_KEY]);
   return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The inputs a run was invoked with, as text by name: what re-running it supplies again.
+ * Empty for a run whose dispatch record names none, including every run started before
+ * the record did. Reads the canonical text map only, so a run list never depends on the
+ * rest of a row's sub-run metadata parsing.
+ */
+export function readSuppliedRunInputs(
+  metadata: Record<string, unknown> | undefined
+): Record<string, string> {
+  const names = readRunDispatchMetadata(metadata)?.supplied_inputs ?? [];
+  const text = metadata?.[SUBRUN_METADATA_KEYS.inputs];
+  if (typeof text !== 'object' || text === null) return {};
+  const supplied: Record<string, string> = {};
+  for (const name of names) {
+    const value: unknown = Object.hasOwn(text, name)
+      ? (text as Record<string, unknown>)[name]
+      : undefined;
+    if (typeof value === 'string') supplied[name] = value;
+  }
+  return supplied;
 }
 
 /**
