@@ -1,7 +1,10 @@
 import { z } from 'zod';
-import { providerFailureSchema } from '@archon/provider-contract';
 import { declaredOutputPathsSchema } from '../output-ref';
-import { nodeExecutionMetadataSchema, nodeFailureKindSchema } from './node-execution';
+import {
+  nodeExecutionMetadataSchema,
+  nodeFailureKindSchema,
+  nodeProviderFailureSchema,
+} from './node-execution';
 import { skipCauseSchema, type NodeState } from './node-state';
 
 /**
@@ -53,8 +56,8 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     retryable: z.literal(false).optional(),
     /** Why the node failed, when the producer knows it (see `nodeFailureKindSchema`). */
     failureKind: nodeFailureKindSchema.optional(),
-    /** The provider's own typed failure, unchanged, when a provider reported one. */
-    providerFailure: providerFailureSchema.optional(),
+    /** The provider's typed failure, when a provider reported one. */
+    providerFailure: nodeProviderFailureSchema.optional(),
   }),
   z.object({
     execution: nodeExecutionMetadataSchema.optional(),

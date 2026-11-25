@@ -1,9 +1,9 @@
 import { finishNodeExecution } from '../../../node-execution';
 import type { InvocationListings } from '../../../invocation-listings';
 import { type NodeExecutionResult } from '../../../node-record-serialization';
-import { type NodeFailureKind } from '../../../schemas/node-execution';
+import { type NodeFailureKind, type NodeProviderFailure } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
-import type { SendQueryOptions, ProviderFailure } from '@archon/provider-contract';
+import type { SendQueryOptions } from '@archon/provider-contract';
 import type { AgentNode, EffortLevel } from '../../../schemas';
 import { isNodeContextResume } from '../../../schemas';
 import { createAttemptEventSequence } from '../../../provider-events';
@@ -94,7 +94,11 @@ export async function executeAgentNode(
   const failAgentNode = async (
     error: string,
     failureKind: NodeFailureKind,
-    extras: { output?: string; providerFailure?: ProviderFailure; providerNotCalled?: boolean } = {}
+    extras: {
+      output?: string;
+      providerFailure?: NodeProviderFailure;
+      providerNotCalled?: boolean;
+    } = {}
   ): Promise<NodeExecutionResult> => {
     const result = await recordNodeState(
       { store: deps.store, logDir },
@@ -281,7 +285,7 @@ function attemptFailure(
   cancelled: boolean,
   nodeMcp: AgentBinding['nodeMcp'],
   nodeId: string
-): { message: string; kind: NodeFailureKind; providerFailure?: ProviderFailure } {
+): { message: string; kind: NodeFailureKind; providerFailure?: NodeProviderFailure } {
   if (cancelled) {
     getLog().info({ nodeId }, 'dag_node_cancelled_via_abort');
     return { message: 'Cancelled by user', kind: 'cancelled' };

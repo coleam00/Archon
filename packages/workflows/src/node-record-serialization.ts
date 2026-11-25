@@ -5,7 +5,6 @@ import {
 } from './output-ref';
 import { z } from 'zod';
 import type { TokenUsage } from '@archon/provider-contract';
-import { providerFailureSchema } from '@archon/provider-contract';
 import type { NodeOutput } from './schemas/workflow-run';
 import { fanOutOutcomeSchema } from './schemas/fan-out-outcome';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
@@ -16,6 +15,7 @@ import {
   nodeExecutionMetadataSchema,
   nodeExecutionMetadataPayloadSchema,
   nodeFailureKindSchema,
+  nodeProviderFailureSchema,
   mcpUnavailableSchema,
   skillUnavailableSchema,
   type ExecutionDiagnostics,
@@ -56,7 +56,7 @@ export const serializedNodeDataSchema = z.object({
   exit_code: z.number().optional(),
   retryable: z.literal(false).optional(),
   failure_kind: nodeFailureKindSchema.optional(),
-  provider_failure: providerFailureSchema.optional(),
+  provider_failure: nodeProviderFailureSchema.optional(),
   reason: z.union([nodeSkipReasonSchema, z.literal('stale_dependency')]).optional(),
   cause: skipCauseSchema.optional(),
   expr: z.string().optional(),

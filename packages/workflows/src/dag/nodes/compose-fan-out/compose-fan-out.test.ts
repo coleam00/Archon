@@ -845,7 +845,12 @@ ${
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
         'compose-quota-run',
-        expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
+        expect.objectContaining({
+          kind: 'quota',
+          nodeId: 'fan',
+          resumeAt: resetAt,
+          provider: 'claude',
+        }),
         { kind: 'started', stepName: 'fan' }
       );
     }

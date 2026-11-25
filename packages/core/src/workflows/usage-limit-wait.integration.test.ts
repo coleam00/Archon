@@ -149,21 +149,27 @@ test('a typed usage limit with a reset waits on the provider it hit, then the co
   const resetAt = new Date(Date.now() + 3_600_000).toISOString();
   const { engine, store, calls } = harness([{ resetAt }, 'ok']);
 
-  const runId = await submit(engine);
+  // The node runs on another provider than the configured default, and the wait names it.
+  const onCodex = makeTestResolvedWorkflow({
+    name: 'usage-limit',
+    nodes: [{ id: 'implement', prompt: 'Implement it', provider: 'codex' }],
+  });
+
+  const runId = await submit(engine, onCodex);
   const waiting = await store.getWorkflowRun(runId);
   expect(waiting?.status).toBe('paused');
   expect(waiting?.metadata.wait).toMatchObject({
     kind: 'quota',
     nodeId: 'implement',
     resumeAt: resetAt,
-    provider: 'claude',
+    provider: 'codex',
   });
 
   // Nothing is due before the reset: one continuation, at the reset time.
-  expect(await wake(engine, store, new Date(Date.parse(resetAt) - 1000))).toEqual([]);
+  expect(await wake(engine, store, new Date(Date.parse(resetAt) - 1000), onCodex)).toEqual([]);
   expect(calls()).toBe(1);
 
-  expect(await wake(engine, store, new Date(Date.parse(resetAt) + 1000))).toEqual([runId]);
+  expect(await wake(engine, store, new Date(Date.parse(resetAt) + 1000), onCodex)).toEqual([runId]);
   const finished = await store.getWorkflowRun(runId);
   expect(finished?.status).toBe('completed');
   expect(finished?.metadata.wait).toBeUndefined();

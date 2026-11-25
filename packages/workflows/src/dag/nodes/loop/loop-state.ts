@@ -1,14 +1,17 @@
 import type {
   IAgentProvider,
   ProviderCapabilities,
-  ProviderFailure,
   ResolvedModel,
   SendQueryOptions,
   TokenUsage,
 } from '@archon/provider-contract';
 import { finishNodeExecution } from '../../../node-execution';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
-import type { NodeExecutionRecord, NodeFailureKind } from '../../../schemas/node-execution';
+import type {
+  NodeExecutionRecord,
+  NodeFailureKind,
+  NodeProviderFailure,
+} from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
 import type { ApprovalContext, LoopNode } from '../../../schemas';
 import type { AttemptEventSequence } from '../../../provider-events';
@@ -91,7 +94,7 @@ export interface LoopState {
 
 export interface LoopFailureExtras {
   failureKind: NodeFailureKind;
-  providerFailure?: ProviderFailure;
+  providerFailure?: NodeProviderFailure;
   output?: string;
   costUsd?: number;
   tokens?: TokenUsage;

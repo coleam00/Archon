@@ -1,7 +1,11 @@
 import { ParentStatusReadError } from '../../../parent-status-read';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
-import { type NodeExecutionRecord, type NodeFailureKind } from '../../../schemas/node-execution';
+import {
+  type NodeExecutionRecord,
+  type NodeFailureKind,
+  type NodeProviderFailure,
+} from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
 import { discoverWorkflowsWithConfig } from '../../../workflow-discovery';
 import { resolveWorkflowCommandContents } from '../../../workflow-discovery/command-scan';
@@ -17,7 +21,6 @@ import {
 import { resolveWorkflowName } from '../../../router';
 import type { WorkflowDeps } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
-import { type ProviderFailure } from '@archon/provider-contract';
 import type { ComposeFanOutNode, ResolvedWorkflow, WorkflowRunStatus } from '../../../schemas';
 import type { DagResumeSnapshot } from '../../../store';
 import { type IncludeCommandContent, isIncludeCommandReadError } from '../../../compiled-command';
@@ -239,7 +242,7 @@ export async function executeComposeFanOutNode(
     failureKind: NodeFailureKind,
     costUsd?: number,
     tokens?: TokenUsage,
-    providerFailure?: ProviderFailure
+    providerFailure?: NodeProviderFailure
   ): Promise<NodeExecutionResult> => {
     return recordNodeState(
       { store: deps.store, logDir: ctx.logDir },

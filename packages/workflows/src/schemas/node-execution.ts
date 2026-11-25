@@ -162,6 +162,18 @@ export const nodeFailureKindSchema = z.enum([
 ]);
 export type NodeFailureKind = z.infer<typeof nodeFailureKindSchema>;
 
+/**
+ * A provider's typed failure as a failed node carries it: the provider's own report,
+ * unchanged, plus `provider`, the provider that reported it, which the engine adds where it
+ * receives the report. An aggregate node forwards the limiting failure of its descendants as
+ * it is, so the provider survives to the run's usage-limit wait. Absent on a failure an older
+ * Archon version recorded.
+ */
+export const nodeProviderFailureSchema = providerFailureSchema.extend({
+  provider: z.string().min(1).optional(),
+});
+export type NodeProviderFailure = z.infer<typeof nodeProviderFailureSchema>;
+
 export const executionLifecycleSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('started') }),
   z.object({ status: z.literal('completed') }),
@@ -170,8 +182,8 @@ export const executionLifecycleSchema = z.discriminatedUnion('status', [
     error: z.string(),
     retryable: z.literal(false).optional(),
     failureKind: nodeFailureKindSchema.optional(),
-    /** The provider's own typed failure, unchanged, when a provider reported one. */
-    providerFailure: providerFailureSchema.optional(),
+    /** The provider's typed failure, when a provider reported one. */
+    providerFailure: nodeProviderFailureSchema.optional(),
     /** Numeric exit code from the subprocess, when one was available. Absent for spawn failures, timeouts, and cancellations. */
     exitCode: z.number().optional(),
   }),

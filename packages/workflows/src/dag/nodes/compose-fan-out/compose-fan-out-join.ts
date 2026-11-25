@@ -1,4 +1,4 @@
-import { type ProviderFailure } from '@archon/provider-contract';
+import { type NodeProviderFailure } from '../../../schemas/node-execution';
 import type { ComposeFanOutNode } from '../../../schemas';
 import { type JsonValue } from '../../../output-ref';
 import type { FanOutInstanceSnapshot } from '../../../fan-out-identity';
@@ -11,7 +11,7 @@ import type { ComposeInstanceOutcome } from './compose-fan-out-instance';
 /** A composed fan-out join's verdict over every instance outcome, in snapshot order. */
 export type ComposeFanOutJoinResult =
   | { status: 'completed'; elements: JsonValue[] }
-  | ({ status: 'failed'; providerFailure?: ProviderFailure } & ComposeFanOutFailure);
+  | ({ status: 'failed'; providerFailure?: NodeProviderFailure } & ComposeFanOutFailure);
 
 /**
  * Reduce the instance outcomes through the declared `join`. An ambiguous instance blocks

@@ -5,7 +5,11 @@
 import { escapeRegExp } from '@archon/paths/regexp';
 import type { ExecNode, DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
-import type { ExecutionOutput, NodeFailureKind } from './schemas/node-execution';
+import type {
+  ExecutionOutput,
+  NodeFailureKind,
+  NodeProviderFailure,
+} from './schemas/node-execution';
 import { transitiveDepsLookup } from './depends-on';
 import type { hostSpawnFailure, RawSubprocessRejection } from './subprocess';
 
@@ -41,10 +45,12 @@ export function rateLimitResumeAt(failure: ProviderFailure, now: number): number
 }
 
 /** A provider failure the provider-limit wait can pause a run on: a rate or usage limit. */
-export type ProviderLimitFailure = ProviderFailure & { class: 'rate_limited' | 'quota_exhausted' };
+export type ProviderLimitFailure = NodeProviderFailure & {
+  class: 'rate_limited' | 'quota_exhausted';
+};
 
 export function isProviderLimit(
-  failure: ProviderFailure | undefined
+  failure: NodeProviderFailure | undefined
 ): failure is ProviderLimitFailure {
   return failure?.class === 'rate_limited' || failure?.class === 'quota_exhausted';
 }
@@ -107,7 +113,8 @@ export function rootFailures(
  * The typed provider failure an aggregate node (a loop group, a composed fan-out instance,
  * the fan-out itself) reports for its failed descendants; the provider-limit wait reads only
  * the aggregate's. Callers pass the {@link rootFailures} of a scope, or the fan-out's sibling
- * instances. A lone failure is the aggregate's, unchanged. Several are reported only when
+ * instances. A lone failure, or the one chosen among several, is forwarded as it is, so it
+ * keeps the provider that reported it. Several are reported only when
  * every one is a provider limit, so the wait never pauses a run beside an unrelated root
  * failure that each continuation would repeat. Among limits, a usage limit without a reported
  * reset wins because the run cannot wait on it; otherwise the latest
@@ -115,10 +122,10 @@ export function rootFailures(
  * and the final wait.
  */
 export function aggregateProviderFailure(
-  failures: readonly (ProviderFailure | undefined)[],
+  failures: readonly (NodeProviderFailure | undefined)[],
   now: number,
   providerLimitDeadline: ReturnType<typeof createProviderLimitDeadlineResolver>
-): ProviderFailure | undefined {
+): NodeProviderFailure | undefined {
   if (failures.length <= 1) return failures[0];
   const limits: { failure: ProviderLimitFailure; resumeAt: number | undefined }[] = [];
   for (const failure of failures) {

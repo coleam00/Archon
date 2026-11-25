@@ -458,10 +458,13 @@ function recordResultUsage(nodeId: string, state: AgentAttemptState, msg: Result
 function throwOnResultError(pc: AgentPassContext, msg: ResultChunk): void {
   const nodeId = pc.node.id;
   if (msg.failure !== undefined) {
-    throw providerReportedFailure(`Node '${nodeId}'`, msg.failure, pc.nodeOptions?.maxBudgetUsd, {
-      nodeId,
-      durationMs: Date.now() - pc.nodeStartTime,
-    });
+    throw providerReportedFailure(
+      `Node '${nodeId}'`,
+      msg.failure,
+      pc.provider,
+      pc.nodeOptions?.maxBudgetUsd,
+      { nodeId, durationMs: Date.now() - pc.nodeStartTime }
+    );
   }
   // Fail loudly on any other SDK error result. Previously we broke out of
   // the stream silently, producing empty/partial output without signaling

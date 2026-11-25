@@ -510,7 +510,7 @@ describe('loop node execution', () => {
             expect(store.failWorkflowRun).not.toHaveBeenCalled();
             expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
               'loop-retry-policy-run',
-              expect.objectContaining({ kind: 'quota', nodeId: 'my-loop' }),
+              expect.objectContaining({ kind: 'quota', nodeId: 'my-loop', provider: 'claude' }),
               { kind: 'started', stepName: 'my-loop' }
             );
           } else {
@@ -753,7 +753,7 @@ describe('loop node execution', () => {
     }
   });
 
-  it('records a failed iteration’s typed failure on the loop node, unchanged', async () => {
+  it('records a failed iteration’s typed failure on the loop node, with its provider', async () => {
     const failure = { class: 'auth', evidence: 'Invalid API key' } as const;
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'result', isError: true, errors: [failure.evidence], failure };
@@ -793,7 +793,7 @@ describe('loop node execution', () => {
       persistedEvents(store).filter(event => event.event_type === 'node_retry_scheduled')
     ).toHaveLength(0);
     expect(failed?.data?.failure_kind).toBe('fatal');
-    expect(failed?.data?.provider_failure).toEqual(failure);
+    expect(failed?.data?.provider_failure).toEqual({ ...failure, provider: 'claude' });
   });
 
   it('names the cost cap when a loop iteration hits its spend limit', async () => {
