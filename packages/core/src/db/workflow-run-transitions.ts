@@ -302,19 +302,17 @@ export async function claimPendingWorkflowRun(
     if (claimed.rowCount !== 1) {
       // Read with the same predicates why a still-pending run was refused. A run that left
       // pending belongs to whoever moved it (null); so does one whose refusal cleared since.
-      const refused = await query<{
-        checkout_released: boolean | number;
-        admission_held: boolean | number;
-      }>(
-        `SELECT ${checkoutReleased} AS checkout_released, ${admissionHeld} AS admission_held
-           FROM remote_agent_workflow_runs WHERE id = $1 AND status = 'pending'`,
-        [id, workingPath ?? null]
-      );
-      const row = refused.rows[0];
+      type Refusal = { released: boolean | number; held: boolean | number };
+      const row = (
+        await query<Refusal>(
+          `SELECT ${checkoutReleased} AS released, ${admissionHeld} AS held
+             FROM remote_agent_workflow_runs WHERE id = $1 AND status = 'pending'`,
+          [id, workingPath ?? null]
+        )
+      ).rows[0];
       if (row === undefined) return null;
-      if (Boolean(row.checkout_released))
-        throw new PendingClaimRefusedError(id, 'checkout_released');
-      if (!row.admission_held) throw new PendingClaimRefusedError(id, 'admission_revoked');
+      if (row.released) throw new PendingClaimRefusedError(id, 'checkout_released');
+      if (!row.held) throw new PendingClaimRefusedError(id, 'admission_revoked');
       return null;
     }
     const selected = await query<WorkflowRunRow>(
