@@ -219,12 +219,18 @@ function withText(chosen: string, said: string | undefined): string {
   return said === undefined ? chosen : `${chosen} and the text "${said}"`;
 }
 
-/** What the tool says of a stopped item: why it stopped and what moves it on. */
+/** What the tool says of a stopped item: how its run ended, what was refused, what moves it. */
 function stoppedText(ref: string, item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string {
   const { runId, workflow, outcome } = item.stoppedIn;
   if (item.failed !== undefined)
     return `attention: item '${ref}' stopped: run ${runId} (${workflow}) failed${item.failed.error === null ? '' : `: ${item.failed.error}`}. It takes no answer: start it again with archon workflow run --supersedes ${runId}, which closes this.`;
-  return `attention: item '${ref}' stopped: run ${runId} (${workflow}) ended${outcome === null ? '' : ` as '${outcome}'`}, and nothing started after it.${item.summary === null ? '' : ` Summary: ${item.summary}`} It takes no answer: start a new run on the item to move it on.`;
+  const count = item.refused?.length ?? 0;
+  // A refusal says only what was refused: other starts the run's end caused may have started.
+  const after =
+    count === 0
+      ? 'and nothing started after it'
+      : `and ${count === 1 ? 'a start it caused was' : `${String(count)} starts it caused were`} refused`;
+  return `attention: item '${ref}' stopped: run ${runId} (${workflow}) ended${outcome === null ? '' : ` as '${outcome}'`}, ${after}.${item.summary === null ? '' : ` Summary: ${item.summary}`} It takes no answer: start a new run on the item to move it on.`;
 }
 
 /** Why the item `ref` names was not answered, in words the agent can act on. */

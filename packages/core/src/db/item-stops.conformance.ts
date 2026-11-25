@@ -131,6 +131,44 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
     }
   });
 
+  test('a refused start is listed beside an open wait; a stop with nothing refused waits for it', async () => {
+    const harness = await makeHarness();
+    try {
+      const deps = itemDeps(harness);
+      const stopped = async () =>
+        (await listAttentionQueue(deps.queue)).filter(
+          item => 'kind' in item && item.kind === 'stopped'
+        );
+      const wait = { event: 'checks', about: 'a'.repeat(40), within_minutes: 60 };
+      const leaving = async (stop: Record<string, unknown>) => {
+        const id = await createOnItem(harness, 'host');
+        await harness.store.claimPendingWorkflowRun(id);
+        await harness.store.completeWorkflowRun(id, { duration_ms: 1 }, stop, { waits: [wait] });
+        return id;
+      };
+      // A stop that names no refused start waits for its run's open wait to close.
+      await leaving(itemStoppedMetadata('waiting'));
+      expect(await stopped()).toEqual([]);
+      // A refused start beside the wait would show nowhere else, so it is listed now.
+      const refused = {
+        receiptId: crypto.randomUUID(),
+        bindingId: 'land',
+        workflow: 'land',
+        reason: 'no_default_provider' as const,
+        refusedAt: new Date().toISOString(),
+      };
+      const run = await leaving(itemStoppedMetadata(null, { refused: [refused] }));
+      expect(await stopped()).toEqual([
+        expect.objectContaining({
+          stoppedIn: expect.objectContaining({ runId: run }),
+          refused: [refused],
+        }),
+      ]);
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('of two stops on an item only the later run is listed', async () => {
     const harness = await makeHarness();
     try {

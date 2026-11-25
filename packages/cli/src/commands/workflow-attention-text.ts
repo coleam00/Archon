@@ -198,7 +198,10 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
           `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
         ]
       : [
-          `${ended(workflow, outcome)}; nothing started${refused === undefined ? ' and it left no ask' : ''}`,
+          // A refused start says only what was refused: others the end caused may have started.
+          refused === undefined
+            ? `${ended(workflow, outcome)}; nothing started and it left no ask`
+            : `${ended(workflow, outcome)}; ${refused.length === 1 ? 'a start it caused was' : `${String(refused.length)} starts it caused were`} refused`,
         ];
   lines.push(...refusedStartLines(refused ?? []));
   if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
