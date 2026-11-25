@@ -570,6 +570,26 @@ describe('validateProjectPackSettings file settings', () => {
     );
   });
 
+  it('a supplied value beats the project file, and a refusal names it as supplied', async () => {
+    await mkdir(join(cwd, 'docs'), { recursive: true });
+    await writeFile(join(cwd, 'docs', 'present.md'), 'be kind\n');
+    // The project file names a file that exists; the supplied value does not.
+    await writeProject('settings:\n  policy: docs/present.md\n');
+    const refusal = (await resolveRunStartInputs(cwd, policy, { policy: 'docs/gone.md' }).catch(
+      (e: unknown) => e
+    )) as FileSettingError;
+    expect({ setting: refusal.setting, path: refusal.path, origin: refusal.origin }).toEqual({
+      setting: 'policy',
+      path: join(cwd, 'docs', 'gone.md'),
+      origin: 'supplied',
+    });
+    // The reverse: a supplied file that exists starts even though the project's is missing.
+    await writeProject('settings:\n  policy: docs/gone.md\n');
+    expect(await resolveRunStartInputs(cwd, policy, { policy: 'docs/present.md' })).toEqual({
+      inputs: { policy: 'docs/present.md' },
+    });
+  });
+
   it('starts with an empty value, as validate accepts it', async () => {
     await writeProject('settings:\n  policy: ""\n');
     expect(await resolveRunStartInputs(cwd, policy, undefined)).toEqual({
