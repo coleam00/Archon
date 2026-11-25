@@ -5,14 +5,21 @@
  * from its queue and prepared again. A file that no longer starts it refuses it on its item.
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { ItemAsk } from '@archon/workflows/schemas/item-ask';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
+import {
+  readWorkflowRunConfigMetadata,
+  WORKFLOW_RUN_CONFIG_METADATA_KEY,
+} from '@archon/workflows/run-config';
+import { sealWorkflowRunConfig } from '../config/run-config';
 import { closeDatabase, getDatabase, resetDatabase } from '../db/connection';
+import { deleteWorkflowRun } from '../db/workflows';
 import * as codebaseDb from '../db/codebases';
 import { registerFolder } from '../handlers/clone';
 import { setPlatformPolicies } from '../platforms/registry';
@@ -121,11 +128,15 @@ async function setup() {
 type Setup = Awaited<ReturnType<typeof setup>>;
 
 /** A completed run of stage-a on issue-1 given `issue`, and the receipt its end writes. */
-async function endA({ store, runs, onDeps }: Setup, issue: string): Promise<string> {
+async function endA(
+  { store, runs, onDeps }: Setup,
+  issue: string,
+  metadata: Record<string, unknown> = {}
+): Promise<string> {
   const run = await store.createWorkflowRun({
     ...runs,
     workflow_name: 'stage-a',
-    metadata: { inputs: { issue } },
+    metadata: { inputs: { issue }, ...metadata },
   });
   await store.claimPendingWorkflowRun(run.id);
   await store.completeWorkflowRun(run.id, { duration_ms: 1 });
@@ -190,17 +201,14 @@ test('an unchanged trigger file starts the start as its receipt froze it', async
   });
 });
 
-test('a queued start whose trigger file changed leaves the queue and starts once, with the new inputs', async () => {
-  const setupped = await setup();
-  const { store, pass, started } = setupped;
-  await stage(['issue']);
-  await trigger(afterA({ issue: { input: 'issue' } }), 1);
+/** Fill the capacity-1 `pool` with a holder, and the release that frees it. */
+async function holdPool({ store, codebaseId }: Setup): Promise<() => Promise<void>> {
   const holder: PreparedWorkflowLaunch = {
     version: 2,
     run: {
       id: crypto.randomUUID(),
       workflow_name: 'holder',
-      codebase_id: setupped.codebaseId,
+      codebase_id: codebaseId,
       user_message: '',
       metadata: {},
     },
@@ -213,25 +221,106 @@ test('a queued start whose trigger file changed leaves the queue and starts once
     overlap: 'queue',
     launch: holder,
   });
-  const receiptId = await endA(setupped, 'Fix the login page');
-  await pass();
-  const queued = await startedInputs(setupped, receiptId);
-  expect(queued.status).toBe('queued');
+  return async () => {
+    await store.claimPendingWorkflowRun(holder.run.id);
+    await store.completeWorkflowRun(holder.run.id, { duration_ms: 1 });
+  };
+}
+
+/** A start of stage-b queued behind the held pool, prepared from the file mapping `issue`. */
+async function queueB(setupped: Setup, metadata: Record<string, unknown> = {}) {
+  await stage(['issue']);
+  await trigger(afterA({ issue: { input: 'issue' } }), 1);
+  const release = await holdPool(setupped);
+  const receiptId = await endA(setupped, 'Fix the login page', metadata);
+  await setupped.pass();
+  const [binding] = (await setupped.store.getStartReceipt(receiptId))?.bindings ?? [];
+  expect(binding?.disposition?.status).toBe('queued');
+  return { receiptId, release, requestId: String(binding?.disposition?.requestId) };
+}
+
+const stageRuns = async () =>
+  (
+    await getDatabase().query<{ id: string }>(
+      "SELECT id FROM remote_agent_workflow_runs WHERE workflow_name = 'stage-b'"
+    )
+  ).rows.map(row => row.id);
+
+test("a queued start whose trigger file changed leaves the queue and starts once, with the new inputs and its item's run config", async () => {
+  const setupped = await setup();
+  const config = sealWorkflowRunConfig({ docsPath: 'docs/stage' }, { kind: 'cli', label: 'test' });
+  const { receiptId, release, requestId } = await queueB(setupped, {
+    [WORKFLOW_RUN_CONFIG_METADATA_KEY]: config,
+  });
 
   await stage(['task']);
   await trigger(afterA({ task: { input: 'issue' } }), 1);
-  await store.claimPendingWorkflowRun(holder.run.id);
-  await store.completeWorkflowRun(holder.run.id, { duration_ms: 1 });
-  await pass();
+  await release();
+  await setupped.pass();
 
   const admitted = await startedInputs(setupped, receiptId);
   expect(admitted).toEqual({ status: 'admitted', inputs: { task: 'Fix the login page' } });
-  const runs = await getDatabase().query<{ id: string }>(
-    "SELECT id FROM remote_agent_workflow_runs WHERE workflow_name = 'stage-b'"
-  );
-  expect(runs.rows).toHaveLength(1);
-  expect(started).toEqual([runs.rows[0]?.id]);
+  const runs = await stageRuns();
+  expect(runs).toHaveLength(1);
+  expect(setupped.started).toEqual(runs);
+  const run = await setupped.store.getWorkflowRun(String(runs[0]));
+  expect(readWorkflowRunConfigMetadata(run?.metadata)?.keys).toEqual(config.keys);
+  // The request it left stays inspectable.
+  expect((await setupped.store.getResourceStartRequest(requestId))?.status).toBe('withdrawn');
 });
+
+test.each(['before this release', 'now'])(
+  'a queued start whose receipt recorded its revision %s runs as prepared when only its workflow changed',
+  async format => {
+    const setupped = await setup();
+    const { receiptId, release, requestId } = await queueB(setupped);
+    if (format === 'before this release') {
+      const file = JSON.parse(await readFile(join(getTriggersPath(), 'stage-b.json'), 'utf8'));
+      await getDatabase().query(
+        'UPDATE remote_agent_start_receipt_bindings SET binding_revision = $1 WHERE receipt_id = $2',
+        [createHash('sha256').update(JSON.stringify(file.binding)).digest('hex'), receiptId]
+      );
+    }
+    await stage([]);
+    await release();
+    await setupped.pass();
+
+    expect(await startedInputs(setupped, receiptId)).toEqual({
+      status: 'admitted',
+      inputs: { issue: 'Fix the login page' },
+    });
+    expect(setupped.started).toEqual([requestId]);
+  }
+);
+
+test('a queued start is not admitted while a trigger file does not read, and starts on the new mapping once it does', async () => {
+  const setupped = await setup();
+  const { receiptId, release } = await queueB(setupped);
+  await stage(['task']);
+  await trigger(afterA({ task: { input: 'issue' } }), 1);
+  await writeFile(join(getTriggersPath(), 'broken.json'), '{ not json');
+  await release();
+
+  await expect(setupped.pass()).rejects.toThrow('resource start operation(s) failed');
+  expect((await startedInputs(setupped, receiptId)).status).toBe('queued');
+  expect(setupped.started).toEqual([]);
+
+  await rm(join(getTriggersPath(), 'broken.json'));
+  await setupped.pass();
+  expect(await startedInputs(setupped, receiptId)).toEqual({
+    status: 'admitted',
+    inputs: { task: 'Fix the login page' },
+  });
+});
+
+const stopOnA = async () => {
+  const ended = (
+    await getDatabase().query<{ metadata: string }>(
+      "SELECT metadata FROM remote_agent_workflow_runs WHERE workflow_name = 'stage-a'"
+    )
+  ).rows[0];
+  return JSON.parse(String(ended?.metadata)).item_stopped;
+};
 
 test('a pending start whose trigger file is gone is refused and stops its item on the ended run', async () => {
   const setupped = await setup();
@@ -247,13 +336,84 @@ test('a pending start whose trigger file is gone is refused and stops its item o
     status: 'rejected',
     error: "trigger file for 'stage-b' is gone",
   });
-  const ended = (
-    await getDatabase().query<{ metadata: string }>(
-      "SELECT metadata FROM remote_agent_workflow_runs WHERE workflow_name = 'stage-a'"
-    )
-  ).rows[0];
-  expect(JSON.parse(String(ended?.metadata)).item_stopped).toMatchObject({
+  expect(await stopOnA()).toMatchObject({
     refused: [{ workflow: 'stage-b', reason: 'launch_preparation_failed' }],
+  });
+});
+
+test('a queued start whose trigger file is gone is refused when its slot frees, and nothing starts', async () => {
+  const setupped = await setup();
+  const { receiptId, release } = await queueB(setupped);
+  await rm(join(getTriggersPath(), 'stage-b.json'));
+  await release();
+
+  await expect(setupped.pass()).rejects.toThrow('resource start operation(s) failed');
+
+  expect(await stageRuns()).toEqual([]);
+  expect(setupped.started).toEqual([]);
+  const [binding] = (await setupped.store.getStartReceipt(receiptId))?.bindings ?? [];
+  expect(binding?.status).toBe('rejected');
+  expect(await stopOnA()).toMatchObject({ refused: [{ workflow: 'stage-b' }] });
+});
+
+test('a run-ended start whose file became an asks-settled binding is refused', async () => {
+  const setupped = await setup();
+  await stage(['issue']);
+  await trigger(afterA({ issue: { input: 'issue' } }));
+  const receiptId = await endA(setupped, 'Fix the login page');
+  // A stage that would start with no inputs, so only the event decides.
+  await stage([]);
+  await trigger({ asksSettled: { workflowName: 'stage-a', settled: 'any' } });
+
+  await expect(setupped.pass()).rejects.toThrow('resource start operation(s) failed');
+  expect(await stageRuns()).toEqual([]);
+  const [binding] = (await setupped.store.getStartReceipt(receiptId))?.bindings ?? [];
+  expect(binding).toMatchObject({ status: 'rejected', error: expect.stringContaining('event') });
+});
+
+test('a refused start whose causing run was deleted is listed as a refused start', async () => {
+  const setupped = await setup();
+  await stage(['issue']);
+  await trigger(afterA({ issue: { input: 'issue' } }));
+  const receiptId = await endA(setupped, 'Fix the login page');
+  const ended = await getDatabase().query<{ id: string }>(
+    "SELECT id FROM remote_agent_workflow_runs WHERE workflow_name = 'stage-a'"
+  );
+  await deleteWorkflowRun(String(ended.rows[0]?.id));
+  await stage(['task']);
+  await trigger(afterA({ task: { input: 'issue' } }));
+
+  await expect(setupped.pass()).rejects.toThrow('resource start operation(s) failed');
+  expect(await setupped.store.listRefusedStarts()).toMatchObject([
+    { receiptId, workflow: 'stage-b', itemKey: 'issue-1' },
+  ]);
+});
+
+test('a rebuild whose write fails gives the start back, and the next drain starts it', async () => {
+  const setupped = await setup();
+  await stage(['issue']);
+  await trigger(afterA({ issue: { input: 'issue' } }));
+  const receiptId = await endA(setupped, 'Fix the login page');
+  await stage(['task']);
+  await trigger(afterA({ task: { input: 'issue' } }));
+  const { host, store } = setupped;
+  const failing = {
+    ...store,
+    replaceStartBindingIntent: () => Promise.reject(new Error('disk full')),
+  };
+  await expect(
+    drainResourceStartHost({
+      ...host,
+      deps: { ...host.deps, store: failing },
+      hostId: 'host',
+      startAdmitted: async () => null,
+    })
+  ).rejects.toThrow('resource start operation(s) failed');
+
+  await setupped.pass();
+  expect(await startedInputs(setupped, receiptId)).toEqual({
+    status: 'admitted',
+    inputs: { task: 'Fix the login page' },
   });
 });
 

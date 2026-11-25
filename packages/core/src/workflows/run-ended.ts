@@ -42,7 +42,7 @@ import {
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
-import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
+import type { CheckoutHandoff, EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import { getArchonHome } from '@archon/paths';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import {
@@ -611,9 +611,26 @@ export function bindingReceipt(
         },
       ],
     });
-  const binding: ResourceStartBindingIntent = {
+  return sourceReceiptAcceptanceSchema.parse({
+    receipt,
+    outcome: 'matched',
+    bindings: [startIntent(candidate, inputs, handoff)],
+  });
+}
+
+/**
+ * The binding a matched file starts: its binding with the mapped inputs as event inputs
+ * and, for a start on another run's checkout, the hand-off. The one place a trigger file
+ * becomes a start's intent, for the receipt and for a rebuild (`rebuilt-binding.ts`).
+ */
+export function startIntent(
+  candidate: OnBinding,
+  inputs: Record<string, JsonValue>,
+  handoff: CheckoutHandoff | undefined
+): ResourceStartBindingIntent {
+  return {
     ...candidate.binding,
-    bindingRevision,
+    bindingRevision: onBindingRevision(candidate),
     ...(Object.keys(inputs).length > 0 ? { eventInputs: inputs } : {}),
     // `launch.isolation` names the branch for an older binary, which reads no hand-off: it
     // runs the stage on that branch or fails to check it out, never on the base branch.
@@ -627,7 +644,6 @@ export function bindingReceipt(
         }
       : {}),
   };
-  return sourceReceiptAcceptanceSchema.parse({ receipt, outcome: 'matched', bindings: [binding] });
 }
 
 /**
@@ -636,6 +652,18 @@ export function bindingReceipt(
  * before it runs (`rebuilt-binding.ts`). A fire or timer file has no `on`, and `trigger
  * fire` hashes its binding alone.
  */
+/**
+ * Whether `revision` is still the revision of `candidate`. A receipt written before the
+ * revision covered `on` hashed the binding alone; it counts as current while the binding
+ * is unchanged, so an upgrade does not send every waiting start back to preparation.
+ */
+export function isOnBindingRevision(candidate: OnBinding, revision: string | null): boolean {
+  return (
+    revision === onBindingRevision(candidate) ||
+    revision === createHash('sha256').update(JSON.stringify(candidate.binding)).digest('hex')
+  );
+}
+
 export function onBindingRevision(candidate: OnBinding): string {
   const on =
     'runEnded' in candidate

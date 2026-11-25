@@ -499,6 +499,10 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       expect((await returnOf(second))?.run.id).toBe(second.prepared.run.id);
       expect(await returnOf(second)).toBeNull();
       expect(await store.listQueuedResourceStartsForHost('host')).toEqual([]);
+      // The request it left stays inspectable, withdrawn.
+      expect((await store.getResourceStartRequest(second.prepared.run.id))?.status).toBe(
+        'withdrawn'
+      );
       expect(
         await store.listPendingStartBindings({
           hostId: 'host',

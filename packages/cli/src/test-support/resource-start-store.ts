@@ -430,7 +430,7 @@ export function createInMemoryResourceStartStore(
       const request = requests.get(input.requestId);
       const item = binding(input);
       if (request?.status !== 'queued' || item?.disposition?.requestId !== request.id) return null;
-      requests.delete(request.id);
+      request.status = 'withdrawn';
       item.status = 'pending';
       item.ownerId = null;
       item.disposition = null;

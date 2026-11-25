@@ -211,7 +211,7 @@ export type HeldStart =
 
 /**
  * A binding start refused for a stored reason (`refusal`) that no run caused: a fire, a
- * schedule, a webhook or a label made it. Its `codebase` is the project its checkout is
+ * schedule, a webhook or a label made it, or a run since deleted, whose stop is gone with it. Its `codebase` is the project its checkout is
  * registered as, and `item` the item its key names there once that exists.
  */
 export interface RefusedStart {
@@ -662,7 +662,7 @@ export interface IResourceStartStore {
   /** Every binding a process is preparing now. A store that records no preparer returns none. */
   listPreparingStarts(): Promise<PreparingStart[]>;
   /**
-   * The refused starts no run caused that are still their item's newest step: neither the
+   * The refused starts no existing run caused that are still their item's newest step: neither the
    * same binding nor any run has started on the item since. A store without items has none.
    */
   listRefusedStarts(): Promise<RefusedStart[]>;
@@ -799,8 +799,8 @@ export interface IResourceStartStore {
   }): Promise<boolean>;
   /**
    * Take a queued request of this receipt's binding out of its queue and put the binding
-   * back to pending, in one write under admission, so it is prepared again. The launch the
-   * request held, whose captured source the caller releases, or null when the request is
+   * back to pending, in one write under admission, so it is prepared again. The request is
+   * kept as withdrawn, no longer one of the binding's requests. The launch the request held, whose captured source the caller releases, or null when the request is
    * no longer queued (another process admitted or withdrew it) or its launch does not read.
    */
   returnQueuedStartToPreparation(input: {

@@ -4,7 +4,7 @@
  * and over which link; that is not decided again here. What it froze on the receipt is the
  * binding and its mapped inputs, and those follow the file: when the file's start config
  * changed before the start was admitted, the binding is built again by the same code
- * (`bindingReceipt`, `mappedInputs`) from what the run recorded. A file that is gone, or
+ * (`mappedInputs`, `startIntent`) from what the run recorded. A file that is gone, or
  * that no longer binds that end, refuses the start.
  *
  * Read at preparation (`preparePendingBinding`) and, for a start already queued, at each
@@ -19,7 +19,6 @@ import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ASKS_SETTLED_SOURCE_ACTOR,
   RUN_ENDED_SOURCE_ACTOR,
-  type EndedCheckout,
   type ResourceStartBindingIntent,
   type SourceReceiptInput,
 } from '@archon/workflows/schemas/resource-start';
@@ -34,13 +33,13 @@ import { settlementStarts } from './asks-settled';
 import type { WorkflowHost } from './host-store';
 import { itemAnswers, settledAnswer } from './item-answers';
 import {
-  bindingReceipt,
   getTriggersPath,
+  isOnBindingRevision,
   launchProjectKey,
   linkedEntries,
   mappedInputs,
-  onBindingRevision,
   readOnBindings,
+  startIntent,
   type AsksSettledBinding,
   type MappedSources,
   type OnBinding,
@@ -81,7 +80,7 @@ export async function changedTriggerFile(
   const file = (await files()).find(
     candidate => candidate.sourceInstanceId === receipt.sourceInstanceId
   );
-  if (file && onBindingRevision(file) === bindingRevision) return undefined;
+  if (file && isOnBindingRevision(file, bindingRevision)) return undefined;
   return { file, actor };
 }
 
@@ -100,6 +99,9 @@ export async function currentBinding(
   if (!changed) return { unchanged: true };
   const { file, actor } = changed;
   if (!file) return refuse(`trigger file for '${receipt.sourceInstanceId}' is gone`);
+  // A file now about the other event cannot be read against this one's run.
+  if ('runEnded' in file !== (actor.source === RUN_ENDED_SOURCE_ACTOR))
+    return refuse(`${file.file}: it no longer binds the event that caused this start`);
   const runId = actor.id;
   const run = await host.deps.store.getWorkflowRun(runId);
   const item = run?.item_id ? await host.deps.store.getItem(run.item_id) : null;
@@ -128,30 +130,16 @@ export async function currentBinding(
       `${file.file}: checkout is ${takesCheckout ? 'now taken' : 'no longer taken'}, and the hand-off was recorded when the run ended`,
       'checkout_refused'
     );
-  // The hand-off is kept as the run's end recorded it.
-  const checkout: EndedCheckout | undefined = checkoutFrom ? { handoff: checkoutFrom } : undefined;
   const sources = 'runEnded' in file ? file.runEnded.inputs : file.asksSettled.inputs;
-  // Only the binding is kept: the receipt it would make is the one already recorded.
-  const built = bindingReceipt(
-    file,
-    { deliveryId: runId, sourceActor: actor, itemKey },
-    mappedInputs(sources, read.sources),
-    checkout,
-    new Date()
-  );
-  const rebuilt = built.bindings[0];
-  if (!rebuilt) {
-    const evaluated = built.evaluatedBindings?.[0];
-    return refuse(
-      `${file.file}: ${evaluated?.reason ?? 'it starts nothing'}`,
-      evaluated?.refused?.reason ?? 'inputs_unmapped'
-    );
-  }
+  const mapped = mappedInputs(sources, read.sources);
+  if ('missing' in mapped) return refuse(`${file.file}: ${mapped.missing}`, 'inputs_unmapped');
+  // The hand-off is kept as the run's end recorded it.
+  const intent = startIntent(file, mapped.inputs, checkoutFrom);
   return {
-    intent: {
-      ...rebuilt,
-      ...(binding.intent.itemKey === undefined ? {} : { itemKey: binding.intent.itemKey }),
-    },
+    intent:
+      binding.intent.itemKey === undefined
+        ? intent
+        : { ...intent, itemKey: binding.intent.itemKey },
   };
 }
 
@@ -189,8 +177,14 @@ async function runEndedSources(
       `${file.file}: it ${onLink ? 'no longer starts' : 'now starts'} linked items`,
       'link_refused'
     );
-  const read = readCompletedRunResult(run, await host.deps.store.listWorkflowEvents(run.id));
-  const result = read.kind === 'result' ? read.value : undefined;
+  // The run's events are read only when the file reads its result.
+  const readsResult =
+    runEnded.linked?.items !== undefined ||
+    Object.values(runEnded.inputs ?? {}).some(source => 'result' in source);
+  const recorded = readsResult
+    ? readCompletedRunResult(run, await host.deps.store.listWorkflowEvents(run.id))
+    : undefined;
+  const result = recorded?.kind === 'result' ? recorded.value : undefined;
   let entry: JsonValue | undefined;
   if (runEnded.linked?.items !== undefined) {
     const entries = linkedEntries(result, runEnded.linked.items);

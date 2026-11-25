@@ -815,11 +815,12 @@ export async function returnQueuedStartToPreparation(input: {
     );
     const launch = selected.rows[0] && readableLaunch(selected.rows[0].launch);
     if (!launch) return null;
-    // Deleted, not withdrawn: a binding's requests are joined on its receipt and binding,
-    // so a withdrawn row beside the one its next preparation writes would be a second
-    // disposition for one binding.
+    // Withdrawn, so `trigger inspect <request>` still finds it, and detached from its
+    // binding: a binding's requests are joined on its receipt and binding, and the request
+    // its next preparation writes is its one disposition.
     await query(
-      "DELETE FROM remote_agent_resource_start_requests WHERE id = $1 AND status = 'queued'",
+      `UPDATE remote_agent_resource_start_requests SET status = 'withdrawn', receipt_id = NULL, binding_id = NULL
+        WHERE id = $1 AND status = 'queued'`,
       [input.requestId]
     );
     const reset = await query(
