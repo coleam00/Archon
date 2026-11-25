@@ -7,7 +7,7 @@ import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdir, symlink, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { tmpdir } from 'os';
 import {
   readProjectPackSettings,
@@ -527,7 +527,7 @@ describe('validateProjectPackSettings file settings', () => {
     const error = (await start.catch((e: unknown) => e)) as FileSettingError;
     expect(error.fileSetting).toEqual({
       setting: 'policy',
-      path: join(cwd, 'docs', 'review.md'),
+      path: `${cwd}${sep}docs/review.md`,
       origin: 'project',
     });
     // The same project state starts a workflow of the pack that does not read the setting.
@@ -580,7 +580,7 @@ describe('validateProjectPackSettings file settings', () => {
     )) as FileSettingError;
     expect(refusal.fileSetting).toEqual({
       setting: 'policy',
-      path: join(cwd, 'docs', 'gone.md'),
+      path: `${cwd}${sep}docs/gone.md`,
       origin: 'supplied',
     });
     // The reverse: a supplied file that exists starts even though the project's is missing.

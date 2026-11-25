@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { packGraphSchema } from '@archon/workflows/pack-graph';
@@ -1678,7 +1678,12 @@ describe('a start refused before launch', () => {
         expect.objectContaining({
           workflow: 'chain-build',
           reason: 'file_setting_missing',
-          fileSetting: { setting: 'policy', path: policy, origin: 'project' },
+          // Joined as the value is written, not normalized: `docs/policy.md` keeps its `/` on Windows.
+          fileSetting: {
+            setting: 'policy',
+            path: `${fixture.projectRoot}${sep}docs/policy.md`,
+            origin: 'project',
+          },
         }),
       ],
     ]);
