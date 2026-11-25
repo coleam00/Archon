@@ -40,6 +40,7 @@ test('auto-resume propagates a published-pause error without failing the success
     preCreatedRun: run,
     priorCompletedNodes: new Map(),
     resumeCause: 'continue_after_wait',
+    claimedByHand: false,
     priorFailedNodes: new Map(),
     priorUsage: {},
     priorNodeSessions: [],

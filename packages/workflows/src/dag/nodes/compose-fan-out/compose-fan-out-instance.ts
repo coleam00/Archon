@@ -29,6 +29,7 @@ import { aggregateProviderFailure, rootFailures } from '../../../executor-shared
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { RunSourceUnreadableError } from '../../node-source';
+import { readUnknownOutcomes } from '../../../unknown-outcome';
 import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { type RunLayersContext } from '../../run-context';
 import { expandComposeInstance } from './compose-fan-out-expansion';
@@ -449,6 +450,36 @@ async function settleInstance(
 }
 
 /**
+ * An instance whose node failed with an unknown outcome that this fan-out's own join
+ * absorbed (`unknownOutcomes`): a recomputed join gets the recorded failure back rather than
+ * running the uncertain node again. One an inner join absorbed leaves the instance to run
+ * again, so its other failures are retried; a live one runs again, which only a resume by
+ * hand reaches.
+ */
+async function absorbedUnknownOutcome(
+  scope: ComposeInstanceScope,
+  scopeName: string,
+  stepNamePrefix: string
+): Promise<ComposeInstanceOutcome | undefined> {
+  const failed = scope.resumeSnapshot.failedNodes;
+  const holds = [...failed].some(
+    ([step, failure]) =>
+      step.startsWith(stepNamePrefix) && failure.failureKind === 'outcome_unknown'
+  );
+  if (!holds) return undefined;
+  const under = (await readUnknownOutcomes(scope.ctx.deps.store, scope.ctx.workflowRun)).filter(
+    outcome => outcome.path.startsWith(stepNamePrefix)
+  );
+  const own = under.some(outcome => outcome.absorbedBy === scope.fanOutScopeName);
+  if (!own || under.some(outcome => outcome.absorbedBy === undefined)) return undefined;
+  return {
+    status: 'failed',
+    output: '',
+    error: failed.get(scopeName)?.error ?? `instance ${scopeName} failed with an unknown outcome`,
+  };
+}
+
+/**
  * Execute one composed fan-out instance: thread it whole when it already completed,
  * otherwise run the composed body via runLayers in its own context, threading inner
  * nodes that already completed. The authored node ids remain ordinary DAG ids inside
@@ -494,6 +525,8 @@ export async function runComposeInstance(
   if (prior !== undefined) return threadedOutcome(prior);
 
   const stepNamePrefix = `${scopeName}__`;
+  const absorbed = await absorbedUnknownOutcome(scope, scopeName, stepNamePrefix);
+  if (absorbed !== undefined) return absorbed;
   const threaded = threadCompletedInnerNodes(expanded.nodes, priorOutputs, stepNamePrefix);
   let priorUsage: InstanceRun['priorUsage'];
   try {

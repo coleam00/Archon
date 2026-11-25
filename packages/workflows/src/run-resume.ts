@@ -3,6 +3,7 @@ import type { PriorRunUsage } from './dag-executor';
 import type { WorkflowDeps } from './deps';
 import type { WorkflowRun, WorkflowRunNodeSession } from './schemas';
 import { readPauseCause } from './schemas';
+import { isAutomaticClaim } from './unknown-outcome';
 import type { PersistedNodeOutput, PriorFailedNode, ResumeClaimCursor } from './store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -88,6 +89,8 @@ export async function hydrateResumableRun(
   priorCompletedNodes: Map<string, PersistedNodeOutput>;
   priorFailedNodes: Map<string, PriorFailedNode>;
   resumeCause: ResumeCause;
+  /** Claimed by an operator's resume by hand, not a continuation by itself (`isAutomaticClaim`). */
+  claimedByHand: boolean;
   priorUsage: PriorRunUsage;
   priorNodeSessions: WorkflowRunNodeSession[];
 }> {
@@ -111,6 +114,7 @@ export async function hydrateResumableRun(
     priorCompletedNodes,
     priorFailedNodes: inspection.priorFailedNodes,
     resumeCause: resumeCauseOf(candidate, preCreatedRun),
+    claimedByHand: !isAutomaticClaim(cursor),
     priorUsage,
     priorNodeSessions,
   };

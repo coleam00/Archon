@@ -1,14 +1,18 @@
 /**
- * Where a walk reaches a failure whose outcome is unknown (`liveUnknownOutcomes`): the walk
- * starts nothing more, and at the top level the pass fails the run with stop reason
- * `outcome_unknown`, under its own claim, so also a row its own parallel wait or gate paused.
+ * Where a walk reaches a failure whose outcome is unknown (`unknownOutcomes`) that the failed
+ * node owns: the walk starts nothing more, and at the top level the pass fails the run with
+ * stop reason `outcome_unknown`, under its own claim, so also a row its own parallel wait or
+ * gate paused.
  */
 import { spellWorkflowCommand } from '../deps';
 import { measureFailedChangeSize } from '../change-size';
 import { logWorkflowError } from '../logger';
 import { safeSendMessage } from '../platform-messages';
 import { executionClaim } from '../store';
-import { readLiveUnknownOutcomes } from '../unknown-outcome';
+import { composeFanOutScopeSegment } from '../fan-out-identity';
+import { loopBodyStepNamePrefix } from '../graph-plan';
+import type { DagNode } from '../schemas';
+import { readUnknownOutcomes, type UnknownOutcome } from '../unknown-outcome';
 import { getLog } from './log';
 import type { LayerNodeResult, RunLayersContext } from './run-context';
 import { failRun } from './run-terminal';
@@ -71,18 +75,51 @@ export async function failRunOnUnknownOutcome(
 }
 
 /**
- * Called where a node of a walk settled: whether it failed while the run holds a live
- * unknown outcome. When it did, the walk starts nothing more, and the top-level walk fails
- * the run. Which node the outcome belongs to is not asked here: any failure stops the walk
- * while one is live, which errs toward stopping.
+ * Called where a node of a walk settled: whether it failed over a live unknown outcome it
+ * owns. When it did, the walk starts nothing more, and the top-level walk fails the run.
+ * Only what the failed node ran decides: its own record, the body of the loop group it is,
+ * or the instances of the composed fan-out it is. Another node's unknown outcome does not
+ * make an ordinary failure stop the walk.
+ *
+ * A loop body is told by the record's loop frame, not by a `<step>.` prefix: node ids may
+ * contain dots (see `dag-structure`), so a top-level `prep.write` is not the body of a loop
+ * group `prep`. A composed scope can be told by its prefix, since its marker cannot occur in
+ * a node id.
  */
 export async function reachedUnknownOutcome(
   ctx: RunLayersContext,
+  node: Pick<DagNode, 'id'>,
   settled: LayerNodeResult
 ): Promise<boolean> {
   if (settled.output.state !== 'failed') return false;
-  const live = await readLiveUnknownOutcomes(ctx.deps.store, ctx.workflowRun);
-  if (live.length === 0) return false;
-  if (ctx.stepNamePrefix === '') await failRunOnUnknownOutcome(ctx, live);
+  const live = (await readUnknownOutcomes(ctx.deps.store, ctx.workflowRun)).filter(
+    outcome => outcome.absorbedBy === undefined
+  );
+  if (!live.some(outcome => ownedBy(ctx, node.id, outcome))) return false;
+  if (ctx.stepNamePrefix === '')
+    await failRunOnUnknownOutcome(
+      ctx,
+      live.map(outcome => outcome.path)
+    );
   return true;
+}
+
+function ownedBy(
+  { stepNamePrefix, loopGroupPath }: Pick<RunLayersContext, 'stepNamePrefix' | 'loopGroupPath'>,
+  nodeId: string,
+  { path, loopPath }: UnknownOutcome
+): boolean {
+  const step = stepNamePrefix + nodeId;
+  if (path === step) return true;
+  // A record without node metadata cannot say what ran it: err toward stopping.
+  if (loopPath === undefined) return true;
+  const depth = loopGroupPath.length;
+  const inBody =
+    loopPath[depth]?.groupId === nodeId &&
+    loopGroupPath.every((frame, index) => loopPath[index]?.groupId === frame.groupId) &&
+    path.startsWith(loopBodyStepNamePrefix(step));
+  return (
+    inBody ||
+    path.startsWith(`${stepNamePrefix}${composeFanOutScopeSegment(nodeId, loopGroupPath)}__`)
+  );
 }
