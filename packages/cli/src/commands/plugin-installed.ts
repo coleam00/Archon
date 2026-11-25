@@ -62,8 +62,11 @@ export async function listPlugins(env: PluginEnvironment): Promise<void> {
   }
   for (const receipt of receipts) {
     const archon = receipt.manifest.compatibility?.archon ?? 'any';
+    // A forge refusal names the executable that refused; this ties it to its receipt id.
+    const executable =
+      receipt.manifest.kind === 'forge' ? `  executable ${receipt.manifest.executable}` : '';
     console.log(
-      `${receipt.id}  ${receipt.manifest.kind}  ${receipt.tag ?? '-'}  ${receipt.commit.slice(0, 12)}  archon ${archon}`
+      `${receipt.id}  ${receipt.manifest.kind}  ${receipt.tag ?? '-'}  ${receipt.commit.slice(0, 12)}  archon ${archon}${executable}`
     );
   }
   for (const entry of broken) {

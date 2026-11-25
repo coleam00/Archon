@@ -1,5 +1,5 @@
 import { readFile, stat } from 'fs/promises';
-import { basename, dirname, join } from 'path';
+import { dirname, join } from 'path';
 import * as archonPaths from '@archon/paths';
 import {
   describeIssues,
@@ -97,18 +97,13 @@ export async function loadablePackFolder(dir: string): Promise<SourcePackFolder 
   }
 }
 
-/** A `.env` file anywhere in the folder: secrets, never pack source. */
-function isEnvFile(relPath: string): boolean {
-  const name = basename(relPath);
-  return name === '.env' || name.startsWith('.env.');
-}
-
 /**
  * The files a run's capture freezes from `dir` when it is a pack folder, or null when it is
  * not one. That is what an install of the folder would hold: in a git checkout, the tracked
  * files plus untracked ones git does not ignore, so a root `.env`, `node_modules` or build
  * output stay out; outside git, the whole tree. It never holds the folder's own `.archon/`,
- * whose source directories the capture freezes as for any project, or a `.env` file.
+ * whose source directories the capture freezes as for any project. The copy step drops
+ * `.env` files from this listing as from every capture job.
  *
  * A manifest that does not read as a pack (invalid, or ambiguous with a nested copy)
  * freezes only the manifest, so the captured read reports the load error live discovery
@@ -128,7 +123,7 @@ export async function sourcePackFiles(dir: string): Promise<TreeListing | null> 
     : (await listTree(dir)).files.map(file => file.relPath);
   return listingOf(
     dir,
-    relPaths.filter(path => path.split(/[\\/]/)[0] !== '.archon' && !isEnvFile(path))
+    relPaths.filter(path => path.split(/[\\/]/)[0] !== '.archon')
   );
 }
 
@@ -174,7 +169,5 @@ async function filesAt(dir: string, relPath: string): Promise<TreeFile[]> {
   if (info.isFile()) return [{ relPath, absPath, size: info.size, mtimeMs: info.mtimeMs }];
   if (!info.isDirectory()) return [];
   const nested = await listTree(absPath);
-  return nested.files
-    .filter(file => !isEnvFile(file.relPath))
-    .map(file => ({ ...file, relPath: join(relPath, file.relPath) }));
+  return nested.files.map(file => ({ ...file, relPath: join(relPath, file.relPath) }));
 }

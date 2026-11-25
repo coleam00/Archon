@@ -742,28 +742,7 @@ async function namedItem(
   return { id: await ensureItem(query, input.launch.run.codebase_id, key), key };
 }
 
-export async function failStartBindingPreparation(input: {
-  receiptId: string;
-  bindingId: string;
-  ownerId: string;
-  retryable: boolean;
-  error: string;
-  forgeRefusal?: ForgeRefusal;
-}): Promise<boolean> {
-  const result = await getDatabase().query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = $4, preparation_error = $5, forge_refusal = $6, updated_at = ${getDialect().now()}
-      WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
-    [
-      input.receiptId,
-      input.bindingId,
-      input.ownerId,
-      input.retryable ? 'failed' : 'rejected',
-      input.error,
-      input.forgeRefusal ? JSON.stringify(input.forgeRefusal) : null,
-    ]
-  );
-  return result.rowCount === 1;
-}
+export { failStartBindingPreparation } from './refused-preparation';
 
 export async function resetStartBindingPreparation(
   input: { receiptId: string; bindingId: string; ownerId: string },

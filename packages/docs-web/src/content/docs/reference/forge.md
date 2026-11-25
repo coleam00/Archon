@@ -33,7 +33,7 @@ The checksum catches a corrupted download or an asset that does not belong to th
 Manage the install with:
 
 ```sh
-archon plugin list                                                 # id, kind, tag, commit, compatibility
+archon plugin list                                                 # id, kind, tag, commit, compatibility, executable
 archon plugin update coleam00/Archon/plugins/forge-github          # latest release; add @<tag> to pick one
 archon plugin remove coleam00/Archon/plugins/forge-github          # deletes only the files the receipt lists
 ```
@@ -149,7 +149,15 @@ Otherwise it exits 1 with the first reason that applies, in this order:
 
 Any other failure of the read keeps its own kind, such as `unavailable` after the read's retries.
 
-A `no_plugin_for_host`, `unsupported_op`, `no_credential`, `authorization` or `not_found` failure carries `remedy`, the operator's next step. For `unsupported_op` and `no_credential` it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step (`archon plugin update`, or the credential variables the plugin reads). The remedy for `authorization` names the credential source, never the token.
+A `no_plugin_for_host`, `unsupported_op`, `no_credential`, `authorization` or `not_found` failure carries `remedy`, the operator's next step. For `unsupported_op` and `no_credential` it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step. For `no_credential` that names the credential variables the plugin reads. For `unsupported_op` it names what runs the plugin:
+
+- **An executable file**, in `ARCHON_HOME/plugins/`, another plugin directory or on PATH: the remedy names its path.
+- **A `forge` entry in Archon's config**: the remedy names the entry by plugin, not its `command` or `args`, which may hold a secret.
+- **This Archon source checkout**: the remedy says to update Archon.
+
+Forge cannot tell who installed a file or the command an entry runs. When `archon plugin list` shows a forge receipt with that executable, run `archon plugin update <id>` with the receipt's id, or the repair command the list prints for a broken receipt. Otherwise replace the file or script with a version that supports the operation.
+
+The remedy for `authorization` names the credential source, never the token.
 
 The credential is resolved the way an operation resolves it, so for GitHub the check may run `gh auth token`. A `host` check, or one whose plugin does not advertise `pr.view`, makes no read: there a credential that resolves can still be expired or lack access to a repository, which the first operation reports.
 
@@ -170,9 +178,11 @@ A Bun `script:` node calls an operation with `forge(op, request)` from the `arch
 
 A read-back never claims to have *prevented* a wrong write; it only reports what it could and could not confirm. A vendor that accepts a write and silently does not apply it is reported as a verification failure, never as success.
 
+In the GitHub plugin, a read-back that disagreed carries `invalid_response`. A read-back that could not run carries the forge's own error kind and message, such as `rate_limited`, `authorization` or `unavailable`, so a lost permission reads differently from an outage. `status` is present when GitHub answered with an HTTP error; a dropped connection or a GraphQL error has none.
+
 `pr.draft` converts an open pull request to draft and returns its verified PR record. An already-draft PR returns `applied` with `changed: false`; closed or merged PRs are refused with the observed record. A plugin that does not advertise `pr.draft` returns `unsupported_op` before execution. Nothing falls back to `gh`. The GitHub plugin uses [the GraphQL draft mutation](https://docs.github.com/en/graphql/reference/pulls#convertpullrequesttodraft) and reads the PR back before reporting success.
 
-`pr.close` closes an open pull request without merging it and returns its verified PR record. An already-closed PR returns `applied` with `changed: false`; a merged PR is refused with the observed record. It never deletes the head branch and writes no comment: a caller that wants to say why writes one with `workitem.comment.upsert`. A plugin that does not advertise `pr.close` returns `unsupported_op` before execution. The GitHub plugin uses [the REST pull request update](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request) with `state: closed` and reads the PR back before reporting success. When that read-back cannot run, the `verification_failed` answer carries the forge's own error kind and status, so a lost permission reads differently from an outage.
+`pr.close` closes an open pull request without merging it and returns its verified PR record. An already-closed PR returns `applied` with `changed: false`; a merged PR is refused with the observed record. It never deletes the head branch and writes no comment: a caller that wants to say why writes one with `workitem.comment.upsert`. A plugin that does not advertise `pr.close` returns `unsupported_op` before execution. The GitHub plugin uses [the REST pull request update](https://docs.github.com/en/rest/pulls/pulls#update-a-pull-request) with `state: closed` and reads the PR back before reporting success.
 
 `comment.upsert` writes the one comment whose first line is the exact `marker`, creating it when absent and replacing it in place when present. A body that does not begin with that marker is refused, and more than one marked comment is a conflict.
 

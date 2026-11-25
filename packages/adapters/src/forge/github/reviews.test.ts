@@ -269,6 +269,26 @@ describe('pr.review.submit', () => {
     expect(github.posts).toHaveLength(1);
   });
 
+  test('a review whose read-back fails keeps the read-back error', async () => {
+    const github = reviewGitHub();
+    let posted = false;
+    const response = await run(submit, {
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === 'POST') posted = true;
+        else if (posted) return json({ message: 'rate limited' }, 429);
+        return github.fetch(input, init);
+      }) as typeof globalThis.fetch,
+    });
+    expect(response).toMatchObject({
+      ok: false,
+      error: { kind: 'rate_limited', status: 429 },
+      mutation: {
+        outcome: 'verification_failed',
+        leaveBehind: 'review 100 exists on the pull request',
+      },
+    });
+  });
+
   test('a review whose inline comments did not land is a verification failure naming it', async () => {
     const github = reviewGitHub({ dropComments: true });
     expect(await run(submit, github)).toMatchObject({

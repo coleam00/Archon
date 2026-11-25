@@ -12,9 +12,16 @@ import {
 } from './plugin-config';
 import { runPluginProcess, type PluginArgv } from './plugin-process';
 
+/**
+ * What launches a plugin, which decides how the operator replaces it: `scanned` is an
+ * executable file found in a plugin directory or on PATH, `configured` is a `forge`
+ * entry in Archon's config, and `source` runs from this Archon checkout.
+ */
+export type PluginOrigin = 'scanned' | 'configured' | 'source';
+
 export interface PluginCandidate extends PluginArgv {
   source: string;
-  configured: boolean;
+  origin: PluginOrigin;
   expectedName?: string;
 }
 
@@ -117,7 +124,7 @@ async function scannedCandidate(
   const command = resolve(directory, entry);
   const candidate: PluginCandidate = {
     source: `${source}:${name}`,
-    configured: false,
+    origin: 'scanned',
     command,
     args: [],
     expectedName: name,
@@ -158,7 +165,7 @@ function configuredCandidates(
 ): PluginCandidate[] {
   const candidates: PluginCandidate[] = config.plugins.map(plugin => ({
     source: `config:${plugin.plugin}`,
-    configured: true,
+    origin: 'configured',
     command: plugin.command,
     args: plugin.args,
     expectedName: plugin.plugin,
@@ -167,7 +174,7 @@ function configuredCandidates(
     if (typeof value !== 'string' && value.command) {
       candidates.push({
         source: `config:${host}`,
-        configured: true,
+        origin: 'configured',
         command: value.command,
         args: value.args,
         expectedName: value.plugin,
@@ -302,14 +309,12 @@ function withSourcePlugins(
     return false;
   });
   return [
-    // Marked configured so a source plugin that fails its handshake fails discovery
-    // instead of being skipped.
     ...source.map(
       (plugin): CandidateInspection => ({
         kind: 'ready',
         candidate: {
           source: `source:${plugin.name}`,
-          configured: true,
+          origin: 'source',
           command: plugin.command,
           args: plugin.args,
           expectedName: plugin.name,
@@ -355,7 +360,9 @@ async function discoverCandidateMetadata(
     } catch (error) {
       if (
         !(error instanceof PluginDiscoveryError) ||
-        candidate.configured ||
+        // A plugin the operator or this checkout named fails discovery when its handshake
+        // fails; only an opportunistically scanned file is skipped.
+        candidate.origin !== 'scanned' ||
         (candidate.expectedName && selectedNames.has(candidate.expectedName))
       )
         throw error;

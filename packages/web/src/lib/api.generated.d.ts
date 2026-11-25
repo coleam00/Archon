@@ -7900,7 +7900,7 @@ export interface components {
           stoppedIn: {
             runId: string;
             workflow: string;
-            outcome: string;
+            outcome: string | null;
           };
           summary: string | null;
           limit?: {
@@ -7911,6 +7911,21 @@ export interface components {
             bindingId: string;
             workflow: string;
           };
+          refused?: {
+            receiptId: string;
+            bindingId: string;
+            workflow: string;
+            /** @enum {string} */
+            reason:
+              | 'checkout_refused'
+              | 'inputs_unmapped'
+              | 'link_refused'
+              | 'no_default_provider'
+              | 'run_as_user_failed'
+              | 'run_configuration_failed'
+              | 'launch_preparation_failed';
+            refusedAt: string;
+          }[];
           checkout: string | null;
         };
     AttentionQueueCountsResponse: {
@@ -8272,7 +8287,7 @@ export interface components {
             stoppedIn: {
               runId: string;
               workflow: string;
-              outcome: string;
+              outcome: string | null;
             };
             summary: string | null;
             limit?: {
@@ -8283,6 +8298,21 @@ export interface components {
               bindingId: string;
               workflow: string;
             };
+            refused?: {
+              receiptId: string;
+              bindingId: string;
+              workflow: string;
+              /** @enum {string} */
+              reason:
+                | 'checkout_refused'
+                | 'inputs_unmapped'
+                | 'link_refused'
+                | 'no_default_provider'
+                | 'run_as_user_failed'
+                | 'run_configuration_failed'
+                | 'launch_preparation_failed';
+              refusedAt: string;
+            }[];
             checkout: string | null;
           }
         | unknown;
@@ -8397,6 +8427,13 @@ export interface components {
         } | null;
         hasResult: boolean;
         resultCommit: string | null;
+        changeSize: {
+          base: string;
+          commit: string;
+          files: number;
+          added: number;
+          removed: number;
+        } | null;
       }[];
       queued: {
         requestId: string;
@@ -8769,7 +8806,7 @@ export interface components {
             stoppedIn: {
               runId: string;
               workflow: string;
-              outcome: string;
+              outcome: string | null;
             };
             summary: string | null;
             limit?: {
@@ -8780,6 +8817,21 @@ export interface components {
               bindingId: string;
               workflow: string;
             };
+            refused?: {
+              receiptId: string;
+              bindingId: string;
+              workflow: string;
+              /** @enum {string} */
+              reason:
+                | 'checkout_refused'
+                | 'inputs_unmapped'
+                | 'link_refused'
+                | 'no_default_provider'
+                | 'run_as_user_failed'
+                | 'run_configuration_failed'
+                | 'launch_preparation_failed';
+              refusedAt: string;
+            }[];
             checkout: string | null;
           }
       )[];
@@ -9134,6 +9186,13 @@ export interface components {
           } | null;
           hasResult: boolean;
           resultCommit: string | null;
+          changeSize: {
+            base: string;
+            commit: string;
+            files: number;
+            added: number;
+            removed: number;
+          } | null;
         }[];
         queued: {
           requestId: string;
@@ -9512,7 +9571,7 @@ export interface components {
               stoppedIn: {
                 runId: string;
                 workflow: string;
-                outcome: string;
+                outcome: string | null;
               };
               summary: string | null;
               limit?: {
@@ -9523,6 +9582,21 @@ export interface components {
                 bindingId: string;
                 workflow: string;
               };
+              refused?: {
+                receiptId: string;
+                bindingId: string;
+                workflow: string;
+                /** @enum {string} */
+                reason:
+                  | 'checkout_refused'
+                  | 'inputs_unmapped'
+                  | 'link_refused'
+                  | 'no_default_provider'
+                  | 'run_as_user_failed'
+                  | 'run_configuration_failed'
+                  | 'launch_preparation_failed';
+                refusedAt: string;
+              }[];
               checkout: string | null;
             }
         )[];
@@ -10138,7 +10212,7 @@ export interface components {
                 stoppedIn: {
                   runId: string;
                   workflow: string;
-                  outcome: string;
+                  outcome: string | null;
                 };
                 summary: string | null;
                 limit?: {
@@ -10149,6 +10223,21 @@ export interface components {
                   bindingId: string;
                   workflow: string;
                 };
+                refused?: {
+                  receiptId: string;
+                  bindingId: string;
+                  workflow: string;
+                  /** @enum {string} */
+                  reason:
+                    | 'checkout_refused'
+                    | 'inputs_unmapped'
+                    | 'link_refused'
+                    | 'no_default_provider'
+                    | 'run_as_user_failed'
+                    | 'run_configuration_failed'
+                    | 'launch_preparation_failed';
+                  refusedAt: string;
+                }[];
                 checkout: string | null;
               };
         }

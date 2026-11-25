@@ -19,6 +19,7 @@ import {
   type AttentionAnswerer,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowNotice } from '@archon/workflows/workflow-notice';
+import type { StoppedRefusal } from '@archon/workflows/schemas/run-metadata';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { formatAge } from './workflow-shared';
 
@@ -149,6 +150,33 @@ function overdueWaitLines(item: Extract<AttentionQueueItem, { kind: 'overdue_wai
   ];
 }
 
+/** Why a start was refused before launch, by the code its stop recorded. */
+const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
+  checkout_refused: 'the checkout could not be handed on',
+  inputs_unmapped: 'an input the binding maps named nothing',
+  link_refused: 'the items it links to could not be read or hold no such link',
+  no_default_provider: 'no default AI provider is set',
+  run_as_user_failed: "the binding's run-as user could not be found",
+  run_configuration_failed: "the item's or the binding's run configuration could not be read",
+  launch_preparation_failed: 'preparing its launch failed',
+};
+
+/**
+ * What starts refused before launch say, wherever they show: the causing stage's own output,
+ * `workflow get`, the item read and attention. Each names its receipt for `trigger inspect`.
+ */
+export function refusedStartLines(refused: readonly StoppedRefusal[]): string[] {
+  return refused.flatMap(start => [
+    `the start of ${start.workflow} (binding ${start.bindingId}) was refused before launch at ${start.refusedAt}: ${REFUSAL_REASONS[start.reason]}`,
+    ...(start.reason === 'no_default_provider' ? ['set one: archon ai default <provider>'] : []),
+    `see the refusal: archon trigger inspect ${start.receiptId}`,
+  ]);
+}
+
+/** How a stopped item's run ended: a run that settled asks may have no outcome. */
+const ended = (workflow: string, outcome: string | null): string =>
+  outcome === null ? `${workflow} ended` : `${workflow} ended as '${outcome}'`;
+
 /** A path as one shell word: quoted only when it holds a character a shell would split on. */
 const shellWord = (text: string): string =>
   /^[\w@%+=:,./-]+$/u.test(text) ? text : `'${text.replaceAll("'", `'\\''`)}'`;
@@ -160,14 +188,18 @@ const shellWord = (text: string): string =>
  */
 function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
   const { runId, workflow, outcome } = item.stoppedIn;
-  const { limit } = item;
+  const { limit, refused } = item;
+  // A limit and refusals before launch can come from one run's end; each keeps its lines.
   const lines =
-    limit === undefined
-      ? [`${workflow} ended as '${outcome}'; nothing started and it left no ask`]
-      : [
-          `${workflow} ended as '${outcome}'; its start of ${limit.workflow} was refused at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
+    limit !== undefined
+      ? [
+          `${ended(workflow, outcome)}; its start of ${limit.workflow} was refused at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
           `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
+        ]
+      : [
+          `${ended(workflow, outcome)}; nothing started${refused === undefined ? ' and it left no ask' : ''}`,
         ];
+  lines.push(...refusedStartLines(refused ?? []));
   if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
   lines.push(
     `show the run: ${command(`get ${runId}`)}`,
@@ -175,8 +207,11 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
   );
   if (item.item !== undefined) {
     const cwd = item.checkout === null ? '' : ` --cwd ${shellWord(item.checkout)}`;
+    // Not a refused start's workflow: a bare run lacks the inputs and checkout its binding
+    // would have passed.
+    const next = limit?.workflow;
     const start = command(
-      `run ${limit === undefined ? '<workflow>' : shellWord(limit.workflow)} --item ${shellWord(item.item.key)}${cwd}`
+      `run ${next === undefined ? '<workflow>' : shellWord(next)} --item ${shellWord(item.item.key)}${cwd}`
     );
     lines.push(
       `run a stage on it, which closes this: ${start}${item.checkout === null ? ", from the item's project" : ''}`

@@ -98,6 +98,40 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       });
     });
 
+    test.each([
+      'update',
+      'running-update',
+      'pending-update',
+      'complete',
+      'pause',
+      'resolve',
+    ] as const)(
+      '%s removes a key its patch sets to null and keeps the nulls inside a value',
+      async writer => {
+        const metadata = { cleared: 'set', kept: 'set' };
+        const run =
+          writer === 'pending-update'
+            ? await create(store, { metadata })
+            : await running(store, { metadata });
+        const patch = { cleared: null, kept: { inner: null } };
+        if (writer === 'update') await store.updateWorkflowRun(run.id, { metadata: patch });
+        else if (writer === 'running-update')
+          expect(await store.updateWorkflowRunMetadataIfRunning(run.id, patch)).toBe(true);
+        else if (writer === 'pending-update')
+          expect(await store.updateWorkflowRunMetadataIfPending(run.id, patch)).toBe(true);
+        else if (writer === 'complete')
+          await store.completeWorkflowRun(run.id, { duration_ms: 1 }, patch);
+        else if (writer === 'pause') await store.pauseWorkflowRun(run.id, approval, patch);
+        else {
+          await store.pauseWorkflowRun(run.id, approval);
+          expect(await store.resolveApprovalGate(run.id, patch, [])).toEqual({ resolved: true });
+        }
+        const stored = (await store.getWorkflowRun(run.id))?.metadata;
+        expect(stored).not.toHaveProperty('cleared');
+        expect(stored?.kept).toEqual({ inner: null });
+      }
+    );
+
     test.each(['spawn', null, 42, undefined])(
       'top-level creation strips caller-supplied child provenance: %s',
       async marker => {
