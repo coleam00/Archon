@@ -8,31 +8,31 @@ export const orderedExamples: ExampleHelp[] = [
   { text: 'archon chat "What does the orchestrator do?"', owner: { command: 'chat' } },
   { text: 'archon workflow list', owner: { command: 'workflow', subcommand: 'list' } },
   {
-    text: 'archon workflow run archon-investigate "Why does login fail?"',
+    text: 'archon workflow run archon-triage --item issue-42 --input issue=42',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run archon-plan --cwd /path/to/repo "Add dark mode"',
+    text: 'archon workflow run archon-plan --cwd /path/to/repo --item issue-42 --input issue=42',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run archon-implement --branch feature-auth "Implement auth"',
+    text: 'archon workflow run archon-land --item issue-42 --input issue=42 --branch feature-auth',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run archon-implement --no-worktree "Fix the typo in the README"',
+    text: 'archon workflow run archon-investigate --no-worktree --item issue-42 --input issue=42',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run archon-investigate --folder "Explain how the repos under this root fit together"',
+    text: 'archon workflow run archon-investigate --folder --item issue-42 --input issue=42',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run archon-investigate --detach "Investigate the flaky test"',
+    text: 'archon workflow run archon-triage --item issue-42 --input issue=42 --detach',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run archon-investigate --dry-run --stubs ./stubs.yaml --json',
+    text: 'archon workflow run archon-investigate --item issue-42 --input issue=42 --dry-run --stubs ./stubs.yaml --json',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   { text: 'archon workflow runs --json', owner: { command: 'workflow', subcommand: 'runs' } },
@@ -71,7 +71,7 @@ export const orderedExamples: ExampleHelp[] = [
   },
   { text: 'archon workflow runs --open', owner: { command: 'workflow', subcommand: 'runs' } },
   {
-    text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',
+    text: 'archon workflow run archon-review --adopt <run-id>',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
