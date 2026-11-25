@@ -2919,8 +2919,8 @@ Two optional keys are for a reader that lists a pack's settings, such as a setti
   by its literal name. A computed lookup is not seen. A setting no node of the workflow reads
   does not block it, and an empty value is not an error. A start a binding makes is refused
   before launch and [stops its item](/guides/workflow-triggers/) with reason
-  `file_setting_missing`, except a start in another run's checkout (`checkout: ended-run`),
-  whose run checks the file in that checkout when it starts.
+  `file_setting_missing`, except a start in another run's checkout (`checkout: ended-run` or
+  `checkout: asking-run`), whose run checks the file in that checkout when it starts.
 
 An unknown key on a setting is ignored, so a pack can use a key a newer Archon adds, and
 `archon validate workflows` lists each one as a `parse_warning`. Releases before this one

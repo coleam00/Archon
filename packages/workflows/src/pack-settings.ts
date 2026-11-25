@@ -551,19 +551,42 @@ export async function resolveRunStartInputs(
   workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
   supplied: Readonly<Record<string, JsonValue>> | undefined
 ): Promise<RunStartInputs> {
+  const { inputs, layers } = await resolveStartValues(cwd, workflow, supplied);
   const pack = workflow.pack;
-  const projectValues = pack === undefined ? {} : await readProjectPackSettings(cwd, pack);
-  const layers = startValueLayers(workflow, projectValues, supplied);
-  const inputs = layers.reduceRight<Record<string, JsonValue>>(
-    (merged, [, values]) => ({ ...merged, ...values }),
-    {}
-  );
   if (pack !== undefined) {
-    assertRequiredSettings(cwd, pack, inputs);
     const [first, ...rest] = await fileSettingFindings(cwd, pack, layers);
     if (first !== undefined) throw new FileSettingError(cwd, pack.key, first, rest);
   }
-  return { inputs: Object.keys(inputs).length > 0 ? inputs : undefined };
+  return { inputs };
+}
+
+/**
+ * {@link resolveRunStartInputs} without the file check, for a check before the start that
+ * needs only the values, such as the repository a run names: a file is checked where the
+ * run opens it, which for a start on another run's checkout is not `cwd`.
+ */
+export async function resolveRunStartValues(
+  cwd: string,
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
+  supplied: Readonly<Record<string, JsonValue>> | undefined
+): Promise<RunStartInputs> {
+  return { inputs: (await resolveStartValues(cwd, workflow, supplied)).inputs };
+}
+
+async function resolveStartValues(
+  cwd: string,
+  workflow: Pick<ResolvedWorkflow, 'pack' | 'inputs'>,
+  supplied: Readonly<Record<string, JsonValue>> | undefined
+): Promise<RunStartInputs & { layers: StartValueLayers }> {
+  const pack = workflow.pack;
+  const projectValues = pack === undefined ? {} : await readProjectPackSettings(cwd, pack);
+  const layers = startValueLayers(workflow, projectValues, supplied);
+  const merged = layers.reduceRight<Record<string, JsonValue>>(
+    (values, [, layer]) => ({ ...values, ...layer }),
+    {}
+  );
+  if (pack !== undefined) assertRequiredSettings(cwd, pack, merged);
+  return { inputs: Object.keys(merged).length > 0 ? merged : undefined, layers };
 }
 
 /**
