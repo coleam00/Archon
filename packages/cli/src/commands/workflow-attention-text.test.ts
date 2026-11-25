@@ -241,6 +241,52 @@ test('an ask with no recommendation says it has none and offers none to accept',
   expect(reasoned).not.toContain('recommended: none');
 });
 
+test('a refused start names its item, its reason and what moves it on', () => {
+  const start = {
+    receiptId: 'r-1',
+    bindingId: 'build',
+    hostId: 'h1',
+    workflow: 'build',
+    itemKey: 'issue-1',
+  };
+  const lines = (
+    reason: string,
+    limit?: {
+      name: string;
+      starts: number;
+      granted: number;
+      used: number;
+      bindingId: string;
+      workflow: string;
+    }
+  ) =>
+    attentionItemLines(
+      {
+        ...base,
+        kind: 'refused_start',
+        ref: 'refused:r-1:build',
+        start: { ...start, reason, ...(limit === undefined ? {} : { limit }) },
+      },
+      'brief'
+    ).join('\n');
+  const provider = lines('no_default_provider');
+  expect(provider).toContain('refused start');
+  expect(provider).toContain('on item issue-1');
+  expect(provider).toContain('archon ai default <provider>');
+  expect(provider).toContain('archon trigger inspect r-1');
+  const limited = lines('start_limit', {
+    name: 'rounds',
+    starts: 1,
+    granted: 0,
+    used: 1,
+    bindingId: 'build',
+    workflow: 'build',
+  });
+  expect(limited).toContain("start limit 'rounds': 1 of 1 starts used");
+  // A code a newer binary wrote reads as it is.
+  expect(lines('file_setting_missing')).toContain('file_setting_missing');
+});
+
 test('a lost preparation names its start and the recovery that returns it to pending', () => {
   const block = attentionItemLines(
     {

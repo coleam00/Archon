@@ -756,6 +756,10 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS forge_r
 -- binary's claim) leaves the preparer unknown.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS preparation_process TEXT;
 
+-- Why a binding start was refused (JSON: a reason code, and a start limit's standing), written
+-- by the write that refuses it, so a read names the reason without parsing preparation_error.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS refusal TEXT;
+
 -- A binding's start limit (JSON) and the name of the limit it grants (#6109), beside the
 -- intent for the same reason as event_input_names. On each start request, the limit it
 -- counted under and the limit it granted, each JSON with the window it was counted in:

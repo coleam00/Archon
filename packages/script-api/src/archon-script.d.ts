@@ -2609,6 +2609,38 @@ declare module 'archon:script' {
       };
       readonly checkout: string | null;
     } | {
+      readonly kind: 'refused_start';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly start: {
+        readonly receiptId: string;
+        readonly bindingId: string;
+        readonly hostId: string | null;
+        readonly workflow: string | null;
+        readonly itemKey: string;
+        readonly reason: string;
+        readonly limit?: {
+          readonly name: string;
+          readonly starts: number;
+          readonly granted: number;
+          readonly used: number;
+          readonly bindingId: string;
+          readonly workflow: string;
+        };
+      };
+    } | {
       readonly kind: 'preparation_lost';
       readonly ref: string;
       readonly project: {
@@ -3259,6 +3291,38 @@ declare module 'archon:script' {
           readonly error: string | null;
         };
         readonly checkout: string | null;
+      } | {
+        readonly kind: 'refused_start';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly start: {
+          readonly receiptId: string;
+          readonly bindingId: string;
+          readonly hostId: string | null;
+          readonly workflow: string | null;
+          readonly itemKey: string;
+          readonly reason: string;
+          readonly limit?: {
+            readonly name: string;
+            readonly starts: number;
+            readonly granted: number;
+            readonly used: number;
+            readonly bindingId: string;
+            readonly workflow: string;
+          };
+        };
       } | {
         readonly kind: 'preparation_lost';
         readonly ref: string;

@@ -130,6 +130,7 @@ const itemBase = {
  * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
  * an outcome that is not final (`returns.final`), started nothing and left no ask or wait,
  * so nothing moves it: it takes no answer, and any newer run on the item closes it;
+ * `refused_start` is a start no run caused that was refused and is its item's newest step;
  * `preparation_lost` is a binding start whose preparer this process can prove gone, which
  * `archon trigger recover-preparation` returns to pending.
  *
@@ -219,6 +220,25 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     checkout: z.string().nullable(),
   }),
   z.object({
+    kind: z.literal('refused_start'),
+    ...itemBase,
+    /**
+     * A binding start that no run caused (a fire, a schedule, a webhook or a label), refused
+     * for `reason`: a start-refusal code, `start_limit` with the limit's standing in `limit`,
+     * or `rejected_by_source`. `pausedAt` is when it was refused. It takes no answer; a run on
+     * the item, or a later start of the same binding on it, closes it.
+     */
+    start: z.object({
+      receiptId: z.string(),
+      bindingId: z.string(),
+      hostId: z.string().nullable(),
+      workflow: z.string().nullable(),
+      itemKey: z.string(),
+      reason: z.string(),
+      limit: stoppedLimitSchema.optional(),
+    }),
+  }),
+  z.object({
     kind: z.literal('preparation_lost'),
     ...itemBase,
     /**
@@ -241,7 +261,7 @@ export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
 /** An item a paused run holds. */
 export type RunAttentionQueueItem = Exclude<
   AttentionQueueItem,
-  { kind: 'overdue_wait' | 'stopped' | 'preparation_lost' }
+  { kind: 'overdue_wait' | 'stopped' | 'refused_start' | 'preparation_lost' }
 > & {
   run: object;
 };
@@ -274,11 +294,16 @@ export type AskQueueItem = Extract<AttentionQueueItem, { kind: 'attention' }> & 
 /** An item no run holds: an ask, an overdue wait, or a stopped item. */
 export type AttentionQueueItemWithoutRun =
   | AskQueueItem
-  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' | 'preparation_lost' }>;
+  | Extract<
+      AttentionQueueItem,
+      { kind: 'overdue_wait' | 'stopped' | 'refused_start' | 'preparation_lost' }
+    >;
 /** An overdue wait's queue item. */
 export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
 /** A stopped item's queue item. */
 export type StoppedQueueItem = Extract<AttentionQueueItem, { kind: 'stopped' }>;
+/** A refused start's queue item. */
+export type RefusedStartQueueItem = Extract<AttentionQueueItem, { kind: 'refused_start' }>;
 /** A lost binding preparation's queue item. */
 export type PreparationLostQueueItem = Extract<AttentionQueueItem, { kind: 'preparation_lost' }>;
 

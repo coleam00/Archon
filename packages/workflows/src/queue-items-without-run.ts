@@ -11,7 +11,13 @@
 import { createLogger } from '@archon/paths';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
-import { askItemRef, preparingItemRef, stoppedItemRef, waitItemRef } from './attention-item-refs';
+import {
+  askItemRef,
+  preparingItemRef,
+  refusedStartRef,
+  stoppedItemRef,
+  waitItemRef,
+} from './attention-item-refs';
 import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
 import {
   projectRef,
@@ -23,6 +29,7 @@ import {
   type CodebaseCache,
   type OverdueWaitQueueItem,
   type PreparationLostQueueItem,
+  type RefusedStartQueueItem,
   type StoppedQueueItem,
 } from './attention-queue';
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
@@ -306,4 +313,41 @@ export async function preparationLostItems(
     });
   }
   return items;
+}
+
+/** The store read a refused start's queue item needs. */
+export type RefusedStartItemStore = Pick<IWorkflowStore, 'listRefusedStarts'>;
+
+/**
+ * The refused starts no run caused that are still their item's newest step, as queue items,
+ * for `AttentionQueueSource.itemsWithoutRun`. The store decides which those are; nothing
+ * here changes them.
+ */
+export async function refusedStartItems(
+  store: RefusedStartItemStore
+): Promise<RefusedStartQueueItem[]> {
+  return (await store.listRefusedStarts()).map(start => {
+    const { receiptId, bindingId, hostId, workflow, itemKey, refusal, codebase } = start;
+    return {
+      kind: 'refused_start',
+      ref: refusedStartRef(receiptId, bindingId),
+      project:
+        codebase === null
+          ? null
+          : projectRef(projectKeyForCodebase(codebase, codebase.default_cwd), codebase),
+      ...(start.item === null ? {} : { item: start.item }),
+      revision: 1,
+      labels: {},
+      pausedAt: start.refusedAt,
+      start: {
+        receiptId,
+        bindingId,
+        hostId,
+        workflow,
+        itemKey,
+        reason: refusal.reason,
+        ...(refusal.limit === undefined ? {} : { limit: refusal.limit }),
+      },
+    };
+  });
 }

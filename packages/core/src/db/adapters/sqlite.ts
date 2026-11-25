@@ -764,6 +764,7 @@ export class SqliteAdapter implements IDatabase {
         preparation_process TEXT,
         preparation_error TEXT,
         forge_refusal TEXT,
+        refusal TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         PRIMARY KEY (receipt_id, binding_id)
