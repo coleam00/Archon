@@ -342,6 +342,8 @@ export function createInMemoryResourceStartStore(
     liftInstallHold: async () => null,
     listHeldStarts: async () => [],
     listHeldItemStarts: async () => [],
+    listPreparingStarts: async () => [],
+    listRefusedStarts: async () => [],
     listSkippedItemStarts: async () => [],
     readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
     getResourceStartRequest: async (

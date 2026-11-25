@@ -8022,7 +8022,76 @@ export interface components {
               origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
             };
           }[];
+          failed?: {
+            error: string | null;
+          };
           checkout: string | null;
+        }
+      | {
+          /** @enum {string} */
+          kind: 'refused_start';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          start: {
+            receiptId: string;
+            bindingId: string;
+            hostId: string | null;
+            workflow: string | null;
+            itemKey: string;
+            reason: string;
+            limit?: {
+              name: string;
+              starts: number;
+              granted: number;
+              used: number;
+              bindingId: string;
+              workflow: string;
+            };
+          };
+        }
+      | {
+          /** @enum {string} */
+          kind: 'preparation_lost';
+          ref: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          revision: number;
+          labels: {
+            [key: string]: string;
+          };
+          /** Format: date-time */
+          pausedAt: string | null;
+          start: {
+            receiptId: string;
+            bindingId: string;
+            hostId: string | null;
+            workflow: string | null;
+            itemKey: string | null;
+            ownerId: string;
+          };
         };
     AttentionQueueCountsResponse: {
       counts: components['schemas']['AttentionQueueCounts'];
@@ -8416,7 +8485,76 @@ export interface components {
                 origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
               };
             }[];
+            failed?: {
+              error: string | null;
+            };
             checkout: string | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'refused_start';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              receiptId: string;
+              bindingId: string;
+              hostId: string | null;
+              workflow: string | null;
+              itemKey: string;
+              reason: string;
+              limit?: {
+                name: string;
+                starts: number;
+                granted: number;
+                used: number;
+                bindingId: string;
+                workflow: string;
+              };
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'preparation_lost';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              receiptId: string;
+              bindingId: string;
+              hostId: string | null;
+              workflow: string | null;
+              itemKey: string | null;
+              ownerId: string;
+            };
           }
         | unknown;
     };
@@ -8942,7 +9080,76 @@ export interface components {
                 origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
               };
             }[];
+            failed?: {
+              error: string | null;
+            };
             checkout: string | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'refused_start';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              receiptId: string;
+              bindingId: string;
+              hostId: string | null;
+              workflow: string | null;
+              itemKey: string;
+              reason: string;
+              limit?: {
+                name: string;
+                starts: number;
+                granted: number;
+                used: number;
+                bindingId: string;
+                workflow: string;
+              };
+            };
+          }
+        | {
+            /** @enum {string} */
+            kind: 'preparation_lost';
+            ref: string;
+            project: {
+              key: string;
+              codebaseId: string | null;
+              name: string;
+            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            revision: number;
+            labels: {
+              [key: string]: string;
+            };
+            /** Format: date-time */
+            pausedAt: string | null;
+            start: {
+              receiptId: string;
+              bindingId: string;
+              hostId: string | null;
+              workflow: string | null;
+              itemKey: string | null;
+              ownerId: string;
+            };
           }
       )[];
       answers: (
@@ -9742,7 +9949,76 @@ export interface components {
                   origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
                 };
               }[];
+              failed?: {
+                error: string | null;
+              };
               checkout: string | null;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'refused_start';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              start: {
+                receiptId: string;
+                bindingId: string;
+                hostId: string | null;
+                workflow: string | null;
+                itemKey: string;
+                reason: string;
+                limit?: {
+                  name: string;
+                  starts: number;
+                  granted: number;
+                  used: number;
+                  bindingId: string;
+                  workflow: string;
+                };
+              };
+            }
+          | {
+              /** @enum {string} */
+              kind: 'preparation_lost';
+              ref: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              item?: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              revision: number;
+              labels: {
+                [key: string]: string;
+              };
+              /** Format: date-time */
+              pausedAt: string | null;
+              start: {
+                receiptId: string;
+                bindingId: string;
+                hostId: string | null;
+                workflow: string | null;
+                itemKey: string | null;
+                ownerId: string;
+              };
             }
         )[];
         answers: (
@@ -10476,7 +10752,76 @@ export interface components {
                     origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
                   };
                 }[];
+                failed?: {
+                  error: string | null;
+                };
                 checkout: string | null;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'refused_start';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                start: {
+                  receiptId: string;
+                  bindingId: string;
+                  hostId: string | null;
+                  workflow: string | null;
+                  itemKey: string;
+                  reason: string;
+                  limit?: {
+                    name: string;
+                    starts: number;
+                    granted: number;
+                    used: number;
+                    bindingId: string;
+                    workflow: string;
+                  };
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'preparation_lost';
+                ref: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                start: {
+                  receiptId: string;
+                  bindingId: string;
+                  hostId: string | null;
+                  workflow: string | null;
+                  itemKey: string | null;
+                  ownerId: string;
+                };
               };
         }
       | (

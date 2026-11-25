@@ -13,7 +13,6 @@ import {
   cleanupContainerEnvironments,
   SESSION_RETENTION_DAYS,
 } from './cleanup-service';
-import { cleanupMergedWorktrees } from './cleanup/merged-sweep';
 import { removeEnvironment } from './cleanup/remove-environment';
 import {
   RETAINING_PLATFORM,
@@ -62,6 +61,7 @@ import {
   scheduledSweepFinds,
   selectedEnvironment,
   resetCleanupMocks,
+  sweepMerged,
 } from './cleanup/test-harness';
 
 beforeEach(resetCleanupMocks);
@@ -1232,7 +1232,7 @@ describe('cleanup after a chat plugin is removed', () => {
     mockListByCodebase.mockResolvedValue([env]);
     const reason = UNKNOWN_PLATFORM_REASON;
     const stale = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
-    const merged = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const merged = await sweepMerged('codebase-1', '/workspace/repo');
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
     expect(stale).toEqual({
       errors: [],
@@ -1275,7 +1275,7 @@ describe('worktree cleanup provider ownership', () => {
     const env = makeEnvironment({ provider: 'container', branch_name: '' });
     mockListByCodebase.mockResolvedValue([env]);
     mockListByCodebaseWithAge.mockResolvedValue([{ ...env, days_since_activity: 30 }]);
-    expect((await cleanupMergedWorktrees('cb', '/repo')).removed).toEqual([]);
+    expect((await sweepMerged('cb', '/repo')).removed).toEqual([]);
     expect((await cleanupStaleWorktrees('cb', '/repo')).removed).toEqual([]);
     expect((await getWorktreeStatusBreakdown('cb', '/repo')).total).toBe(0);
     expect(mockGetPrState).not.toHaveBeenCalled();
@@ -1312,7 +1312,7 @@ describe('failed-run lock release', () => {
     mockGetPrState.mockResolvedValue(prAt('MERGED'));
     releasedByTheSweep();
 
-    const result = await cleanupMergedWorktrees('codebase-123', '/workspace/repo');
+    const result = await sweepMerged('codebase-123', '/workspace/repo');
 
     expect(result.removed).toEqual(['settled']);
     expect(result.releasedFailedRuns).toEqual([
@@ -1526,7 +1526,7 @@ describe('failed-run lock release', () => {
     mockListByCodebase.mockResolvedValue([makeEnvironment({ branch_name: 'paused' })]);
     mockGetPrState.mockResolvedValue(prAt('MERGED'));
 
-    const merged = await cleanupMergedWorktrees('codebase-123', '/workspace/repo');
+    const merged = await sweepMerged('codebase-123', '/workspace/repo');
     mockGetPrState.mockResolvedValue(NO_PR);
     const report = await runScheduledCleanup();
 

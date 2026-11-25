@@ -2,12 +2,34 @@ import { describe, it, expect } from 'bun:test';
 import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
+import { cliForgeJsonSchemas } from '@archon/forge';
 import { forgeRequestSchema } from '@archon/forge/operations';
+import { convertOutputSchema } from '@archon/workflows/output-types/schema-to-ts';
 import { formatSpecLine, helpEntries, renderHelp, renderHelpFor } from './help';
+import { forgeRequestHelp } from './help-table/forge-request';
 import { cliArgOptions } from './args';
 import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
+
+function indentType(type: string): string {
+  return type.replace(/^/gm, '  ');
+}
+
+/** The `--data` template of the request example in a forge operation's scoped help. */
+function exampleTemplate(help: string, subcommand: string): string {
+  const prefix = `  archon forge ${subcommand} --data '`;
+  const line = help.split('\n').find(l => l.startsWith(prefix));
+  expect(line, `no request example in forge ${subcommand} --help`).toBeDefined();
+  return (line ?? '').slice(prefix.length, -1);
+}
+
+/** The template as a tree, each bare `<...>` placeholder read as the string it shows. */
+function exampleData(help: string, subcommand: string): unknown {
+  return JSON.parse(
+    exampleTemplate(help, subcommand).replace(/<[^<>"]+>/g, token => JSON.stringify(token))
+  );
+}
 
 /**
  * The `Options:` block that `archon <argv...> --help` prints.
@@ -114,13 +136,151 @@ describe('CLI help output', () => {
     expect(scoped).not.toContain('--follow');
   });
 
-  for (const request of forgeRequestSchema.options) {
-    const op = request.shape.op.value;
-    it(`renders scoped help for the admitted forge operation ${op}`, () => {
-      expect(renderHelp('forge', op)).toContain(`forge ${op}`);
-      expect(scopedHelpOptions(['forge', op])).toContain('--data <json>');
+  type Schema = Record<string, unknown>;
+
+  /** The alternative whose `const` properties the example names, such as a subject's `kind`. */
+  function chosenAlternative(alternatives: Schema[], value: unknown): Schema {
+    const chosen = alternatives.find(alternative => {
+      const properties = alternative.properties as Record<string, Schema> | undefined;
+      if (typeof value !== 'object' || value === null) return properties === undefined;
+      return Object.entries(properties ?? {}).every(
+        ([key, child]) => !('const' in child) || (value as Schema)[key] === child.const
+      );
+    });
+    expect(chosen, `no alternative matches ${JSON.stringify(value)}`).toBeDefined();
+    return chosen ?? {};
+  }
+
+  /** Every value of an example but a `const` is a placeholder; none can be copied as real. */
+  function expectPlaceholders(schema: Schema, value: unknown): void {
+    if ('const' in schema) return void expect(value).toBe(schema.const);
+    const alternatives = (schema.anyOf ?? schema.oneOf) as Schema[] | undefined;
+    if (alternatives) return expectPlaceholders(chosenAlternative(alternatives, value), value);
+    if (schema.type === 'object') {
+      const properties = schema.properties as Record<string, Schema>;
+      for (const [key, child] of Object.entries(value as Schema))
+        expectPlaceholders(properties[key] ?? {}, child);
+      return;
+    }
+    if (schema.type === 'array') {
+      for (const item of value as unknown[]) expectPlaceholders(schema.items as Schema, item);
+      return;
+    }
+    expect(String(value), 'example value is not a placeholder').toMatch(/^<[^<>]+>$/);
+  }
+
+  // Every operation's request type and template come from its schema, and every value the
+  // caller supplies is a bare placeholder, so an unfilled template is not JSON at all.
+  for (const { op, request } of cliForgeJsonSchemas().operations) {
+    for (const subcommand of op === 'checks.state' ? [op, 'checks'] : [op]) {
+      it(`renders the request and a template example in forge ${subcommand} --help`, () => {
+        const scoped = renderHelpFor(['forge', subcommand]);
+        expect(scopedHelpOptions(['forge', subcommand])).toContain('--data <json>');
+        expect(scoped).toContain(
+          `Request (--data):\n${indentType(convertOutputSchema(request).type)}`
+        );
+        expectPlaceholders(request as Schema, exampleData(scoped, subcommand));
+        expect(() => JSON.parse(exampleTemplate(scoped, subcommand))).toThrow();
+      });
+    }
+  }
+
+  // Filling a template with deliberate values, keyed by field path, gives a request the
+  // host accepts.
+  const repo = { 'repo.host': '"forge.example"', 'repo.path': '"a/b"' };
+  const ref = { 'ref.repo.host': '"forge.example"', 'ref.repo.path': '"a/b"', 'ref.number': '4' };
+  const filled: Record<string, Record<string, string>> = {
+    'pr.merge': { ...ref, method: '"squash"', 'conditions.head': '"abc123"' },
+    'pr.close': ref,
+    'workitem.create': {
+      ...repo,
+      title: '"Title"',
+      marker: '"<!-- item-31 -->"',
+      body: '"<!-- item-31 -->\\nBody"',
+    },
+    'workitem.edit-body': { ...ref, body: '"New body"' },
+    'workitem.label.add': {
+      'subject.ref.repo.host': '"forge.example"',
+      'subject.ref.repo.path': '"a/b"',
+      'subject.ref.number': '4',
+      name: '"queued"',
+    },
+  };
+  for (const [op, values] of Object.entries(filled)) {
+    it(`fills the forge ${op} template into a request the host accepts`, () => {
+      const template = exampleTemplate(renderHelpFor(['forge', op]), op);
+      const tree = exampleData(renderHelpFor(['forge', op]), op);
+      // Walk the tree for each placeholder's path, then write that path's value in its place.
+      const paths: string[] = [];
+      const walk = (value: unknown, path: string): void => {
+        if (typeof value === 'object' && value !== null)
+          for (const [key, child] of Object.entries(value))
+            walk(child, path ? `${path}.${key}` : key);
+        else if (typeof value === 'string' && value.startsWith('<')) paths.push(path);
+      };
+      walk(tree, '');
+      let index = 0;
+      const request = template.replace(/<[^<>"]+>/g, () => {
+        const value = values[paths[index++] ?? ''];
+        expect(value, `no deliberate value for ${paths[index - 1]}`).toBeDefined();
+        return value ?? '';
+      });
+      const parsed = { ...JSON.parse(request), op, operationId: 'help' };
+      expect(forgeRequestSchema.safeParse(parsed).success).toBe(true);
     });
   }
+
+  it('shows the pull request and the head pr.merge is pinned to, and only what it needs', () => {
+    const scoped = renderHelp('forge', 'pr.merge');
+    expect(scoped).toMatch(/readonly ref: \{\n\s+readonly repo: \{/);
+    expect(scoped).toContain('readonly number: number;');
+    expect(scoped).toContain('readonly head: string;');
+    expect(exampleData(renderHelpFor(['forge', 'pr.merge']), 'pr.merge')).toEqual({
+      ref: { repo: { host: '<host>', path: '<path>' }, number: '<number: integer>' },
+      method: '<method: merge|squash>',
+      conditions: { head: '<head>' },
+    });
+  });
+
+  it('states a field added to a request schema in both the type and the example', () => {
+    const base = {
+      type: 'object',
+      properties: { ref: { type: 'integer' }, note: { type: 'string' } },
+      required: ['ref'],
+      additionalProperties: false,
+    };
+    const added = {
+      ...base,
+      properties: { ...base.properties, pinned: { type: 'string' } },
+      required: ['ref', 'pinned'],
+    };
+    expect(forgeRequestHelp('op', base)).toEqual({
+      type: '{\n  readonly ref: number;\n  readonly note?: string;\n}',
+      notes: [],
+      example: `archon forge op --data '{"ref":<ref: integer>}'`,
+    });
+    const help = forgeRequestHelp('op', {
+      ...added,
+      properties: { ...added.properties, pinned: { type: 'string', description: 'Pinned value' } },
+    });
+    expect(help.type).toContain('readonly pinned: string;');
+    expect(help.notes).toEqual(['pinned: Pinned value']);
+    expect(help.example).toBe(`archon forge op --data '{"ref":<ref: integer>,"pinned":<pinned>}'`);
+  });
+
+  it('says in forge workitem.create --help that the marker is chosen per item', () => {
+    expect(renderHelpFor(['forge', 'workitem.create'])).toContain(
+      'marker: Chosen for this one item and used by no other'
+    );
+  });
+
+  it('points forge --help to each operation without printing every request', () => {
+    const forge = renderHelp('forge');
+    expect(forge).toContain('archon forge <operation> --help');
+    expect(forge).not.toContain('Request (--data):');
+    for (const forgeName of ['github', 'gitlab', 'gitea', 'forgejo', 'bitbucket'])
+      expect(forge.toLowerCase()).not.toContain(forgeName);
+  });
 
   const EXPECTED_GLOBAL_HELP = `
 Archon CLI - Run AI workflows from the command line
@@ -333,10 +493,10 @@ Options:
 Examples:
   archon chat "What does the orchestrator do?"
   archon workflow list
-  archon workflow run investigate-issue "Fix the login bug"
+  archon workflow run archon-investigate "Why does login fail?"
   archon workflow run archon-plan --cwd /path/to/repo "Add dark mode"
   archon workflow run archon-implement --branch feature-auth "Implement auth"
-  archon workflow run quick-fix --no-worktree "Fix typo"
+  archon workflow run archon-implement --no-worktree "Fix the typo in the README"
   archon workflow run archon-investigate --folder "Explain how the repos under this root fit together"
   archon workflow run archon-investigate --detach "Investigate the flaky test"
   archon workflow run archon-investigate --dry-run --stubs ./stubs.yaml --json
@@ -355,6 +515,7 @@ Examples:
   archon workflow cancel --item issue-42
   archon workflow runs --open
   archon workflow run archon-review --adopt <run-id> "Review the changes"
+  archon forge <operation> --help    # that operation's request fields and an example
   archon skill add
   archon skill add /path/to/project
   archon skill add --pack owner/repo
@@ -446,6 +607,5 @@ it('every supported attachment verb has scoped help, with aliases scoped only', 
 it('documents host metadata separately from plugin operations', () => {
   const scoped = renderHelp('forge', 'metadata');
   expect(scoped).toContain('without credentials or forge operations');
-  expect(scoped).toContain('"host":"github.com"');
   expect(renderHelp()).not.toContain('forge metadata');
 });

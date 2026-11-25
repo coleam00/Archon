@@ -173,7 +173,7 @@ async function validateCommandReference(
     return false;
   }
 
-  const resolved = await resolveCommand(commandName, validation.cwd, validation.config);
+  const resolved = await resolveCommand(commandName, validation.sourceRoot, validation.config);
   if (!resolved) {
     const similar = findSimilar(commandName, [...validation.availableCommands]);
     const issue: ValidationIssue = {

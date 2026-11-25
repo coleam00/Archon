@@ -173,7 +173,10 @@ async function readsOfHeldItem() {
 }
 
 /** A hand start of `build` on issue-1 from a test platform that calls `onMessage`. */
-function handStart(onMessage: (message: string) => Promise<void>) {
+function handStart(
+  onMessage: (message: string) => Promise<void>,
+  preCreatedRun?: Awaited<ReturnType<typeof getWorkflowRun>>
+) {
   registerBuiltinProviders();
   const platform: IWorkflowPlatform = {
     sendMessage: async (_conversation, message) => onMessage(message),
@@ -206,7 +209,12 @@ function handStart(onMessage: (message: string) => Promise<void>) {
       }),
       '',
       undefined,
-      { codebaseId: CODEBASE_ID, item: 'issue-1', noWait }
+      {
+        codebaseId: CODEBASE_ID,
+        item: 'issue-1',
+        noWait,
+        ...(preCreatedRun ? { preCreatedRun } : {}),
+      }
     );
 }
 
@@ -392,6 +400,42 @@ describe('one run of a workflow per item', () => {
     const item = await store.getItem(String((await getWorkflowRun(older))?.item_id));
     const read = await readItem(source(), String(item?.projectKey), 'issue-1');
     expect(read?.runs.find(run => run.id === older)?.heldBehind?.runId).toBe(newer);
+  });
+
+  test('an executor whose claim is refused because its admission is gone fails its run with the reason', async () => {
+    const { runId, disposition } = await bindingStart({
+      workflow: 'build',
+      item: 'issue-1',
+      resource: 'builds',
+      overlap: 'queue',
+    });
+    expect(disposition).toMatchObject({ status: 'admitted' });
+    // The store refuses the claim and writes nothing: the run stays pending.
+    await getDatabase().query(
+      'DELETE FROM remote_agent_resource_slot_holders WHERE holder_id = $1',
+      [runId]
+    );
+    await expect(claimPendingWorkflowRun(runId)).rejects.toMatchObject({
+      name: 'PendingClaimRefusedError',
+      reason: 'admission_revoked',
+    });
+    expect((await getWorkflowRun(runId))?.status).toBe('pending');
+    // The executor that tried is the one that knows why, so it ends the run with the reason.
+    const messages: string[] = [];
+    const result = await handStart(
+      async message => {
+        messages.push(message);
+      },
+      await getWorkflowRun(runId)
+    )(false);
+    expect(result).toMatchObject({
+      success: false,
+      workflowRunId: runId,
+      error: expect.stringContaining('resource slot it was admitted to is no longer held'),
+    });
+    const failed = await getWorkflowRun(runId);
+    expect(failed?.status).toBe('failed');
+    expect(messages.join('\n')).toContain('no longer held for it');
   });
 
   test('a failed run on an item resumes only while no other run of its workflow holds the item', async () => {

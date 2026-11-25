@@ -4,6 +4,7 @@
  * run whose end or settled asks caused the start (`recordRefusedStartStop`), in the same
  * transaction, so that run, the item read and attention show the refused start.
  */
+import { storedBindingRefusal } from '@archon/workflows/schemas/binding-refusal';
 import type { IResourceStartStore } from '@archon/workflows/resource-start-store';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { getDatabase, getDialect } from './connection';
@@ -57,7 +58,7 @@ export async function failStartBindingPreparation(input: FailedPreparation): Pro
 
 async function markFailed(query: Query, input: FailedPreparation): Promise<boolean> {
   const result = await query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = $4, preparation_error = $5, forge_refusal = $6, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = $4, preparation_error = $5, forge_refusal = $6, refusal = $7, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
     [
       input.receiptId,
@@ -66,6 +67,7 @@ async function markFailed(query: Query, input: FailedPreparation): Promise<boole
       input.retryable ? 'failed' : 'rejected',
       input.error,
       input.forgeRefusal ? JSON.stringify(input.forgeRefusal) : null,
+      !input.retryable && input.refusal !== undefined ? storedBindingRefusal(input.refusal) : null,
     ]
   );
   return result.rowCount === 1;

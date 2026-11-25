@@ -1,3 +1,4 @@
+import { storedBindingRefusal } from '@archon/workflows/schemas/binding-refusal';
 import { WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import { insertWorkflowEvent } from './workflow-events';
 import { z } from 'zod';
@@ -59,6 +60,7 @@ import { drainAdmits, runLimitBlocker } from './run-room';
 import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
 import { ensureItem } from './items';
+import { currentProcessOwner } from '@archon/paths/process-owner';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { toHydratedTimestamp } from './timestamps';
 import { InstallHeldError } from '@archon/workflows/store';
@@ -659,10 +661,11 @@ export async function claimStartBindingPreparation(input: {
   bindingId: string;
   ownerId: string;
 }): Promise<boolean> {
+  // The claiming process is recorded beside the owner id, so a reader can prove it gone.
   const result = await getDatabase().query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'preparing', preparation_owner = $3, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'preparing', preparation_owner = $3, preparation_process = $4, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status IN ('pending','failed')`,
-    [input.receiptId, input.bindingId, input.ownerId]
+    [input.receiptId, input.bindingId, input.ownerId, JSON.stringify(currentProcessOwner)]
   );
   return result.rowCount === 1;
 }
@@ -702,9 +705,15 @@ export async function completeStartBindingPreparation(
     const counted = await countStartLimits(query, item, limit, grants, { ...input, persisted });
     if ('refused' in counted) {
       await query(
-        `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'rejected', preparation_error = $4, forge_refusal = NULL, updated_at = ${getDialect().now()}
+        `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'rejected', preparation_error = $4, forge_refusal = NULL, refusal = $5, updated_at = ${getDialect().now()}
           WHERE receipt_id = $1 AND binding_id = $2 AND preparation_owner = $3`,
-        [input.receiptId, input.bindingId, input.ownerId, counted.refused]
+        [
+          input.receiptId,
+          input.bindingId,
+          input.ownerId,
+          counted.refused,
+          storedBindingRefusal('start_limit', counted.limit),
+        ]
       );
       return { status: 'refused', reason: counted.refused };
     }
@@ -749,7 +758,7 @@ export async function resetStartBindingPreparation(
   query: Query = (sql, params) => getDatabase().query(sql, params)
 ): Promise<boolean> {
   const result = await query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'pending', preparation_owner = NULL, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'pending', preparation_owner = NULL, preparation_process = NULL, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
     [input.receiptId, input.bindingId, input.ownerId]
   );
