@@ -23,7 +23,7 @@ if (command === 'metadata') {
         forge: mode === 'github-origin' ? 'github' : 'test',
         hosts: ['forge.example'],
         capabilities:
-          mode === 'unsupported'
+          mode === 'unsupported' || mode === 'remedies'
             ? []
             : [
                 'resolve',
@@ -32,6 +32,9 @@ if (command === 'metadata') {
                 ...(mode === 'access' ? ['pr.view'] : []),
               ],
         token_env: mode === 'token' || mode === 'access' ? ['TEST_FORGE_TOKEN'] : [],
+        ...(mode === 'remedies'
+          ? { remedies: { unsupported_op: 'Run the fixture upgrade.' } }
+          : {}),
       })
     );
   process.exit(0);
