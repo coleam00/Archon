@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths/archon-paths';
 import {
   type AttentionQueueSource,
+  attentionQueueItemForRun,
   fanOutPosition,
   listAttentionQueue,
   parseAttentionLabelPairs,
@@ -222,5 +223,73 @@ describe('owner observations', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe('a continuation a host gave up on', () => {
+  const wait = {
+    owner: 'node',
+    kind: 'time',
+    nodeId: 'delay',
+    waitingSince: '2026-11-25T08:00:00.000Z',
+    resumeAt: '2026-11-25T09:00:00.000Z',
+  };
+  const givenUp = (resumeAt: string) => ({
+    at: '2026-11-25T09:03:00.000Z',
+    attempts: 3,
+    path: '/src/manifest.json',
+    cursor: { kind: 'wait', nodeId: 'delay', resumeAt },
+  });
+  const paused = (metadata: Record<string, unknown>): WorkflowRun => ({
+    origin: null,
+    id: 'parked',
+    workflow_name: 'deliver',
+    conversation_id: null,
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'paused',
+    outcome: null,
+    completed_outcome: null,
+    user_message: '',
+    metadata,
+    active_phase_started_at: null,
+    started_at: new Date('2026-11-25T07:00:00.000Z'),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    checkout_baseline: null,
+    item_id: null,
+  });
+  const source = {
+    store: {
+      listAttentionQueueRows: async () => [],
+      getWorkflowRun: async () => null,
+      getWorkflowRunForAttention: async () => null,
+      getCodebase: async () => null,
+      getItem: async () => null,
+    },
+    branchOf: async () => null,
+  };
+
+  test('is listed while the run is at that continuation, with what to do', async () => {
+    const item = await attentionQueueItemForRun(
+      source,
+      paused({ wait, continuation_given_up: givenUp(wait.resumeAt) })
+    );
+    expect(item).toMatchObject({ kind: 'unreadable', reason: 'continuation_given_up' });
+    expect(item && 'detail' in item ? item.detail : '').toContain('archon workflow resume parked');
+  });
+
+  test('is inert once the run waits at another continuation', async () => {
+    expect(
+      await attentionQueueItemForRun(
+        source,
+        paused({ wait, continuation_given_up: givenUp('2026-11-25T08:30:00.000Z') })
+      )
+    ).toBeNull();
   });
 });

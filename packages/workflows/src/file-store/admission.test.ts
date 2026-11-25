@@ -502,7 +502,7 @@ test('a persisted malformed guard stays inspectable without stalling independent
     launch: { run: { metadata: { admission_checkout_guard: 'false' } } },
   });
   expect(await store.getWorkflowRun(id)).toBeNull();
-  expect(await store.withdrawQueuedResourceStart(id)).toMatchObject({ run: { id } });
+  expect(await store.withdrawQueuedResourceStart(id)).toMatchObject({ launch: { run: { id } } });
 });
 
 async function finishRun(root: string, id: string): Promise<void> {

@@ -172,6 +172,7 @@ export const mockExecFileAsync = mock<typeof Git.execFileAsync>();
 export const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChangesStrict>();
 export const mockWorktreeExists = mock<typeof Git.worktreeExists>();
 export const mockGetDefaultBranch = mock<typeof Git.getDefaultBranch>();
+export const mockGetDefaultRemote = mock<typeof Git.getDefaultRemote>();
 export const mockIsBranchMerged = mock<typeof Git.isBranchMerged>();
 export const mockIsPatchEquivalent = mock<typeof Git.isPatchEquivalent>();
 export const mockLocalBranchExists = mock<typeof Git.localBranchExists>();
@@ -190,7 +191,7 @@ mock.module('@archon/git', () => ({
   hasUncommittedChangesStrict: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
   getDefaultBranch: mockGetDefaultBranch,
-  getDefaultRemote: async () => 'origin',
+  getDefaultRemote: mockGetDefaultRemote,
   isBranchMerged: mockIsBranchMerged,
   isPatchEquivalent: mockIsPatchEquivalent,
   localBranchExists: mockLocalBranchExists,
@@ -371,6 +372,7 @@ export function resetCleanupMocks(): void {
   mockHasUncommittedChanges.mockReset().mockResolvedValue(false);
   mockWorktreeExists.mockReset().mockResolvedValue(false);
   mockGetDefaultBranch.mockReset().mockResolvedValue(toBranchName('main'));
+  mockGetDefaultRemote.mockReset().mockResolvedValue('origin');
   mockIsBranchMerged.mockReset().mockResolvedValue(false);
   mockIsPatchEquivalent.mockReset().mockImplementation(branchUnmergedHeadAtTip);
   mockLocalBranchExists.mockReset().mockResolvedValue(true);

@@ -87,6 +87,7 @@ describe('workflow run resume', () => {
         tool_call_attention: null,
         error: null,
         stop_reason: null,
+        continuation_given_up: null,
         continuation_retry_at: null,
         capacity_wait: null,
         source_release: null,

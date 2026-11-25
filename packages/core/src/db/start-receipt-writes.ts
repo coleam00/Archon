@@ -115,8 +115,8 @@ async function insertReceiptBindings(
   for (const evaluated of recorded.evaluatedBindings ?? []) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
-       (receipt_id,binding_id,binding_revision,host_id,intent,preparation_status,preparation_error,refusal)
-       VALUES ($1,$2,$3,NULL,NULL,$4,$5,$6)`,
+       (receipt_id,binding_id,binding_revision,host_id,intent,preparation_status,preparation_error,refusal,item_key)
+       VALUES ($1,$2,$3,NULL,NULL,$4,$5,$6,$7)`,
       [
         recorded.receipt.id,
         evaluated.bindingId,
@@ -127,6 +127,7 @@ async function insertReceiptBindings(
         evaluated.status !== 'rejected'
           ? null
           : storedBindingRefusal(evaluated.refused?.reason ?? 'rejected_by_source'),
+        evaluated.itemKey ?? null,
       ]
     );
   }

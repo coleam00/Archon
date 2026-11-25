@@ -18,6 +18,7 @@ test('the attention banner shows a run holding its item after its owner is gone,
             itemKey: 'issue-1',
             observedStatus: 'running',
             start: null,
+            dueWithoutWaker: false,
           },
         ]}
         showProject={false}
@@ -46,6 +47,7 @@ test('a pending start no process runs names its start command and offers abandon
             itemKey: null,
             observedStatus: 'pending',
             start: { requestId: 'start-1', hostId: 'h1' },
+            dueWithoutWaker: false,
           },
         ]}
         showProject={false}

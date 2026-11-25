@@ -653,7 +653,9 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
       expect(await store.listQueuedResourceStartsForHost('other')).toMatchObject([
         { id: queued.launch.run.id },
       ]);
-      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual(queued.launch);
+      expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toEqual({
+        launch: queued.launch,
+      });
       expect(await store.withdrawQueuedResourceStart(queued.launch.run.id)).toBeNull();
       expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
         { id: last.launch.run.id },
