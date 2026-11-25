@@ -164,7 +164,7 @@ describe('rounds and returns from run records', () => {
     // v1's reading: after a replan or past the allowance, N+1 would be a wrong number.
     expect(card.round?.text).toBe('4 of 4 check rounds, next one running');
     expect(card.round?.dots.at(-1)?.verdict).toBe('running');
-    expect(card.running).toEqual({ stage: 'Check', step: 'review' });
+    expect(card.running).toMatchObject({ stage: 'Check', step: 'review' });
   });
 
   test('a first check round running, before any is recorded, reads "first check round running"', () => {

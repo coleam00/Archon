@@ -11,7 +11,7 @@ import type { PackGraph } from '../skills/items';
 import { useEntity, type EntityView } from '../store/cache';
 import { K } from '../store/keys';
 import { getPackViewRead, type FactoryView, type PackView } from './api';
-import { DerivedFlow, flowCounts } from './DerivedFlow';
+import { DerivedFlow, flowCounts, stageCounts } from './DerivedFlow';
 import { FactoryCardsProvider } from './FactoryCards';
 import { GraphSkeleton } from './GraphSkeleton';
 import { curatedView } from './lib/curated-view';
@@ -70,6 +70,8 @@ export function PackMap({ projectId, pack, board, itemsError }: PackMapProps): R
   const derived = (
     <DerivedFlow
       flow={flowCounts(columnsOf(graph.data), board?.moving ?? [], graph.data?.stages)}
+      graph={graph.data}
+      counts={stageCounts(board?.moving ?? [], graph.data?.stages)}
       live={{ board: boardPath, numbers: board?.numbers, failed: itemsError !== undefined }}
     />
   );

@@ -35,7 +35,12 @@ export interface CardProgress {
   /** The item's key as a person reads it: `#123`, `#199 · board furniture`. */
   keyText: string;
   /** The newest running run's stage and step, in the view's words. */
-  running: { stage: string; step: string | null } | null;
+  running: {
+    stage: string;
+    step: string | null;
+    stepId?: string | null;
+    workflow?: string | null;
+  } | null;
   round: { dots: { iteration: number; verdict: RoundVerdict }[]; text: string } | null;
   returned: { count: number; text: string; reason: string | null } | null;
   /** The pull request, with the run that named it (null for the merge the item recorded). */
@@ -331,6 +336,8 @@ function runningField(view: FactoryView, runs: readonly ReadRun[]): CardProgress
   return {
     stage: words?.label ?? running.workflow ?? running.run.workflow,
     step: step === null ? null : (words?.steps?.[step] ?? cleanedId(step)),
+    stepId: step,
+    workflow: running.workflow,
   };
 }
 
