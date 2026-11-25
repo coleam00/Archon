@@ -36,13 +36,23 @@ function commit(dir: string): string {
   return git(dir, 'rev-parse', 'HEAD');
 }
 
-type Run = Pick<WorkflowRun, 'id' | 'item_id' | 'checkout_baseline' | 'metadata'>;
+type Run = Pick<
+  WorkflowRun,
+  'id' | 'status' | 'item_id' | 'checkout_baseline' | 'metadata' | 'adopted_from_run_id'
+>;
 
-function itemRun(id: string, cutFromCommit?: string, metadata: Run['metadata'] = {}): Run {
+function itemRun(
+  id: string,
+  cutFromCommit?: string,
+  metadata: Run['metadata'] = {},
+  adoptedFrom: string | null = null
+): Run {
   return {
     id,
+    status: 'completed',
     item_id: 'item-1',
     metadata,
+    adopted_from_run_id: adoptedFrom,
     checkout_baseline: {
       kind: 'git',
       sampledAt: '2026-11-25T10:00:00.000Z',
@@ -116,6 +126,27 @@ describe('measureChangeSize', () => {
       base: cutFrom,
       added: 40,
     });
+  });
+
+  test('an adopting run keeps the base of the run it adopted; a supersession does not', async () => {
+    const { dir, cutFrom } = repo();
+    writeFileSync(join(dir, 'a.txt'), lines(40));
+    const head = commit(dir);
+    const build = itemRun('build-1', cutFrom);
+    const adopted = itemRun('review-1', undefined, { continuation: { mode: 'adopt' } }, build.id);
+    const superseding = itemRun(
+      'build-2',
+      undefined,
+      { continuation: { mode: 'supersede' } },
+      build.id
+    );
+    const runs = store([build, adopted, superseding]);
+
+    expect(await measureChangeSize(runs, adopted, dir, head)).toMatchObject({
+      base: cutFrom,
+      added: 40,
+    });
+    expect(await measureChangeSize(runs, superseding, dir, head)).toBeUndefined();
   });
 
   test('records no size, not zero, without an item, a clean end commit or a cut-from', async () => {

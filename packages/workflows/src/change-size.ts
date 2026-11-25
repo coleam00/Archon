@@ -6,11 +6,8 @@
 import { createLogger } from '@archon/paths';
 import { runGit } from './checkout-observation';
 import { readCheckoutHandoff } from './schemas/resource-start';
-import {
-  CHANGE_SIZE_METADATA_KEY,
-  type ChangeSize,
-  changeSizeSchema,
-} from './schemas/terminal-record';
+import { type ChangeSize, recordedChangeSize } from './schemas/change-size';
+import { continuationInheritsEstate, readContinuationMode } from './schemas/run-metadata';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 
@@ -21,7 +18,7 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 type RunReader = Pick<IWorkflowStore, 'getWorkflowRun'>;
-type SizedRun = Pick<WorkflowRun, 'id' | 'checkout_baseline' | 'metadata'>;
+type SizedRun = Pick<WorkflowRun, 'id' | 'checkout_baseline' | 'metadata' | 'adopted_from_run_id'>;
 
 /**
  * The change at `endCommit` against the commit the run's work was cut from. Only a run of
@@ -63,21 +60,29 @@ function unavailable(workflowRunId: string, step: string, code?: number): undefi
 }
 
 /**
- * The commit the run's work was cut from. A run started on another run's checkout
- * (`checkout_handoff`) measures from the base of the run whose estate holds that branch,
- * so a read-only check on its own copy, cut at the build's commit, and a later build on the
- * build's branch both measure from where the first build's branch was cut. Otherwise it is
- * the cut-from this run recorded when it created its checkout; a run that reused or adopted
- * a checkout outside a hand-off has none.
+ * The commit the run's work was cut from. A run on a checkout another run left takes that
+ * run's base: one started on a hand-off (`checkout_handoff`, which names the run whose
+ * estate holds the branch, so a read-only check on its own copy cut at the build's commit
+ * still measures from the build's base), and one that adopted a run's estate (`--adopt`, or a
+ * restart of a hand-off), through `adopted_from_run_id`. Otherwise it is the cut-from the run
+ * recorded when it created its checkout. A branch reused with `--branch` has neither.
  */
 async function workBase(store: RunReader, run: SizedRun): Promise<string | undefined> {
-  const handoff = readCheckoutHandoff(run);
-  if (handoff === undefined)
+  const sourceId = readCheckoutHandoff(run)?.runId ?? adoptedEstate(run);
+  if (sourceId === undefined)
     return run.checkout_baseline?.kind === 'git' ? run.checkout_baseline.cutFromCommit : undefined;
-  const source = await store.getWorkflowRun(handoff.runId);
+  const source = await store.getWorkflowRun(sourceId);
   if (source === null) return undefined;
-  const recorded = changeSizeSchema.safeParse(source.metadata[CHANGE_SIZE_METADATA_KEY]);
-  return recorded.success ? recorded.data.base : workBase(store, source);
+  return recordedChangeSize(source)?.base ?? workBase(store, source);
+}
+
+/** The run whose estate this run adopted; a supersession takes no estate. Legacy unstamped runs adopt. */
+function adoptedEstate(run: SizedRun): string | undefined {
+  if (run.adopted_from_run_id === null) return undefined;
+  const mode = readContinuationMode(run.metadata);
+  return mode === undefined || continuationInheritsEstate(mode)
+    ? run.adopted_from_run_id
+    : undefined;
 }
 
 /**

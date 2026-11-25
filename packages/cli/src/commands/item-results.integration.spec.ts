@@ -691,14 +691,17 @@ test('each run that ended at a commit shows the size of its change from where th
   git('add', '-A');
   git('commit', '-q', '-m', 'base');
   const cutFrom = git('rev-parse', 'HEAD');
-  const inWorktree = (workflow: string, ...inputs: string[]) =>
-    fixture.attempt(run(workflow, ...inputs).filter(arg => arg !== '--no-worktree'));
+  const inWorktree = (workflow: string, inputs: string[], flags: string[] = []) =>
+    fixture.attempt([...run(workflow, ...inputs).filter(arg => arg !== '--no-worktree'), ...flags]);
 
   // Each start cuts its own worktree from main.
-  expect((await inWorktree('build', 'file=a.txt', 'lines=40', 'drop=base.txt')).exitCode).toBe(0);
+  expect((await inWorktree('build', ['file=a.txt', 'lines=40', 'drop=base.txt'])).exitCode).toBe(0);
   // A build that commits and then fails still ended at its commit.
-  expect((await inWorktree('build', 'file=b.txt', 'lines=7', 'fail=yes')).exitCode).not.toBe(0);
-  expect((await inWorktree('sizes')).exitCode).toBe(0);
+  expect((await inWorktree('build', ['file=b.txt', 'lines=7', 'fail=yes'])).exitCode).not.toBe(0);
+  expect((await inWorktree('sizes', [])).exitCode).toBe(0);
+  // A run that adopts the first build's estate changes nothing and keeps its size.
+  const [first] = await itemRuns(fixture);
+  expect((await inWorktree('review', [], ['--adopt', String(first?.id)])).exitCode).toBe(0);
   // A run in place has no cut-from to measure from, so it shows no size.
   await fixture.cli(run('review'));
 
@@ -709,6 +712,7 @@ test('each run that ended at a commit shows the size of its change from where th
     ['build', 'completed', { ...built, commit: expect.any(String) }],
     ['build', 'failed', { ...failed, commit: expect.any(String) }],
     ['sizes', 'completed', { base: cutFrom, commit: cutFrom, files: 0, added: 0, removed: 0 }],
+    ['review', 'completed', runs[0]?.changeSize],
     ['review', 'completed', null],
   ]);
   // A script's item() read carries the sizes the earlier runs recorded.

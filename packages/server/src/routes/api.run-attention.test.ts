@@ -368,40 +368,10 @@ describe('reading an item over HTTP', () => {
       status: 'completed',
       item_id: item.id,
       completed_at: new Date('2026-10-14T00:00:00.000Z'),
+      metadata: { change_size: changeSize },
     };
     mockGetItemRuns.mockImplementation(async () => ({ item, runs: [built], descendantIds: [] }));
     mockListAttentionQueueRows.mockImplementationOnce(async () => []);
-    mockListEventsForRuns.mockImplementation(
-      async runIds =>
-        new Map(
-          runIds.map(id => [
-            id,
-            [
-              {
-                id: 'event-done',
-                workflow_run_id: id,
-                event_type: 'workflow_completed',
-                step_index: null,
-                step_name: null,
-                data: {
-                  terminal_record: {
-                    run_id: id,
-                    status: 'completed',
-                    outcome: 'succeeded',
-                    error: null,
-                    first_failed_node: null,
-                    nodes: [],
-                    returns: { availability: 'unavailable', node_id: null, reason: 'not_declared' },
-                    artifacts: { root: null, files: [], limitations: [] },
-                    change_size: changeSize,
-                  },
-                },
-                created_at: '2026-10-14T00:00:00.000Z',
-              },
-            ],
-          ])
-        )
-    );
     try {
       const response = await makeApp().app.request(
         `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
@@ -411,7 +381,6 @@ describe('reading an item over HTTP', () => {
       expect(read.runs.map(run => run.changeSize)).toEqual([changeSize]);
     } finally {
       mockGetItemRuns.mockImplementation(async () => null);
-      mockListEventsForRuns.mockImplementation(async runIds => new Map(runIds.map(id => [id, []])));
     }
   });
 

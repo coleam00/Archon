@@ -1857,8 +1857,9 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
 get a value from it, `resultCommit`: the commit its result holds at, and `changeSize`: how
 large the change was when the run completed or failed (`files`, `added`, `removed`) from
 `base`, the commit the item's work was cut from, to `commit`, the clean commit it ended on.
-A run started on another run's checkout keeps that run's base. `changeSize` is `null` when
-the checkout ended on no clean commit or no cut-from is known for its work, never zeros.
+A run on a checkout another run left (a hand-off, or `--adopt`) keeps that run's base.
+`changeSize` is `null` when the checkout ended on no clean commit or no cut-from is known for
+its work, such as a branch reused with `--branch`, never zeros.
 
 ### The result that holds at this run's commit
 

@@ -80,7 +80,7 @@ import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 import { readCompletedRunResult, resultCommitOf } from './run-result';
 import { getTerminalRecord } from './terminal-record';
-import { changeSizeSchema } from './schemas/terminal-record';
+import { changeSizeSchema, recordedChangeSize } from './schemas/change-size';
 import { runPack, runPackSchema } from './run-pack';
 import { itemStartLimitSchema, type LimitBindingsReader, withLimitBindings } from './start-limit';
 
@@ -167,8 +167,8 @@ export const itemRunSchema = z.object({
    * How large the change was when the run completed or failed: files changed and lines
    * added and removed from `base`, the commit the item's work was cut from, to `commit`, the
    * clean commit it ended on, recorded then. Null when the checkout ended on no clean commit,
-   * no cut-from is known for its work (an in-place run, or a checkout reused outside a
-   * hand-off), or the run was recorded before sizes were.
+   * no cut-from is known for its work (an in-place run, or a branch reused with `--branch`),
+   * or the run ended before sizes were recorded. Read from the run's row, not its events.
    */
   changeSize: changeSizeSchema.nullable(),
 });
@@ -398,37 +398,38 @@ export interface ItemReadSource extends AttentionQueueSource {
 function readResult(
   run: WorkflowRun,
   events: readonly WorkflowEventRow[]
-): Pick<ItemRun, 'hasResult' | 'resultCommit' | 'changeSize'> {
+): Pick<ItemRun, 'hasResult' | 'resultCommit'> {
   try {
-    const record =
-      run.status === 'completed' || run.status === 'failed'
-        ? getTerminalRecord(run.status, events)
-        : null;
     return {
       hasResult: readCompletedRunResult(run, events).kind === 'result',
-      resultCommit: resultCommitOf(record),
-      changeSize: record?.change_size ?? null,
+      resultCommit:
+        run.status === 'completed' ? resultCommitOf(getTerminalRecord(run.status, events)) : null,
     };
   } catch (error) {
     // One unreadable record must not fail the whole item read.
     getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.terminal_record_unreadable');
-    return { hasResult: false, resultCommit: null, changeSize: null };
+    return { hasResult: false, resultCommit: null };
   }
 }
 
-/**
- * The terminal events of the completed and failed runs: a completed run's record holds its
- * result, and either holds the change size the run ended with.
- */
+/** The size the run's row recorded when it ended; an unreadable one reads as none. */
+function readChangeSize(run: WorkflowRun): ItemRun['changeSize'] {
+  try {
+    return recordedChangeSize(run);
+  } catch (error) {
+    getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.change_size_unreadable');
+    return null;
+  }
+}
+
+/** The `workflow_completed` events of the completed runs, which hold their results. */
 async function completionEvents(
   source: ItemReadSource,
   runs: readonly WorkflowRun[]
 ): Promise<ReadonlyMap<string, WorkflowEventRow[]>> {
-  const endedIds = runs
-    .filter(run => run.status === 'completed' || run.status === 'failed')
-    .map(run => run.id);
-  if (endedIds.length === 0) return new Map();
-  return source.store.listEventsForRuns(endedIds, ['workflow_completed', 'workflow_failed']);
+  const completedIds = runs.filter(run => run.status === 'completed').map(run => run.id);
+  if (completedIds.length === 0) return new Map();
+  return source.store.listEventsForRuns(completedIds, ['workflow_completed']);
 }
 
 async function itemRun(
@@ -462,6 +463,7 @@ async function itemRun(
     heldBehind,
     operatorPause: operatorPause(run),
     ...readResult(run, terminalEvents.get(run.id) ?? []),
+    changeSize: readChangeSize(run),
   };
 }
 

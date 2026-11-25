@@ -1,7 +1,7 @@
 import type { WorkflowRun } from './schemas/workflow-run';
 import { isTerminalRunStatus } from './schemas/workflow-run';
 import { PAUSE_CAUSE_METADATA_KEY } from './schemas/pause-cause';
-import { CHANGE_SIZE_METADATA_KEY, type ChangeSize } from './schemas/terminal-record';
+import { CHANGE_SIZE_METADATA_KEY, type ChangeSize } from './schemas/change-size';
 import type { RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
 import { DETACHED_LAUNCH_METADATA_KEY, executionClaim } from './store';
 

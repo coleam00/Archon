@@ -1,9 +1,6 @@
 import { getRunArtifactsDirForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
 import {
   type ArtifactManifest,
-  CHANGE_SIZE_METADATA_KEY,
-  changeSizeSchema,
-  type ChangeSize,
   RESULT_COMMIT_METADATA_KEY,
   resultCommitSchema,
   type ResultCommit,
@@ -355,16 +352,6 @@ function readResultCommit(run: Pick<WorkflowRun, 'status' | 'metadata'>): Result
   return value === undefined ? undefined : resultCommitSchema.parse(value);
 }
 
-/**
- * The change size the executor stored when the run completed or failed. Null is a
- * completion that measured none. A malformed value throws, like the result commit.
- */
-function readChangeSize(run: Pick<WorkflowRun, 'status' | 'metadata'>): ChangeSize | undefined {
-  if (run.status !== 'completed' && run.status !== 'failed') return undefined;
-  const value = run.metadata?.[CHANGE_SIZE_METADATA_KEY];
-  return value == null ? undefined : changeSizeSchema.parse(value);
-}
-
 function selectRecordedReturn(folded: NodeEventFold): TerminalRecord['returns'] {
   const selected = folded.graph?.returns;
   if (selected === undefined) {
@@ -488,7 +475,6 @@ export function buildTerminalRecord(input: {
   const { nodes, failureOrder } = folded;
   const worktreeDisposition = readWorktreeDisposition(run);
   const resultCommit = readResultCommit(run);
-  const changeSize = readChangeSize(run);
   return terminalRecordSchema.parse({
     run_id: run.id,
     status: terminalStatusSchema.parse(run.status),
@@ -501,7 +487,6 @@ export function buildTerminalRecord(input: {
     artifacts,
     ...(worktreeDisposition ? { worktree_disposition: worktreeDisposition } : {}),
     ...(resultCommit ? { result_commit: resultCommit } : {}),
-    ...(changeSize ? { change_size: changeSize } : {}),
   });
 }
 

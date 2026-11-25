@@ -13,9 +13,8 @@ import type {
 import { SUBRUN_METADATA_KEYS } from '../schemas';
 import { keptAsksResult, stoppedItem } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
+import { CHANGE_SIZE_METADATA_KEY, type ChangeSize } from '../schemas/change-size';
 import {
-  CHANGE_SIZE_METADATA_KEY,
-  type ChangeSize,
   RESULT_COMMIT_METADATA_KEY,
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
@@ -364,12 +363,16 @@ async function failOnNodeOutcome(
     workflowId: workflowRun.id,
   });
   // A build can commit before a later node fails: the failed run still ended at that commit.
-  const ended = resultCommitFromSample(await sampleCheckout(ctx.cwd, ctx.execContext));
+  // Only an item run is sized, so no other run pays for the checkout sample.
+  const ended =
+    workflowRun.item_id === null
+      ? null
+      : resultCommitFromSample(await sampleCheckout(ctx.cwd, ctx.execContext));
   const changeSize = await measureChangeSize(
     deps.store,
     workflowRun,
     ctx.cwd,
-    ended.held ? ended.commit : null
+    ended?.held ? ended.commit : null
   );
   await failRun(
     deps,

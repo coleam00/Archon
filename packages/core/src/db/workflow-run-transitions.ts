@@ -29,7 +29,7 @@ import {
 } from '@archon/workflows/store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
-import { CHANGE_SIZE_METADATA_KEY } from '@archon/workflows/schemas/terminal-record';
+import { CHANGE_SIZE_METADATA_KEY } from '@archon/workflows/schemas/change-size';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
