@@ -36,6 +36,7 @@ type TransactionReads = Pick<
   | 'findWorkflowRunsByIdPrefix'
   | 'findAdoptingRuns'
   | 'listAttentionQueueRows'
+  | 'listUnfinishedRuns'
   | 'findOpenWorkRuns'
   | 'listWorkflowRuns'
   | 'getCodebase'
@@ -257,6 +258,16 @@ export function createTransactionReads(
       ),
     listAttentionQueueRows: async () =>
       structuredClone(newestFirst([...runs.values()].filter(isAttentionQueueRow))),
+    listUnfinishedRuns: async () =>
+      structuredClone(
+        newestFirst(
+          [...runs.values()].filter(
+            run =>
+              run.parent_run_id === null &&
+              (run.status === 'pending' || run.status === 'running' || run.status === 'paused')
+          )
+        ).reverse()
+      ),
     findOpenWorkRuns: async options =>
       structuredClone(
         newestFirst(

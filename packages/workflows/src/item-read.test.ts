@@ -743,7 +743,7 @@ describe('reading an item', () => {
     });
     const held: ItemReadSource = {
       ...source,
-      ownerLost: { holders: async () => [second], observe: async () => 'unreachable' },
+      ownerLost: { runs: async () => [second], observe: async () => 'unreachable' },
       store: {
         ...source.store,
         getItemRuns: async () => ({

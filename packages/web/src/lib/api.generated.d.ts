@@ -7845,6 +7845,10 @@ export interface components {
           };
           /** @enum {string} */
           observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+          start?: {
+            requestId: string;
+            hostId: string;
+          };
         }
       | {
           /** @enum {string} */
@@ -8228,6 +8232,10 @@ export interface components {
             };
             /** @enum {string} */
             observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            start?: {
+              requestId: string;
+              hostId: string;
+            };
           }
         | {
             /** @enum {string} */
@@ -8743,6 +8751,10 @@ export interface components {
             };
             /** @enum {string} */
             observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+            start?: {
+              requestId: string;
+              hostId: string;
+            };
           }
         | {
             /** @enum {string} */
@@ -9504,6 +9516,10 @@ export interface components {
                 | 'failed'
                 | 'cancelled'
                 | 'paused';
+              start?: {
+                requestId: string;
+                hostId: string;
+              };
             }
           | {
               /** @enum {string} */
@@ -10141,6 +10157,10 @@ export interface components {
                   | 'failed'
                   | 'cancelled'
                   | 'paused';
+                start?: {
+                  requestId: string;
+                  hostId: string;
+                };
               }
             | {
                 /** @enum {string} */
