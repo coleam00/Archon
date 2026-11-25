@@ -3056,7 +3056,7 @@ bindings:
     workflow: review-follow-up
     resource: follow-up
     overlap: queue
-    item: { field: number, prefix: pr- }  # a key of the fire's --inputs
+    item: { field: number, prefix: pr- }  # a key of the fire's event inputs
   fix:
     workflow: review-fix
     resource: fix
@@ -3188,9 +3188,9 @@ and its fields are checked against the source plugin when a binding is generated
 an optional fixed `prefix`; see
 [putting a start on its event's item](/guides/workflow-triggers/#put-a-start-on-the-item-its-event-names).
 An event binding's `field` is a source plugin event field, checked when the binding is
-generated; a fire-only binding's is a key of the fire's `--inputs`. A timer binding with
-`item:` is refused at load, since a tick is about no item, and so is a run-ended binding with
-`item:`, since its start is on the ended run's item.
+generated; a fire-only binding's is a key of the fire's event inputs (`--inputs` or
+`--input`). A timer binding with `item:` is refused at load, since a tick is about no
+item, and so is a run-ended binding with `item:`, since its start is on the ended run's item.
 
 ### Pack forge needs
 

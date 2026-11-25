@@ -230,6 +230,7 @@ export async function runTrigger({
       owner: typeof values.owner === 'string' ? values.owner : undefined,
       deliveryId: typeof values['delivery-id'] === 'string' ? values['delivery-id'] : undefined,
       inputs: typeof values.inputs === 'string' ? values.inputs : undefined,
+      input: Array.isArray(values.input) ? values.input : undefined,
       item: typeof values.item === 'string' ? values.item : undefined,
       noItem: values['no-item'] === true,
       limit: typeof values.limit === 'string' ? values.limit : undefined,
