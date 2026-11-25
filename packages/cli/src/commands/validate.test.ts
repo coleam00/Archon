@@ -416,11 +416,20 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
-  test('refuses a binding to a workflow the manifest does not list as an entrypoint', async () => {
-    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
-    const manifest = (entrypoints: Record<string, string>) =>
+  test('refuses a --workflow-source binding to a workflow its manifest does not list', async () => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        makeTestWorkflowWithSource(
+          { name: 'plan', nodes: [{ id: 'run', bash: 'true' }] },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+    const source = await mkdtemp(join(tmpdir(), 'archon-cli-validate-pack-'));
+    const manifest = (dir: string, entrypoints: Record<string, string>) =>
       writeFile(
-        join(validationCwd, 'archon-plugin.json'),
+        join(dir, 'archon-plugin.json'),
         JSON.stringify({
           schemaVersion: 1,
           kind: 'workflow-pack',
@@ -429,16 +438,23 @@ describe('validateWorkflowsCommand', () => {
           entrypoints,
         })
       );
-    await manifest({ plan: 'plan/plan.yaml' });
-    await mkdir(join(validationCwd, '.pack'));
+    // The project's own manifest lists both, so reading it instead of the source's passes.
+    await manifest(validationCwd, { plan: 'plan/plan.yaml', triage: 'triage/triage.yaml' });
+    await manifest(source, { plan: 'plan/plan.yaml' });
+    await mkdir(join(source, '.pack'));
     await writeFile(
-      join(validationCwd, '.pack', 'pack.yaml'),
+      join(source, '.pack', 'pack.yaml'),
       'bindings:\n  plan-after-triage:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'
     );
+    const args = [undefined, true, process.env, validationCwd, source] as const;
     const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
     try {
-      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(1);
-      expect(JSON.parse(String(write.mock.calls[0]?.[0])).results).toEqual([
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(1);
+      const results = (output: unknown) =>
+        (JSON.parse(String(output)).results as { workflowName: string }[]).filter(
+          r => r.workflowName === 'archon-plugin.json'
+        );
+      expect(results(write.mock.calls[0]?.[0])).toEqual([
         {
           workflowName: 'archon-plugin.json',
           filename: 'archon-plugin.json',
@@ -455,12 +471,13 @@ describe('validateWorkflowsCommand', () => {
         },
       ]);
 
-      await manifest({ plan: 'plan/plan.yaml', triage: 'triage/triage.yaml' });
+      await manifest(source, { plan: 'plan/plan.yaml', triage: 'triage/triage.yaml' });
       write.mockClear();
-      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(0);
-      expect(JSON.parse(String(write.mock.calls[0]?.[0])).results).toEqual([]);
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(0);
+      expect(results(write.mock.calls[0]?.[0])).toEqual([]);
     } finally {
       write.mockRestore();
+      await removeTempTree(source);
     }
   });
 
