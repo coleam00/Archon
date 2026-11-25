@@ -42,6 +42,11 @@ import { workflowSourceSchema } from './workflow';
  * `summary_value`  — additive sibling of `summary` (#2637): the child's terminal
  *                    structured value, stamped at completion alongside the text summary
  *                    so a parent `workflow:` node threads the logical value back.
+ * `summary_value_json` — the same value as JSON text. A metadata patch removes a
+ *                    top-level key whose value is null, so `summary_value` alone loses a
+ *                    null result and the parent falls back to the text "null". A string
+ *                    survives every store's merge (the `asks_result` encoding below).
+ *                    Readers prefer it; old rows and older binaries use `summary_value`.
  * `summary_declared_output_paths` — additive sibling of `summary_value`: the field
  *                    paths the child's selected `returns:` node declared, so a parent
  *                    reads `$<node>.output.a.b` under the CHILD's contract — a
@@ -59,6 +64,7 @@ export const SUBRUN_METADATA_KEYS = {
   inputs: 'inputs',
   inputsValues: 'inputs_values',
   summaryValue: 'summary_value',
+  summaryValueJson: 'summary_value_json',
   summaryDeclaredFields: 'summary_declared_fields',
   summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
@@ -80,6 +86,14 @@ export function runInputsMetadata(
     ...(keepValues || Object.values(inputs).some(v => typeof v !== 'string')
       ? { [SUBRUN_METADATA_KEYS.inputsValues]: inputs }
       : {}),
+  };
+}
+
+/** A child's terminal value as completion stamps it: the logical value and its JSON text. */
+export function subrunSummaryMetadata(value: unknown): Record<string, unknown> {
+  return {
+    [SUBRUN_METADATA_KEYS.summaryValue]: value,
+    [SUBRUN_METADATA_KEYS.summaryValueJson]: JSON.stringify(value),
   };
 }
 
@@ -117,6 +131,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   const parentNodeId = metadata?.[SUBRUN_METADATA_KEYS.parentNodeId];
   const childIndex = metadata?.[SUBRUN_METADATA_KEYS.childIndex];
   const fanOutItemHash = metadata?.[SUBRUN_METADATA_KEYS.fanOutItemHash];
+  const summaryValueJson = metadata?.[SUBRUN_METADATA_KEYS.summaryValueJson];
   const asPlainObject = (raw: unknown): Record<string, unknown> | undefined =>
     typeof raw === 'object' && raw !== null && !Array.isArray(raw)
       ? (raw as Record<string, unknown>)
@@ -166,11 +181,15 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
     fanOutItemHash: typeof fanOutItemHash === 'string' ? fanOutItemHash : undefined,
     inputs,
-    // Presence-keyed rather than truthiness: `false`/`0`/`null` are legitimate values.
+    // The JSON text first: it is the only copy of a null result that survives a merge.
+    // Only `subrunSummaryMetadata` writes it, so text that does not parse throws as corrupt.
+    // Otherwise presence-keyed rather than truthiness: `false`/`0` are legitimate values.
     summaryValue:
-      metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
-        ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
-        : undefined,
+      typeof summaryValueJson === 'string'
+        ? JSON.parse(summaryValueJson)
+        : metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
+          ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
+          : undefined,
     summaryDeclaredOutputPaths,
   };
 }

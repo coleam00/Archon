@@ -329,6 +329,13 @@ describe('readSubrunMetadata — inputs (#2470)', () => {
   });
 });
 
+describe('readSubrunMetadata — summary value', () => {
+  test('a row written before summary_value_json reads its summary_value as before', () => {
+    expect(readSubrunMetadata({ summary: 'false', summary_value: false }).summaryValue).toBe(false);
+    expect(readSubrunMetadata({ summary: 'null' }).summaryValue).toBeUndefined();
+  });
+});
+
 describe('readIdentityUnresolved (#2304)', () => {
   test('reads a true stamp', () => {
     expect(readIdentityUnresolved({ [RUN_METADATA_KEYS.identityUnresolved]: true })).toBe(true);
