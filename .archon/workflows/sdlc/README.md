@@ -106,7 +106,7 @@ The pack has two settings, in `.archon/packs/sdlc.yaml`:
 ```yaml
 settings:
   ci: forge   # forge: the pull request's checks are the full validation; none: no CI
-  land_policy: .archon/sdlc/policy/merge.md   # the project's land policy; empty: the default alone
+  land_policy: .archon/sdlc/policy/merge.md   # the project's land policy; empty: .archon/sdlc/policy/merge.md if it exists
 ```
 
 Everything else a project holds an opinion on is policy text. Each stage reads the
