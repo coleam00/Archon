@@ -458,7 +458,9 @@ function foldChildUsage(fold: DagUsageFold, record: ReadNodeRecordEvent): void {
   if (
     (usage.costUsd ?? 0) === 0 &&
     !usage.tokensUnknown &&
-    Object.values(usage.tokens ?? {}).every(value => value === undefined || value === 0)
+    Object.values(usage.tokens ?? {}).every(
+      value => value === undefined || value === 0 || (Array.isArray(value) && value.length === 0)
+    )
   )
     return;
   const ids = new Set(
