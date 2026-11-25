@@ -253,7 +253,11 @@ jobs:
       # `Git\bin\git.exe` on the runner's PATH is a launcher that starts
       # `mingw64\bin\git.exe` as a second process, so every git call cost two processes
       # (about 4,700 extra per leg). Putting the real binary first removes the launcher.
+      #
+      # The step deadline is the Linux one's (#6283), set for Windows legs: successful ones
+      # have taken up to 13 minutes.
       - name: Validate
+        timeout-minutes: 25
         env:
           ARCHON_TEST_PART: ${{ matrix.part }}
           TEMP: ${{ runner.temp }}

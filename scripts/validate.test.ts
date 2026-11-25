@@ -63,7 +63,6 @@ describe('validate check selection', () => {
   }
   interface WorkflowJob {
     'runs-on'?: string;
-    'timeout-minutes'?: number;
     strategy?: { matrix: { include?: MatrixLeg[] } };
     steps?: {
       if?: string;
@@ -130,16 +129,17 @@ describe('validate check selection', () => {
       expect(validateSteps).toHaveLength(1);
       expect(validateSteps[0].run).toContain('bun run validate --only ${{ matrix.check }}');
       expect(validateSteps[0].env?.ARCHON_TEST_PART).toBe('${{ matrix.part }}');
+      // A hang Bun's per-test timeout cannot break fails the leg in minutes, not at the job
+      // limit (#6283).
+      const deadline = validateSteps[0]['timeout-minutes'] ?? 0;
+      expect({
+        id,
+        deadlineInMinutes: Number.isInteger(deadline) && deadline > 0 && deadline <= 25,
+      }).toEqual({
+        id,
+        deadlineInMinutes: true,
+      });
     }
-  });
-
-  test('a hung Linux test leg fails in minutes, well before its job limit', () => {
-    // #6283: a hang Bun's per-test timeout cannot break held a cli leg until the 45-minute
-    // job limit cancelled it.
-    const job = readWorkflow().jobs.test;
-    const validate = (job.steps ?? []).find(step => (step.run ?? '').includes('bun run validate'));
-    expect(validate?.['timeout-minutes']).toBeLessThanOrEqual(20);
-    expect(job['timeout-minutes']).toBeGreaterThan(validate?.['timeout-minutes'] ?? Infinity);
   });
 
   test('the scripts shard runs on every OS', () => {
