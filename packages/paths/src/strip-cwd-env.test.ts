@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { stripCwdEnv } from './strip-cwd-env';
+import { readCwdEnvKeys, stripCwdEnv } from './strip-cwd-env';
 
 describe('stripCwdEnv', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'archon-strip-cwd-env-test-'));
@@ -87,7 +87,7 @@ describe('stripCwdEnv', () => {
   });
 });
 
-describe('stripCwdEnv — operator logging (#1302)', () => {
+describe('stripCwdEnv — what it reports', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'archon-strip-cwd-env-log-test-'));
   let stderrSpy: ReturnType<typeof spyOn>;
   let stderrWrites: string[];
@@ -109,40 +109,21 @@ describe('stripCwdEnv — operator logging (#1302)', () => {
     delete process.env.TEST_STRIP_LOG_C;
   });
 
-  it('emits [archon] stripped line with count and filename when keys are stripped', () => {
-    writeFileSync(join(tmpDir, '.env'), 'TEST_STRIP_LOG_A=leaked\nTEST_STRIP_LOG_B=leaked\n');
-    process.env.TEST_STRIP_LOG_A = 'leaked';
-    process.env.TEST_STRIP_LOG_B = 'leaked';
-    stripCwdEnv(tmpDir);
-    const line = stderrWrites.find(s => s.startsWith('[archon] stripped'));
-    expect(line).toBeDefined();
-    expect(line).toContain('stripped 2 keys');
-    expect(line).toContain(tmpDir);
-    expect(line).toContain('(.env)');
-  });
-
-  it('lists every contributing filename when keys span multiple .env files', () => {
+  it('strips the keys without writing to stderr', () => {
     writeFileSync(join(tmpDir, '.env'), 'TEST_STRIP_LOG_A=leaked\n');
-    writeFileSync(join(tmpDir, '.env.local'), 'TEST_STRIP_LOG_B=leaked\n');
     process.env.TEST_STRIP_LOG_A = 'leaked';
-    process.env.TEST_STRIP_LOG_B = 'leaked';
     stripCwdEnv(tmpDir);
-    const line = stderrWrites.find(s => s.startsWith('[archon] stripped'));
-    expect(line).toBeDefined();
-    expect(line).toContain('(.env, .env.local)');
+    expect(process.env.TEST_STRIP_LOG_A).toBeUndefined();
+    expect(stderrWrites).toEqual([]);
   });
 
-  it('emits no [archon] stripped line when no CWD .env files exist', () => {
-    stripCwdEnv(tmpDir);
-    const line = stderrWrites.find(s => s.startsWith('[archon] stripped'));
-    expect(line).toBeUndefined();
-  });
-
-  it('emits no [archon] stripped line when .env file is empty', () => {
-    writeFileSync(join(tmpDir, '.env'), '');
-    stripCwdEnv(tmpDir);
-    const line = stderrWrites.find(s => s.startsWith('[archon] stripped'));
-    expect(line).toBeUndefined();
+  it('readCwdEnvKeys returns the files and sorted key names across env files, never values', () => {
+    writeFileSync(join(tmpDir, '.env'), 'TEST_B=value-b\nTEST_A=value-a\n');
+    writeFileSync(join(tmpDir, '.env.local'), 'TEST_A=value-c\nTEST_C=value-d\n');
+    expect(readCwdEnvKeys(tmpDir)).toEqual({
+      files: ['.env', '.env.local'],
+      keys: ['TEST_A', 'TEST_B', 'TEST_C'],
+    });
   });
 });
 

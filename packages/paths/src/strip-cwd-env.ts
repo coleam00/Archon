@@ -54,9 +54,7 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     ? captureDetachedInstallContext()
     : undefined;
 
-  const { cwdKeys, strippedFiles } = collectCwdEnvKeys(cwd);
-
-  for (const key of cwdKeys) {
+  for (const key of readCwdEnvKeys(cwd).keys) {
     Reflect.deleteProperty(process.env, key);
   }
 
@@ -65,14 +63,6 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
   // protect it from the later Archon-owned env layers too.
   if (inheritedInstallContext) {
     restoreDetachedInstallContext(inheritedInstallContext);
-  }
-
-  // Tell the operator what we just did — otherwise the delete loop is silent
-  // and users think their env file was loaded (see #1302).
-  if (cwdKeys.size > 0) {
-    process.stderr.write(
-      `[archon] stripped ${cwdKeys.size} keys from ${cwd} (${strippedFiles.join(', ')}) to prevent target repo env from leaking into Archon processes\n`
-    );
   }
 
   stripNestedSessionMarkers();
@@ -110,9 +100,14 @@ function stripDebuggerEnv(): void {
   }
 }
 
-function collectCwdEnvKeys(cwd: string): { cwdKeys: Set<string>; strippedFiles: string[] } {
-  const cwdKeys = new Set<string>();
-  const strippedFiles: string[] = [];
+/**
+ * The files and key names stripCwdEnv() strips for `cwd`: the single source for what the
+ * guard covers. loadArchonEnv's debug record and `archon doctor` read it too. Names
+ * only, sorted; values are never returned.
+ */
+export function readCwdEnvKeys(cwd: string): { files: string[]; keys: string[] } {
+  const keys = new Set<string>();
+  const files: string[] = [];
   for (const filename of BUN_AUTO_LOADED_ENV_FILES) {
     const filepath = resolve(cwd, filename);
     // dotenv.config with processEnv:{} parses without writing to process.env.
@@ -132,8 +127,8 @@ function collectCwdEnvKeys(cwd: string): { cwdKeys: Set<string>; strippedFiles: 
     }
     const parsedKeys = Object.keys(result.parsed ?? {});
     if (parsedKeys.length === 0) continue;
-    strippedFiles.push(filename);
-    for (const key of parsedKeys) cwdKeys.add(key);
+    files.push(filename);
+    for (const key of parsedKeys) keys.add(key);
   }
-  return { cwdKeys, strippedFiles };
+  return { files, keys: [...keys].sort() };
 }

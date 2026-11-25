@@ -7,7 +7,7 @@
  */
 import { providerRegistry } from '@archon/providers';
 import { doctorLog, type CheckResult } from './doctor-check';
-import { checkConfigFiles, checkProviderDeprecation } from './doctor-config';
+import { checkConfigFiles, checkCwdEnvIsolation, checkProviderDeprecation } from './doctor-config';
 import { checkInstalledProviders, checkProviderDiagnostics } from './doctor-providers';
 import { checkAssistantLogin } from './doctor-assistant-login';
 import { checkDatabase } from './doctor-database';
@@ -24,6 +24,7 @@ async function runDefaultChecks(env: NodeJS.ProcessEnv): Promise<CheckOutcome[]>
   const workflows = await checkWorkflows();
   return [
     checkConfigFiles(),
+    Promise.resolve(checkCwdEnvIsolation()),
     Promise.resolve(workflows.files),
     Promise.resolve(workflows.providers),
     checkInstalledProviders(undefined, undefined, workflows.allowEmptyProviderInventory),

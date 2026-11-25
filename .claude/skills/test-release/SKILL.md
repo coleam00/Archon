@@ -314,46 +314,46 @@ cd "$LEAKREPO"
 git init -q
 git commit -q --allow-empty -m init
 printf 'ANTHROPIC_API_KEY=sk-ant-test-fake\n' > .env
-"$BINARY" workflow run archon-investigate --no-worktree "hello" 2>&1 | tee /tmp/archon-test-leak.log
 ```
 
-**Pass criteria** (current behaviour — the guard **strips**, it does not refuse):
+**Pass criteria** (current behaviour — the guard **strips** silently, it does not refuse):
 
-- Output contains a strip line naming the repo and the source file, of the form:
-  `[archon] stripped N keys from <repo> (.env) to prevent target repo env from leaking into Archon processes`
-- `N` equals the number of keys planted (1 for the `.env` above) — a count of `0`
-  means the file was not read at all, which is a real regression
-- The workflow is then allowed to proceed and complete normally
+- The workflow proceeds and completes normally, with no `[archon] stripped` line on
+  stderr: the guard no longer prints on every command
+- `archon doctor` in the repo reports the strip, naming this repo's `.env` and the
+  planted key: `Target repo .env: 1 key from <repo>/.env is kept out of runs, …: ANTHROPIC_API_KEY`
+- The key count equals the number of keys planted (1 for the `.env` above)
 
-Assert on the strip line — pinned to **this** repo and **this** key count, so a
-strip from some other directory cannot produce a false pass. Capture the exit
-status too: under the strip design the workflow is expected to succeed, so a
-non-zero exit is its own failure.
+Assert on the doctor line pinned to **this** repo, **this** count and **this** key, so
+a strip from some other directory cannot produce a false pass. Capture the workflow's
+exit status too: under the strip design it is expected to succeed.
 
 ```bash
 "$BINARY" workflow run archon-investigate --no-worktree "hello" > /tmp/archon-test-leak.log 2>&1
 leak_exit=$?
+"$BINARY" doctor > /tmp/archon-test-leak-doctor.log 2>&1
 
 # $LEAKREPO may be a symlinked path (/tmp -> /private/tmp on macOS); the binary
-# logs the resolved form, so compare against that.
+# reports the resolved form, so compare against that.
 resolved_repo=$(cd "$LEAKREPO" && pwd -P)
-expected="[archon] stripped 1 keys from ${resolved_repo} (.env) to prevent target repo env from leaking into Archon processes"
+expected="Target repo .env: 1 key from ${resolved_repo}/.env is kept out of runs"
 
 if [ "$leak_exit" -ne 0 ]; then
   echo "FAIL: workflow exited $leak_exit — the guard strips and proceeds, it should not abort"
-elif grep -qxF "$expected" /tmp/archon-test-leak.log; then
-  echo "PASS: env-leak guard stripped exactly the planted key from this repo"
+elif grep -qF '[archon] stripped' /tmp/archon-test-leak.log; then
+  echo "FAIL: the per-command strip line is back on stderr"
+elif grep -F "$expected" /tmp/archon-test-leak-doctor.log | grep -qF ': ANTHROPIC_API_KEY'; then
+  echo "PASS: env-leak guard strips exactly the planted key from this repo"
 else
-  echo "FAIL: expected strip line absent. Got:"
-  grep -F '[archon] stripped' /tmp/archon-test-leak.log || echo "  (no strip line at all — guard inactive)"
+  echo "FAIL: expected doctor line absent. Got:"
+  grep -F 'Target repo .env' /tmp/archon-test-leak-doctor.log || echo "  (no doctor line at all)"
 fi
 ```
 
-An exact-match assertion is deliberate here. A looser pattern such as
-`stripped [1-9][0-9]* keys .*\.env` passes on **any** positive count from **any**
-path, so a strip belonging to a different repository — or a count inflated by an
-unrelated `.env` — reads as success while the regression it is meant to catch
-goes unnoticed.
+A pinned assertion is deliberate here. A looser pattern such as
+`[1-9][0-9]* keys .*\.env` passes on **any** positive count from **any** path, so a
+strip belonging to a different repository — or a count inflated by an unrelated
+`.env` — reads as success while the regression it is meant to catch goes unnoticed.
 
 > **History — do not re-assert the old criteria.** This test previously expected a
 > *refusal* (`Cannot add codebase` / `Cannot run workflow`, non-zero exit), which
@@ -366,9 +366,8 @@ goes unnoticed.
 
 **Common failures:**
 
-- No strip line at all → the guard is not active; the `.env` is reaching subprocesses
-- `stripped 0 keys` → the file was located but not parsed
-- Strip line names the wrong file or repo → path resolution regression
+- Doctor reports `skip` (no `.env` keys) → the file was not found or not parsed
+- Doctor names the wrong file or repo → path resolution regression
 
 Clean up the leak test repo:
 

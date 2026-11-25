@@ -813,11 +813,13 @@ The CLI makes exceptions to this order: selected chat scope is read from the exp
 
 A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`. If it does, Archon refuses to start and names the file and the key. Those keys decide which Archon home and which executables Archon uses, so a repository could otherwise choose which plugins run. Set them in your shell, your scheduler or `~/.archon/.env` instead.
 
-**Operator log lines** (stderr, emitted only when there is something to report):
+**Seeing what the guard strips.** Commands print nothing about the target repo's `.env` keys they strip. Run `archon doctor` in the repository to see them:
 
 ```
-[archon] stripped 2 keys from /path/to/target-repo (.env, .env.local) to prevent target repo env from leaking into Archon processes
+✓ Target repo .env: 2 keys from /path/to/target-repo/.env, /path/to/target-repo/.env.local are kept out of runs, so the target repo's secrets cannot reach Archon's processes: API_URL, OPENAI_API_KEY
 ```
+
+Every command also logs an `env.cwd_keys_stripped` record at debug level with the same files and key names; `LOG_LEVEL=debug` shows it. Neither ever contains a value.
 
 The `[archon] loaded N keys from …` lines are suppressed by default (they would otherwise interleave with `archon setup`/`archon doctor` checklist output). To enable them, set `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug` before running:
 

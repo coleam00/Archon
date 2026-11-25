@@ -3,7 +3,7 @@ import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { getArchonEnvNames, getPluginsPath, loadArchonEnv } from './env-loader';
-import { getLogLevel, resetLogLevelOverride, rootLogger, setLogLevel } from './logger';
+import { getLogLevel, resetLogLevelOverride, rootLogger, setLogLevel, setLogSink } from './logger';
 
 /**
  * loadArchonEnv covers the read side of the three-path env model (#1302):
@@ -371,5 +371,27 @@ describe('getArchonEnvNames', () => {
 
   it('returns an empty set when neither file exists', () => {
     expect(getArchonEnvNames(repoDir).size).toBe(0);
+  });
+});
+
+describe('loadArchonEnv — stripped-keys record', () => {
+  afterEach(() => {
+    setLogSink(undefined);
+    resetLogLevelOverride();
+  });
+
+  it('logs the target repo env files and key names at debug, never values', () => {
+    const events: Array<Record<string, unknown>> = [];
+    setLogSink(line => events.push(JSON.parse(line) as Record<string, unknown>));
+    setLogLevel('debug');
+    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=secret-value-6362\n');
+
+    loadArchonEnv(repoDir);
+
+    const records = events.filter(e => e.msg === 'env.cwd_keys_stripped');
+    expect(records).toEqual([
+      expect.objectContaining({ cwd: repoDir, files: ['.env'], keys: ['TEST_EL_OTHER'] }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain('secret-value-6362');
   });
 });
