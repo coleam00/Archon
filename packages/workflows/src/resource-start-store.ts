@@ -7,7 +7,7 @@ import {
   readAdmissionCheckoutGuard,
 } from './schemas/resource-start';
 import type { RunLimitState } from './schemas/run-limit';
-import type { StartRefusalReason } from './schemas/run-metadata';
+import type { FileSettingRefusal, StartRefusalReason } from './schemas/run-metadata';
 import type { z } from 'zod';
 import type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 import type {
@@ -706,6 +706,8 @@ export interface IResourceStartStore {
      * item and attention show it; the file store records no stop.
      */
     refusal?: StartRefusalReason;
+    /** The setting a `file_setting_missing` refusal is about, recorded with it on the stop. */
+    fileSetting?: FileSettingRefusal;
   }): Promise<boolean>;
   resetStartBindingPreparation(input: {
     receiptId: string;

@@ -48,6 +48,7 @@ export async function failStartBindingPreparation(input: FailedPreparation): Pro
         workflow,
         reason: refusal,
         refusedAt: new Date().toISOString(),
+        ...(input.fileSetting !== undefined ? { fileSetting: input.fileSetting } : {}),
       },
     });
     return true;

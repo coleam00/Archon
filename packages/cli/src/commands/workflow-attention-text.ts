@@ -19,6 +19,7 @@ import {
   type AttentionAnswerer,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowNotice } from '@archon/workflows/workflow-notice';
+import { PACK_SETTING_ORIGIN_TEXT } from '@archon/workflows/pack-settings';
 import type { StoppedRefusal } from '@archon/workflows/schemas/run-metadata';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { formatAge } from './workflow-shared';
@@ -156,6 +157,7 @@ const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
   inputs_unmapped: 'an input the binding maps named nothing',
   link_refused: 'the items it links to could not be read or hold no such link',
   no_default_provider: 'no default AI provider is set',
+  file_setting_missing: 'a pack file setting it reads names no file',
   run_as_user_failed: "the binding's run-as user could not be found",
   run_configuration_failed: "the item's or the binding's run configuration could not be read",
   launch_preparation_failed: 'preparing its launch failed',
@@ -167,10 +169,21 @@ const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
  */
 export function refusedStartLines(refused: readonly StoppedRefusal[]): string[] {
   return refused.flatMap(start => [
-    `the start of ${start.workflow} (binding ${start.bindingId}) was refused before launch at ${start.refusedAt}: ${REFUSAL_REASONS[start.reason]}`,
+    `the start of ${start.workflow} (binding ${start.bindingId}) was refused before launch at ${start.refusedAt}: ${refusalReason(start)}`,
     ...(start.reason === 'no_default_provider' ? ['set one: archon ai default <provider>'] : []),
+    ...(start.fileSetting === undefined
+      ? []
+      : [
+          `restore the file, or set '${start.fileSetting.setting}' to an existing file under 'settings:' in the project's .archon/packs/ file; archon validate workflows checks it`,
+        ]),
     `see the refusal: archon trigger inspect ${start.receiptId}`,
   ]);
+}
+
+function refusalReason(start: StoppedRefusal): string {
+  const file = start.fileSetting;
+  if (file === undefined) return REFUSAL_REASONS[start.reason];
+  return `pack file setting '${file.setting}' names ${file.path}, which does not exist or is not a file (value from ${PACK_SETTING_ORIGIN_TEXT[file.origin]})`;
 }
 
 /** How a stopped item's run ended: a run that settled asks may have no outcome. */

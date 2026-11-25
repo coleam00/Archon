@@ -15,8 +15,11 @@ import {
   validateProjectPackSettings,
   parsePackDeclaration,
   PackSettingsError,
+  FileSettingError,
+  resolveRunStartInputs,
 } from './pack-settings';
-import type { PackSettingSpec, WorkflowPack } from './schemas/pack-settings';
+import type { PackSettingOrigin, PackSettingSpec } from './schemas/pack-settings';
+import type { ResolvedWorkflow } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { resolveTopLevelInputs } from './utils/workflow-requirements';
 import { WorkflowInputContractError } from './workflow-inputs';
@@ -407,11 +410,10 @@ describe('readProjectPackSettings', () => {
 });
 
 describe('validateProjectPackSettings file settings', () => {
+  type PackWorkflow = Pick<ResolvedWorkflow, 'pack' | 'inputs'>;
   const projectFile = (): string => join(cwd, '.archon', 'packs', 'alpha.yaml');
-  const packWith = (settings: Record<string, PackSettingSpec>): WorkflowPack => ({
-    key: 'alpha',
-    source: 'project',
-    settings,
+  const packWith = (settings: Record<string, PackSettingSpec>): PackWorkflow => ({
+    pack: { key: 'alpha', source: 'project', workflow: 'stage', settings },
   });
   const policy = packWith({ policy: { type: 'string', file: true } });
 
@@ -421,7 +423,7 @@ describe('validateProjectPackSettings file settings', () => {
   }
 
   /** The one error validation reports, checked to name the setting and the file. */
-  async function onlyError(pack: WorkflowPack, setting: string, file: string): Promise<void> {
+  async function onlyError(pack: PackWorkflow, setting: string, file: string): Promise<void> {
     const errors = await validateProjectPackSettings(cwd, pack);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain(setting);
@@ -516,6 +518,74 @@ describe('validateProjectPackSettings file settings', () => {
     await writeProject('settings:\n  note: docs/absent.md\n');
     expect(await validateProjectPackSettings(cwd, pack)).toEqual([]);
   });
+
+  it('refuses a start that reads a missing file, naming the setting, path and origin', async () => {
+    await writeProject('settings:\n  policy: docs/review.md\n');
+    const start = resolveRunStartInputs(cwd, policy, undefined);
+    await expect(start).rejects.toBeInstanceOf(FileSettingError);
+    const error = (await start.catch((e: unknown) => e)) as FileSettingError;
+    expect({ setting: error.setting, path: error.path, origin: error.origin }).toEqual({
+      setting: 'policy',
+      path: join(cwd, 'docs', 'review.md'),
+      origin: 'project',
+    });
+    // The same project state starts a workflow of the pack that does not read the setting.
+    const unread: PackWorkflow = {
+      pack: { ...(policy.pack as NonNullable<PackWorkflow['pack']>), fileSettingReads: [] },
+    };
+    expect(await resolveRunStartInputs(cwd, unread, undefined)).toEqual({
+      inputs: { policy: 'docs/review.md' },
+    });
+    // Restoring the file lets the reading workflow start.
+    await mkdir(join(cwd, 'docs'), { recursive: true });
+    await writeFile(join(cwd, 'docs', 'review.md'), 'be kind\n');
+    expect(await resolveRunStartInputs(cwd, policy, undefined)).toEqual({
+      inputs: { policy: 'docs/review.md' },
+    });
+  });
+
+  it('starts with an empty value, as validate accepts it', async () => {
+    await writeProject('settings:\n  policy: ""\n');
+    expect(await resolveRunStartInputs(cwd, policy, undefined)).toEqual({
+      inputs: { policy: '' },
+    });
+  });
+
+  it('agrees with start on what it reports, with the value resolved as start resolves it', async () => {
+    await mkdir(join(cwd, 'docs'), { recursive: true });
+    await writeFile(join(cwd, 'docs', 'present.md'), 'be kind\n');
+    const missingDefault = packWith({
+      policy: { type: 'string', file: true, default: 'docs/missing.md' },
+    });
+    const cases: { workflow: PackWorkflow; project?: string; origin?: PackSettingOrigin }[] = [
+      { workflow: policy, project: 'settings:\n  policy: docs/missing.md\n', origin: 'project' },
+      { workflow: missingDefault, origin: 'pack_default' },
+      // A workflow input default beats the pack default, at start and in validate alike.
+      {
+        workflow: {
+          ...missingDefault,
+          inputs: { policy: { default: 'docs/present.md' } },
+        },
+      },
+      {
+        workflow: {
+          ...policy,
+          inputs: { policy: { default: 'docs/missing.md' } },
+        },
+        origin: 'workflow_default',
+      },
+    ];
+    for (const { workflow, project, origin } of cases) {
+      await writeProject(project ?? 'settings: {}\n');
+      const reported = await validateProjectPackSettings(cwd, workflow);
+      const refusal = await resolveRunStartInputs(cwd, workflow, undefined).then(
+        () => undefined,
+        (e: unknown) => e as FileSettingError
+      );
+      expect(refusal?.origin).toBe(origin);
+      expect(reported).toEqual(refusal === undefined ? [] : [refusal.message]);
+    }
+  });
 });
 
 describe('readPackSettingEntries', () => {
@@ -607,6 +677,7 @@ describe('discovery carries the pack', () => {
         tone: { type: 'string', default: 'calm', section: 'Style' },
         policy: { type: 'string', file: true },
       },
+      fileSettingReads: [],
     });
     // A `pack:` key in YAML cannot claim a pack: only discovery sets it.
     expect(byName.get('flat')?.pack).toBeUndefined();

@@ -8010,10 +8010,17 @@ export interface components {
               | 'inputs_unmapped'
               | 'link_refused'
               | 'no_default_provider'
+              | 'file_setting_missing'
               | 'run_as_user_failed'
               | 'run_configuration_failed'
               | 'launch_preparation_failed';
             refusedAt: string;
+            fileSetting?: {
+              setting: string;
+              path: string;
+              /** @enum {string} */
+              origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+            };
           }[];
           checkout: string | null;
         };
@@ -8397,10 +8404,17 @@ export interface components {
                 | 'inputs_unmapped'
                 | 'link_refused'
                 | 'no_default_provider'
+                | 'file_setting_missing'
                 | 'run_as_user_failed'
                 | 'run_configuration_failed'
                 | 'launch_preparation_failed';
               refusedAt: string;
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+              };
             }[];
             checkout: string | null;
           }
@@ -8916,10 +8930,17 @@ export interface components {
                 | 'inputs_unmapped'
                 | 'link_refused'
                 | 'no_default_provider'
+                | 'file_setting_missing'
                 | 'run_as_user_failed'
                 | 'run_configuration_failed'
                 | 'launch_preparation_failed';
               refusedAt: string;
+              fileSetting?: {
+                setting: string;
+                path: string;
+                /** @enum {string} */
+                origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+              };
             }[];
             checkout: string | null;
           }
@@ -9709,10 +9730,17 @@ export interface components {
                   | 'inputs_unmapped'
                   | 'link_refused'
                   | 'no_default_provider'
+                  | 'file_setting_missing'
                   | 'run_as_user_failed'
                   | 'run_configuration_failed'
                   | 'launch_preparation_failed';
                 refusedAt: string;
+                fileSetting?: {
+                  setting: string;
+                  path: string;
+                  /** @enum {string} */
+                  origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+                };
               }[];
               checkout: string | null;
             }
@@ -10436,10 +10464,17 @@ export interface components {
                     | 'inputs_unmapped'
                     | 'link_refused'
                     | 'no_default_provider'
+                    | 'file_setting_missing'
                     | 'run_as_user_failed'
                     | 'run_configuration_failed'
                     | 'launch_preparation_failed';
                   refusedAt: string;
+                  fileSetting?: {
+                    setting: string;
+                    path: string;
+                    /** @enum {string} */
+                    origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+                  };
                 }[];
                 checkout: string | null;
               };

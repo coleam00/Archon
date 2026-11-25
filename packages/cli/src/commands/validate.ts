@@ -173,10 +173,8 @@ async function collectWorkflowResults(
       defaultProvider
     );
 
-    if (workflow.pack !== undefined) {
-      for (const message of await validateProjectPackSettings(cwd, workflow.pack)) {
-        issues.push({ level: 'error', field: 'pack_settings', message });
-      }
+    for (const message of await validateProjectPackSettings(cwd, workflow)) {
+      issues.push({ level: 'error', field: 'pack_settings', message });
     }
 
     if (workflow.pack?.forge !== undefined) {
