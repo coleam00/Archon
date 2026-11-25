@@ -2,7 +2,8 @@
  * Conformance for a binding's start limit on the SQL stores, run by the SQLite and
  * PostgreSQL integration tests: admission counts a limited binding's starts per item,
  * refuses the one past the limit with a reason, lets a grant allow one more, and starts the
- * count again when the limit's reset workflow completes on the item.
+ * count again when the limit's reset workflow completes on the item. A start refused at its
+ * limit, or by preparation before launch, stops its item on the run whose end caused it.
  */
 import { expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
@@ -32,10 +33,10 @@ type LimitFields = Pick<ResourceStartBindingIntent, 'limit' | 'grants'>;
 function starts(harness: Harness) {
   const { store } = harness;
   const { launch } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
-  const start = async (
+  const claimed = async (
     itemKey: string | undefined,
     fields: LimitFields,
-    sourceActor: SourceReceiptInput['sourceActor'] = null
+    sourceActor: SourceReceiptInput['sourceActor']
   ) => {
     const identity = { receiptId: randomUUID(), bindingId: 'binding', ownerId: 'owner' };
     await store.acceptStartReceipt({
@@ -64,6 +65,14 @@ function starts(harness: Harness) {
       ],
     });
     await store.claimStartBindingPreparation(identity);
+    return identity;
+  };
+  const start = async (
+    itemKey: string | undefined,
+    fields: LimitFields,
+    sourceActor: SourceReceiptInput['sourceActor'] = null
+  ) => {
+    const identity = await claimed(itemKey, fields, sourceActor);
     const result = await store.completeStartBindingPreparation({ ...identity, launch: launch() });
     return { result, receiptId: identity.receiptId };
   };
@@ -90,7 +99,7 @@ function starts(harness: Harness) {
     return { runId: run.id, itemId: run.item_id ?? '' };
   };
   const standing = async (itemId: string) => (await store.readItemStartLimits(itemId)).limits[0];
-  return { start, finish, admitted, plan, standing };
+  return { claimed, start, finish, admitted, plan, standing };
 }
 
 export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harness>): void {
@@ -173,6 +182,35 @@ export function describeSqlStartLimitConformance(makeHarness: () => Promise<Harn
       expect(readItemStopped(run?.metadata ?? {})).toEqual({
         summary: null,
         limit: { ...limit, granted: 0, used: 1, bindingId: 'binding', workflow: 'w' },
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a start refused before launch records the stop on the run whose end caused it', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const { claimed, admitted } = starts(harness);
+      const ended = await admitted('s', {});
+      const identity = await claimed('s', {}, { source: RUN_ENDED_SOURCE_ACTOR, id: ended });
+      const failed = await store.failStartBindingPreparation({
+        ...identity,
+        retryable: false,
+        error: 'launch_preparation_failed',
+        refusal: 'no_default_provider',
+      });
+      expect(failed).toBe(true);
+      const run = await store.getWorkflowRun(ended);
+      expect(readItemStopped(run?.metadata ?? {})).toEqual({
+        summary: null,
+        refused: {
+          receiptId: identity.receiptId,
+          bindingId: 'binding',
+          workflow: 'w',
+          reason: 'no_default_provider',
+        },
       });
     } finally {
       await harness.close();

@@ -192,6 +192,9 @@ async function makeFixture(label: string): Promise<Fixture> {
         ARCHON_NODE_EXECUTION: '',
         ARCHON_TRIGGER_HOST: '',
         DATABASE_URL: '',
+        // A shell inside an Archon run exports its own provider and webhook sources.
+        DEFAULT_AI_ASSISTANT: '',
+        ARCHON_WEBHOOK_SOURCES: '',
         ARCHON_HOME: archonHome,
         GITHUB_TOKEN: '',
         GH_TOKEN: '',
@@ -1452,5 +1455,82 @@ describe('a start limit', () => {
     const next = await stopped();
     expect(next).toHaveLength(1);
     expect(next[0]?.stoppedIn?.runId).not.toBe(runs[2]?.id);
+  }, 90_000);
+});
+
+// An AI stage whose only prompt is skipped, so it needs a provider to start and never calls one.
+const STAGE_AI = `name: stage-ai
+description: Judge what stage A planned.
+mutates_checkout: false
+inputs:
+  plan: { required: true }
+  issue: { required: true }
+nodes:
+  - id: gate
+    bash: echo no
+  - id: judge
+    depends_on: [gate]
+    when: "$gate.output == 'yes'"
+    prompt: Judge the plan.
+`;
+
+describe('a start refused before launch', () => {
+  test('stops its item on the run whose end caused it, in the item read and attention, until a later run on the item', async () => {
+    const fixture = await makeFixture('no-provider');
+    writeFileSync(join(fixture.projectRoot, '.archon', 'workflows', 'stage-ai.yaml'), STAGE_AI);
+    fixture.bind('judge-after-plan', RUN_ENDED, { workflowName: 'stage-ai' });
+    // A Claude key that passes the credential check and reaches nothing: the stage's only
+    // prompt is skipped by its `when:`, so no provider is called.
+    const claude = {
+      CLAUDE_CONFIG_DIR: join(fixture.root, 'claude-config'),
+      ANTHROPIC_API_KEY: 'fixture-key',
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:9',
+      CLAUDE_API_KEY: '',
+      CLAUDE_CODE_OAUTH_TOKEN: '',
+      ANTHROPIC_AUTH_TOKEN: '',
+      CLAUDE_CODE_USE_BEDROCK: '0',
+      CLAUDE_CODE_USE_VERTEX: '0',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    };
+    mkdirSync(claude.CLAUDE_CONFIG_DIR);
+    const cli = (args: string[]) => fixture.cli(args, claude);
+    const run = (workflow: string) =>
+      cli([
+        ...['workflow', 'run', workflow, '--no-worktree', '--item', 'issue-1'],
+        ...['--input', 'plan=p1', '--input', 'issue=i1'],
+      ]);
+    const stopped = async () => {
+      const read = itemReadSchema.parse(
+        JSON.parse(await cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+      );
+      const attention = JSON.parse(await cli(['workflow', 'attention', '--json'])) as {
+        items: { kind: string; ref: string }[];
+      };
+      return {
+        onItem: read.questions.filter(question => question.kind === 'stopped'),
+        inAttention: attention.items.filter(item => item.kind === 'stopped'),
+      };
+    };
+
+    await run('stage-a');
+    const [planned] = fixture.rows<RunRow>(RUNS_SQL);
+    const before = await stopped();
+    expect(before.onItem).toEqual([
+      expect.objectContaining({
+        item: expect.objectContaining({ key: 'issue-1' }),
+        stoppedIn: { runId: planned?.id, workflow: 'stage-a', outcome: 'planned' },
+        refused: {
+          receiptId: expect.any(String),
+          bindingId: 'judge-after-plan',
+          workflow: 'stage-ai',
+          reason: 'no_default_provider',
+        },
+      }),
+    ]);
+    expect(before.inAttention.map(item => item.ref)).toEqual(before.onItem.map(item => item.ref));
+
+    await cli(['ai', 'default', 'claude']);
+    await run('stage-ai');
+    expect(await stopped()).toEqual({ onItem: [], inAttention: [] });
   }, 90_000);
 });

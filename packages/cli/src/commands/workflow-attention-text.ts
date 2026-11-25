@@ -19,6 +19,7 @@ import {
   type AttentionAnswerer,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowNotice } from '@archon/workflows/workflow-notice';
+import type { StoppedRefusal } from '@archon/workflows/schemas/run-metadata';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { formatAge } from './workflow-shared';
 
@@ -149,6 +150,24 @@ function overdueWaitLines(item: Extract<AttentionQueueItem, { kind: 'overdue_wai
   ];
 }
 
+/** What preparation could not do, by the code its refusal recorded. */
+const REFUSAL_REASONS: Record<StoppedRefusal['reason'], string> = {
+  no_default_provider: 'no default AI provider is set',
+  run_as_user_failed: "the binding's run-as user could not be found",
+  run_configuration_failed: "the item's or the binding's run configuration could not be read",
+  launch_preparation_failed: 'preparing its launch failed',
+};
+
+/** What a stop says when preparation refused the start its run's end caused. */
+function refusedLines(workflow: string, outcome: string, refused: StoppedRefusal): string[] {
+  return [
+    `${workflow} ended as '${outcome}'; its start of ${refused.workflow} was refused before launch: ${REFUSAL_REASONS[refused.reason]}`,
+    refused.reason === 'no_default_provider'
+      ? 'set one: archon ai default <provider>'
+      : `see the refusal: archon trigger inspect ${refused.receiptId}`,
+  ];
+}
+
 /** A path as one shell word: quoted only when it holds a character a shell would split on. */
 const shellWord = (text: string): string =>
   /^[\w@%+=:,./-]+$/u.test(text) ? text : `'${text.replaceAll("'", `'\\''`)}'`;
@@ -160,14 +179,16 @@ const shellWord = (text: string): string =>
  */
 function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
   const { runId, workflow, outcome } = item.stoppedIn;
-  const { limit } = item;
+  const { limit, refused } = item;
   const lines =
-    limit === undefined
-      ? [`${workflow} ended as '${outcome}'; nothing started and it left no ask`]
-      : [
+    limit !== undefined
+      ? [
           `${workflow} ended as '${outcome}'; its start of ${limit.workflow} was refused at start limit '${limit.name}': ${String(limit.used)} of ${String(limit.starts + limit.granted)} starts used`,
           `one more start: an asks-settled binding that grants '${limit.name}', or a start of ${limit.workflow} by hand`,
-        ];
+        ]
+      : refused !== undefined
+        ? refusedLines(workflow, outcome, refused)
+        : [`${workflow} ended as '${outcome}'; nothing started and it left no ask`];
   if (item.summary !== null) lines.push(`summary: ${oneLine(item.summary)}`);
   lines.push(
     `show the run: ${command(`get ${runId}`)}`,
@@ -175,8 +196,9 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
   );
   if (item.item !== undefined) {
     const cwd = item.checkout === null ? '' : ` --cwd ${shellWord(item.checkout)}`;
+    const next = limit?.workflow ?? refused?.workflow;
     const start = command(
-      `run ${limit === undefined ? '<workflow>' : shellWord(limit.workflow)} --item ${shellWord(item.item.key)}${cwd}`
+      `run ${next === undefined ? '<workflow>' : shellWord(next)} --item ${shellWord(item.item.key)}${cwd}`
     );
     lines.push(
       `run a stage on it, which closes this: ${start}${item.checkout === null ? ", from the item's project" : ''}`

@@ -4,9 +4,20 @@
  * queue while each is still its item's last run.
  */
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
-import { ITEM_STOPPED_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
+import {
+  ASKS_SETTLED_SOURCE_ACTOR,
+  RUN_ENDED_SOURCE_ACTOR,
+  sourceReceiptInputSchema,
+} from '@archon/workflows/schemas/resource-start';
+import {
+  ITEM_STOPPED_METADATA_KEY,
+  itemStoppedMetadata,
+  type StoppedLimit,
+  type StoppedRefusal,
+} from '@archon/workflows/schemas/run-metadata';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { getDatabaseType, getDialect, pool } from './connection';
+import type { TransactionQuery as Query } from './resource-slots';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
 
@@ -42,4 +53,47 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
     }
   }
   return runs;
+}
+
+/**
+ * Record that a refused start stopped its item, inside the refusing transaction: on the
+ * completed run whose end (a run-ended binding) or settled asks (an asks-settled binding)
+ * caused the start, which is then the item's last step. Admission refuses at a start limit
+ * (`limit`); preparation refuses before launch (`refused`). The attention queue lists the
+ * item as `stopped` while that run is the item's newest, and any later run on the item ends
+ * it. A start caused by anything else (a fire, a schedule, a node) has no such run; a start
+ * on another item than the run's (a linked start) and a run with an open ask or wait on the
+ * item stop nothing.
+ */
+export async function recordRefusedStartStop(
+  query: Query,
+  receiptId: string,
+  itemKey: string,
+  refusal: { limit: StoppedLimit } | { refused: StoppedRefusal }
+): Promise<void> {
+  const receipt = (
+    await query<{ source_actor: unknown }>(
+      'SELECT source_actor FROM remote_agent_start_receipts WHERE id = $1',
+      [receiptId]
+    )
+  ).rows[0];
+  const stored = receipt?.source_actor;
+  const actor = sourceReceiptInputSchema.shape.sourceActor.safeParse(
+    typeof stored === 'string' ? JSON.parse(stored) : (stored ?? null)
+  );
+  const source = actor.success ? actor.data : undefined;
+  if (source?.source !== RUN_ENDED_SOURCE_ACTOR && source?.source !== ASKS_SETTLED_SOURCE_ACTOR)
+    return;
+  await query(
+    `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 3)}
+      WHERE id = $1 AND status = 'completed'
+        AND EXISTS (SELECT 1 FROM remote_agent_items i
+                     WHERE i.id = remote_agent_workflow_runs.item_id AND i.key = $2)
+        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
+                         WHERE run_id = $4 AND closed_as IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
+                         WHERE run_id = $4 AND closed_as IS NULL)`,
+    // The run id twice: the runs table keys it as a UUID on PostgreSQL, asks and waits as text.
+    [source.id, itemKey, JSON.stringify(itemStoppedMetadata(null, refusal)), source.id]
+  );
 }

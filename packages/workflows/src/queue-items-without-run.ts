@@ -196,6 +196,7 @@ export async function stoppedQueueItem(
     stoppedIn: { runId: run.id, workflow: run.workflow_name, outcome: run.completed_outcome },
     summary: stopped.summary,
     ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
+    ...(stopped.refused === undefined ? {} : { refused: stopped.refused }),
     checkout: codebase?.default_cwd ?? null,
   };
 }
