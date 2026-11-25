@@ -16,6 +16,7 @@ import type { DashboardWorkflowRun } from '../schemas/workflow-run-listing';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { readProviderEventRows } from '../provider-event-reader';
 import type { TransactionView } from './transaction-view';
+import { isOutcomeUnknownRun } from '../outcome-unknown';
 
 type TransactionReads = Pick<
   TransactionView,
@@ -38,6 +39,7 @@ type TransactionReads = Pick<
   | 'listAttentionQueueRows'
   | 'listUnfinishedRuns'
   | 'findOpenWorkRuns'
+  | 'listStoppedItemRuns'
   | 'listWorkflowRuns'
   | 'getCodebase'
   | 'getCodebaseEnvVars'
@@ -278,6 +280,14 @@ export function createTransactionReads(
               ![...runs.values()].some(other => other.adopted_from_run_id === run.id)
           )
         ).slice(0, options?.limit ?? 50)
+      ),
+    // This store holds no items, so the only runs that stop one are those whose outcome is
+    // unknown, which are listed with no item until resumed or abandoned.
+    listStoppedItemRuns: async () =>
+      structuredClone(
+        [...runs.values()]
+          .filter(isOutcomeUnknownRun)
+          .sort((a, b) => a.started_at.getTime() - b.started_at.getTime())
       ),
     listWorkflowRuns: async (options): ReturnType<IWorkflowStore['listWorkflowRuns']> => {
       const parents =

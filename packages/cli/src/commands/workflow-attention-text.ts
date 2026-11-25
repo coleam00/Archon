@@ -232,24 +232,30 @@ function stoppedItemLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>
 /**
  * A failed run that is the newest on its item: its error, and the restarts. A restart from
  * the run's record repeats its inputs; naming the workflow passes others. A run that stopped
- * with an unknown outcome is resumed once its operator checked what it did.
+ * with an unknown outcome, on an item or not, is resumed or abandoned once its operator
+ * checked what it did; only that closes it.
  */
 function failedLines(
   item: Extract<AttentionQueueItem, { kind: 'stopped' }>,
   { error, outcomeUnknown }: NonNullable<Extract<AttentionQueueItem, { kind: 'stopped' }>['failed']>
 ): string[] {
   const { runId, workflow } = item.stoppedIn;
+  const failed = `${workflow} failed${error === null ? '' : `: ${oneLine(error)}`}`;
+  const show = `show the run: ${command(`get ${runId}`)}`;
+  const readItem = `read the item: ${command(`runs --item-of ${runId}`)}`;
+  if (outcomeUnknown)
+    return [
+      failed,
+      `its outcome is unknown, so nothing continues it by itself: check what it did, then resume it with ${command(`resume ${runId}`)}, or abandon it with ${command(`abandon ${runId}`)}`,
+      show,
+      ...(item.item === undefined ? [] : [readItem]),
+    ];
   return [
-    `${workflow} failed${error === null ? '' : `: ${oneLine(error)}`}`,
-    ...(outcomeUnknown
-      ? [
-          `its outcome is unknown, so nothing continues it by itself: check what it did, then resume it with ${command(`resume ${runId}`)}, or abandon it with ${command(`abandon ${runId}`)}`,
-        ]
-      : []),
+    failed,
     `start it again from its record, which closes this: ${command(`run --supersedes ${runId}`)}`,
     `or with other inputs: ${command(`run ${shellWord(workflow)} --supersedes ${runId} --input <name>=<value>`)}`,
-    `show the run: ${command(`get ${runId}`)}`,
-    `read the item: ${command(`runs --item-of ${runId}`)}`,
+    show,
+    readItem,
   ];
 }
 

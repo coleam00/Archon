@@ -1144,7 +1144,7 @@ A node failure can record the kind `outcome_unknown`: the node may have had a si
 - A run whose source this host cannot read is failed instead of released to another host, since the host that continues a released run runs its failed nodes again.
 - When a run continues after a wait, an `always_run` node that failed this way is replayed as failed instead of running again.
 - A loop group does not start another round after a round that left such a failure, which an `all_done` fan-out in its body can let complete. The group fails with `child_failed`.
-- In `archon workflow attention --watch`, the run's terminal line names the node with `(outcome_unknown)` and gives the resume and abandon commands. A failed run that is the newest on its item is also listed by `archon workflow attention`, with the same commands.
+- In `archon workflow attention --watch`, the run's terminal line names the node with `(outcome_unknown)` and gives the resume and abandon commands. Every failed run with stop reason `outcome_unknown` is also listed by `archon workflow attention` as `stopped`, child runs and runs with no item included, with the same commands, until it is resumed or abandoned. A later run on its item does not close it. A completed run that went past such an instance under `all_done` shows only in the watch.
 
 The operator decides what happens next: check what the node did, then continue with `archon workflow resume <run-id>`, which runs the node again, or discard the run with `archon workflow abandon <run-id>`. Resume works even when the node was the run's first.
 

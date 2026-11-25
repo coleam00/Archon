@@ -148,15 +148,30 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       });
       expect(await stopped()).toEqual([]);
 
-      // A run that stopped with an unknown outcome says so: it is resumed, not restarted.
+      // A run that stopped with an unknown outcome says so, and only its resume or abandon
+      // closes it: a later run on the item does not, and a child run with no item is listed.
       const unknown = await createOnItem(harness, 'check');
       await harness.store.claimPendingWorkflowRun(unknown);
       await harness.store.failWorkflowRun(unknown, 'write timed out', {
         exitReason: 'outcome_unknown',
       });
-      expect(await stopped()).toMatchObject([
-        { stoppedIn: { runId: unknown }, failed: { outcomeUnknown: true } },
+      await createOnItem(harness, 'check');
+      const child = await harness.store.createWorkflowRun({
+        workflow_name: 'writer',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        parent_run_id: unknown,
+      });
+      await harness.store.claimPendingWorkflowRun(child.id);
+      await harness.store.failWorkflowRun(child.id, 'write timed out', {
+        exitReason: 'outcome_unknown',
+      });
+      const listed = await stopped();
+      expect(listed).toMatchObject([
+        { stoppedIn: { runId: unknown }, item: { key: 'pr-7' }, failed: { outcomeUnknown: true } },
+        { stoppedIn: { runId: child.id }, failed: { outcomeUnknown: true } },
       ]);
+      expect(listed[1]).not.toHaveProperty('item');
     } finally {
       await harness.close();
     }

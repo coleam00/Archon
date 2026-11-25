@@ -376,6 +376,20 @@ test('a stopped item names its stage and outcome, and its commands work from any
   ).join('\n');
   expect(unknown).toContain('archon workflow resume run-9');
   expect(unknown).toContain('archon workflow abandon run-9');
+  // A restart does not close it, so the restart is not offered; with no item, nor is the item read.
+  expect(unknown).not.toContain('--supersedes');
+  const { item: _item, ...withoutItem } = stopped;
+  const childUnknown = attentionItemLines(
+    {
+      ...withoutItem,
+      stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
+      summary: null,
+      failed: { error: null, outcomeUnknown: true },
+    },
+    'brief'
+  ).join('\n');
+  expect(childUnknown).toContain('archon workflow resume run-9');
+  expect(childUnknown).not.toContain('--item-of');
 
   // Stopped by a start refused at its limit: it names the limit and starts that workflow.
   const limited = attentionItemLines(

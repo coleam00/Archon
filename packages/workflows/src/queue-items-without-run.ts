@@ -186,7 +186,7 @@ export type StoppedItemStore = Pick<
 /**
  * The queue item of an item `run` stopped, or null when the run has no item, or completed
  * and recorded no stop. A failed run stopped its item by failing: nothing moves it on by
- * itself. A run that settled asks may have no outcome; a refused start's stop dates from its
+ * itself. A run whose outcome is unknown is listed with no item too, and as a child. A run that settled asks may have no outcome; a refused start's stop dates from its
  * latest refusal. Nothing here changes the item. Each surface spells the commands that
  * read it and start a new run on it, which closes the item.
  */
@@ -201,8 +201,9 @@ export async function stoppedQueueItem(
   const stopped: ItemStopped | undefined = failed
     ? { summary: null }
     : readItemStopped(run.metadata);
-  if (stopped === undefined || run.item_id === null) return null;
-  const item = await store.getItem(run.item_id);
+  const outcomeUnknown = isOutcomeUnknownRun(run);
+  if (stopped === undefined || (run.item_id === null && !outcomeUnknown)) return null;
+  const item = run.item_id === null ? null : await store.getItem(run.item_id);
   let codebase: AttentionQueueItemSources['codebase'] = null;
   if (run.codebase_id !== null) {
     const read = codebases.get(run.codebase_id) ?? store.getCodebase(run.codebase_id);
@@ -225,7 +226,7 @@ export async function stoppedQueueItem(
       ? {
           failed: {
             error: failureReason(run, failedEvents),
-            ...(isOutcomeUnknownRun(run) ? { outcomeUnknown: true as const } : {}),
+            ...(outcomeUnknown ? { outcomeUnknown: true as const } : {}),
           },
         }
       : {}),
@@ -256,7 +257,8 @@ function failureReason(run: WorkflowRun, events: readonly WorkflowEventRow[]): s
 
 /**
  * The items runs stopped, for `AttentionQueueSource.itemsWithoutRun`, but for an item whose
- * end holds (`readHoldingItemEnd`): an operator said nothing more happens on it.
+ * end holds (`readHoldingItemEnd`): an operator said nothing more happens on it. A run whose
+ * outcome is unknown stays until resumed or abandoned, since its write is still unreconciled.
  */
 export async function stoppedItems(
   store: StoppedItemStore
@@ -276,7 +278,10 @@ export async function stoppedItems(
       items.push(run);
       continue;
     }
-    const end = run.item_id === null ? null : await readHoldingItemEnd(store, run.item_id);
+    const end =
+      run.item_id === null || isOutcomeUnknownRun(run)
+        ? null
+        : await readHoldingItemEnd(store, run.item_id);
     if (end !== null && !('type' in end)) continue;
     const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
     if (item !== null) items.push(item);
