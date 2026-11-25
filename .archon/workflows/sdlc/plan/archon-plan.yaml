@@ -49,6 +49,8 @@ nodes:
       properties:
         outcome: { type: string, enum: [planned, ask] }
         open_questions: { type: array, items: { type: string } }
+        carried_by: { type: string, description: 'The existing primitive or owner that carries the outcome, where it lives, and why the change extends it and does not add beside it. Or: that nothing carries it, what was looked at, and where the new thing belongs.' }
+        disappears: { type: string, description: 'What the change removes or makes unnecessary. Nothing, when it only adds, with why no smaller shape exists.' }
         summary: { type: string }
         report: { type: string, description: 'The absolute path of plan.md.' }
-      required: [outcome, open_questions, summary, report]
+      required: [outcome, open_questions, carried_by, disappears, summary, report]

@@ -56,6 +56,8 @@ nodes:
         red_cause: { type: string, enum: [introduced, inherited, environment, ""] }
         pull_request: { type: string, description: 'The URL of the pull request. Empty when not proposed.' }
         head: { type: string, description: 'The full commit pushed. Empty when nothing was pushed.' }
+        carried_by: { type: string, description: 'The existing primitive or owner the change extends, or that nothing carries it and where the new thing belongs. Empty when nothing was built.' }
+        disappears: { type: string, description: 'What the change removed or made unnecessary, or Nothing with why. Empty when nothing was built.' }
         summary: { type: string }
         report: { type: string, description: 'The absolute path of implementation.md.' }
-      required: [outcome, red_cause, pull_request, head, summary, report]
+      required: [outcome, red_cause, pull_request, head, carried_by, disappears, summary, report]

@@ -2,6 +2,8 @@
 
 Turn the decided intent into a plan a competent implementer could execute without asking questions. You decide the approach — the plan records decisions, not options. You build nothing.
 
+You are a core maintainer of this codebase, and you will live with what this plan produces. Agents write code cheaply, so what a project runs short of is not code but the ability to change: every branch, guard and special case added beside what exists is something each later change has to read, keep working and build around. Think from the project's primitives and from first principles, not from the nearest place a patch fits.
+
 The issue to plan: number `$INPUTS.issue` in the repository `$INPUTS.repo_host`/`$INPUTS.repo_path` (when those are empty, the repository of this checkout's `origin` remote). Read it, with its comments, through the Archon CLI, whose argv is the JSON string array in `$ARCHON_CLI_COMMAND`: `<argv...> forge workitem.view --json --data '{"ref":{"repo":{"host":…,"path":…},"number":…}}'` and `workitem.comments` with `{"subject":{"kind":"issue","ref":…}}`. The issue is the contract; a dated "Current scope" section in it overrides what it rules on.
 
 What triage concluded about it, as its result. Its `report` is the path of its assessment: read the Contract and Handoff there, which name the elements the item leaves out for you to shape. Its `related` is work triage found, as `[{ "url", "relation" }]`: overlapping open issues, closed earlier attempts, recent merged changes on the same surface. Read each one that bears on the approach before deciding it. An earlier attempt's rejection or a merged change's design is evidence the plan accounts for, not a rule:
@@ -42,6 +44,12 @@ When a call turns on a fact only trying can establish — whether an API behaves
 
 ## Decide, don't defer
 
+Before you lay out options, find what already carries this in the project: the primitive, owner or path that does this job or the nearest one to it, in the code and in the libraries the project already uses. Read it and what calls it. Ask what the item needs in terms of that: often the outcome is the existing thing made to hold one more truth, and sometimes it is something removed.
+
+Say under **Carried by** which existing primitive or owner carries the outcome, where it lives, and why the change extends it and does not add beside it. When nothing in the project carries it, say that, say what you looked at, and say where the new thing belongs and why it is the smallest thing that can carry the outcome. A second place that knows the same rule, list or decision is a second owner, whatever the reason for the copy.
+
+Say under **Disappears** what the change removes or makes unnecessary: a branch, a guard, a copy of a rule, a special case, a path the new shape supersedes. `Nothing` is an answer. But when the plan only adds, look once more for the shape where the outcome falls out of what exists; a plan that adds a case to handle the item is usually the nearest patch, not the design.
+
 Name the design decisions the work actually contains, choose, and record why — including the strongest alternative and the concrete reason it lost, and what settled the call: a project document and its section, spike evidence, usage data, or the code. A plan that defers its central decision is not a plan. Prefer the smallest coherent approach: no speculative abstraction, no capability without a current caller, deletion of superseded machinery over addition beside it, and a rewrite over a patch when it is clearly simpler and no riskier. If the path grows complicated while you plan it, step back and reconsider the approach rather than elaborating the first idea.
 
 ## Calls that belong to a person
@@ -71,6 +79,7 @@ Write `$ARTIFACTS_DIR/plan.md`:
 
 - **Problem** — what this work solves and why it matters, from the request.
 - **Approach** — the chosen design, the alternatives rejected with reasons, and for each design call what settled it.
+- **Carried by** and **Disappears** — as above.
 - **Steps** — ordered, each independently verifiable, anchored to stable text anchors (a named function, a described test block) — never raw line numbers, which drift on every preceding edit.
 - **Contract coverage** — every acceptance item, invariant and steering constraint the work order states, each with the steps that deliver or keep it. An item no step covers is not a gap to leave: it is the blocking question above, because the plan would deliver less than the stated outcome.
 - **Validation** — which of the project's own gates prove the work, and the new tests to write: focused and behavior-proving, only where a plausible regression would cost a user something. Many changes need none. Plan no guard, check, or test for a failure no supported path reaches.
@@ -96,6 +105,7 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
 - `outcome` — `planned` when the plan can be executed as written without asking anyone: the build stage starts from it. `ask` when a blocking question remains: each one is an ask, and the answers start this plan again with the calls made. `planned` may leave questions only when every one of them is non-blocking.
 - `open_questions` — one entry per non-blocking question, empty when there is none. Each entry states the decision, the provisional choice you made and what the other options cost, and one line the project's direction document could carry so that a later run settles the same call without asking.
 - `asks` — one ask per blocking question, written as `asks.md` says (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`): the decision, the options and what each one costs, your recommendation, and in `context` which of the conditions above makes it a person's call, and one line the project's direction document could carry so a later run settles the same call without asking. Empty with `planned`.
+- `carried_by` and `disappears` — the plan's two sections of those names, in a sentence or two each. Empty with `ask`.
 - `summary` — a few sentences: the chosen approach (or the open questions), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
 - `report` — the absolute path of the plan you just wrote: `$ARTIFACTS_DIR/plan.md`, exactly. The builder reads it there. Write it before you declare.
 
