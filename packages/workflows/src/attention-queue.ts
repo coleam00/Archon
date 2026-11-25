@@ -126,7 +126,9 @@ const itemBase = {
  * open past their deadline, which the awaited event, another run of the waiting workflow
  * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
  * an outcome that is not final (`returns.final`), started nothing and left no ask or wait,
- * so nothing moves it: it takes no answer, and any newer run on the item closes it.
+ * so nothing moves it: it takes no answer, and any newer run on the item closes it;
+ * `preparation_lost` is a binding start whose preparer this process can prove gone, which
+ * `archon trigger recover-preparation` returns to pending.
  *
  * `run` is the paused run that holds the item. A gate, a usage-limit wait and an
  * unreadable pause are always a run. A question may have none: then nothing is paused on
@@ -206,12 +208,30 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),
+  z.object({
+    kind: z.literal('preparation_lost'),
+    ...itemBase,
+    /**
+     * The binding start whose preparer is provably gone: it stays `preparing`, owned by
+     * `ownerId`, and nothing prepares it again until `archon trigger recover-preparation`
+     * returns it to pending. `pausedAt` is when the preparation was claimed.
+     */
+    start: z.object({
+      receiptId: z.string(),
+      bindingId: z.string(),
+      hostId: z.string().nullable(),
+      workflow: z.string().nullable(),
+      /** The item key the start names, also before a start has made the item. */
+      itemKey: z.string().nullable(),
+      ownerId: z.string(),
+    }),
+  }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
 /** An item a paused run holds. */
 export type RunAttentionQueueItem = Exclude<
   AttentionQueueItem,
-  { kind: 'overdue_wait' | 'stopped' }
+  { kind: 'overdue_wait' | 'stopped' | 'preparation_lost' }
 > & {
   run: object;
 };
@@ -244,11 +264,13 @@ export type AskQueueItem = Extract<AttentionQueueItem, { kind: 'attention' }> & 
 /** An item no run holds: an ask, an overdue wait, or a stopped item. */
 export type AttentionQueueItemWithoutRun =
   | AskQueueItem
-  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' }>;
+  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' | 'preparation_lost' }>;
 /** An overdue wait's queue item. */
 export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
 /** A stopped item's queue item. */
 export type StoppedQueueItem = Extract<AttentionQueueItem, { kind: 'stopped' }>;
+/** A lost binding preparation's queue item. */
+export type PreparationLostQueueItem = Extract<AttentionQueueItem, { kind: 'preparation_lost' }>;
 
 const RUN_REF_SEPARATOR = ':';
 

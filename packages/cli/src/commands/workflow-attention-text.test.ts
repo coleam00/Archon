@@ -229,6 +229,29 @@ test('an ask with no recommendation says it has none and offers none to accept',
   expect(reasoned).not.toContain('recommended: none');
 });
 
+test('a lost preparation names its start and the recovery that returns it to pending', () => {
+  const block = attentionItemLines(
+    {
+      ...base,
+      kind: 'preparation_lost',
+      ref: 'preparing:r-1:build',
+      start: {
+        receiptId: 'r-1',
+        bindingId: 'build',
+        hostId: 'h1',
+        workflow: 'build',
+        itemKey: 'issue-1',
+        ownerId: 'o-1',
+      },
+    },
+    'brief'
+  ).join('\n');
+  expect(block).toContain('preparer gone');
+  expect(block).toContain('on item issue-1');
+  expect(block).toContain('archon trigger recover-preparation r-1 build --owner o-1 --yes');
+  expect(block).toContain('archon trigger drain --host h1');
+});
+
 test('a stopped item names its stage and outcome, and its commands work from any directory', () => {
   const stopped: Extract<AttentionQueueItem, { kind: 'stopped' }> = {
     ...base,

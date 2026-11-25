@@ -157,6 +157,16 @@ async function descendantRunIds(roots: readonly string[]): Promise<string[]> {
   return found;
 }
 
+/** The item `key` names in project `projectKey`, or null when no start has made it yet. */
+export async function findItem(projectKey: string, key: string): Promise<WorkflowItem | null> {
+  const result = await pool.query<{ id: string; project_key: string; key: string }>(
+    'SELECT id, project_key, key FROM remote_agent_items WHERE project_key = $1 AND key = $2',
+    [projectKey, key]
+  );
+  const row = result.rows[0];
+  return row ? { id: row.id, projectKey: row.project_key, key: row.key } : null;
+}
+
 export async function getItem(id: string): Promise<WorkflowItem | null> {
   const result = await pool.query<{ id: string; project_key: string; key: string }>(
     'SELECT id, project_key, key FROM remote_agent_items WHERE id = $1',

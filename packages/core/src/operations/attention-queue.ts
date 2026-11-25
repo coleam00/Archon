@@ -17,6 +17,8 @@ import {
   type AskItemStore,
   stoppedItems,
   type StoppedItemStore,
+  preparationLostItems,
+  type PreparingItemStore,
 } from '@archon/workflows/queue-items-without-run';
 import { stateProjectKeySchema } from '@archon/workflows/state-document-store';
 import type { Codebase } from '../schemas/codebase';
@@ -50,6 +52,7 @@ export function attentionQueueSource<
     AskItemStore &
     WaitItemStore &
     StoppedItemStore &
+    PreparingItemStore &
     Pick<IWorkflowStore, 'listWaitedItemHolders'>,
 >(
   store: Store,
@@ -65,6 +68,7 @@ export function attentionQueueSource<
       ...(await openAskItems(store)),
       ...(await overdueWaitItems(store)),
       ...(await stoppedItems(store)),
+      ...(await preparationLostItems(store)),
     ],
     branchOf: async run =>
       run.codebase_id === null || run.working_path === null

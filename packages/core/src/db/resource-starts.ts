@@ -65,6 +65,7 @@ import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normal
 import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
+import { currentProcessOwner } from '@archon/paths/process-owner';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { toHydratedTimestamp } from './timestamps';
 import { InstallHeldError } from '@archon/workflows/store';
@@ -716,10 +717,11 @@ export async function claimStartBindingPreparation(input: {
   bindingId: string;
   ownerId: string;
 }): Promise<boolean> {
+  // The claiming process is recorded beside the owner id, so a reader can prove it gone.
   const result = await getDatabase().query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'preparing', preparation_owner = $3, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'preparing', preparation_owner = $3, preparation_process = $4, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status IN ('pending','failed')`,
-    [input.receiptId, input.bindingId, input.ownerId]
+    [input.receiptId, input.bindingId, input.ownerId, JSON.stringify(currentProcessOwner)]
   );
   return result.rowCount === 1;
 }
@@ -806,7 +808,7 @@ export async function resetStartBindingPreparation(
   query: Query = (sql, params) => getDatabase().query(sql, params)
 ): Promise<boolean> {
   const result = await query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'pending', preparation_owner = NULL, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'pending', preparation_owner = NULL, preparation_process = NULL, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
     [input.receiptId, input.bindingId, input.ownerId]
   );
