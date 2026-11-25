@@ -1,6 +1,6 @@
 import { ParentStatusReadError } from '../../../parent-status-read';
 import { awaitingTurnSettlement } from '@archon/provider-contract';
-import type { MessageChunk, TokenUsage } from '@archon/provider-contract';
+import type { MessageChunk, ProviderFailure, TokenUsage } from '@archon/provider-contract';
 import { sessionPreview } from '@archon/provider-contract';
 import {
   type TurnCutOff,
@@ -17,7 +17,7 @@ import {
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import { createStallMessenger, type StallMessagePass } from '../../../stall-message';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
-import type { NodeFailureKind, NodeProviderFailure } from '../../../schemas/node-execution';
+import type { NodeFailureKind } from '../../../schemas/node-execution';
 import { createProviderEventHandler, type ProviderEventHandler } from '../../../provider-events';
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
@@ -61,7 +61,7 @@ export type AttemptVerdict = { kind: 'retry' } | IterationFailed;
 export interface IterationFailure {
   failureKind: NodeFailureKind;
   error: string;
-  providerFailure?: NodeProviderFailure;
+  providerFailure?: ProviderFailure;
 }
 
 /** The iteration's transient-retry position, shared by every attempt of one iteration. */
@@ -762,7 +762,6 @@ function throwOnResultFailure(run: LoopRun, i: number, msg: ResultChunk): void {
     throw providerReportedFailure(
       `Loop '${nodeId}' iteration ${String(i)}`,
       msg.failure,
-      run.workflowProvider,
       run.resolvedOptions?.maxBudgetUsd,
       { nodeId, iteration: i }
     );

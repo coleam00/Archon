@@ -144,19 +144,17 @@ describe('a usage-limit wait', () => {
       nodeId: 'implement',
       resumeAt: '2026-10-15T14:00:00.000Z',
     });
-    // The provider is read from the waiting node's latest failure record, not the wait.
+    // The provider is the one the waiting node's latest failure record was bound to.
     const failed = (stepName: string, provider?: string) => ({
       id: `${stepName}-${provider ?? 'none'}`,
       workflow_run_id: 'limited',
       event_type: 'node_failed',
       step_index: null,
       step_name: stepName,
+      // The released record shape: the node's bound provider sits beside its failure.
       data: {
-        provider_failure: {
-          class: 'quota_exhausted',
-          evidence: 'limit',
-          ...(provider ? { provider } : {}),
-        },
+        ...(provider ? { provider } : {}),
+        provider_failure: { class: 'quota_exhausted', evidence: 'limit' },
       },
       created_at: '2026-10-15T09:00:00.000Z',
     });
@@ -188,7 +186,7 @@ describe('a usage-limit wait', () => {
       provider: 'claude',
       pausedAt: '2026-10-15T09:00:00.000Z',
     });
-    // A failure an older Archon version recorded names no provider.
+    // A failure record bound to no provider names none.
     expect(await attentionQueueItemForRun(source([failed('implement')]), run)).not.toHaveProperty(
       'provider',
       expect.anything()

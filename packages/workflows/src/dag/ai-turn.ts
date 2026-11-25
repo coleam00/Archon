@@ -1,7 +1,7 @@
-import { type NodeFailureKind, type NodeProviderFailure } from '../schemas/node-execution';
+import { type NodeFailureKind } from '../schemas/node-execution';
 import type { MessageChunk, ProviderCapabilities, ProviderEvent } from '@archon/provider-contract';
 import { providerEventSchema, type ProviderFailure } from '@archon/provider-contract';
-import { isProviderLimit, nodeFailureKindOf } from '../executor-shared';
+import { nodeFailureKindOf } from '../executor-shared';
 import { getLog } from './log';
 
 export function assertResultBeforeSettlement(
@@ -145,23 +145,20 @@ export class NodeFailure extends Error {
   constructor(
     readonly kind: NodeFailureKind,
     message: string,
-    /** The provider's typed failure and the provider that reported it, recorded on the failed node. */
-    readonly providerFailure?: NodeProviderFailure
+    /** The provider's typed failure, recorded unchanged on the failed node. */
+    readonly providerFailure?: ProviderFailure
   ) {
     super(message);
   }
 }
 
 /**
- * A provider's typed failure on its result chunk, from `provider`. The kind comes from the
- * class, so retry never reads the evidence text, which stays in the message for the operator.
- * A rate or usage limit also records `provider`, which the run's usage-limit wait names;
- * every other failure is recorded as the provider reported it.
+ * A provider's typed failure on its result chunk. The kind comes from the class, so retry
+ * never reads the evidence text, which stays in the message for the operator.
  */
 export function providerReportedFailure(
   subject: string,
   failure: ProviderFailure,
-  provider: string,
   maxBudgetUsd: number | undefined,
   logContext: Record<string, unknown>
 ): NodeFailure {
@@ -185,9 +182,5 @@ export function providerReportedFailure(
     default:
       message = `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
   }
-  return new NodeFailure(
-    nodeFailureKindOf(failure),
-    message,
-    isProviderLimit(failure) ? { ...failure, provider } : failure
-  );
+  return new NodeFailure(nodeFailureKindOf(failure), message, failure);
 }

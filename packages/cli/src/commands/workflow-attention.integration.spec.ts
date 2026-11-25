@@ -1397,12 +1397,12 @@ test('runs paused on one provider limit list as one entry until they resume', as
   const pause = async (node: string, provider: string, resumeAt: string): Promise<string> => {
     const run = await store.createWorkflowRun({ workflow_name: 'deliver', user_message: '' });
     await store.claimPendingWorkflowRun(run.id);
-    // The node's failure record names the provider; the wait itself stores none.
+    // The node's failure record names its bound provider; the wait itself stores none.
     await store.persistWorkflowEvent({
       workflow_run_id: run.id,
       event_type: 'node_failed',
       step_name: node,
-      data: { provider_failure: { class: 'quota_exhausted', evidence: 'limit', provider } },
+      data: { provider, provider_failure: { class: 'quota_exhausted', evidence: 'limit' } },
     });
     await store.pauseWorkflowRunForWait(
       run.id,

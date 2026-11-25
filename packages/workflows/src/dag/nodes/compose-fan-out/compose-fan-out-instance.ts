@@ -14,11 +14,9 @@ import {
   serializeNodeStateRecord,
   serializeNodeTranscript,
 } from '../../../node-record-serialization';
-import {
-  type NodeExecutionRecord,
-  type NodeProviderFailure,
-} from '../../../schemas/node-execution';
+import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { NodeEventWriteError } from '../../../node-event-write';
+import { type ProviderFailure } from '@archon/provider-contract';
 import type { ComposeFanOutNode, DagNode, NodeOutput, ResolvedWorkflow } from '../../../schemas';
 import { planGraph } from '../../../graph-plan';
 import type { DagResumeSnapshot, PersistedNodeOutput } from '../../../store';
@@ -47,7 +45,7 @@ export interface ComposeInstanceOutcome extends InstanceUsage {
   structuredOutput?: unknown;
   error?: string;
   /** The failed instance's typed provider failure, from {@link aggregateProviderFailure}. */
-  providerFailure?: NodeProviderFailure;
+  providerFailure?: ProviderFailure;
 }
 
 /** What every instance of one composed fan-out pass shares. */

@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { buildInstanceSnapshots } from '../../../fan-out-identity';
-import { readNodeRecordEvent } from '../../../node-record-reader';
+import { limitFailureProvider, readNodeRecordEvent } from '../../../node-record-reader';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { ParentStatusReadError } from '../../../parent-status-read';
 import { workflowRunStatusSchema } from '../../../schemas/workflow-run';
@@ -848,12 +848,17 @@ ${
         expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
         { kind: 'started', stepName: 'fan' }
       );
-      // The fan-out's failure record names the provider of the instance's limit, which the
-      // attention queue reads for the wait.
-      const fanFailed = persistedEvents(store).find(
-        event => event.event_type === 'node_failed' && event.step_name === 'fan'
-      );
-      expect(fanFailed?.data?.provider_failure).toMatchObject({ provider: 'claude' });
+      // The fan-out is bound to no provider; its records still name the instance's.
+      const failedRecords = persistedEvents(store)
+        .filter(event => event.event_type === 'node_failed')
+        .map(event => ({ step_name: event.step_name ?? null, data: event.data ?? {} }));
+      expect(
+        limitFailureProvider(
+          new Map([['compose-quota-run', failedRecords]]),
+          'compose-quota-run',
+          'fan'
+        )
+      ).toBe('claude');
     }
   );
 

@@ -5589,7 +5589,6 @@ export interface components {
                 /** Format: date-time */
                 resetAt?: string;
                 evidence: string;
-                provider?: string;
               };
               exitCode?: number;
             }
@@ -7347,7 +7346,6 @@ export interface components {
                   /** Format: date-time */
                   resetAt?: string;
                   evidence: string;
-                  provider?: string;
                 };
                 exitCode?: number;
               }

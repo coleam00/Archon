@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { describe, expect, it } from 'bun:test';
 import {
+  limitFailureProvider,
   nodeInvocationKey,
   parseNodeInvocationKey,
   readNodeRecordEvent,
@@ -239,3 +240,52 @@ it.each([...NODE_STATE_EVENT_TYPES, 'node_deferred_usage'])(
     expect(() => read(envelope)).toThrow();
   }
 );
+
+describe('limitFailureProvider', () => {
+  const quota = {
+    class: 'quota_exhausted',
+    evidence: 'limit',
+    resetAt: '2026-11-27T10:00:00.000Z',
+  };
+  const failed = (step: string, data: Record<string, unknown>) => ({ step_name: step, data });
+
+  it("names the provider the node's latest failure was bound to", () => {
+    const events = new Map([
+      [
+        'run',
+        [
+          failed('implement', { provider: 'claude', provider_failure: quota }),
+          failed('review', { provider: 'pi', provider_failure: quota }),
+          failed('implement', { provider: 'codex', provider_failure: quota }),
+        ],
+      ],
+    ]);
+    expect(limitFailureProvider(events, 'run', 'implement')).toBe('codex');
+    // A record bound to no provider, with no failure to trace, names none.
+    expect(
+      limitFailureProvider(new Map([['run', [failed('implement', {})]]]), 'run', 'implement')
+    ).toBeUndefined();
+  });
+
+  it("names an aggregate's provider by the descendant record holding the failure it forwarded", () => {
+    const other = { ...quota, resetAt: '2026-11-26T10:00:00.000Z' };
+    const events = new Map([
+      [
+        'run',
+        [
+          failed('fan__a__work', { provider: 'claude', provider_failure: quota }),
+          failed('fan__b__work', { provider: 'codex', provider_failure: other }),
+          failed('fan', { provider_failure: quota }),
+        ],
+      ],
+    ]);
+    expect(limitFailureProvider(events, 'run', 'fan')).toBe('claude');
+    expect(
+      limitFailureProvider(
+        new Map([['run', [failed('fan', { provider_failure: quota })]]]),
+        'run',
+        'fan'
+      )
+    ).toBeUndefined();
+  });
+});

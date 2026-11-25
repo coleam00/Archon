@@ -231,7 +231,6 @@ export function registerQuotaWaitTests(fixture: ReturnType<typeof setupCreditExh
           : "Node 'investigate' failed: the provider's usage or credit limit is used up. Resume the run once it reopens: You've hit your session limit"
       );
       expect(failedEvent?.[0].data?.provider_failure).toEqual({
-        provider: 'claude',
         class: 'quota_exhausted',
         evidence: "You've hit your session limit",
         ...(resetAt !== undefined ? { resetAt } : {}),
@@ -270,10 +269,9 @@ export function registerQuotaWaitTests(fixture: ReturnType<typeof setupCreditExh
       },
       { kind: 'started', stepName: 'investigate' }
     );
-    // The typed failure is recorded on the node with the provider that reported it.
+    // The typed failure is recorded on the node, unchanged.
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
     expect(failed?.data?.provider_failure).toEqual({
-      provider: 'claude',
       class: 'quota_exhausted',
       evidence: "You've hit your session limit",
       resetAt,
@@ -648,7 +646,6 @@ export function registerQuotaWaitTests(fixture: ReturnType<typeof setupCreditExh
       expect(resumeAt).toBeLessThanOrEqual(Date.now() + (RATE_LIMIT_PAUSE_DELAY_MS * 3) / 2);
       const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
       expect(failed?.data?.provider_failure).toEqual({
-        provider: 'claude',
         class: 'rate_limited',
         evidence: 'HTTP 429',
       });
