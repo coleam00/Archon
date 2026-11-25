@@ -82,11 +82,37 @@ In your Archon checkout, first check for local changes:
 git status
 ```
 
-Commit or stash your changes before updating. The `main` branch contains releases;
-`dev` is the working development branch.
+Commit or stash your changes before updating. Then follow one of two branches:
+`main` holds releases and is the recommended branch, and `dev` is the working
+development branch.
+
+### Follow releases
+
+A clone made with `--single-branch` fetches only the branch it cloned. If
+`git branch -r` does not list `origin/main`, run this once so `git fetch` also
+fetches `main`:
 
 ```bash
+git remote set-branches --add origin main
+```
+
+Then update:
+
+```bash
+git fetch origin
 git switch main
+git pull --ff-only
+bun install --frozen-lockfile
+bun run cli version
+```
+
+`git switch main` creates a local `main` that tracks `origin/main` the first
+time, and switches to it after that.
+
+### Follow development
+
+```bash
+git switch dev
 git pull --ff-only
 bun install --frozen-lockfile
 bun run cli version
