@@ -3,6 +3,7 @@ import { createLogger } from '@archon/paths';
 import {
   listAttentionQueue,
   selectAttentionQueue,
+  type AttentionQueueItem,
   type AttentionQueueScope,
   type ProjectRef,
 } from '@archon/workflows/attention-queue';
@@ -218,6 +219,20 @@ function withText(chosen: string, said: string | undefined): string {
   return said === undefined ? chosen : `${chosen} and the text "${said}"`;
 }
 
+/** What the tool says of a stopped item: how its run ended, what was refused, what moves it. */
+function stoppedText(ref: string, item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string {
+  const { runId, workflow, outcome } = item.stoppedIn;
+  if (item.failed !== undefined)
+    return `attention: item '${ref}' stopped: run ${runId} (${workflow}) failed${item.failed.error === null ? '' : `: ${item.failed.error}`}. It takes no answer: start it again with archon workflow run --supersedes ${runId}, which closes this.`;
+  const count = item.refused?.length ?? 0;
+  // A refusal says only what was refused: other starts the run's end caused may have started.
+  const after =
+    count === 0
+      ? 'and nothing started after it'
+      : `and ${count === 1 ? 'a start it caused was' : `${String(count)} starts it caused were`} refused`;
+  return `attention: item '${ref}' stopped: run ${runId} (${workflow}) ended${outcome === null ? '' : ` as '${outcome}'`}, ${after}.${item.summary === null ? '' : ` Summary: ${item.summary}`} It takes no answer: start a new run on the item to move it on.`;
+}
+
 /** Why the item `ref` names was not answered, in words the agent can act on. */
 function notAnswered(
   ref: string,
@@ -243,7 +258,7 @@ function notAnswered(
         case 'overdue_wait':
           return `attention: item '${ref}' waits for ${result.item.waits.map(wait => `'${wait.event}' about ${wait.about}`).join(' or ')}, due ${result.item.deadline}. It takes no answer: the event meets it, a new run of ${result.item.waitingIn.workflow} on the item replaces it, or \`archon workflow answer --withdraw ${ref}\` closes it.`;
         case 'stopped':
-          return `attention: item '${ref}' stopped: run ${result.item.stoppedIn.runId} (${result.item.stoppedIn.workflow}) ended${result.item.stoppedIn.outcome === null ? '' : ` as '${result.item.stoppedIn.outcome}'`}, and nothing started after it.${result.item.summary === null ? '' : ` Summary: ${result.item.summary}`} It takes no answer: start a new run on the item to move it on.`;
+          return stoppedText(ref, result.item);
       }
       return result.item satisfies never;
     case 'refused':

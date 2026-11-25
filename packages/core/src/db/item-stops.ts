@@ -1,7 +1,7 @@
 /**
  * Stopped items: the completed runs that recorded a stop in the write that completed them
- * (`item_stopped` in the run's metadata, see `itemStoppedMetadata`), read for the attention
- * queue while each is still its item's last run.
+ * (`item_stopped` in the run's metadata, see `itemStoppedMetadata`), and the failed top-level
+ * runs, read for the attention queue while each is still its item's last run.
  */
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import {
@@ -24,21 +24,27 @@ import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normal
 import { getLog } from './workflow-run-shared';
 
 /**
- * The completed runs that stopped their item and are still its last run (see
- * `IWorkflowStore.listStoppedItemRuns`). Runs on an item are ordered as `getItemRuns` orders
+ * The runs that stopped their item and are still its last run (see
+ * `IWorkflowStore.listStoppedItemRuns`): a completed run that recorded a stop, or a failed
+ * top-level run with no scheduled resume, which nothing moves on by itself. Runs on an item are ordered as `getItemRuns` orders
  * them: by start time, and on SQLite, which records it to the second, by insertion order
  * within a second. Any run after this one, in any status, ends the stop, and so does one
  * deleted since (`moved_on_at` on the item, recorded by the delete). A run that still
- * has an open ask or wait is not listed: the ask or wait is what needs someone, and the stop
- * shows once they close.
+ * has an open ask is not listed: the ask is in attention and is what needs someone, and the
+ * stop shows once it closes. Nor is one with an open wait, unless its stop names a refused
+ * start: a wait not yet overdue is in no list, so the refusal beside it would show nowhere.
  */
 export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]> {
   const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
   const result = await pool.query<WorkflowRunRow>(
     `SELECT r.*, CAST(r.origin AS TEXT) AS origin
      FROM remote_agent_workflow_runs r
-     WHERE r.status = 'completed' AND r.item_id IS NOT NULL
-       AND ${getDialect().jsonText('r.metadata', ITEM_STOPPED_METADATA_KEY)} IS NOT NULL
+     WHERE r.item_id IS NOT NULL
+       AND ((r.status = 'completed'
+             AND ${getDialect().jsonText('r.metadata', ITEM_STOPPED_METADATA_KEY)} IS NOT NULL)
+         OR (r.status = 'failed' AND r.parent_run_id IS NULL
+             -- A failed run with a scheduled resume is due to move on by itself.
+             AND ${getDialect().jsonText('r.metadata', 'scheduled_resume.resumeAt')} IS NULL))
        AND NOT EXISTS (
          SELECT 1 FROM remote_agent_workflow_runs n
          WHERE n.item_id = r.item_id AND n.id <> r.id
@@ -52,8 +58,9 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
                             OR (i.moved_on_at = r.started_at AND i.moved_on_tie > r.${tie})))
        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
                         WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)
-       AND NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
-                        WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)
+       AND (${getDialect().jsonText('r.metadata', `${ITEM_STOPPED_METADATA_KEY}.refused`)} IS NOT NULL
+         OR NOT EXISTS (SELECT 1 FROM remote_agent_item_waits
+                         WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL))
      ORDER BY r.started_at, r.${tie}`
   );
   const runs: AttentionRead<WorkflowRun>[] = [];
