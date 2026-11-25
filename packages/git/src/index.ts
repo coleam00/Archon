@@ -68,6 +68,7 @@ export type { GitHubHost } from './github-host';
 // Repository operations
 export {
   findRepoRoot,
+  isBareRepository,
   getDefaultRemote,
   listChildRepos,
   syncWorkspace,

@@ -11,7 +11,7 @@ import { readChatProjectScope } from '../workflow-scope';
 
 import type { Conversation } from '@archon/core/schemas/conversation';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
+import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   ChildRunRedirectError,
   ResumeRefusedError,
@@ -355,6 +355,14 @@ export async function assertInheritedWorkflowCodebase(
   }
 }
 
+/** The refusal for a short run id prefix that has no project to resolve in. */
+export function shortRunIdNeedsProject(runId: string): string {
+  return (
+    `Short run id '${runId}' resolves only in the run's project.\n` +
+    'Run from the project directory, or pass the full run id.'
+  );
+}
+
 /**
  * Resolve a run-id argument that may be the 8-char short id printed by
  * `workflow runs` into the full run id. Mirrors the chat `manage_run` tool's
@@ -364,9 +372,9 @@ export async function assertInheritedWorkflowCodebase(
  * --chat-project-id requires a unique project-scoped match for every ID.
  * Without that explicit scope, full UUIDs skip resolution entirely: exact lookup
  * is global, so full ids keep working from any directory. A caller that already resolved a project can
- * provide its id; otherwise the cwd's project is resolved as the CLI's project gate
- * resolves it (`resolveCodebaseForPath`), so checkout subdirectories, linked worktrees
- * and folder projects find the project `workflow runs` lists there. By
+ * provide its id; otherwise `cwd` is the project gate's effective directory, and the
+ * project is looked up exactly as `findRunsCodebase` looks it up, so a prefix listed by
+ * `workflow runs` resolves to the same run. By
  * default, an omitted cwd and an unmatched prefix pass through unchanged so the
  * downstream exact lookup keeps its existing error surface; callers without a
  * downstream lookup can require a match instead. A prefix from a cwd in no
@@ -392,15 +400,10 @@ export async function resolveRunIdArg(
     codebaseId ??
     (cwd === undefined
       ? undefined
-      : (await resolveCodebaseForPath(cwd, host.records.codebases)).codebase?.id);
+      : (await findCodebaseForCheckoutPath(cwd, host.records.codebases))?.id);
   // Prefixes are project-scoped: outside a registered project there is nothing to resolve
   // one in, and passing it on would report an existing run as missing.
-  if (!resolvedCodebaseId) {
-    throw new Error(
-      `Short run id '${runId}' resolves only in the run's project.\n` +
-        'Run from the project directory, or pass the full run id.'
-    );
-  }
+  if (!resolvedCodebaseId) throw new Error(shortRunIdNeedsProject(runId));
   const matches = await findProjectRunsByReference(host.deps.store, runId, resolvedCodebaseId);
   if (matches.length > 1) {
     const candidates = matches.map(match => `  ${match.id}`).join('\n');

@@ -66,6 +66,23 @@ export async function fetchWithRetry(
 }
 
 /**
+ * Whether `path` is a bare repository, from git's own `--is-bare-repository` answer.
+ * False when git cannot answer, as for a path that is in no repository at all.
+ */
+export async function isBareRepository(path: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', path, 'rev-parse', '--is-bare-repository'],
+      { timeout: 10000 }
+    );
+    return stdout.trim() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Find the root of the git repository containing the given path
  * Returns null if not in a git repository
  */

@@ -423,12 +423,18 @@ const NO_GIT_COMMANDS = [
 const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing'];
 
 /**
- * Reads of one run by id. A full run id names one run in the whole store, so these need
- * no project and skip the gate. `resolveRunIdArg` resolves a short prefix in the
- * directory's project, or refuses it where there is none. `wait --item` resolves its item
- * in the project, so it is not one.
+ * Reads of one run by id. A full run id names one run in the whole store, and
+ * `--chat-project-id` names the project, so either needs no directory and skips the gate.
+ * A short prefix goes through the gate, so it resolves in the project `workflow runs`
+ * lists from the same directory, and is refused with a request for the full id where the
+ * gate finds no project. `wait --item` resolves its item in the project, so it is not one.
  */
 const BY_ID_READS = ['get', 'logs', 'artifacts', 'wait'];
+function isByIdRead({ command, subcommand, values }: CliRouteContext): boolean {
+  return (
+    command === 'workflow' && BY_ID_READS.includes(subcommand ?? '') && values.item === undefined
+  );
+}
 
 function requiresGitRepo({ command, subcommand, values }: CliRouteContext): boolean {
   // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
@@ -438,7 +444,6 @@ function requiresGitRepo({ command, subcommand, values }: CliRouteContext): bool
   if (NO_GIT_COMMANDS.includes(command ?? '')) return false;
   if (command !== 'workflow') return true;
   if (subcommand === 'attention' || subcommand === 'notice') return false;
-  if (BY_ID_READS.includes(subcommand ?? '') && values.item === undefined) return false;
   return !(values['item-of'] !== undefined && ITEM_OF_SUBCOMMANDS.includes(subcommand ?? ''));
 }
 
@@ -446,6 +451,13 @@ function requiresGitRepo({ command, subcommand, values }: CliRouteContext): bool
 async function resolveEffectiveCwd(ctx: CliRouteContext): Promise<string | number> {
   const { command, subcommand, values, cwd, json } = ctx;
   if (!requiresGitRepo(ctx)) return cwd;
+  if (isByIdRead(ctx)) {
+    const runId = ctx.positionals[2];
+    if (values['chat-project-id'] !== undefined) return cwd;
+    // Imported here: the CLI startup import boundary keeps `@archon/core` out of startup.
+    const { isFullRunId } = await import('@archon/core/workflows/run-id');
+    if (runId !== undefined && isFullRunId(runId)) return cwd;
+  }
   if (!existsSync(cwd)) {
     return await fail(json, `Error: Directory does not exist: ${cwd}`);
   }
@@ -474,6 +486,7 @@ async function resolveRegisteredCwd(
     const host = await createCliWorkflowHost();
     const { codebase, repoRoot } = await resolveCodebaseForPath(realCwd, host.records.codebases);
     if (!repoRoot && codebase?.kind !== 'folder') {
+      if (isByIdRead(ctx)) return await refuseShortRunId(ctx);
       return await fail(
         ctx.json,
         'Error: Not in a git repository.\n' +
@@ -482,8 +495,20 @@ async function resolveRegisteredCwd(
     }
     return codebase?.kind === 'folder' ? codebase.default_cwd : (repoRoot ?? realCwd);
   } catch (error) {
+    // A bare repository has no work tree, so the lookup fails there; for a prefix read that
+    // means no project, read from git's structured answer. Other failures stay visible.
+    if (isByIdRead(ctx)) {
+      const { isBareRepository } = await import('@archon/git');
+      if (await isBareRepository(realCwd)) return await refuseShortRunId(ctx);
+    }
     return await fallBackToRepoRoot(ctx, realCwd, error as Error);
   }
+}
+
+/** A short prefix read where the gate finds no project to resolve it in. */
+async function refuseShortRunId(ctx: CliRouteContext): Promise<number> {
+  const { shortRunIdNeedsProject } = await import('./commands/workflow-shared');
+  return await fail(ctx.json, `Error: ${shortRunIdNeedsProject(ctx.positionals[2] ?? '')}`);
 }
 
 /** Workflow discovery still works in an unverifiable checkout when its git root is known. */

@@ -573,12 +573,8 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     const git = await import('@archon/git');
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
-    const worktree = '/home/test/.archon/workspaces/owner/proj/worktrees/archon/task-2611';
-    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce(worktree);
     (git.getCanonicalRepoPath as ReturnType<typeof mock>).mockResolvedValueOnce('/canonical/repo');
-    // Neither the cwd nor the worktree root is registered; the primary checkout is.
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>)
-      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(CODEBASE);
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([

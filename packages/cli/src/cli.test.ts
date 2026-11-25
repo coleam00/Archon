@@ -27,6 +27,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  renameSync,
   mkdtempSync,
   readFileSync,
   writeFileSync,
@@ -1935,9 +1936,13 @@ describe('pre-dispatch gates --json error envelope', () => {
       project: '',
       retired: '',
       repo: '',
+      parent: '',
     };
     // A run in the registered git checkout `repo`, read by the prefix `workflow runs` shows.
     const repoRunId = '5c50458b-0000-4000-8000-000000000000';
+    // Runs in a checkout and in a nested checkout inside it, sharing one prefix.
+    const parentRunId = 'ab50458b-0000-4000-8000-000000000001';
+    const nestedRunId = 'ab50458b-0000-4000-8000-000000000002';
 
     beforeAll(async () => {
       for (const key of Object.keys(dirs) as (keyof typeof dirs)[]) {
@@ -1958,6 +1963,13 @@ describe('pre-dispatch gates --json error envelope', () => {
         throw new Error('git init failed');
       }
       mkdirSync(join(dirs.repo, 'src'));
+      // A nested checkout retired by moving its `.git` aside, inside a live parent checkout.
+      const nested = join(dirs.parent, 'nested');
+      mkdirSync(nested);
+      const parent = spawnSync('git', ['init', '-q', '.'], { cwd: dirs.parent });
+      const nestedInit = spawnSync('git', ['init', '-q', '.'], { cwd: nested });
+      if (parent.status !== 0 || nestedInit.status !== 0) throw new Error('git init failed');
+      renameSync(join(nested, '.git'), join(nested, '.git-retired'));
       // A private copy of the seeded registry, so the run stays out of other cases.
       copyFileSync(join(jsonEnvelopeHome, 'archon.db'), join(dirs.home, 'archon.db'));
       const db = new Database(join(dirs.home, 'archon.db'));
@@ -1983,6 +1995,23 @@ describe('pre-dispatch gates --json error envelope', () => {
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
           ['repo-conversation', 'cli', 'by-id-repo', 'repo']
         );
+        for (const [id, dir, runOfIt] of [
+          ['parent', dirs.parent, parentRunId],
+          ['nested', join(dirs.parent, 'nested'), nestedRunId],
+        ] as const) {
+          db.run(
+            'INSERT INTO remote_agent_codebases (id, name, default_cwd, kind) VALUES (?, ?, ?, ?)',
+            [id, `fixture/${id}`, await canonicalizeProjectPath(dir), 'repo']
+          );
+          db.run(
+            'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
+            [`${id}-conversation`, 'cli', `by-id-${id}`, id]
+          );
+          db.run(
+            'INSERT INTO remote_agent_workflow_runs (id, conversation_id, codebase_id, workflow_name, user_message, status) VALUES (?, ?, ?, ?, ?, ?)',
+            [runOfIt, `${id}-conversation`, id, 'by-id-test', '', 'completed']
+          );
+        }
         db.run(
           'INSERT INTO remote_agent_workflow_runs (id, conversation_id, codebase_id, workflow_name, user_message, status) VALUES (?, ?, ?, ?, ?, ?)',
           [repoRunId, 'repo-conversation', 'repo', 'by-id-test', '', 'completed']
@@ -2070,6 +2099,26 @@ describe('pre-dispatch gates --json error envelope', () => {
       expect(runs.stdout).toContain(repoRunId);
       const { status, answer } = read(src, ['get', repoRunId.slice(0, 8)]);
       expect({ status, answer }).toMatchObject({ status: 0, answer: { id: repoRunId } });
+    });
+
+    it('resolves a prefix to the run workflow runs lists, in a retired nested checkout', () => {
+      // The gate maps the former nested root to the parent checkout, for both commands.
+      const nested = join(dirs.parent, 'nested');
+      const runs = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'runs', '--json'], {
+        cwd: nested,
+        encoding: 'utf8',
+        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: dirs.home },
+      });
+      expect(runs.stdout).toContain(parentRunId);
+      expect(runs.stdout).not.toContain(nestedRunId);
+      const { status, answer } = read(nested, ['get', parentRunId.slice(0, 8)]);
+      expect({ status, answer }).toMatchObject({ status: 0, answer: { id: parentRunId } });
+    });
+
+    it('refuses a short prefix from an unregistered bare repository and names the full id', () => {
+      const { status, text } = read(dirs.bare, ['get', prefix]);
+      expect(status).toBe(1);
+      expect(text).toContain('pass the full run id');
     });
 
     it("resolves a short prefix from a subdirectory of the run's folder project", () => {
