@@ -22,7 +22,6 @@ export type PluginOrigin = 'scanned' | 'configured' | 'source';
 export interface PluginCandidate extends PluginArgv {
   source: string;
   origin: PluginOrigin;
-  configured: boolean;
   expectedName?: string;
 }
 
@@ -126,7 +125,6 @@ async function scannedCandidate(
   const candidate: PluginCandidate = {
     source: `${source}:${name}`,
     origin: 'scanned',
-    configured: false,
     command,
     args: [],
     expectedName: name,
@@ -168,7 +166,6 @@ function configuredCandidates(
   const candidates: PluginCandidate[] = config.plugins.map(plugin => ({
     source: `config:${plugin.plugin}`,
     origin: 'configured',
-    configured: true,
     command: plugin.command,
     args: plugin.args,
     expectedName: plugin.plugin,
@@ -178,7 +175,6 @@ function configuredCandidates(
       candidates.push({
         source: `config:${host}`,
         origin: 'configured',
-        configured: true,
         command: value.command,
         args: value.args,
         expectedName: value.plugin,
@@ -313,15 +309,12 @@ function withSourcePlugins(
     return false;
   });
   return [
-    // Marked configured so a source plugin that fails its handshake fails discovery
-    // instead of being skipped.
     ...source.map(
       (plugin): CandidateInspection => ({
         kind: 'ready',
         candidate: {
           source: `source:${plugin.name}`,
           origin: 'source',
-          configured: true,
           command: plugin.command,
           args: plugin.args,
           expectedName: plugin.name,
@@ -367,7 +360,9 @@ async function discoverCandidateMetadata(
     } catch (error) {
       if (
         !(error instanceof PluginDiscoveryError) ||
-        candidate.configured ||
+        // A plugin the operator or this checkout named fails discovery when its handshake
+        // fails; only an opportunistically scanned file is skipped.
+        candidate.origin !== 'scanned' ||
         (candidate.expectedName && selectedNames.has(candidate.expectedName))
       )
         throw error;
