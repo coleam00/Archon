@@ -27,9 +27,9 @@ Its smaller shapes are not review findings and you do not judge them: they go to
 
 ## Decide how the review ends
 
-When `$INPUTS.issue` is empty, this review was started by hand on a pull request, not by delivery: end `ready` when the verdict is ready and `not_ready` otherwise. Nothing starts after it, and you leave no ask.
+This review's issue input is "$INPUTS.issue". When it names an issue, this review is part of delivery: end with one of the delivery outcomes below, never `ready` or `not_ready`, which end the item with nothing started after it. Only when it is empty ("") was the review started by hand on a pull request: then end `ready` when the verdict is ready and `not_ready` otherwise, and leave no ask.
 
-Otherwise, in delivery:
+In delivery:
 
 - **approve** — the verdict is ready and the simplify pass reported no smaller shape (or did not complete). The host stage starts on the change.
 - **return** also when the verdict is ready but the simplify pass reported a smaller shape: the builder adopts or declines each one, and the next round's review sees the result. Its round limit applies as below. A shape the builder already declined with a reason in an earlier round, per its `implementation.md` at the path scope.md names, does not count: when every shape is one of those, the outcome is **approve**, and the report names each with the decline it repeats.
