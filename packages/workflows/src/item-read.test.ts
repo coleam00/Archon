@@ -315,7 +315,8 @@ describe('reading an item', () => {
       item.projectKey,
       item.key
     );
-    expect(read?.startLimits).toEqual([standing]);
+    // A host that reads no trigger files cannot say which bindings count under it.
+    expect(read?.startLimits).toEqual([{ ...standing, bindings: null }]);
     expect(read?.runs.map(run => [run.id, run.startLimit])).toEqual([
       ['first', null],
       ['second', 'check'],

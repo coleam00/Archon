@@ -112,6 +112,21 @@ const entrypointPath = z
   )
   .refine(path => !path.includes('..'), 'must stay inside its workflow folder');
 
+/** The folder `archon skill add` writes the Archon skill to, in each skill root. */
+export const ARCHON_SKILL_NAME = 'archon-cli';
+/** Retired Archon skill folders `archon skill add` deletes from each skill root on every run. */
+export const RETIRED_ARCHON_SKILL_NAMES = ['archon', 'manage-run'] as const;
+// A pack skill under any of these names would be overwritten or deleted by `archon skill add`.
+const reservedSkillNames: readonly string[] = [ARCHON_SKILL_NAME, ...RETIRED_ARCHON_SKILL_NAMES];
+
+/** A folder relative to the plugin root, such as `skill` or `skills/review-kit`. */
+const skillPath = z
+  .string()
+  .refine(
+    path => path.split('/').every(isPluginPathSegment),
+    'must be a relative folder inside the plugin, such as skill or skills/<name>'
+  );
+
 export const workflowPackManifestSchema = z.object({
   ...manifestBase,
   kind: z.literal('workflow-pack'),
@@ -129,6 +144,21 @@ export const workflowPackManifestSchema = z.object({
       entries => new Set(Object.values(entries)).size === Object.keys(entries).length,
       'each entrypoint must name a different workflow file'
     ),
+  /**
+   * The agent skill the pack ships for the operator's own agent: the folder at `path`
+   * (a `SKILL.md` plus reference files), installed by `archon skill add --pack <id>`
+   * under `.claude/skills/<name>` and `.agents/skills/<name>`. It changes nothing about
+   * which skills a workflow node gets.
+   */
+  skill: z
+    .object({
+      name: pluginName.refine(name => !reservedSkillNames.includes(name), {
+        error: issue =>
+          `"${String(issue.input)}" is ${issue.input === ARCHON_SKILL_NAME ? 'the name of the Archon skill' : 'a retired Archon skill folder that archon skill add deletes'}; choose another skill name`,
+      }),
+      path: skillPath,
+    })
+    .optional(),
 });
 
 export const pluginManifestSchema = z.discriminatedUnion('kind', [
@@ -140,7 +170,7 @@ export const pluginManifestSchema = z.discriminatedUnion('kind', [
 
 /**
  * Dotted paths of keys in a raw manifest that its kind's schema does not
- * declare, such as `skills` or `compatibility.min`. Readers ignore these keys;
+ * declare, such as `skils` or `compatibility.min`. Readers ignore these keys;
  * only `archon validate` calls this, so an author sees a typo instead of
  * losing it silently. An unknown kind or a non-object returns `[]`: parsing
  * reports those.

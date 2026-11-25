@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readdir, realpath, stat } from 'fs/promises';
 import type { Stats } from 'fs';
-import { join, sep } from 'path';
+import { basename, join, sep } from 'path';
 import * as archonPaths from '@archon/paths';
 import { isSystemError } from './integrity';
 import { getLog } from './log';
@@ -163,16 +163,37 @@ async function enterableDirectory(
   return canonical;
 }
 
-/** Copy a listed tree into `to`. Empty directories are recreated too. */
+/**
+ * A `.env` or `.env.*` file: secrets, never executable source. This is the one rule every
+ * capture job (project, global, installed packs, the pack root) applies, through
+ * `copyListing`. Scripts get their environment from the engine (Bun runs with
+ * `--no-env-file`), so no supported path reads one beside a script; the skip is still
+ * logged by path so a script that opened one explicitly is not a silent difference.
+ */
+function isEnvFile(relPath: string): boolean {
+  const name = basename(relPath);
+  return name === '.env' || name.startsWith('.env.');
+}
+
+/**
+ * Copy a listed tree into `to`, leaving out every `.env` file. Empty directories are
+ * recreated too. The counts cover only the files copied.
+ */
 export async function copyListing(
   listing: TreeListing,
   to: string
 ): Promise<{ files: number; bytes: number }> {
   for (const dir of listing.dirs) await mkdir(join(to, dir), { recursive: true });
+  let files = 0;
   let bytes = 0;
   for (const file of listing.files) {
+    if (isEnvFile(file.relPath)) {
+      getLog().warn({ path: file.absPath }, 'workflow.source_capture_env_file_skipped');
+      continue;
+    }
     await copyFile(file.absPath, join(to, file.relPath));
+    files += 1;
     bytes += file.size;
   }
-  return { files: listing.files.length, bytes };
+  return { files, bytes };
 }

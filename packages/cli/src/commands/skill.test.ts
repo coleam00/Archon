@@ -2,12 +2,24 @@
  * Tests for bundled skill copying and CLI commands
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
+import { pluginReceiptSchema } from '@archon/plugin-manifest';
+import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { BUNDLED_SKILL_FILES } from '../bundled-skill';
-import { copyArchonSkill, skillInstallCommand } from './skill';
+import { copyArchonSkill, packSkillInstallCommand, skillInstallCommand } from './skill';
 
 describe('copyArchonSkill', () => {
   let tempDir: string;
@@ -304,5 +316,264 @@ describe('skill CLI verbs', () => {
     } finally {
       await removeTempTree(root);
     }
+  });
+});
+
+describe('packSkillInstallCommand', () => {
+  const tempRoot = trackTempRoots();
+  const ID = 'owner/review-kit';
+  const COMMIT = 'a'.repeat(40);
+
+  /** An installed workflow pack: its receipt and its tree, with the tree's own manifest. */
+  function installPack(
+    pluginsDir: string,
+    id: string,
+    skill: { name: string; path: string } | undefined,
+    files: Record<string, string> = {}
+  ): string {
+    const manifest = {
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: id.split('/')[1],
+      description: 'fixture',
+      entrypoints: { review: 'review/review.yaml' },
+      ...(skill ? { skill } : {}),
+    };
+    const receipt = pluginReceiptSchema.parse({
+      schemaVersion: 1,
+      id,
+      manifest,
+      commit: COMMIT,
+      installedAt: new Date().toISOString(),
+    });
+    mkdirSync(join(receiptPath(pluginsDir, id), '..'), { recursive: true });
+    writeFileSync(receiptPath(pluginsDir, id), JSON.stringify(receipt));
+    const tree = packTreePath(pluginsDir, id, COMMIT);
+    for (const [path, content] of Object.entries({
+      'archon-plugin.json': JSON.stringify(manifest),
+      ...files,
+    })) {
+      mkdirSync(join(tree, path, '..'), { recursive: true });
+      writeFileSync(join(tree, path), content);
+    }
+    return tree;
+  }
+
+  async function run(
+    id: string,
+    target: string,
+    pluginsDir: string
+  ): Promise<{ code: number; out: string; err: string }> {
+    const log = spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const code = await packSkillInstallCommand(id, target, pluginsDir);
+      return {
+        code,
+        out: log.mock.calls.map(call => call.join(' ')).join('\n'),
+        err: error.mock.calls.map(call => call.join(' ')).join('\n'),
+      };
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  }
+
+  function setup(): { pluginsDir: string; project: string } {
+    const root = tempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-skill-')));
+    const project = join(root, 'project');
+    mkdirSync(project);
+    return { pluginsDir: join(root, 'plugins'), project };
+  }
+
+  it('copies the skill folder into both roots, and a rerun replaces it whole', async () => {
+    const { pluginsDir, project } = setup();
+    const tree = installPack(
+      pluginsDir,
+      ID,
+      { name: 'review-kit', path: 'skills/review-kit' },
+      {
+        'skills/review-kit/SKILL.md': '# Review kit v1\n',
+        'skills/review-kit/reference/queues.md': 'queues\n',
+        'skills/review-kit/reference/old.md': 'dropped next release\n',
+      }
+    );
+    for (const root of ['.claude', '.agents']) {
+      const archonCli = join(project, root, 'skills', 'archon-cli');
+      mkdirSync(archonCli, { recursive: true });
+      writeFileSync(join(archonCli, 'SKILL.md'), 'Archon skill');
+    }
+
+    const first = await run(ID, project, pluginsDir);
+    expect(first.err).toBe('');
+    expect(first.code).toBe(0);
+    for (const root of ['.claude', '.agents']) {
+      const skill = join(project, root, 'skills', 'review-kit');
+      expect(readFileSync(join(skill, 'SKILL.md'), 'utf8')).toBe('# Review kit v1\n');
+      expect(readFileSync(join(skill, 'reference/queues.md'), 'utf8')).toBe('queues\n');
+    }
+
+    // A pack update: one file changes, one is gone.
+    writeFileSync(join(tree, 'skills/review-kit/SKILL.md'), '# Review kit v2\n');
+    rmSync(join(tree, 'skills/review-kit/reference/old.md'));
+    expect((await run(ID, project, pluginsDir)).code).toBe(0);
+    for (const root of ['.claude', '.agents']) {
+      const skill = join(project, root, 'skills', 'review-kit');
+      expect(readFileSync(join(skill, 'SKILL.md'), 'utf8')).toBe('# Review kit v2\n');
+      expect(existsSync(join(skill, 'reference/old.md'))).toBe(false);
+      expect(readFileSync(join(project, root, 'skills/archon-cli/SKILL.md'), 'utf8')).toBe(
+        'Archon skill'
+      );
+    }
+  });
+
+  it('reads the skill from the installed tree when the receipt predates the field', async () => {
+    const { pluginsDir, project } = setup();
+    installPack(pluginsDir, ID, { name: 'review-kit', path: 'skill' }, { 'skill/SKILL.md': 'x' });
+    // An older Archon wrote this receipt and stripped the key it did not know.
+    const file = receiptPath(pluginsDir, ID);
+    const receipt = JSON.parse(readFileSync(file, 'utf8'));
+    delete receipt.manifest.skill;
+    writeFileSync(file, JSON.stringify(receipt));
+
+    expect((await run(ID, project, pluginsDir)).code).toBe(0);
+    expect(readFileSync(join(project, '.agents/skills/review-kit/SKILL.md'), 'utf8')).toBe('x');
+  });
+
+  it('refuses a pack that is not installed or ships no skill, naming it and writing nothing', async () => {
+    const { pluginsDir, project } = setup();
+    const missing = await run(ID, project, pluginsDir);
+    expect(missing.code).toBe(1);
+    expect(missing.err).toBe(`Error: ${ID} is not installed. Install it: archon plugin add ${ID}`);
+
+    installPack(pluginsDir, ID, undefined);
+    const none = await run(ID, project, pluginsDir);
+    expect(none.code).toBe(1);
+    expect(none.err).toBe(
+      `Error: ${ID} ships no skill (its archon-plugin.json declares no "skill")`
+    );
+    expect(existsSync(join(project, '.claude'))).toBe(false);
+    expect(existsSync(join(project, '.agents'))).toBe(false);
+  });
+
+  it('refuses a skill name another installed pack ships, naming both packs', async () => {
+    const { pluginsDir, project } = setup();
+    const skill = { name: 'review-kit', path: 'skill' };
+    installPack(pluginsDir, ID, skill, { 'skill/SKILL.md': 'mine' });
+    installPack(pluginsDir, 'other/review-kit', skill, { 'skill/SKILL.md': 'theirs' });
+
+    const result = await run(ID, project, pluginsDir);
+    expect(result.code).toBe(1);
+    expect(result.err).toBe(
+      `Error: ${ID} and other/review-kit both ship a skill named review-kit; installing it would replace the other pack's skill`
+    );
+    expect(existsSync(join(project, '.claude'))).toBe(false);
+  });
+
+  // Receipts know only what is installed now; the project folder keeps its owner.
+  it('refuses a folder another pack installed, after that pack is removed or renames its skill', async () => {
+    const shared = { name: 'shared-skill', path: 'skill' };
+    for (const change of ['removed', 'renamed'] as const) {
+      const { pluginsDir, project } = setup();
+      const alpha = installPack(pluginsDir, 'alpha/first', shared, { 'skill/SKILL.md': 'alpha' });
+      expect((await run('alpha/first', project, pluginsDir)).code).toBe(0);
+      if (change === 'removed') {
+        rmSync(join(receiptPath(pluginsDir, 'alpha/first'), '..'), { recursive: true });
+        rmSync(alpha, { recursive: true });
+      } else {
+        installPack(
+          pluginsDir,
+          'alpha/first',
+          { name: 'renamed-skill', path: 'skill' },
+          { 'skill/SKILL.md': 'alpha' }
+        );
+      }
+      installPack(pluginsDir, 'beta/second', shared, { 'skill/SKILL.md': 'beta' });
+
+      const result = await run('beta/second', project, pluginsDir);
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('holds the skill alpha/first installed, not beta/second');
+      for (const root of ['.claude', '.agents']) {
+        expect(readFileSync(join(project, root, 'skills/shared-skill/SKILL.md'), 'utf8')).toBe(
+          'alpha'
+        );
+      }
+    }
+  });
+
+  it('refuses a same-named folder no pack install wrote, leaving it as it is', async () => {
+    const { pluginsDir, project } = setup();
+    installPack(pluginsDir, ID, { name: 'review-kit', path: 'skill' }, { 'skill/SKILL.md': 'x' });
+    const handCopy = join(project, '.agents', 'skills', 'review-kit');
+    mkdirSync(handCopy, { recursive: true });
+    writeFileSync(join(handCopy, 'SKILL.md'), 'my own');
+
+    const result = await run(ID, project, pluginsDir);
+    expect(result.code).toBe(1);
+    expect(result.err).toBe(
+      `Error: ${handCopy} exists and archon skill add --pack did not install it; move or delete it, then run this again`
+    );
+    expect(readFileSync(join(handCopy, 'SKILL.md'), 'utf8')).toBe('my own');
+    expect(existsSync(join(project, '.claude', 'skills', 'review-kit'))).toBe(false);
+  });
+
+  it('refuses while another plugin command holds the mutation lock, writing nothing', async () => {
+    const { pluginsDir, project } = setup();
+    installPack(pluginsDir, ID, { name: 'review-kit', path: 'skill' }, { 'skill/SKILL.md': 'x' });
+    mkdirSync(join(pluginsDir, '.mutation-lock'));
+
+    const result = await run(ID, project, pluginsDir);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('Plugin mutation locked');
+    expect(existsSync(join(project, '.claude'))).toBe(false);
+    expect(existsSync(join(project, '.agents'))).toBe(false);
+  });
+
+  // chmod does not make a file unreadable on Windows.
+  it.skipIf(process.platform === 'win32')(
+    'keeps the installed skill when a replacement fails, and a retry then replaces it',
+    async () => {
+      const { pluginsDir, project } = setup();
+      const tree = installPack(
+        pluginsDir,
+        ID,
+        { name: 'review-kit', path: 'skill' },
+        { 'skill/SKILL.md': 'v1', 'skill/notes.md': 'notes' }
+      );
+      expect((await run(ID, project, pluginsDir)).code).toBe(0);
+      writeFileSync(join(tree, 'skill/SKILL.md'), 'v2');
+      chmodSync(join(tree, 'skill/notes.md'), 0o000);
+
+      const failed = await run(ID, project, pluginsDir);
+      expect(failed.code).toBe(1);
+      for (const root of ['.claude', '.agents']) {
+        expect(readdirSync(join(project, root, 'skills'))).toEqual(['review-kit']);
+        expect(readFileSync(join(project, root, 'skills/review-kit/SKILL.md'), 'utf8')).toBe('v1');
+        expect(readdirSync(join(project, root))).toEqual(['skills']);
+      }
+
+      chmodSync(join(tree, 'skill/notes.md'), 0o644);
+      expect((await run(ID, project, pluginsDir)).code).toBe(0);
+      for (const root of ['.claude', '.agents']) {
+        expect(readFileSync(join(project, root, 'skills/review-kit/SKILL.md'), 'utf8')).toBe('v2');
+      }
+    }
+  );
+
+  it('is what archon skill add --pack runs, and never writes archon-cli', async () => {
+    const root = tempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-skill-cli-')));
+    const child = Bun.spawn(
+      [process.execPath, join(import.meta.dir, '../cli.ts'), 'skill', 'add', '--pack', ID, root],
+      {
+        cwd: root,
+        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_HOME: root },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const [err, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    expect(code).toBe(1);
+    expect(err).toContain(`${ID} is not installed`);
+    expect(existsSync(join(root, '.claude'))).toBe(false);
   });
 });
