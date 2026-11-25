@@ -47,6 +47,8 @@ import { workflowRunStatusSchema } from './schemas/run-status';
 import { stoppedLimitSchema, stoppedRefusalSchema } from './schemas/run-metadata';
 import { observeLostOwners, type LostOwner, type OwnerObserver } from './owner-observation';
 import { resolveRunAttention } from './run-attention-resolution';
+import { readContinuationGiveUp } from './schemas/continuation-give-up';
+import { resumeCursorMatches } from './store/continuation-cursors';
 import { stateProjectKeySchema } from './state-document-store';
 import type { AttentionQueueCounts } from './attention-counts';
 import type { IWorkflowStore } from './store';
@@ -489,6 +491,22 @@ async function itemFor(
 }
 
 /**
+ * A paused run a continuation host stopped resuming, while it is still at the continuation
+ * the host gave up on (`readContinuationGiveUp`); a later pause makes an old record inert.
+ */
+function givenUpAttention(run: WorkflowRun): QueuedRunAttention | undefined {
+  const givenUp = run.status === 'paused' ? readContinuationGiveUp(run.metadata) : undefined;
+  if (givenUp === undefined) return undefined;
+  if (!resumeCursorMatches(run, givenUp.cursor)) return undefined;
+  return {
+    kind: 'unreadable',
+    runId: run.id,
+    reason: 'continuation_given_up',
+    detail: `a host stopped resuming it after ${String(givenUp.attempts)} failed reads of its frozen workflow source (${givenUp.path ?? 'path unavailable'}) at ${givenUp.at}. Resume it on a host that can read it with archon workflow resume ${run.id}, or abandon it with archon workflow abandon ${run.id}.`,
+  };
+}
+
+/**
  * The attention that makes `run` an item of its own. A parent blocked on sub-runs is one
  * only when the walk the single read uses stops at the parent, because its sub-run tree
  * cannot be read; otherwise the walk reaches a child, which is listed by its own row.
@@ -497,6 +515,8 @@ async function ownQueuedAttention(
   source: AttentionQueueSource,
   run: WorkflowRun
 ): Promise<QueuedRunAttention | undefined> {
+  const givenUp = givenUpAttention(run);
+  if (givenUp !== undefined) return givenUp;
   const own = queuedRunAttention(run);
   if (own !== undefined) return own;
   const resolution = await resolveRunAttention(source.store, run);

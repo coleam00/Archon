@@ -59,7 +59,7 @@ A `stopped` item carries `stoppedIn` (the run that stopped it, its workflow and 
 
 An `owner_lost` item carries `observedStatus`, the run's stored status (`running`, `paused` for a parent whose sub-run lost its owner, or `pending`), which is unchanged, and `item` when the run is on one. A pending start also carries `start`: the `requestId` and `hostId` to run it with. The list observes owners on this host only, so a run owned on another host or user is not listed, and neither is a pending start whose executor it cannot rule out (no hand-off recorded yet, or a process still holds the recorded pid); `archon workflow runs --item <key>` shows those as `unknown`. Each read observes at most 8 owners at once and gives each 5 seconds; an observation that takes longer reads as `unknown`, so a slow owner on a busy machine is never listed as gone.
 
-An `unreadable` item carries `reason` and `detail`. A container paused with reason `source_release_not_continued` could not read its frozen source on this host. Resume it by hand on a host that can.
+An `unreadable` item carries `reason` and `detail`. A container paused with reason `source_release_not_continued` could not read its frozen source on this host. Resume it by hand on a host that can. A paused run with reason `continuation_given_up` is one a continuation host stopped resuming after three failed reads of its frozen source; the host records that on the run (`continuation_given_up` in its metadata), so it shows after the host restarts too, and only while the run is still at the continuation the host gave up on. Resume it on a host that can read the source, or abandon it.
 
 ## Answer a run
 

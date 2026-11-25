@@ -5810,7 +5810,8 @@ export interface components {
             | 'child_pointer_missing'
             | 'child_run_missing'
             | 'child_chain_too_deep'
-            | 'source_release_not_continued';
+            | 'source_release_not_continued'
+            | 'continuation_given_up';
           detail: string;
         }
       | {
@@ -7889,7 +7890,8 @@ export interface components {
             | 'child_pointer_missing'
             | 'child_run_missing'
             | 'child_chain_too_deep'
-            | 'source_release_not_continued';
+            | 'source_release_not_continued'
+            | 'continuation_given_up';
           detail: string;
         }
       | {
@@ -8308,7 +8310,8 @@ export interface components {
               | 'child_pointer_missing'
               | 'child_run_missing'
               | 'child_chain_too_deep'
-              | 'source_release_not_continued';
+              | 'source_release_not_continued'
+              | 'continuation_given_up';
             detail: string;
           }
         | {
@@ -8859,7 +8862,8 @@ export interface components {
               | 'child_pointer_missing'
               | 'child_run_missing'
               | 'child_chain_too_deep'
-              | 'source_release_not_continued';
+              | 'source_release_not_continued'
+              | 'continuation_given_up';
             detail: string;
           }
         | {
@@ -9678,7 +9682,8 @@ export interface components {
                 | 'child_pointer_missing'
                 | 'child_run_missing'
                 | 'child_chain_too_deep'
-                | 'source_release_not_continued';
+                | 'source_release_not_continued'
+                | 'continuation_given_up';
               detail: string;
             }
           | {
@@ -10437,7 +10442,8 @@ export interface components {
                   | 'child_pointer_missing'
                   | 'child_run_missing'
                   | 'child_chain_too_deep'
-                  | 'source_release_not_continued';
+                  | 'source_release_not_continued'
+                  | 'continuation_given_up';
                 detail: string;
               }
             | {
