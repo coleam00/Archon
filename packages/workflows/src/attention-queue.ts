@@ -45,8 +45,7 @@ import {
 } from './schemas/workflow-run';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import { stoppedLimitSchema } from './schemas/run-metadata';
-import type { RunOwnerObservation } from './schemas/workflow-run-listing';
-import type { AwaitingExecution } from './schemas/start-executor';
+import { observeLostOwners, type LostOwner, type OwnerObserver } from './owner-observation';
 import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
 import type { AttentionQueueCounts } from './attention-counts';
@@ -420,18 +419,8 @@ export interface AttentionQueueSource {
    * that does not read is reported in its place.
    */
   itemsWithoutRun?(): Promise<readonly AttentionRead<AttentionQueueItemWithoutRun>[]>;
-  /**
-   * The runs that need an owner to move (`IWorkflowStore.listUnfinishedRuns`), what this
-   * process observes about a running or paused run's execution owner, and about a pending
-   * admitted start's executor (`awaitingExecution`; without it no pending run is listed).
-   * A run the store cannot read is reported `run_unreadable`. Without `ownerLost` the queue
-   * lists no `owner_lost` items and an item read observes no owners.
-   */
-  ownerLost?: {
-    runs(): Promise<AttentionRead<WorkflowRun>[]>;
-    observe(run: WorkflowRun): Promise<RunOwnerObservation | null>;
-    awaitingExecution?(run: WorkflowRun): Promise<AwaitingExecution | null>;
-  };
+  /** Without it the queue lists no `owner_lost` items and an item read observes no owners. */
+  ownerLost?: OwnerObserver;
 }
 
 export type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
@@ -503,59 +492,16 @@ export async function attentionQueueItemForRun(
 }
 
 /**
- * How long one owner observation may take before it reads as `unknown`, and how many run at
- * once. A dead owner on this host answers at once (no endpoint); a live one answers within
- * the endpoint's own IPC timeout, twice at most. A busy machine can make a live owner slow,
- * and slow must never read as gone, so an observation past the deadline lists nothing.
- */
-export const OWNER_OBSERVATION_DEADLINE_MS = 5_000;
-export const OWNER_OBSERVATION_CONCURRENCY = 8;
-
-/** `observation`, or null once `OWNER_OBSERVATION_DEADLINE_MS` passes first. */
-async function withinDeadline<T>(observation: Promise<T>): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<null>(resolve => {
-    timer = setTimeout(() => resolve(null), OWNER_OBSERVATION_DEADLINE_MS);
-  });
-  try {
-    return await Promise.race([observation, deadline]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * What proves `run`'s owner gone, or null when nothing does: its owner is reachable or
- * unknown, it needs no owner now, or the observation ran past its deadline.
- */
-async function lostOwner(
-  ownerLost: NonNullable<AttentionQueueSource['ownerLost']>,
-  run: WorkflowRun
-): Promise<{ start?: { requestId: string; hostId: string } } | null> {
-  if (run.status === 'pending') {
-    const awaiting = await withinDeadline(
-      ownerLost.awaitingExecution?.(run) ?? Promise.resolve(null)
-    );
-    return awaiting?.state === 'unowned'
-      ? { start: { requestId: awaiting.requestId, hostId: awaiting.hostId } }
-      : null;
-  }
-  return (await withinDeadline(ownerLost.observe(run))) === 'unreachable' ? {} : null;
-}
-
-/**
- * The `owner_lost` item of `run` (see `AttentionQueueSource.ownerLost`) when its owner is
- * provably gone; null otherwise, and for a child run, whose top-level run is the item.
- * Observing never changes the run.
+ * The `owner_lost` item of `run` (see `AttentionQueueSource.ownerLost`) when `lost` proves
+ * its owner gone; null otherwise, and for a child run, whose top-level run is the item.
  */
 async function ownerLostItem(
   source: AttentionQueueSource,
   run: WorkflowRun,
+  lost: LostOwner | null | undefined,
   codebases: CodebaseCache
 ): Promise<RunAttentionQueueItem | null> {
-  if (source.ownerLost === undefined || run.parent_run_id !== null) return null;
-  const lost = await lostOwner(source.ownerLost, run);
-  if (lost === null) return null;
+  if (lost == null || run.parent_run_id !== null) return null;
   const sources: AttentionQueueItemSources = {
     codebase: await codebaseFor(source, run, codebases),
     branch: await source.branchOf(run),
@@ -575,34 +521,24 @@ async function ownerLostItem(
   };
 }
 
-/**
- * The `owner_lost` items, observed `OWNER_OBSERVATION_CONCURRENCY` at a time and listed in
- * the store's order; a run already reported unreadable in `reported` is not repeated.
- */
+/** The `owner_lost` items, in the store's order; a run already in `reported` is not repeated. */
 async function ownerLostItems(
   source: AttentionQueueSource,
   reported: ReadonlySet<string>
 ): Promise<AttentionRead<RunAttentionQueueItem>[]> {
   if (source.ownerLost === undefined) return [];
+  const { values, degraded } = splitAttentionRead(await source.ownerLost.runs());
+  const top = values.filter(run => run.parent_run_id === null);
+  const lost = await observeLostOwners(source.ownerLost, top);
   const codebases: CodebaseCache = new Map();
-  const runs = await source.ownerLost.runs();
-  const found: (AttentionRead<RunAttentionQueueItem> | null)[] = runs.map(() => null);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    for (let index = next++; index < runs.length; index = next++) {
-      const run = runs[index];
-      if (run === undefined) continue;
-      if (isAttentionDegraded(run)) {
-        if (!reported.has(run.runId)) found[index] = run;
-        continue;
-      }
-      found[index] = await ownerLostItem(source, run, codebases);
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(OWNER_OBSERVATION_CONCURRENCY, runs.length) }, worker)
+  const items: AttentionRead<RunAttentionQueueItem>[] = degraded.filter(
+    run => !reported.has(run.runId)
   );
-  return found.filter(item => item !== null);
+  for (const [index, run] of top.entries()) {
+    const item = await ownerLostItem(source, run, lost[index], codebases);
+    if (item !== null) items.push(item);
+  }
+  return items;
 }
 
 /** The items the store's queue rows hold, in the rows' order. */
@@ -684,7 +620,9 @@ export async function readAttentionQueueItem(
   const run = await source.store.getWorkflowRun(runId);
   if (run === null) return undefined;
   // A run whose owner is gone reads as the list lists it, by the same rule.
-  const lost = await ownerLostItem(source, run, new Map());
+  const [owner] =
+    source.ownerLost === undefined ? [] : await observeLostOwners(source.ownerLost, [run]);
+  const lost = await ownerLostItem(source, run, owner, new Map());
   if (lost !== null) return lost;
   const resolution = await resolveRunAttention(source.store, run);
   if (resolution.kind !== 'attention') return null;

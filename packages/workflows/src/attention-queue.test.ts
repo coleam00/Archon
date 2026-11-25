@@ -6,8 +6,6 @@ import {
   type AttentionQueueSource,
   fanOutPosition,
   listAttentionQueue,
-  OWNER_OBSERVATION_CONCURRENCY,
-  OWNER_OBSERVATION_DEADLINE_MS,
   parseAttentionLabelPairs,
   parseAttentionQueueCountBy,
   parseAttentionQueueOrder,
@@ -15,6 +13,7 @@ import {
   projectRefForRun,
   toAttentionQueueItem,
 } from './attention-queue';
+import { OWNER_OBSERVATION_CONCURRENCY, OWNER_OBSERVATION_DEADLINE_MS } from './owner-observation';
 import { queuedRunAttention, type WorkflowRun } from './schemas/workflow-run';
 
 describe('attention queue arguments', () => {
