@@ -507,6 +507,32 @@ function metricPopulationNodes(coverage: MetricCoverage): UsageNodeIdentity[] {
   ]);
 }
 
+function wrapperPartial(
+  runId: string,
+  fold: DagUsageFold,
+  metric: UsageMetric,
+  partial: MetricCoverage['partial']
+): MetricCoverage['partial'] {
+  if (metric !== 'usd') return partial;
+  const next = [...partial];
+  for (const contribution of allContributions(fold.usageContributions)) {
+    if (contribution.costPartial !== true || contribution.evidence === undefined) continue;
+    const node = { ...identity(runId, contribution.evidence), partial: true as const };
+    if (
+      next.some(
+        item =>
+          item.runId === node.runId &&
+          item.path === node.path &&
+          item.invocationId === node.invocationId &&
+          item.attemptId === node.attemptId
+      )
+    )
+      continue;
+    next.push(node);
+  }
+  return next;
+}
+
 function buildMetricCoverage(
   run: ReportRun,
   fold: DagUsageFold,
@@ -569,23 +595,10 @@ function buildMetricCoverage(
   }
   if (totals[metric] === null) contributors = [];
   const uniqueContributors = uniqueUsageNodes(contributors);
-  const partial = [...evidence.partial, ...child.reports.flatMap(report => report.partial)];
-  if (metric === 'usd') {
-    for (const contribution of allContributions(fold.usageContributions)) {
-      if (contribution.costPartial !== true || contribution.evidence === undefined) continue;
-      const node = { ...identity(run.id, contribution.evidence), partial: true as const };
-      if (
-        !partial.some(
-          item =>
-            item.runId === node.runId &&
-            item.path === node.path &&
-            item.invocationId === node.invocationId &&
-            item.attemptId === node.attemptId
-        )
-      )
-        partial.push(node);
-    }
-  }
+  const partial = wrapperPartial(run.id, fold, metric, [
+    ...evidence.partial,
+    ...child.reports.flatMap(report => report.partial),
+  ]);
   const legacyRecorded = allContributions(fold.usageContributions).flatMap(contribution => {
     const observation = contribution.evidence;
     return observation !== undefined &&
