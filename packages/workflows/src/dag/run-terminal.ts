@@ -496,8 +496,8 @@ async function completeRun(
           // `$<node>.output` on re-entry. Gated on parent_run_id to bound metadata
           // growth to child runs only (top-level runs return the summary directly).
           // `summary_value` is the additive logical sibling (#2637): old binaries keep
-          // reading `summary`, new parents prefer the typed value when present. The value
-          // is also written as JSON text, because the merge drops a null `summary_value`.
+          // reading `summary`, new parents prefer the typed value when present. A null
+          // value is written as a marker instead, because the merge drops a null key.
           ...(workflowRun.parent_run_id && terminal.output ? { summary: terminal.output } : {}),
           ...(workflowRun.parent_run_id &&
           terminal.output &&
