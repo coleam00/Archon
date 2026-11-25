@@ -648,22 +648,10 @@ export function startIntent(
 
 /**
  * The revision of a trigger file's start config: its binding and its `on`, since `on` holds
- * the input mapping. A waiting start whose file's revision moved is rebuilt from the file
- * before it runs (`rebuilt-binding.ts`). A fire or timer file has no `on`, and `trigger
- * fire` hashes its binding alone.
+ * the input mapping. While it is a waiting start's, the start runs as its receipt froze it;
+ * otherwise it is checked against the file as it is now (`rebuilt-binding.ts`). A fire or
+ * timer file has no `on`, and `trigger fire` hashes its binding alone.
  */
-/**
- * Whether `revision` is still the revision of `candidate`. A receipt written before the
- * revision covered `on` hashed the binding alone; it counts as current while the binding
- * is unchanged, so an upgrade does not send every waiting start back to preparation.
- */
-export function isOnBindingRevision(candidate: OnBinding, revision: string | null): boolean {
-  return (
-    revision === onBindingRevision(candidate) ||
-    revision === createHash('sha256').update(JSON.stringify(candidate.binding)).digest('hex')
-  );
-}
-
 export function onBindingRevision(candidate: OnBinding): string {
   const on =
     'runEnded' in candidate

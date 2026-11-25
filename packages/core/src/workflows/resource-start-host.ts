@@ -79,7 +79,7 @@ import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner
 import { handOffAdmitted, type StartedExecutor } from './start-executor';
 import { leaveForInstalledEngine } from './installed-engine-preparation';
 import { releaseQueuedLaunchSource } from './queued-launch-source';
-import { changedTriggerFile, currentBinding, triggerFilesReader } from './rebuilt-binding';
+import { currentBinding, triggerFilesReader } from './rebuilt-binding';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { assertLaneStartable, executionLane, handoffIsolation } from './resource-start-lanes';
 import { resolveBindingInputs, selectStartedWorkflow } from './binding-workflow';
@@ -636,10 +636,11 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
 }
 
 /**
- * The queued requests left after those whose trigger file changed since their receipt froze
- * it (`changedTriggerFile`) are taken from the queue and their bindings put back to
+ * The queued requests left after those whose trigger file no longer starts what they were
+ * prepared from (`currentBinding`) are taken from the queue and their bindings put back to
  * pending; the pass's own preparation then rebuilds each from its file, behind the queue.
- * One whose file is gone goes back too, so that preparation refuses it on its item.
+ * One whose file is gone or refuses it goes back too, so that preparation refuses it on
+ * its item.
  * `unverified` names the resources of requests that could not be checked or sent back: the
  * store admits a host's queue by resource, so the pass drains none of them rather than
  * admit a start the file may no longer say.
@@ -664,9 +665,11 @@ async function returnChangedQueuedStarts(
     try {
       const receipt = await store.getStartReceipt(origin.receiptId);
       const binding = receipt?.bindings.find(entry => entry.bindingId === origin.bindingId);
-      const changed =
-        receipt && binding && (await changedTriggerFile(receipt, binding.bindingRevision, files));
-      if (!changed) {
+      const current =
+        receipt && binding?.intent
+          ? await currentBinding(host, receipt, { ...binding, intent: binding.intent }, files)
+          : { unchanged: true as const };
+      if ('unchanged' in current) {
         kept.push(request);
         continue;
       }

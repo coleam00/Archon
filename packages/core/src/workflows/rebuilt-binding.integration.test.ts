@@ -269,18 +269,21 @@ test("a queued start whose trigger file changed leaves the queue and starts once
   expect((await setupped.store.getResourceStartRequest(requestId))?.status).toBe('withdrawn');
 });
 
+/** Give the receipt the revision an older Archon recorded: a hash of the file's binding alone. */
+async function olderRevision(receiptId: string): Promise<void> {
+  const file = JSON.parse(await readFile(join(getTriggersPath(), 'stage-b.json'), 'utf8'));
+  await getDatabase().query(
+    'UPDATE remote_agent_start_receipt_bindings SET binding_revision = $1 WHERE receipt_id = $2',
+    [createHash('sha256').update(JSON.stringify(file.binding)).digest('hex'), receiptId]
+  );
+}
+
 test.each(['before this release', 'now'])(
   'a queued start whose receipt recorded its revision %s runs as prepared when only its workflow changed',
   async format => {
     const setupped = await setup();
     const { receiptId, release, requestId } = await queueB(setupped);
-    if (format === 'before this release') {
-      const file = JSON.parse(await readFile(join(getTriggersPath(), 'stage-b.json'), 'utf8'));
-      await getDatabase().query(
-        'UPDATE remote_agent_start_receipt_bindings SET binding_revision = $1 WHERE receipt_id = $2',
-        [createHash('sha256').update(JSON.stringify(file.binding)).digest('hex'), receiptId]
-      );
-    }
+    if (format === 'before this release') await olderRevision(receiptId);
     await stage([]);
     await release();
     await setupped.pass();
@@ -292,6 +295,38 @@ test.each(['before this release', 'now'])(
     expect(setupped.started).toEqual([requestId]);
   }
 );
+
+test('a pending start whose receipt an older Archon wrote follows a mapping-only change', async () => {
+  const setupped = await setup();
+  await stage(['issue']);
+  await trigger(afterA({ issue: { input: 'issue' } }));
+  const receiptId = await endA(setupped, 'Fix the login page');
+  await olderRevision(receiptId);
+  await stage(['task']);
+  await trigger(afterA({ task: { input: 'issue' } }));
+  await setupped.pass();
+
+  expect(await startedInputs(setupped, receiptId)).toEqual({
+    status: 'admitted',
+    inputs: { task: 'Fix the login page' },
+  });
+});
+
+test('a queued start whose receipt an older Archon wrote follows a mapping-only change', async () => {
+  const setupped = await setup();
+  const { receiptId, release } = await queueB(setupped);
+  await olderRevision(receiptId);
+  await stage(['task']);
+  await trigger(afterA({ task: { input: 'issue' } }), 1);
+  await release();
+  await setupped.pass();
+
+  expect(await startedInputs(setupped, receiptId)).toEqual({
+    status: 'admitted',
+    inputs: { task: 'Fix the login page' },
+  });
+  expect(await stageRuns()).toHaveLength(1);
+});
 
 test('a queued start is not admitted while a trigger file does not read, and starts on the new mapping once it does', async () => {
   const setupped = await setup();
@@ -428,36 +463,41 @@ const askOf = (question: string): ItemAsk => ({
   artifacts: [],
 });
 
-test('a pending start of settled asks is rebuilt from the answers when its file changed', async () => {
-  const setupped = await setup();
-  const { store, runs } = setupped;
-  await stage(['notes']);
-  const settled = (inputs: Record<string, unknown>) => ({
-    asksSettled: { workflowName: 'plan', settled: 'any', inputs },
-  });
-  await trigger(settled({ notes: { answers: true } }));
-  const run = await store.createWorkflowRun({ ...runs, workflow_name: 'plan' });
-  await store.claimPendingWorkflowRun(run.id);
-  await store.completeWorkflowRun(run.id, { duration_ms: 1 }, undefined, {
-    asks: [askOf('Keep the flag?')],
-  });
-  const [ask] = await store.listItemAsks(String(run.item_id));
-  if (!ask || !('id' in ask)) throw new Error('no ask');
-  // The close writes the start its settlement causes, from the file as it is now.
-  const closed = await store.withdrawItemAsk({
-    askId: ask.id,
-    via: 'cli',
-    by: { declared: 'maintainer' },
-    fromRun: null,
-  });
-  const receiptId = closed.kind === 'closed' ? closed.startReceipts[0]?.receipt.id : undefined;
-  if (!receiptId) throw new Error(`the settlement started nothing: ${JSON.stringify(closed)}`);
+test.each(['exists', 'was deleted'])(
+  'a pending start of settled asks is rebuilt from the answers when its file changed and its asking run %s',
+  async asking => {
+    const setupped = await setup();
+    const { store, runs } = setupped;
+    await stage(['notes']);
+    const settled = (inputs: Record<string, unknown>) => ({
+      asksSettled: { workflowName: 'plan', settled: 'any', inputs },
+    });
+    await trigger(settled({ notes: { answers: true } }));
+    const run = await store.createWorkflowRun({ ...runs, workflow_name: 'plan' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.completeWorkflowRun(run.id, { duration_ms: 1 }, undefined, {
+      asks: [askOf('Keep the flag?')],
+    });
+    const [ask] = await store.listItemAsks(String(run.item_id));
+    if (!ask || !('id' in ask)) throw new Error('no ask');
+    // The close writes the start its settlement causes, from the file as it is now.
+    const closed = await store.withdrawItemAsk({
+      askId: ask.id,
+      via: 'cli',
+      by: { declared: 'maintainer' },
+      fromRun: null,
+    });
+    const receiptId = closed.kind === 'closed' ? closed.startReceipts[0]?.receipt.id : undefined;
+    if (!receiptId) throw new Error(`the settlement started nothing: ${JSON.stringify(closed)}`);
 
-  await stage(['decision']);
-  await trigger(settled({ decision: { answers: true } }));
-  await setupped.pass();
+    // The answers outlive the run, so a mapping that reads only them still rebuilds.
+    if (asking === 'was deleted') await deleteWorkflowRun(run.id);
+    await stage(['decision']);
+    await trigger(settled({ decision: { answers: true } }));
+    await setupped.pass();
 
-  const { status, inputs } = await startedInputs(setupped, receiptId);
-  expect(status).toBe('admitted');
-  expect(inputs).toMatchObject({ decision: expect.stringContaining('Keep the flag?') });
-});
+    const { status, inputs } = await startedInputs(setupped, receiptId);
+    expect(status).toBe('admitted');
+    expect(inputs).toMatchObject({ decision: expect.stringContaining('Keep the flag?') });
+  }
+);

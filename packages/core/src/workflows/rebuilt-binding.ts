@@ -8,8 +8,10 @@
  * that no longer binds that end, refuses the start.
  *
  * Read at preparation (`preparePendingBinding`) and, for a start already queued, at each
- * host drain, which sends a queued start whose file changed back to preparation.
+ * host drain, which sends a queued start whose file now starts something else back to
+ * preparation.
  */
+import { isDeepStrictEqual } from 'node:util';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import type { StartReceiptInspection } from '@archon/workflows/resource-start-store';
 import { readCompletedRunResult } from '@archon/workflows/run-result';
@@ -27,17 +29,16 @@ import {
   readSubrunMetadata,
   type StartRefusalReason,
 } from '@archon/workflows/schemas/run-metadata';
-import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import { settlementStarts } from './asks-settled';
 import type { WorkflowHost } from './host-store';
 import { itemAnswers, settledAnswer } from './item-answers';
 import {
   getTriggersPath,
-  isOnBindingRevision,
   launchProjectKey,
   linkedEntries,
   mappedInputs,
+  onBindingRevision,
   readOnBindings,
   startIntent,
   type AsksSettledBinding,
@@ -63,64 +64,42 @@ export function triggerFilesReader(): () => Promise<OnBinding[]> {
 type CausingActor = NonNullable<SourceReceiptInput['sourceActor']>;
 
 /**
- * Whether a start of this receipt's binding waits on a file that changed since the receipt
- * froze it: the file as it is now (undefined when it is gone) and the run that caused the
- * start. Undefined when the file is unchanged, or the start was not caused by a run's end
- * or settled asks: other sources' files are not rebuilt from.
- */
-export async function changedTriggerFile(
-  receipt: Pick<StartReceiptInspection, 'sourceActor' | 'sourceInstanceId'>,
-  bindingRevision: string | null,
-  files: () => Promise<readonly OnBinding[]>
-): Promise<{ file: OnBinding | undefined; actor: CausingActor } | undefined> {
-  const actor = receipt.sourceActor;
-  // Checked before the files are read, so a broken file holds back only these starts.
-  if (actor?.source !== RUN_ENDED_SOURCE_ACTOR && actor?.source !== ASKS_SETTLED_SOURCE_ACTOR)
-    return undefined;
-  const file = (await files()).find(
-    candidate => candidate.sourceInstanceId === receipt.sourceInstanceId
-  );
-  if (file && isOnBindingRevision(file, bindingRevision)) return undefined;
-  return { file, actor };
-}
-
-/**
- * The binding a pending start prepares with: its own intent when its file is unchanged, the
- * one its file builds now, or why the file no longer starts it. Throws when the trigger
- * files or the causing run cannot be read; the start then stays pending.
+ * The binding a waiting start runs with: its own intent while its trigger file is
+ * unchanged, the one its file builds now, or why the file no longer starts it. Only a start
+ * a run's end or settled asks caused follows its file; any other is unchanged. The file is
+ * unchanged when its revision is the receipt's, or, failing that, when it builds the same
+ * intent from what the run recorded: a receipt an older Archon wrote hashed its binding
+ * alone, and a cosmetic edit moves the revision without changing the start. The one
+ * freshness rule for a pending start's preparation and for a queued start's admission.
+ * Throws when the trigger files or what the start was caused by cannot be read.
  */
 export async function currentBinding(
   host: WorkflowHost,
-  receipt: StartReceiptInspection,
+  receipt: Pick<StartReceiptInspection, 'sourceActor' | 'sourceInstanceId' | 'itemKey'>,
   binding: { bindingRevision: string | null; intent: ResourceStartBindingIntent },
   files: () => Promise<readonly OnBinding[]> = triggerFilesReader()
 ): Promise<CurrentBinding> {
-  const changed = await changedTriggerFile(receipt, binding.bindingRevision, files);
-  if (!changed) return { unchanged: true };
-  const { file, actor } = changed;
+  const actor = receipt.sourceActor;
+  // Checked before the files are read, so a broken file holds back only these starts.
+  if (actor?.source !== RUN_ENDED_SOURCE_ACTOR && actor?.source !== ASKS_SETTLED_SOURCE_ACTOR)
+    return { unchanged: true };
+  const file = (await files()).find(
+    candidate => candidate.sourceInstanceId === receipt.sourceInstanceId
+  );
+  if (file && onBindingRevision(file) === binding.bindingRevision) return { unchanged: true };
   if (!file) return refuse(`trigger file for '${receipt.sourceInstanceId}' is gone`);
-  // A file now about the other event cannot be read against this one's run.
+  // A file now about the other event cannot be read against this one's cause.
   if ('runEnded' in file !== (actor.source === RUN_ENDED_SOURCE_ACTOR))
     return refuse(`${file.file}: it no longer binds the event that caused this start`);
-  const runId = actor.id;
-  const run = await host.deps.store.getWorkflowRun(runId);
-  const item = run?.item_id ? await host.deps.store.getItem(run.item_id) : null;
-  if (!run || !item)
-    return refuse(`${file.file}: run '${runId}', which caused this start, or its item is gone`);
   if (file.binding.bindingId !== binding.intent.bindingId)
     return refuse(`${file.file}: its binding is now '${file.binding.bindingId}'`);
   const projectKey = await launchProjectKey(cwd =>
     registeredProjectKeyForPath(cwd, host.records.codebases)
   )(file.binding.launch.cwd);
-  if (projectKey !== item.projectKey)
-    return refuse(`${file.file}: binding.launch.cwd is no longer in the item's project`);
-  // A start on another item was matched over a link; one on the run's own item was not.
-  const itemKey = receipt.itemKey ?? item.key;
-  const onLink = itemKey !== item.key;
   const read =
     'runEnded' in file
-      ? await runEndedSources(host, file, { run, item, actor, onLink, itemKey })
-      : await asksSettledSources(host, file, { run, item, actor, onLink });
+      ? await runEndedSources(host, file, actor, receipt.itemKey, projectKey)
+      : await asksSettledSources(host, file, actor, receipt.itemKey, projectKey);
   if ('refused' in read) return read;
   const takesCheckout =
     ('runEnded' in file ? file.runEnded.checkout : file.asksSettled.checkout) !== undefined;
@@ -134,13 +113,17 @@ export async function currentBinding(
   const mapped = mappedInputs(sources, read.sources);
   if ('missing' in mapped) return refuse(`${file.file}: ${mapped.missing}`, 'inputs_unmapped');
   // The hand-off is kept as the run's end recorded it.
-  const intent = startIntent(file, mapped.inputs, checkoutFrom);
-  return {
-    intent:
-      binding.intent.itemKey === undefined
-        ? intent
-        : { ...intent, itemKey: binding.intent.itemKey },
-  };
+  const built = startIntent(file, mapped.inputs, checkoutFrom);
+  const intent =
+    binding.intent.itemKey === undefined ? built : { ...built, itemKey: binding.intent.itemKey };
+  return sameStart(intent, binding.intent) ? { unchanged: true } : { intent };
+}
+
+/** Whether two intents start the same thing, whatever revision each records. */
+function sameStart(a: ResourceStartBindingIntent, b: ResourceStartBindingIntent): boolean {
+  const plain = ({ bindingRevision: _revision, ...intent }: ResourceStartBindingIntent) =>
+    JSON.parse(JSON.stringify(intent)) as unknown;
+  return isDeepStrictEqual(plain(a), plain(b));
 }
 
 function refuse(
@@ -152,26 +135,32 @@ function refuse(
 
 type Sources = { sources: MappedSources } | ReturnType<typeof refuse>;
 
-interface Cause {
-  run: WorkflowRun;
-  item: WorkflowItem;
-  actor: CausingActor;
-  /** Whether the start is on an item linked to the run's, not on the run's own. */
-  onLink: boolean;
-}
-
-/** What a run-ended binding maps from, read again from the ended run's record. */
+/**
+ * What a run-ended binding maps from, read again from the ended run's record. The run is
+ * needed: its inputs, result, outcome and item are what the start was matched on.
+ */
 async function runEndedSources(
   host: WorkflowHost,
   file: RunEndedBinding,
-  { run, item, actor, onLink, itemKey }: Cause & { itemKey: string }
+  actor: CausingActor,
+  receiptItemKey: string | null,
+  projectKey: string | null
 ): Promise<Sources> {
   const { runEnded } = file;
+  const run = await host.deps.store.getWorkflowRun(actor.id);
+  const item = run?.item_id ? await host.deps.store.getItem(run.item_id) : null;
+  if (!run || !item)
+    return refuse(`${file.file}: run '${actor.id}', which caused this start, or its item is gone`);
+  if (projectKey !== item.projectKey)
+    return refuse(`${file.file}: binding.launch.cwd is no longer in the item's project`);
   const outcome = actor.display ?? '';
   if (runEnded.workflowName !== run.workflow_name || runEnded.outcome !== outcome)
     return refuse(
       `${file.file}: it no longer binds '${run.workflow_name}' completing with '${outcome}'`
     );
+  // A start on another item was matched over a link; one on the run's own item was not.
+  const itemKey = receiptItemKey ?? item.key;
+  const onLink = itemKey !== item.key;
   if ((runEnded.linked !== undefined) !== onLink)
     return refuse(
       `${file.file}: it ${onLink ? 'no longer starts' : 'now starts'} linked items`,
@@ -208,32 +197,53 @@ async function runEndedSources(
   };
 }
 
-/** What an asks-settled binding maps from, read again from the asking run and its asks. */
+/**
+ * What an asks-settled binding maps from: the settled set and the item's asks, which
+ * outlive the asking run, and the asking run's inputs and result while it exists. With the
+ * run deleted, a mapping that reads it refuses (`mappedInputs`), as at the settlement.
+ */
 async function asksSettledSources(
   host: WorkflowHost,
   file: AsksSettledBinding,
-  { run, item, actor, onLink }: Cause
+  actor: CausingActor,
+  receiptItemKey: string | null,
+  projectKey: string | null
 ): Promise<Sources> {
   const { asksSettled } = file;
-  if (onLink || asksSettled.workflowName !== run.workflow_name)
-    return refuse(`${file.file}: it no longer binds the asks of '${run.workflow_name}'`);
-  const onItem = await host.deps.store.listItemAsks(item.id);
+  // The receipt names the asking item: an asks-settled start is never on a linked one.
+  const found =
+    projectKey === null || receiptItemKey === null
+      ? null
+      : await host.deps.store.getItemRuns(projectKey, receiptItemKey);
+  if (!found) return refuse(`${file.file}: binding.launch.cwd is no longer in the item's project`);
+  const onItem = await host.deps.store.listItemAsks(found.item.id);
   const rows: StoredItemAsk[] = [];
   for (const row of onItem) {
-    if (row.runId !== run.id) continue;
+    if (row.runId !== actor.id) continue;
     // Thrown: the set cannot be read again by this binary, so the start waits for one that can.
-    if (isAttentionDegraded(row)) throw new Error(`An ask run '${run.id}' left cannot be read`);
+    if (isAttentionDegraded(row)) throw new Error(`An ask run '${actor.id}' left cannot be read`);
     if (row.closed !== null && row.closed.as !== 'replaced') rows.push(row);
   }
+  const workflow = rows[0]?.workflowName;
+  if (workflow !== asksSettled.workflowName)
+    return refuse(`${file.file}: it no longer binds the asks run '${actor.id}' left`);
   const settledAs = actor.display === 'withdrawn' ? 'withdrawn' : 'answered';
   if (!settlementStarts(asksSettled, rows, settledAs))
     return refuse(`${file.file}: it no longer starts when the asks settle as they did`);
+  const answers = rows.map(settledAnswer);
+  const run = await host.deps.store.getWorkflowRun(actor.id);
   return {
-    sources: {
-      inputs: readSubrunMetadata(run.metadata).inputs ?? {},
-      result: readAsksResult(run.metadata),
-      answers: rows.map(settledAnswer),
-      itemAnswers: itemAnswers(onItem),
-    },
+    sources: run
+      ? {
+          inputs: readSubrunMetadata(run.metadata).inputs ?? {},
+          result: readAsksResult(run.metadata),
+          answers,
+          itemAnswers: itemAnswers(onItem),
+        }
+      : {
+          gone: `run '${actor.id}', which left the asks, no longer exists`,
+          answers,
+          itemAnswers: itemAnswers(onItem),
+        },
   };
 }
