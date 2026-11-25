@@ -157,10 +157,17 @@ function writeTempProject(options: TempFixtureOptions): { cwd: string; fixturePa
 }
 
 describe('parseFixtureFile', () => {
-  it('rejects a sparse iteration sequence', () => {
+  it('rejects a sparse or undefined iteration sequence', () => {
     const sparse: unknown[] = [];
     sparse.length = 1;
+    const disguised = [undefined] as unknown[];
+    disguised[Symbol.iterator] = function* () {
+      yield 'ok';
+    };
     expect(dryRunIterationStubsSchema.safeParse({ verdict: sparse }).success).toBe(false);
+    expect(dryRunIterationStubsSchema.safeParse({ verdict: [undefined] }).success).toBe(false);
+    expect(dryRunIterationStubsSchema.safeParse({ verdict: disguised }).success).toBe(false);
+    expect(dryRunIterationStubsSchema.safeParse({ verdict: ['ok'] }).success).toBe(true);
   });
 
   it('keeps literal arrays and wrapper objects separate from iteration metadata', () => {

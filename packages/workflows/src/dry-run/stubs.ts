@@ -69,12 +69,7 @@ export const dryRunIterationStubsSchema = z.unknown().transform((value, ctx) => 
   }
   const entries: [string, DryRunStubValue[]][] = [];
   for (const [id, candidate] of Object.entries(value)) {
-    // `every` skips holes, so a sparse array would pass and later execute for real.
-    if (
-      !Array.isArray(candidate) ||
-      candidate.length === 0 ||
-      !Array.from(candidate).every(isStubValue)
-    ) {
+    if (!isIterationSequence(candidate)) {
       ctx.addIssue({
         code: 'custom',
         path: [id],
@@ -108,6 +103,15 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isStubValue(value: unknown): value is DryRunStubValue {
   return dryRunStubValueSchema.safeParse(value).success;
+}
+
+/** Own indexes only. `every` skips holes, and `Array.from` follows a custom iterator. */
+function isIterationSequence(candidate: unknown): candidate is DryRunStubValue[] {
+  if (!Array.isArray(candidate) || candidate.length === 0) return false;
+  for (let index = 0; index < candidate.length; index += 1) {
+    if (!Object.hasOwn(candidate, index) || !isStubValue(candidate[index])) return false;
+  }
+  return true;
 }
 
 function objectPlaceholder(
