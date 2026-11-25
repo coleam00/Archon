@@ -6,7 +6,7 @@ import {
   type RunUsageReadStore,
 } from './run-usage-read';
 import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
-import { serializeNodeStateRecord } from './node-record-serialization';
+import { serializeDeferredNodeUsage, serializeNodeStateRecord } from './node-record-serialization';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { USAGE_METRICS } from './schemas/run-usage-report';
@@ -69,10 +69,10 @@ function agentEvent(runId: string): WorkflowEventRow {
   };
 }
 
-function parentEvent(childIds: string[], costUsd = 0.25): WorkflowEventRow {
+function parentEvent(childIds: string[], costUsd = 0.25, runId = 'parent'): WorkflowEventRow {
   return {
-    id: 'parent-event',
-    workflow_run_id: 'parent',
+    id: `${runId}-event-${childIds.join('-')}`,
+    workflow_run_id: runId,
     event_type: 'node_completed',
     step_name: 'children',
     step_index: null,
@@ -133,7 +133,7 @@ describe('strict usage history reads', () => {
       expect(JSON.stringify([...reports])).not.toContain(marker);
   });
 
-  it('preserves totals and records an unavailable batch without refetching individual runs', async () => {
+  it('preserves totals and records every run unavailable when each strict read fails', async () => {
     const roots = [run('one'), run('two')];
     const fixture = source(roots, []);
     let attempts = 0;
@@ -142,7 +142,7 @@ describe('strict usage history reads', () => {
       throw new Error('unavailable');
     };
     const reports = await readRunUsageReports(fixture.store, roots);
-    expect(attempts).toBe(1);
+    expect(attempts).toBe(3);
     for (const root of roots) {
       const report = reports.get(root.id);
       expect(report?.totals.usd).toBe(0.25);
@@ -156,6 +156,44 @@ describe('strict usage history reads', () => {
         reason: 'history_unavailable',
       });
     }
+  });
+
+  it('keeps a readable sibling when another root history fails its strict read', async () => {
+    const roots = [run('bad'), run('good')];
+    const fixture = source(roots, [agentEvent('good')]);
+    fixture.store.listEventsForRuns = async ids => {
+      if (ids.includes('bad')) JSON.parse('{');
+      return new Map([['good', [agentEvent('good')]]]);
+    };
+    const reports = await readRunUsageReports(fixture.store, roots);
+    expect(reports.get('good')?.coverage.usd.state).toBe('complete');
+    expect(reports.get('bad')?.coverage.usd.limitations).toContainEqual({
+      runId: 'bad',
+      reason: 'history_unavailable',
+    });
+  });
+
+  it('keeps a readable referenced child when its sibling history fails', async () => {
+    const parent = parentEvent(['bad', 'good'], 0.5);
+    parent.data.tokens = { input: 8, output: 4 };
+    const fixture = source([run('bad'), run('good')], [parent, agentEvent('good')]);
+    fixture.store.listEventsForRuns = async ids => {
+      if (ids.includes('bad')) JSON.parse('{');
+      return new Map(
+        ids.map(id => [id, id === 'parent' ? [parent] : id === 'good' ? [agentEvent('good')] : []])
+      );
+    };
+    const report = await readRunUsageReport(
+      fixture.store,
+      run('parent', { total_cost_usd: 0.5, total_tokens_in: 8, total_tokens_out: 4 })
+    );
+    expect(report.coverage.usd.contributors).toContainEqual(
+      expect.objectContaining({ runId: 'good', path: 'build' })
+    );
+    expect(report.coverage.usd.limitations).toContainEqual({
+      runId: 'bad',
+      reason: 'history_unavailable',
+    });
   });
 
   it('degrades only the run carrying malformed typed metadata', async () => {
@@ -184,6 +222,56 @@ describe('strict usage history reads', () => {
       runId: 'bad',
       reason: 'history_unavailable',
     });
+  });
+
+  it.each([null, ''])('names a node usage row whose path is %s', async stepName => {
+    const missing = agentEvent('bad');
+    missing.step_name = stepName;
+    const fixture = source([run('bad'), run('good')], [missing, agentEvent('good')]);
+    const reports = await readRunUsageReports(fixture.store, [run('bad'), run('good')]);
+    expect(reports.get('bad')?.coverage.usd.limitations).toContainEqual({
+      runId: 'bad',
+      reason: 'record_unreadable',
+    });
+    expect(reports.get('bad')?.coverage.usd.state).not.toBe('complete');
+    expect(reports.get('good')?.coverage.usd.state).toBe('complete');
+  });
+
+  it('names deferred usage without a path but ignores a node-less completion row', async () => {
+    const started = startNodeExecution({
+      runId: 'bad',
+      path: 'build',
+      node: { id: 'build', kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+      invocation: newNodeInvocation(),
+      provider: 'claude',
+    });
+    const deferred = serializeDeferredNodeUsage(
+      finishNodeExecution(started, { status: 'suspended', point: 'interactive_loop' }, {})
+    );
+    const missing: WorkflowEventRow = {
+      ...deferred,
+      id: 'deferred-without-path',
+      workflow_run_id: 'bad',
+      step_index: null,
+      step_name: null,
+      created_at: new Date().toISOString(),
+    };
+    const completed: WorkflowEventRow = {
+      id: 'completed',
+      workflow_run_id: 'bad',
+      event_type: 'workflow_completed',
+      step_index: null,
+      step_name: null,
+      data: {},
+      created_at: new Date().toISOString(),
+    };
+    const fixture = source([run('bad')], [missing, completed]);
+    const report = await readRunUsageReport(fixture.store, run('bad'));
+    expect(
+      report.coverage.usd.limitations.filter(
+        limitation => limitation.reason === 'record_unreadable'
+      )
+    ).toEqual([{ runId: 'bad', reason: 'record_unreadable' }]);
   });
 
   it('expands matching child baselines using qualified nodes without adding child totals', async () => {
@@ -287,6 +375,26 @@ describe('strict usage history reads', () => {
     });
   });
 
+  it('keeps convergent cycle reports independent of batch root order', async () => {
+    const roots = [run('a'), run('b'), run('c'), run('d')];
+    const fixture = source(roots, [
+      parentEvent(['b'], 0.25, 'a'),
+      parentEvent(['c'], 0.25, 'b'),
+      parentEvent(['a'], 0.25, 'c'),
+      parentEvent(['b'], 0.25, 'd'),
+    ]);
+    const batch = await readRunUsageReports(fixture.store, [roots[0], roots[3]]);
+    for (const root of [roots[0], roots[3]]) {
+      const isolated = await readRunUsageReport(fixture.store, root);
+      expect(batch.get(root.id)).toEqual(isolated);
+    }
+    expect(batch.get('d')?.coverage.usd.limitations).toContainEqual({
+      runId: 'b',
+      path: 'children',
+      reason: 'child_cycle',
+    });
+  });
+
   it('preserves readable own usage when a child batch rejects', async () => {
     const fixture = source([], [parentEvent(['missing'])]);
     fixture.store.getWorkflowRunsByIds = async () => {
@@ -326,6 +434,41 @@ describe('strict usage history reads', () => {
     expect(report.totals.usd).toBe(5);
     expect(report.coverage.usd.contributedAiNodes).toBe(0);
     expect(report.coverage.usd.observedAiNodes).toBe(1);
+    expect(report.coverage.usd.limitations).toContainEqual({
+      runId: 'parent',
+      path: 'fan__item',
+      reason: 'scope_unattributed',
+    });
+  });
+
+  it('certifies a child baseline recorded after an opaque instance terminal', async () => {
+    const before = parentEvent(['child']);
+    before.step_name = 'fan__item__children';
+    const wrapper: WorkflowEventRow = {
+      id: 'wrapper',
+      workflow_run_id: 'parent',
+      step_name: 'fan__item',
+      step_index: null,
+      event_type: 'node_completed',
+      created_at: '2026-11-25T00:00:00Z',
+      data: {
+        type: 'compose_fan_out_instance',
+        cost_usd: 5,
+        tokens: { input: 40, output: 20 },
+        cost_scope: 'total',
+      },
+    };
+    const after = parentEvent(['child']);
+    after.id = 'after';
+    after.step_name = 'fan__item__children';
+    const fixture = source([run('child')], [before, wrapper, after, agentEvent('child')]);
+    const report = await readRunUsageReport(
+      fixture.store,
+      run('parent', { total_cost_usd: 5.25, total_tokens_in: 44, total_tokens_out: 22 })
+    );
+    expect(report.coverage.usd.contributors).toContainEqual(
+      expect.objectContaining({ runId: 'child', path: 'build' })
+    );
     expect(report.coverage.usd.limitations).toContainEqual({
       runId: 'parent',
       path: 'fan__item',

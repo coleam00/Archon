@@ -1,3 +1,4 @@
+import { createLogger } from '@archon/paths';
 import {
   foldDagUsageRecord,
   foldDeferredUsage,
@@ -16,6 +17,11 @@ import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowRun } from './schemas/workflow-run';
 import { NODE_STATE_EVENT_TYPES, type IWorkflowStore } from './store';
 
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  return (cachedLog ??= createLogger('workflow.run-usage-read'));
+}
+
 export const USAGE_REPORT_EVENT_TYPES = [
   ...NODE_STATE_EVENT_TYPES,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
@@ -33,7 +39,11 @@ function readHistory(run: WorkflowRun, events: readonly WorkflowEventRow[]): Usa
   const fold = newDagUsageFold(run.id);
   const limitations: UsageLimitation[] = [];
   for (const event of events) {
-    if (!event.step_name) continue;
+    if (!event.step_name) {
+      if (event.event_type !== 'workflow_completed')
+        limitations.push({ runId: run.id, reason: 'record_unreadable' });
+      continue;
+    }
     const row = { ...event, step_name: event.step_name };
     try {
       if (row.event_type === DEFERRED_NODE_USAGE_EVENT_TYPE) foldDeferredUsage(fold, row);
@@ -41,7 +51,11 @@ function readHistory(run: WorkflowRun, events: readonly WorkflowEventRow[]): Usa
         const record = readNodeRecordEvent(row);
         if (record !== undefined) foldDagUsageRecord(fold, row, record);
       }
-    } catch {
+    } catch (error) {
+      getLog().warn(
+        { err: error, workflowRunId: run.id, path: row.step_name },
+        'run_usage.record_unreadable'
+      );
       limitations.push({ runId: run.id, path: row.step_name, reason: 'record_unreadable' });
     }
   }
@@ -62,9 +76,22 @@ async function loadHistories(
       USAGE_REPORT_EVENT_TYPES,
       { strict: true }
     );
-  } catch {
-    for (const run of runs)
-      unavailable.set(run.id, unknownRunUsageReport(run, 'history_unavailable'));
+  } catch (batchError) {
+    getLog().warn(
+      { err: batchError, workflowRunIds: runs.map(run => run.id) },
+      'run_usage.history_batch_unavailable'
+    );
+    for (const run of runs) {
+      try {
+        const events = await store.listEventsForRuns([run.id], USAGE_REPORT_EVENT_TYPES, {
+          strict: true,
+        });
+        histories.set(run.id, readHistory(run, events.get(run.id) ?? []));
+      } catch (error) {
+        getLog().warn({ err: error, workflowRunId: run.id }, 'run_usage.history_unavailable');
+        unavailable.set(run.id, unknownRunUsageReport(run, 'history_unavailable'));
+      }
+    }
     return;
   }
   for (const run of runs) histories.set(run.id, readHistory(run, events.get(run.id) ?? []));
@@ -89,12 +116,18 @@ async function loadReferencedChildren(
     let children: WorkflowRun[];
     try {
       children = await store.getWorkflowRunsByIds(childIds);
-    } catch {
+    } catch (error) {
+      getLog().warn({ err: error, childRunIds: childIds }, 'run_usage.child_lookup_unavailable');
       return;
     }
     await loadHistories(store, children, histories, unavailable);
     level = children.map(child => child.id);
   }
+}
+
+interface ResolvedUsageReport {
+  result: ChildUsageReport;
+  cycleCut: boolean;
 }
 
 function resolveReport(
@@ -103,27 +136,28 @@ function resolveReport(
   unavailable: ReadonlyMap<string, RunUsageReport>,
   cache: Map<string, RunUsageReport>,
   ancestors: ReadonlySet<string>
-): ChildUsageReport {
-  if (ancestors.has(runId)) return { reason: 'child_cycle' };
+): ResolvedUsageReport {
+  if (ancestors.has(runId)) return { result: { reason: 'child_cycle' }, cycleCut: true };
   const cached = cache.get(runId) ?? unavailable.get(runId);
-  if (cached !== undefined) return { report: cached };
+  if (cached !== undefined) return { result: { report: cached }, cycleCut: false };
   const history = histories.get(runId);
-  if (history === undefined) return { reason: 'child_unavailable' };
+  if (history === undefined) return { result: { reason: 'child_unavailable' }, cycleCut: false };
   const next = new Set([...ancestors, runId]);
   const children = new Map<string, ChildUsageReport>();
-  for (const id of history.fold.reportedChildUsage.keys())
-    children.set(id, resolveReport(id, histories, unavailable, cache, next));
+  let cycleCut = false;
+  for (const id of history.fold.reportedChildUsage.keys()) {
+    const child = resolveReport(id, histories, unavailable, cache, next);
+    children.set(id, child.result);
+    cycleCut ||= child.cycleCut;
+  }
   const report = buildRunUsageReport(history.run, history.fold, {
     children,
     limitations: history.limitations,
   });
   // A cycle cut depends on the ancestor set. Caching it would make a later root
   // in the same request reuse a report that was built for a different cut.
-  const cut = [...children.values()].some(
-    child => 'reason' in child && child.reason === 'child_cycle'
-  );
-  if (!cut) cache.set(runId, report);
-  return { report };
+  if (!cycleCut) cache.set(runId, report);
+  return { result: { report }, cycleCut };
 }
 
 export async function readRunUsageReports(
@@ -140,7 +174,9 @@ export async function readRunUsageReports(
     const resolved = resolveReport(root.id, histories, unavailable, cache, new Set());
     result.set(
       root.id,
-      'report' in resolved ? resolved.report : unknownRunUsageReport(root, 'history_unavailable')
+      'report' in resolved.result
+        ? resolved.result.report
+        : unknownRunUsageReport(root, 'history_unavailable')
     );
   }
   return result;

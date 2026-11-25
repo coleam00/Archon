@@ -26,7 +26,7 @@ export type ChildUsageReport =
   | { report: RunUsageReport }
   | { reason: 'child_unavailable' | 'child_cycle' };
 
-export function validUsageAmount(metric: UsageMetric, value: unknown): value is number {
+function validUsageAmount(metric: UsageMetric, value: unknown): value is number {
   return (
     typeof value === 'number' &&
     Number.isFinite(value) &&
@@ -35,7 +35,7 @@ export function validUsageAmount(metric: UsageMetric, value: unknown): value is 
   );
 }
 
-export function usageAmountsAgree(
+function usageAmountsAgree(
   metric: UsageMetric,
   left: number | null | undefined,
   right: number | null | undefined
@@ -44,7 +44,7 @@ export function usageAmountsAgree(
   return metric === 'usd' ? Math.abs(left - right) <= COST_TOLERANCE_USD : left === right;
 }
 
-export function usageFiguresTotals(usage: RunUsageFigures): UsageTotals {
+function usageFiguresTotals(usage: RunUsageFigures): UsageTotals {
   return {
     usd: usage.costUsd ?? null,
     inputTokens: usage.tokens?.input ?? null,
@@ -115,7 +115,7 @@ function identity(runId: string, observation: DagUsageObservation): UsageNodeIde
   return usageNodeIdentitySchema.parse({ runId, ...observation });
 }
 
-export function uniqueUsageNodes(nodes: readonly UsageNodeIdentity[]): UsageNodeIdentity[] {
+function uniqueUsageNodes(nodes: readonly UsageNodeIdentity[]): UsageNodeIdentity[] {
   const seen = new Set<string>();
   return nodes.filter(node => {
     const key = JSON.stringify([node.runId, node.path]);
@@ -457,7 +457,7 @@ function childMetricCoverage(
   fold: DagUsageFold,
   children: ReadonlyMap<string, ChildUsageReport>,
   metric: UsageMetric,
-  opaquePaths: readonly string[] = []
+  opaqueChildren: ReadonlySet<string> = new Set()
 ): {
   reports: MetricCoverage[];
   limitations: UsageLimitation[];
@@ -480,10 +480,7 @@ function childMetricCoverage(
       continue;
     }
     const expected = usageFiguresTotals(baseline)[metric];
-    const paths = [...(fold.childUsagePaths.get(childId) ?? [])];
-    const opaque = opaquePaths.some(scope =>
-      paths.some(path => path === scope || path.startsWith(`${scope}__`))
-    );
+    const opaque = opaqueChildren.has(childId);
     const matches = !opaque && usageAmountsAgree(metric, expected, child.report.totals[metric]);
     const coverage = child.report.coverage[metric];
     result.reports.push(
@@ -559,10 +556,12 @@ function buildMetricCoverage(
     limitations,
     fold.observations
   );
-  const opaquePaths = limitations
-    .filter(limitation => limitation.runId === run.id && limitation.reason === 'scope_unattributed')
-    .flatMap(limitation => (limitation.path === undefined ? [] : [limitation.path]));
-  const attributedChildren = childMetricCoverage(fold, children, metric, opaquePaths);
+  const attributedChildren = childMetricCoverage(
+    fold,
+    children,
+    metric,
+    new Set(fold.opaqueChildUsagePaths.keys())
+  );
   contributors.push(...attributedChildren.reports.flatMap(report => report.contributors));
   const population = uniqueUsageNodes(
     [...observations, ...unfinished]
@@ -583,7 +582,12 @@ function buildMetricCoverage(
     hasUnknownPopulation(limitations) || child.reports.some(report => report.aiNodes === null)
       ? null
       : population.length;
-  if (aiNodes !== 0) limitations.push(...totalLimitation(run, metric, totals[metric]));
+  const totalLimitations = totalLimitation(run, metric, totals[metric]);
+  limitations.push(
+    ...(aiNodes === 0
+      ? totalLimitations.filter(limitation => limitation.reason === 'total_invalid')
+      : totalLimitations)
+  );
   const selectedTotal = usageFiguresTotals(countedUsage(fold))[metric];
   if (
     totals[metric] !== null &&

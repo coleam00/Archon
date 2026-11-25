@@ -144,10 +144,11 @@ async function surfaceResult(run: BackgroundRun, result: SubmitResult): Promise<
       if (persisted !== null) {
         const usage = await readRunUsageReport(store, persisted);
         card.message += `\n\n${formatUsageReport(usage).join('\n')}`;
-      }
+      } else card.message += '\n\nUsage: unavailable (persisted run unavailable)';
     }
-  } catch {
-    getLog().warn({ runId: card.runId }, 'workflow_output_usage_unavailable');
+  } catch (error) {
+    card.message += '\n\nUsage: unavailable (persisted run unavailable)';
+    getLog().warn({ err: toError(error), runId: card.runId }, 'workflow_output_usage_unavailable');
   }
   try {
     await ctx.platform.sendMessage(ctx.conversationId, card.message, {

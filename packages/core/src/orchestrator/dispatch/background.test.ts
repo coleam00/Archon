@@ -806,6 +806,46 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   );
 
+  test.each(['missing', 'rejected'] as const)(
+    'a %s usage read degrades a successful result card without changing its outcome',
+    async failure => {
+      const error = new Error('usage read failed');
+      if (failure === 'rejected') mockUsageRun.mockRejectedValueOnce(error);
+      mockExecuteWorkflow.mockResolvedValueOnce({
+        success: true,
+        workflowRunId: 'run-1',
+        summary: 'Authored summary',
+      });
+      await dispatchBackgroundWorkflow(
+        makeRoutingCtx(),
+        makeWorkflow({ worktree: { enabled: false } })
+      );
+      await flushBackgroundExecution();
+      const cards = platform.sendMessage.mock.calls.filter(
+        call => call[2]?.category === 'workflow_result'
+      );
+      expect(cards).toHaveLength(1);
+      expect(cards[0]?.[1]).toContain('Authored summary');
+      expect(cards[0]?.[1]).toContain('Usage: unavailable (persisted run unavailable)');
+      expect(cards[0]?.[1]).not.toContain('Workflow **bg-workflow** failed');
+      expect(cards[0]?.[2]?.workflowResult).toEqual({
+        workflowName: 'bg-workflow',
+        runId: 'run-1',
+      });
+      expect(mockFailWorkflowRun).not.toHaveBeenCalled();
+      if (failure === 'rejected')
+        expect(
+          mockLogger.warn.mock.calls.some(
+            ([fields]) =>
+              typeof fields === 'object' &&
+              fields !== null &&
+              'err' in fields &&
+              fields.err === error
+          )
+        ).toBe(true);
+    }
+  );
+
   test.each(['own', 'composed'] as const)(
     'a workflow with its %s approval gate dispatches in the background',
     async origin => {

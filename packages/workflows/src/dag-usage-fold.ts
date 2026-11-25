@@ -59,7 +59,9 @@ export interface DagUsageFold {
   readonly observations: DagUsageObservation[];
   readonly reportedChildUsage: NonNullable<DagResumeSnapshot['reportedChildUsage']>;
   readonly childUsagePaths: Map<string, Set<string>>;
+  readonly opaqueChildUsagePaths: Map<string, Set<string>>;
   readonly unattributedChildUsagePaths: Set<string>;
+  readonly latestNodeKindByPath: Map<string, NodeDescriptor['kind']>;
 }
 
 export function newDagUsageFold(runId: string): DagUsageFold {
@@ -69,7 +71,9 @@ export function newDagUsageFold(runId: string): DagUsageFold {
     observations: [],
     reportedChildUsage: new Map(),
     childUsagePaths: new Map(),
+    opaqueChildUsagePaths: new Map(),
     unattributedChildUsagePaths: new Set(),
+    latestNodeKindByPath: new Map(),
   };
 }
 
@@ -128,9 +132,16 @@ function recordedNodeKind(type: string | undefined): NodeDescriptor['kind'] | un
 }
 
 function recordChildUsagePath(fold: DagUsageFold, childRunId: string, path: string): void {
+  fold.opaqueChildUsagePaths.delete(childRunId);
   const paths = fold.childUsagePaths.get(childRunId) ?? new Set<string>();
   paths.add(path);
   fold.childUsagePaths.set(childRunId, paths);
+}
+
+function recordObservation(fold: DagUsageFold, evidence: DagUsageObservation): void {
+  fold.observations.push(evidence);
+  if (evidence.nodeKind === undefined) fold.latestNodeKindByPath.delete(evidence.path);
+  else fold.latestNodeKindByPath.set(evidence.path, evidence.nodeKind);
 }
 
 export function foldDagUsageRecord(
@@ -139,7 +150,7 @@ export function foldDagUsageRecord(
   record: ReadNodeRecordEvent
 ): void {
   const evidence = projectUsageObservation(record);
-  fold.observations.push(evidence);
+  recordObservation(fold, evidence);
   if (
     row.event_type !== 'node_completed' &&
     row.event_type !== 'node_failed' &&
@@ -298,7 +309,7 @@ export function foldDeferredUsage(fold: DagUsageFold, row: DagUsageRow): void {
   }
   if (!usage || nodeCostScope(usage.data) === 'total') return;
   const evidence = projectDeferredUsageObservation(fold, usage);
-  fold.observations.push(evidence);
+  recordObservation(fold, evidence);
   foldDeferredLoopBaseline(fold, usage, evidence);
   addUsage(
     fold,
@@ -313,13 +324,11 @@ function projectDeferredUsageObservation(
   fold: DagUsageFold,
   usage: NonNullable<ReturnType<typeof readDeferredNodeUsageEvent>>
 ): DagUsageObservation {
-  const priorIdentity = [...fold.observations]
-    .reverse()
-    .find(observation => observation.path === usage.path);
+  const priorNodeKind = fold.latestNodeKindByPath.get(usage.path);
   return {
     path: usage.path,
     eventType: DEFERRED_NODE_USAGE_EVENT_TYPE,
-    ...(priorIdentity?.nodeKind === undefined ? {} : { nodeKind: priorIdentity.nodeKind }),
+    ...(priorNodeKind === undefined ? {} : { nodeKind: priorNodeKind }),
     ...(usage.data.invocation === undefined
       ? {}
       : {
@@ -388,6 +397,10 @@ function foldNodeUsage(
   let coveredContributions: readonly UsageContribution[] | undefined;
   if (isAuthoritativeInstanceUsage) {
     const prefix = `${row.step_name}__`;
+    for (const [childRunId, paths] of fold.childUsagePaths) {
+      const replaced = [...paths].filter(path => path.startsWith(prefix));
+      if (replaced.length > 0) fold.opaqueChildUsagePaths.set(childRunId, new Set(replaced));
+    }
     coveredContributions = fold.usageContributions.filter(contribution =>
       contribution.stepName.startsWith(prefix)
     );

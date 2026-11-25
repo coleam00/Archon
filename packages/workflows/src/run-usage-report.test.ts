@@ -346,6 +346,32 @@ describe('recorded usage coverage', () => {
     expect(result.coverage.usd.contributors[0].path).toBe('fan__item__build');
   });
 
+  it('keeps a selected instance wrapper partial-cost flag on USD only', () => {
+    const leaf = serializeNodeStateRecord(agent('fan__item__build', measured));
+    const wrapper: DagResumeEvent = {
+      event_type: 'node_completed',
+      step_name: 'fan__item',
+      data: {
+        type: 'compose_fan_out_instance',
+        cost_scope: 'total',
+        cost_usd: 0.25,
+        cost_partial: true,
+        tokens: measured.tokens,
+      },
+    };
+    const result = report([leaf, wrapper]);
+    expect(result.coverage.usd).toMatchObject({
+      state: 'partial',
+      contributedAiNodes: 1,
+    });
+    expect(result.coverage.usd.contributors[0].path).toBe('fan__item__build');
+    expect(result.coverage.usd.partial).toContainEqual(
+      expect.objectContaining({ path: 'fan__item', partial: true })
+    );
+    expect(result.coverage.inputTokens.state).toBe('complete');
+    expect(result.coverage.outputTokens.state).toBe('complete');
+  });
+
   it('keeps an opaque instance amount without allocating it to readable leaves', () => {
     const leaf = serializeNodeStateRecord(agent('fan__item__build', measured));
     const wrapper: DagResumeEvent = {
@@ -429,6 +455,44 @@ describe('recorded usage coverage', () => {
         runId: 'run',
         reason: 'total_invalid',
       });
+  });
+
+  it.each(USAGE_METRICS)('names an invalid zero-AI %s total in an item aggregate', metric => {
+    const deterministic = startNodeExecution({
+      runId: 'bad',
+      path: 'script',
+      node: { id: 'script', kind: 'exec', runtime: 'sh', script: 'true' },
+      invocation: newNodeInvocation(),
+    });
+    const bad = {
+      id: 'bad',
+      metadata: {
+        total_cost_usd: metric === 'usd' ? -1 : null,
+        total_tokens_in: metric === 'inputTokens' ? -2 : 4,
+        total_tokens_out: metric === 'outputTokens' ? 1.5 : 2,
+      },
+    };
+    const badReport = itemRunUsageReport(
+      bad,
+      buildRunUsageReport(
+        bad,
+        foldDagUsage(
+          [
+            serializeNodeStateRecord(
+              finishNodeExecution(deterministic, { status: 'completed' }, {})
+            ),
+          ],
+          'bad'
+        )
+      )
+    );
+    const good = report([serializeNodeStateRecord(agent('build', measured))]);
+    const result = aggregateUsageReports([badReport, good]);
+    expect(result.coverage[metric].state).not.toBe('complete');
+    expect(result.coverage[metric].limitations).toContainEqual({
+      runId: 'bad',
+      reason: 'total_invalid',
+    });
   });
 
   it('reports an item without runs as not applicable, not a fabricated zero', () => {

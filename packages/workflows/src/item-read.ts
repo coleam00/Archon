@@ -9,6 +9,7 @@
  */
 import { askItemRef } from './attention-item-refs';
 import { z } from 'zod';
+import { createLogger } from '@archon/paths';
 import {
   attentionQueueItemSchema,
   compareAge,
@@ -79,7 +80,8 @@ import {
 } from './resource-start-store';
 import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
-import { readItemRunResult, itemCompletionEvents } from './item-run-result';
+import { readCompletedRunResult, resultCommitOf } from './run-result';
+import { getTerminalRecord } from './terminal-record';
 import { changeSizeSchema } from './schemas/change-size';
 import { readChangeSize } from './change-size';
 import { runPack, runPackSchema } from './run-pack';
@@ -92,6 +94,12 @@ import {
   itemRunUsageReport,
   unknownRunUsageReport,
 } from './run-usage-report';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('workflow.item-read');
+  return cachedLog;
+}
 
 /**
  * The run of the same workflow that holds the item, which a start waits behind or was
@@ -397,6 +405,33 @@ export interface ItemReadSource extends AttentionQueueSource {
   limitBindings?: LimitBindingsReader;
 }
 
+function readResult(
+  run: WorkflowRun,
+  events: readonly WorkflowEventRow[]
+): Pick<ItemRun, 'hasResult' | 'resultCommit'> {
+  try {
+    return {
+      hasResult: readCompletedRunResult(run, events).kind === 'result',
+      resultCommit:
+        run.status === 'completed' ? resultCommitOf(getTerminalRecord(run.status, events)) : null,
+    };
+  } catch (error) {
+    // One unreadable record must not fail the whole item read.
+    getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.terminal_record_unreadable');
+    return { hasResult: false, resultCommit: null };
+  }
+}
+
+/** The `workflow_completed` events of the completed runs, which hold their results. */
+async function completionEvents(
+  source: ItemReadSource,
+  runs: readonly WorkflowRun[]
+): Promise<ReadonlyMap<string, WorkflowEventRow[]>> {
+  const completedIds = runs.filter(run => run.status === 'completed').map(run => run.id);
+  if (completedIds.length === 0) return new Map();
+  return source.store.listEventsForRuns(completedIds, ['workflow_completed']);
+}
+
 async function itemRun(
   source: ItemReadSource,
   run: WorkflowRun,
@@ -409,7 +444,6 @@ async function itemRun(
   // The receipt stays the one owner of why a start happened; this only reads it.
   const receiptId = readResourceStartReceiptId(run.metadata);
   const receipt = receiptId ? await source.store.getStartReceipt(receiptId) : null;
-  const usage = parseRunUsage(run.metadata);
   return {
     id: run.id,
     workflow: run.workflow_name,
@@ -422,14 +456,12 @@ async function itemRun(
     awaitingExecution: await awaitingExecution(request, run, source.startExecutor),
     startLimit,
     spend: {
-      usd: usage.costUsd ?? null,
-      inputTokens: usage.tokens?.input ?? null,
-      outputTokens: usage.tokens?.output ?? null,
+      ...report.totals,
       coverage: report.coverage,
     },
     heldBehind,
     operatorPause: operatorPause(run),
-    ...readItemRunResult(run, terminalEvents.get(run.id) ?? []),
+    ...readResult(run, terminalEvents.get(run.id) ?? []),
     changeSize: readChangeSize(run),
   };
 }
@@ -743,7 +775,7 @@ export async function assembleItemRead(
       ? new Map<string, WorkflowEventRow[]>()
       : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
   const facts = await readItemFacts(source, found.item);
-  const terminalEvents = await itemCompletionEvents(source, own.values);
+  const terminalEvents = await completionEvents(source, own.values);
   const reports = await readRunUsageReports(source.store, own.values);
   const usageReports = own.values.map(run =>
     itemRunUsageReport(
@@ -789,7 +821,7 @@ export async function assembleItemRead(
     item: found.item,
     spend: { ...aggregate.totals, coverage: aggregate.coverage },
     runs: await Promise.all(
-      own.values.map(async run =>
+      own.values.map(async (run, index) =>
         itemRun(
           source,
           run,
@@ -797,10 +829,7 @@ export async function assembleItemRead(
           (await holds.runHeldBehind(run)) ?? null,
           terminalEvents,
           startLimits.countedUnder[run.id] ?? null,
-          itemRunUsageReport(
-            run,
-            reports.get(run.id) ?? unknownRunUsageReport(run, 'history_unavailable')
-          )
+          usageReports[index]
         )
       )
     ),
