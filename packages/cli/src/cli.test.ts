@@ -15,7 +15,12 @@ import { parseArgs } from 'util';
 import ts from 'typescript';
 import { cliArgOptions } from './args';
 import { generateConversationId } from './utils/conversation-id';
-import { canonicalizeProjectPath, projectKeyForCodebase } from '@archon/paths';
+import {
+  canonicalizeProjectPath,
+  getRunArtifactsDirForRoot,
+  getRunLogPathForRoot,
+  projectKeyForCodebase,
+} from '@archon/paths';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
 import {
@@ -27,7 +32,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { sealWorkflowRunConfig } from '@archon/core/config';
 import {
@@ -1919,14 +1924,23 @@ describe('pre-dispatch gates --json error envelope', () => {
     const prefix = runId.slice(0, 8);
     const missing = '7b50458b-0000-4000-8000-000000000000';
     const reads = ['get', 'logs', 'artifacts', 'wait'];
-    // Scratch directories: only `project` is a registered (folder) project.
-    const dirs = { home: '', plain: '', bare: '', checkout: '', project: '' };
+    const transcriptLine = '{"type":"by-id-marker"}';
+    // Scratch directories: `project` is a registered folder project and `retired` a
+    // registered repository checkout whose `.git` is gone; the others are in no project.
+    const dirs = { home: '', plain: '', bare: '', checkout: '', project: '', retired: '' };
 
     beforeAll(async () => {
       for (const key of Object.keys(dirs) as (keyof typeof dirs)[]) {
         dirs[key] = mkdtempSync(join(tmpdir(), `archon-by-id-${key}-`));
       }
       mkdirSync(join(dirs.project, 'sub'));
+      mkdirSync(join(dirs.retired, 'sub'));
+      // The run's output lives under its recorded root, where logs and artifacts read it.
+      const outputRoot = join(dirs.home, 'run-output');
+      mkdirSync(getRunArtifactsDirForRoot(outputRoot, runId), { recursive: true });
+      writeFileSync(join(getRunArtifactsDirForRoot(outputRoot, runId), 'report.md'), 'done\n');
+      mkdirSync(dirname(getRunLogPathForRoot(outputRoot, runId)), { recursive: true });
+      writeFileSync(getRunLogPathForRoot(outputRoot, runId), `${transcriptLine}\n`);
       const bare = spawnSync('git', ['init', '-q', '--bare', '.'], { cwd: dirs.bare });
       const checkout = spawnSync('git', ['init', '-q', '.'], { cwd: dirs.checkout });
       if (bare.status !== 0 || checkout.status !== 0) throw new Error('git init failed');
@@ -1940,12 +1954,16 @@ describe('pre-dispatch gates --json error envelope', () => {
           ['codebase', 'fixture/by-id', await canonicalizeProjectPath(dirs.project), 'folder']
         );
         db.run(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd, kind) VALUES (?, ?, ?, ?)',
+          ['retired', 'fixture/retired', await canonicalizeProjectPath(dirs.retired), 'repo']
+        );
+        db.run(
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
           ['conversation', 'cli', 'by-id-test', 'codebase']
         );
         db.run(
-          'INSERT INTO remote_agent_workflow_runs (id, conversation_id, codebase_id, workflow_name, user_message, status) VALUES (?, ?, ?, ?, ?, ?)',
-          [runId, 'conversation', 'codebase', 'by-id-test', '', 'completed']
+          'INSERT INTO remote_agent_workflow_runs (id, conversation_id, codebase_id, workflow_name, user_message, status, output_root) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [runId, 'conversation', 'codebase', 'by-id-test', '', 'completed', outputRoot]
         );
       } finally {
         db.close();
@@ -1957,7 +1975,7 @@ describe('pre-dispatch gates --json error envelope', () => {
     });
 
     // The caller's own directory, with no --cwd, as an operator runs it. `logs` takes no
-    // --json, so its answer is read from stderr.
+    // --json: it prints the transcript on stdout and a refusal on stderr.
     function read(cwd: string, args: string[]) {
       const json = args[0] !== 'logs';
       const result = spawnSync(
@@ -1972,12 +1990,13 @@ describe('pre-dispatch gates --json error envelope', () => {
       return {
         status: result.status,
         answer: json ? (JSON.parse(result.stdout) as Record<string, unknown>) : null,
+        stdout: result.stdout,
         text: json ? result.stdout : result.stderr,
       };
     }
 
-    it('reads a full id from a plain directory and a bare repository', () => {
-      for (const cwd of [dirs.plain, dirs.bare]) {
+    it('reads a full id from a plain directory, a bare repository and a retired checkout', () => {
+      for (const cwd of [dirs.plain, dirs.bare, dirs.retired, join(dirs.retired, 'sub')]) {
         const { status, answer } = read(cwd, ['get', runId]);
         expect({ cwd, status, answer }).toMatchObject({
           cwd,
@@ -1992,9 +2011,16 @@ describe('pre-dispatch gates --json error envelope', () => {
         status: 0,
         answer: { ok: true, runId },
       });
-      expect(read(dirs.bare, ['artifacts', runId]).answer).toMatchObject({ runId });
-      // The seeded run has no transcript; the answer is about the run, not the directory.
-      expect(read(dirs.bare, ['logs', runId]).text).toContain(runId);
+      const artifacts = read(dirs.bare, ['artifacts', runId]);
+      expect({ status: artifacts.status, files: artifacts.answer?.files }).toEqual({
+        status: 0,
+        files: ['report.md'],
+      });
+      const logs = read(dirs.bare, ['logs', runId]);
+      expect({ status: logs.status, stdout: logs.stdout }).toEqual({
+        status: 0,
+        stdout: `${transcriptLine}\n`,
+      });
     });
 
     it.each([

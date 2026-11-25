@@ -423,18 +423,12 @@ const NO_GIT_COMMANDS = [
 const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing'];
 
 /**
- * Reads of one run by id. A full run id names one run in the whole store, so the gate
- * never refuses these: it maps the directory to its project when it has one, so a short
- * prefix resolves there (folder subdirectories included), and otherwise passes the
- * directory on. `resolveRunIdArg` then refuses a prefix that has no project to resolve
- * in. `wait --item` resolves its item in the project, so it is not one.
+ * Reads of one run by id. A full run id names one run in the whole store, so these need
+ * no project and skip the gate. `resolveRunIdArg` resolves a short prefix in the
+ * directory's project, or refuses it where there is none. `wait --item` resolves its item
+ * in the project, so it is not one.
  */
 const BY_ID_READS = ['get', 'logs', 'artifacts', 'wait'];
-function isByIdRead({ command, subcommand, values }: CliRouteContext): boolean {
-  return (
-    command === 'workflow' && BY_ID_READS.includes(subcommand ?? '') && values.item === undefined
-  );
-}
 
 function requiresGitRepo({ command, subcommand, values }: CliRouteContext): boolean {
   // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
@@ -444,6 +438,7 @@ function requiresGitRepo({ command, subcommand, values }: CliRouteContext): bool
   if (NO_GIT_COMMANDS.includes(command ?? '')) return false;
   if (command !== 'workflow') return true;
   if (subcommand === 'attention' || subcommand === 'notice') return false;
+  if (BY_ID_READS.includes(subcommand ?? '') && values.item === undefined) return false;
   return !(values['item-of'] !== undefined && ITEM_OF_SUBCOMMANDS.includes(subcommand ?? ''));
 }
 
@@ -478,9 +473,6 @@ async function resolveRegisteredCwd(
     );
     const host = await createCliWorkflowHost();
     const { codebase, repoRoot } = await resolveCodebaseForPath(realCwd, host.records.codebases);
-    // With no project, the command checks its arguments and `resolveRunIdArg` refuses a
-    // short prefix after them; a full id needs no project.
-    if (isByIdRead(ctx) && !codebase) return realCwd;
     if (!repoRoot && codebase?.kind !== 'folder') {
       return await fail(
         ctx.json,
@@ -496,18 +488,10 @@ async function resolveRegisteredCwd(
 
 /** Workflow discovery still works in an unverifiable checkout when its git root is known. */
 async function fallBackToRepoRoot(
-  ctx: CliRouteContext,
+  { command, subcommand, json }: CliRouteContext,
   realCwd: string,
   error: Error
 ): Promise<string | number> {
-  const { command, subcommand, json } = ctx;
-  // A bare repository, for one, has no checkout for the gate to resolve. A by-id read does
-  // not need one: `resolveRunIdArg` looks up a prefix's project itself and fails there with
-  // its own error, and a full id goes to the store, which reports its own failures.
-  if (isByIdRead(ctx)) {
-    getLog().debug({ err: error, cwd: realCwd }, 'cli.by_id_read_project_unresolved');
-    return realCwd;
-  }
   if (command === 'validate' || (command === 'workflow' && subcommand === 'list')) {
     const { findRepoRoot } = await import('@archon/git');
     const repoRoot = await findRepoRoot(realCwd);

@@ -9,6 +9,7 @@ import {
 } from '@archon/core/workflows/run-id';
 import { readChatProjectScope } from '../workflow-scope';
 
+import type { Codebase } from '@archon/core/schemas/codebase';
 import type { Conversation } from '@archon/core/schemas/conversation';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -365,7 +366,8 @@ export async function assertInheritedWorkflowCodebase(
  * Without that explicit scope, full UUIDs skip resolution entirely: exact lookup
  * is global, so full ids keep working from any directory. A caller that already resolved a project can
  * provide its id; otherwise project lookup preserves an exact checkout
- * registration, then falls back to a linked worktree's canonical checkout. By
+ * registration, then falls back to a linked worktree's canonical checkout, then to a
+ * registered folder project the cwd is inside. By
  * default, an omitted cwd and an unmatched prefix pass through unchanged so the
  * downstream exact lookup keeps its existing error surface; callers without a
  * downstream lookup can require a match instead. A prefix from a cwd in no
@@ -388,10 +390,7 @@ export async function resolveRunIdArg(
     return runId;
   }
   const resolvedCodebaseId =
-    codebaseId ??
-    (cwd === undefined
-      ? undefined
-      : (await findCodebaseForCheckoutPath(cwd, host.records.codebases))?.id);
+    codebaseId ?? (cwd === undefined ? undefined : (await findPrefixProject(host, cwd))?.id);
   // Prefixes are project-scoped: outside a registered project there is nothing to resolve
   // one in, and passing it on would report an existing run as missing.
   if (!resolvedCodebaseId) {
@@ -414,6 +413,20 @@ export async function resolveRunIdArg(
     return runId;
   }
   return matches[0].id;
+}
+
+/**
+ * The project a short prefix typed in `cwd` resolves in: the checkout's registration, else
+ * a registered folder project `cwd` is inside, so a folder's subdirectories resolve too.
+ */
+async function findPrefixProject(host: WorkflowHost, cwd: string): Promise<Codebase | null> {
+  const codebases = host.records.codebases;
+  const checkout = await findCodebaseForCheckoutPath(cwd, codebases);
+  if (checkout) return checkout;
+  const parent = await codebases.findCodebaseByPathPrefix(
+    await archonPaths.canonicalizeProjectPath(cwd)
+  );
+  return parent?.kind === 'folder' ? parent : null;
 }
 
 async function resolveProjectScopedRunId(
