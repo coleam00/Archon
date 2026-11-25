@@ -1,9 +1,9 @@
 import type { DagNode, ExecNode, WorkflowDefinition } from './schemas';
-import { INPUT_NAME_SOURCE, inputEnvKey, isExecNode, isIncludeDirective } from './schemas';
+import { inputEnvKey, isExecNode, isIncludeDirective } from './schemas';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
 import { readComposedMeta, type IncludeCommandContent } from './compiled-command';
 import { collectFileBackedCommandNames } from './command-file';
-import { INPUTS_SCOPE } from './reference-scopes';
+import { INPUTS_REF } from './output-ref';
 import { isInlineScript } from './executor-shared';
 import type { TemplateSlot } from './template-walker';
 import { visitNodeTemplateSlots } from './template-walker';
@@ -244,8 +244,6 @@ export function findUnpassedPackSettingReads(
 function ownEnvBindings(owner: TemplateSlot['owner']): ReadonlySet<string> {
   return new Set(isExecNode(owner) && owner.runtime !== 'sh' ? Object.keys(owner.with ?? {}) : []);
 }
-
-const INPUTS_REF = new RegExp(String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})`, 'g');
 
 /**
  * The settings of `settingNames` that a flattened workflow reads where the engine can see
