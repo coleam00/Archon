@@ -406,6 +406,52 @@ async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Pr
 }
 
 test.serial(
+  'a run whose outcome finishes its item ends it: the item read says the engine ended it and why',
+  async () => {
+    writeFileSync(
+      join(projectRoot, '.archon', 'workflows', 'finish.yaml'),
+      `name: finish
+description: Close an item.
+mutates_checkout: false
+returns: { node: decide, outcome: outcome, ends: [close], summary: why }
+nodes:
+  - id: decide
+    bash: |
+      echo '{"outcome": "close", "why": "Fixed upstream."}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [close, again] }
+        why: { type: string }
+      required: [outcome, why]
+`
+    );
+    const started = await invoke(host =>
+      workflowRunCommand(host, projectRoot, 'finish', 'go', {
+        noWorktree: true,
+        item: 'item-close',
+      })
+    );
+    expect(started.exitCode, started.stderr).toBe(0);
+
+    const reason = "Workflow 'finish' ended the item with outcome 'close': Fixed upstream.";
+    expect((await readItemJson('item-close')).ended).toMatchObject({
+      reason,
+      via: 'engine',
+      by: null,
+    });
+    const text = await invoke(host =>
+      workflowRunsCommand(host, projectRoot, { item: 'item-close' })
+    );
+    expect(text.stdout).toContain(`via engine: ${reason}`);
+    const attention = await invoke(host =>
+      workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+    );
+    expect(attention.stdout).not.toContain('item-close');
+  }
+);
+
+test.serial(
   'workflow end takes a stopped item out of attention, and the item read says who ended it and why',
   async () => {
     const attention = async () =>

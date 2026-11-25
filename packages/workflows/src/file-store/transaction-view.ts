@@ -380,13 +380,14 @@ export function createTransactionView(
       result
     ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
       validateWorkflowWaitMetadata(metadata);
-      // A start receipt, a linked start, an ask and a wait name an item, and items are refused
-      // here before a run starts, so none can reach this write.
+      // A start receipt, a linked start, an ask, a wait and an end name an item, and items are
+      // refused here before a run starts, so none can reach this write.
       if (
         (result?.startReceipts?.length ?? 0) > 0 ||
         (result?.linkedStarts?.length ?? 0) > 0 ||
         (result?.asks?.length ?? 0) > 0 ||
-        (result?.waits?.length ?? 0) > 0
+        (result?.waits?.length ?? 0) > 0 ||
+        result?.end !== undefined
       )
         throw new FileStoreUnsupportedError('items');
       const run = structuredClone(row(id));

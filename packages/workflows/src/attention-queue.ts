@@ -129,9 +129,10 @@ const itemBase = {
  * item and its resource slot among them, and the engine never ends it by itself;
  * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
  * open past their deadline, which the awaited event, another run of the waiting workflow
- * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
- * an outcome that is not final (`returns.final`), started nothing and left no ask or wait,
- * so nothing moves it: it takes no answer, and any newer run on the item closes it;
+ * on the item, or a withdrawal closes; `stopped` is an item whose newest step completed
+ * with an ending that started nothing, left no ask or wait and ended nothing, or failed, so
+ * nothing moves it: it takes no answer, and any newer step on the item closes it (a run
+ * that observes the item, `observes: true`, is not a step);
  * `refused_start` is a start no run caused that was refused and is its item's newest step;
  * `preparation_lost` is a binding start whose preparer this process can prove gone, which
  * `archon trigger recover-preparation` returns to pending.

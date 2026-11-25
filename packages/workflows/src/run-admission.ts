@@ -1,4 +1,8 @@
-import { CONTAINER_ISOLATION_MARKER, ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
+import {
+  CONTAINER_ISOLATION_MARKER,
+  ISOLATION_ENV_ID_METADATA_KEY,
+  observesItemMetadata,
+} from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { currentExecutionOwner, executionClaim } from './store';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
@@ -239,6 +243,7 @@ async function createWorkflowRunRow(
           ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? CONTINUATION_MODES.adopt } }
           : {}),
         ...freshInvocationMetadata(opts, dispatch),
+        ...observesItemMetadata(workflow),
         // `abandon` shows this record when no owner answers (#2325). The pending claim
         // records it again, in the update that makes the run `running`.
         [EXECUTION_OWNER_METADATA_KEY]: currentExecutionOwner(),

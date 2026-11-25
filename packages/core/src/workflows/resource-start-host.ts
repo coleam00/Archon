@@ -6,6 +6,7 @@ import type {
 } from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
+import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
@@ -207,6 +208,7 @@ function bindingRunMetadata(
     [RESOURCE_START_METADATA_KEY]: { ...origin },
     [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false,
     ...(handoff ? { [CHECKOUT_HANDOFF_METADATA_KEY]: { ...handoff } } : {}),
+    ...observesItemMetadata(workflow),
     ...authoredInputsMetadata(inputs),
     ...(preparedAi.runConfigMetadata
       ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAi.runConfigMetadata }

@@ -624,6 +624,11 @@ export interface IWorkflowStore
    *
    * `result.waits` is the same for `returns.waits`: the open waits of that workflow on the
    * run's item close as `replaced` and these open, in the same transaction.
+   *
+   * `result.end` is the end the run's outcome records on its item (`returns.ends`), written
+   * in the same transaction and only when this call wins: the end `archon workflow end`
+   * writes, `via: engine`, from this run and its returns node (`node`). A store refuses it
+   * for a run with no item; a store without items refuses any.
    */
   completeWorkflowRun(
     id: string,
@@ -635,6 +640,7 @@ export interface IWorkflowStore
       linkedStarts?: readonly LinkedRunEndedStart[];
       asks?: readonly ItemAsk[];
       waits?: readonly ItemWait[];
+      end?: { readonly reason: string; readonly node: string };
     }
   ): Promise<{ startReceipts: SourceReceiptAcceptance[] }>;
   /**

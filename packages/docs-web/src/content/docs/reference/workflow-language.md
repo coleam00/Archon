@@ -72,7 +72,8 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
-| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`) and inputs filled from an earlier run's result (`result_of`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`), the outcomes that finish the run's item (`returns.ends`) and inputs filled from an earlier run's result (`result_of`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `observes` | `true` declares that the workflow's runs act on an item without being steps of it: an advice stage, a shadow judgment, a drain, a check after a merge. An observing run never stops, ends or moves its item. The stop and end rules read past it to the item's last step, so a stopped item stays listed while it runs and after it completes or fails, an ended item stays ended, and an observing run that fails is not listed itself. It can still leave asks and waits on the item. It cannot be combined with `returns.ends`. Default `false`. See [`returns.ends`](#workflow-signature-inputs-returns-and-inputs). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
@@ -2469,32 +2470,50 @@ nodes:
 - **`returns.waits`**: a property of the `returns:` node's output, defined and required by the engine, that holds what
   the run's item now waits for outside Archon. See [Waits](#waits-what-an-item-waits-for-outside-archon).
 
-- **`returns.final`**: the outcomes after which the run's item needs nothing more, such as a
-  landed change. Each entry is a value `returns.outcome` can take: one of its `enum` values, or
+- **`returns.ends`**: the outcomes that finish the run's item, such as a landed change or a
+  dropped one. Each entry is a value `returns.outcome` can take: one of its `enum` values, or
   `succeeded` or `failed` for the boolean form. It needs `returns.outcome`, and a value the
-  outcome cannot take or one listed twice fails the workflow at load.
+  outcome cannot take or one listed twice fails the workflow at load. A workflow that declares
+  `observes: true` cannot declare it.
 
-  It decides when an item has stopped. A top-level run on an item stops the item when it
-  completes with an outcome that is not final, its end starts nothing (no
+  A top-level run on an item that completes with one of these outcomes, leaving no ask and no
+  wait, ends the item. The write that completes the run records the same end
+  [`archon workflow end`](/reference/cli/#workflow-end) records, `via: engine`, from the run
+  and its `returns:` node, with the reason `Workflow '<name>' ended the item with outcome
+  '<value>'`, followed by the `returns.summary` value when the run gave one. The item leaves
+  the attention queue and the item read shows the end. A stage the outcome starts does not
+  keep the end from being written: an observing stage (a check after the merge) leaves it
+  holding, and a step started on the item opens it, as any new step opens an end.
+
+  Every other ending of a step stops its item. A top-level run on an item, of a workflow that
+  does not declare `observes: true`, stops the item when it completes with an outcome that
+  is not in `returns.ends`, its end starts nothing (no
   [run-ended binding](/guides/workflow-triggers/) starts from that outcome), and it leaves no
-  ask and no wait. Nothing follows such a run, so
-  [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
-  `stopped` until another run starts on the item, whatever its status. A run on no item, a run
-  that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
-  workflow that declares no `final` has none, so every unbound outcome stops its item. A run
-  whose end does start a binding also stops its item when admission refuses that start at
-  its [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item), or
+  ask and no wait. What the outcome is called does not matter, and no timer is involved.
+  Nothing follows such a run, so [`archon workflow attention`](/reference/cli/#workflow-attention)
+  lists the item as `stopped` until another step starts on the item, whatever its status. A
+  run on no item, an observing run, a run that ended its item, and a run that left an ask or
+  a wait stop nothing. A run whose end does start a binding also stops its item when
+  admission refuses that start at its
+  [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item), or
   when that start is refused before launch, once the run's own asks and waits are closed; the
-  listing then names the limit or the refusal.
+  listing then names the limit or the refusal. `archon validate workflows` warns for each
+  outcome of a pack stage that the pack's bindings start nothing on and that asks nothing
+  and ends nothing.
+
+  `returns.final`, which marked an outcome as never stopping its item, was removed. A
+  workflow that declares it fails to load with a message naming `returns.ends` and
+  `observes`.
 
 - **`returns.summary`**: a string property of the `returns:` node's output that the attention
-  queue shows, as one line, on a `stopped` item: why the stage stopped. The node's
+  queue shows, as one line, on a `stopped` item: why the stage stopped. An end the run
+  records gives it in its reason. The node's
   `output_format` must declare it with `type: string`; it need not be required, and a run that
   leaves it out shows none. It is read only because it is declared here, never because a
   property is called `summary`, and it changes nothing about the run.
 
 ```yaml
-returns: { node: result, outcome: stage, final: [landed], summary: why }
+returns: { node: result, outcome: stage, ends: [landed], summary: why }
 nodes:
   - id: result
     prompt: Say where the change stands.
@@ -2506,8 +2525,9 @@ nodes:
       required: [stage]
 ```
 
-A run of this workflow that ends `landed` stops nothing. One that ends `replan` with no
-binding for it and no ask lists its item as `stopped` with `why` as the summary.
+A run of this workflow that ends `landed` ends its item, with `why` in the reason. One that
+ends `replan` with no binding for it and no ask lists its item as `stopped` with `why` as the
+summary.
 
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.

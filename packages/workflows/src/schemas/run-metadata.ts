@@ -222,10 +222,25 @@ export function readAsksResult(metadata: Record<string, unknown>): JsonValue | u
 }
 
 /**
- * Set by the completing write of a top-level run on an item that stopped the item: it
- * completed with a declared outcome that is not final (`returns.final`), its end started
- * nothing, and it left no ask or wait. The attention queue lists the item as `stopped`
- * while this run is the newest on it. `summary` is the declared `returns.summary` value,
+ * Set when a run of a workflow that declares `observes: true` is created: the run acts on
+ * its item without being one of its steps, so the item's stop and end rules read past it
+ * (see `itemFate`). Written once, in the creation write, so a pending run of a queued start
+ * already carries it. Older binaries read metadata as an open record and ignore the key, so
+ * they count the run as a step.
+ */
+export const OBSERVES_ITEM_METADATA_KEY = 'observes_item';
+
+/** The creation metadata that records a run as observing its item, or none for a step. */
+export function observesItemMetadata(workflow: { readonly observes?: boolean }): {
+  [OBSERVES_ITEM_METADATA_KEY]?: true;
+} {
+  return workflow.observes === true ? { [OBSERVES_ITEM_METADATA_KEY]: true } : {};
+}
+
+/**
+ * Set by the completing write of a top-level run on an item that stopped the item: its
+ * ending started nothing, left no ask or wait and ended nothing (`itemFate` is `stops`).
+ * The attention queue lists the item as `stopped` while this run is the newest step on it. `summary` is the declared `returns.summary` value,
  * or null. Older binaries read metadata as an open record and ignore the key.
  *
  * Admission also sets it, with `limit`, on the completed run whose end or settled asks

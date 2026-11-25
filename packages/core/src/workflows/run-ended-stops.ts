@@ -1,12 +1,12 @@
 /**
  * The `stops` report of `archon trigger check`: the outcomes after which a run on an item
- * would stop the item, because nothing follows it (see `returns.final` and the `stopped`
+ * would stop the item, because nothing follows it (see `itemFate` and the `stopped`
  * attention item).
  */
 import { existsSync } from 'node:fs';
 import {
+  declaredItemFate,
   declaredOutcome,
-  isFinalOutcome,
   outcomeValues,
 } from '@archon/workflows/completed-outcome';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -43,26 +43,29 @@ function namedWorkflows(candidate: OnBinding | OnBindingFile): string[] {
 const stopKey = (project: string, workflow: string, outcome: string): string =>
   JSON.stringify([project, workflow, outcome]);
 
-/** The outcomes of `workflow` nothing follows: not final, not bound, and no ask or wait. */
+/** The outcomes of `workflow` that stop its item (`declaredItemFate`), given what is bound. */
 function workflowStops(
   workflow: ResolvedWorkflow,
   project: string,
   bound: ReadonlySet<string>
 ): RunEndedStop[] {
-  if (workflow.result?.asks !== undefined || workflow.result?.waits !== undefined) return [];
   const outcome = declaredOutcome(workflow);
   if (outcome === undefined) return [];
   return outcomeValues(outcome.form)
-    .filter(value => !isFinalOutcome(workflow, value))
-    .filter(value => !bound.has(stopKey(project, workflow.name, value)))
+    .filter(
+      value =>
+        declaredItemFate(workflow, value, bound.has(stopKey(project, workflow.name, value))) ===
+        'stops'
+    )
     .map(value => ({ project, workflow: workflow.name, outcome: value }));
 }
 
 /**
  * The outcomes after which a run on an item would stop it, per project the bindings launch
- * in: each value a workflow's declared outcome can take that is not final (`returns.final`),
- * that no run-ended file in the project binds, and whose workflow declares neither
- * `returns.asks` nor `returns.waits`, so nothing follows it. The workflows read are the ones
+ * in: each value a workflow's declared outcome can take that no run-ended file in the
+ * project binds and that does not end the item (`returns.ends`), of a workflow that is a
+ * step (not `observes: true`) and declares neither `returns.asks` nor `returns.waits`, so
+ * nothing follows it. The workflows read are the ones
  * the bindings name, ended, asking or started, including those a binding without `on`
  * (fire-only or timer) starts. Each binding's workflows are read from its own definitions
  * (`discoverBindingWorkflows`), as its check and its start read them; what is bound is

@@ -11,6 +11,7 @@ import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { providerRegistry } from '@archon/providers';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
+import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
@@ -461,6 +462,7 @@ function preCreateRun(
       ...(ctx.declaredContinuation
         ? { [CONTINUATION_METADATA_KEY]: ctx.declaredContinuation.stamp }
         : {}),
+      ...observesItemMetadata(workflow),
     },
     ...(ctx.declaredContinuation ? { adopted_from_run_id: ctx.declaredContinuation.run.id } : {}),
   });

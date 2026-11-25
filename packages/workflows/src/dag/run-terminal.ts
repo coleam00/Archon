@@ -11,7 +11,7 @@ import type {
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
 import { SUBRUN_METADATA_KEYS, subrunSummaryMetadata } from '../schemas';
-import { keptAsksResult, stoppedItem } from './item-completion';
+import { itemCompletion, keptAsksResult, type ItemCompletion } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import { CHANGE_SIZE_METADATA_KEY, type ChangeSize } from '../schemas/change-size';
 import {
@@ -137,15 +137,16 @@ export async function finishRun(
   const { starts, asksCheckout, result } = handOffs;
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);
+  const item = itemCompletion(ctx, returned, starts, result);
   const written = await completeRun(
     ctx,
     nodeCounts,
     terminal,
     runTranscriptUsage,
-    completionResult(returned, starts),
+    completionResult(returned, starts, item),
     asksCheckout,
     result,
-    stoppedItem(ctx, returned, starts, result)
+    item !== undefined && 'stop' in item ? item.stop : undefined
   );
   await reportNoOutcome(ctx, outcome);
   // The receipts the write wrote, which include those it resolved for linked starts.
@@ -156,12 +157,14 @@ export async function finishRun(
 /** What the completing write records beside the status, or nothing when there is none. */
 function completionResult(
   returned: ReturnedResult,
-  starts: RunEndedStarts
+  starts: RunEndedStarts,
+  item: ItemCompletion | undefined
 ): Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3] {
   const result = {
     ...returned,
     ...(starts.receipts.length > 0 ? { startReceipts: starts.receipts } : {}),
     ...(starts.linked.length > 0 ? { linkedStarts: starts.linked } : {}),
+    ...(item !== undefined && 'end' in item ? { end: item.end } : {}),
   };
   return Object.keys(result).length > 0 ? result : undefined;
 }

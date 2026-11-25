@@ -25,6 +25,7 @@ import {
 } from '@archon/core/workflows/registered-worktree';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
+import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import { CHECKOUT_HANDOFF_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
 import {
@@ -734,6 +735,7 @@ function createSetupRun(
       ...(admission.resolvedInputs && { [SUBRUN_METADATA_KEYS.inputs]: admission.resolvedInputs }),
       ...(declaration ? { [CONTINUATION_METADATA_KEY]: declaration.stamp } : {}),
       ...(handoff && { [CHECKOUT_HANDOFF_METADATA_KEY]: handoff }),
+      ...observesItemMetadata(admission.workflow),
     },
     ...(declaration ? { adopted_from_run_id: declaration.runId } : {}),
     ...(request.options.item === undefined ? {} : { item_key: request.options.item }),

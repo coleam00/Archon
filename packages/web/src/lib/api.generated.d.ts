@@ -6212,6 +6212,7 @@ export interface components {
         };
       };
       returns?: string;
+      observes?: boolean;
       deprecated?: {
         message: string;
       };
@@ -6228,7 +6229,7 @@ export interface components {
           cost: string;
         }[];
         waits?: string;
-        final?: string[];
+        ends?: string[];
         summary?: string;
       };
     };
@@ -12432,9 +12433,11 @@ export interface components {
           values: {
             value: string;
             startsNothing: boolean;
-            final: boolean;
+            ends: boolean;
+            stops: boolean;
           }[];
         } | null;
+        observes: boolean;
         asks: boolean;
         waits: boolean;
         nodes: {

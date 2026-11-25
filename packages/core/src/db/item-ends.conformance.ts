@@ -9,7 +9,7 @@ import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
 import { ItemEndRefusedError } from '@archon/workflows/schemas/item-end';
-import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
+import { itemStoppedMetadata, observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
 import { recordItemEnd } from '../operations/item-ends';
 import { itemDeps, operator, type Harness } from './item-asks.conformance';
@@ -18,11 +18,12 @@ import { starts } from './start-limits.conformance';
 const projectKey = projectKeyForCodebase({ name: 'conformance', default_cwd: '/conformance' }, '');
 const end = { projectKey, key: 'pr-7', reason: 'Done by hand in another repository.' };
 
-async function createOnItem(harness: Harness, parent?: string): Promise<string> {
+async function createOnItem(harness: Harness, parent?: string, observes = false): Promise<string> {
   const run = await harness.store.createWorkflowRun({
     workflow_name: 'deliver',
     user_message: '',
     codebase_id: CONFORMANCE_CODEBASE_ID,
+    metadata: observesItemMetadata({ observes }),
     ...(parent === undefined ? { item_key: 'pr-7' } : { parent_run_id: parent }),
   });
   return run.id;
@@ -108,6 +109,48 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       await deleteWorkflowRun(latest);
       expect(await stoppedRefs(harness)).toEqual([]);
       expect(await holding(harness)).toEqual(recorded);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a finishing outcome ends its item in the completing write, and observing runs leave it ended', async () => {
+    const harness = await makeHarness();
+    try {
+      await stopOnItem(harness);
+      const ending = await startOnItem(harness);
+      const reason = "Workflow 'deliver' ended the item with outcome 'close': Closed upstream.";
+      await harness.store.completeWorkflowRun(ending, { duration_ms: 1 }, undefined, {
+        outcome: { kind: 'enum', value: 'close' },
+        end: { reason, node: 'decide' },
+      });
+      const ended = await holding(harness);
+      expect(ended).toMatchObject({
+        kind: 'ended',
+        reason,
+        via: 'engine',
+        by: null,
+        fromRun: { runId: ending, nodePath: 'decide' },
+      });
+      expect(await stoppedRefs(harness)).toEqual([]);
+
+      // An observing run, live, below it, done or failed, neither opens the end nor is a stop.
+      const shadow = await createOnItem(harness, undefined, true);
+      expect(await holding(harness)).toEqual(ended);
+      await harness.store.claimPendingWorkflowRun(shadow);
+      const below = await startOnItem(harness, shadow);
+      expect(await holding(harness)).toEqual(ended);
+      await harness.store.completeWorkflowRun(below, { duration_ms: 1 });
+      await harness.store.completeWorkflowRun(shadow, { duration_ms: 1 });
+      const failed = await createOnItem(harness, undefined, true);
+      await harness.store.claimPendingWorkflowRun(failed);
+      await harness.store.failWorkflowRun(failed, 'boom');
+      expect(await holding(harness)).toEqual(ended);
+      expect(await stoppedRefs(harness)).toEqual([]);
+
+      // A step opens it, as it opens an operator's end.
+      await createOnItem(harness);
+      expect(await holding(harness)).toBeNull();
     } finally {
       await harness.close();
     }

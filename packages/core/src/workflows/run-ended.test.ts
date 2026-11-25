@@ -706,15 +706,19 @@ describe('the hosts trigger files name', () => {
 });
 
 describe('the outcomes after which an item stops', () => {
-  test('are those of a named workflow that are neither final, bound, nor able to leave an ask', async () => {
+  test('are those of a named step workflow that neither end the item, are bound, nor can leave an ask', async () => {
     const root = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-stops-')));
     const workflows = join(root, '.archon', 'workflows');
     await mkdir(workflows, { recursive: true });
-    const stage = (name: string, returns: string): string =>
-      `name: ${name}\ndescription: ${name}\nreturns: ${returns}\nnodes:\n  - id: result\n    bash: echo '{}'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [approve, replan, landed] }\n      required: [stage]\n`;
+    const stage = (name: string, returns: string, observes = false): string =>
+      `name: ${name}\ndescription: ${name}\n${observes ? 'observes: true\n' : ''}returns: ${returns}\nnodes:\n  - id: result\n    bash: echo '{}'\n    output_format:\n      type: object\n      properties:\n        stage: { type: string, enum: [approve, replan, landed] }\n      required: [stage]\n`;
     await writeFile(
       join(workflows, 'deliver.yaml'),
-      stage('deliver', '{ node: result, outcome: stage, final: [landed] }')
+      stage('deliver', '{ node: result, outcome: stage, ends: [landed] }')
+    );
+    await writeFile(
+      join(workflows, 'shadow.yaml'),
+      stage('shadow', '{ node: result, outcome: stage }', true)
     );
     await writeFile(
       join(workflows, 'review.yaml'),
@@ -743,6 +747,16 @@ describe('the outcomes after which an item stops', () => {
           binding,
           runEnded: { workflowName: 'deliver', outcome: 'approve' },
         },
+        {
+          file: 's.json',
+          sourceInstanceId: 's',
+          binding: {
+            ...binding,
+            bindingId: 's',
+            launch: { ...binding.launch, workflowName: 'shadow' },
+          },
+          runEnded: { workflowName: 'deliver', outcome: 'approve' },
+        },
       ],
       {
         loadConfig: async () => ({
@@ -756,7 +770,8 @@ describe('the outcomes after which an item stops', () => {
       }
     );
 
-    // `approve` is bound and `landed` final; `review` can leave an ask.
+    // `approve` is bound and `landed` ends the item; `review` can leave an ask, and
+    // `shadow` observes its item, so none of its outcomes stops it.
     expect(stops).toEqual([{ project: 'acme/widgets', workflow: 'deliver', outcome: 'replan' }]);
   });
 });

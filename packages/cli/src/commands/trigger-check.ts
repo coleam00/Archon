@@ -76,7 +76,7 @@ export async function checkTriggers(
     ...checked,
     // Not a problem: the exit status ignores it, and attention lists such an item.
     stopsExplained:
-      'Outcomes of the workflows the bindings above name, started by any of them or ended or asking in an on binding, that are not final (returns.final), that no run-ended file binds, and whose workflow can leave no ask or wait. A run on an item that ends in one stops the item, and `archon workflow attention` lists it as stopped.',
+      'Outcomes of the workflows the bindings above name, started by any of them or ended or asking in an on binding, that no run-ended file binds and that do not end the item (returns.ends), of a workflow that is a step of its item (not observes: true) and can leave no ask or wait. A run on an item that ends in one stops the item, and `archon workflow attention` lists it as stopped.',
     stops: await runEndedStops([...bindings, ...fire.readable], deps),
     observing: await (await import('./wake-observation')).observingReport(host, schedules),
   });

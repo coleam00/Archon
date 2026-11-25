@@ -26,6 +26,7 @@ import {
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import type { TransactionQuery as Query } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
+import { stepRun } from './item-step';
 import { getWorkflowRun } from './workflow-run-reads';
 import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
 
@@ -300,8 +301,8 @@ const NO_LIVE_ADOPTERS = `NOT EXISTS (
     AND adopter.status NOT IN (${terminalList}))`;
 
 /**
- * Before deleting top-level runs on items, record on each item when the newest of them
- * started (`moved_on_at`): the deletion removes the run that moved the item on, and a stop
+ * Before deleting top-level steps on items, record on each item when the newest of them
+ * started (`moved_on_at`); a run that observes its item moved nothing on: the deletion removes the run that moved the item on, and a stop
  * from before it must stay closed (`listStoppedItemRuns`). Nothing about the stop is erased.
  */
 async function recordItemsMovedOn(query: Query, ids: readonly string[]): Promise<void> {
@@ -312,6 +313,7 @@ async function recordItemsMovedOn(query: Query, ids: readonly string[]): Promise
   const deleted = await query<{ item_id: string; started_at: unknown; tie: unknown }>(
     `SELECT item_id, started_at, ${tie} AS tie FROM remote_agent_workflow_runs
       WHERE id IN (${list}) AND item_id IS NOT NULL AND parent_run_id IS NULL
+        AND ${stepRun('remote_agent_workflow_runs')}
       ORDER BY started_at, ${tie}`,
     [...ids]
   );

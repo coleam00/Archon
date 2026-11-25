@@ -259,10 +259,17 @@ export const workflowBaseSchema = z.object({
    * sub-run child. Selecting by id (not text) works for every node type,
    * including a non-sink node.
    *
-   * Authored as `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field>, waits?: <field>, final?: [<outcome>], summary?: <field> }`. The
+   * Authored as `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field>, waits?: <field>, ends?: [<outcome>], summary?: <field> }`. The
    * loader keeps the node id here and the rest of the declaration in `result`.
    */
   returns: z.string().min(1).optional(),
+  /**
+   * The workflow's runs act on an item without being steps of it: an advice stage, a
+   * shadow judgment, a drain, a check after a merge. Their endings never stop, end or move
+   * the item, and the rules that read an item's last step read past them, so a stop stays
+   * listed and an end keeps holding. Recorded on each run when it is created.
+   */
+  observes: z.boolean().optional(),
   /**
    * Marks the workflow deprecated (#2781): run-start surfaces announce removal
    * in an upcoming release with a switch/copy escape hatch, while it keeps
@@ -312,15 +319,17 @@ export const workflowResultContractSchema = z.strictObject({
    */
   waits: z.string().min(1).optional(),
   /**
-   * The outcomes after which the run's item needs nothing more: each one of the values
-   * `outcome` can take (the enum's values, or `succeeded`/`failed` for a boolean). A run
-   * that ends in one is never reported as a stopped item in the attention queue.
+   * The outcomes that finish the run's item: each one of the values `outcome` can take (the
+   * enum's values, or `succeeded`/`failed` for a boolean). A top-level run on an item that
+   * completes with one, starting nothing and leaving no ask or wait, records an end on the
+   * item in the write that completes it, the same end `archon workflow end` records.
    */
-  final: z.array(z.string().min(1)).min(1).optional(),
+  ends: z.array(z.string().min(1)).min(1).optional(),
   /**
-   * A string property of the returns node's output that the attention queue shows, as one
-   * line, when the run's item stops: it ended in an outcome that is not final, started
-   * nothing and left no ask or wait. Declared, never read from a property by its name.
+   * A string property of the returns node's output, as one line: the attention queue shows
+   * it when the run's item stops (its ending started nothing, left no ask or wait and ended
+   * nothing), and an end the run records gives it as its reason. Declared, never read from
+   * a property by its name.
    */
   summary: z.string().min(1).optional(),
 });

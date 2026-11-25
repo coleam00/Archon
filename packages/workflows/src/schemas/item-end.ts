@@ -1,8 +1,9 @@
 /**
- * An end: an operator's statement that nothing more will happen on an item. It is a fact
- * about the item, like a ruling, and nothing records one by itself. It holds until work
- * starts on the item again: a new run or a queued start on the item, or a resume of one of
- * its runs. Opening the item writes nothing; the rule reads the runs that exist now. While it
+ * An end: the statement that nothing more will happen on an item, made by an operator or, for
+ * an outcome a workflow lists in `returns.ends`, by the engine as the run completes (`via:
+ * engine`, from that run). It is a fact about the item, like a ruling; nothing records one by
+ * age. It holds until work starts on the item again: a new step or a queued start on the
+ * item, or a resume of one of its steps. Opening the item writes nothing; the rule reads the runs that exist now. While it
  * holds, the item is at rest and its stop is not in the attention queue.
  */
 import { z } from 'zod';

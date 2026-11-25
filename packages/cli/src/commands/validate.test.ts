@@ -5,6 +5,7 @@ import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { packRunEndedBindingSchema } from '@archon/workflows/schemas/pack-bindings';
 
 const mockDiscoverWorkflowsWithConfig = mock<typeof discoverWorkflowsWithConfig>(() =>
   Promise.resolve({ workflows: [], errors: [] })
@@ -218,6 +219,53 @@ describe('validateWorkflowsCommand', () => {
       const { hint } = output.results[0].issues[0];
       expect(hint).toContain('`archon plugin update <id>`');
       expect(hint).toContain('`archon plugin list`');
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test('warns for each pack stage outcome that starts nothing, asks nothing and ends nothing', async () => {
+    const entry = makeTestWorkflowWithSource({
+      name: 'review',
+      nodes: [
+        {
+          id: 'decide',
+          bash: 'true',
+          output_format: {
+            type: 'object',
+            properties: { outcome: { type: 'string', enum: ['close', 'not_ready', 'ready'] } },
+            required: ['outcome'],
+          },
+        },
+      ],
+      returns: 'decide',
+      result: { outcome: 'outcome', ends: ['close'] },
+    });
+    entry.workflow.pack = {
+      key: 'example',
+      workflow: 'review',
+      source: 'project',
+      bindings: {
+        'build-after-review': packRunEndedBindingSchema.parse({
+          workflow: 'build',
+          resource: 'build',
+          overlap: 'queue',
+          run_ended: { workflow: 'review', outcome: 'ready' },
+        }),
+      },
+    };
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [entry], errors: [] });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, 'review', true)).toBe(0);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0]));
+      expect(output.results[0].issues).toEqual([
+        expect.objectContaining({
+          level: 'warning',
+          field: 'stops',
+          message: expect.stringContaining("outcome 'not_ready'"),
+        }),
+      ]);
     } finally {
       write.mockRestore();
     }

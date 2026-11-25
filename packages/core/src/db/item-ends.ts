@@ -1,14 +1,17 @@
 /**
  * Ends of an item (`remote_agent_item_ends`) and the runs each saw
- * (`remote_agent_item_end_runs`, the item's runs and every run below them): append-only
- * facts, never updated or deleted. An end holds until work starts on the item again
- * (`schemas/item-end.ts`): a run in the item's tree the end did not see, a run resumed since
- * (its execution claim changed), a live run, or a queued start. The rule reads the runs that
- * exist now and compares run identities and claims, never clocks, so a run whose transaction
- * overlapped the end's, a run row id reused after cleanup, or two resumes in one second
- * still open the item. Deleting runs leaves no trace: deleting runs the end saw keeps it
- * holding, and deleting the run that opened the item makes the end hold again, as the
- * operator left it.
+ * (`remote_agent_item_end_runs`, the item's steps and every run below them): append-only
+ * facts, never updated or deleted. An end is an operator's act (`archon workflow end`) or a
+ * finishing outcome a workflow declares (`returns.ends`), which the engine records in the
+ * write that completes the run. An end holds until work starts on the item again
+ * (`schemas/item-end.ts`): a step in the item's tree the end did not see, a run resumed since
+ * (its execution claim changed), a live run, or a queued start. A run that observes the item
+ * (`stepRun`) is not in that tree, so it neither opens an end nor keeps one from holding. The
+ * rule reads the runs that exist now and compares run identities and claims, never clocks, so
+ * a run whose transaction overlapped the end's, a run row id reused after cleanup, or two
+ * resumes in one second still open the item. Deleting runs leaves no trace: deleting runs the
+ * end saw keeps it holding, and deleting the run that opened the item makes the end hold
+ * again, as the operator left it.
  */
 import {
   itemEndBlockerSchema,
@@ -23,6 +26,7 @@ import type { ItemAct } from '@archon/workflows/schemas/item-act';
 import { EXECUTION_CLAIM_METADATA_KEY } from '@archon/workflows/store';
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import { actColumns, actRead, type ActColumns } from './item-act';
+import { stepRun } from './item-step';
 import type { TransactionQuery } from './resource-slots';
 import { getLog } from './workflow-run-shared';
 
@@ -51,10 +55,10 @@ function claim(alias: string): string {
   return getDialect().jsonText(`${alias}.metadata`, EXECUTION_CLAIM_METADATA_KEY);
 }
 
-/** The runs of item `itemId` (SQL) and every run below them, as a recursive `tree(id)`. */
+/** The steps of item `itemId` (SQL) and every run below them, as a recursive `tree(id)`. */
 function runTree(itemId: string): string {
   return `WITH RECURSIVE tree(id) AS (
-      SELECT id FROM remote_agent_workflow_runs WHERE item_id = ${itemId}
+      SELECT s.id FROM remote_agent_workflow_runs s WHERE s.item_id = ${itemId} AND ${stepRun('s')}
       UNION SELECT c.id FROM remote_agent_workflow_runs c JOIN tree t ON c.parent_run_id = t.id
     )`;
 }
@@ -94,15 +98,12 @@ function holds(): string {
 }
 
 /**
- * The first work on item `itemId` that is still active or waiting: a live run on it or below
- * one of its runs, a queued start, an open ask, an open wait. Null when there is none.
+ * The first work on item `itemId` that is still active or waiting: a live step on it or below
+ * one of its steps, a queued start, an open ask, an open wait. Null when there is none.
  */
 async function blockerOf(query: TransactionQuery, itemId: string): Promise<ItemEndBlocker | null> {
   const run = await query<{ id: string; status: string }>(
-    `WITH RECURSIVE tree(id) AS (
-       SELECT id FROM remote_agent_workflow_runs WHERE item_id = $1
-       UNION SELECT c.id FROM remote_agent_workflow_runs c JOIN tree t ON c.parent_run_id = t.id
-     )
+    `${runTree('$1')}
      SELECT CAST(r.id AS TEXT) AS id, r.status FROM remote_agent_workflow_runs r
      JOIN tree t ON t.id = r.id WHERE r.status IN ${LIVE} ORDER BY r.started_at LIMIT 1`,
     [itemId]
@@ -129,6 +130,63 @@ async function blockerOf(query: TransactionQuery, itemId: string): Promise<ItemE
 }
 
 /**
+ * Write an end on item `itemId` and copy the runs it sees on the item and below its steps,
+ * inside the caller's transaction. Refuses nothing: the operator's end checks the item after
+ * it, and the engine's needs no check.
+ */
+async function insertItemEnd(
+  query: TransactionQuery,
+  input: { itemId: string; reason: string } & ItemAct
+): Promise<EndRow> {
+  const result = await query<EndRow>(
+    `INSERT INTO remote_agent_item_ends
+       (item_id, reason, by_declared, by_user_id, via, from_run_id, from_node_path, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING *`,
+    [input.itemId, input.reason, ...actColumns(input)]
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new Error('The end was not written');
+  // Copied in SQL, so each time compares exactly with the column it came from.
+  await query(
+    `${runTree('$2')}
+     INSERT INTO remote_agent_item_end_runs
+       (end_id, run_id, execution_claim)
+     SELECT $1, CAST(r.id AS TEXT), ${claim('r')}
+     FROM remote_agent_workflow_runs r JOIN tree t ON t.id = r.id`,
+    [row.id, input.itemId]
+  );
+  return row;
+}
+
+/**
+ * The end a run's finishing outcome records on its item (`returns.ends`), inside the
+ * transaction that completes the run and only when that write won. It is the end
+ * `archon workflow end` writes, from the engine: no blocker refuses it, and a step on the
+ * item still live, or a start queued on it, keeps it from holding as for any end.
+ */
+export async function recordCompletedRunEnd(
+  query: TransactionQuery,
+  runId: string,
+  end: { readonly reason: string; readonly node: string }
+): Promise<void> {
+  const found = await query<{ item_id: string | null }>(
+    'SELECT item_id FROM remote_agent_workflow_runs WHERE id = $1',
+    [runId]
+  );
+  const itemId = found.rows[0]?.item_id ?? null;
+  if (itemId === null)
+    throw new Error(`Run '${runId}' ended its item but has no item; an end belongs to an item`);
+  await insertItemEnd(query, {
+    itemId,
+    reason: end.reason,
+    via: 'engine',
+    by: null,
+    fromRun: { runId, nodePath: end.node },
+  });
+}
+
+/**
  * Record an end on item `itemId` and copy the runs it sees on the item and below its runs.
  * The item is checked after the write, in the same transaction: on SQLite the write
  * holds the database, so no run or start slips in between; on PostgreSQL a run committed
@@ -141,24 +199,7 @@ export async function recordItemEnd(
 ): Promise<ItemEnd> {
   if (input.reason.trim() === '') throw new Error('An end needs a reason.');
   return getDatabase().withTransaction(async query => {
-    const result = await query<EndRow>(
-      `INSERT INTO remote_agent_item_ends
-         (item_id, reason, by_declared, by_user_id, via, from_run_id, from_node_path, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [input.itemId, input.reason, ...actColumns(input)]
-    );
-    const row = result.rows[0];
-    if (row === undefined) throw new Error('The end was not written');
-    // Copied in SQL, so each time compares exactly with the column it came from.
-    await query(
-      `${runTree('$2')}
-       INSERT INTO remote_agent_item_end_runs
-         (end_id, run_id, execution_claim)
-       SELECT $1, CAST(r.id AS TEXT), ${claim('r')}
-       FROM remote_agent_workflow_runs r JOIN tree t ON t.id = r.id`,
-      [row.id, input.itemId]
-    );
+    const row = await insertItemEnd(query, input);
     const blocker = await blockerOf(query, input.itemId);
     if (blocker !== null) throw new ItemEndRefusedError(input.key, blocker);
     const read = endRead(row);

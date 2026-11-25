@@ -12,7 +12,7 @@
  * started the next.
  */
 import { z } from 'zod';
-import { declaredOutcome, isFinalOutcome, outcomeValues } from './completed-outcome';
+import { declaredItemFate, declaredOutcome, outcomeValues } from './completed-outcome';
 import { readComposedMeta } from './compiled-command';
 import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
@@ -70,12 +70,22 @@ const packGraphStageSchema = z.object({
            * is the pack's call.
            */
           startsNothing: z.boolean(),
-          /** The stage declares this outcome final (`returns.final`): its item needs nothing more. */
-          final: z.boolean(),
+          /** The stage declares that this outcome finishes its item (`returns.ends`). */
+          ends: z.boolean(),
+          /**
+           * A run that ends with this outcome stops its item (`itemFate`): it starts nothing
+           * here, leaves no ask or wait and ends nothing, and the stage is a step.
+           */
+          stops: z.boolean(),
         })
       ),
     })
     .nullable(),
+  /**
+   * The stage declares `observes: true`: its runs act on an item without being steps of it,
+   * so none of its outcomes stops or ends the item.
+   */
+  observes: z.boolean(),
   /** The stage declares `result.asks`, so a run can end leaving questions on its item. */
   asks: z.boolean(),
   /** The stage declares `result.waits`, so a run can end leaving its item waiting on an event. */
@@ -373,7 +383,7 @@ export interface InstalledArrow {
   problems: readonly string[];
 }
 
-type Stage = Pick<ResolvedWorkflow, 'name' | 'returns' | 'result' | 'nodes'>;
+type Stage = Pick<ResolvedWorkflow, 'name' | 'returns' | 'result' | 'nodes' | 'observes'>;
 type GraphNode = PackGraph['stages'][number]['nodes'][number];
 
 /**
@@ -567,17 +577,22 @@ function graphStage(stage: Stage, started: ReadonlySet<string>): PackGraph['stag
     outcome = {
       field: declared.field,
       form: declared.form.kind,
-      values: values.map(value => ({
-        value,
-        startsNothing: !started.has(arrowKey({ stage: stage.name, outcome: value }, '')),
-        final: isFinalOutcome(stage, value),
-      })),
+      values: values.map(value => {
+        const startsNothing = !started.has(arrowKey({ stage: stage.name, outcome: value }, ''));
+        return {
+          value,
+          startsNothing,
+          ends: stage.result?.ends?.includes(value) === true,
+          stops: declaredItemFate(stage, value, !startsNothing) === 'stops',
+        };
+      }),
     };
   }
   return {
     name: stage.name,
     returns: stage.returns ?? null,
     outcome,
+    observes: stage.observes === true,
     asks: stage.result?.asks !== undefined,
     waits: stage.result?.waits !== undefined,
     nodes: stageNodes(stage),
@@ -608,4 +623,32 @@ export function buildPackGraph(input: GraphInput): Omit<PackGraph, 'loaded' | 'o
       error: e.error,
     })),
   };
+}
+
+/**
+ * The outcomes of the pack's stages that stop their item when only the bindings the pack
+ * declares start stages (`declaredItemFate`): what `archon validate workflows` reports
+ * before anything is installed. An installed trigger file the pack does not declare is
+ * `archon trigger check`'s to read.
+ */
+export function declaredPackStops(
+  packKey: string,
+  stages: readonly Stage[],
+  declared: Readonly<Record<string, PackBinding>> | undefined
+): { stage: string; outcome: string }[] {
+  const bound = new Set(
+    declaredArrows({ packKey, stages, declared, installed: [], workflows: [], discoveryErrors: [] })
+      .filter(arrow => 'outcome' in arrow.from)
+      .map(arrow => arrowKey(arrow.from, ''))
+  );
+  return stages.flatMap(stage => {
+    const outcome = declaredOutcome(stage);
+    if (outcome === undefined) return [];
+    return outcomeValues(outcome.form)
+      .filter(value => {
+        const starts = bound.has(arrowKey({ stage: stage.name, outcome: value }, ''));
+        return declaredItemFate(stage, value, starts) === 'stops';
+      })
+      .map(value => ({ stage: stage.name, outcome: value }));
+  });
 }

@@ -7,18 +7,19 @@
  */
 import { expect, test } from 'bun:test';
 import { listAttentionQueue, readAttentionQueueItemByRef } from '@archon/workflows/attention-queue';
-import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
+import { itemStoppedMetadata, observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
 import { answerAttentionItem } from '../operations/attention-items';
 import { itemDeps, operator, type Harness } from './item-asks.conformance';
 
-/** Create a run of `workflow` on item `pr-7`. */
-async function createOnItem(harness: Harness, workflow: string): Promise<string> {
+/** Create a run of `workflow` on item `pr-7`, as a step of it unless it `observes` it. */
+async function createOnItem(harness: Harness, workflow: string, observes = false): Promise<string> {
   const run = await harness.store.createWorkflowRun({
     workflow_name: workflow,
     user_message: '',
     codebase_id: CONFORMANCE_CODEBASE_ID,
     item_key: 'pr-7',
+    metadata: observesItemMetadata({ observes }),
   });
   return run.id;
 }
@@ -105,6 +106,41 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       expect(await stopped()).toEqual([]);
       // Nothing about the stop was erased: its run still records it.
       expect((await harness.store.getWorkflowRun(stop))?.metadata).toHaveProperty('item_stopped');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a run that observes its item neither closes its stop nor is listed when it fails', async () => {
+    const harness = await makeHarness();
+    try {
+      const deps = itemDeps(harness);
+      const stopped = async () =>
+        (await listAttentionQueue(deps.queue)).flatMap(item =>
+          'kind' in item && item.kind === 'stopped' ? [item.ref] : []
+        );
+      // A failed observing run alone is no stop.
+      const failedShadow = await createOnItem(harness, 'shadow', true);
+      await harness.store.claimPendingWorkflowRun(failedShadow);
+      await harness.store.failWorkflowRun(failedShadow, 'boom');
+      expect(await stopped()).toEqual([]);
+
+      const stop = await completeOnItem(harness, 'review', 'not_ready', 'Tests are missing.');
+      const live = await createOnItem(harness, 'shadow', true);
+      expect(await stopped()).toEqual([`stopped:${stop}`]);
+      await harness.store.claimPendingWorkflowRun(live);
+      await harness.store.completeWorkflowRun(live, { duration_ms: 1 }, undefined, {
+        outcome: { kind: 'enum', value: 'agree' },
+      });
+      const failed = await createOnItem(harness, 'advice', true);
+      await harness.store.claimPendingWorkflowRun(failed);
+      await harness.store.failWorkflowRun(failed, 'boom');
+      expect(await stopped()).toEqual([`stopped:${stop}`]);
+
+      // Deleting an observing run moved nothing on, so the stop stays listed.
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      await deleteWorkflowRun(live);
+      expect(await stopped()).toEqual([`stopped:${stop}`]);
     } finally {
       await harness.close();
     }

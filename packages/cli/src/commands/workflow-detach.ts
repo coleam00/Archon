@@ -16,6 +16,7 @@ import * as archonPaths from '@archon/paths';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { sealWorkflowRunConfig } from '@archon/core/config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
+import { observesItemMetadata } from '@archon/workflows/schemas/run-metadata';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { resolveRunStartInputs } from '@archon/workflows/pack-settings';
@@ -583,6 +584,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
         ...(continuationDeclaration
           ? { [CONTINUATION_METADATA_KEY]: continuationDeclaration.stamp }
           : {}),
+        ...observesItemMetadata(workflow),
       },
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
       ...(launch.options.item === undefined ? {} : { item_key: launch.options.item }),

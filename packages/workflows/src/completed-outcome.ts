@@ -124,12 +124,44 @@ export function readCompletedOutcome(
 }
 
 /**
- * Whether `value` is one of the outcomes the workflow declares final (`returns.final`):
- * after it the run's item needs nothing more, so it is never reported stopped.
+ * What a run's ending does to its item: the one rule every reader of an ending calls, the
+ * completion write and the static reports alike.
+ * - `observes`: the workflow declares `observes: true`; its runs act on the item without
+ *   being one of its steps, so its ending neither moves, ends nor stops the item.
+ * - `moves`: the ending left an ask or a wait, which is the item's next step even when the
+ *   outcome is one that ends it; or, for an outcome that does not end it, started something.
+ * - `ends`: the outcome is one the workflow lists in `returns.ends`; the engine records an
+ *   end on the item. A start it causes does not keep the end from being written: a start of
+ *   an observing workflow (a check after a merge) leaves the end holding, and a step started
+ *   on the item opens it, as a run after `archon workflow end` does.
+ * - `stops`: anything else. Nothing follows the run, whatever the outcome is called.
  */
-export function isFinalOutcome(
-  workflow: Pick<WorkflowDefinition, 'result'>,
-  value: string
-): boolean {
-  return workflow.result?.final?.includes(value) ?? false;
+export type ItemFate = 'observes' | 'moves' | 'ends' | 'stops';
+
+export function itemFate(
+  workflow: Pick<WorkflowDefinition, 'result' | 'observes'>,
+  outcome: string,
+  leaves: { readonly asks: boolean; readonly waits: boolean; readonly starts: boolean }
+): ItemFate {
+  if (workflow.observes === true) return 'observes';
+  if (leaves.asks || leaves.waits) return 'moves';
+  if (workflow.result?.ends?.includes(outcome) === true) return 'ends';
+  return leaves.starts ? 'moves' : 'stops';
+}
+
+/**
+ * `itemFate` read before any run: a workflow that declares `returns.asks` or
+ * `returns.waits` is taken to leave them, and `starts` is whether a binding starts a stage
+ * on the outcome.
+ */
+export function declaredItemFate(
+  workflow: Pick<WorkflowDefinition, 'result' | 'observes'>,
+  outcome: string,
+  starts: boolean
+): ItemFate {
+  return itemFate(workflow, outcome, {
+    asks: workflow.result?.asks !== undefined,
+    waits: workflow.result?.waits !== undefined,
+    starts,
+  });
 }
