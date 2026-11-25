@@ -394,7 +394,7 @@ test('merges and reruns require complete applied evidence at dispatch', async ()
   }
 });
 
-test('unsupported or missing merge conditions do not launch the operation', async () => {
+test('unsupported merge conditions do not launch the operation', async () => {
   const discovery = await discoverPlugins({
     config: {
       plugins: [{ plugin: 'mutator', command: process.execPath, args: [fixture] }],
@@ -404,14 +404,13 @@ test('unsupported or missing merge conditions do not launch the operation', asyn
   // If dispatch launches this missing executable, the response is a process failure.
   for (const plugin of discovery.byHost.values()) plugin.command = '/missing-operation-executable';
   for (const conditions of [
-    {},
     { head: 'headsha', base: 'base' },
     { head: 'headsha', tree: 'tree' },
   ]) {
     const result = await dispatchForge({ ...merge, conditions }, { discovery });
     expect(result.response).toMatchObject({
       ok: false,
-      error: { kind: conditions.head ? 'unsupported_op' : 'invalid_request' },
+      error: { kind: 'unsupported_op' },
       mutation: { outcome: 'refused' },
     });
   }

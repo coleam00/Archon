@@ -59,12 +59,20 @@ export function refusedStartRef(receiptId: string, bindingId: string): string {
   return `${REFUSED_REF_PREFIX}${receiptId}:${bindingId}`;
 }
 
+const PREPARING_REF_PREFIX = 'preparing:';
+
+/** The ref of a binding preparation whose preparer is gone; nothing reads it back. */
+export function preparingItemRef(receiptId: string, bindingId: string): string {
+  return `${PREPARING_REF_PREFIX}${receiptId}:${bindingId}`;
+}
+
 /** True when `ref` has the form of an item no run holds, open or closed. */
 export function isItemWithoutRunRef(ref: string): boolean {
   return (
     askIdOfRef(ref) !== undefined ||
     waitRunIdOfRef(ref) !== undefined ||
     stoppedRunIdOfRef(ref) !== undefined ||
-    (ref.startsWith(REFUSED_REF_PREFIX) && ref.length > REFUSED_REF_PREFIX.length)
+    (ref.startsWith(REFUSED_REF_PREFIX) && ref.length > REFUSED_REF_PREFIX.length) ||
+    (ref.startsWith(PREPARING_REF_PREFIX) && ref.length > PREPARING_REF_PREFIX.length)
   );
 }

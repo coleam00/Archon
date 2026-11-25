@@ -6,7 +6,7 @@
 import { resolve } from 'path';
 import { BUNDLED_VERSION, getPluginsPath } from '@archon/paths';
 import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from '../attachment-commands';
-import { type CliRouteContext, fail, printUsageFor } from './context';
+import { type CliRouteContext, fail, isPathDirectory, printUsageFor } from './context';
 import { loadRoute, usesDatabaseStore } from './route-loader';
 
 export async function runScript({
@@ -439,6 +439,7 @@ export async function runIsolation({
 export async function runValidate({
   subcommand,
   positionals,
+  values,
   cwd,
   effectiveCwd,
   json,
@@ -448,14 +449,22 @@ export async function runValidate({
     () => import('../commands/validate')
   );
   switch (subcommand) {
-    case 'workflows':
+    case 'workflows': {
+      // Resolved against the process cwd, not --cwd, as `workflow run` resolves it.
+      const flag = values['workflow-source'];
+      const source = typeof flag === 'string' ? resolve(flag) : undefined;
+      if (source !== undefined && !(await isPathDirectory(source))) {
+        return await fail(json, `Error: --workflow-source is not a directory: ${source}`);
+      }
       return await validateWorkflowsCommand(
         effectiveCwd,
         positionals[2],
         json,
         forgeTrustedEnv,
-        cwd
+        cwd,
+        source
       );
+    }
 
     case 'commands':
       return await validateCommandsCommand(effectiveCwd, positionals[2], json);

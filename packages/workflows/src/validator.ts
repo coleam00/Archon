@@ -66,9 +66,11 @@ export async function validateWorkflowResources(
   defaultProvider?: string
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
-  const availableCommands = await discoverAvailableCommands(cwd, config);
+  const sourceRoot = config?.sourceRoot ?? cwd;
+  const availableCommands = await discoverAvailableCommands(sourceRoot, config);
   const validation: ResourceValidation = {
     cwd,
+    sourceRoot,
     providers,
     config,
     defaultProvider,

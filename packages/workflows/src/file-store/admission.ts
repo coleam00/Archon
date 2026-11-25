@@ -139,6 +139,8 @@ export function createFileAdmissionStore(
     liftInstallHold: async () => null,
     listHeldStarts: async () => [],
     listHeldItemStarts: async () => [],
+    // The file store records no preparer process, so no preparer can be proven gone.
+    listPreparingStarts: async () => [],
     // The file store keeps no items, so no refused start is any item's step.
     listRefusedStarts: async () => [],
     // The file store keeps no run limit: `assertFileStoreConfiguration` refuses the key.
@@ -159,7 +161,6 @@ export function createFileAdmissionStore(
     // No start names an item here (`FileStoreUnsupportedError('items')`).
     listSkippedItemStarts: async () => [],
     readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
-    listWaitedItemHolders: async () => [],
     getResourceStartRequest: id =>
       query(async tx => {
         const row = await tx.request(id);

@@ -28,7 +28,7 @@ export interface InMemoryStore extends IWorkflowStore {}
 
 export class InMemoryStore {
   listSkippedItemStarts: IWorkflowStore['listSkippedItemStarts'] = async () => [];
-  listWaitedItemHolders: IWorkflowStore['listWaitedItemHolders'] = async () => [];
+  listUnfinishedRuns: IWorkflowStore['listUnfinishedRuns'] = async () => [];
   releasePausedRunSlot: IWorkflowStore['releasePausedRunSlot'] = async () => ({
     released: false,
   });
