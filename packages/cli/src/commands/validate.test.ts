@@ -618,39 +618,36 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
-  test.each([false, true])(
-    'reads workflows from --workflow-source and names it, JSON=%s',
-    async json => {
-      const source = await mkdtemp(join(tmpdir(), 'archon-cli-validate-source-'));
+  test('names --workflow-source and refuses a source whose only workflows are in other scopes', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'archon-cli-validate-source-'));
+    const global = makeTestWorkflowWithSource(
+      { name: 'home-only', nodes: [{ id: 'run', bash: 'true' }] },
+      'global'
+    );
+    try {
       mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
-        workflows: [],
-        errors: [{ filename: 'broken.yaml', errorType: 'parse_error', error: 'Bad YAML' }],
+        workflows: [
+          global,
+          makeTestWorkflowWithSource(
+            { name: 'staged', nodes: [{ id: 'run', bash: 'true' }] },
+            'project'
+          ),
+        ],
+        errors: [],
       });
-      const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
-      try {
-        expect(
-          await validateWorkflowsCommand(
-            validationCwd,
-            undefined,
-            json,
-            process.env,
-            validationCwd,
-            source
-          )
-        ).toBe(1);
-        expect(mockDiscoverWorkflowsWithConfig.mock.calls[0]?.[0]).toBe(source);
-        if (json) {
-          const payload = JSON.parse(String(write.mock.calls[0]?.[0])) as { source?: string };
-          expect(payload.source).toBe(source);
-        } else {
-          expect(mockConsoleLog.mock.calls.flat().join('\n')).toContain(source);
-        }
-      } finally {
-        write.mockRestore();
-        await removeTempTree(source);
-      }
+      const args = [undefined, false, process.env, validationCwd, source] as const;
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(0);
+      expect(mockDiscoverWorkflowsWithConfig.mock.calls[0]?.[3]?.project).toBe(source);
+      const output = mockConsoleLog.mock.calls.flat().join('\n');
+      expect(output).toContain(source);
+      expect(output).not.toContain('home-only');
+
+      mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({ workflows: [global], errors: [] });
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(1);
+    } finally {
+      await removeTempTree(source);
     }
-  );
+  });
 
   test('missing default assistant fails an unqualified prompt and passes bash and script', async () => {
     mockLoadConfig.mockResolvedValue({

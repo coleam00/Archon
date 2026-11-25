@@ -6,6 +6,7 @@
 
 import { providerRegistry } from '@archon/providers';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/workflow-source';
 import { suggestWorkflowNames } from '@archon/workflows/router';
 import { workflowLoadErrorName } from '@archon/workflows/schemas/workflow';
 import { writeStdout } from '../utils/stdout';
@@ -99,9 +100,12 @@ function formatWorkflowResult(result: WorkflowValidationResult): string {
  * the operator ran from, before `cwd` was resolved to the project root, so a plugin in
  * a repository subdirectory is checked too.
  *
- * `source` is an explicit `--workflow-source`. Workflows, commands, scripts and the
- * manifest are then read from it, as `workflow run --workflow-source` reads them, while
- * config and pack settings stay with the project at `cwd` the pack runs against.
+ * `source` is an explicit `--workflow-source`. It is read live, as a fresh
+ * `workflow run --workflow-source` discovers it: workflows, commands, scripts, the manifest
+ * and the source's command settings come from the source; config, `.archon/.env` names,
+ * MCP configs, skills and pack settings come from the project at `cwd`. Only the source's
+ * own workflows are reported: a bundled, global or installed one stays available to resolve
+ * against, but must not pass in the source's place.
  */
 export async function validateWorkflowsCommand(
   cwd: string,
@@ -111,9 +115,14 @@ export async function validateWorkflowsCommand(
   pluginRoot: string = cwd,
   source?: string
 ): Promise<number> {
-  const definitionRoot = source ?? cwd;
-  const config = await buildValidationConfig(definitionRoot);
-  const results = await collectWorkflowResults(cwd, definitionRoot, config, forgeTrustedEnv);
+  const config = await buildValidationConfig(source ?? cwd);
+  const results = await collectWorkflowResults(cwd, source, config, forgeTrustedEnv);
+  if (source !== undefined && results.length === 0) {
+    const message = `Error: no workflows found in --workflow-source ${source}`;
+    if (json) await writeStdout(`${JSON.stringify({ error: message, source })}\n`);
+    else console.error(message);
+    return 1;
+  }
 
   let filteredResults = results;
   if (name) {
@@ -142,17 +151,24 @@ export async function validateWorkflowsCommand(
 
 async function collectWorkflowResults(
   cwd: string,
-  definitionRoot: string,
+  workflowSource: string | undefined,
   config: ValidationConfig,
   forgeTrustedEnv: NodeJS.ProcessEnv
 ): Promise<WorkflowValidationResult[]> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
-  const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(
-    definitionRoot,
+  // The split a fresh run makes (`prepareWorkflowSource`): the project is discovery's cwd,
+  // the source supplies the roots and its own source settings.
+  const { workflows: discovered, errors: loadErrors } = await discoverWorkflowsWithConfig(
+    cwd,
     loadConfig,
-    providerRegistry
+    providerRegistry,
+    workflowSource === undefined
+      ? undefined
+      : liveSourceRoots(workflowSource, workflowSourceConfigFrom(await loadConfig(workflowSource)))
   );
+  const workflowEntries =
+    workflowSource === undefined ? discovered : discovered.filter(e => e.source === 'project');
 
   const results: WorkflowValidationResult[] = [];
   // Discovered once, and only when some pack declares forge needs: it starts each plugin.
@@ -171,10 +187,11 @@ async function collectWorkflowResults(
   for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(
       workflow,
-      definitionRoot,
+      cwd,
       providerRegistry,
       {
         ...workflowValidationConfig(mergedConfig, config),
+        ...(workflowSource === undefined ? {} : { sourceRoot: workflowSource }),
         workflowSource: source,
       },
       defaultProvider

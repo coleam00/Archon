@@ -11,7 +11,7 @@ export const metaHelp: HelpGroup = {
         {
           spec: '--workflow-source <dir>',
           description:
-            'Validate the workflows, commands and manifest in this directory, as workflow run\n--workflow-source reads them; config and pack settings stay with the project',
+            "Validate this directory's own workflows, with their commands, scripts and manifest,\nas workflow run --workflow-source reads them; config and pack settings stay with the project",
         },
       ],
     },
