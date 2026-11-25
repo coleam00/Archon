@@ -1014,6 +1014,38 @@ describe('GitHub source plugin observing label bindings', () => {
     );
   });
 
+  test('a labelled issue whose input mapping fails is recorded once as a refused start on its item', async () => {
+    const broken = onlyKind('issue', {
+      inputMapping: { labelId: { source: 'field', field: 'label.id' } },
+    });
+    const plugin = await labelSource([broken]);
+    const read = { bindingId: 'factory-intake', repo, label: 'factory' };
+    const observed = await plugin.observe?.({
+      waits: [],
+      labels: [{ ...read, seenSince: '2026-11-01T00:00:00Z' }],
+      forge: labelReader().forge,
+    });
+    // Recorded, not reported as a pass failure: the receipt holds the refusal and its item.
+    expect(observed?.labelFailures.map(failure => failure.reason)).toEqual([
+      'the forge records no add',
+    ]);
+    expect(observed?.labelAcceptances.map(entry => entry.acceptance)).toMatchObject([
+      {
+        outcome: 'unmatched',
+        bindings: [],
+        receipt: { deliveryId: 'observe:label:github.com/owner/repo#8:555:factory-intake' },
+        evaluatedBindings: [
+          {
+            bindingId: 'factory-intake',
+            status: 'rejected',
+            itemKey: 'issue-8',
+            reason: expect.stringContaining('label.id'),
+          },
+        ],
+      },
+    ]);
+  });
+
   test('a labelled pull request is the start its webhook would make; an issue is not read', async () => {
     const prs = onlyKind('pr', { item: { field: 'subject.number', prefix: 'pr-' } });
     const plugin = await labelSource([prs]);
