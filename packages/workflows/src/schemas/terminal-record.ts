@@ -73,6 +73,24 @@ export const resultCommitSchema = z.discriminatedUnion('held', [
 ]);
 export type ResultCommit = z.infer<typeof resultCommitSchema>;
 
+/** Run metadata key where a completed run's change size waits for the record. */
+export const CHANGE_SIZE_METADATA_KEY = 'change_size';
+/**
+ * How large the change is at the commit a completed run's result holds at (#6261): the
+ * files changed and lines added and removed from `base`, the merge-base of that commit with
+ * the run's base branch, to the commit. The diff a pull request from the commit would show.
+ * Recorded only when the result holds at a commit and the base resolved, so absent means
+ * unknown, never zero. Renames are not detected: a moved file counts as one file removed and
+ * one added. A binary file counts as a file with no lines.
+ */
+export const changeSizeSchema = z.object({
+  base: gitObjectIdSchema,
+  files: z.number().int().nonnegative(),
+  added: z.number().int().nonnegative(),
+  removed: z.number().int().nonnegative(),
+});
+export type ChangeSize = z.infer<typeof changeSizeSchema>;
+
 export const artifactManifestSchema = z.object({
   root: z.string().nullable(),
   files: z.array(
@@ -154,5 +172,10 @@ export const terminalRecordSchema = z.object({
    * no commit: a reader never takes another commit in its place.
    */
   result_commit: resultCommitSchema.optional(),
+  /**
+   * Absent on records written before #6261 and whenever no size was recorded: the result
+   * holds at no commit, or the run's base did not resolve.
+   */
+  change_size: changeSizeSchema.optional(),
 });
 export type TerminalRecord = z.infer<typeof terminalRecordSchema>;

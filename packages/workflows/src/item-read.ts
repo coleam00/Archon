@@ -80,6 +80,7 @@ import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 import { readCompletedRunResult, resultCommitOf } from './run-result';
 import { getTerminalRecord } from './terminal-record';
+import { changeSizeSchema } from './schemas/terminal-record';
 import { runPack, runPackSchema } from './run-pack';
 import { itemStartLimitSchema, type LimitBindingsReader, withLimitBindings } from './start-limit';
 
@@ -162,6 +163,13 @@ export const itemRunSchema = z.object({
    * held at commits.
    */
   resultCommit: z.string().nullable(),
+  /**
+   * How large the change is at `resultCommit`: files changed and lines added and removed
+   * from `base`, the merge-base of that commit with the run's base branch, recorded when the
+   * run completed. Null when `resultCommit` is null, the base did not resolve, or the run was
+   * recorded before sizes were. Renames count as a removal plus an addition.
+   */
+  changeSize: changeSizeSchema.nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
 
@@ -389,17 +397,19 @@ export interface ItemReadSource extends AttentionQueueSource {
 function readResult(
   run: WorkflowRun,
   events: readonly WorkflowEventRow[]
-): Pick<ItemRun, 'hasResult' | 'resultCommit'> {
+): Pick<ItemRun, 'hasResult' | 'resultCommit' | 'changeSize'> {
   try {
+    const record = run.status === 'completed' ? getTerminalRecord(run.status, events) : null;
+    const resultCommit = resultCommitOf(record);
     return {
       hasResult: readCompletedRunResult(run, events).kind === 'result',
-      resultCommit:
-        run.status === 'completed' ? resultCommitOf(getTerminalRecord(run.status, events)) : null,
+      resultCommit,
+      changeSize: resultCommit === null ? null : (record?.change_size ?? null),
     };
   } catch (error) {
     // One unreadable record must not fail the whole item read.
     getLog().warn({ err: error, workflowRunId: run.id }, 'item_read.terminal_record_unreadable');
-    return { hasResult: false, resultCommit: null };
+    return { hasResult: false, resultCommit: null, changeSize: null };
   }
 }
 

@@ -14,11 +14,13 @@ import { SUBRUN_METADATA_KEYS } from '../schemas';
 import { keptAsksResult, stoppedItem } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import {
+  CHANGE_SIZE_METADATA_KEY,
   RESULT_COMMIT_METADATA_KEY,
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
 } from '../schemas/terminal-record';
 import { readCompletingResult, sampleResultCommit } from '../run-result';
+import { measureChangeSize } from '../change-size';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
@@ -49,6 +51,7 @@ export type RunTerminalContext = Pick<
   | 'platform'
   | 'conversationId'
   | 'cwd'
+  | 'baseBranch'
   | 'returnsCheckout'
   | 'config'
   | 'workflowRun'
@@ -480,6 +483,14 @@ async function completeRun(
     asksCheckout
   );
   const resultCommit = await sampleResultCommit(ctx, workflowRun.id);
+  const changeSize = await measureChangeSize(
+    ctx.cwd,
+    ctx.execContext,
+    resultCommit,
+    ctx.baseBranch,
+    ctx.config.remote,
+    workflowRun.id
+  );
 
   let written: Awaited<ReturnType<WorkflowDeps['store']['completeWorkflowRun']>>;
   try {
@@ -521,6 +532,7 @@ async function completeRun(
             ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
             : {}),
           [RESULT_COMMIT_METADATA_KEY]: resultCommit,
+          ...(changeSize ? { [CHANGE_SIZE_METADATA_KEY]: changeSize } : {}),
           // An asks-settled binding reads the result when the asks settle, by then from
           // the row alone. Gated on the asks a top-level run declares, like the asks.
           ...keptAsksResult(result, returnedValue),

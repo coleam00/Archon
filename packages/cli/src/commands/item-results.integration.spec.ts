@@ -624,3 +624,52 @@ test('a land stage merges the commit its approval was read at, not where its che
   expect(await land('move=commit')).toEqual({ landed: x, message: null });
   expect(await landed()).toBe(x);
 }, 240_000);
+
+// Appends `lines` lines to `file` and commits them, then returns: the result holds at the
+// commit the build made.
+const BUILD = `name: build
+description: Add lines to the change.
+inputs:
+  file: { required: true }
+  lines: { required: true }
+returns: done
+nodes:
+  - id: write
+    bash: |
+      seq "$INPUTS_LINES" >> "$INPUTS_FILE"
+      git add -A
+      git -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m build
+  - id: done
+    depends_on: [write]
+    bash: |
+      echo '{"built": true}'
+    output_format: { type: object, properties: { built: { type: boolean } }, required: [built] }
+`;
+
+test('each run that ended at a commit shows the size of the change there against its base', async () => {
+  const { fixture, commit } = await makeLandFixture('change-size');
+  writeFileSync(join(fixture.projectRoot, '.archon', 'workflows', 'build.yaml'), BUILD);
+  writeFileSync(
+    join(fixture.projectRoot, '.archon', 'config.yaml'),
+    'worktree:\n  baseBranch: main\n'
+  );
+  const git = (...args: string[]) =>
+    Bun.spawn(['git', ...args], { cwd: fixture.projectRoot }).exited;
+  expect(await git('symbolic-ref', 'HEAD', 'refs/heads/main')).toBe(0);
+  const base = await commit('base.txt');
+  expect(await git('checkout', '-q', '-b', 'work')).toBe(0);
+
+  await fixture.cli(run('build', 'file=a.txt', 'lines=40'));
+  await fixture.cli(run('build', 'file=b.txt', 'lines=80'));
+  // A review changes nothing: it holds at the commit the last build made.
+  await fixture.cli(run('review'));
+
+  const runs = await itemRuns(fixture);
+  expect(runs.map(read => [read.workflow, read.changeSize])).toEqual([
+    ['build', { base, files: 1, added: 40, removed: 0 }],
+    ['build', { base, files: 2, added: 120, removed: 0 }],
+    ['review', { base, files: 2, added: 120, removed: 0 }],
+  ]);
+  const text = await fixture.cli(['workflow', 'runs', '--item', 'issue-1']);
+  expect(text).toContain(`holds at ${runs[0]?.resultCommit?.slice(0, 12)} · 1 file, +40 -0`);
+}, 240_000);

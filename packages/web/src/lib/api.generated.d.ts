@@ -8389,6 +8389,12 @@ export interface components {
         } | null;
         hasResult: boolean;
         resultCommit: string | null;
+        changeSize: {
+          base: string;
+          files: number;
+          added: number;
+          removed: number;
+        } | null;
       }[];
       queued: {
         requestId: string;
@@ -9122,6 +9128,12 @@ export interface components {
           } | null;
           hasResult: boolean;
           resultCommit: string | null;
+          changeSize: {
+            base: string;
+            files: number;
+            added: number;
+            removed: number;
+          } | null;
         }[];
         queued: {
           requestId: string;
@@ -10789,6 +10801,12 @@ export interface components {
                   | 'concurrent'
                   | 'unobserved';
               };
+          change_size?: {
+            base: string;
+            files: number;
+            added: number;
+            removed: number;
+          };
         } | null;
         /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. A loop body node holds its latest round. */
         nodes: {

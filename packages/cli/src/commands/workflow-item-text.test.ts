@@ -24,6 +24,7 @@ const read: ItemRead = {
       operatorPause: null,
       hasResult: true,
       resultCommit: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+      changeSize: null,
     },
   ],
   queued: [
@@ -241,6 +242,7 @@ test('an admitted start shows the execute command only when nobody runs it', () 
             completedAt: null,
             hasResult: false,
             resultCommit: null,
+            changeSize: null,
             awaitingExecution: { requestId, hostId: 'host', state, executor },
           },
         ],

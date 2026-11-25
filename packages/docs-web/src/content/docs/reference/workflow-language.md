@@ -1854,7 +1854,10 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
   `result_of` input as `null`.
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
-get a value from it, and `resultCommit`: the commit its result holds at.
+get a value from it, `resultCommit`: the commit its result holds at, and `changeSize`: how
+large the change is at that commit (`files`, `added`, `removed`) against `base`, its
+merge-base with the run's base branch, recorded when the run completed. `changeSize` is
+`null` when the result holds at no commit or the run had no base to measure from, never zeros.
 
 ### The result that holds at this run's commit
 
@@ -1947,7 +1950,8 @@ nodes:
 ```
 
 `item().runs[].resultCommit` and `archon workflow runs --item <key> --json` show the commit
-each run's result holds at, so a node that got `null` can say why.
+each run's result holds at, so a node that got `null` can say why. `changeSize` beside it lets
+a stage see whether the change grew since an earlier run on the item.
 
 ## Reading a project's items over a window
 
