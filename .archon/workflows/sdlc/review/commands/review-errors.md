@@ -42,8 +42,8 @@ When a clearance describes a predicate or contract, quote the actual code or con
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/errors.md`: each in-scope finding begins with `sources: [errors]`, followed by the evidence parts for its failure mode and the smallest correction (propagate, preserve identity, mark degraded, or report at the owning boundary), then the examined-and-visible-and-contained list citing the contracts that handle failure correctly. On a continuation, a verdict per prior `errors` finding you verified: still open, fixed at `<sha>`, or validly declined, with evidence. No findings is a valid result.
+Your report, written as Markdown into the `report` field of your output, holds: each in-scope finding begins with `sources: [errors]`, followed by the evidence parts for its failure mode and the smallest correction (propagate, preserve identity, mark degraded, or report at the owning boundary), then the examined-and-visible-and-contained list citing the contracts that handle failure correctly. On a continuation, a verdict per prior `errors` finding you verified: still open, fixed at `<sha>`, or validly declined, with evidence. No findings is a valid result.
 
 Your discoveries file is `$ARTIFACTS_DIR/discoveries/review-errors.json`, and your `source_node` is `errors`.
 
-Verify every cited `file:line` is real, then declare `findings`, the number of findings in it, and `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/errors.md"}`. The engine fails this lens when that file is missing, so write it before you declare.
+Verify every cited `file:line` is real, then declare `findings`, the number of findings in it, and `report`: the complete report. Archon writes it to `$ARTIFACTS_DIR/review/errors.md` for synthesis; write no report file yourself.

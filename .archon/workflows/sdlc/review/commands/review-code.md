@@ -53,11 +53,11 @@ Record the examined input/state domain with its quoted predicates, including the
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/code.md`: each in-scope finding begins with `sources: [code]`, followed by what it costs, the evidence fields above, and `file:line` references; then an "examined and clean" list naming the specific contracts or callers that cleared the suspicious spots; on a continuation, a verdict per prior finding (still open / fixed at `<sha>` / disproved, with evidence). If there are no findings, say so and name what was decisively checked — never claim the whole change is correct.
+Your report, written as Markdown into the `report` field of your output, holds: each in-scope finding begins with `sources: [code]`, followed by what it costs, the evidence fields above, and `file:line` references; then an "examined and clean" list naming the specific contracts or callers that cleared the suspicious spots; on a continuation, a verdict per prior finding (still open / fixed at `<sha>` / disproved, with evidence). If there are no findings, say so and name what was decisively checked — never claim the whole change is correct.
 
 Your discoveries file is `$ARTIFACTS_DIR/discoveries/review-code.json`, and your `source_node` is `code`.
 
-Verify the file exists and every `file:line` in it is real, then declare `findings`, the number of findings in it, and `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/code.md"}`. The engine fails this lens when that file is missing, so write it before you declare.
+Verify every `file:line` in it is real, then declare `findings`, the number of findings in it, and `report`: the complete report. Archon writes it to `$ARTIFACTS_DIR/review/code.md` for synthesis; write no report file yourself.
 
 ## Docker verification builds
 

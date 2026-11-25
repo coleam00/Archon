@@ -21,8 +21,8 @@ Rules:
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/ux.md`: each finding begins with `sources: [ux]`, then what the user meets and what it costs them, the screenshot, the `file:line` that produces it, and the smallest fix. Never assign a severity: synthesis labels every finding. Then list what you exercised and found clear. On a continuation round, scope.md names the prior report: give a verdict per prior `ux` finding still open (still open / fixed / disproved, with evidence), check whether its fix introduced a new defect or side effect a person meets, then judge the rest of the delta.
+Your report, written as Markdown into the `report` field of your output, holds: each finding begins with `sources: [ux]`, then what the user meets and what it costs them, the screenshot, the `file:line` that produces it, and the smallest fix. Never assign a severity: synthesis labels every finding. Then list what you exercised and found clear. On a continuation round, scope.md names the prior report: give a verdict per prior `ux` finding still open (still open / fixed / disproved, with evidence), check whether its fix introduced a new defect or side effect a person meets, then judge the rest of the delta.
 
 A UX problem you meet that the change did not cause is a discovery: write `$ARTIFACTS_DIR/discoveries/review-ux.json` as a JSON array of records with `title`, `claim`, `evidence`, `relation` (`unrelated` or `scope_conflict`) and `source_node` (`ux`). Write no file for no discovery.
 
-Verify the file exists, then declare `findings`, the number of findings in it, and `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/ux.md"}`. The engine fails this lens when that file is missing, so write it before you declare.
+Verify your report is complete, then declare `findings`, the number of findings in it, and `report`: the complete report. Archon writes it to `$ARTIFACTS_DIR/review/ux.md` for synthesis; write no report file yourself.

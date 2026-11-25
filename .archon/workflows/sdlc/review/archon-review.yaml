@@ -133,14 +133,7 @@ nodes:
       additionalProperties: false
       properties:
         findings: { type: integer, minimum: 0 }
-        report:
-          type: object
-          additionalProperties: false
-          properties:
-            type: { const: archon_artifact }
-            run_id: { type: string }
-            path: { type: string }
-          required: [type, run_id, path]
+        report: { type: string, minLength: 1, description: 'The complete report, as Markdown. Archon writes it to review/<lens>.md; write no report file yourself.' }
       required: [findings, report]
   - id: code
     model: ['@review-code', '@reviewer', large]
@@ -181,6 +174,59 @@ nodes:
   # Beside the lenses, so its smaller shapes reach the builder with the review's findings.
   # A later round judges only a large or reshaping delta (see commands/simplify.md). Its
   # report is shape.md, and the verdict carries its count, so a bench can tell what it added.
+  # A lens returns its report in its output, and one script node per lens writes it where
+  # synthesis reads it. No agent writes the file: a refused shell write left it missing on
+  # 2026-11-25. A lens that was not selected or failed has no report node run, so its file
+  # is absent and synthesis discloses the gap as before.
+  - id: seams-report
+    depends_on: [seams]
+    runtime: bun
+    mutates_checkout: false
+    script: lens-report
+    with:
+      lens: seams
+      report: $seams.output.report
+  - id: code-report
+    depends_on: [code]
+    runtime: bun
+    mutates_checkout: false
+    script: lens-report
+    with:
+      lens: code
+      report: $code.output.report
+  - id: tests-report
+    depends_on: [tests]
+    runtime: bun
+    mutates_checkout: false
+    script: lens-report
+    with:
+      lens: tests
+      report: $tests.output.report
+  - id: errors-report
+    depends_on: [errors]
+    runtime: bun
+    mutates_checkout: false
+    script: lens-report
+    with:
+      lens: errors
+      report: $errors.output.report
+  - id: docs-report
+    depends_on: [docs]
+    runtime: bun
+    mutates_checkout: false
+    script: lens-report
+    with:
+      lens: docs
+      report: $docs.output.report
+  - id: ux-report
+    depends_on: [ux]
+    runtime: bun
+    mutates_checkout: false
+    script: lens-report
+    with:
+      lens: ux
+      report: $ux.output.report
+
   - id: simplify
     model: ['@review-simplify', '@reviewer', medium]
     command: simplify
@@ -202,7 +248,7 @@ nodes:
   - id: synthesize
     command: review-synthesize
     context: fresh
-    depends_on: [scope, route, seams, code, tests, errors, docs, ux]
+    depends_on: [scope, route, seams, code, tests, errors, docs, ux, seams-report, code-report, tests-report, errors-report, docs-report, ux-report]
     trigger_rule: all_done
     output_format:
       type: object

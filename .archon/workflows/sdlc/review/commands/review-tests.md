@@ -37,8 +37,8 @@ State what each finding costs if it merges — the concrete consequence and who 
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/tests.md`: each in-scope finding begins with `sources: [tests]`, followed by its evidence parts (a gap's four or an excess test's three) and `file:line` references, then the examined-and-protected list citing the decisive assertions. On a continuation, a verdict per prior `tests` finding you verified: still open, fixed at `<sha>`, or validly declined, with evidence. No findings is a valid result.
+Your report, written as Markdown into the `report` field of your output, holds: each in-scope finding begins with `sources: [tests]`, followed by its evidence parts (a gap's four or an excess test's three) and `file:line` references, then the examined-and-protected list citing the decisive assertions. On a continuation, a verdict per prior `tests` finding you verified: still open, fixed at `<sha>`, or validly declined, with evidence. No findings is a valid result.
 
 Your discoveries file is `$ARTIFACTS_DIR/discoveries/review-tests.json`, and your `source_node` is `tests`.
 
-Verify every cited `file:line` is real, then declare `findings`, the number of findings in it, and `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/tests.md"}`. The engine fails this lens when that file is missing, so write it before you declare.
+Verify every cited `file:line` is real, then declare `findings`, the number of findings in it, and `report`: the complete report. Archon writes it to `$ARTIFACTS_DIR/review/tests.md` for synthesis; write no report file yourself.

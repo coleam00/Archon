@@ -48,8 +48,8 @@ Also report a seam defect when a changed type permits a reachable invalid state 
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/seams.md`: each in-scope finding begins with `sources: [seams]`, followed by what it costs if it merges — whether the sides already disagree or fail silently on a supported path — without a severity label, which synthesis assigns; then **both sides quoted with `file:line`**, what the missing type would carry, the concrete failure, and the smallest change that keeps the type. Then carve-outs applied, and the examined-and-clean list with its quotations. On a continuation, a verdict per prior `seams` finding you verified: still open, fixed at `<sha>`, or validly declined, with evidence. No findings is a valid result — but only quoted silence.
+Your report, written as Markdown into the `report` field of your output, holds: each in-scope finding begins with `sources: [seams]`, followed by what it costs if it merges — whether the sides already disagree or fail silently on a supported path — without a severity label, which synthesis assigns; then **both sides quoted with `file:line`**, what the missing type would carry, the concrete failure, and the smallest change that keeps the type. Then carve-outs applied, and the examined-and-clean list with its quotations. On a continuation, a verdict per prior `seams` finding you verified: still open, fixed at `<sha>`, or validly declined, with evidence. No findings is a valid result — but only quoted silence.
 
 Your discoveries file is `$ARTIFACTS_DIR/discoveries/review-seams.json`, and your `source_node` is `seams`.
 
-Verify every `file:line` cited is real, then declare `findings`, the number of findings in it, and `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/seams.md"}`. The engine fails this lens when that file is missing, so write it before you declare.
+Verify every `file:line` cited is real, then declare `findings`, the number of findings in it, and `report`: the complete report. Archon writes it to `$ARTIFACTS_DIR/review/seams.md` for synthesis; write no report file yourself.
