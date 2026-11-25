@@ -113,6 +113,33 @@ export class ConcurrencyConfigError extends Error {
 }
 
 /**
+ * Why a still-pending run's claim was refused by its own state rather than by a wait:
+ * `checkout_released`, no worktree record of the checkout it starts from is active, or one
+ * is being removed; `admission_revoked`, the resource slot its start was admitted to is no
+ * longer held for it.
+ */
+export type PendingClaimRefusal = 'checkout_released' | 'admission_revoked';
+
+/**
+ * `claimPendingWorkflowRun` refused a run that is still pending, for a `PendingClaimRefusal`;
+ * nothing was written. Nothing else would start the run, so the process that tried, which is
+ * the one that knows why, fails it with this message instead of leaving it pending.
+ */
+export class PendingClaimRefusedError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly reason: PendingClaimRefusal
+  ) {
+    super(
+      reason === 'checkout_released'
+        ? `Run ${runId} was not started: the worktree it starts from was released (its records are destroyed, or it is being removed) before the run could start.`
+        : `Run ${runId} was not started: the resource slot it was admitted to is no longer held for it.`
+    );
+    this.name = 'PendingClaimRefusedError';
+  }
+}
+
+/**
  * A store refused to delete a workflow run, and nothing was deleted. The message says why
  * (not found, not terminal, open asks or waits, sub-runs that have not ended) and what the
  * operator does first, so a caller reports it as given.

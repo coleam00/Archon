@@ -576,10 +576,12 @@ describe('owned worktree release', () => {
     const release = reclaimRunWorktree(run, store);
     try {
       await entered.promise;
-      const claim = claimPendingWorkflowRun(adopter, env.working_path);
+      const claim = claimPendingWorkflowRun(adopter, env.working_path).catch(
+        (error: unknown) => error
+      );
       finish.resolve();
       await release;
-      expect(await claim).toBeNull();
+      expect(await claim).toMatchObject({ reason: 'checkout_released' });
     } finally {
       finish.resolve();
       await release.catch(() => {});
@@ -614,7 +616,9 @@ describe('owned worktree release', () => {
       );
       finish.resolve();
       await release;
-      expect(await claimPendingWorkflowRun(await lateRun)).toBeNull();
+      await expect(claimPendingWorkflowRun(await lateRun)).rejects.toMatchObject({
+        reason: 'checkout_released',
+      });
     } finally {
       finish.resolve();
       await release.catch(() => {});
