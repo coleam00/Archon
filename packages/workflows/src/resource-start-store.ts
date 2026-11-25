@@ -7,6 +7,7 @@ import {
   readAdmissionCheckoutGuard,
 } from './schemas/resource-start';
 import type { RunLimitState } from './schemas/run-limit';
+import type { StartRefusalReason } from './schemas/run-metadata';
 import type { z } from 'zod';
 import type { AwaitingExecution, StartExecutorObservation } from './schemas/start-executor';
 import type {
@@ -706,6 +707,12 @@ export interface IResourceStartStore {
     error: string;
     /** The one preparation failure whose detail is stored: a refusal for the pack's forge needs. */
     forgeRefusal?: ForgeRefusal;
+    /**
+     * Why a rejected start was refused. When the start was caused by a run's end or settled
+     * asks, the SQL store records it as a stop on that run in the same write, so the run, its
+     * item and attention show it; the file store records no stop.
+     */
+    refusal?: StartRefusalReason;
   }): Promise<boolean>;
   resetStartBindingPreparation(input: {
     receiptId: string;

@@ -6820,6 +6820,10 @@ export interface components {
       agents_completed: number | null;
       agents_failed: number | null;
       agents_total: number | null;
+      /** @description The inputs the run was invoked with (`--input`, the run route's `inputs`, a parent's `with:`), as text by name: not the pack settings and declared defaults `metadata.inputs` also holds. What re-running the run supplies again. Empty for a run started before runs recorded it. */
+      supplied_inputs: {
+        [key: string]: string;
+      };
       attention: components['schemas']['RunAttention'] | (never | null);
       /** @description An operator's pause (`archon workflow pause`): `requested` while the run still runs the nodes it had started and pauses once they finish, `paused` once it stopped at that boundary, with who asked, through which surface and when. Null when the run is in neither. Derived from the run row; a resume ends it. */
       operator_pause: {
@@ -7981,7 +7985,7 @@ export interface components {
           stoppedIn: {
             runId: string;
             workflow: string;
-            outcome: string;
+            outcome: string | null;
           };
           summary: string | null;
           limit?: {
@@ -7992,6 +7996,21 @@ export interface components {
             bindingId: string;
             workflow: string;
           };
+          refused?: {
+            receiptId: string;
+            bindingId: string;
+            workflow: string;
+            /** @enum {string} */
+            reason:
+              | 'checkout_refused'
+              | 'inputs_unmapped'
+              | 'link_refused'
+              | 'no_default_provider'
+              | 'run_as_user_failed'
+              | 'run_configuration_failed'
+              | 'launch_preparation_failed';
+            refusedAt: string;
+          }[];
           checkout: string | null;
         };
     AttentionQueueCountsResponse: {
@@ -8349,7 +8368,7 @@ export interface components {
             stoppedIn: {
               runId: string;
               workflow: string;
-              outcome: string;
+              outcome: string | null;
             };
             summary: string | null;
             limit?: {
@@ -8360,6 +8379,21 @@ export interface components {
               bindingId: string;
               workflow: string;
             };
+            refused?: {
+              receiptId: string;
+              bindingId: string;
+              workflow: string;
+              /** @enum {string} */
+              reason:
+                | 'checkout_refused'
+                | 'inputs_unmapped'
+                | 'link_refused'
+                | 'no_default_provider'
+                | 'run_as_user_failed'
+                | 'run_configuration_failed'
+                | 'launch_preparation_failed';
+              refusedAt: string;
+            }[];
             checkout: string | null;
           }
         | unknown;
@@ -8474,6 +8508,13 @@ export interface components {
         } | null;
         hasResult: boolean;
         resultCommit: string | null;
+        changeSize: {
+          base: string;
+          commit: string;
+          files: number;
+          added: number;
+          removed: number;
+        } | null;
       }[];
       queued: {
         requestId: string;
@@ -8842,7 +8883,7 @@ export interface components {
             stoppedIn: {
               runId: string;
               workflow: string;
-              outcome: string;
+              outcome: string | null;
             };
             summary: string | null;
             limit?: {
@@ -8853,6 +8894,21 @@ export interface components {
               bindingId: string;
               workflow: string;
             };
+            refused?: {
+              receiptId: string;
+              bindingId: string;
+              workflow: string;
+              /** @enum {string} */
+              reason:
+                | 'checkout_refused'
+                | 'inputs_unmapped'
+                | 'link_refused'
+                | 'no_default_provider'
+                | 'run_as_user_failed'
+                | 'run_configuration_failed'
+                | 'launch_preparation_failed';
+              refusedAt: string;
+            }[];
             checkout: string | null;
           }
       )[];
@@ -9235,6 +9291,13 @@ export interface components {
           } | null;
           hasResult: boolean;
           resultCommit: string | null;
+          changeSize: {
+            base: string;
+            commit: string;
+            files: number;
+            added: number;
+            removed: number;
+          } | null;
         }[];
         queued: {
           requestId: string;
@@ -9609,7 +9672,7 @@ export interface components {
               stoppedIn: {
                 runId: string;
                 workflow: string;
-                outcome: string;
+                outcome: string | null;
               };
               summary: string | null;
               limit?: {
@@ -9620,6 +9683,21 @@ export interface components {
                 bindingId: string;
                 workflow: string;
               };
+              refused?: {
+                receiptId: string;
+                bindingId: string;
+                workflow: string;
+                /** @enum {string} */
+                reason:
+                  | 'checkout_refused'
+                  | 'inputs_unmapped'
+                  | 'link_refused'
+                  | 'no_default_provider'
+                  | 'run_as_user_failed'
+                  | 'run_configuration_failed'
+                  | 'launch_preparation_failed';
+                refusedAt: string;
+              }[];
               checkout: string | null;
             }
         )[];
@@ -10317,7 +10395,7 @@ export interface components {
                 stoppedIn: {
                   runId: string;
                   workflow: string;
-                  outcome: string;
+                  outcome: string | null;
                 };
                 summary: string | null;
                 limit?: {
@@ -10328,6 +10406,21 @@ export interface components {
                   bindingId: string;
                   workflow: string;
                 };
+                refused?: {
+                  receiptId: string;
+                  bindingId: string;
+                  workflow: string;
+                  /** @enum {string} */
+                  reason:
+                    | 'checkout_refused'
+                    | 'inputs_unmapped'
+                    | 'link_refused'
+                    | 'no_default_provider'
+                    | 'run_as_user_failed'
+                    | 'run_configuration_failed'
+                    | 'launch_preparation_failed';
+                  refusedAt: string;
+                }[];
                 checkout: string | null;
               };
         }
@@ -10716,6 +10809,10 @@ export interface components {
           }
         | unknown;
       item_id: string | null;
+      /** @description The inputs the run was invoked with (`--input`, the run route's `inputs`, a parent's `with:`), as text by name: not the pack settings and declared defaults `metadata.inputs` also holds. What re-running the run supplies again. Empty for a run started before runs recorded it. */
+      supplied_inputs: {
+        [key: string]: string;
+      };
       attention: components['schemas']['RunAttention'] | (never | null);
       /** @description An operator's pause (`archon workflow pause`): `requested` while the run still runs the nodes it had started and pauses once they finish, `paused` once it stopped at that boundary, with who asked, through which surface and when. Null when the run is in neither. Derived from the run row; a resume ends it. */
       operator_pause: {

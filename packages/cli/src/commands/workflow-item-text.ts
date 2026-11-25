@@ -133,6 +133,12 @@ function runLines(run: ItemRun): string[] {
       `            result: archon workflow get ${run.id} --json${holds ? `, ${holds}` : ''}`
     );
   else if (holds) lines.push(`            result: ${holds}`);
+  if (run.changeSize) {
+    const { files, added, removed, base, commit } = run.changeSize;
+    lines.push(
+      `            change: ${files} file${files === 1 ? '' : 's'}, +${added} -${removed} at ${commit.slice(0, 12)} from ${base.slice(0, 12)}`
+    );
+  }
   if (run.operatorPause) lines.push(`            ${describeOperatorPause(run.operatorPause)}`);
   if (run.awaitingExecution)
     lines.push(`            ${awaitingExecutionText(run.awaitingExecution)}`);

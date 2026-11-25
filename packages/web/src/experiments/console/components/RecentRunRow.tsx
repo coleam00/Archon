@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
+import { rerunPath } from '../lib/rerun';
 import { OriginBadge } from './OriginBadge';
 import { RelativeRunStart } from './RelativeRunStart';
 import { runDetailPath, runPhaseStart, type Run } from '../primitives/run';
@@ -52,12 +53,7 @@ export function RecentRunRow({
 
   const onRerun = (): void => {
     if (!canRerun || run.projectId === null) return;
-    const params = new URLSearchParams({
-      rerun: '1',
-      workflow: run.workflow,
-    });
-    if (run.userMessage !== '') params.set('message', run.userMessage);
-    navigate(`/console/p/${run.projectId}?${params.toString()}`);
+    navigate(rerunPath({ ...run, projectId: run.projectId }));
   };
 
   const renderStatus = (): ReactElement => (

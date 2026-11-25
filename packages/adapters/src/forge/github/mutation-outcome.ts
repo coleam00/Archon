@@ -15,6 +15,7 @@ import {
   type ForgePrRecord,
   type ForgeResponse,
 } from '@archon/forge/operations';
+import { githubErrorDetail } from './api';
 
 /** Records how far a mutation's single write got: submitted, then acknowledged by GitHub. */
 export type Submit = (phase: 'submitted' | 'acknowledged') => void;
@@ -32,13 +33,17 @@ function evidenceBase(
 ): Pick<ForgeMutationFailure, 'op' | 'target' | 'merge' | 'rerun'> {
   return { op: request.op, target: mutationTarget(request), ...mutationAttempt(request) };
 }
+/** `merge` adds to a refused merge's evidence what the forge reports of an earlier merge. */
 export function refused(
   request: ForgeMutationRequest,
   error: ForgeError,
-  observed?: ForgePrRecord
+  observed?: ForgePrRecord,
+  merge?: Pick<NonNullable<ForgeMutationFailure['merge']>, 'landed' | 'merged_at'>
 ): ForgeResponse {
+  const base = evidenceBase(request);
   return failure(request.operationId, error, {
-    ...evidenceBase(request),
+    ...base,
+    ...(base.merge && merge ? { merge: { ...base.merge, ...merge } } : {}),
     outcome: 'refused',
     ...(observed ? { observed } : {}),
   });
@@ -86,6 +91,25 @@ export function unverified(
       ...(observed?.workitem ? { workitem: observed.workitem } : {}),
       ...(observed?.label ? { label: observed.label } : {}),
     }
+  );
+}
+/**
+ * The read-back after an acknowledged write threw. The forge's own error is kept, so
+ * a rate limit, a revoked token or an outage stays apart from a malformed answer.
+ */
+export function unreadable(
+  request: ForgeMutationRequest,
+  context: string,
+  cause: unknown,
+  leaveBehind: string,
+  observed?: Parameters<typeof unverified>[3]
+): ForgeResponse {
+  const error = githubErrorDetail(cause);
+  return unverified(
+    request,
+    { ...error, message: `${context}: ${error.message}` },
+    leaveBehind,
+    observed
   );
 }
 export function applied(request: ForgeMutationRequest, value: object): ForgeResponse {

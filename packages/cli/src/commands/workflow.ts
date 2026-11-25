@@ -112,7 +112,7 @@ export async function workflowEventEmitCommand(
   data?: Record<string, unknown>,
   cwd?: string
 ): Promise<void> {
-  const resolvedId = await resolveRunIdArg(host, runId, cwd, true);
+  const resolvedId = await resolveRunIdArg(host, runId, cwd, 'require-match');
   const store = host.deps.store;
   if (eventType === 'workflow.checkout_shared') {
     await store.persistWorkflowEvent({

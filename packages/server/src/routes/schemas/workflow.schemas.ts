@@ -198,6 +198,11 @@ const ownerObservationSchema = runOwnerObservationSchema.nullable().openapi({
     "What this server observes about the run's execution owner while its state needs one (running, or paused on a sub-run that runs in its process), by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run needs no owner now (an ordinary pause, a pending or ended run). Observed per request; never stored.",
 });
 
+const suppliedInputsFieldSchema = z.record(z.string(), z.string()).openapi({
+  description:
+    "The inputs the run was invoked with (`--input`, the run route's `inputs`, a parent's `with:`), as text by name: not the pack settings and declared defaults `metadata.inputs` also holds. What re-running the run supplies again. Empty for a run started before runs recorded it.",
+});
+
 const operatorPauseFieldSchema = operatorPauseSchema.nullable().openapi({
   description:
     "An operator's pause (`archon workflow pause`): `requested` while the run still runs the nodes it had started and pauses once they finish, `paused` once it stopped at that boundary, with who asked, through which surface and when. Null when the run is in neither. Derived from the run row; a resume ends it.",
@@ -208,6 +213,7 @@ export const workflowRunSchema = engineWorkflowRunSchema
   .extend({
     outcome: workflowRunOutcomeSchema,
     metadata: workflowRunMetadataSchema,
+    supplied_inputs: suppliedInputsFieldSchema,
     attention: nullableRunAttentionSchema,
     operator_pause: operatorPauseFieldSchema,
     started_at: z.string(),
@@ -396,6 +402,7 @@ export const resetWorkflowNodeSessionsResponseSchema = z
 export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
     metadata: workflowRunMetadataSchema,
+    supplied_inputs: suppliedInputsFieldSchema,
     attention: nullableRunAttentionSchema,
     operator_pause: operatorPauseFieldSchema,
     owner_observation: ownerObservationSchema,

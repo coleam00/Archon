@@ -20,6 +20,7 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
     operatorPause: null,
     hasResult: false,
     resultCommit: null,
+    changeSize: null,
   };
 }
 

@@ -83,7 +83,7 @@ export async function resolveAttentionRunId(
   cwd: string
 ): Promise<string> {
   const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
-  return resolveRunIdArg(host, runId, undefined, false, codebase?.id);
+  return resolveRunIdArg(host, runId, undefined, 'pass-through', codebase?.id);
 }
 
 /** Chat scope takes precedence over the CLI's explicit or working-directory scope. */

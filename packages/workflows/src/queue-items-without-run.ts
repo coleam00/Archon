@@ -171,7 +171,8 @@ export type StoppedItemStore = Pick<
 
 /**
  * The queue item of an item `run` stopped, or null when the run recorded no stop or has no
- * outcome or item. Nothing here changes the item. Each surface spells the commands that
+ * item. A run that settled asks may have no outcome; a refused start's stop dates from its
+ * latest refusal. Nothing here changes the item. Each surface spells the commands that
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
@@ -180,7 +181,7 @@ export async function stoppedQueueItem(
   codebases: CodebaseCache = new Map()
 ): Promise<StoppedQueueItem | null> {
   const stopped = readItemStopped(run.metadata);
-  if (stopped === undefined || run.item_id === null || run.completed_outcome === null) return null;
+  if (stopped === undefined || run.item_id === null) return null;
   const item = await store.getItem(run.item_id);
   let codebase: AttentionQueueItemSources['codebase'] = null;
   if (run.codebase_id !== null) {
@@ -195,10 +196,11 @@ export async function stoppedQueueItem(
     ...(item === null ? {} : { item }),
     revision: 1,
     labels: {},
-    pausedAt: run.completed_at?.toISOString() ?? null,
+    pausedAt: stopped.refused?.at(-1)?.refusedAt ?? run.completed_at?.toISOString() ?? null,
     stoppedIn: { runId: run.id, workflow: run.workflow_name, outcome: run.completed_outcome },
     summary: stopped.summary,
     ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
+    ...(stopped.refused === undefined ? {} : { refused: stopped.refused }),
     checkout: codebase?.default_cwd ?? null,
   };
 }

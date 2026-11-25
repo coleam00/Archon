@@ -163,7 +163,9 @@ async function observeCheckout(
  * at, so the result holds at no commit rather than at one it never judged. A run that takes
  * no path lock must also show HEAD never moved since its first pass began: another run may
  * move its checkout to another commit and back while it judges (#5769). `sampleCheckout`
- * never throws; a checkout it cannot read holds at no commit.
+ * never throws; a checkout it cannot read holds at no commit. `endCommit` is the clean commit
+ * the checkout ended on whatever the result holds at, or null: an item run's change size is
+ * measured there, so a run with no `returns:` node still has one.
  */
 export async function sampleResultCommit(
   run: {
@@ -174,8 +176,9 @@ export async function sampleResultCommit(
     workflowRun: Pick<WorkflowRun, 'checkout_baseline'>;
   },
   workflowRunId: string
-): Promise<ResultCommit> {
+): Promise<{ resultCommit: ResultCommit; endCommit: string | null }> {
   const end = await observeCheckout(run.cwd, run.execContext);
+  const ended = resultCommitFromSample(end.sample);
   const given = heldThroughCompletion(run.returnsCheckout?.observed, end);
   const resultCommit =
     run.workflow.mutates_checkout === false
@@ -186,7 +189,7 @@ export async function sampleResultCommit(
       { workflowRunId, reason: resultCommit.reason },
       'workflow.result_holds_at_no_commit'
     );
-  return resultCommit;
+  return { resultCommit, endCommit: ended.held ? ended.commit : null };
 }
 
 /**

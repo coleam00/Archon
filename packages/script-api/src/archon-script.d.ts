@@ -1712,6 +1712,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
       readonly rerun?: {
         readonly revision: string;
@@ -1805,6 +1806,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
       readonly rerun?: {
         readonly revision: string;
@@ -1912,6 +1914,7 @@ declare module 'archon:script' {
           readonly tree: string | null;
           readonly parents: ReadonlyArray<string> | null;
         };
+        readonly merged_at?: string;
       };
       readonly rerun?: {
         readonly revision: string;
@@ -1941,6 +1944,13 @@ declare module 'archon:script' {
       readonly outcome: 'outcome_unknown';
     };
     readonly credentialSource?: string;
+    readonly itemRecord?: {
+      readonly recorded: true;
+      readonly landing: 'recorded' | 'kept';
+    } | {
+      readonly recorded: false;
+      readonly reason: 'no_merge_time' | 'already_recorded' | 'write_failed';
+    };
     readonly unsupported?: ReadonlyArray<string>;
     readonly remedy?: string;
   };
@@ -2257,6 +2267,13 @@ declare module 'archon:script' {
       } | null;
       readonly hasResult: boolean;
       readonly resultCommit: string | null;
+      readonly changeSize: {
+        readonly base: string;
+        readonly commit: string;
+        readonly files: number;
+        readonly added: number;
+        readonly removed: number;
+      } | null;
     }>;
     readonly queued: ReadonlyArray<{
       readonly requestId: string;
@@ -2565,7 +2582,7 @@ declare module 'archon:script' {
       readonly stoppedIn: {
         readonly runId: string;
         readonly workflow: string;
-        readonly outcome: string;
+        readonly outcome: string | null;
       };
       readonly summary: string | null;
       readonly limit?: {
@@ -2576,6 +2593,13 @@ declare module 'archon:script' {
         readonly bindingId: string;
         readonly workflow: string;
       };
+      readonly refused?: ReadonlyArray<{
+        readonly receiptId: string;
+        readonly bindingId: string;
+        readonly workflow: string;
+        readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
+        readonly refusedAt: string;
+      }>;
       readonly checkout: string | null;
     }>;
     readonly answers: ReadonlyArray<{
@@ -2863,6 +2887,13 @@ declare module 'archon:script' {
         } | null;
         readonly hasResult: boolean;
         readonly resultCommit: string | null;
+        readonly changeSize: {
+          readonly base: string;
+          readonly commit: string;
+          readonly files: number;
+          readonly added: number;
+          readonly removed: number;
+        } | null;
       }>;
       readonly queued: ReadonlyArray<{
         readonly requestId: string;
@@ -3171,7 +3202,7 @@ declare module 'archon:script' {
         readonly stoppedIn: {
           readonly runId: string;
           readonly workflow: string;
-          readonly outcome: string;
+          readonly outcome: string | null;
         };
         readonly summary: string | null;
         readonly limit?: {
@@ -3182,6 +3213,13 @@ declare module 'archon:script' {
           readonly bindingId: string;
           readonly workflow: string;
         };
+        readonly refused?: ReadonlyArray<{
+          readonly receiptId: string;
+          readonly bindingId: string;
+          readonly workflow: string;
+          readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
+          readonly refusedAt: string;
+        }>;
         readonly checkout: string | null;
       }>;
       readonly answers: ReadonlyArray<{
