@@ -227,7 +227,7 @@ function roundField(
  * An option id in words, for an option that declares no label (Visual standard, rule 8):
  * `send-back` reads "Send back"; the reserved `other` reads "Something else".
  */
-function humaniseId(id: string): string {
+export function humaniseId(id: string): string {
   if (id === 'other') return 'Something else';
   const words = id.replace(/[-_]+/g, ' ').trim();
   return words.charAt(0).toUpperCase() + words.slice(1);

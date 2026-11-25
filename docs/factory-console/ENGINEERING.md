@@ -68,8 +68,10 @@ The factory building this repository runs Archon from another checkout, on the h
   Table and the number tiles). It is mounted from Rasmus's pages, and only these files outside
   the folder import from it, tests included: `ConsoleApp.tsx` (the How it works routes and
   `factory.css`), `routes/OverviewPage.tsx` (the number tiles and the map, through
-  `factory/PackMap.tsx`), and Rasmus's board, `routes/BoardPage.tsx`,
-  `routes/board/ItemCard.tsx` and its test. `ProjectRail.tsx` carries the sidebar Factory entry
+  `factory/PackMap.tsx`), Rasmus's board, `routes/BoardPage.tsx` and its test,
+  `routes/board/ItemCard.tsx` and its test, and the project's Needs you tab,
+  `routes/ProjectNeedsYouPage.tsx` (the board read, and the board's item key, title and option
+  words). `ProjectRail.tsx` carries the sidebar Factory entry
   without importing the folder. No lint checks this on `combined` (`scripts/check-factory-imports.ts`
   is not ported); keep the list true when a change adds a mount point. The curated map, How it
   works and the stage modal are drawn only when the pack ships a view file the server read

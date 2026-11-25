@@ -36,6 +36,16 @@ http://127.0.0.1:3195/console). Rules:
   the item's iteration detail as v1's cards did: title, running step, check-round dots and
   "N of M check rounds", returned / "sent back Nx", PR link, the green "Recommended: <label>"
   line from the ask record and "N open asks".
+- **The project's Needs you tab** (`routes/ProjectNeedsYouPage.tsx`, the first project tab; owner
+  after the 11/25 review). `?item=<key>` shows only that item's asks; the value is the raw key or
+  the issue number (`198` and `issue-198` name one item; a parent's number does not take in its
+  split members), repeatable or comma-separated. Each value has a chip "Item #N ×" linking to the
+  page without it, and a filter that matches nothing says so beside its chip. A filtered item
+  with one ask opens that ask's section directly. Rows print the key and title as the board card
+  does (`#171`, members `#199 · board card`, the forge issue's title when the `title` column is
+  empty). The recommendation reads "Suggested: <label>" in `--text-secondary`, never green,
+  because a green line read as if the ask were already answered. Answering stays in Archon's
+  ask section. The board card's green "Recommended" line above is not changed by this.
 - **Keep, all required:** the stage modal ("What this stage does" curated cards, "Items here
   now", "The real workflow" step list); rich board cards; work orders "N of N merged" with split
   parents resolved when their pieces merged and run-less work orders listed; the Merged column
