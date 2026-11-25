@@ -47,9 +47,16 @@ export function hostSourceForgeReader(
     return options;
   };
   const read = async (request: ForgeRequest): Promise<ForgeResponse & { ok: true }> => {
-    const { response } = await dispatchForge(request, await discovery());
-    if (!response.ok) throw new SourceForgeReadError(response.error.kind, response.error.message);
-    return response;
+    const { response, plugin } = await dispatchForge(request, await discovery());
+    if (response.ok) return response;
+    const { kind, message } = response.error;
+    // A plugin installed before an operation existed refuses it; say how to get past that.
+    if (kind === 'unsupported_op' && plugin !== null)
+      throw new SourceForgeReadError(
+        kind,
+        `${message}. Update plugin ${plugin.name} (installed ${plugin.version}) with \`archon plugin update\`; \`archon forge check\` with operations ["${request.op}"] confirms it`
+      );
+    throw new SourceForgeReadError(kind, message);
   };
   const repoOf = async (remote: string): Promise<RepoRef> => {
     const resolved = await read({ operationId: randomUUID(), op: 'resolve', remote });
@@ -96,6 +103,12 @@ export function hostSourceForgeReader(
       if (added.result.op !== 'workitem.label.added')
         throw new SourceForgeReadError('invalid_response', 'The forge answered another operation');
       return added.result.value;
+    },
+    async issuesOpened({ repo, since }) {
+      const opened = await read({ operationId: randomUUID(), op: 'workitem.opened', repo, since });
+      if (opened.result.op !== 'workitem.opened')
+        throw new SourceForgeReadError('invalid_response', 'The forge answered another operation');
+      return opened.result.value;
     },
   };
 }

@@ -104,10 +104,8 @@ export const prCloseRequestSchema = requestBase.extend({
 });
 // The marker identifies the one canonical comment, so it has to survive a
 // first-line comparison against a body the forge may have re-wrapped.
-const commentMarker = text.refine(
-  value => !/[\r\n]/.test(value),
-  'comment marker must be one line'
-);
+const oneLine = (what: string) => text.refine(v => !/[\r\n]/.test(v), `${what} must be one line`);
+const commentMarker = oneLine('comment marker');
 /** The pull-request form, kept for callers and installed plugins that predate subjects. */
 export const commentUpsertRequestSchema = requestBase.extend({
   op: z.literal('comment.upsert'),
@@ -140,7 +138,9 @@ export const workItemCreateRequestSchema = requestBase
     repo: repoRefSchema,
     title: text,
     body: text,
-    marker: text.refine(value => !/[\r\n]/.test(value), 'marker must be one line'),
+    marker: oneLine('marker').describe(
+      "Chosen for this one item and used by no other; a create that repeats a marker returns the item it first created. The body's first line must be this marker."
+    ),
   })
   .refine(
     value => value.body.split(/\r?\n/, 1)[0] === value.marker,
@@ -188,6 +188,15 @@ export const workItemLabelAddedRequestSchema = requestBase.extend({
   op: z.literal('workitem.label.added'),
   subject: forgeSubjectRefSchema,
   name: text,
+});
+/**
+ * The open issues of one repository created at or after `since`, never pull requests. An
+ * install with no webhooks reads it to start work on newly opened issues.
+ */
+export const workItemOpenedRequestSchema = requestBase.extend({
+  op: z.literal('workitem.opened'),
+  repo: repoRefSchema,
+  since: z.iso.datetime({ offset: true }),
 });
 /** The most matches one `workitem.search` returns, and the count it returns when none is asked for. */
 export const WORKITEM_SEARCH_MAX_LIMIT = 100;
@@ -239,7 +248,7 @@ export const prMergeRequestSchema = requestBase.extend({
   op: z.literal('pr.merge'),
   ref: prRefSchema,
   method: z.enum(['merge', 'squash']),
-  conditions: mergeConditionsSchema,
+  conditions: mergeConditionsSchema.extend({ head: gitObjectIdSchema }),
 });
 export const checksRerunRequestSchema = requestBase.extend({
   op: z.literal('checks.rerun'),
@@ -479,6 +488,7 @@ export const lifecycleReadRequestSchemas = [
   prThreadsRequestSchema,
   workItemListRequestSchema,
   workItemLabelAddedRequestSchema,
+  workItemOpenedRequestSchema,
   workItemSearchRequestSchema,
   workItemCommentsRequestSchema,
   prMergeStateRequestSchema,
@@ -569,6 +579,17 @@ export const workItemListSchema = z.object({
   label: text,
   items: z.array(workItemListItemSchema),
 });
+/** Each issue with when it was created and, when the plugin reports one, who opened it. */
+export const workItemOpenedSchema = z.object({
+  repo: repoRefSchema,
+  since: z.iso.datetime({ offset: true }),
+  items: z.array(
+    workItemRecordSchema.extend({
+      createdAt: z.iso.datetime({ offset: true }),
+      author: sourceActorSchema.nullable().optional(),
+    })
+  ),
+});
 /** `added` is null when the forge records no add of the label, such as one never added. */
 export const workItemLabelAddedSchema = z.object({
   subject: forgeSubjectRefSchema,
@@ -654,6 +675,7 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
   z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
   z.object({ op: workItemLabelAddedRequestSchema.shape.op, value: workItemLabelAddedSchema }),
+  z.object({ op: workItemOpenedRequestSchema.shape.op, value: workItemOpenedSchema }),
   z.object({ op: workItemSearchRequestSchema.shape.op, value: workItemSearchSchema }),
   z.object({ op: workItemCommentsRequestSchema.shape.op, value: workItemCommentsSchema }),
   z.object({ op: prMergeStateRequestSchema.shape.op, value: prMergeStateSchema }),

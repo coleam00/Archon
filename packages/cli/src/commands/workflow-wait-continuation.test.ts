@@ -126,7 +126,6 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
             },
           });
           const resume = spyOn(host.engine, 'resume').mockResolvedValue({
-            accepted: true,
             runId: run.id,
             settled: Promise.resolve({ success: true, workflowRunId: run.id }),
           });

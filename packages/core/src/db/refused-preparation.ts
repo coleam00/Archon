@@ -4,7 +4,9 @@
  * run whose end or settled asks caused the start (`recordRefusedStartStop`), in the same
  * transaction, so that run, the item read and attention show the refused start.
  */
+import { storedBindingRefusal } from '@archon/workflows/schemas/binding-refusal';
 import type { IResourceStartStore } from '@archon/workflows/resource-start-store';
+import type { FileSettingRefusal } from '@archon/workflows/schemas/pack-settings';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { getDatabase, getDialect } from './connection';
 import { recordRefusedStartStop } from './item-stops';
@@ -48,6 +50,7 @@ export async function failStartBindingPreparation(input: FailedPreparation): Pro
         workflow,
         reason: refusal,
         refusedAt: new Date().toISOString(),
+        ...fileSettingDetail(input),
       },
     });
     return true;
@@ -56,7 +59,7 @@ export async function failStartBindingPreparation(input: FailedPreparation): Pro
 
 async function markFailed(query: Query, input: FailedPreparation): Promise<boolean> {
   const result = await query(
-    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = $4, preparation_error = $5, forge_refusal = $6, updated_at = ${getDialect().now()}
+    `UPDATE remote_agent_start_receipt_bindings SET preparation_status = $4, preparation_error = $5, forge_refusal = $6, refusal = $7, updated_at = ${getDialect().now()}
       WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3`,
     [
       input.receiptId,
@@ -65,7 +68,17 @@ async function markFailed(query: Query, input: FailedPreparation): Promise<boole
       input.retryable ? 'failed' : 'rejected',
       input.error,
       input.forgeRefusal ? JSON.stringify(input.forgeRefusal) : null,
+      !input.retryable && input.refusal !== undefined
+        ? storedBindingRefusal(input.refusal, fileSettingDetail(input))
+        : null,
     ]
   );
   return result.rowCount === 1;
+}
+
+/** The setting a `file_setting_missing` refusal names, on the binding row and the stop alike. */
+function fileSettingDetail({ fileSetting }: FailedPreparation): {
+  fileSetting?: FileSettingRefusal;
+} {
+  return fileSetting === undefined ? {} : { fileSetting };
 }

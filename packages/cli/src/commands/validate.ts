@@ -6,8 +6,13 @@
 
 import { providerRegistry } from '@archon/providers';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/workflow-source';
 import { suggestWorkflowNames } from '@archon/workflows/router';
-import { workflowLoadErrorName } from '@archon/workflows/schemas/workflow';
+import {
+  workflowLoadErrorName,
+  type WorkflowLoadError,
+  type WorkflowWithSource,
+} from '@archon/workflows/schemas/workflow';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
@@ -98,28 +103,42 @@ function formatWorkflowResult(result: WorkflowValidationResult): string {
  * `pluginRoot` is the directory whose `archon-plugin.json` is checked: the directory
  * the operator ran from, before `cwd` was resolved to the project root, so a plugin in
  * a repository subdirectory is checked too.
+ *
+ * `source` is an explicit `--workflow-source`. It is read live, as a fresh
+ * `workflow run --workflow-source` discovers it: workflows, commands, scripts, the manifest
+ * and the source's command settings come from the source; config, `.archon/.env` names,
+ * MCP configs, skills and pack settings come from the project at `cwd`. Only the source's
+ * own workflows are reported: a bundled, global or installed one stays available to resolve
+ * against, but must not pass in the source's place.
  */
 export async function validateWorkflowsCommand(
   cwd: string,
   name?: string,
   json?: boolean,
   forgeTrustedEnv: NodeJS.ProcessEnv = process.env,
-  pluginRoot: string = cwd
+  pluginRoot: string = cwd,
+  source?: string
 ): Promise<number> {
-  const config = await buildValidationConfig(cwd);
-  const results = await collectWorkflowResults(cwd, config, forgeTrustedEnv);
+  const config = await buildValidationConfig(source ?? cwd);
+  const results = await collectWorkflowResults(cwd, source, config, forgeTrustedEnv);
+  if (source !== undefined && results.length === 0) {
+    const message = `Error: no workflows found in --workflow-source ${source}`;
+    if (json) await writeStdout(`${JSON.stringify({ error: message, source })}\n`);
+    else console.error(message);
+    return 1;
+  }
 
   let filteredResults = results;
   if (name) {
     filteredResults = results.filter(r => r.workflowName === name);
 
     if (filteredResults.length === 0) {
-      await reportMissingWorkflow(name, results, json);
+      await reportMissingWorkflow(name, results, json, source);
       return 1;
     }
   }
   // The manifest is not a workflow, so the name filter does not apply to it.
-  filteredResults.push(...(await manifestResults(pluginRoot)));
+  filteredResults.push(...(await manifestResults(source ?? pluginRoot)));
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -129,23 +148,51 @@ export async function validateWorkflowsCommand(
   });
 
   const totalErrors = filteredResults.filter(r => !r.valid).length;
-  await writeWorkflowResults(cwd, filteredResults, totalErrors, json);
+  await writeWorkflowResults(cwd, source, filteredResults, totalErrors, json);
 
   return totalErrors > 0 ? 1 : 0;
 }
 
+/**
+ * The workflows to report and the load errors. Under an explicit source this is the split a
+ * fresh run makes (`prepareWorkflowSource`): the project is discovery's cwd, the source
+ * supplies the roots and its own source settings, and only the source's own workflows are
+ * reported. Other scopes stay in discovery so source workflows still resolve against them.
+ */
+async function discoverForValidation(
+  cwd: string,
+  workflowSource: string | undefined
+): Promise<{
+  workflowEntries: readonly WorkflowWithSource[];
+  loadErrors: readonly WorkflowLoadError[];
+}> {
+  if (workflowSource === undefined) {
+    const { workflows, errors } = await discoverWorkflowsWithConfig(
+      cwd,
+      loadConfig,
+      providerRegistry
+    );
+    return { workflowEntries: workflows, loadErrors: errors };
+  }
+  const sourceConfig = workflowSourceConfigFrom(await loadConfig(workflowSource));
+  const { workflows, errors } = await discoverWorkflowsWithConfig(
+    cwd,
+    loadConfig,
+    providerRegistry,
+    liveSourceRoots(workflowSource, sourceConfig)
+  );
+  return { workflowEntries: workflows.filter(e => e.source === 'project'), loadErrors: errors };
+}
+
 async function collectWorkflowResults(
   cwd: string,
+  workflowSource: string | undefined,
   config: ValidationConfig,
   forgeTrustedEnv: NodeJS.ProcessEnv
 ): Promise<WorkflowValidationResult[]> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
-  const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(
-    cwd,
-    loadConfig,
-    providerRegistry
-  );
+  const { workflowEntries, loadErrors } = await discoverForValidation(cwd, workflowSource);
 
   const results: WorkflowValidationResult[] = [];
   // Discovered once, and only when some pack declares forge needs: it starts each plugin.
@@ -168,15 +215,15 @@ async function collectWorkflowResults(
       providerRegistry,
       {
         ...workflowValidationConfig(mergedConfig, config),
+        // Undefined without a source: the validator then reads commands and scripts from cwd.
+        sourceRoot: workflowSource,
         workflowSource: source,
       },
       defaultProvider
     );
 
-    if (workflow.pack !== undefined) {
-      for (const message of await validateProjectPackSettings(cwd, workflow.pack)) {
-        issues.push({ level: 'error', field: 'pack_settings', message });
-      }
+    for (const message of await validateProjectPackSettings(cwd, workflow)) {
+      issues.push({ level: 'error', field: 'pack_settings', message });
     }
 
     if (workflow.pack?.forge !== undefined) {
@@ -286,7 +333,8 @@ function packForgeIssues(
 async function reportMissingWorkflow(
   name: string,
   results: WorkflowValidationResult[],
-  json: boolean | undefined
+  json: boolean | undefined,
+  source: string | undefined
 ): Promise<void> {
   const allNames = results.map(r => r.workflowName);
   const similar = suggestWorkflowNames(
@@ -296,13 +344,15 @@ async function reportMissingWorkflow(
   if (json) {
     await writeStdout(
       `${JSON.stringify({
-        error: `Workflow '${name}' not found`,
+        error: `Workflow '${name}' not found${source === undefined ? '' : ` in --workflow-source ${source}`}`,
         suggestions: similar,
         available: allNames,
       })}\n`
     );
   } else {
-    console.error(`Workflow '${name}' not found.`);
+    console.error(
+      `Workflow '${name}' not found${source === undefined ? '' : ` in --workflow-source ${source}`}.`
+    );
     if (similar.length > 0) {
       console.error(`Did you mean: ${similar.map(s => `'${s}'`).join(', ')}?`);
     }
@@ -312,6 +362,7 @@ async function reportMissingWorkflow(
 
 async function writeWorkflowResults(
   cwd: string,
+  source: string | undefined,
   results: WorkflowValidationResult[],
   totalErrors: number,
   json: boolean | undefined
@@ -321,6 +372,7 @@ async function writeWorkflowResults(
   if (json) {
     await writeStdout(
       `${JSON.stringify({
+        ...(source === undefined ? {} : { source }),
         results,
         summary: {
           total: results.length,
@@ -331,7 +383,11 @@ async function writeWorkflowResults(
       })}\n`
     );
   } else {
-    console.log(`\nValidating workflows in ${cwd}\n`);
+    console.log(
+      source === undefined
+        ? `\nValidating workflows in ${cwd}\n`
+        : `\nValidating workflows from --workflow-source ${source} (project ${cwd})\n`
+    );
     for (const result of results) {
       console.log(formatWorkflowResult(result));
     }

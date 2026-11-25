@@ -618,6 +618,37 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test('names --workflow-source and refuses a source whose only workflows are in other scopes', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'archon-cli-validate-source-'));
+    const global = makeTestWorkflowWithSource(
+      { name: 'home-only', nodes: [{ id: 'run', bash: 'true' }] },
+      'global'
+    );
+    try {
+      mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+        workflows: [
+          global,
+          makeTestWorkflowWithSource(
+            { name: 'staged', nodes: [{ id: 'run', bash: 'true' }] },
+            'project'
+          ),
+        ],
+        errors: [],
+      });
+      const args = [undefined, false, process.env, validationCwd, source] as const;
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(0);
+      expect(mockDiscoverWorkflowsWithConfig.mock.calls[0]?.[3]?.project).toBe(source);
+      const output = mockConsoleLog.mock.calls.flat().join('\n');
+      expect(output).toContain(source);
+      expect(output).not.toContain('home-only');
+
+      mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({ workflows: [global], errors: [] });
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(1);
+    } finally {
+      await removeTempTree(source);
+    }
+  });
+
   test('missing default assistant fails an unqualified prompt and passes bash and script', async () => {
     mockLoadConfig.mockResolvedValue({
       assistant: undefined,

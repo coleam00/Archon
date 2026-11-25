@@ -252,61 +252,6 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
 }
 
 /**
- * True when a paused run's gate state, on its own, is worth resuming even with
- * ZERO completed DAG nodes — i.e. resolving the run left no `node_completed`
- * row anywhere, but the executor still knows how to make forward progress.
- * Exhaustively switched over `SuspendReason` (#2714) so a future fifth reason
- * cannot silently repeat the gap this closes: a plain `approval` gate whose
- * staged legacy `on_reject` rework was invisible to `hydrateResumableRun`
- * because `rejectWorkflow`'s stage-rework path never writes `node_completed`
- * (only `metadata.approval.resolved`/`rejection_reason`/`rejection_count`).
- *
- * - `interactive_loop` / `child_workflow` / `fan_out` — always true: these kinds
- *   are re-entered by the node executor's own re-read of its state,
- *   independent of `priorCompletedNodes` (`executeLoopNode`/
- *   `executeLoopGroupNode`/`executeWorkflowNode` under dag/nodes/).
- * - `writeback` — always false: there is no DAG node behind this gate to
- *   re-run (`nodeId` is the synthetic `__writeback__`); resolving it flows
- *   through the container write-back resume path, never a node re-run.
- * - `approval` / `undefined` — true ONLY for a genuinely staged legacy
- *   on_reject rework: `resolved === 'rejected'`, a non-empty top-level
- *   `rejection_reason`, and `onRejectPrompt` still present on the approval
- *   context (the same legacy-mode signal `executeApprovalNode` itself checks
- *   before re-running the rework prompt). A new-mode gate (#2707 step 1)
- *   never needs this carve-out: both approve and reject write
- *   `node_completed` immediately, so `priorCompletedNodes` already contains
- *   it by the time this function would be asked.
- */
-export function reRunsOwnNodeOnResume(
-  approval: ApprovalContext | undefined,
-  metadata: Record<string, unknown> | undefined
-): boolean {
-  if (approval === undefined) return false;
-  switch (approval.type) {
-    case 'interactive_loop':
-    case 'child_workflow':
-    case 'fan_out':
-      return true;
-    case 'writeback':
-      return false;
-    case 'approval':
-    case undefined: {
-      const rejectionReason = metadata?.rejection_reason;
-      return (
-        approval.resolved === 'rejected' &&
-        approval.onRejectPrompt !== undefined &&
-        typeof rejectionReason === 'string' &&
-        rejectionReason !== ''
-      );
-    }
-    default: {
-      const unreachable: never = approval.type;
-      throw new Error(`reRunsOwnNodeOnResume: unhandled gate type '${String(unreachable)}'`);
-    }
-  }
-}
-
-/**
  * True when `run` is currently paused blocked on the child sub-run `childRunId`
  * (#2121 Phase 2) — i.e. a `paused` run whose `metadata.approval` is a
  * `child_workflow` gate pointing at that child, or a `fan_out` gate listing it in

@@ -12,6 +12,7 @@ import {
   mockListItemRulings,
   mockRecordItemRuling,
   mockWithdrawItemRuling,
+  mockRecordItemEnd,
   mockGetItemAsk,
   mockGetItem,
   mockListOpenItemAsks,
@@ -35,6 +36,7 @@ import {
   startNodeExecution,
 } from '@archon/workflows/node-execution';
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
+import { ItemEndRefusedError, itemEndSchema } from '@archon/workflows/schemas/item-end';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ItemRulingNotFoundError,
@@ -605,6 +607,73 @@ describe('rulings on an item over HTTP', () => {
     } finally {
       mockGetItemRuns.mockImplementation(async () => null);
     }
+  });
+});
+
+describe('ending an item over HTTP', () => {
+  const item = { id: 'item-row', projectKey: '_cwd/scratch', key: 'issues/9' };
+  const post = (body: unknown) =>
+    makeApp().app.request('/api/items/ends', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const body = { project: item.projectKey, key: item.key, reason: 'Folded into issues/7.' };
+
+  test('a refusal is 409 naming what is live; an end is 201', async () => {
+    const failed: WorkflowRun = { ...MOCK_RUNNING_RUN, status: 'failed', item_id: item.id };
+    mockGetItemRuns.mockImplementation(async () => ({ item, runs: [failed], descendantIds: [] }));
+    try {
+      const blocker = { kind: 'run', runId: 'run-live', status: 'running' } as const;
+      mockRecordItemEnd.mockImplementationOnce(async () => {
+        throw new ItemEndRefusedError(item.key, blocker);
+      });
+      const refused = await post({ ...body, as: 'triage-agent' });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({ blocker });
+      mockRecordItemEnd.mockImplementationOnce(async input => ({
+        kind: 'ended',
+        id: 'end-1',
+        reason: input.reason,
+        at: '2026-11-24T10:00:00.000Z',
+        via: input.via,
+        by: input.by,
+        fromRun: null,
+      }));
+      const recorded = await post({ ...body, as: 'triage-agent' });
+      expect(recorded.status).toBe(201);
+      expect(itemEndSchema.parse(await recorded.json())).toMatchObject({
+        via: 'api',
+        by: { declared: 'triage-agent' },
+        reason: 'Folded into issues/7.',
+      });
+      expect(mockRecordItemEnd.mock.calls.at(-1)?.[0]).toMatchObject({ itemId: item.id });
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
+  });
+
+  test('an unknown key is 404, a blank reason or an operator naming nobody is 400', async () => {
+    expect((await post({ ...body, as: 'triage-agent' })).status).toBe(404);
+    expect((await post({ ...body, as: 'triage-agent', reason: ' ' })).status).toBe(400);
+    const failed: WorkflowRun = { ...MOCK_RUNNING_RUN, status: 'failed', item_id: item.id };
+    mockGetItemRuns.mockImplementation(async () => ({ item, runs: [failed], descendantIds: [] }));
+    try {
+      expect((await post(body)).status).toBe(400);
+    } finally {
+      mockGetItemRuns.mockImplementation(async () => null);
+    }
+  });
+
+  test('a user who is not an admin is refused, and nothing is written', async () => {
+    const calls = mockRecordItemEnd.mock.calls.length;
+    setSessionUserId('member');
+    try {
+      expect((await post(body)).status).toBe(403);
+    } finally {
+      setSessionUserId(undefined);
+    }
+    expect(mockRecordItemEnd.mock.calls.length).toBe(calls);
   });
 });
 

@@ -46,6 +46,7 @@ function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
     answers: [],
     links: [],
     landing: null,
+    ended: null,
     merged:
       mergedAt === null
         ? null

@@ -1,7 +1,5 @@
 import { expect, mock, test } from 'bun:test';
-import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import {
-  CAPTURED_SOURCE_ROOTS,
   makeCodebase,
   makeDispatchConversation,
   makeForegroundPlatform,
@@ -15,13 +13,10 @@ import {
   mockGetOrCreateConversation,
   mockHandleCommand,
   mockHydrateResumableRun,
-  mockInspectResumableRun,
   mockLogger,
-  mockResolveContinuationWorkflow,
   mockResolveWorkflowSourceRoot,
   mockStartRunLiveOwner,
   mockStartWorkflow,
-  mockWithRunLiveOwner,
   operator,
 } from '../../test/orchestrator-agent-harness';
 import { workflowStartRefusal } from '../../operations/workflow-start-admission';
@@ -210,7 +205,6 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).toContain('a new run config cannot be applied');
     expect(sent).toContain('force a fresh run');
-    expect(mockInspectResumableRun).toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
@@ -237,52 +231,6 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     expect(sent).toContain('Resuming the failed run');
     expect(sent).not.toContain('Resuming the paused run');
     expect(mockExecuteWorkflow).toHaveBeenCalled();
-  });
-
-  test('re-raises the deferred input error when hydration finds nothing to resume', async () => {
-    // The gate defers a contract violation while a continuation looks possible. This is
-    // the ONE branch where that prediction turns out wrong — hydration returns null, so
-    // a FRESH run row gets created after all — and the deferred error has to come back.
-    // Without the re-raise, a required-input workflow would silently start with the
-    // input never supplied and never validated: neither a safe refusal nor a real resume.
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(
-      Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
-    );
-    mockListResumableRunsByParentConversation.mockReturnValueOnce(
-      Promise.resolve([
-        makeResumableRun({
-          id: 'nothing-to-resume-1',
-          working_path: '/repos/test-repo/worktrees/paused',
-          status: 'paused',
-        }),
-      ])
-    );
-    // Nothing worth resuming → the fresh-run fallthrough.
-    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
-    const capturedWorkflow = makeTestResolvedWorkflow({
-      name: 'test-workflow',
-      inputs: { diff: { required: true } },
-    });
-    mockResolveContinuationWorkflow.mockResolvedValueOnce({
-      workflow: capturedWorkflow,
-      roots: CAPTURED_SOURCE_ROOTS,
-      workflows: [{ workflow: capturedWorkflow, source: 'project' }],
-      errors: [],
-    });
-
-    const platform = makeForegroundPlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-
-    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
-    expect(sent).toContain("requires input 'diff'");
-    // Must NOT reach the generic "starting fresh in the same worktree" dispatch.
-    expect(sent).not.toContain('starting fresh in the same worktree');
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('nothing-to-resume-1');
-    expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
-    expect(mockWithRunLiveOwner).not.toHaveBeenCalled();
   });
 
   test('reports a deferred input error on a lost resume race when values were supplied', async () => {

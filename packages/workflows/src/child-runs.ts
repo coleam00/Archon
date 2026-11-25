@@ -592,16 +592,9 @@ async function resumeFailedChildRun(
   childSource: PreparedWorkflowSource
 ): Promise<ChildRunStart> {
   const hydrated = await hydrateResumableRun(launch.deps, childRun);
-  if (hydrated) {
-    return {
-      opts: { ...hydrated, ...inheritedChildOptions(launch, childSource) },
-      runId: hydrated.preCreatedRun.id,
-    };
-  }
-  const preCreatedRun = await launch.deps.store.resumeWorkflowRun(childRun.id);
   return {
-    opts: { preCreatedRun, ...inheritedChildOptions(launch, childSource) },
-    runId: preCreatedRun.id,
+    opts: { ...hydrated, ...inheritedChildOptions(launch, childSource) },
+    runId: hydrated.preCreatedRun.id,
   };
 }
 
@@ -612,7 +605,7 @@ async function recoverCancelledChildRun(
 ): Promise<ChildRunStart> {
   const { deps } = launch;
   const inspection = await inspectResumableRun(deps, childRun);
-  const completedNodeIds = new Set(inspection?.priorCompletedNodes.keys() ?? []);
+  const completedNodeIds = new Set(inspection.priorCompletedNodes.keys());
   const priorNodeSessions = (await deps.store.listWorkflowRunNodeSessions(childRun.id)).filter(
     row => completedNodeIds.has(row.node_id)
   );
@@ -620,13 +613,9 @@ async function recoverCancelledChildRun(
   return {
     opts: {
       preCreatedRun,
-      ...(inspection
-        ? {
-            priorCompletedNodes: inspection.priorCompletedNodes,
-            priorUsage: inspection.priorUsage,
-            priorNodeSessions,
-          }
-        : {}),
+      priorCompletedNodes: inspection.priorCompletedNodes,
+      priorUsage: inspection.priorUsage,
+      priorNodeSessions,
       ...inheritedChildOptions(launch, childSource),
     },
     runId: preCreatedRun.id,

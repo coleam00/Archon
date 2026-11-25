@@ -325,6 +325,38 @@ test('a label-added read proves the item and label it was asked about', () => {
     expect(matches(request, answered(wrong))).toBe(false);
 });
 
+test('an opened-issue listing proves its repository, cutoff and open issues', () => {
+  const request = {
+    operationId: 'opened',
+    op: 'workitem.opened',
+    repo,
+    since: '2026-11-23T10:00:00Z',
+  } satisfies ForgeRequest;
+  const issue = {
+    ref,
+    kind: 'issue',
+    url: 'https://github.com/owner/repo/issues/7',
+    state: 'open',
+    createdAt: '2026-11-23T10:00:00Z',
+  };
+  const answered = (value: object): ForgeResponse =>
+    forgeResponseSchema.parse({
+      operationId: 'opened',
+      ok: true,
+      result: { op: request.op, value: { repo, since: request.since, items: [issue], ...value } },
+    });
+  expect(matches(request, answered({}))).toBe(true);
+  for (const wrong of [
+    { since: '2026-11-22T10:00:00Z' },
+    { items: [{ ...issue, createdAt: '2026-11-23T09:59:59Z' }] },
+    { items: [{ ...issue, state: 'closed' }] },
+    { items: [{ ...issue, ref: { ...ref, repo: { ...repo, path: 'other/repo' } } }] },
+  ])
+    expect(matches(request, answered(wrong))).toBe(false);
+  // A pull request is not an issue, so it cannot be in the answer at all.
+  expect(() => answered({ items: [{ ...issue, kind: 'pr' }] })).toThrow();
+});
+
 test('item and pull request views accept an author and still parse without one', () => {
   const author = { host: repo.host, id: '1', login: 'octo' };
   const pr = {

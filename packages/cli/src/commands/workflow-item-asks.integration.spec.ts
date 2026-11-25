@@ -156,6 +156,7 @@ function startWatch(fixture: Fixture) {
 }
 
 interface ListedItem {
+  kind: string;
   ref: string;
   run?: unknown;
   message: string;
@@ -164,7 +165,8 @@ interface ListedItem {
   options: { id: string; does?: string; cost?: string }[];
 }
 
-async function listed(fixture: Fixture): Promise<ListedItem[]> {
+/** Every item attention lists, asks and the items failed runs stopped alike. */
+async function listedAll(fixture: Fixture): Promise<ListedItem[]> {
   const { stdout, exitCode, stderr } = await runCli(fixture, [
     'workflow',
     'attention',
@@ -173,6 +175,11 @@ async function listed(fixture: Fixture): Promise<ListedItem[]> {
   ]);
   if (exitCode !== 0) throw new Error(stderr || stdout);
   return (JSON.parse(stdout) as { items: ListedItem[] }).items;
+}
+
+/** The asks attention lists. */
+async function listed(fixture: Fixture): Promise<ListedItem[]> {
+  return (await listedAll(fixture)).filter(item => item.kind === 'attention');
 }
 
 async function run(fixture: Fixture, workflow: string, item?: string) {
@@ -321,6 +328,10 @@ test('a run that fails after its returns node ran leaves no ask', async () => {
   const result = await run(fixture, 'leave-asks-fails', 'issue-2');
   expect(result.exitCode).not.toBe(0);
   expect(await listed(fixture)).toEqual([]);
+  // The failure itself is what the item shows: it stopped there.
+  expect(await listedAll(fixture)).toEqual([
+    expect.objectContaining({ kind: 'stopped', item: expect.objectContaining({ key: 'issue-2' }) }),
+  ]);
 }, 120_000);
 
 test('a workflow that declares asks is refused at start without an item', async () => {

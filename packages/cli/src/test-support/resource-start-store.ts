@@ -342,9 +342,10 @@ export function createInMemoryResourceStartStore(
     liftInstallHold: async () => null,
     listHeldStarts: async () => [],
     listHeldItemStarts: async () => [],
+    listPreparingStarts: async () => [],
+    listRefusedStarts: async () => [],
     listSkippedItemStarts: async () => [],
     readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
-    listWaitedItemHolders: async () => [],
     getResourceStartRequest: async (
       id
     ): ReturnType<IResourceStartStore['getResourceStartRequest']> => {
@@ -368,8 +369,9 @@ export function createInMemoryResourceStartStore(
       const request = requests.get(id);
       if (request?.status !== 'queued') return null;
       request.status = 'withdrawn';
-      return structuredClone(request.launch);
+      return { launch: structuredClone(request.launch) };
     },
+    listUnreadableQueuedStarts: async () => [],
     claimStartBindingPreparation: async (
       input
     ): ReturnType<IResourceStartStore['claimStartBindingPreparation']> => {

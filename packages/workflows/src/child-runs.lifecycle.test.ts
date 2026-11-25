@@ -278,7 +278,6 @@ ${fanOut ? "    fan_out:\n      items: '[1]'\n      as: item\n      join: all_su
           run: paused,
           legacyWorkflow: await discover('target'),
         });
-        if (!admission.accepted) throw new Error('Resume was not admitted');
         return admission.settled;
       } else {
         return continueBlockedRun(deps, makePlatform(), 'test', paused, async () => {}, {});
@@ -1101,7 +1100,6 @@ nodes:
       run: paused,
       legacyWorkflow: await discover('originless-resume'),
     });
-    if (!admission.accepted) throw new Error('expected resume admission');
     expect(await admission.settled).toMatchObject({ success: true, workflowRunId: paused.id });
     expect(store.runs.size).toBe(1);
     expect((await store.getWorkflowRun(paused.id))?.origin).toBeNull();

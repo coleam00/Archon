@@ -1,9 +1,10 @@
 {
   "name": "@archon/workflows",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
+    "./output-types/schema-to-ts": "./src/output-types/schema-to-ts.ts",
     "./run-ai-configuration": "./src/run-ai-configuration.ts",
     "./run-preflight": "./src/run-preflight.ts",
     "./start-refusal": "./src/start-refusal.ts",
@@ -31,6 +32,7 @@
     "./attention-needs": "./src/attention-needs.ts",
     "./item-read": "./src/item-read.ts",
     "./item-window": "./src/item-window.ts",
+    "./item-end": "./src/item-end.ts",
     "./item-landing": "./src/item-landing.ts",
     "./item-metrics": "./src/item-metrics.ts",
     "./item-hold": "./src/item-hold.ts",
@@ -72,6 +74,7 @@
     "./in-process-engine": "./src/in-process-engine.ts",
     "./engine-contract-tests": "./src/engine-contract-tests.ts",
     "./webhook-source-plugin": "./src/webhook-source-plugin.ts",
+    "./temporary-error-kinds": "./src/temporary-error-kinds.ts",
     "./output-ref": "./src/output-ref.ts",
     "./json-pointer": "./src/json-pointer.ts",
     "./completed-outcome": "./src/completed-outcome.ts",

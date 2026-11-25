@@ -492,6 +492,44 @@ declare module 'archon:script' {
         } | null;
       };
     };
+    'workitem.opened': {
+      readonly request: {
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly since: string;
+      };
+      readonly result: {
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly since: string;
+        readonly items: ReadonlyArray<{
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+          readonly kind: 'issue';
+          readonly url: string;
+          readonly state: 'open' | 'closed';
+          readonly createdAt: string;
+          readonly author?: {
+            readonly host: string;
+            readonly id: string;
+            readonly login: string | null;
+            readonly type?: 'user' | 'bot' | 'organization' | null;
+          } | null;
+        }>;
+      };
+    };
     'workitem.search': {
       readonly request: {
         readonly repo: {
@@ -670,7 +708,7 @@ declare module 'archon:script' {
         };
         readonly method: 'merge' | 'squash';
         readonly conditions: {
-          readonly head?: string;
+          readonly head: string;
           readonly base?: string;
           readonly tree?: string;
         };
@@ -2773,6 +2811,7 @@ declare module 'archon:script' {
       readonly hostId: string;
       readonly queuedAt: string;
       readonly ahead: number;
+      readonly blockedBy: string | null;
       readonly heldBehind: {
         readonly runId: string;
         readonly workflow: string;
@@ -2994,7 +3033,7 @@ declare module 'archon:script' {
           readonly branch: string | null;
         };
       };
-      readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued';
+      readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued' | 'continuation_given_up';
       readonly detail: string;
     } | {
       readonly kind: 'owner_lost';
@@ -3029,6 +3068,10 @@ declare module 'archon:script' {
         };
       };
       readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      readonly start?: {
+        readonly requestId: string;
+        readonly hostId: string;
+      };
     } | {
       readonly kind: 'overdue_wait';
       readonly ref: string;
@@ -3088,10 +3131,101 @@ declare module 'archon:script' {
         readonly receiptId: string;
         readonly bindingId: string;
         readonly workflow: string;
-        readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
+        readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'file_setting_missing' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
         readonly refusedAt: string;
+        readonly fileSetting?: {
+          readonly setting: string;
+          readonly path: string;
+          readonly origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+        };
       }>;
+      readonly failed?: {
+        readonly error: string | null;
+      };
       readonly checkout: string | null;
+    } | {
+      readonly kind: 'refused_start';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly start: {
+        readonly receiptId: string;
+        readonly bindingId: string;
+        readonly hostId: string | null;
+        readonly workflow: string | null;
+        readonly itemKey: string;
+        readonly reason: string;
+        readonly limit?: {
+          readonly name: string;
+          readonly starts: number;
+          readonly granted: number;
+          readonly used: number;
+          readonly bindingId: string;
+          readonly workflow: string;
+        };
+        readonly fileSetting?: {
+          readonly setting: string;
+          readonly path: string;
+          readonly origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+        };
+      };
+    } | {
+      readonly kind: 'preparation_lost';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly start: {
+        readonly receiptId: string;
+        readonly bindingId: string;
+        readonly hostId: string | null;
+        readonly workflow: string | null;
+        readonly itemKey: string | null;
+        readonly ownerId: string;
+      };
+    } | {
+      readonly kind: 'unreadable_start';
+      readonly ref: string;
+      readonly project: {
+        readonly key: string;
+        readonly codebaseId: string | null;
+        readonly name: string;
+      } | null;
+      readonly item?: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly revision: number;
+      readonly labels: Readonly<Record<string, string>>;
+      readonly pausedAt: string | null;
+      readonly start: {
+        readonly requestId: string;
+        readonly resource: string;
+        readonly hostId: string;
+        readonly behind: number;
+      };
     }>;
     readonly answers: ReadonlyArray<{
       readonly kind: 'attention';
@@ -3255,6 +3389,22 @@ declare module 'archon:script' {
         };
       };
     } | null;
+    readonly ended: {
+      readonly kind: 'ended';
+      readonly id: string;
+      readonly reason: string;
+      readonly at: string;
+      readonly via: string;
+      readonly by: {
+        readonly declared: string;
+      } | {
+        readonly userId: string;
+      } | null;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+    } | null;
     readonly degraded: ReadonlyArray<{
       readonly type: 'degraded';
       readonly reason: 'run_unreadable';
@@ -3275,6 +3425,10 @@ declare module 'archon:script' {
       readonly type: 'degraded';
       readonly reason: 'landing_unresolved';
       readonly message: string;
+    } | {
+      readonly type: 'degraded';
+      readonly reason: 'end_unreadable';
+      readonly endId: string;
     }>;
   };
 
@@ -3864,6 +4018,7 @@ declare module 'archon:script' {
         readonly hostId: string;
         readonly queuedAt: string;
         readonly ahead: number;
+        readonly blockedBy: string | null;
         readonly heldBehind: {
           readonly runId: string;
           readonly workflow: string;
@@ -4085,7 +4240,7 @@ declare module 'archon:script' {
             readonly branch: string | null;
           };
         };
-        readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued';
+        readonly reason: 'malformed_tool_call_attention' | 'malformed_gate' | 'unrecognized_gate_type' | 'child_pointer_missing' | 'child_run_missing' | 'child_chain_too_deep' | 'source_release_not_continued' | 'continuation_given_up';
         readonly detail: string;
       } | {
         readonly kind: 'owner_lost';
@@ -4120,6 +4275,10 @@ declare module 'archon:script' {
           };
         };
         readonly observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        readonly start?: {
+          readonly requestId: string;
+          readonly hostId: string;
+        };
       } | {
         readonly kind: 'overdue_wait';
         readonly ref: string;
@@ -4179,10 +4338,101 @@ declare module 'archon:script' {
           readonly receiptId: string;
           readonly bindingId: string;
           readonly workflow: string;
-          readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
+          readonly reason: 'checkout_refused' | 'inputs_unmapped' | 'link_refused' | 'no_default_provider' | 'file_setting_missing' | 'run_as_user_failed' | 'run_configuration_failed' | 'launch_preparation_failed';
           readonly refusedAt: string;
+          readonly fileSetting?: {
+            readonly setting: string;
+            readonly path: string;
+            readonly origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+          };
         }>;
+        readonly failed?: {
+          readonly error: string | null;
+        };
         readonly checkout: string | null;
+      } | {
+        readonly kind: 'refused_start';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly start: {
+          readonly receiptId: string;
+          readonly bindingId: string;
+          readonly hostId: string | null;
+          readonly workflow: string | null;
+          readonly itemKey: string;
+          readonly reason: string;
+          readonly limit?: {
+            readonly name: string;
+            readonly starts: number;
+            readonly granted: number;
+            readonly used: number;
+            readonly bindingId: string;
+            readonly workflow: string;
+          };
+          readonly fileSetting?: {
+            readonly setting: string;
+            readonly path: string;
+            readonly origin: 'supplied' | 'project' | 'workflow_default' | 'pack_default';
+          };
+        };
+      } | {
+        readonly kind: 'preparation_lost';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly start: {
+          readonly receiptId: string;
+          readonly bindingId: string;
+          readonly hostId: string | null;
+          readonly workflow: string | null;
+          readonly itemKey: string | null;
+          readonly ownerId: string;
+        };
+      } | {
+        readonly kind: 'unreadable_start';
+        readonly ref: string;
+        readonly project: {
+          readonly key: string;
+          readonly codebaseId: string | null;
+          readonly name: string;
+        } | null;
+        readonly item?: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly revision: number;
+        readonly labels: Readonly<Record<string, string>>;
+        readonly pausedAt: string | null;
+        readonly start: {
+          readonly requestId: string;
+          readonly resource: string;
+          readonly hostId: string;
+          readonly behind: number;
+        };
       }>;
       readonly answers: ReadonlyArray<{
         readonly kind: 'attention';
@@ -4346,6 +4596,22 @@ declare module 'archon:script' {
           };
         };
       } | null;
+      readonly ended: {
+        readonly kind: 'ended';
+        readonly id: string;
+        readonly reason: string;
+        readonly at: string;
+        readonly via: string;
+        readonly by: {
+          readonly declared: string;
+        } | {
+          readonly userId: string;
+        } | null;
+        readonly fromRun: {
+          readonly runId: string;
+          readonly nodePath: string;
+        } | null;
+      } | null;
       readonly degraded: ReadonlyArray<{
         readonly type: 'degraded';
         readonly reason: 'run_unreadable';
@@ -4366,6 +4632,10 @@ declare module 'archon:script' {
         readonly type: 'degraded';
         readonly reason: 'landing_unresolved';
         readonly message: string;
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'end_unreadable';
+        readonly endId: string;
       }>;
     }>;
     readonly next: string | null;

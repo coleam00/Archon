@@ -498,6 +498,7 @@ describe('trigger CLI durable execution', () => {
         hostId: fixture.hostId,
         queuedAt: expect.any(String),
         ahead: 0,
+        blockedBy: null,
         heldBehind: expect.objectContaining({ runId: runs()[0]?.id, workflow: 'item-proof' }),
         waitsForRunLimit: false,
       },

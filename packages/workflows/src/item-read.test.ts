@@ -6,6 +6,7 @@ import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
 import { heldRunOf } from './attention-queue';
 import type { ResourceStartRequestInspection } from './resource-start-store';
 import type { ItemMerge } from './schemas/item-merge';
+import type { ItemEnd } from './schemas/item-end';
 import type { ItemLanding } from './schemas/item-landing';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { ItemLink } from './schemas/item-link';
@@ -204,6 +205,7 @@ const source: ItemReadSource = {
     listItemRulings: async id => (id === item.id ? rulings : []),
     getItemMerge: async id => (id === item.id ? merge : null),
     getItemLanding: async id => (id === item.id ? landing : null),
+    getHoldingItemEnd: async () => null,
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
     listSkippedItemStarts: async () => [],
@@ -507,6 +509,7 @@ describe('reading an item', () => {
       hostId: 'host',
       queuedAt: '2026-11-01T09:35:00.000Z',
       ahead: 0,
+      blockedBy: null,
     });
     const limited: ItemReadSource = {
       ...source,
@@ -522,6 +525,39 @@ describe('reading an item', () => {
       ['held', true],
       ['free', false],
     ]);
+  });
+
+  test('an end the store holds reads as ended until a held trigger start waits on the item', async () => {
+    const end: ItemEnd = {
+      kind: 'ended',
+      id: 'end-1',
+      reason: 'Done by hand elsewhere.',
+      at: '2026-11-01T10:00:00.000Z',
+      via: 'cli',
+      by: { declared: 'alice' },
+      fromRun: null,
+    };
+    const ended: ItemReadSource = {
+      ...source,
+      store: { ...source.store, getHoldingItemEnd: async id => (id === item.id ? end : null) },
+    };
+    expect((await readItem(ended, item.projectKey, item.key))?.ended).toEqual(end);
+    const held: ItemReadSource = {
+      ...ended,
+      store: {
+        ...ended.store,
+        listHeldItemStarts: async () => [
+          {
+            receiptId: 'receipt-1',
+            bindingId: 'binding',
+            hostId: 'host',
+            workflow: 'review',
+            receivedAt: '2026-11-01T11:00:00.000Z',
+          },
+        ],
+      },
+    };
+    expect((await readItem(held, item.projectKey, item.key))?.ended).toBeNull();
   });
 
   test('a landing that cannot be resolved is reported, and the rest of the item still reads', async () => {
@@ -570,6 +606,7 @@ describe('reading an item', () => {
       merged: merge,
       landing: { branch: 'feat/order-1', from: { kind: 'own' } },
       links: [],
+      ended: null,
       degraded: [],
     });
   });
@@ -650,6 +687,7 @@ describe('reading an item', () => {
                     hostId: 'host',
                     queuedAt: '2026-11-01T11:05:00.000Z',
                     ahead: 0,
+                    blockedBy: null,
                   },
                 ]
           ),
@@ -822,10 +860,11 @@ describe('reading an item', () => {
       hostId: 'host',
       queuedAt: '2026-11-01T12:02:00.000Z',
       ahead: 0,
+      blockedBy: null,
     });
     const held: ItemReadSource = {
       ...source,
-      ownerLost: { holders: async () => [second], observe: async () => 'unreachable' },
+      ownerLost: { runs: async () => [second], observe: async () => 'unreachable' },
       store: {
         ...source.store,
         getItemRuns: async () => ({

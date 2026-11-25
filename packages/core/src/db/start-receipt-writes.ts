@@ -1,3 +1,4 @@
+import { storedBindingRefusal } from '@archon/workflows/schemas/binding-refusal';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import type {
   ResourceStartBindingIntent,
@@ -114,14 +115,19 @@ async function insertReceiptBindings(
   for (const evaluated of recorded.evaluatedBindings ?? []) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
-       (receipt_id,binding_id,binding_revision,host_id,intent,preparation_status,preparation_error)
-       VALUES ($1,$2,$3,NULL,NULL,$4,$5)`,
+       (receipt_id,binding_id,binding_revision,host_id,intent,preparation_status,preparation_error,refusal,item_key)
+       VALUES ($1,$2,$3,NULL,NULL,$4,$5,$6,$7)`,
       [
         recorded.receipt.id,
         evaluated.bindingId,
         evaluated.bindingRevision,
         evaluated.status,
         evaluated.reason,
+        // An unmatched binding was not refused; a rejection is the hand-off's or the source's.
+        evaluated.status !== 'rejected'
+          ? null
+          : storedBindingRefusal(evaluated.refused?.reason ?? 'rejected_by_source'),
+        evaluated.itemKey ?? null,
       ]
     );
   }

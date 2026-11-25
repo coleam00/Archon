@@ -64,7 +64,12 @@ describe('validate check selection', () => {
   interface WorkflowJob {
     'runs-on'?: string;
     strategy?: { matrix: { include?: MatrixLeg[] } };
-    steps?: { if?: string; run?: string; env?: Record<string, string> }[];
+    steps?: {
+      if?: string;
+      run?: string;
+      env?: Record<string, string>;
+      'timeout-minutes'?: number;
+    }[];
   }
   const readWorkflow = (): { jobs: Record<string, WorkflowJob> } =>
     Bun.YAML.parse(
@@ -124,6 +129,16 @@ describe('validate check selection', () => {
       expect(validateSteps).toHaveLength(1);
       expect(validateSteps[0].run).toContain('bun run validate --only ${{ matrix.check }}');
       expect(validateSteps[0].env?.ARCHON_TEST_PART).toBe('${{ matrix.part }}');
+      // A hang Bun's per-test timeout cannot break fails the leg in minutes, not at the job
+      // limit (#6283).
+      const deadline = validateSteps[0]['timeout-minutes'] ?? 0;
+      expect({
+        id,
+        deadlineInMinutes: Number.isInteger(deadline) && deadline > 0 && deadline <= 25,
+      }).toEqual({
+        id,
+        deadlineInMinutes: true,
+      });
     }
   });
 

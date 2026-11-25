@@ -3,6 +3,7 @@ import { disposeWorkflowSource } from '@archon/workflows/run-source';
 import {
   WorkflowExecutionHandoffError,
   type IWorkflowEngine,
+  type WorkflowResumeAdmission,
   type WorkflowRunSubscription,
 } from '@archon/workflows/engine-port';
 import {
@@ -12,7 +13,7 @@ import {
   WorkflowResourceBusyError,
 } from '@archon/workflows/store';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
-import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import {
   registerOwnedRunTermination,
@@ -341,7 +342,7 @@ async function resumeRun(
       admitted = true;
       return prepareExecution(run);
     });
-  let resumeAdmission: Awaited<ReturnType<IWorkflowEngine['resume']>>;
+  let resumeAdmission: WorkflowResumeAdmission;
   try {
     resumeAdmission = await request.host.engine.resume({
       platform: launch.adapter,
@@ -382,7 +383,6 @@ async function resumeRun(
       { cause: err }
     );
   }
-  if (!resumeAdmission.accepted) throw nothingToResumeError(launch, resumable);
   request.notifyResumeAccepted?.(resumeAdmission.runId);
   return resumeAdmission.settled;
 }
@@ -403,34 +403,6 @@ function preparationFailedError(workflowName: string, runId: string, err: Error)
     `Workflow '${workflowName}' failed while preparing its resumed run — ${err.message}\n` +
       `The run is marked failed; resume it with: archon workflow resume ${runId}`,
     { cause: err }
-  );
-}
-
-function nothingToResumeError(launch: ForegroundLaunch, resumable: WorkflowRun): Error {
-  const { workflowName } = launch.request;
-  // `--branch` is only runnable when the prior run used worktree isolation:
-  // folder projects reject worktree options outright, and an in-place repo run
-  // cannot be relaunched onto the branch its own checkout holds. A run still marked
-  // running cannot be superseded until it is released, so name that step first.
-  const worktreeBranch = launch.isFolderCodebase ? undefined : launch.resumeBranch;
-  const unblock = isTerminalRunStatus(resumable.status)
-    ? ''
-    : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
-      `  archon workflow abandon ${resumable.id}\n`;
-  const relaunch = [
-    'archon workflow run',
-    workflowName,
-    ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
-    '--supersedes',
-    resumable.id,
-  ].join(' ');
-  return new Error(
-    `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
-      unblock +
-      (worktreeBranch
-        ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
-        : 'Nothing can be skipped, so start a fresh run instead:\n') +
-      `  ${relaunch}`
   );
 }
 

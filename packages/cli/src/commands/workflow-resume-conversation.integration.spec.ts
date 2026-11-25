@@ -56,8 +56,7 @@ const ORIGIN_ANCHOR_ID = '00000000-0000-4000-8000-000000003640';
 
 /**
  * A repo, a scratch `ARCHON_HOME`, and a workflow where `settle` succeeds and `boom`
- * fails. A run with no completed node is refused for an unrelated reason, so the pair
- * is what leaves a run a resume can actually continue.
+ * fails, so a resume has a completed node to skip.
  */
 function makeFixture(): Fixture {
   const root = mkdtempSync(join(tmpdir(), 'archon-resume-conversation-'));

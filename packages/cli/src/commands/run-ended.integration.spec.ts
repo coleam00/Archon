@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { packGraphSchema } from '@archon/workflows/pack-graph';
@@ -1626,6 +1626,79 @@ describe('a start refused before launch', () => {
     await cli(['ai', 'default', 'claude']);
     await run('stage-ai');
     expect(await stopped()).toEqual({ onItem: [], inAttention: [] });
+  }, 90_000);
+
+  test('for a pack file setting the started stage reads that names no file, naming the setting and path, until the file is restored', async () => {
+    const fixture = await makeFixture('file-setting');
+    const pack = join(fixture.projectRoot, '.archon', 'workflows', 'chain');
+    // chain-plan reads no setting; chain-build reads `policy` from its environment.
+    for (const [name, body] of [
+      ['chain-plan', STAGE_A.replace('name: stage-a', 'name: chain-plan')],
+      [
+        'chain-build',
+        STAGE_B.replace('name: stage-b', 'name: chain-build').replace(
+          'echo "building $INPUTS_PLAN"',
+          'cat "$INPUTS_POLICY"'
+        ),
+      ],
+    ] as const) {
+      mkdirSync(join(pack, name), { recursive: true });
+      writeFileSync(join(pack, name, `${name}.yaml`), body);
+    }
+    mkdirSync(join(pack, '.pack'), { recursive: true });
+    writeFileSync(join(pack, '.pack', 'pack.yaml'), 'inputs:\n  policy:\n    file: true\n');
+    mkdirSync(join(fixture.projectRoot, '.archon', 'packs'), { recursive: true });
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'packs', 'chain.yaml'),
+      'settings:\n  policy: docs/policy.md\n'
+    );
+    fixture.bind(
+      'build-after-plan',
+      { runEnded: { ...RUN_ENDED.runEnded, workflowName: 'chain-plan' } },
+      { workflowName: 'chain-build' }
+    );
+    const run = (workflow: string) =>
+      fixture.cli([
+        ...['workflow', 'run', workflow, '--no-worktree', '--item', 'issue-1'],
+        ...['--input', 'plan=p1', '--input', 'issue=i1'],
+      ]);
+    const stoppedOnItem = async () =>
+      itemReadSchema
+        .parse(JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json'])))
+        .questions.flatMap(question => (question.kind === 'stopped' ? [question] : []));
+    const policy = join(fixture.projectRoot, 'docs', 'policy.md');
+
+    // The stage that does not read the setting runs; the one its end starts is refused.
+    await run('chain-plan');
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(row => [row.workflow_name, row.status])).toEqual([
+      ['chain-plan', 'completed'],
+    ]);
+    expect((await stoppedOnItem()).map(item => item.refused)).toEqual([
+      [
+        expect.objectContaining({
+          workflow: 'chain-build',
+          reason: 'file_setting_missing',
+          // Joined as the value is written, not normalized: `docs/policy.md` keeps its `/` on Windows.
+          fileSetting: {
+            setting: 'policy',
+            path: `${fixture.projectRoot}${sep}docs/policy.md`,
+            origin: 'project',
+          },
+        }),
+      ],
+    ]);
+    const attention = await fixture.cli(['workflow', 'attention']);
+    for (const fact of ["'policy'", policy]) expect(attention).toContain(fact);
+
+    // Restored, the stage that reads it starts and runs.
+    mkdirSync(join(fixture.projectRoot, 'docs'));
+    writeFileSync(policy, 'ask before every merge\n');
+    await run('chain-build');
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(row => [row.workflow_name, row.status])).toEqual([
+      ['chain-plan', 'completed'],
+      ['chain-build', 'completed'],
+    ]);
+    expect(await stoppedOnItem()).toEqual([]);
   }, 90_000);
 
   test('is recorded on a run that also left an ask, and stops its item once the ask is answered', async () => {
