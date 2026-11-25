@@ -215,11 +215,13 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** Set when the start the run caused was refused: at its limit, or before launch. */
     limit: stoppedLimitSchema.optional(),
     refused: z.array(stoppedRefusalSchema).optional(),
-    /** Set when the run failed: its error or null, and for an unknown outcome the node to check. */
+    /** Set when the run failed: its error or null; for an unknown outcome, the node and resumability. */
     failed: z
       .object({
         error: z.string().nullable(),
-        outcomeUnknown: z.object({ node: z.string().nullable() }).optional(),
+        outcomeUnknown: z
+          .object({ node: z.string().nullable(), resumable: z.boolean() })
+          .optional(),
       })
       .optional(),
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */

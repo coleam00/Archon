@@ -251,6 +251,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
   const iterCtx: RunLayersContext = {
     providerLimitDeadline: ctx.providerLimitDeadline,
     toolAttention: ctx.toolAttention,
+    unknownOutcomes: ctx.unknownOutcomes,
     containerPause: ctx.containerPause,
     bodyGateOwner:
       terminalSuspendNode && isGateNode(terminalSuspendNode)

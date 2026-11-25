@@ -2609,6 +2609,7 @@ declare module 'archon:script' {
         readonly error: string | null;
         readonly outcomeUnknown?: {
           readonly node: string | null;
+          readonly resumable: boolean;
         };
       };
       readonly checkout: string | null;
@@ -3318,6 +3319,7 @@ declare module 'archon:script' {
           readonly error: string | null;
           readonly outcomeUnknown?: {
             readonly node: string | null;
+            readonly resumable: boolean;
           };
         };
         readonly checkout: string | null;

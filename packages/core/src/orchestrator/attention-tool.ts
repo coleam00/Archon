@@ -174,7 +174,7 @@ const HOW_TO_ANSWER = [
   '- kind attention: choose=<JSON array of option ids> (one id, several only for form multi_select), or recommended=true; form message takes text only.',
   '- kind awaiting_response: choose=<JSON array with one decision id>, e.g. ["approve"] or ["reject"].',
   '- kind usage_limit continues by itself at resetAt; kind unreadable needs someone to look at the run. Neither takes an answer.',
-  '- kind stopped is an item whose last run (stoppedIn) left nothing to move it: an outcome nothing starts from, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new run on the item moves it on. One whose failed.outcomeUnknown is set (any failed run, on an item or not, whose node may or may not have done its write) is different: check what failed.outcomeUnknown.node did, then resume or abandon that run; a new run or ending the item does not clear it.',
+  '- kind stopped is an item whose last run (stoppedIn) left nothing to move it: an outcome nothing starts from, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new run on the item moves it on. One whose failed.outcomeUnknown is set (any failed run, on an item or not, whose node may or may not have done its write) is different: check what failed.outcomeUnknown.node did, then resume that run (only when failed.outcomeUnknown.resumable) or abandon it; a new run or ending the item does not clear it.',
 ].join('\n');
 
 const chooseSchema = z.array(z.string().min(1)).min(1);
@@ -219,15 +219,29 @@ function withText(chosen: string, said: string | undefined): string {
   return said === undefined ? chosen : `${chosen} and the text "${said}"`;
 }
 
+/** A failed run's stop: its error and, for an unknown outcome, what the operator can do. */
+function failedStopText(
+  ref: string,
+  item: Extract<AttentionQueueItem, { kind: 'stopped' }>,
+  failed: NonNullable<Extract<AttentionQueueItem, { kind: 'stopped' }>['failed']>
+): string {
+  const { runId, workflow } = item.stoppedIn;
+  const unknown = failed.outcomeUnknown;
+  const next =
+    unknown === undefined
+      ? `start it again with archon workflow run --supersedes ${runId}, which closes this`
+      : `${unknown.node === null ? 'its outcome' : `the outcome of node ${unknown.node}`} is unknown, so check what it did, then ${
+          unknown.resumable
+            ? `resume it with archon workflow resume ${runId} or abandon it with archon workflow abandon ${runId}`
+            : `abandon it with archon workflow abandon ${runId}: nothing completed before it, so it cannot be resumed, and a fresh start (archon workflow run --supersedes ${runId}) does not close this`
+        }`;
+  return `attention: item '${ref}' stopped: run ${runId} (${workflow}) failed${failed.error === null ? '' : `: ${failed.error}`}. It takes no answer: ${next}.`;
+}
+
 /** What the tool says of a stopped item: how its run ended, what was refused, what moves it. */
 function stoppedText(ref: string, item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string {
   const { runId, workflow, outcome } = item.stoppedIn;
-  if (item.failed !== undefined)
-    return `attention: item '${ref}' stopped: run ${runId} (${workflow}) failed${item.failed.error === null ? '' : `: ${item.failed.error}`}. It takes no answer: ${
-      item.failed.outcomeUnknown === undefined
-        ? `start it again with archon workflow run --supersedes ${runId}, which closes this`
-        : `${item.failed.outcomeUnknown.node === null ? 'its outcome' : `the outcome of node ${item.failed.outcomeUnknown.node}`} is unknown, so check what it did, then resume it with archon workflow resume ${runId} or abandon it with archon workflow abandon ${runId}`
-    }.`;
+  if (item.failed !== undefined) return failedStopText(ref, item, item.failed);
   const count = item.refused?.length ?? 0;
   // A refusal says only what was refused: other starts the run's end caused may have started.
   const after =

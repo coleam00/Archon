@@ -42,7 +42,7 @@ import { type RunInputs, type RunLayersContext } from './dag/run-context';
 import { assertRunCapabilities } from './dag/capability-preflight';
 import { runLayers } from './dag/run-layers';
 import { OperatorPauseBoundary } from './dag/operator-pause-boundary';
-import { OutcomeUnknownBoundary } from './dag/outcome-unknown-boundary';
+import { UnknownOutcomes } from './outcome-unknown';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
@@ -316,13 +316,12 @@ export async function executeDagWorkflow(
    * runLayers guards almost everything, but a failed durable write (terminal status or
    * node event) escapes through its layer join. Persist the settled usage before rethrowing
    * that exact value (including an exotic `throw undefined`). Usage is best-effort. A
-   * run-budget refusal also escapes the join; it fails the run here instead of
-   * propagating. An unreadable source escapes it too; it is returned, so the tail persists
-   * the settled usage and then releases the run.
+   * run-budget refusal and an unreadable source also escape the join; each is returned, so
+   * the tail persists the settled usage and then chooses how the pass ends.
    */
   const unwindRunLayers = async (
     error: unknown
-  ): Promise<RunSourceUnreadableError | 'budget_failed'> => {
+  ): Promise<RunSourceUnreadableError | RunBudgetRefusedError> => {
     if (
       error instanceof RunBudgetRefusedError ||
       error instanceof RunSourceUnreadableError ||
@@ -331,11 +330,8 @@ export async function executeDagWorkflow(
       await refreshUsageFromDurableRows(deps.store, workflowRun.id, runCtx, error);
     }
     if (error instanceof RunSourceUnreadableError) return error;
+    if (error instanceof RunBudgetRefusedError && runBudget !== undefined) return error;
     await persistRunUsage();
-    if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
-      await failRunForBudget(runBudget, error.refusal);
-      return 'budget_failed';
-    }
     throw error;
   };
 
@@ -378,31 +374,26 @@ export async function executeDagWorkflow(
   };
 
   const pauseBoundary = new OperatorPauseBoundary(deps.store, workflowRun.id);
-  const heldBoundary = new OutcomeUnknownBoundary(deps.store, workflowRun.id);
-  let sourceUnreadable: RunSourceUnreadableError | undefined;
+  let unwound: RunSourceUnreadableError | RunBudgetRefusedError | undefined;
   try {
-    await runLayers(runCtx, pauseBoundary, heldBoundary);
+    await runLayers(runCtx, pauseBoundary);
   } catch (error) {
-    const unwound = await unwindRunLayers(error);
-    if (unwound === 'budget_failed') return;
-    sourceUnreadable = unwound;
+    unwound = await unwindRunLayers(error);
   } finally {
     await runCtx.toolAttention.refresh();
   }
 
   await persistRunUsage();
-  // A node whose outcome is unknown ends the run here, ahead of everything that would let
-  // it go on: the source release, a published pause and the operator's pause. Read again,
-  // since the failure may come from the walk's last layer.
-  if (await heldBoundary.stopsHere()) {
-    return finishRun({
-      ...runCtx,
-      workflow,
-      containerCtx,
-      startedAt: dagStartTime,
-      outcomeUnknownSteps: heldBoundary.held,
-    });
+  const terminal = { ...runCtx, workflow, containerCtx, startedAt: dagStartTime };
+  // How the pass ends, in one order. An unknown outcome comes first: a budget refusal, a
+  // source release, a staged pause or an operator pause would each let the run go on or
+  // lose the reason, and the node must not run again by itself.
+  if (runCtx.unknownOutcomes.steps().length > 0) return finishRun(terminal);
+  if (unwound instanceof RunBudgetRefusedError && runBudget !== undefined) {
+    await failRunForBudget(runBudget, unwound.refusal);
+    return;
   }
+  const sourceUnreadable = unwound instanceof RunSourceUnreadableError ? unwound : undefined;
   if (sourceUnreadable !== undefined) {
     return {
       kind: 'source_release',
@@ -432,13 +423,7 @@ export async function executeDagWorkflow(
     return undefined;
   }
 
-  return finishRun({
-    ...runCtx,
-    workflow,
-    containerCtx,
-    startedAt: dagStartTime,
-    outcomeUnknownSteps: [],
-  });
+  return finishRun(terminal);
 }
 
 /** Refuses a run no node could work in, then announces a container run. */
@@ -547,6 +532,7 @@ async function createRunContext(
     containerPause: execContext.kind === 'container' && containerCtx ? {} : undefined,
     providerLimitDeadline: createProviderLimitDeadlineResolver(),
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
+    unknownOutcomes: new UnknownOutcomes(),
     unfinishedInvocations,
     loopUsageBaselines:
       priorCompletedNodes === undefined ? undefined : resumeSnapshot?.loopUsageBaselines,

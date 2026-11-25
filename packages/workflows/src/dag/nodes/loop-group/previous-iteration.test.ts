@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { UnknownOutcomes } from '../../../outcome-unknown';
 import { createProviderLimitDeadlineResolver } from '../../../executor-shared';
 import { expect, mock, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -291,6 +292,7 @@ test('resumed completion preserves enclosing previous-output scopes', async () =
         workflowPack: undefined,
         providerLimitDeadline: createProviderLimitDeadlineResolver(),
         toolAttention: createRunToolCallAttention({ store, runId: 'run' }),
+        unknownOutcomes: new UnknownOutcomes(),
         workflowName: 'scope',
         workflowSourceRoots: liveSourceRoots(root),
         execContext: { kind: 'host' },

@@ -358,23 +358,29 @@ test('a stopped item names its stage and outcome, and its commands work from any
   expect(failed).toContain('check failed: (exec_failed) no pr input given');
   expect(failed).toContain('archon workflow run --supersedes run-9');
   expect(failed).toContain('archon workflow run check --supersedes run-9 --input');
-  // One that stopped with an unknown outcome names the node and is resumed or abandoned: a
-  // restart would not close it, and with no item there is no item to read.
+  // One that stopped with an unknown outcome names the node. When resume admits it, the
+  // text offers resume and abandon, never the restart, which would not close it; with no
+  // item there is no item to read. When nothing completed before it, resume is not offered.
   const { item: _item, ...withoutItem } = stopped;
-  const unknown = attentionItemLines(
-    {
-      ...withoutItem,
-      stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
-      summary: null,
-      failed: { error: null, outcomeUnknown: { node: 'fan__b__write' } },
-    },
-    'brief'
-  ).join('\n');
-  expect(unknown).toContain('node fan__b__write');
-  expect(unknown).toContain('archon workflow resume run-9');
-  expect(unknown).toContain('archon workflow abandon run-9');
-  expect(unknown).not.toContain('--supersedes');
-  expect(unknown).not.toContain('--item-of');
+  const unknownText = (resumable: boolean) =>
+    attentionItemLines(
+      {
+        ...withoutItem,
+        stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
+        summary: null,
+        failed: { error: null, outcomeUnknown: { node: 'fan__b__write', resumable } },
+      },
+      'brief'
+    ).join('\n');
+  const resumable = unknownText(true);
+  expect(resumable).toContain('node fan__b__write');
+  expect(resumable).toContain('archon workflow resume run-9');
+  expect(resumable).toContain('archon workflow abandon run-9');
+  expect(resumable).not.toContain('--supersedes');
+  expect(resumable).not.toContain('--item-of');
+  const firstNode = unknownText(false);
+  expect(firstNode).not.toContain('archon workflow resume');
+  expect(firstNode).toContain('archon workflow abandon run-9');
 
   // Stopped by a start refused at its limit: it names the limit and starts that workflow.
   const limited = attentionItemLines(

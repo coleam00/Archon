@@ -113,27 +113,8 @@ describe('a failure whose outcome is unknown', () => {
   });
 
   describe('inside a composed fan-out', () => {
-    // The later layer: a wait, and an always_run node that would run after any failure.
-    const later = (marker: string): DagNode[] => [
-      {
-        id: 'delay',
-        kind: 'wait',
-        wait: { duration_ms: 60_000 },
-        depends_on: ['fan'],
-        trigger_rule: 'all_done',
-      } as DagNode,
-      {
-        id: 'cleanup',
-        kind: 'exec',
-        runtime: 'sh',
-        script: `touch '${marker}'`,
-        depends_on: ['fan'],
-        trigger_rule: 'all_done',
-        always_run: true,
-      } as DagNode,
-    ];
-
-    const fanOut = async (join_: 'all_done' | 'all_success') => {
+    // Item 2's instance fails its output contract; with `unknown`, as an unknown outcome.
+    const fanOut = async (unknown: boolean, join_: 'all_done' | 'all_success') => {
       await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
       await writeFile(
         join(testDir, '.archon', 'workflows', 'writer.yaml'),
@@ -145,10 +126,11 @@ describe('a failure whose outcome is unknown', () => {
           '  item: { required: true }',
           'nodes:',
           '  - id: write',
-          '    bash: "test $INPUTS.item != 2"',
+          `    bash: "if [ $INPUTS.item = 2 ]; then echo notjson; else echo '{}'; fi"`,
+          '    output_format: { type: object }',
         ].join('\n')
       );
-      spy = failingWithOutcomeUnknown(['write']);
+      if (unknown) spy = failingWithOutcomeUnknown(['write']);
       const marker = join(testDir, 'cleaned');
       const store = createMockStore();
       await executeDagWorkflow(
@@ -162,9 +144,25 @@ describe('a failure whose outcome is unknown', () => {
                 id: 'fan',
                 kind: 'compose_fan_out',
                 include: 'writer',
-                fan_out: { items: '[1,2]', as: 'item', max_parallel: 2, join: join_ },
+                // One at a time: the failing slot comes first, and the queued one still runs.
+                fan_out: { items: '[2,1]', as: 'item', max_parallel: 1, join: join_ },
               },
-              ...later(marker),
+              {
+                id: 'delay',
+                kind: 'wait',
+                wait: { duration_ms: 60_000 },
+                depends_on: ['fan'],
+                trigger_rule: 'all_done',
+              } as DagNode,
+              {
+                id: 'cleanup',
+                kind: 'exec',
+                runtime: 'sh',
+                script: `touch '${marker}'`,
+                depends_on: ['fan'],
+                trigger_rule: 'all_done',
+                always_run: true,
+              } as DagNode,
             ],
           },
           workflowRun: makeWorkflowRun('unknown-fan'),
@@ -172,18 +170,20 @@ describe('a failure whose outcome is unknown', () => {
       );
       return { store, marker };
     };
+    const fanNode = (store: MockWorkflowStore) =>
+      persistedEvents(store).find(
+        e =>
+          e.step_name === 'fan' &&
+          (e.event_type === 'node_completed' || e.event_type === 'node_failed')
+      );
 
     it.each(['all_done', 'all_success'] as const)(
-      'under %s lets the other instance finish, then stops the run before the next layer',
+      'under %s lets the queued instance run, then stops the run before the next layer',
       async join_ => {
-        const { store, marker } = await fanOut(join_);
+        const { store, marker } = await fanOut(true, join_);
         const instances = persistedEvents(store).filter(e => e.step_name?.endsWith('__write'));
         expect(instances.filter(e => e.event_type === 'node_completed')).toHaveLength(1);
-        const fan = persistedEvents(store).find(
-          e =>
-            e.step_name === 'fan' &&
-            (e.event_type === 'node_completed' || e.event_type === 'node_failed')
-        );
+        const fan = fanNode(store);
         if (join_ === 'all_done') {
           // The join is unchanged: it completes with the failure marker in the slot.
           expect(fan?.event_type).toBe('node_completed');
@@ -199,10 +199,25 @@ describe('a failure whose outcome is unknown', () => {
         expectStoppedWithOutcomeUnknown(store, 'unknown-fan');
       }
     );
+
+    it('under all_done with a script contract failure (retryable: false) goes on as today', async () => {
+      const { store, marker } = await fanOut(false, 'all_done');
+      expect(fanNode(store)?.event_type).toBe('node_completed');
+      expect(existsSync(marker)).toBe(true);
+      expect(store.failWorkflowRun).not.toHaveBeenCalledWith(
+        'unknown-fan',
+        expect.any(String),
+        expect.objectContaining({ exitReason: 'outcome_unknown' })
+      );
+    });
   });
 
-  it('inside a loop group body fails the run with its stop reason', async () => {
-    spy = failingWithOutcomeUnknown(['write']);
+  it.each([
+    { unknown: true, kind: 'an unknown outcome' },
+    { unknown: false, kind: 'a script contract failure' },
+  ])('a loop group body node failing with $kind fails the group at once', async ({ unknown }) => {
+    if (unknown) spy = failingWithOutcomeUnknown(['write']);
+    const marker = join(testDir, 'after');
     const store = createMockStore();
     await executeDagWorkflow(
       dagOptions({
@@ -217,7 +232,17 @@ describe('a failure whose outcome is unknown', () => {
               loop_group: {
                 until: 'DONE',
                 max_iterations: 3,
-                nodes: [{ id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1' }],
+                nodes: [
+                  { id: 'write', kind: 'exec', runtime: 'sh', ...contractFailure },
+                  {
+                    id: 'after',
+                    kind: 'exec',
+                    runtime: 'sh',
+                    script: `touch '${marker}'`,
+                    depends_on: ['write'],
+                    trigger_rule: 'all_done',
+                  },
+                ],
               },
             },
           ] as DagNode[],
@@ -225,8 +250,69 @@ describe('a failure whose outcome is unknown', () => {
         workflowRun: makeWorkflowRun('unknown-group'),
       })
     );
-    expect(eventsOf(store, 'node_failed', step => step.endsWith('write'))).toHaveLength(1);
-    expectStoppedWithOutcomeUnknown(store, 'unknown-group');
+    expect(eventsOf(store, 'node_failed', step => step === 'refine')[0]?.data?.failure_kind).toBe(
+      'child_failed'
+    );
+    // The body walk stops at the unknown outcome; a contract failure lets it go on as today.
+    expect(existsSync(marker)).toBe(!unknown);
+    if (unknown) expectStoppedWithOutcomeUnknown(store, 'unknown-group');
+    else
+      expect(store.failWorkflowRun).toHaveBeenCalledWith(
+        'unknown-group',
+        expect.any(String),
+        expect.objectContaining({ exitReason: 'node_error' })
+      );
+  });
+
+  it('a serialized sibling wait in the same layer never starts', async () => {
+    spy = failingWithOutcomeUnknown(['write']);
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'unknown-serial',
+          nodes: [
+            // A checkout-guarded node beside an unguarded one runs the layer one at a time.
+            { id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1', mutates_checkout: false },
+            { id: 'delay', kind: 'wait', wait: { duration_ms: 60_000 } },
+          ] as DagNode[],
+        },
+        workflowRun: makeWorkflowRun('unknown-serial'),
+      })
+    );
+    expect(eventsOf(store, 'node_started', step => step === 'delay')).toEqual([]);
+    expectStoppedWithOutcomeUnknown(store, 'unknown-serial');
+  });
+
+  it('beats a sibling budget refusal: the stop reason stays outcome_unknown', async () => {
+    // A script sibling reserves its work unit after reading its source, so the shell writer
+    // takes the only unit and the script is refused.
+    await mkdir(join(testDir, '.archon', 'scripts'), { recursive: true });
+    await writeFile(join(testDir, '.archon', 'scripts', 'other.ts'), 'console.log("other")');
+    spy = failingWithOutcomeUnknown(['write']);
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'unknown-budget',
+          budget: { max_work_units: 1 },
+          nodes: [
+            { id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1' },
+            { id: 'other', kind: 'exec', runtime: 'bun', script: 'other' },
+          ] as DagNode[],
+        },
+        workflowRun: makeWorkflowRun('unknown-budget'),
+      })
+    );
+    expect(eventsOf(store, 'run_budget_work_unit', () => true).map(e => e.step_name)).toEqual([
+      'write',
+    ]);
+    expect(eventsOf(store, 'node_started', step => step === 'other')).toEqual([]);
+    expectStoppedWithOutcomeUnknown(store, 'unknown-budget');
   });
 
   describe('after a provider usage limit with a reset ahead', () => {
@@ -383,41 +469,77 @@ describe('a failure whose outcome is unknown', () => {
     );
   });
 
-  // The pass before recorded the failure. A continuation of a wait that paused in the same
-  // layer has no `workflow_resumed` after it; a hand resume of the failed run does.
-  it.each([
-    { pass: 'a continuation', resumed: false },
-    { pass: 'a hand resume', resumed: true },
-  ])('$pass after the failure runs the node again only on a hand resume', async ({ resumed }) => {
-    const marker = join(testDir, 'wrote');
+  it('a continuation pass replays the failure and fails at that layer, starting nothing later', async () => {
+    const marker = join(testDir, 'ran');
     const store = createMockStore();
-    await store.createWorkflowEvent({
-      workflow_run_id: 'unknown-again',
-      event_type: 'node_failed',
-      step_name: 'write',
-      data: { error: 'timed out', failure_kind: 'outcome_unknown' },
-    });
-    if (resumed)
-      await store.createWorkflowEvent({
-        workflow_run_id: 'unknown-again',
-        event_type: 'workflow_resumed',
-        data: {},
-      });
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
         cwd: testDir,
         workflow: {
-          name: 'unknown-again',
+          name: 'unknown-continue',
           nodes: [
-            { id: 'write', kind: 'exec', runtime: 'sh', script: `touch '${marker}'` },
+            { id: 'write', kind: 'exec', runtime: 'sh', script: `touch '${marker}'; exit 1` },
+            {
+              id: 'later',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `touch '${marker}-later'`,
+              depends_on: ['write'],
+              trigger_rule: 'all_done',
+            },
           ] as DagNode[],
         },
-        workflowRun: makeWorkflowRun('unknown-again'),
+        workflowRun: makeWorkflowRun('unknown-continue'),
+        // A parallel wait paused the run before this failure settled; the continuation replays it.
+        replayedFailures: new Map([
+          ['write', { error: 'timed out', failureKind: 'outcome_unknown' }],
+        ]),
       })
     );
-    expect(existsSync(marker)).toBe(resumed);
-    if (resumed) expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
-    else expectStoppedWithOutcomeUnknown(store, 'unknown-again');
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(`${marker}-later`)).toBe(false);
+    expectStoppedWithOutcomeUnknown(store, 'unknown-continue');
+  });
+
+  it('a hand resume starts with an empty record: the node runs again and the run can complete', async () => {
+    const marker = join(testDir, 'tried');
+    const workflow = {
+      name: 'unknown-resume',
+      nodes: [
+        { id: 'first', kind: 'exec', runtime: 'sh', script: 'echo ok' },
+        // Fails the first time (recorded as an unknown outcome), succeeds when run again.
+        {
+          id: 'write',
+          kind: 'exec',
+          runtime: 'sh',
+          script: `test -f '${marker}' || { touch '${marker}'; exit 1; }`,
+          depends_on: ['first'],
+        },
+      ] as DagNode[],
+    };
+    spy = failingWithOutcomeUnknown(['write']);
+    const failed = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(failed),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('unknown-resume'),
+      })
+    );
+    expectStoppedWithOutcomeUnknown(failed, 'unknown-resume');
+    const resumed = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(resumed),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('unknown-resume'),
+        priorCompletedNodes: new Map([['first', { output: 'ok' }]]),
+      })
+    );
+    expect(eventsOf(resumed, 'node_completed', step => step === 'write')).toHaveLength(1);
+    expect(resumed.completeWorkflowRun).toHaveBeenCalledTimes(1);
   });
 });

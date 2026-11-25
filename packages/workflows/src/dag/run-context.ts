@@ -1,3 +1,4 @@
+import type { UnknownOutcomes } from '../outcome-unknown';
 import type { createProviderLimitDeadlineResolver } from '../executor-shared';
 import type { ContainerPauseBoundary } from './pause';
 import type { InteractionAdmission } from '../interaction-admission';
@@ -126,6 +127,8 @@ export interface RunDerived {
   providerLimitDeadline: ReturnType<typeof createProviderLimitDeadlineResolver>;
   containerPause?: ContainerPauseBoundary;
   toolAttention: ReturnType<typeof createRunToolCallAttention>;
+  /** Steps that failed with an unknown outcome this pass; every nested walk shares it. */
+  unknownOutcomes: UnknownOutcomes;
   /**
    * The roots nodes READ executable source from — command files and named scripts.
    *

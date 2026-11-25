@@ -40,6 +40,7 @@ import type { WorkflowEventRow } from './schemas/workflow-event';
 import { getTerminalRecord, terminalReason } from './terminal-record';
 import type { TerminalRecord } from './schemas/terminal-record';
 import { isOutcomeUnknownRun } from './outcome-unknown';
+import { inspectResumableRun } from './run-resume';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { StoredItemWait } from './schemas/item-wait';
@@ -182,7 +183,7 @@ export async function overdueWaitItems(
 /** The store reads a stopped item's queue item needs. */
 export type StoppedItemStore = Pick<
   IWorkflowStore,
-  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase'
+  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase' | 'getDagResumeSnapshot'
 > &
   ItemEndStore;
 
@@ -195,17 +196,22 @@ export type StoppedItemStore = Pick<
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
-  store: Omit<StoppedItemStore, 'listStoppedItemRuns' | 'listEventsForRuns'>,
+  store: Omit<
+    StoppedItemStore,
+    'listStoppedItemRuns' | 'listEventsForRuns' | 'getDagResumeSnapshot'
+  >,
   run: WorkflowRun,
   codebases: CodebaseCache = new Map(),
   /** A failed run's `workflow_failed` events, which carry what failed first. */
-  failedEvents: readonly WorkflowEventRow[] = []
+  failedEvents: readonly WorkflowEventRow[] = [],
+  /** For a run whose outcome is unknown: whether resume admits it (`inspectResumableRun`). */
+  resumable?: boolean
 ): Promise<StoppedQueueItem | null> {
   const failed = run.status === 'failed';
   const stopped: ItemStopped | undefined = failed
     ? { summary: null }
     : readItemStopped(run.metadata);
-  const outcomeUnknown = isOutcomeUnknownRun(run);
+  const outcomeUnknown = resumable === undefined ? undefined : { resumable };
   if (stopped === undefined || (run.item_id === null && !outcomeUnknown)) return null;
   const item = run.item_id === null ? null : await store.getItem(run.item_id);
   let codebase: AttentionQueueItemSources['codebase'] = null;
@@ -241,7 +247,7 @@ export async function stoppedQueueItem(
 function failedStop(
   run: WorkflowRun,
   events: readonly WorkflowEventRow[],
-  outcomeUnknown: boolean
+  outcomeUnknown: { resumable: boolean } | undefined
 ): NonNullable<StoppedQueueItem['failed']> {
   let record: TerminalRecord | null = null;
   try {
@@ -264,7 +270,28 @@ function failedStop(
   const node = record?.nodes.find(
     state => state.state === 'failed' && state.failure_kind === 'outcome_unknown'
   );
-  return { error, outcomeUnknown: { node: node?.node_id ?? null } };
+  return { error, outcomeUnknown: { node: node?.node_id ?? null, ...outcomeUnknown } };
+}
+
+/**
+ * Whether resume admits a run whose outcome is unknown, as the resume owner decides
+ * (`inspectResumableRun`): a run whose first node failed this way has nothing to resume.
+ * Undefined for any other run; `unreadable` when the read failed.
+ */
+async function outcomeUnknownResumable(
+  store: StoppedItemStore,
+  run: WorkflowRun
+): Promise<boolean | undefined | 'unreadable'> {
+  if (!isOutcomeUnknownRun(run)) return undefined;
+  try {
+    return (await inspectResumableRun({ store }, run)) !== null;
+  } catch (error) {
+    createLogger('workflow.attention_queue').warn(
+      { err: error as Error, runId: run.id },
+      'workflow.stopped_item_resume_read_failed'
+    );
+    return 'unreadable';
+  }
 }
 
 /**
@@ -295,7 +322,12 @@ export async function stoppedItems(
         ? null
         : await readHoldingItemEnd(store, run.item_id);
     if (end !== null && !('type' in end)) continue;
-    const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
+    const resumable = await outcomeUnknownResumable(store, run);
+    if (resumable === 'unreadable') {
+      items.push({ type: 'degraded', reason: 'run_unreadable', runId: run.id });
+      continue;
+    }
+    const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id), resumable);
     if (item !== null) items.push(item);
   }
   return items;

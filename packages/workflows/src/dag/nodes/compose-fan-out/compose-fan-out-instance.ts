@@ -177,6 +177,7 @@ function instanceRunContext(
   return {
     providerLimitDeadline: ctx.providerLimitDeadline,
     toolAttention: ctx.toolAttention,
+    unknownOutcomes: ctx.unknownOutcomes,
     unfinishedInvocations: resumeSnapshot.unfinishedInvocations,
     loopUsageBaselines: resumeSnapshot.loopUsageBaselines,
     reportedChildUsage: resumeSnapshot.reportedChildUsage,

@@ -8024,6 +8024,7 @@ export interface components {
             error: string | null;
             outcomeUnknown?: {
               node: string | null;
+              resumable: boolean;
             };
           };
           checkout: string | null;
@@ -8511,6 +8512,7 @@ export interface components {
               error: string | null;
               outcomeUnknown?: {
                 node: string | null;
+                resumable: boolean;
               };
             };
             checkout: string | null;
@@ -9131,6 +9133,7 @@ export interface components {
               error: string | null;
               outcomeUnknown?: {
                 node: string | null;
+                resumable: boolean;
               };
             };
             checkout: string | null;
@@ -10025,6 +10028,7 @@ export interface components {
                 error: string | null;
                 outcomeUnknown?: {
                   node: string | null;
+                  resumable: boolean;
                 };
               };
               checkout: string | null;
@@ -10852,6 +10856,7 @@ export interface components {
                   error: string | null;
                   outcomeUnknown?: {
                     node: string | null;
+                    resumable: boolean;
                   };
                 };
                 checkout: string | null;

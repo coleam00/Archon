@@ -61,13 +61,12 @@ export type RunTerminalContext = Pick<
   | 'nodeOutputs'
   | 'totalCostUsd'
   | 'totalTokens'
+  | 'unknownOutcomes'
 > & {
   workflow: ResolvedWorkflow;
   containerCtx: ContainerRunContext | undefined;
   /** When this pass began (`Date.now()`); the completion write records its duration. */
   startedAt: number;
-  /** Steps whose failure recorded `outcome_unknown`: any fail the run, and nothing waits. */
-  outcomeUnknownSteps: readonly string[];
 };
 
 type NodeCounts = { completed: number; failed: number; skipped: number; total: number };
@@ -102,7 +101,7 @@ export async function finishRun(
   );
 
   // An `all_done` fan-out can complete past an instance whose outcome is unknown.
-  if (!anyCompleted || anyFailed || ctx.outcomeUnknownSteps.length > 0) {
+  if (!anyCompleted || anyFailed || ctx.unknownOutcomes.steps().length > 0) {
     await failOnNodeOutcome(ctx, nodeCounts, runTranscriptUsage);
     return;
   }
@@ -351,12 +350,12 @@ async function failOnNodeOutcome(
   const { deps, platform, conversationId, workflow, workflowRun, logDir, nodeOutputs } = ctx;
   const noneCompleted = nodeCounts.completed === 0;
   const anyFailed = nodeCounts.failed > 0;
-  const held = ctx.outcomeUnknownSteps.length > 0;
+  const held = ctx.unknownOutcomes.steps().length > 0;
   if (await skipIfStatusChanged(deps, workflowRun, 'dag.skip_fail_status_changed')) return;
   if (!held && (!noneCompleted || anyFailed) && (await pauseForUsageLimit(ctx))) return;
 
   const failMsg = held
-    ? outcomeUnknownMessage(workflow.name, ctx.outcomeUnknownSteps)
+    ? outcomeUnknownMessage(workflow.name, ctx.unknownOutcomes.steps())
     : noneCompleted
       ? noSuccessfulNodesMessage(workflow.name, nodeOutputs, nodeCounts.skipped)
       : partialFailureMessage(workflow.name, nodeOutputs);

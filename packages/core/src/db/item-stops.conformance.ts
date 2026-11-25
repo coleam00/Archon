@@ -153,6 +153,13 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       // no item is listed too.
       const unknown = await createOnItem(harness, 'check');
       await harness.store.claimPendingWorkflowRun(unknown);
+      // A node completed before it, so resume admits the run.
+      await harness.store.persistWorkflowEvent({
+        workflow_run_id: unknown,
+        event_type: 'node_completed',
+        step_name: 'prepare',
+        data: { node_output: 'ok' },
+      });
       await harness.store.persistWorkflowEvent({
         workflow_run_id: unknown,
         event_type: 'node_failed',
@@ -178,9 +185,13 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
         {
           stoppedIn: { runId: unknown },
           item: { key: 'pr-7' },
-          failed: { outcomeUnknown: { node: 'fan__b__write' } },
+          failed: { outcomeUnknown: { node: 'fan__b__write', resumable: true } },
         },
-        { stoppedIn: { runId: child.id }, failed: { outcomeUnknown: { node: null } } },
+        // Nothing completed in the child, so resume would refuse it: attention says so.
+        {
+          stoppedIn: { runId: child.id },
+          failed: { outcomeUnknown: { node: null, resumable: false } },
+        },
       ]);
       expect(listed[1]).not.toHaveProperty('item');
     } finally {

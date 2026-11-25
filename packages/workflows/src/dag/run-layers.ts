@@ -30,7 +30,6 @@ import { getLog } from './log';
 import { incrementalLoopUsage, sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settleSequentially, settledValuesOrThrow } from './node-source';
 import type { OperatorPauseBoundary } from './operator-pause-boundary';
-import type { OutcomeUnknownBoundary } from './outcome-unknown-boundary';
 import {
   beginExecution,
   ownsBodySessionCursor,
@@ -53,16 +52,15 @@ import { getStaleCachedDependencies } from './stale-dependencies';
  * `ctx`. Stops early (returns) when a between-layer status check sees a non-running run
  * state (paused/cancelled/deleted) — the caller always proceeds to its own terminal tally.
  * The top-level walk also stops at `pause`: before each layer dispatches, or before the
- * next node of a layer it runs one node at a time. It stops before each layer at `held` too,
- * once a node recorded an `outcome_unknown` failure; that wins over a pause request.
+ * next node of a layer it runs one node at a time. Every walk starts nothing more (layer, phase,
+ * serialized sibling) once a step under its prefix failed with an unknown outcome.
  *
  * Shared by the top-level DAG, `executeLoopGroupNode`'s per-iteration body and each
  * composed fan-out instance; `ctx.stepNamePrefix` is empty for the top-level DAG.
  */
 export async function runLayers(
   ctx: RunLayersContext,
-  pause?: OperatorPauseBoundary,
-  held?: OutcomeUnknownBoundary
+  pause?: OperatorPauseBoundary
 ): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
@@ -70,7 +68,6 @@ export async function runLayers(
     if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
       break;
     await ctx.toolAttention.refresh();
-    if (await held?.stopsHere()) break;
     if (await pause?.stopsHere()) break;
     const layer = ctx.layers[layerIdx];
     await runLayer(ctx, layer, layerIdx, pause);
@@ -111,7 +108,9 @@ async function runLayer(
   for (const phase of phases) {
     if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
       break;
-    if (pause?.reached) break;
+    // Before each phase, the first of a layer included: nothing new starts in a walk holding
+    // an unknown outcome.
+    if (pause?.reached || ctx.unknownOutcomes.heldWithin(ctx.stepNamePrefix)) break;
     const layerHadFailure = await runLayerPhase(
       ctx,
       phase,
@@ -176,6 +175,7 @@ async function runLayerPhase(
                 () => dispatchNode(nodeCtx, node, isParallelLayer)
               )
             ));
+          ctx.unknownOutcomes.settle(ctx.stepNamePrefix + node.id, result.output);
           if (admitted === undefined)
             await observeReturnsCheckout(nodeCtx, node.id, result.output, mayRun);
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
@@ -191,8 +191,10 @@ async function runLayerPhase(
         }
       }
   );
+  const stopBefore = async () =>
+    ctx.unknownOutcomes.heldWithin(ctx.stepNamePrefix) || (await pause?.stopsHere()) === true;
   const layerResults = sequential
-    ? await settleSequentially(nodeThunks, pause && (() => pause.stopsHere()))
+    ? await settleSequentially(nodeThunks, stopBefore)
     : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
   const layerHadFailure = await aggregateLayerResults(ctx, layer, layerResults, isParallelLayer);

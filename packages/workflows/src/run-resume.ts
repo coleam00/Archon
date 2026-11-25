@@ -61,8 +61,13 @@ export interface ResumeStoreDeps {
   >;
 }
 
+/** The store reads that decide whether a run can resume, without claiming it. */
+export type ResumeInspectionDeps = {
+  store: Pick<ResumeStoreDeps['store'], 'getDagResumeSnapshot' | 'listEventsForRuns'>;
+};
+
 async function hasUnexecutedSourceRelease(
-  deps: ResumeStoreDeps,
+  deps: ResumeInspectionDeps,
   candidate: WorkflowRun
 ): Promise<boolean> {
   if (candidate.status !== 'failed') return false;
@@ -77,7 +82,7 @@ async function hasUnexecutedSourceRelease(
 
 /** Read whether a candidate has state worth resuming without claiming or mutating it. */
 export async function inspectResumableRun(
-  deps: ResumeStoreDeps,
+  deps: ResumeInspectionDeps,
   candidate: WorkflowRun
 ): Promise<ResumableRunInspection | null> {
   const snapshot = await deps.store.getDagResumeSnapshot(candidate.id);

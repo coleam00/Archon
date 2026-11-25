@@ -246,7 +246,10 @@ function failedLines(
   if (outcomeUnknown !== undefined)
     return [
       failed,
-      `${outcomeUnknown.node === null ? 'its outcome' : `the outcome of node ${outcomeUnknown.node}`} is unknown, so nothing continues it by itself: check what it did, then resume it with ${command(`resume ${runId}`)}, or abandon it with ${command(`abandon ${runId}`)}`,
+      `${outcomeUnknown.node === null ? 'its outcome' : `the outcome of node ${outcomeUnknown.node}`} is unknown, so nothing continues it by itself`,
+      outcomeUnknown.resumable
+        ? `check what it did, then resume it with ${command(`resume ${runId}`)}, or abandon it with ${command(`abandon ${runId}`)}`
+        : `nothing completed before it, so it cannot be resumed: check what it did, then abandon it with ${command(`abandon ${runId}`)}; to run it again from the start, ${command(`run --supersedes ${runId}`)}, which does not close this, so abandon it too`,
       show,
       ...(item.item === undefined ? [] : [readItem]),
     ];
