@@ -13,16 +13,16 @@ interface ProjectViewTabsProps {
 }
 
 const TABS: readonly { key: ProjectView; label: string; suffix: string }[] = [
+  { key: 'needs-you', label: 'Needs you', suffix: '/needs-you' },
   { key: 'runs', label: 'Runs', suffix: '' },
   { key: 'overview', label: 'Overview', suffix: '/overview' },
   { key: 'board', label: 'Board', suffix: '/board' },
-  { key: 'needs-you', label: 'Needs you', suffix: '/needs-you' },
   { key: 'chat', label: 'Chat', suffix: '/chat' },
   { key: 'metrics', label: 'Metrics', suffix: '/metrics' },
 ];
 
 /**
- * Runs | Overview | Board | Needs you | Chat | Metrics tab control under a project. Active styling mirrors
+ * Needs you | Runs | Overview | Board | Chat | Metrics tab control under a project. Active styling mirrors
  * FilterChips (brand-bar underline). Only meaningful when a project is scoped —
  * chat is project-scoped, so this is never rendered on the All-projects view.
  *
@@ -41,37 +41,36 @@ export function ProjectViewTabs({ projectId, active }: ProjectViewTabsProps): Re
   const hasBoard = (projects?.find(project => project.id === projectId)?.itemPacks.length ?? 0) > 0;
   return (
     <div className="flex items-center gap-1">
-      {TABS.filter(
-        tab =>
-          (tab.key !== 'board' && tab.key !== 'overview' && tab.key !== 'needs-you') || hasBoard
-      ).map(({ key, label, suffix }) => {
-        const isActive = key === active;
-        return (
-          <Link
-            key={key}
-            to={`/console/p/${projectId}${suffix}`}
-            aria-current={isActive ? 'page' : undefined}
-            className={`relative rounded px-2 py-1 text-console-11 font-medium uppercase tracking-wider transition-colors ${
-              isActive
-                ? 'bg-surface-elevated text-text-primary'
-                : 'text-text-tertiary hover:text-text-primary'
-            }`}
-          >
-            {label}
-            {key === 'needs-you' && openAsks > 0 ? (
-              <span data-needs-count className="ml-1 text-warning">
-                {String(openAsks)}
-              </span>
-            ) : null}
-            {isActive ? (
-              <span
-                aria-hidden
-                className="brand-bar pointer-events-none absolute inset-x-1 -bottom-0.5 h-0.5 rounded-full"
-              />
-            ) : null}
-          </Link>
-        );
-      })}
+      {TABS.filter(tab => (tab.key !== 'board' && tab.key !== 'overview') || hasBoard).map(
+        ({ key, label, suffix }) => {
+          const isActive = key === active;
+          return (
+            <Link
+              key={key}
+              to={`/console/p/${projectId}${suffix}`}
+              aria-current={isActive ? 'page' : undefined}
+              className={`relative rounded px-2 py-1 text-console-11 font-medium uppercase tracking-wider transition-colors ${
+                isActive
+                  ? 'bg-surface-elevated text-text-primary'
+                  : 'text-text-tertiary hover:text-text-primary'
+              }`}
+            >
+              {label}
+              {key === 'needs-you' && openAsks > 0 ? (
+                <span data-needs-count className="ml-1 text-warning">
+                  {String(openAsks)}
+                </span>
+              ) : null}
+              {isActive ? (
+                <span
+                  aria-hidden
+                  className="brand-bar pointer-events-none absolute inset-x-1 -bottom-0.5 h-0.5 rounded-full"
+                />
+              ) : null}
+            </Link>
+          );
+        }
+      )}
     </div>
   );
 }

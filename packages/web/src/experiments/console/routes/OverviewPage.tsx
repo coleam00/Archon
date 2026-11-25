@@ -22,67 +22,11 @@ import { useBoardItems } from '../factory/useBoardItems';
 import type { Project } from '../primitives/project';
 import * as skill from '../skills';
 import { getPackGraph, listItems, type ItemRead, type PackGraph } from '../skills/items';
-import type { MetricsReport } from '../skills/metrics';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import { MOVING } from './BoardPage';
-import { MetricCards } from './metrics/MetricsOverview';
-import { metricsRequests } from './metrics/model';
 
-const HEADLINE_CARDS = 3;
-const HEADLINE_DAYS = 7;
 const TOP_ASKS = 3;
-
-/** The pack's own numbers: the first cards it declares, over the last week of its metrics. */
-function Headline({
-  projectId,
-  views,
-}: {
-  projectId: string;
-  views: NonNullable<PackGraph['metricViews']>;
-}): ReactElement | null {
-  const cards = views.cards.slice(0, HEADLINE_CARDS);
-  // The metrics queries are made only for a pack that declares cards.
-  const requests = metricsRequests(projectId, HEADLINE_DAYS);
-  const idle = cards.length === 0;
-  const report = useEntity<MetricsReport | undefined>(
-    idle ? 'noop:overview-no-cards' : requests.report.key,
-    idle ? () => Promise.resolve(undefined) : requests.report.load
-  );
-  const calibrated = cards.some(card => card.shape === 'ratio' && card.calibration !== undefined);
-  const calibration = useEntity<MetricsReport | undefined>(
-    calibrated ? requests.calibration.key : 'noop:overview-no-calibration',
-    calibrated ? requests.calibration.load : () => Promise.resolve(undefined)
-  );
-  if (views.problem !== null)
-    return (
-      <p data-cards-problem className="text-console-12 text-warning">
-        The pack's metric cards could not be read: {views.problem}
-      </p>
-    );
-  if (idle) return null;
-  return (
-    <div data-headline>
-      <p className="mb-2 text-console-11 text-text-tertiary">
-        The pack's own numbers, last {HEADLINE_DAYS} days
-        {report.error !== undefined ? `: ${report.error.message}` : ''}
-      </p>
-      <MetricCards
-        cards={cards}
-        report={report.data}
-        calibrations={
-          calibration.data !== undefined
-            ? { state: 'loaded', report: calibration.data }
-            : calibration.error !== undefined
-              ? { state: 'failed', message: calibration.error.message }
-              : { state: 'loading' }
-        }
-        names={new Map(Object.entries(views.names))}
-        detailsPath={`/console/p/${projectId}/metrics/details`}
-      />
-    </div>
-  );
-}
 
 export function PackOverview({
   projectId,
@@ -129,9 +73,6 @@ export function PackOverview({
       <FactoryNumbers numbers={board?.numbers} needYou={needYou} error={itemsError} />
       {children}
       <PackMap projectId={projectId} pack={pack} board={board} itemsError={itemsError} />
-      {graph?.metricViews == null ? null : (
-        <Headline projectId={projectId} views={graph.metricViews} />
-      )}
     </section>
   );
 }

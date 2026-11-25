@@ -359,7 +359,9 @@ test('only a project with an item on a pack stage gets the board tab', () => {
       ).querySelectorAll('a'),
     ].map(link => link.getAttribute('href'));
   expect(tabs('web')).toContain('/console/p/web/board');
+  expect(tabs('web').slice(0, 2)).toEqual(['/console/p/web/needs-you', '/console/p/web']);
   expect(tabs('docs')).toEqual([
+    '/console/p/docs/needs-you',
     '/console/p/docs',
     '/console/p/docs/chat',
     '/console/p/docs/metrics',

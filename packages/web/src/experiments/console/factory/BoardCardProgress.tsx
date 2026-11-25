@@ -120,7 +120,7 @@ function CardAsks({ read, progress }: { read: ItemRead; progress: CardProgress }
           trigger: event.currentTarget,
         });
       }}
-      className={`${INNER} flex min-w-0 max-w-full flex-col items-start gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+      className={`${INNER} flex min-w-0 max-w-full cursor-pointer flex-col items-start gap-2 rounded border border-transparent p-1 -m-1 text-left transition-colors hover:border-border-bright hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
     >
       <span className="flex w-full min-w-0 items-center gap-2">
         <AskDot />
@@ -136,7 +136,7 @@ function CardAsks({ read, progress }: { read: ItemRead; progress: CardProgress }
         ) : (
           <span
             data-card-recommended
-            className="max-w-full rounded-console-12 border bg-[color:var(--success-soft)] px-2 py-1 text-console-12 text-text-primary [overflow-wrap:anywhere]"
+            className="max-w-full cursor-pointer rounded-console-12 border bg-[color:var(--success-soft)] px-2 py-1 transition-colors hover:brightness-125 text-console-12 text-text-primary [overflow-wrap:anywhere]"
             // Inline: theme.css sets border-color on `.console-root *` outside Tailwind's layers.
             style={{ borderColor: 'color-mix(in oklab, var(--success) 40%, transparent)' }}
           >
@@ -145,7 +145,7 @@ function CardAsks({ read, progress }: { read: ItemRead; progress: CardProgress }
         )}
         <span
           data-card-open-asks
-          className="rounded-console-12 border border-border px-2 py-1 text-console-12 text-text-primary"
+          className="cursor-pointer rounded-console-12 border border-border bg-surface-inset px-2 py-1 text-console-12 text-text-primary transition-colors hover:border-border-bright hover:bg-surface-elevated"
         >
           {words}
         </span>

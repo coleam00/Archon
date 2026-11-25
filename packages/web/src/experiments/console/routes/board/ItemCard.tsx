@@ -8,6 +8,7 @@ import type { ReactElement } from 'react';
 import { Link } from 'react-router';
 import { BoardCardProgress, INNER } from '../../factory/BoardCardProgress';
 import { useCardList } from '../../factory/FactoryCards';
+import { useFactoryCards } from '../../factory/cards-context';
 import type { CardProgress } from '../../factory/lib/item-card';
 import { relativeTime } from '../../lib/format';
 import type { ItemRead } from '../../skills/items';
@@ -57,6 +58,9 @@ export function ItemCard({
   const open = runToOpen(read);
   const chip = chipOf(read);
   const shade = litShade(lit, read.item.id);
+  const cards = useFactoryCards();
+  const chipText = chip === 'done' ? howItEnded(read) : CHIP[chip].label;
+  const chipClass = `shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-console-12 font-medium ${CHIP[chip].tone}`;
   const [heldByRun] = read.questions.flatMap(question =>
     'run' in question && question.run !== undefined ? [question.run] : []
   );
@@ -94,12 +98,30 @@ export function ItemCard({
         <span data-item-key className="truncate font-mono text-console-12 text-text-tertiary">
           {progress.keyText}
         </span>
-        <span
-          data-chip={chip}
-          className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-console-12 font-medium ${CHIP[chip].tone}`}
-        >
-          {chip === 'done' ? howItEnded(read) : CHIP[chip].label}
-        </span>
+        {chip === 'needs_you' && progress.asks !== null && cards !== null ? (
+          <button
+            type="button"
+            data-chip={chip}
+            aria-haspopup="dialog"
+            aria-expanded={cards.open?.read.item.id === read.item.id}
+            aria-label={`${chipText}: open its asks`}
+            onClick={event => {
+              cards.setOpen({
+                read,
+                title: progress.title,
+                keyText: progress.keyText,
+                trigger: event.currentTarget,
+              });
+            }}
+            className={`${INNER} ${chipClass} cursor-pointer transition-[filter] hover:brightness-110 hover:ring-2 hover:ring-warning/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+          >
+            {chipText}
+          </button>
+        ) : (
+          <span data-chip={chip} className={chipClass}>
+            {chipText}
+          </span>
+        )}
       </div>
       {progress.titleIsKey ? null : (
         <p

@@ -389,13 +389,16 @@ export function RunsPage(): ReactElement {
           Check operator logs, repair the stored run, then reload.
         </p>
       ))}
-      <PendingInputBanner
-        runs={pending.visible}
-        ownerLost={pending.ownerLost}
-        showProject={scope === 'all'}
-        onDismiss={pending.dismiss}
-        itemAsks={pending.itemAsks}
-      />
+      {/* A project's waiting asks live on its Needs you tab; only the install-wide view lists them here. */}
+      {scope === 'all' ? (
+        <PendingInputBanner
+          runs={pending.visible}
+          ownerLost={pending.ownerLost}
+          showProject
+          onDismiss={pending.dismiss}
+          itemAsks={pending.itemAsks}
+        />
+      ) : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-7.5 pb-7.5 pt-5.5">
         <SearchElsewhereHint
