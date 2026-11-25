@@ -13,6 +13,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import * as nodeEventWrite from '../node-event-write';
+import * as settle from './unknown-outcome';
 import { executeDagWorkflow } from '../dag-executor';
 import { createFileWorkflowStore } from '../file-store/store';
 import { hydrateResumableRun } from '../run-resume';
@@ -35,6 +36,7 @@ import {
 
 const roots = trackTempRoots();
 const realRecordNodeState = nodeEventWrite.recordNodeState;
+const realReachedUnknownOutcome = settle.reachedUnknownOutcome;
 
 /**
  * Record a failure of each named node as `outcome_unknown`, as a writing tool would; with
@@ -581,12 +583,6 @@ describe('a failure whose outcome is unknown', () => {
         e => e.event_type === 'node_failed' && e.step_name?.endsWith('__write')
       );
 
-    it('under all_done a recomputed join replays the absorbed failure, not the writer', async () => {
-      const result = await fanOut(true, 'all_done', { later: laterWait, upstream: counter() });
-      await continueAtWait(result, result.nodes);
-      expect(await writeFailures(result.store, result.runId)).toHaveLength(1);
-    });
-
     it('under all_done an instance that fails this way when its join is recomputed starts nothing after', async () => {
       // First pass: an ordinary failure, which the join absorbs and a recompute runs again.
       const cleaned = join(testDir, 'cleaned');
@@ -601,76 +597,6 @@ describe('a failure whose outcome is unknown', () => {
       await continueAtWait(result, result.nodes);
       expect(await writeFailures(result.store, result.runId)).toHaveLength(2);
       expect((await readFile(cleaned, 'utf8')).trim().split('\n')).toHaveLength(2);
-    });
-
-    it('a hand resume runs an outer instance again when only an inner join absorbed the uncertain write', async () => {
-      const workflows = join(testDir, '.archon', 'workflows');
-      await mkdir(workflows, { recursive: true });
-      const marker = join(testDir, 'tried');
-      await writeFile(
-        join(workflows, 'writer.yaml'),
-        [
-          'name: writer',
-          'description: block',
-          'mutates_checkout: false',
-          'inputs:',
-          '  item: { required: true }',
-          'nodes:',
-          '  - id: write',
-          '    bash: "exit 1"',
-        ].join('\n')
-      );
-      // The outer block: an inner all_done fan-out over the writer, and a step that fails once.
-      await writeFile(
-        join(workflows, 'outer.yaml'),
-        [
-          'name: outer',
-          'description: block',
-          'mutates_checkout: false',
-          'inputs:',
-          '  item: { required: true }',
-          'nodes:',
-          '  - id: inner',
-          '    include: writer',
-          "    fan_out: { items: '[2]', as: item, join: all_done }",
-          '  - id: step',
-          `    bash: "test -f '${marker}' || { touch '${marker}'; exit 1; }"`,
-        ].join('\n')
-      );
-      spy = failingWithOutcomeUnknown(['write']);
-      const workflow = {
-        name: 'unknown-nested',
-        nodes: [
-          {
-            id: 'fan',
-            kind: 'compose_fan_out',
-            include: 'outer',
-            fan_out: { items: '[1]', as: 'item', join: 'all_success' },
-          },
-        ] as DagNode[],
-      };
-      const { store, runId, deps } = await run(workflow.name, workflow.nodes);
-      expect((await store.getWorkflowRun(runId))?.metadata).toMatchObject({
-        stop_reason: { reason: 'node_error' },
-      });
-      const failed = await store.getWorkflowRun(runId);
-      if (failed === null) throw new Error('run vanished');
-      const hydrated = await hydrateResumableRun(deps, failed);
-      await executeDagWorkflow(
-        dagOptions({
-          deps,
-          cwd: testDir,
-          workflow,
-          workflowRun: hydrated.preCreatedRun,
-          priorCompletedNodes: hydrated.priorCompletedNodes,
-        })
-      );
-      const started = (await store.listWorkflowEvents(runId)).filter(
-        e => e.event_type === 'node_started'
-      );
-      expect(started.filter(e => e.step_name?.endsWith('__step'))).toHaveLength(2);
-      expect(started.filter(e => e.step_name?.endsWith('__write'))).toHaveLength(1);
-      expect((await store.getWorkflowRun(runId))?.status).toBe('completed');
     });
 
     it('under all_done a later ordinary failure fails the run as today', async () => {
@@ -735,66 +661,53 @@ describe('a failure whose outcome is unknown', () => {
       return { ...result, marker };
     };
 
-    it.each([
-      [0, 1],
-      [1, 0],
-    ])(
-      'a peer failing ordinarily does not clear the stop (scans released in order %d, %d)',
-      async (first, second) => {
-        spy = failingWithOutcomeUnknown(['write']);
-        const marker = join(testDir, 'cleaned');
-        const { store, runId } = await run(
-          'unknown-group-race',
-          [
-            {
-              id: 'refine',
-              kind: 'loop_group',
-              loop_group: {
-                until: 'DONE',
-                max_iterations: 3,
-                nodes: [
-                  { id: 'write', kind: 'exec', runtime: 'sh', script: 'exit 1' },
-                  { id: 'other', kind: 'exec', runtime: 'sh', script: 'exit 1' },
-                  {
-                    id: 'cleanup',
-                    kind: 'exec',
-                    runtime: 'sh',
-                    script: `touch '${marker}'`,
-                    depends_on: ['write', 'other'],
-                    trigger_rule: 'all_done',
-                  },
-                ],
-              },
-            },
-          ] as DagNode[],
+    it('a peer whose ordinary failure settles last does not clear the stop', async () => {
+      spy = failingWithOutcomeUnknown(['write']);
+      const marker = join(testDir, 'cleaned');
+      const go = join(testDir, 'go');
+      // `other` fails first and decides "no unknown outcome yet"; only then may `write` fail.
+      // `other`'s decision is handed back after `write`'s stop is set, so it settles last.
+      const writerStopped = Promise.withResolvers<void>();
+      const decide = spyOn(settle, 'reachedUnknownOutcome').mockImplementation(
+        async (ctx, settled) => {
+          const reached = await realReachedUnknownOutcome(ctx, settled);
+          if (settled.nodeId === 'write') writerStopped.resolve();
+          if (settled.nodeId !== 'other') return reached;
+          await writeFile(go, '');
+          await writerStopped.promise;
+          await new Promise(resolve => setTimeout(resolve, 0));
+          return reached;
+        }
+      );
+      try {
+        const { store, runId } = await run('unknown-group-race', [
           {
-            // Hold both peers' settle scans, then let each finish, and its walk act, in turn.
-            prepare: store => {
-              const read = store.listEventsForRuns.bind(store);
-              const held: { release: () => void; read: Promise<unknown> }[] = [];
-              spyOn(store, 'listEventsForRuns').mockImplementation((ids, types) => {
-                if (held.length >= 2 || !types?.includes('fan_out_instances'))
-                  return read(ids, types);
-                const gate = Promise.withResolvers<void>();
-                const result = gate.promise.then(() => read(ids, types));
-                held.push({ release: gate.resolve, read: result });
-                if (held.length === 2)
-                  void (async () => {
-                    for (const index of [first, second]) {
-                      held[index]?.release();
-                      await held[index]?.read;
-                      await new Promise(resolve => setTimeout(resolve, 0));
-                    }
-                  })();
-                return result;
-              });
+            id: 'refine',
+            kind: 'loop_group',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              nodes: [
+                { id: 'write', kind: 'exec', runtime: 'sh', script: afterPause(go) },
+                { id: 'other', kind: 'exec', runtime: 'sh', script: 'exit 1' },
+                {
+                  id: 'cleanup',
+                  kind: 'exec',
+                  runtime: 'sh',
+                  script: `touch '${marker}'`,
+                  depends_on: ['write', 'other'],
+                  trigger_rule: 'all_done',
+                },
+              ],
             },
-          }
-        );
+          },
+        ] as DagNode[]);
         expect(existsSync(marker)).toBe(false);
         await expectEnded(store, runId);
+      } finally {
+        decide.mockRestore();
       }
-    );
+    });
 
     it('starts no queued peer of the same body layer', async () => {
       spy = failingWithOutcomeUnknown(['write']);
@@ -910,45 +823,6 @@ describe('a failure whose outcome is unknown', () => {
       },
     ] as DagNode[]);
     expect(existsSync(marker)).toBe(true);
-    expect((await store.getWorkflowRun(runId))?.metadata).toMatchObject({
-      stop_reason: { reason: 'node_error' },
-    });
-  });
-
-  it('a hand resume reaches the node again past an ordinary failure before it', async () => {
-    const workflow = {
-      name: 'unknown-resume-past',
-      nodes: [
-        { id: 'prep', kind: 'exec', runtime: 'sh', script: 'exit 1' },
-        {
-          id: 'write',
-          kind: 'exec',
-          runtime: 'sh',
-          script: 'exit 1',
-          depends_on: ['prep'],
-          trigger_rule: 'all_done',
-        },
-      ] as DagNode[],
-    };
-    spy = failingWithOutcomeUnknown(['write']);
-    const { store, runId, deps } = await run(workflow.name, workflow.nodes);
-    await expectEnded(store, runId);
-    spy.mockRestore();
-    spy = undefined;
-    const failed = await store.getWorkflowRun(runId);
-    if (failed === null) throw new Error('run vanished');
-    // `prep` fails again, as an ordinary failure; the writer's older record does not stop it.
-    const hydrated = await hydrateResumableRun(deps, failed);
-    await executeDagWorkflow(
-      dagOptions({
-        deps,
-        cwd: testDir,
-        workflow,
-        workflowRun: hydrated.preCreatedRun,
-        priorCompletedNodes: hydrated.priorCompletedNodes,
-      })
-    );
-    expect(await events(store, runId, 'node_started', 'write')).toHaveLength(2);
     expect((await store.getWorkflowRun(runId))?.metadata).toMatchObject({
       stop_reason: { reason: 'node_error' },
     });

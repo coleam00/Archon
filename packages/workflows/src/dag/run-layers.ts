@@ -189,7 +189,7 @@ async function runLayerPhase(
           peers?.[index].finished();
         }
         // Outside the handler: never over the node's record. Only true assigns: no peer clears it.
-        if (await reachedUnknownOutcome(ctx, node, settled.output)) stopped = true;
+        if (await reachedUnknownOutcome(ctx, settled)) stopped = true;
         return settled;
       }
   );

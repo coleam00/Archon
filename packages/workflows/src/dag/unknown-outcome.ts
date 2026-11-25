@@ -8,12 +8,9 @@ import { measureFailedChangeSize } from '../change-size';
 import { logWorkflowError } from '../logger';
 import { safeSendMessage } from '../platform-messages';
 import { executionClaim } from '../store';
-import { composeFanOutScopeSegment } from '../fan-out-identity';
-import { loopBodyStepNamePrefix } from '../graph-plan';
 import { readLiveUnknownOutcomes } from '../unknown-outcome';
 import { getLog } from './log';
-import type { DagNode, NodeOutput } from '../schemas';
-import type { RunLayersContext } from './run-context';
+import type { LayerNodeResult, RunLayersContext } from './run-context';
 import { failRun } from './run-terminal';
 
 /** Fail the run with stop reason `outcome_unknown` naming `nodes`, under the pass's own claim. */
@@ -74,25 +71,18 @@ export async function failRunOnUnknownOutcome(
 }
 
 /**
- * Called where `node` of a walk settled: whether its `output` is a failure that reached a
- * live unknown outcome, read from the stored records of the node and of what runs under it
- * (a loop body, a composed fan-out's instances). Only what this node just ran decides, never another
- * node's older record, so a resume by hand reaches the uncertain node again. When it did,
- * the walk starts nothing more, and the top-level walk fails the run.
+ * Called where a node of a walk settled: whether it failed while the run holds a live
+ * unknown outcome. When it did, the walk starts nothing more, and the top-level walk fails
+ * the run. Which node the outcome belongs to is not asked here: any failure stops the walk
+ * while one is live, which errs toward stopping.
  */
 export async function reachedUnknownOutcome(
   ctx: RunLayersContext,
-  node: DagNode,
-  output: NodeOutput
+  settled: LayerNodeResult
 ): Promise<boolean> {
-  if (output.state !== 'failed') return false;
-  const step = ctx.stepNamePrefix + node.id;
-  const body = loopBodyStepNamePrefix(step);
-  const scope = `${ctx.stepNamePrefix}${composeFanOutScopeSegment(node.id, ctx.loopGroupPath)}__`;
-  const reached = (await readLiveUnknownOutcomes(ctx.deps.store, ctx.workflowRun)).filter(
-    path => path === step || path.startsWith(body) || path.startsWith(scope)
-  );
-  if (reached.length === 0) return false;
-  if (ctx.stepNamePrefix === '') await failRunOnUnknownOutcome(ctx, reached);
+  if (settled.output.state !== 'failed') return false;
+  const live = await readLiveUnknownOutcomes(ctx.deps.store, ctx.workflowRun);
+  if (live.length === 0) return false;
+  if (ctx.stepNamePrefix === '') await failRunOnUnknownOutcome(ctx, live);
   return true;
 }
