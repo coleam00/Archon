@@ -692,8 +692,8 @@ test('forge check exits 1 with a typed reason for a missing plugin, capability o
     },
     unsupported: ['pr.merge', 'pr.review.submit'],
     // The test plugin states no remedies and is configured by command, so forge's
-    // generic step names that command rather than a receipt to update.
-    remedy: expect.stringContaining(`(${process.execPath})`),
+    // generic step names what that entry runs rather than a receipt to update.
+    remedy: expect.stringContaining(`(${process.execPath} --no-env-file`),
   });
 
   // A plugin's own remedy replaces forge's generic step.

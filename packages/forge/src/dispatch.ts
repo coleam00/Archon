@@ -604,20 +604,22 @@ function remedy(
 }
 
 /**
- * How the operator gets a plugin version that serves a missing operation. Only an
- * executable in Archon's plugin directory has an install receipt `archon plugin update`
- * can act on; `archon plugin list` names a forge receipt's executable, which ties the
- * receipt to the one that refused.
+ * How the operator gets a plugin version that serves a missing operation. Only a
+ * receipt `archon plugin add` wrote can be updated, and forge reads no receipts: a file
+ * in Archon's plugin directory may have been copied there by hand. `archon plugin list`
+ * names a forge receipt's executable, so the operator matches the refusing file to its
+ * id, and the remedy says what to do when no row matches.
  */
-function replacePluginStep({ metadata, origin, command }: DiscoveredPlugin): string {
+function replacePluginStep({ metadata, origin, command, args }: DiscoveredPlugin): string {
   const plugin = `plugin ${metadata.name} ${metadata.version}`;
+  const replace = 'with a version that supports the operation';
   switch (origin) {
     case 'installed':
-      return `Update ${plugin}: \`archon plugin list\` shows the id of the forge plugin whose executable is ${executableName(command)}; run \`archon plugin update <id>\` with that id.`;
+      return `Update ${plugin} (${command}): find the forge row in \`archon plugin list\` whose executable is ${executableName(command)}, then run \`archon plugin update <id>\` with that row's id. If no row names it, the file was copied in by hand: replace it ${replace}.`;
     case 'scanned':
-      return `Replace ${command} (${plugin}), which Archon found on PATH or in a configured plugin directory and did not install, with a version that supports the operation.`;
+      return `Replace ${command} (${plugin}), which Archon found on PATH or in a configured plugin directory and did not install, ${replace}.`;
     case 'configured':
-      return `Point the command Archon's config sets for ${plugin} under \`forge\` (${command}) at a version that supports the operation.`;
+      return `Update what the \`forge\` entry in Archon's config runs for ${plugin} (${[command, ...args].join(' ')}): replace the executable or script it names ${replace}.`;
     case 'source':
       return `Update this Archon source checkout, which runs ${plugin}, to a revision whose plugin supports the operation.`;
   }

@@ -336,20 +336,32 @@ function scannedFixtureDir(): string {
   return dir;
 }
 
-// The generic unsupported_op remedy is a step that works for where the executable came from:
-// only a plugin `archon plugin add` installed has a receipt `archon plugin update` acts on.
+// The generic unsupported_op remedy names what supplies the plugin and a step that works
+// for where it came from: only a receipt `archon plugin add` wrote can be updated, and a
+// file in the plugins directory (this fixture has no receipt) may have been copied in by hand.
 test.skipIf(process.platform === 'win32').each([
   [
     'installed',
     (dir: string) => ({ pluginsDir: dir }),
-    ['`archon plugin list`', 'archon-forge-test', '`archon plugin update <id>`'],
+    (dir: string) => [
+      join(dir, 'archon-forge-test'),
+      '`archon plugin list`',
+      'executable is archon-forge-test',
+      '`archon plugin update <id>`',
+      'copied in by hand',
+    ],
   ],
   [
     'scanned',
     (dir: string) => ({ config: { pluginDirs: [dir], scanPath: false } }),
-    ['archon-forge-test', 'did not install'],
+    (dir: string) => [join(dir, 'archon-forge-test'), 'did not install'],
   ],
-  ['configured', () => ({ config: config('unsupported') }), [process.execPath, "Archon's config"]],
+  [
+    'configured',
+    () => ({ config: config('unsupported') }),
+    // The script the interpreter runs is the plugin, so the remedy names it too.
+    () => [`${process.execPath} ${fixture}`, "Archon's config"],
+  ],
   [
     'source',
     () => ({
@@ -358,18 +370,19 @@ test.skipIf(process.platform === 'win32').each([
         { name: 'test', command: process.execPath, args: [fixture, '--mode', 'unsupported'] },
       ],
     }),
-    ['source checkout'],
+    () => ['source checkout'],
   ],
 ] as const)(
   'an unsupported_op remedy for a %s plugin names its own next step',
   async (origin, options, says) => {
+    const dir = scannedFixtureDir();
     const check = await checkForgeAccess(
       { host: 'forge.example', operations: ['pr.merge'] },
-      { ...options(scannedFixtureDir()), env: {} }
+      { ...options(dir), env: {} }
     );
     if (check.ok) throw new Error('Expected a refusal');
     expect(check.error.kind).toBe('unsupported_op');
-    for (const text of says) expect(check.remedy).toContain(text);
+    for (const text of says(dir)) expect(check.remedy).toContain(text);
     if (origin !== 'installed') expect(check.remedy).not.toContain('archon plugin update');
   }
 );

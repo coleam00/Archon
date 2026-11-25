@@ -33,7 +33,7 @@ The checksum catches a corrupted download or an asset that does not belong to th
 Manage the install with:
 
 ```sh
-archon plugin list                                                 # id, kind, tag, commit, compatibility
+archon plugin list                                                 # id, kind, tag, commit, compatibility, executable
 archon plugin update coleam00/Archon/plugins/forge-github          # latest release; add @<tag> to pick one
 archon plugin remove coleam00/Archon/plugins/forge-github          # deletes only the files the receipt lists
 ```
@@ -151,9 +151,9 @@ Any other failure of the read keeps its own kind, such as `unavailable` after th
 
 A `no_plugin_for_host`, `unsupported_op`, `no_credential`, `authorization` or `not_found` failure carries `remedy`, the operator's next step. For `unsupported_op` and `no_credential` it is the plugin's own text when its metadata states one under `remedies`, and otherwise forge's generic step. For `no_credential` that names the credential variables the plugin reads. For `unsupported_op` it depends on where the plugin's executable came from:
 
-- **Installed** with `archon plugin add`: find the id of the forge plugin with that executable in `archon plugin list`, then run `archon plugin update <id>`.
+- **In `ARCHON_HOME/plugins/`**: the remedy names the file. Find the forge row in `archon plugin list` whose executable matches it and run `archon plugin update <id>` with that row's id. No row matches a file copied in by hand; replace that file.
 - **Found on PATH or in a configured plugin directory**: Archon did not install it, so the remedy names the executable to replace.
-- **Configured** as a command under `forge` in Archon's config: the remedy names that command to point at a newer version.
+- **Run by a `forge` entry in Archon's config**: the remedy names the entry's `command` and `args`; replace the executable or script they run.
 - **Run from an Archon source checkout**: update the checkout.
 
 The remedy for `authorization` names the credential source, never the token.
