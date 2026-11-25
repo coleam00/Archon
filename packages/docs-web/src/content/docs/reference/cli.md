@@ -1519,7 +1519,9 @@ merge time (`merged_at`), so a later `workflow merged` for that item keeps the f
 record. So does one the forge refuses because the pull request is already merged, from the
 facts of the earlier merge the refusal carries. An item that already has a merge keeps it;
 for that same change it only gains the landing branch when it has none.
-With a plugin that omits the merge time, nothing is recorded and the merge still succeeds.
+With a plugin that omits the merge time, nothing is recorded and the exit is what it would
+have been: 0 for an applied merge, 1 for an already-merged refusal (on which `forge()` in
+`archon:script` throws `ForgeError`).
 
 ### `workflow landing`
 

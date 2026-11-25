@@ -171,7 +171,7 @@ test('a stored attachment answers the request only when its digest, size and typ
   expect(answer({ contentType: 'image/gif' })).toBe(false);
 });
 
-test('a merge refusal that observed another pull request merged does not answer the request', () => {
+test('a merge refusal answers only for the requested pull request, with a merge time only when observed merged', () => {
   const repo = { host: 'forge.example', path: 'team/repo' };
   const request = {
     operationId: 'merge',
@@ -180,7 +180,7 @@ test('a merge refusal that observed another pull request merged does not answer 
     method: 'squash' as const,
     conditions: { head: 'head' },
   };
-  const refusal = (number: number) => ({
+  const refusal = (number: number, state: 'merged' | 'closed' = 'merged') => ({
     operationId: 'merge',
     ok: false as const,
     error: { kind: 'conflict' as const, message: 'already merged' },
@@ -188,7 +188,11 @@ test('a merge refusal that observed another pull request merged does not answer 
       op: 'pr.merge' as const,
       target: request.ref,
       outcome: 'refused' as const,
-      merge: { method: 'squash' as const, conditions: request.conditions },
+      merge: {
+        method: 'squash' as const,
+        conditions: request.conditions,
+        merged_at: '2026-11-20T09:30:00Z',
+      },
       observed: {
         repo,
         number,
@@ -197,7 +201,7 @@ test('a merge refusal that observed another pull request merged does not answer 
         head: 'feat',
         base: 'dev',
         is_draft: false,
-        state: 'merged' as const,
+        state,
         head_repo: repo,
         head_revision: 'head',
         base_revision: 'base',
@@ -209,4 +213,7 @@ test('a merge refusal that observed another pull request merged does not answer 
   expect(matchesForgeOperationResponse(request, refusal(52), metadata, 'forge.example')).toBe(
     false
   );
+  expect(
+    matchesForgeOperationResponse(request, refusal(51, 'closed'), metadata, 'forge.example')
+  ).toBe(false);
 });

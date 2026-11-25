@@ -8,6 +8,7 @@ import { sourceForgePlugins } from '@archon/forge/host-plugins';
 import { forgeCommand } from './forge';
 import {
   forgeAuditResponse,
+  type ForgeMutationFailure,
   type ForgeRequest,
   type ForgeResponse,
 } from '@archon/forge/operations';
@@ -886,6 +887,28 @@ const earlierMerge = {
   at: '2026-11-18T14:05:00Z',
 };
 
+const attempt = { method: 'squash' as const, conditions: mergeRequest.conditions };
+const earlierLanded = { commit: earlierMerge.commit, tree: null, parents: null };
+/** The evidence each failed outcome carries beyond the merge it attempted. */
+const failureEvidence = {
+  refused: { outcome: 'refused' },
+  outcome_unknown: { outcome: 'outcome_unknown' },
+  closed: { outcome: 'refused', observed: { ...mergedPr, state: 'closed' } },
+  'already-merged': {
+    outcome: 'refused',
+    observed: earlierMerge.pr,
+    merge: { ...attempt, landed: earlierLanded, merged_at: earlierMerge.at },
+  },
+  'already-merged-no-time': {
+    outcome: 'refused',
+    observed: earlierMerge.pr,
+    merge: { ...attempt, landed: earlierLanded },
+  },
+} as const satisfies Record<
+  Exclude<MergeOutcome, 'applied' | 'applied-no-time'>,
+  Partial<ForgeMutationFailure>
+>;
+
 function mergeResponse(request: ForgeRequest, outcome: MergeOutcome): ForgeResponse {
   if (outcome !== 'applied' && outcome !== 'applied-no-time')
     return {
@@ -895,30 +918,7 @@ function mergeResponse(request: ForgeRequest, outcome: MergeOutcome): ForgeRespo
         kind: outcome === 'outcome_unknown' ? 'process_failed' : 'conflict',
         message: 'not merged',
       },
-      mutation: {
-        op: 'pr.merge',
-        target: mergeRef,
-        merge: { method: 'squash', conditions: mergeRequest.conditions },
-        ...(outcome === 'outcome_unknown'
-          ? { outcome }
-          : {
-              outcome: 'refused' as const,
-              ...(outcome === 'closed'
-                ? { observed: { ...mergedPr, state: 'closed' as const } }
-                : {}),
-              ...(outcome === 'already-merged' || outcome === 'already-merged-no-time'
-                ? {
-                    observed: earlierMerge.pr,
-                    merge: {
-                      method: 'squash' as const,
-                      conditions: mergeRequest.conditions,
-                      landed: { commit: earlierMerge.commit, tree: null, parents: null },
-                      ...(outcome === 'already-merged' ? { merged_at: earlierMerge.at } : {}),
-                    },
-                  }
-                : {}),
-            }),
-      },
+      mutation: { op: 'pr.merge', target: mergeRef, merge: attempt, ...failureEvidence[outcome] },
     };
   return {
     operationId: request.operationId,
