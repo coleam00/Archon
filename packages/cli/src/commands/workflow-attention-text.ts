@@ -291,7 +291,7 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
       ];
     case 'usage_limit':
       return [
-        `${item.run.node}: provider usage or rate limit reached; tries again by itself at ${item.resetAt}`,
+        `${item.run.node}: ${limitName(item)} reached; tries again by itself at ${item.resetAt}`,
         `retry sooner: ${command(`resume ${run.id}`)}, or stop it: ${command(`abandon ${run.id}`)}`,
       ];
     case 'unreadable':
@@ -349,11 +349,8 @@ const withoutRunHeading: Record<AttentionQueueItemWithoutRun['kind'], [string, s
   unreadable_start: ['unreadable start', 'queued'],
 };
 
-/** One queue item as a block of text lines. */
-export function attentionItemLines(
-  item: AttentionQueueItem,
-  detail: AttentionItemDetail
-): string[] {
+/** An item's heading line, then what its run is part of and its labels. */
+function headLines(item: AttentionQueueItem): string[] {
   const run = isHeldByRun(item) ? item.run : undefined;
   const lines = [headingLine(item)];
   if (run !== undefined && run.fanOut !== null)
@@ -363,9 +360,70 @@ export function attentionItemLines(
   const labels = Object.entries(item.labels);
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
+  return lines;
+}
+
+/** One queue item as a block of text lines. */
+export function attentionItemLines(
+  item: AttentionQueueItem,
+  detail: AttentionItemDetail
+): string[] {
   // No run holds it, so no run command answers it: it is answered by its ref.
   const body = isHeldByRun(item) ? itemBody(item, detail) : withoutRunBody(item);
-  for (const line of body) lines.push(`    ${line}`);
+  return [...headLines(item), ...body.map(line => `    ${line}`)];
+}
+
+type UsageLimitItem = Extract<AttentionQueueItem, { kind: 'usage_limit' }>;
+
+/** The limit a usage-limit item waits on, by its provider when the wait recorded one. */
+const limitName = (item: UsageLimitItem): string =>
+  item.provider === undefined
+    ? 'usage or rate limit (provider not recorded)'
+    : `${item.provider} usage or rate limit`;
+
+/** The usage-limit items one entry of the list holds, from the first of them. */
+type LimitGroup = [UsageLimitItem, ...UsageLimitItem[]];
+
+/**
+ * The list as text blocks, one per entry. The usage-limit items of one provider are one
+ * entry, at the place of the first of them, naming each run it holds: one limit is one
+ * thing to act on. Every other item is its own entry, and so is a usage-limit item whose
+ * wait recorded no provider, since nothing says which limit holds it. The provider is the
+ * whole key: the engine cannot tell two credentials of one provider apart, and each run
+ * keeps its own retry time.
+ */
+export function attentionListBlocks(items: readonly AttentionQueueItem[]): string[][] {
+  const limits = new Map<string, LimitGroup>();
+  const entries: (AttentionQueueItem | LimitGroup)[] = [];
+  for (const item of items) {
+    if (item.kind !== 'usage_limit') {
+      entries.push(item);
+      continue;
+    }
+    const held = item.provider === undefined ? undefined : limits.get(item.provider);
+    if (held !== undefined) {
+      held.push(item);
+      continue;
+    }
+    const group: LimitGroup = [item];
+    if (item.provider !== undefined) limits.set(item.provider, group);
+    entries.push(group);
+  }
+  return entries.map(entry =>
+    Array.isArray(entry) ? usageLimitLines(entry) : attentionItemLines(entry, 'brief')
+  );
+}
+
+/** One limit and the runs it holds, each with its node, retry time and commands. */
+function usageLimitLines(group: LimitGroup): string[] {
+  const runs = group.length === 1 ? '1 run' : `${String(group.length)} runs`;
+  const lines = [`  ${limitName(group[0])}, holding ${runs}`];
+  for (const item of group)
+    lines.push(
+      ...headLines(item).map(line => `  ${line}`),
+      `      ${item.run.node}: tries again by itself at ${item.resetAt}`,
+      `      retry sooner: ${command(`resume ${item.run.id}`)}, or stop it: ${command(`abandon ${item.run.id}`)}`
+    );
   return lines;
 }
 

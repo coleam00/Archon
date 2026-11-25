@@ -4,6 +4,7 @@ import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { workflowEventCursor } from '@archon/workflows/store';
 import {
   attentionItemLines,
+  attentionListBlocks,
   attentionStreamText,
   refusedStartLines,
 } from './workflow-attention-text';
@@ -68,6 +69,52 @@ test.each([
 ] as const)('a %s ask names the command that answers its form', (form, answer) => {
   const { recommendation: _, ...unadvised } = ask;
   expect(opened({ ...unadvised, form })).toContain(answer);
+});
+
+test('the list shows one entry per provider limit, naming each run it holds and how to retry it', () => {
+  const limited = (
+    id: string,
+    provider: string | undefined
+  ): Extract<AttentionQueueItem, { kind: 'usage_limit' }> => ({
+    ...base,
+    labels: {},
+    kind: 'usage_limit',
+    ref: id,
+    run: { ...held, id, node: `node-${id}` },
+    resetAt: `2026-11-27T10:00:00.000Z`,
+    ...(provider === undefined ? {} : { provider }),
+  });
+  const blocks = attentionListBlocks([
+    limited('a', 'claude'),
+    ask,
+    limited('b', 'codex'),
+    limited('c', 'claude'),
+    limited('d', undefined),
+    limited('e', undefined),
+  ]).map(block => block.join('\n'));
+  // Each provider's limit is one entry, at its first run's place; other items stay their own,
+  // and so does each wait that recorded no provider, since nothing says they share a limit.
+  expect(blocks).toHaveLength(5);
+  const [claude, asked, codex, unrecorded, alsoUnrecorded] = blocks;
+  expect(asked).toContain('Merge pull request 42?');
+  expect(claude).toContain('claude usage or rate limit, holding 2 runs');
+  for (const id of ['a', 'c']) {
+    expect(claude).toContain(`node-${id}: tries again by itself at 2026-11-27T10:00:00.000Z`);
+    expect(claude).toContain(`archon workflow resume ${id}`);
+  }
+  expect(claude).not.toContain('node-b');
+  expect(codex).toContain('codex usage or rate limit, holding 1 run');
+  for (const [block, id] of [
+    [unrecorded, 'd'],
+    [alsoUnrecorded, 'e'],
+  ] as const) {
+    expect(block).toContain('usage or rate limit (provider not recorded), holding 1 run');
+    expect(block).toContain(`archon workflow resume ${id}`);
+  }
+  // The single read names the provider too.
+  expect(attentionItemLines(limited('a', 'claude'), 'full').join('\n')).toContain(
+    'node-a: claude usage or rate limit reached'
+  );
 });
 
 test('a gate names its occurrence in the answer command', () => {

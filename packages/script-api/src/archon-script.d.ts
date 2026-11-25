@@ -2510,6 +2510,7 @@ declare module 'archon:script' {
         readonly node: string;
       };
       readonly resetAt: string;
+      readonly provider?: string;
     } | {
       readonly kind: 'unreadable';
       readonly ref: string;
@@ -3258,6 +3259,7 @@ declare module 'archon:script' {
           readonly node: string;
         };
         readonly resetAt: string;
+        readonly provider?: string;
       } | {
         readonly kind: 'unreadable';
         readonly ref: string;

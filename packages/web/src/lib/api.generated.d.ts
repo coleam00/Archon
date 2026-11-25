@@ -7846,6 +7846,7 @@ export interface components {
           };
           /** Format: date-time */
           resetAt: string;
+          provider?: string;
         }
       | {
           /** @enum {string} */
@@ -8343,6 +8344,7 @@ export interface components {
             };
             /** Format: date-time */
             resetAt: string;
+            provider?: string;
           }
         | {
             /** @enum {string} */
@@ -8973,6 +8975,7 @@ export interface components {
             };
             /** Format: date-time */
             resetAt: string;
+            provider?: string;
           }
         | {
             /** @enum {string} */
@@ -9917,6 +9920,7 @@ export interface components {
               };
               /** Format: date-time */
               resetAt: string;
+              provider?: string;
             }
           | {
               /** @enum {string} */
@@ -10795,6 +10799,7 @@ export interface components {
                 };
                 /** Format: date-time */
                 resetAt: string;
+                provider?: string;
               }
             | {
                 /** @enum {string} */
