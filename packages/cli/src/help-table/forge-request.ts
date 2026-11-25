@@ -10,17 +10,17 @@ function isSchema(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The smallest value `schema` admits, built deterministically: only required properties,
- * the first alternative, the first enum value, the schema's own first `examples` value, and
- * a `<name>` placeholder for any other string.
- * Throws on a schema shape it cannot build from rather than printing a wrong example.
+ * The shape of the smallest request `schema` admits: only required properties and the
+ * first alternative. Every value the caller supplies is a `"<name>"` placeholder, with
+ * its type or choices when it is not a string (`"<number: integer>"`,
+ * `"<method: merge|squash>"`), so no example value can be copied as a real one. Only a
+ * `const`, which the caller cannot choose, is printed as itself. Throws on a schema shape
+ * it cannot build from rather than printing a wrong example.
  */
 export function exampleRequest(schema: unknown, name = 'value'): unknown {
   if (!isSchema(schema)) throw new Error(`request schema at '${name}' is not an object`);
   if ('const' in schema) return schema.const;
-  if (Array.isArray(schema.enum)) return schema.enum[0];
-  // A field whose pattern or cross-field rule a placeholder cannot meet names its own example.
-  if (Array.isArray(schema.examples) && schema.examples.length > 0) return schema.examples[0];
+  if (Array.isArray(schema.enum)) return `<${name}: ${schema.enum.join('|')}>`;
   const alternatives = schema.anyOf ?? schema.oneOf;
   if (Array.isArray(alternatives)) return exampleRequest(alternatives[0], name);
   switch (schema.type) {
@@ -32,18 +32,14 @@ export function exampleRequest(schema: unknown, name = 'value'): unknown {
       );
     }
     case 'array':
-      return typeof schema.minItems === 'number' && schema.minItems > 0
-        ? Array.from({ length: schema.minItems }, () => exampleRequest(schema.items, name))
-        : [];
+      return [exampleRequest(schema.items, name)];
     case 'string':
       return `<${name}>`;
     case 'integer':
     case 'number':
-      return 1;
     case 'boolean':
-      return true;
     case 'null':
-      return null;
+      return `<${name}: ${schema.type}>`;
     default:
       throw new Error(`request schema at '${name}' has no type an example can be built from`);
   }

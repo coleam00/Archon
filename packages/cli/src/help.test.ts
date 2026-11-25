@@ -139,6 +139,41 @@ describe('CLI help output', () => {
     check: cliForgeCheckRequestSchema,
   };
 
+  /**
+   * Fills an example along its schema. Every value but a `const` (a discriminator such as a
+   * subject's `kind`) must be a placeholder, so none can be copied as a real value. Each is
+   * filled with a value of its stated type; a string also fits the field's `pattern`.
+   */
+  function fillPlaceholders(schema: unknown, value: unknown): unknown {
+    const node = schema as Record<string, unknown>;
+    if ('const' in node) {
+      expect(value).toBe(node.const);
+      return value;
+    }
+    const alternatives = (node.anyOf ?? node.oneOf) as unknown[] | undefined;
+    if (alternatives) return fillPlaceholders(alternatives[0], value);
+    if (node.type === 'object') {
+      const properties = node.properties as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.entries(value as object).map(([k, v]) => [k, fillPlaceholders(properties[k], v)])
+      );
+    }
+    if (node.type === 'array')
+      return (value as unknown[]).map(v => fillPlaceholders(node.items, v));
+    const placeholder = typeof value === 'string' ? /^<[^:>]+(?:: (.+))?>$/.exec(value) : null;
+    expect(
+      placeholder,
+      `example value ${JSON.stringify(value)} is not a placeholder`
+    ).not.toBeNull();
+    const kind = placeholder?.[1];
+    if (Array.isArray(node.enum)) return node.enum[0];
+    if (kind === 'integer' || kind === 'number') return 1;
+    if (kind === 'boolean') return true;
+    if (kind === 'null') return null;
+    const pattern = typeof node.pattern === 'string' ? new RegExp(node.pattern) : /./;
+    return ['aaaaaaaa', 'aaaaaa'].find(candidate => pattern.test(candidate));
+  }
+
   // Every operation's request type and example come from its schema, and the example is a
   // request the host accepts once the placeholders are filled in. `checks` is an alias.
   for (const { op, request } of cliForgeJsonSchemas().operations) {
@@ -149,7 +184,11 @@ describe('CLI help output', () => {
         expect(scoped).toContain(
           `Request (--data):\n${indentType(convertOutputSchema(request).type)}`
         );
-        const example = { ...(exampleData(scoped, subcommand) as object), op, operationId: 'help' };
+        const example = {
+          ...(fillPlaceholders(request, exampleData(scoped, subcommand)) as object),
+          op,
+          operationId: 'help',
+        };
         expect((hostParsers[op] ?? forgeRequestSchema).safeParse(example).success).toBe(true);
       });
     }
@@ -161,8 +200,8 @@ describe('CLI help output', () => {
     expect(scoped).toContain('readonly number: number;');
     expect(scoped).toContain('readonly head: string;');
     expect(exampleData(scoped, 'pr.merge')).toEqual({
-      ref: { repo: { host: '<host>', path: '<path>' }, number: 1 },
-      method: 'merge',
+      ref: { repo: { host: '<host>', path: '<path>' }, number: '<number: integer>' },
+      method: '<method: merge|squash>',
       conditions: { head: '<head>' },
     });
   });
@@ -181,11 +220,13 @@ describe('CLI help output', () => {
     };
     expect(forgeRequestHelp('op', base)).toEqual({
       type: '{\n  readonly ref: number;\n  readonly note?: string;\n}',
-      example: `archon forge op --data '{"ref":1}'`,
+      example: `archon forge op --data '{"ref":"<ref: integer>"}'`,
     });
     const help = forgeRequestHelp('op', added);
     expect(help.type).toContain('readonly pinned: string;');
-    expect(help.example).toBe(`archon forge op --data '{"ref":1,"pinned":"<pinned>"}'`);
+    expect(help.example).toBe(
+      `archon forge op --data '{"ref":"<ref: integer>","pinned":"<pinned>"}'`
+    );
   });
 
   it('points forge --help to each operation without printing every request', () => {
