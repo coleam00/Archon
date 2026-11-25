@@ -6,7 +6,8 @@
  * nothing; the set stays open until an event meets it, a newer run of its workflow replaces
  * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
  * `readItemStopped`), or a failed top-level run, is listed while it is the newest run on the
- * item and the item's end does not hold (`item-end.ts`); it takes no answer.
+ * item, the item's end does not hold (`item-end.ts`) and no merge is recorded on it
+ * (`getItemMerge`); it takes no answer.
  */
 import { createLogger } from '@archon/paths';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
@@ -180,7 +181,7 @@ export async function overdueWaitItems(
 /** The store reads a stopped item's queue item needs. */
 export type StoppedItemStore = Pick<
   IWorkflowStore,
-  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase'
+  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase' | 'getItemMerge'
 > &
   ItemEndStore;
 
@@ -192,7 +193,7 @@ export type StoppedItemStore = Pick<
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
-  store: Omit<StoppedItemStore, 'listStoppedItemRuns' | 'listEventsForRuns'>,
+  store: Pick<StoppedItemStore, 'getItem' | 'getCodebase'>,
   run: WorkflowRun,
   codebases: CodebaseCache = new Map(),
   /** A failed run's `workflow_failed` events, which carry what failed first. */
@@ -250,7 +251,9 @@ function failureReason(run: WorkflowRun, events: readonly WorkflowEventRow[]): s
 
 /**
  * The items runs stopped, for `AttentionQueueSource.itemsWithoutRun`, but for an item whose
- * end holds (`readHoldingItemEnd`): an operator said nothing more happens on it.
+ * end holds (`readHoldingItemEnd`), where an operator said nothing more happens on it, or
+ * whose merge is recorded (`getItemMerge`), where its change landed. Neither compares times:
+ * a run that failed after the merge leaves the item done.
  */
 export async function stoppedItems(
   store: StoppedItemStore
@@ -270,12 +273,23 @@ export async function stoppedItems(
       items.push(run);
       continue;
     }
-    const end = run.item_id === null ? null : await readHoldingItemEnd(store, run.item_id);
-    if (end !== null && !('type' in end)) continue;
+    if (await isItemDone(store, run.item_id)) continue;
     const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
     if (item !== null) items.push(item);
   }
   return items;
+}
+
+/**
+ * Whether item `itemId` needs nothing more: its end holds or its merge is recorded. An
+ * unreadable end or merge row reads as not done, so it does not hide the stop.
+ */
+async function isItemDone(store: StoppedItemStore, itemId: string | null): Promise<boolean> {
+  if (itemId === null) return false;
+  const end = await readHoldingItemEnd(store, itemId);
+  if (end !== null && !('type' in end)) return true;
+  const merge = await store.getItemMerge(itemId);
+  return merge !== null && !('type' in merge);
 }
 
 /** The store reads a lost preparation's queue item needs. */

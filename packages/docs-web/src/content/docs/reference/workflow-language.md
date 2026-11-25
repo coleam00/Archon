@@ -2494,7 +2494,8 @@ nodes:
   outcome; a `linked` binding starts on other items), and it leaves no ask and no wait. What
   the outcome is called does not matter, and no timer is involved.
   Nothing follows such a run, so [`archon workflow attention`](/reference/cli/#workflow-attention)
-  lists the item as `stopped` until another step starts on the item, whatever its status. A
+  lists the item as `stopped` until another step starts on the item, whatever its status,
+  unless the item's [merge is recorded](/reference/cli/#workflow-merged). A
   run on no item, an observing run, a run that ended its item, and a run that left an ask or
   a wait stop nothing. A run whose end does start a binding also stops its item when
   admission refuses that start at its
