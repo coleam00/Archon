@@ -53,24 +53,10 @@ test.each(['directory', 'missing path'])(
 
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', repoPath);
 
-    const diagnostic = breakdown.inspectionFailedEnvs[0]?.errors[0];
-    expect(diagnostic).toBe(`Patch equivalence: ${omitted}`);
-    expect(breakdown).toEqual({
-      total: 1,
-      merged: 0,
-      stale: 0,
-      active: 0,
-      mergedEnvs: [],
-      staleEnvs: [],
-      activeEnvs: [],
-      inspectionFailedEnvs: [
-        {
-          id: 'env-1',
-          branchName: 'task-1',
-          errors: [diagnostic],
-        },
-      ],
+    expect(breakdown.classificationUnavailable).toEqual({
+      reason: 'Git operation failed (exit code 128)',
     });
+    expect(breakdown.inspectionFailedEnvs).toEqual([]);
   }
 );
 
@@ -333,4 +319,25 @@ test('real malformed remote cannot expose a credential in status or its warning'
   );
   expect(result.message).not.toContain('topsecret-5209');
   expect(JSON.stringify(warn.mock.calls)).not.toContain('topsecret-5209');
+});
+
+test('status names a repository with no remote as the reason classification is unavailable', async () => {
+  const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-status-no-remote-')));
+  await git.execFileAsync('git', ['init', root]);
+  setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
+  const codebase = makeCodebase({ default_cwd: root });
+  spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
+  spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
+  spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
+  spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
+  spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([statusEnvironment(root)]);
+  spyOn(config, 'loadRepoConfig').mockResolvedValue({});
+
+  const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
+    formatWorkflowCommand: command => command,
+  });
+
+  expect(result.message).toContain(
+    'Merge/stale classification unavailable (base ref resolution failed: Repository has no remote to judge merges against)'
+  );
 });

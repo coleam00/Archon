@@ -427,8 +427,9 @@ export interface MergedConfig {
   baseBranch?: string;
   /**
    * Git remote name from repo config (worktree.remote).
-   * When undefined, callers auto-detect at runtime via getDefaultRemote()
-   * or fall back to 'origin'.
+   * When undefined, callers auto-detect at runtime via getDefaultRemote().
+   * When that finds none (no remote, or several and none named origin), the
+   * repository has no remote: there is no 'origin' fallback.
    */
   remote?: string;
   /**

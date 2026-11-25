@@ -4,6 +4,7 @@ import {
   execFileAsync,
   GitFailure,
   getDefaultBranch,
+  getDefaultRemote,
   isRevCoveredBy,
   isBranchMerged,
   isPatchEquivalent,
@@ -18,14 +19,27 @@ import { loadRepoConfig } from '../../config/config-loader';
 export interface RepoGitContext {
   /** Remote-qualified base ref (e.g. "origin/main"), kept current via `git fetch`. */
   remoteMainRef: BranchName;
-  /** Configured remote name (worktree.remote). Always resolved to a string (defaults to 'origin'). */
+  /** worktree.remote, else getDefaultRemote(); with neither, resolveRepoGitContext throws NoRemoteError. */
   remote: string;
 }
+
+/** The repository has no remote that could prove a merge. */
+export class NoRemoteError extends Error {
+  constructor() {
+    super('Repository has no remote to judge merges against');
+    this.name = 'NoRemoteError';
+  }
+}
+
+/** Why cleanup keeps an environment whose repository has no remote. */
+export const NO_REMOTE_REASON =
+  'repository has no remote to judge a merge against — kept (with several remotes and none named origin, set worktree.remote)';
 
 // Resolve the base branch and remote for a repo, preferring worktree.baseBranch /
 // worktree.remote from .archon/config.yaml before falling back to runtime git
 // detection. A reachable remote with a known symbolic HEAD is required unless
-// worktree.baseBranch is configured.
+// worktree.baseBranch is configured. A repository with no resolvable remote throws
+// NoRemoteError.
 // A missing config falls back to git detection; a config that fails to load
 // throws, and cleanup surfaces that rather than working around it.
 export async function resolveRepoGitContext(
@@ -33,7 +47,8 @@ export async function resolveRepoGitContext(
   cwd: string
 ): Promise<RepoGitContext> {
   const repoConfig = await loadRepoConfig(cwd);
-  const remote = configuredRemote(repoConfig);
+  const remote = await resolveCleanupRemote(repoPath, repoConfig);
+  if (!remote) throw new NoRemoteError();
   const configured = repoConfig.worktree?.baseBranch?.trim();
   if (configured) {
     return { remoteMainRef: toBranchName(`${remote}/${configured}`), remote };
@@ -42,8 +57,16 @@ export async function resolveRepoGitContext(
   return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
 }
 
-export function configuredRemote(repoConfig: Awaited<ReturnType<typeof loadRepoConfig>>): string {
-  return repoConfig.worktree?.remote?.trim() || 'origin';
+/**
+ * The remote cleanup judges against: worktree.remote, else getDefaultRemote(). Null means
+ * the repository has no remote, or has several and none is named origin or configured,
+ * so nothing remote can prove a merge or hold a pushed commit.
+ */
+export async function resolveCleanupRemote(
+  repoPath: RepoPath,
+  repoConfig: Awaited<ReturnType<typeof loadRepoConfig>>
+): Promise<string | null> {
+  return repoConfig.worktree?.remote?.trim() || (await getDefaultRemote(repoPath));
 }
 
 /** Git integration or one eligible PR head must cover every existing local tip. */

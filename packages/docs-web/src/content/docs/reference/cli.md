@@ -2529,6 +2529,12 @@ nothing in it is needed, then run `archon isolation list`, which retires a recor
 is missing unless a run can still claim it; the next cleanup pass does the same. A checkout that exists but cannot be read
 still fails the pass.
 
+A repository with no remote has nothing that can prove a merge, so `--merged` and the
+scheduled sweep keep every worktree environment in it and report each one as skipped, with a
+reason that says the repository has no remote. These are not failures and do not change the
+exit status. A repository with several remotes and none named `origin` is reported the same
+way until `worktree.remote` names one.
+
 With `--json`, `--merged` prints one document, `{ "codebases": [...] }`. Each entry carries
 `codebaseId`, `repositoryUrl`, `path`, and a `kind`: `swept` with the sweep's `result`
 (`removed`, `skipped`, `warnings`, `releasedFailedRuns`, `errors`); `repository-gone` with

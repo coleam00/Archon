@@ -4,6 +4,7 @@ import { GitFailure } from '@archon/git';
 import type * as Isolation from '@archon/isolation';
 import { cleanupStaleWorktrees, runScheduledCleanup } from '../cleanup-service';
 import { cleanupMergedWorktrees, type CleanupOperationResult } from './merged-sweep';
+import { NO_REMOTE_REASON } from './merge-verdict';
 import {
   NO_PR,
   daysAgo,
@@ -16,6 +17,7 @@ import {
   mockHasUncommittedChanges,
   mockWorktreeExists,
   mockGetDefaultBranch,
+  mockGetDefaultRemote,
   mockIsBranchMerged,
   mockIsPatchEquivalent,
   mockLocalBranchExists,
@@ -366,6 +368,26 @@ describe('cleanupMergedWorktrees', () => {
       expect(mockDestroy).not.toHaveBeenCalled();
       expect(mockGetLastCommitDate).not.toHaveBeenCalled();
       expect(mockGetPrState).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each(['manual', 'scheduled'] as const)(
+    '%s cleanup keeps a worktree in a repository with no remote, without a merge check',
+    async sweep => {
+      mergedSweepFinds(worktreeEnv('local-only'));
+      scheduledSweepFinds(sweptWorktreeEnv('local-only', { created_at: daysAgo(30) }));
+      mockWorktreeExists.mockResolvedValue(true);
+      mockGetDefaultRemote.mockResolvedValue(null);
+      const result =
+        sweep === 'manual'
+          ? await sweepMerged('codebase-1', '/workspace/repo')
+          : await runScheduledCleanup();
+      expect(result.skipped.map(entry => entry.reason)).toEqual([NO_REMOTE_REASON]);
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual([]);
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockGetPrState).not.toHaveBeenCalled();
+      expect(mockDestroy).not.toHaveBeenCalled();
     }
   );
 
