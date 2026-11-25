@@ -1849,9 +1849,9 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
 - A run with no item is refused before it does any work, unless every `result_of` input is
   supplied. A `workflow:` child carries no item, so its parent passes the value through
   `with:`.
-- `result_of` with `default:` or `required: true` is contradictory, and the input is dropped at
-  load with a warning. A dry run has no item and previews an unsupplied `result_of` input as
-  `null`.
+- `result_of` with `default:` or `required: true` is contradictory, and the workflow is refused
+  at load, naming the input and both keys. A dry run has no item and previews an unsupplied
+  `result_of` input as `null`.
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
 get a value from it, and `resultCommit`: the commit its result holds at.
@@ -1907,8 +1907,8 @@ inputs:
 - The commit is read from this run's starting checkout. A dirty checkout still reads at its
   HEAD commit, because a land merges commits, not worktree changes. A checkout at no commit
   reads `null`.
-- `at:` without `result_of:` is contradictory, and the input is dropped at load with a
-  warning. A dry run previews the input as `null`, as it does any unsupplied `result_of`.
+- `at:` without `result_of:` is contradictory, and the workflow is refused at load. A dry run
+  previews the input as `null`, as it does any unsupplied `result_of`.
 
 A result at a commit is not an approval by itself: it is whatever the stage returned there,
 and the reading node judges it. A land stage runs on the change's own checkout, for example

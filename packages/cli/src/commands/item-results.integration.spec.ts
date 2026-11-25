@@ -322,12 +322,50 @@ test('a reader with no item is refused before it starts, unless the value is sup
   );
   // No node ran: the run was cancelled before its claim.
   expect(fixture.rows().map(row => row.status)).toEqual(['cancelled']);
+  // A detached start is refused in the result it prints, before its child is forked.
+  const detached = await fixture.attempt([
+    'workflow',
+    'run',
+    'stage-c',
+    '--no-worktree',
+    '--detach',
+    '--json',
+  ]);
+  expect(detached.exitCode).not.toBe(0);
+  const refusal = JSON.parse(detached.stdout) as { ok: boolean; error: string };
+  expect(refusal.ok).toBe(false);
+  expect(refusal.error).toContain(
+    "reads input 'prior' from result_of 'stage-a', which resolves from the run's item"
+  );
+  expect(fixture.rows().map(row => row.status)).toEqual(['cancelled', 'cancelled']);
 
   await fixture.cli(['workflow', 'run', 'stage-c', '--no-worktree', '--input', 'prior="supplied"']);
-  const supplied = fixture.rows()[1];
+  const supplied = fixture.rows()[2];
   expect(supplied?.status).toBe('completed');
   expect((await detail(fixture, supplied?.id)).terminal_record.returns.value).toEqual({
     read: 'supplied',
+  });
+}, 120_000);
+
+test('a detached reader with no item starts when its project pack settings supply the value', async () => {
+  const fixture = await makeFixture('pack-setting', {});
+  const pack = join(fixture.projectRoot, '.archon', 'workflows', 'kit');
+  mkdirSync(join(pack, 'kit-reader'), { recursive: true });
+  writeFileSync(join(pack, 'kit-reader', 'kit-reader.yaml'), reader('kit-reader', 'stage-a'));
+  mkdirSync(join(pack, '.pack'), { recursive: true });
+  writeFileSync(join(pack, '.pack', 'pack.yaml'), 'inputs:\n  prior: { type: string }\n');
+  mkdirSync(join(fixture.projectRoot, '.archon', 'packs'), { recursive: true });
+  writeFileSync(
+    join(fixture.projectRoot, '.archon', 'packs', 'kit.yaml'),
+    `settings:\n  prior: '"from-project"'\n`
+  );
+  const ack = JSON.parse(
+    await fixture.cli(['workflow', 'run', 'kit-reader', '--no-worktree', '--detach', '--json'])
+  ) as { ok: boolean; runId: string };
+  expect(ack.ok).toBe(true);
+  await fixture.attempt(['workflow', 'wait', ack.runId]);
+  expect((await detail(fixture, ack.runId)).terminal_record.returns.value).toEqual({
+    read: 'from-project',
   });
 }, 120_000);
 
