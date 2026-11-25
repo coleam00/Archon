@@ -28,7 +28,8 @@ import { getLog } from './workflow-run-shared';
  * `IWorkflowStore.listStoppedItemRuns`): a completed run that recorded a stop, or a failed
  * top-level run with no scheduled resume, which nothing moves on by itself. Runs on an item are ordered as `getItemRuns` orders
  * them: by start time, and on SQLite, which records it to the second, by insertion order
- * within a second. Any run after this one, in any status, ends the stop. A run that still
+ * within a second. Any run after this one, in any status, ends the stop, and so does one
+ * deleted since (`moved_on_at` on the item, recorded by the delete). A run that still
  * has an open ask is not listed: the ask is in attention and is what needs someone, and the
  * stop shows once it closes. Nor is one with an open wait, unless its stop names a refused
  * start: a wait not yet overdue is in no list, so the refusal beside it would show nowhere.
@@ -50,6 +51,11 @@ export async function listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[
            AND (n.started_at > r.started_at
              OR (n.started_at = r.started_at AND n.${tie} > r.${tie}))
        )
+       -- A later run that was deleted still moved the item on.
+       AND NOT EXISTS (SELECT 1 FROM remote_agent_items i
+                        WHERE i.id = r.item_id
+                          AND (i.moved_on_at > r.started_at
+                            OR (i.moved_on_at = r.started_at AND i.moved_on_tie > r.${tie})))
        AND NOT EXISTS (SELECT 1 FROM remote_agent_item_asks
                         WHERE run_id = CAST(r.id AS TEXT) AND closed_as IS NULL)
        AND (${getDialect().jsonText('r.metadata', `${ITEM_STOPPED_METADATA_KEY}.refused`)} IS NOT NULL
