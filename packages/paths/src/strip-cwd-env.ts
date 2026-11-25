@@ -40,6 +40,22 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
   'CLAUDE_CODE_USE_VERTEX',
 ]);
 
+/** What the last stripCwdEnv() removed from a project's env files. Key names only, never values. */
+export interface CwdEnvStrip {
+  cwd: string;
+  files: string[];
+  keys: string[];
+}
+
+let lastStrip: CwdEnvStrip | undefined;
+
+/** Return what the last strip removed and clear it, so one boot reports it once. */
+export function takeCwdEnvStrip(): CwdEnvStrip | undefined {
+  const strip = lastStrip;
+  lastStrip = undefined;
+  return strip;
+}
+
 /**
  * Strip every key named in CWD .env files, whatever its value or source
  * (detached children then restore DETACHED_INSTALL_CONTEXT_KEYS), and nested Claude Code session markers from process.env.
@@ -67,13 +83,10 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     restoreDetachedInstallContext(inheritedInstallContext);
   }
 
-  // Tell the operator what we just did — otherwise the delete loop is silent
-  // and users think their env file was loaded (see #1302).
-  if (cwdKeys.size > 0) {
-    process.stderr.write(
-      `[archon] stripped ${cwdKeys.size} keys from ${cwd} (${strippedFiles.join(', ')}) to prevent target repo env from leaking into Archon processes\n`
-    );
-  }
+  // Recorded, not printed: loadArchonEnv tells the operator once the Archon home
+  // and verbosity are final (see #1302, #6362).
+  lastStrip =
+    cwdKeys.size > 0 ? { cwd, files: strippedFiles, keys: [...cwdKeys].sort() } : undefined;
 
   stripNestedSessionMarkers();
   stripDebuggerEnv();

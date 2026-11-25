@@ -44,8 +44,8 @@ packages/cli/
 ┌─────────────────────────────────────────────────────────────────┐
 │ strip-cwd-env-boot  (first import, side-effect)                 │
 │   stripCwdEnv(): deletes Bun-auto-loaded <cwd>/.env* keys from  │
-│   process.env + CLAUDE_CODE_* session markers. Emits            │
-│   [archon] stripped N keys from <cwd> (...) when N > 0.         │
+│   process.env + CLAUDE_CODE_* session markers. Silent; records  │
+│   what it stripped for loadArchonEnv to report.                 │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
@@ -55,6 +55,9 @@ packages/cli/
 │   2. <cwd>/.archon/.env    (repo scope, exceptions below)       │
 │   Emits one [archon] loaded N keys from <path> line per file    │
 │   when N > 0 and ARCHON_VERBOSE_BOOT=1 or LOG_LEVEL=debug/trace.│
+│   Emits [archon] stripped N keys from <cwd> (...) when the      │
+│   project's stripped files or keys are new or changed (state in │
+│   ~/.archon/cwd-env-notice.json), or on every run when verbose. │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼

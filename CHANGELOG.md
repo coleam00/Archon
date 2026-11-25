@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A start a run's end or settled asks caused follows its trigger file while it waits. Registering the file again with another mapping rebuilds a start not yet prepared with the new inputs, and a queued one leaves its queue and is prepared again; a file that no longer binds the start refuses it on its item. A queued start whose workflow alone changed runs as prepared. Re-registering bindings no longer needs the install hold. (#6225)
+- The `[archon] stripped N keys from <cwd> (...)` line now explains why Archon strips a target repository's `.env` keys, and prints only on the first command in a project and again when the stripped files or key names change. The keys are still stripped on every command. Set `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug` to print it every time. (#6362)
 
 ## [0.15.0] - 2026-11-25
 

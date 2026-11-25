@@ -14,6 +14,12 @@
  * Directory ownership (`.archon/`) is the security boundary, not the filename.
  *
  * Logging rules:
+ *   - The `[archon] stripped N keys from <cwd> …` line (what stripCwdEnv() removed)
+ *     prints the first time a project's set of stripped files and key names is
+ *     seen, and again when it changes. A fingerprint per project is kept in
+ *     `<ARCHON_HOME>/cwd-env-notice.json`. Verbose boot prints it every time. It
+ *     is reported here, not in stripCwdEnv(), because only now are ARCHON_HOME
+ *     and the verbosity switches from `~/.archon/.env` final.
  *   - Each `[archon] loaded N keys from …` line prints only when N > 0 AND
  *     the operator has opted into verbose boot output via `ARCHON_VERBOSE_BOOT=1`
  *     or `LOG_LEVEL=debug`/`trace`. Silent by default — these run before
@@ -24,12 +30,14 @@
  *   - Passes `{ quiet: true }` to suppress dotenv's own `[dotenv@17.3.1] …`
  *     output.
  */
+import { createHash } from 'crypto';
 import { config, parse } from 'dotenv';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getArchonEnvPath, getArchonHome, getRepoArchonEnvPath } from './home-paths';
-import { applyEnvLogLevel } from './logger';
+import { applyEnvLogLevel, createLogger } from './logger';
+import { type CwdEnvStrip, takeCwdEnvStrip } from './strip-cwd-env';
 
 /**
  * Shorten a path with `~` when it lives under the current user's home directory.
@@ -118,6 +126,62 @@ export function loadArchonEnv(
 
   // The logger fixed its level before these files loaded; hand it a LOG_LEVEL they set.
   if (process.env.LOG_LEVEL !== logLevelBefore) applyEnvLogLevel();
+
+  const strip = takeCwdEnvStrip();
+  if (strip) reportCwdEnvStrip(strip, env);
+}
+
+const log = createLogger('env-loader');
+const CWD_ENV_NOTICE_FILE = 'cwd-env-notice.json';
+
+/**
+ * Tell the operator what stripCwdEnv() removed, once per project and again when the
+ * stripped files or key names change. The state file holds a hash per project, not the
+ * key names. A missing or corrupt state file means "not shown yet", so it prints; a
+ * failed write only means the line prints again next time.
+ */
+function reportCwdEnvStrip(strip: CwdEnvStrip, env: NodeJS.ProcessEnv): void {
+  const archonHome = getArchonHome(env);
+  const statePath = join(archonHome, CWD_ENV_NOTICE_FILE);
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify([strip.files, strip.keys]))
+    .digest('hex');
+  const projects = readCwdEnvNoticeProjects(statePath);
+  const changed = projects[strip.cwd] !== fingerprint;
+  if (!changed && !isVerboseBoot()) return;
+
+  const count = strip.keys.length;
+  process.stderr.write(
+    `[archon] stripped ${count} ${count === 1 ? 'key' : 'keys'} from ${strip.cwd} (${strip.files.join(', ')}). ` +
+      "Archon does not load a project's .env files into its own processes, so a key there " +
+      'cannot override Archon settings or credentials (an ANTHROPIC_API_KEY would bill the ' +
+      'API instead of your Claude subscription). Shown again only when these keys or files change.\n'
+  );
+  if (!changed) return;
+
+  try {
+    mkdirSync(archonHome, { recursive: true });
+    writeFileSync(
+      statePath,
+      JSON.stringify({ projects: { ...projects, [strip.cwd]: fingerprint } }),
+      'utf-8'
+    );
+  } catch (err) {
+    log.debug({ err }, 'cwd_env_notice.write_failed');
+  }
+}
+
+function readCwdEnvNoticeProjects(statePath: string): Record<string, string> {
+  try {
+    const data = JSON.parse(readFileSync(statePath, 'utf-8')) as { projects?: unknown };
+    if (data.projects && typeof data.projects === 'object') {
+      return data.projects as Record<string, string>;
+    }
+  } catch (err) {
+    // Absent or unreadable: the notice has not been shown.
+    log.debug({ err }, 'cwd_env_notice.read_failed');
+  }
+  return {};
 }
 
 function loadRepoEnv(cwd: string, homePath: string, env: NodeJS.ProcessEnv): void {

@@ -320,7 +320,9 @@ printf 'ANTHROPIC_API_KEY=sk-ant-test-fake\n' > .env
 **Pass criteria** (current behaviour — the guard **strips**, it does not refuse):
 
 - Output contains a strip line naming the repo and the source file, of the form:
-  `[archon] stripped N keys from <repo> (.env) to prevent target repo env from leaking into Archon processes`
+  `[archon] stripped N key(s) from <repo> (.env). Archon does not load a project's .env files …`
+- The line prints only on the first command in a project (or when its keys change),
+  which is why `$LEAKREPO` is a fresh directory each time
 - `N` equals the number of keys planted (1 for the `.env` above) — a count of `0`
   means the file was not read at all, which is a real regression
 - The workflow is then allowed to proceed and complete normally
@@ -337,11 +339,12 @@ leak_exit=$?
 # $LEAKREPO may be a symlinked path (/tmp -> /private/tmp on macOS); the binary
 # logs the resolved form, so compare against that.
 resolved_repo=$(cd "$LEAKREPO" && pwd -P)
-expected="[archon] stripped 1 keys from ${resolved_repo} (.env) to prevent target repo env from leaking into Archon processes"
+# Pinned to the count, repo and file list; the explanation that follows may be reworded.
+expected="[archon] stripped 1 key from ${resolved_repo} (.env). "
 
 if [ "$leak_exit" -ne 0 ]; then
   echo "FAIL: workflow exited $leak_exit — the guard strips and proceeds, it should not abort"
-elif grep -qxF "$expected" /tmp/archon-test-leak.log; then
+elif grep -qF "$expected" /tmp/archon-test-leak.log; then
   echo "PASS: env-leak guard stripped exactly the planted key from this repo"
 else
   echo "FAIL: expected strip line absent. Got:"
@@ -349,7 +352,7 @@ else
 fi
 ```
 
-An exact-match assertion is deliberate here. A looser pattern such as
+A pinned prefix is deliberate here. A looser pattern such as
 `stripped [1-9][0-9]* keys .*\.env` passes on **any** positive count from **any**
 path, so a strip belonging to a different repository — or a count inflated by an
 unrelated `.env` — reads as success while the regression it is meant to catch

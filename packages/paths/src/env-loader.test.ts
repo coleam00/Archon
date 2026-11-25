@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { writeFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { getArchonEnvNames, getPluginsPath, loadArchonEnv } from './env-loader';
 import { getLogLevel, resetLogLevelOverride, rootLogger, setLogLevel } from './logger';
+import { stripCwdEnv } from './strip-cwd-env';
 
 /**
  * loadArchonEnv covers the read side of the three-path env model (#1302):
@@ -371,5 +372,67 @@ describe('getArchonEnvNames', () => {
 
   it('returns an empty set when neither file exists', () => {
     expect(getArchonEnvNames(repoDir).size).toBe(0);
+  });
+});
+
+describe('loadArchonEnv — stripped-keys notice (#6362)', () => {
+  /** One boot: strip the project's env files, then load Archon's, as each entry point does. */
+  function boot(): string[] {
+    stderrWrites.length = 0;
+    stripCwdEnv(repoDir);
+    loadArchonEnv(repoDir);
+    return stderrWrites.filter(s => s.startsWith('[archon] stripped'));
+  }
+
+  it('explains the strip on the first boot in a project, then stays quiet while still stripping', () => {
+    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=secret-value-6362\n');
+
+    const [line, ...rest] = boot();
+    expect(rest).toEqual([]);
+    expect(line).toStartWith(`[archon] stripped 1 key from ${repoDir} (.env). `);
+    expect(line).toContain("does not load a project's .env files");
+
+    process.env.TEST_EL_OTHER = 'from-shell';
+    expect(boot()).toEqual([]);
+    expect(process.env.TEST_EL_OTHER).toBeUndefined();
+  });
+
+  it('prints again when the stripped keys or files change', () => {
+    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=a\n');
+    expect(boot()).toHaveLength(1);
+
+    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=a\nTEST_EL_OVERLAP=b\n');
+    expect(boot()).toHaveLength(1);
+
+    writeFileSync(join(repoDir, '.env.local'), 'TEST_EL_OTHER=c\n');
+    const [line] = boot();
+    expect(line).toContain('(.env, .env.local)');
+    expect(boot()).toEqual([]);
+  });
+
+  it('prints on every boot under verbose boot', () => {
+    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=a\n');
+    process.env.ARCHON_VERBOSE_BOOT = '1';
+    expect(boot()).toHaveLength(1);
+    expect(boot()).toHaveLength(1);
+  });
+
+  it('still prints when the Archon home cannot be written', () => {
+    const homeIsAFile = join(tmpRoot, 'home-file');
+    writeFileSync(homeIsAFile, '');
+    process.env.ARCHON_HOME = homeIsAFile;
+    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=a\n');
+    expect(boot()).toHaveLength(1);
+    expect(boot()).toHaveLength(1);
+  });
+
+  it('never writes a key value to stderr or the state file', () => {
+    writeFileSync(join(repoDir, '.env'), 'TEST_EL_OTHER=secret-value-6362\n');
+    process.env.ARCHON_VERBOSE_BOOT = '1';
+    boot();
+    expect(stderrWrites.join('')).not.toContain('secret-value-6362');
+    const state = readFileSync(join(archonHomeDir, 'cwd-env-notice.json'), 'utf-8');
+    expect(state).not.toContain('secret-value-6362');
+    expect(state).not.toContain('TEST_EL_OTHER');
   });
 });
