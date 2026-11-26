@@ -143,8 +143,17 @@ export const groupSchema = z.strictObject({
   kind: z.enum(['intake', 'build', 'check', 'merge', 'neutral']).optional(),
 });
 
-/** What choosing one option of an ask starts, in one plain sentence. */
-export const answerSchema = z.strictObject({ starts: sentenceSchema });
+/**
+ * How one option of an ask reads. `label` is the short form an arrow the option takes reads
+ * as on the map (the graph and the ask's declared options carry only its id, and the reserved
+ * `other` is never declared). `starts` is what choosing it starts, in one plain sentence, for
+ * the item's story.
+ */
+export const answerSchema = z
+  .strictObject({ label: labelSchema.optional(), starts: sentenceSchema.optional() })
+  .refine(answer => answer.label !== undefined || answer.starts !== undefined, {
+    message: 'an answer gives a `label`, a `starts` sentence, or both',
+  });
 
 export const factoryViewSchema = z.strictObject({
   version: z.literal(1),
@@ -162,8 +171,8 @@ export const factoryViewSchema = z.strictObject({
   /** How each outcome reads, by `stage:outcome` or `stage:*`. */
   outcomes: z.record(outcomeKeySchema, outcomeSchema).optional(),
   /**
-   * What choosing an option of an ask a run of the stage left starts, by `stage:option`, in one
-   * plain sentence. It decides nothing: the pack's bindings do.
+   * How each option of an ask a run of the stage left reads, by `stage:option`: its label on a
+   * map arrow, and what choosing it starts. It decides nothing: the pack's bindings do.
    */
   answers: z.record(answerKeySchema, answerSchema).optional(),
   words: wordsSchema.optional(),
@@ -193,7 +202,8 @@ export type FactoryView = z.infer<typeof factoryViewSchema>;
  * - `retired`: a `rounds`, `returns`, `approves` or `change` entry names a workflow the graph
  *   lacks and the file does not retire. It is kept and its workflow treated as retired, so
  *   old runs still count.
- * - `unworded`: an in-flow stage, one of its steps, or one of its outcome values has no words.
+ * - `unworded`: an in-flow stage, one of its steps, one of its outcome values, or an ask option
+ *   one of its hand-offs leaves on has no words.
  * - `ungrouped`: the file declares groups and an in-flow stage is in none of them.
  *
  * `path` is where in the file, as a zod issue path, naming the entry as the author wrote it.

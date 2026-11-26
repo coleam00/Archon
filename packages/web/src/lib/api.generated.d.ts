@@ -13402,7 +13402,8 @@ export interface components {
         };
         answers?: {
           [key: string]: {
-            starts: string;
+            label?: string;
+            starts?: string;
           };
         };
         words?: {

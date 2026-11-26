@@ -785,9 +785,10 @@ What it carries, and nothing else:
 - map and How it works layout: positions, lanes, captions, edge labels, notes (`map.notes`);
   *Superseded on `combined` by the COMBINED direction (#237): the file has no `map`; it declares
   `groups` (name, blurb, stages) and `merged`, and the map's cards and edges come from the graph,
-  its edges worded by the outcomes' `label`.*
+  its edges worded by the outcomes' `label` and, for an answer to an ask, the option's `label`
+  in `answers`.*
 - story wording: how each outcome reads (`story.outcomes`, `story.steps`, `story.said`), what
-  choosing an ask's option starts (`answers`), and the words for a check round, a return, a
+  choosing an ask's option starts and how it reads on a map arrow (`answers`), and the words for a check round, a return, a
   parked item and a work order;
 - optionally, which steps a stage modal highlights, by name.
 
@@ -815,8 +816,10 @@ own copy of the pack (v2 direction). Its `story` field gives the item page one p
 outcome (#122). Its `retired` field names `deliver`, the one-workflow delivery the pack dropped
 on 2026-11-23 (pack d7f8c36), kept only while old items need it to place: the Build stage lists
 it, `placement` places its outcomes, `story.outcomes` words them and `change` reads its pull
-request; `deliver` is drawn nowhere. Its `answers` field words what the pack's `drop` and `reshape` routes start, for the
-workflows whose asks the pack binds them on.
+request; `deliver` is drawn nowhere. Its `answers` field gives every option an asks-settled hand-off of the pack leaves on a
+`label`, how its arrow reads on the map (the graph and the ask's declared options carry only
+the id, and the reserved `other` is never declared), and words what the pack's `drop` and
+`reshape` routes start, for the workflows whose asks the pack binds them on.
 
 **The check** (`bun run check:factory-view`, run in console CI; later shipped with the owner's
 pack copy) loads the view file and the pack graph. It FAILS on any workflow, step, outcome or
@@ -1030,7 +1033,8 @@ Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row,
   per stage of it something returns to, spread over its left half in its stage order. Each
   send-back drops from its card's source leg to the lane, runs right to left, and rises into
   its target stage's leg; every send-back into one stage shares that leg and one pill under the
-  lane ("returned, sent back, answers" on Build, "replan, answers" on Plan). A send-back inside one card (an asked
+  lane, in the outcomes' and options' labels ("returned, sent back, one more round" on Build,
+  "answered, plan again" on Plan). A send-back inside one card (an asked
   plan answered) is a short U from the card's source leg into its stage's leg. Where runs
   overlap they are one line, drawn once. Pills sit under the lane, each centred on its leg but
   never past the row's first or last card (a long label on Intake's leg starts at the row's

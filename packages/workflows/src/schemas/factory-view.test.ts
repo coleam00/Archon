@@ -81,6 +81,13 @@ test('accepts where progress lives in a run: one rounds source or a list, return
   ).toEqual([]);
 });
 
+test('an answer reads with a label, a starts sentence or both, and is refused with neither', () => {
+  const answers = (entry: object): unknown => ({ ...valid(), answers: { 'make:drop': entry } });
+  expect(issues(answers({ label: 'dropped' }))).toEqual([]);
+  expect(issues(answers({ starts: 'Closes it.' }))).toEqual([]);
+  expect(issues(answers({}))).toEqual(['answers.make:drop']);
+});
+
 test('a rounds source missing a key is refused, and the refusal names the key', () => {
   const parsed = factoryViewSchema.safeParse({
     ...valid(),

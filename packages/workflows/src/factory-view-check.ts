@@ -11,10 +11,11 @@
  * Meaning entries are the exception: a `rounds`, `returns`, `approves` or `change` entry
  * naming a workflow the graph lacks is kept, and the workflow is served as `retired`
  * (reported `retired`), because old runs carry the old name and board cards read their rounds
- * from them. What the graph has and the file gives no words is `unworded`, and an in-flow stage
- * the file's groups leave out is `ungrouped`. Every problem is an error for
- * `check:factory-view`; a console shows them and draws what is left. Read time (`packViewOf`,
- * through `servedFactoryView`) and the check run this one pass.
+ * from them. What the graph has and the file gives no words (a stage, step, outcome value, or
+ * option a hand-off leaves on) is `unworded`, and an in-flow stage the file's groups leave out
+ * is `ungrouped`. Every problem is an error for `check:factory-view`; a console shows them and
+ * draws what is left. Read time (`packViewOf`, through `servedFactoryView`) and the check run
+ * this one pass.
  */
 import type { PackGraph } from './pack-graph';
 import { reconcileProgress } from './factory-view-progress-check';
@@ -289,10 +290,30 @@ export function outcomeLabelOf(
   return view.outcomes?.[`${workflow}:${value}`]?.label ?? view.outcomes?.[`${workflow}:*`]?.label;
 }
 
+/** The label an ask option of a stage reads as on a map arrow: its exact entry's only. */
+function answerLabelOf(
+  view: Pick<FactoryView, 'answers'>,
+  workflow: string,
+  option: string
+): string | undefined {
+  return view.answers?.[`${workflow}:${option}`]?.label;
+}
+
+/** The options the graph's asks-settled arrows out of `stage` leave on, each once, in order. */
+const optionsOf = (graph: PackGraph, stage: GraphStage): string[] => [
+  ...new Set(
+    graph.arrows.flatMap(({ from }) =>
+      'settled' in from && from.stage === stage.name && from.option !== undefined
+        ? [from.option]
+        : []
+    )
+  ),
+];
+
 /**
- * An in-flow stage with no words, a step of it with none, and an outcome value of it with no
- * label: a console would show the raw id ("Build · build"). Only in-flow stages: no item
- * stands at the rest.
+ * An in-flow stage with no words, a step of it with none, and an outcome value or an ask option
+ * of it with no label: a console would show the raw id ("Build · build", "take-as-is"). Only
+ * in-flow stages: no item stands at the rest.
  */
 function unworded(r: Reconciling): void {
   for (const stage of r.graph.stages.filter(entry => entry.inFlow)) {
@@ -314,7 +335,20 @@ function unworded(r: Reconciling): void {
           ['outcomes', `${workflow}:${value}`],
           `outcome "${value}" of stage "${workflow}" has no label`
         );
+    unwordedOptions(r, stage);
   }
+}
+
+/** The options an in-flow stage's asks-settled arrows leave on that have no label. */
+function unwordedOptions(r: Reconciling, stage: GraphStage): void {
+  const { workflow } = stage;
+  for (const option of optionsOf(r.graph, stage))
+    if (answerLabelOf(r.view, workflow, option) === undefined)
+      r.add(
+        'unworded',
+        ['answers', `${workflow}:${option}`],
+        `option "${option}" of stage "${workflow}" has no label`
+      );
 }
 
 /**

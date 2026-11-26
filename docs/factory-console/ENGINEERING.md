@@ -75,7 +75,7 @@ The factory building this repository runs Archon from another checkout, on the h
   read and in `bun run check:factory-view <pack dir>`: each entry is read alone with its own
   schema, then `reconcileFactoryView` (`factory-view-check.ts`) drops each entry naming what the
   graph lacks, keeps a `rounds`, `returns`, `approves` or `change` entry for a missing workflow as
-  retired, and reports every in-flow stage, step and outcome without words. Every problem is a
+  retired, and reports every in-flow stage, step, outcome and ask option without words. Every problem is a
   typed error (`kind`): the console shows them all and draws what is left, and the check exits 1
   on any. The progress declarations are checked too: a workflow is a graph stage or retired, a
   retired workflow's `stage` is one of the graph's flow (else only that placement is dropped), a

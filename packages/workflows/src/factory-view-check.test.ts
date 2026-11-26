@@ -257,6 +257,19 @@ describe('what the graph has and the view gives no words is an error', () => {
     ).toEqual([]);
   });
 
+  test('an option an asks-settled arrow leaves on, with no label', () => {
+    const g = graph();
+    g.arrows.push({
+      ...arrow('check', 'x', 'make'),
+      from: { stage: `${PACK}:check`, settled: 'answered', option: 'redo' },
+    });
+    expect(problems(undefined, g)).toEqual(['unworded answers.check:redo']);
+    expect(problems(v => void (v.answers = { 'check:redo': { starts: 'x' } }), g)).toEqual([
+      'unworded answers.check:redo',
+    ]);
+    expect(problems(v => void (v.answers = { 'check:redo': { label: 'again' } }), g)).toEqual([]);
+  });
+
   test('a stage that is not in flow needs no words', () => {
     const g = graph();
     expect(g.stages.some(s => s.workflow === 'helper' && !s.inFlow)).toBe(true);

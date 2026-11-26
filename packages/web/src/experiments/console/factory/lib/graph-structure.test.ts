@@ -73,6 +73,7 @@ const view: StructureView = {
   ],
   runNames: { triage: 'o/p:triage', link: 'o/p:link', plan: 'o/p:plan' },
   outcomeLabels: {},
+  answerLabels: {},
 };
 
 /** The same view, with the file wording triage's `whole` exactly and link's outcomes by `link:*`. */
@@ -108,6 +109,17 @@ describe('the structure the pack graph gives', () => {
       { from: 'link', to: 'plan', label: 'linked' },
       { from: 'link', to: 'link', label: 'linked' },
     ]);
+  });
+
+  test("an answer arrow reads as the file's label for its option; an option with none reads as its id", () => {
+    const answered = (option: string): Arrow => ({
+      ...arrow('plan', 'triage'),
+      from: { stage: 'o/p:plan', settled: 'answered', option },
+    });
+    const asked = { ...graph, arrows: [answered('take-as-is'), answered('other')] } as PackGraph;
+    const [back] = mapArrows({ ...view, answerLabels: { 'plan:take-as-is': 'kept' } }, asked);
+    expect(back).toEqual({ from: 'plan', to: 'intake', label: 'kept, other' });
+    expect(back?.label).not.toContain('take-as-is');
   });
 
   test('where items go from a stage: its arrows into other stages, in the same words', () => {

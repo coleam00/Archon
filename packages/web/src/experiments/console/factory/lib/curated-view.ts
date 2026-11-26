@@ -68,6 +68,8 @@ export interface CuratedView {
   stageLabels: Record<string, string>;
   /** The file's short label for an outcome, by `stage:outcome` or `stage:*`, where it gives one. */
   outcomeLabels: Record<string, string>;
+  /** The file's short label for an ask option, by `stage:option`, where it gives one. */
+  answerLabels: Record<string, string>;
   /** Each graph stage's `workflow` name to its name in the graph's arrows (`owner/name:workflow`). */
   runNames: Record<string, string>;
 }
@@ -159,6 +161,11 @@ export function curatedView(view: FactoryView, graph: PackGraph): CuratedView {
     outcomeLabels: Object.fromEntries(
       Object.entries(view.outcomes ?? {}).flatMap(([key, outcome]) =>
         outcome.label === undefined ? [] : [[key, outcome.label]]
+      )
+    ),
+    answerLabels: Object.fromEntries(
+      Object.entries(view.answers ?? {}).flatMap(([key, answer]) =>
+        answer.label === undefined ? [] : [[key, answer.label]]
       )
     ),
     runNames: Object.fromEntries(graph.stages.map(stage => [stage.workflow, stage.name])),
