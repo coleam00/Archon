@@ -3,7 +3,10 @@
  * and title as the board prints them, the stage it is at, how long it has waited, the question
  * and the suggested option. A row is a disclosure: its chevron header opens Archon's own ask
  * section (`ItemAsksSection`) as the row's child, inside the row's frame and indented under it,
- * so the ask belongs visibly to the row that opened it and there is no second ask form. The
+ * so the ask belongs visibly to the row that opened it and there is no second ask form. A row
+ * whose asks were all answered here stays where it was, open as it was, showing Archon's answered
+ * line until it is dismissed; answered records last this session only, so after a reload the
+ * attention list alone decides the rows (#240). The
  * console's accent marks three things only (owner, 11/26): the suggested answer, the active
  * filter and the open row's marker; never green, which read as if the ask were already answered.
  * The install-wide Needs you page is separate.
@@ -22,6 +25,7 @@ import {
   itemAsksAnchor,
   ItemAsksSection,
   useItemAsks,
+  type AnsweredAsk,
   type ItemAsks,
 } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
@@ -39,8 +43,17 @@ import { K } from '../store/keys';
 
 interface Row {
   key: string;
+  /** Open asks not answered here this session. */
   asks: ItemAsk[];
+  /** The item's asks answered here this session. */
+  answered: AnsweredAsk[];
+  /** What the header describes: the newest open ask, else the newest answered one. */
   newest: ItemAsk;
+  /**
+   * The newest wait across open and answered asks, so a row sorts by the same age once answered.
+   * Rows of equal age have no fixed order between them.
+   */
+  sortMs: number;
 }
 
 /** The issue titles the board reads, as its hook returns them. */
@@ -54,19 +67,38 @@ interface FilterEntry {
   none: boolean;
 }
 
-/** One row an item, the item with the newest ask first. */
-function rowsOf(asks: readonly ItemAsk[]): Row[] {
+/**
+ * One row an item, open or answered here, the item with the newest ask first. An answered ask
+ * stays in the list until its refetch lands; it counts as answered, never as open.
+ */
+function rowsOf(open: readonly ItemAsk[], answered: readonly AnsweredAsk[]): Row[] {
   const rows = new Map<string, Row>();
-  for (const ask of asks) {
+  const rowOf = (ask: ItemAsk): Row => {
     const key = askGroupKey(ask);
-    const row = rows.get(key);
-    if (row === undefined) rows.set(key, { key, asks: [ask], newest: ask });
-    else {
-      row.asks.push(ask);
-      if (pausedMs(ask) > pausedMs(row.newest)) row.newest = ask;
+    let row = rows.get(key);
+    if (row === undefined) {
+      row = { key, asks: [], answered: [], newest: ask, sortMs: 0 };
+      rows.set(key, row);
     }
+    return row;
+  };
+  const answeredRefs = new Set(answered.map(record => record.ask.ref));
+  for (const ask of open) if (!answeredRefs.has(ask.ref)) rowOf(ask).asks.push(ask);
+  for (const record of answered) rowOf(record.ask).answered.push(record);
+  for (const row of rows.values()) {
+    const every = [...row.asks, ...row.answered.map(record => record.ask)];
+    row.sortMs = Math.max(...every.map(pausedMs));
+    row.newest =
+      newestOf(row.asks) ?? newestOf(row.answered.map(record => record.ask)) ?? row.newest;
   }
-  return [...rows.values()].sort((a, b) => pausedMs(b.newest) - pausedMs(a.newest));
+  return [...rows.values()].sort((a, b) => b.sortMs - a.sortMs);
+}
+
+function newestOf(asks: readonly ItemAsk[]): ItemAsk | undefined {
+  return asks.reduce<ItemAsk | undefined>(
+    (newest, ask) => (newest === undefined || pausedMs(ask) > pausedMs(newest) ? ask : newest),
+    undefined
+  );
 }
 
 function pausedMs(ask: ItemAsk): number {
@@ -135,7 +167,7 @@ function AskRowHeader({
   const recommendation = row.newest.recommendation;
   const recommended = row.newest.options.find(option => option.id === recommendation?.option);
   const stage = stageOf(read);
-  const total = row.asks.length;
+  const openAsks = row.asks.length;
   return (
     <button
       type="button"
@@ -165,12 +197,13 @@ function AskRowHeader({
               {relativeTime(row.newest.pausedAt)}
             </span>
           )}
-          {total > 1 ? (
-            <span className="text-console-11 text-warning">{String(total)} open asks</span>
+          {openAsks > 1 ? (
+            <span className="text-console-11 text-warning">{String(openAsks)} open asks</span>
           ) : null}
         </span>
         <span className="text-sm text-text-primary">{row.newest.message}</span>
-        {recommended === undefined ? null : (
+        {/* A suggestion on a row with nothing open would read as still pending. */}
+        {recommended === undefined || openAsks === 0 ? null : (
           <span data-suggested={recommended.id} className="text-console-12 text-accent-bright">
             Suggested: {recommended.label ?? humaniseId(recommended.id)}
           </span>
@@ -229,7 +262,7 @@ function AskRow({
           <ItemAsksSection
             {...itemAsks}
             asks={row.asks}
-            answered={itemAsks.answered.filter(record => askGroupKey(record.ask) === row.key)}
+            answered={row.answered}
             showProject={false}
           />
         </div>
@@ -369,14 +402,12 @@ export function ProjectNeedsYouPage(): ReactElement {
   const shown = (ask: ItemAsk): boolean =>
     wanted.length === 0 || wanted.some(value => matchesItemFilter(ask, value));
   const asks = itemAsks.asks.filter(shown);
-  const rows = rowsOf(asks);
+  const rows = rowsOf(
+    asks,
+    itemAsks.answered.filter(record => shown(record.ask))
+  );
   // Counted as a board card counts its "Needs you · N", so the link's N is this line's.
   const open = openAsksOf(itemAsks.asks, itemAsks.answered, wanted).length;
-  // Rows whose asks were all answered here stay until dismissed, as they do elsewhere.
-  const answeredOnly = itemAsks.answered.filter(
-    record =>
-      shown(record.ask) && !itemAsks.asks.some(ask => askGroupKey(ask) === askGroupKey(record.ask))
-  );
   const linked = location.hash.replace(/^#/, '');
   // A filtered link to an item with one ask is a link to that ask, so it opens.
   const openOnly = wanted.length > 0 && rows.length === 1 && rows[0]?.asks.length === 1;
@@ -384,7 +415,7 @@ export function ProjectNeedsYouPage(): ReactElement {
     filterEntry(value, { asks, boardReads, readOf, titles, read: attention !== undefined })
   );
   const reading = attention === undefined && error === undefined;
-  const empty = rows.length === 0 && answeredOnly.length === 0 && error === undefined;
+  const empty = rows.length === 0 && error === undefined;
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex flex-col gap-3 border-b border-border px-4 py-4 md:px-6">
@@ -421,9 +452,6 @@ export function ProjectNeedsYouPage(): ReactElement {
             ))}
           </ul>
         )}
-        {answeredOnly.length > 0 ? (
-          <ItemAsksSection {...itemAsks} asks={[]} answered={answeredOnly} showProject={false} />
-        ) : null}
       </div>
     </section>
   );

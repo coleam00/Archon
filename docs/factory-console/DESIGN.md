@@ -47,7 +47,9 @@ http://127.0.0.1:3195/console). Rules:
   marker on its left edge. The recommendation reads "Suggested: <label>" in the console's
   accent, never green, because a green line read as if the ask were already answered. While the
   asks are still read the body shows skeleton rows and never says nothing needs you (#222).
-  Answering stays in Archon's ask section.
+  Answering stays in Archon's ask section. A row whose asks were all answered keeps its `#N <title>`
+  header and its open state, with Archon's answered line inside its frame, until Dismiss; there is
+  no separate answered block, and after a reload only open asks show.
 - **Keep, all required:** the stage modal ("What this stage does" curated cards, "Items here
   now", "The real workflow" step list); rich board cards; work orders "N of N merged" with split
   parents resolved when their pieces merged and run-less work orders listed; the Merged column
