@@ -590,6 +590,46 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test('checks the pack manifest above the directory it runs in', async () => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
+    await writeFile(
+      join(validationCwd, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'factory',
+        description: 'Factory workflows',
+        entrypoints: { plan: 'plan/plan.yaml' },
+      })
+    );
+    await mkdir(join(validationCwd, '.pack'));
+    await writeFile(
+      join(validationCwd, '.pack', 'pack.yaml'),
+      'bindings:\n  triage:\n    workflow: triage\n    resource: triage\n    overlap: queue\n'
+    );
+    await mkdir(join(validationCwd, 'plan'));
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(
+        await validateWorkflowsCommand(
+          validationCwd,
+          undefined,
+          true,
+          process.env,
+          join(validationCwd, 'plan')
+        )
+      ).toBe(1);
+      const { results } = JSON.parse(String(write.mock.calls[0]?.[0])) as {
+        results: validator.WorkflowValidationResult[];
+      };
+      expect(results.find(r => r.workflowName === 'archon-plugin.json')?.issues).toMatchObject([
+        { field: 'manifest_entrypoints' },
+      ]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('loose output schema warns and exits successfully', async () => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [

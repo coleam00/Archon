@@ -49,7 +49,8 @@ import {
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
 import { readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { canonicalizeProjectPath } from '@archon/paths';
 
 /**
  * Build ValidationConfig from the repo's .archon/config.yaml
@@ -108,9 +109,10 @@ function formatWorkflowResult(result: WorkflowValidationResult): string {
  * Validate all workflows or a specific workflow.
  * Returns exit code: 0 = all valid, 1 = errors found.
  *
- * `pluginRoot` is the directory whose `archon-plugin.json` is checked: the directory
- * the operator ran from, before `cwd` was resolved to the project root, so a plugin in
- * a repository subdirectory is checked too.
+ * `pluginRoot` is the directory the operator ran from, before `cwd` was resolved to the
+ * project root. The manifest checked is the nearest `archon-plugin.json` at or above it,
+ * within the project, so a plugin in a repository subdirectory is checked, and so is a pack
+ * validated from one of its workflow folders.
  *
  * `source` is an explicit `--workflow-source`. It is read live, as a fresh
  * `workflow run --workflow-source` discovers it: workflows, commands, scripts, the manifest
@@ -146,7 +148,7 @@ export async function validateWorkflowsCommand(
     }
   }
   // The manifest is not a workflow, so the name filter does not apply to it.
-  filteredResults.push(...(await manifestResults(source ?? pluginRoot)));
+  filteredResults.push(...(await manifestResults(source ?? (await manifestDir(pluginRoot, cwd)))));
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -297,13 +299,33 @@ function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, Validat
 }
 
 /**
+ * The nearest directory at or above `from` that holds `archon-plugin.json`, stopping at
+ * `projectRoot`; `from` itself when none does or when it lies outside the project (`--cwd`
+ * pointing elsewhere). Both are canonicalized: the project root comes from git resolution,
+ * the invocation directory may not (`/tmp` against `/private/tmp`).
+ */
+async function manifestDir(from: string, projectRoot: string): Promise<string> {
+  const start = await canonicalizeProjectPath(from);
+  const root = await canonicalizeProjectPath(projectRoot);
+  const below = relative(root, start);
+  if (below === '..' || below.startsWith(`..${sep}`) || isAbsolute(below)) return from;
+  for (let dir = start; ; dir = dirname(dir)) {
+    const present = await stat(join(dir, PLUGIN_MANIFEST_FILE)).then(
+      () => true,
+      () => false
+    );
+    if (present) return dir;
+    if (dir === root) return from;
+  }
+}
+
+/**
  * The plugin root's own manifest. Keys this Archon ignores are warnings: readers strip
  * them so a newer Archon can add a field, and the author still sees a typo. A declared
  * skill folder without a `SKILL.md` is an error, because install refuses it. So is a
  * binding in `.pack/pack.yaml` that names a workflow the manifest does not list as an
- * entrypoint: an installed copy dispatches only entrypoints, so `pack bindings` refuses it
- * there, while a folder source sees every workflow and would accept it. Schema failures
- * are discovery load errors and are not repeated here.
+ * entrypoint: `pack bindings` refuses it, on an installed copy and on the pack's own
+ * folder alike. Schema failures are discovery load errors and are not repeated here.
  */
 async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]> {
   let raw: unknown;

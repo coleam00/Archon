@@ -22,6 +22,8 @@ export interface SourcePackFolder {
   readonly name: string;
   /** The folder itself, holding `archon-plugin.json`. */
   readonly dir: string;
+  /** The manifest's entrypoint names: the only workflows an installed copy dispatches. */
+  readonly entrypoints: readonly string[];
 }
 
 /**
@@ -75,12 +77,12 @@ export async function sourcePackFolder(dir: string): Promise<SourcePackFolder | 
     return null;
   const parsed = workflowPackManifestSchema.safeParse(raw);
   if (!parsed.success) throw new Error(`Invalid ${file}: ${describeIssues(parsed.error)}`);
-  const { name } = parsed.data;
+  const { name, entrypoints } = parsed.data;
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
   const nested = join(dir, workflowFolder, name);
   if (!isReservedScopeDirName(name) && (await isDirectory(nested)))
     throw new AmbiguousSourcePackError(name, file, nested);
-  return { name, dir };
+  return { name, dir, entrypoints: Object.keys(entrypoints) };
 }
 
 /**

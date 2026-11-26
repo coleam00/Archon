@@ -59,7 +59,7 @@ import {
   packWorkflowName,
   packWorkflows,
 } from '@archon/workflows/pack-graph';
-import { liveSourceRoots } from '@archon/workflows/workflow-source';
+import { liveSourceRoots, loadablePackFolder } from '@archon/workflows/workflow-source';
 import { writeJsonLine } from '../utils/stdout';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import type {
@@ -423,11 +423,23 @@ async function findPack(
         ...copyLines(packKey, copies, cwd, explicitSource),
       ].join('\n')
     );
+  // Discovery reads a pack folder's support workflows as dispatchable, while an installed
+  // copy dispatches only its manifest entrypoints. A binding generated from the folder
+  // resolves as it will once installed, the rule `archon validate workflows` checks.
+  const project = copies.loaded.find(copy => copy.source === 'project');
+  const folder = project?.dir ? await loadablePackFolder(project.dir) : null;
+  const dispatchable =
+    folder?.name === packKey
+      ? workflows.filter(
+          ({ workflow }) =>
+            workflow.pack?.source !== 'project' || folder.entrypoints.includes(workflow.name)
+        )
+      : workflows;
   return {
     key: packKey,
     copies,
     bindings,
-    workflowNames: workflows.map(entry => entry.workflow.name),
+    workflowNames: dispatchable.map(entry => entry.workflow.name),
   };
 }
 
