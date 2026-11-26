@@ -1,7 +1,8 @@
 /**
  * Every item of a project and its work orders' own reads: the one read the Board's columns,
- * work orders, Merged column, Table and Set aside strip and the Overview's numbers all count
- * from. One cache key, so opening one page after the other reads once.
+ * decision strip, work orders, Merged column, Table and Set aside strip, the Overview's
+ * numbers and the Needs you tab all count from. One cache key, so opening one page after
+ * another reads once, and the server places the project's items once per page load.
  */
 import type { ItemRead } from '../skills/items';
 import { useEntity } from '../store/cache';

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { readPackGraph } from './pack-graph';
 
 const track = trackTempRoots();
@@ -132,6 +133,25 @@ describe('readPackGraph', () => {
       ['policy', 'docs/missing.md'],
       ['label', 'hello'],
     ]);
+  });
+
+  test('discovers through the discover it is given, from the workflow source', async () => {
+    const { project, source, deps } = await fixture('source');
+    const roots: string[] = [];
+    const graph = await readPackGraph(
+      project,
+      'chain',
+      {
+        ...deps,
+        discover: root => {
+          roots.push(root);
+          return discoverWorkflowsWithConfig(root, deps.loadConfig, deps.providers);
+        },
+      },
+      { workflowSource: source }
+    );
+    expect(roots).toEqual([source]);
+    expect(graph.stages.map(s => s.name).sort()).toEqual(['chain-a', 'chain-b']);
   });
 
   test('a pack in a separate workflow source is read from there, with the project arrows', async () => {

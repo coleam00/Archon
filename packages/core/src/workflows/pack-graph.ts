@@ -29,6 +29,7 @@ import {
   type InstalledArrow,
   type PackGraph,
 } from '@archon/workflows/pack-graph';
+import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { asksSettledBindingCheck } from './asks-settled';
@@ -50,6 +51,11 @@ type GraphDeps = BindingDefinitionsDeps &
     slotOccupancy?: (
       resources: readonly string[]
     ) => Promise<ReadonlyMap<string, { capacity: number; held: number }>>;
+    /**
+     * Live discovery from a root. A server passes `createDiscoveryCache`'s, which keeps the
+     * result while the files discovery reads are unchanged; without it every read discovers.
+     */
+    discover?: (root: string) => Promise<WorkflowLoadResult>;
   };
 
 /** Each resource the registered arrows start work on, with its stages, limit and slots held. */
@@ -198,7 +204,8 @@ export async function readPackGraph(
   options: { workflowSource?: string } = {}
 ): Promise<PackGraph> {
   const source = options.workflowSource ?? cwd;
-  const discovered = await discoverWorkflowsWithConfig(source, deps.loadConfig, deps.providers);
+  const discovered = await (deps.discover?.(source) ??
+    discoverWorkflowsWithConfig(source, deps.loadConfig, deps.providers));
   const workflows = packWorkflows(discovered, packKey, source);
   const stages = workflows.map(entry => entry.workflow);
   const declared = nearestPackBindings(workflows);

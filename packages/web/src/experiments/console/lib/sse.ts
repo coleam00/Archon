@@ -26,6 +26,8 @@ import { createThrottledInvalidator } from './throttled-invalidator';
 
 interface ParsedEvent {
   type?: string;
+  /** On an attention stream line: whether it asks for someone (`attentionWatchReader`). */
+  needs?: string;
   runId?: string;
   locked?: boolean;
   /** On a `conversation_lock` that a starting reply emits: the turn a Stop names. */
@@ -116,14 +118,23 @@ export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
  * closes. An ask a completed run left changes no run, so the dashboard stream never tells
  * of it. Lines are only a cue: the list stays the one source of what is open.
  *
+ * A stream opens with the open set, then `ready`. That replay is what the page's own first
+ * reads already show, so it refetches nothing: refetching it reread the attention list and
+ * every board window once more on each page load. A change landing between a page's first
+ * read and the stream's open set is the one thing this misses, until the next line.
+ * After `ready`, an item that opens and needs someone, or closes, refetches. The server sends
+ * the open set and `ready` on every connect, EventSource's own reconnects included, so each
+ * connect starts a replay again; changes past the resumed cursor come after its `ready`.
+ *
  * On `cursor_invalid` the server ends the stream, and a plain reconnect would resend the
- * same `Last-Event-ID`, so the stream is opened afresh instead.
+ * same `Last-Event-ID`, so the stream is opened afresh instead, with one refetch for what was
+ * missed.
  */
 export function useAttentionStreamSSE(): void {
   useEffect(() => {
     let es: EventSource;
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
-    // The open set arrives as a burst of `attention` lines; one refetch covers it.
+    // Several items opening or closing at once send a burst of lines; one refetch covers it.
     const scheduleRefetch = (): void => {
       if (flushTimer !== null) return;
       flushTimer = setTimeout(() => {
@@ -136,14 +147,23 @@ export function useAttentionStreamSSE(): void {
     };
     const open = (): void => {
       es = new EventSource(`${SSE_BASE_URL}${ATTENTION_SSE_PATH}`);
+      let replaying = true;
+      es.onopen = (): void => {
+        replaying = true;
+      };
       es.onmessage = (e: MessageEvent<string>): void => {
         const line = parse(e.data);
-        if (line?.type === 'attention' || line?.type === 'resolved') scheduleRefetch();
+        if (line?.type === 'ready') replaying = false;
         else if (line?.type === 'error') {
           es.close();
           scheduleRefetch();
           open();
-        }
+        } else if (replaying) return;
+        else if (
+          (line?.type === 'attention' && line.needs !== 'nothing') ||
+          line?.type === 'resolved'
+        )
+          scheduleRefetch();
       };
       es.onerror = (): void => {
         if (es.readyState === EventSource.CLOSED) {

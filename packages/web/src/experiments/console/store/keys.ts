@@ -19,13 +19,9 @@ export const K = {
   runsAttention: 'runs:attention' as const,
   /** How many things wait on the operator, for the rail; only the attention stream refetches it. */
   needsYouCount: 'needs-you:count' as const,
-  /** A project's open items, as the board lists them. Run and attention events refetch `board:*`. */
-  board: (projectId: string): string => `board:${projectId}`,
-  /** The newest failed or stopped items of a project, which need a decision. */
-  boardDecide: (projectId: string): string => `board:${projectId}:decide`,
   /**
-   * Every item of a project, which the board's work orders, Merged column and Table and the
-   * overview's numbers count from; under `board:` so the same events refetch it.
+   * Every item of a project: the board's columns, decision strip, work orders, Merged column and
+   * Table and the overview's numbers all read it. Run and attention events refetch `board:*`.
    */
   boardOrders: (projectId: string): string => `board:${projectId}:orders`,
   /**

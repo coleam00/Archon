@@ -2,7 +2,9 @@
  * `GET /api/forge/subjects`: what the project's forge says of its issues and of the changes runs
  * delivered, through Archon's forge seam (`@archon/adapters/forge-host`). An item has no title
  * column and a merge on the forge is no run event, so a reader that shows an issue's title or
- * whether a change merged asks here. The browser never calls the forge. Read-only.
+ * whether a change merged asks here. The browser never calls the forge. It changes nothing on
+ * the forge or in the engine; its answers are also kept in a display cache file under the
+ * server's home (`forge-answer-file.ts`), so a restarted server does not ask again per card.
  */
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import {
@@ -21,6 +23,7 @@ import {
   jsonError,
   openApiRouteRegistrar,
 } from './api-route-kit';
+import type { ForgeAnswerFile, Kept } from './forge-answer-file';
 
 /** The most issues, and the most changes, one request asks about. */
 const SUBJECTS_MAX = 100;
@@ -81,7 +84,7 @@ const getForgeSubjectsRoute = createRoute({
   tags: ['Workflows'],
   summary: "What the project's forge says of some issues and delivered changes",
   description:
-    "Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change whose item recorded a merge (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server (a change that has not merged for 60 s, an issue for 10 min, a stale answer served while it refreshes); a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.",
+    "Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change whose item recorded a merge (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.",
   request: { query: forgeSubjectsQuerySchema },
   responses: {
     200: {
@@ -123,6 +126,17 @@ export interface ForgeRouteDeps {
   /** How long one read waits on a lookup no request has made yet; tests shorten it. */
   waitMs?: number;
   now?: () => number;
+  /**
+   * The file the answers are kept in across restarts (`forgeAnswerFile`); without it they
+   * live only as long as the process.
+   */
+  answerFile?: ForgeAnswerFile;
+}
+
+/** Where a cache keeps its answers, and who hears of a new one. */
+interface Keeping<T> {
+  kept?: Map<string, Kept<T>>;
+  onKept?: () => void;
 }
 
 /**
@@ -131,12 +145,12 @@ export interface ForgeRouteDeps {
  */
 function keyedOnce<T, A extends unknown[]>(
   load: (key: string, ...args: A) => Promise<T>,
-  now: () => number
+  now: () => number,
+  { kept = new Map<string, Kept<T>>(), onKept }: Keeping<T> = {}
 ): {
   known: (key: string) => { value: T; at: number } | undefined;
   refresh: (key: string, ...args: A) => Promise<T>;
 } {
-  const kept = new Map<string, { value: T; at: number }>();
   const running = new Map<string, Promise<T>>();
   return {
     known: key => kept.get(key),
@@ -146,6 +160,7 @@ function keyedOnce<T, A extends unknown[]>(
       const started = load(key, ...args)
         .then(value => {
           kept.set(key, { value, at: now() });
+          onKept?.();
           return value;
         })
         .finally(() => running.delete(key));
@@ -173,8 +188,19 @@ async function within<T, P>(promise: Promise<T>, waitMs: number, pending: P): Pr
 
 /** How long a change that has not merged keeps its answer. A merge does not come undone. */
 const CHANGE_TTL_MS = 60_000;
-/** How long an issue's answer is kept before a read refreshes it. */
-const ISSUE_TTL_MS = 10 * 60_000;
+/**
+ * How long an issue's answer is kept before a read refreshes it. Cards show only an issue's
+ * title, which rarely changes, and refreshing means one forge plugin process per issue: with
+ * a ten-minute TTL, a page load after a pause refreshed every titleless card and slowed the server
+ * for about a minute.
+ */
+const ISSUE_TTL_MS = 6 * 3600_000;
+/**
+ * How long a failed issue lookup is kept: long enough that a read does not ask again on every
+ * page load, short enough that a forge blip (an auth lapse, a rate limit) does not leave a card
+ * titleless for `ISSUE_TTL_MS`.
+ */
+const ISSUE_FAILURE_TTL_MS = 10 * 60_000;
 /**
  * A forge read retries temporary failures for about 7 s; a read answers before that and
  * the lookup finishes into the cache for the next one.
@@ -182,6 +208,28 @@ const ISSUE_TTL_MS = 10 * 60_000;
 const WAIT_MS = 4_000;
 /** The most issue lookups in flight at once, so a cold read of every item does not flood the forge. */
 const ISSUE_LOOKUPS = 8;
+/**
+ * The most refreshes of a stale issue in flight at once. A stale answer is already shown, and
+ * a restarted server finds every answer its file kept stale: each lookup runs a forge plugin
+ * process, and eight at a time slowed every other read of the first page load.
+ */
+const ISSUE_REFRESHES = 2;
+
+/** `work`, with at most `most` of the works given to one limiter running at once. */
+function limiter(most: number): <T>(work: () => Promise<T>) => Promise<T> {
+  let running = 0;
+  const queue: (() => void)[] = [];
+  return async work => {
+    if (running >= most) await new Promise<void>(resolve => queue.push(resolve));
+    running++;
+    try {
+      return await work();
+    } finally {
+      running--;
+      queue.shift()?.();
+    }
+  };
+}
 
 /** A change to ask about: a URL with its run's audit rows, or the pull request on a run's item's branches. */
 type Change =
@@ -202,7 +250,8 @@ type ShownAnswer = Omit<ChangeAnswer, 'run'>;
  * number is the forge's, else the one the run's own audit rows name.
  */
 export function changeStateCache(
-  deps: Pick<ForgeRouteDeps, 'changeMergeState' | 'waitMs' | 'now'>
+  deps: Pick<ForgeRouteDeps, 'changeMergeState' | 'waitMs' | 'now'>,
+  keeping: Keeping<ChangeMergeState> = {}
 ): (
   change: Change,
   branches: () => Promise<readonly string[]>,
@@ -238,7 +287,8 @@ export function changeStateCache(
           return answer;
         });
     },
-    now
+    now,
+    keeping
   );
   const lookup = (
     change: Change,
@@ -294,35 +344,28 @@ type IssueAnswer = z.infer<typeof forgeSubjectsResponseSchema>['issues'][number]
 
 /**
  * The forge's answer for each issue, shared by every request: kept `ISSUE_TTL_MS` and served
- * stale while it refreshes, a failure kept like an answer (an issue that cannot be read is
- * not asked again on every read). At most `ISSUE_LOOKUPS` lookups run at once. A cold lookup
- * slower than the wait answers `pending` for that request only.
+ * stale while it refreshes. A failure is kept `ISSUE_FAILURE_TTL_MS`, so an issue that cannot
+ * be read is not asked again on every read but is asked again soon. At most `ISSUE_LOOKUPS` first lookups and `ISSUE_REFRESHES`
+ * refreshes run at once. A cold lookup slower than the wait answers `pending` for that request
+ * only.
  */
 function issueCache(
-  deps: Pick<ForgeRouteDeps, 'viewWorkItem' | 'waitMs' | 'now'>
+  deps: Pick<ForgeRouteDeps, 'viewWorkItem' | 'waitMs' | 'now'>,
+  keeping: Keeping<WorkItemAnswer> = {}
 ): (number: number, remote: string | null) => Promise<IssueAnswer> {
   const now = deps.now ?? Date.now;
   const waitMs = deps.waitMs ?? WAIT_MS;
-  let running = 0;
-  const queue: (() => void)[] = [];
-  const limited = async <T>(work: () => Promise<T>): Promise<T> => {
-    if (running >= ISSUE_LOOKUPS) await new Promise<void>(resolve => queue.push(resolve));
-    running++;
-    try {
-      return await work();
-    } finally {
-      running--;
-      queue.shift()?.();
-    }
-  };
+  const lookups = limiter(ISSUE_LOOKUPS);
+  const refreshes = limiter(ISSUE_REFRESHES);
   const answers = keyedOnce(
-    (key: string, number: number, remote: string | null): Promise<WorkItemAnswer> =>
-      limited(() => deps.viewWorkItem(number, remote)).then(answer => {
+    (key: string, number: number, remote: string | null, stale: boolean): Promise<WorkItemAnswer> =>
+      (stale ? refreshes : lookups)(() => deps.viewWorkItem(number, remote)).then(answer => {
         if ('unknown' in answer)
           getLog().warn({ issue: key, reason: answer.unknown }, 'forge_issue_unknown');
         return answer;
       }),
-    now
+    now,
+    keeping
   );
   const shown = (answer: WorkItemAnswer): IssueAnswer =>
     'unknown' in answer
@@ -332,11 +375,12 @@ function issueCache(
     const key = `${remote ?? ''}#${String(number)}`;
     const known = answers.known(key);
     if (known !== undefined) {
-      if (now() - known.at >= ISSUE_TTL_MS) void answers.refresh(key, number, remote);
+      const life = 'unknown' in known.value ? ISSUE_FAILURE_TTL_MS : ISSUE_TTL_MS;
+      if (now() - known.at >= life) void answers.refresh(key, number, remote, true);
       return shown(known.value);
     }
     const pending = { number, title: null, state: null, url: null, pending: true } as const;
-    const answer = await within(answers.refresh(key, number, remote), waitMs, pending);
+    const answer = await within(answers.refresh(key, number, remote, false), waitMs, pending);
     return 'pending' in answer ? answer : shown(answer);
   };
 }
@@ -380,8 +424,12 @@ const listOf = (value: string | string[] | undefined): string[] =>
 
 export function registerForgeRoutes(app: OpenAPIHono, deps: ForgeRouteDeps): void {
   const register = openApiRouteRegistrar(app);
-  const changeStates = changeStateCache(deps);
-  const issues = issueCache(deps);
+  const file = deps.answerFile ?? null;
+  const changeStates = changeStateCache(
+    deps,
+    file === null ? {} : { kept: file.changes, onKept: file.changed }
+  );
+  const issues = issueCache(deps, file === null ? {} : { kept: file.issues, onKept: file.changed });
 
   /** The answer for one delivered change; null when its run is gone, or it has no change. */
   const answerFor = async (
@@ -419,6 +467,8 @@ export function registerForgeRoutes(app: OpenAPIHono, deps: ForgeRouteDeps): voi
     if (changeRuns.length !== changeUrls.length)
       return apiError(c, 400, 'Every changeRun needs the changeUrl at the same position');
     try {
+      // Read once, on the first request: registering the route reads nothing.
+      await file?.load();
       const remote = await deps.remote(query.codebaseId);
       if (remote === undefined) return apiError(c, 404, 'Codebase not found');
       const [issueAnswers, changes] = await Promise.all([

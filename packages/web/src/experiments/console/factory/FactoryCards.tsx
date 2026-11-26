@@ -39,9 +39,9 @@ type PackReadResult = (CardPack & { viewFailed: boolean }) | 'error';
 
 /**
  * One pack's graph and factory view, reported to the provider. The graph is read through the
- * board's own `K.packGraph` entry, so the stage columns and the cards share one read, and the
- * view (whose read computes the graph again on the server) is read only once the graph has
- * answered, so it never competes with the read the columns wait on.
+ * board's own `K.packGraph` entry, so the stage columns and the cards share one read. The view
+ * is asked for at the same time: the server answers both from one graph read
+ * (`shareWhileRunning`, over its kept discovery), so neither waits on the other.
  */
 function PackRead({
   projectId,
@@ -53,14 +53,11 @@ function PackRead({
   onRead: (pack: string, result: PackReadResult) => void;
 }): null {
   const graph = useEntity(K.packGraph(projectId, pack), () => getPackGraph(projectId, pack));
+  const view = useEntity(K.packView(projectId, pack), () => getPackViewRead(projectId, pack));
   const stages = graph.data?.stages;
-  const view = useEntity(
-    stages === undefined ? 'pack-view:none' : K.packView(projectId, pack),
-    () => (stages === undefined ? Promise.resolve(null) : getPackViewRead(projectId, pack))
-  );
   const failed = graph.error !== undefined;
-  const viewFailed = stages !== undefined && view.error !== undefined;
-  const viewRead = stages !== undefined && view.data !== undefined;
+  const viewFailed = view.error !== undefined;
+  const viewRead = view.data !== undefined;
   // The map reads the whole view read under this key; a card reads only its view.
   const viewData = view.data?.view ?? null;
   useEffect(() => {
@@ -197,8 +194,7 @@ function useForgeRead(
 /**
  * The issue titles the forge names for `reads` whose title column is empty: what a card prints
  * as its title, and what the board's filter searches (`itemMatches`). `projectId` null reads
- * nothing: a forge lookup holds the server (it asks the change host for each issue), so the
- * cards ask only once the board's pack graph, which the stage columns wait on, has answered.
+ * nothing. Titles need only the item reads, so cards ask at once, beside the pack reads.
  */
 export function useForgeTitles(
   projectId: string | null,
@@ -266,8 +262,9 @@ export function useCardList(reads: readonly ItemRead[]): (read: ItemRead) => Car
   const cards = useFactoryCards();
   const projectId = cards?.projectId ?? null;
   const packs = cards?.packs ?? new Map<string, CardPack>();
-  // After the packs are read, so the forge never competes with the columns' graph read.
-  const issues = useForgeTitles(cards?.packs == null ? null : projectId, reads);
+  const issues = useForgeTitles(projectId, reads);
+  // Records wait for the packs: which runs a card reads, and which result keys, come from
+  // its pack's graph and view (`runsToRead`, `resultKeys`).
   const { records, asked } = useListRecords(
     cards?.packs == null ? null : projectId,
     recordsAsk(packs, reads)

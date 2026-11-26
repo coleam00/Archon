@@ -102,7 +102,6 @@ const graph: PackGraph = {
 };
 
 /** No item in any state. */
-const NONE = { running: 0, waiting: 0, queued: 0, failed: 0, stopped: 0, done: 0, resting: 0 };
 
 const ask: ItemAsk = {
   kind: 'attention',
@@ -135,7 +134,7 @@ const keysIn = (scope: ParentNode): string[] =>
 
 test('each open item is under the stage it stands at, in the order the pack graph gives', () => {
   set(K.projects, [project('web', ['flow'])]);
-  set(K.board('web'), [
+  set(K.boardOrders('web'), [
     // Part of a work order, which is not itself open.
     {
       ...item('issue-1', 'check', 'running'),
@@ -162,14 +161,10 @@ test('each open item is under the stage it stands at, in the order the pack grap
     // A stage the pack no longer has and a run of no pack: on no column (set aside, below).
     item('issue-4', 'retired', 'queued'),
     item('issue-5', null, 'running'),
+    // A failed item, which stands on no column: the decision strip shows it.
+    item('issue-3', 'check', 'failed'),
   ]);
   set(K.packGraph('web', 'flow'), graph);
-  // A failed item is read apart from the ones on a stage.
-  set(K.boardDecide('web'), {
-    items: [item('issue-3', 'check', 'failed')],
-    next: null,
-    totals: { ...NONE, failed: 1 },
-  });
   set(K.runsAttention, {
     runs: [],
     ownerLost: [],
@@ -219,9 +214,6 @@ test('each open item is under the stage it stands at, in the order the pack grap
   expect(card?.querySelector('a')?.getAttribute('href')).toBe('/console/p/web/r/run-issue-3');
   // The card's chip is its state, a label; that it waits on the operator is its button.
   expect(page.querySelector('[data-item="issue-2"] [data-chip]')?.textContent).toBe('Waiting');
-  // Until every item is read, the work orders are a skeleton: no total that may be wrong.
-  expect(page.querySelector('[data-work-orders-loading]')).not.toBeNull();
-  expect(page.querySelector('[data-work-order]')).toBeNull();
   // The Board has no Needs you section (that is its own tab); the item that has an ask links to
   // that tab, filtered to it, from one button in its card's actions.
   expect(page.querySelector('[data-needs-you]')).toBeNull();
@@ -257,9 +249,7 @@ test('a work order with no run of its own is listed from its members, open or me
     ...older,
     runs: older.runs.map(run => ({ ...run, workflow: 'acme/flow:build', pack: null })),
   };
-  set(K.board('web'), [build]);
   set(K.packGraph('web', 'flow'), graph);
-  set(K.boardDecide('web'), { items: [], next: null, totals: NONE });
   const merged = (key: string, order: string): ItemRead => ({
     ...item(key, 'check', 'done'),
     links: [partOf(order, null)],
@@ -390,9 +380,7 @@ const untitled = (key: string, stage: string): ItemRead => {
 /** What a mounted board reads apart from its pack graph and view, seeded so nothing is fetched. */
 function seedBoard(reads: ItemRead[]): void {
   set(K.projects, [project('web', ['flow'])]);
-  set(K.board('web'), reads);
   set(K.boardOrders('web'), reads);
-  set(K.boardDecide('web'), { items: [], next: null, totals: NONE });
   set(K.runsAttention, {
     runs: [],
     ownerLost: [],
@@ -451,6 +439,53 @@ async function mountBoard(answer: (url: string) => Promise<Response>) {
 
 const nothingFetched = (url: string): Promise<Response> =>
   Promise.reject(new Error(`unexpected fetch ${url}`));
+
+test("the decision strip shows the every-item read's failed and stopped items in its order, six at a time", async () => {
+  // Newest first, as the server orders every read; open and done items between them.
+  const reads = [
+    ...[1, 2, 3, 4].map(n =>
+      item(`issue-${String(n)}`, 'check', n % 2 === 0 ? 'stopped' : 'failed')
+    ),
+    item('issue-20', 'plan', 'running'),
+    ...[5, 6, 7, 8].map(n => item(`issue-${String(n)}`, 'check', 'failed')),
+    item('issue-21', 'check', 'done'),
+  ];
+  seedBoard(reads);
+  set(K.packGraph('web', 'flow'), graph);
+  // Showing more reads nothing: every fetch fails the test's expectations below.
+  const board = await mountBoard(nothingFetched);
+  try {
+    const strip = () => board.container.querySelector('[data-needs-decision]');
+    expect(strip()?.querySelector('[data-decide-total]')?.textContent).toBe('8');
+    expect(keysIn(strip() as unknown as ParentNode)).toEqual([
+      'issue-1',
+      'issue-2',
+      'issue-3',
+      'issue-4',
+      'issue-5',
+      'issue-6',
+    ]);
+    const more = [...(strip()?.querySelectorAll('button') ?? [])].find(button =>
+      button.textContent?.startsWith('Show more')
+    );
+    expect(more?.textContent).toBe('Show more of 8');
+    await board.act(async () => {
+      (more as unknown as HTMLElement).click();
+    });
+    expect(keysIn(strip() as unknown as ParentNode)).toEqual(
+      [1, 2, 3, 4, 5, 6, 7, 8].map(n => `issue-${String(n)}`)
+    );
+    const fewer = [...(strip()?.querySelectorAll('button') ?? [])].find(
+      button => button.textContent === 'Show fewer'
+    );
+    await board.act(async () => {
+      (fewer as unknown as HTMLElement).click();
+    });
+    expect(keysIn(strip() as unknown as ParentNode)).toHaveLength(6);
+  } finally {
+    await board.unmount();
+  }
+});
 
 /** An item standing on its only run, of the retired `deliver`, which recorded no pack workflow. */
 function delivered(key: string): ItemRead {
@@ -606,17 +641,11 @@ test('the board filter finds a card by the issue title and the key the card prin
   }
 });
 
-test("the stage columns' graph read goes alone: the cards share it, then read the view and the forge", async () => {
+test('the graph, the view and the titles are asked for at once; the columns draw when the graph answers', async () => {
   // Untitled issue-keyed items, whose cards ask the forge for their titles: one in a column,
-  // which waits on the graph, and one in the decision strip, which draws at once.
-  const reads = [untitled('issue-2', 'plan')];
-  seedBoard(reads);
+  // and one in the decision strip.
   const failed = item('issue-3', 'check', 'failed');
-  set(K.boardDecide('web'), {
-    items: [{ ...failed, item: { ...failed.item, title: null } }],
-    next: null,
-    totals: { ...NONE, failed: 1 },
-  });
+  seedBoard([untitled('issue-2', 'plan'), { ...failed, item: { ...failed.item, title: null } }]);
   const asked: string[] = [];
   let answerGraph: () => void = () => undefined;
   const json = (body: unknown): Response =>
@@ -635,30 +664,30 @@ test("the stage columns' graph read goes alone: the cards share it, then read th
     return nothingFetched(url);
   });
   try {
-    // While the graph read is out: one request for it, and none for the view or the forge.
-    expect(asked).toEqual(['/api/packs/flow/graph']);
+    // While the graph read is out, nothing waits on it: the server answers the view from the
+    // same graph read, and the strip's card asks for its title, which needs only its item read.
+    expect([...asked].sort()).toEqual([
+      '/api/forge/subjects',
+      '/api/packs/flow/graph',
+      '/api/packs/flow/view',
+    ]);
+    expect(board.container.querySelectorAll('[data-stage]').length).toBe(0);
     await board.act(async () => {
       answerGraph();
       await new Promise(resolve => setTimeout(resolve, 10));
     });
+    // The columns draw, and the column's card asks for its title.
     expect(board.container.querySelectorAll('[data-stage]').length).toBeGreaterThan(0);
-    // Then the view, and the forge for each list's titles (the column's and the strip's).
-    expect(asked.slice(0, 2)).toEqual(['/api/packs/flow/graph', '/api/packs/flow/view']);
-    expect(asked.slice(2)).toEqual(['/api/forge/subjects', '/api/forge/subjects']);
+    expect(asked.slice(3)).toEqual(['/api/forge/subjects']);
   } finally {
     await board.unmount();
   }
 });
 
-test('while the project is still read, its packs are unknown and no card asks the forge', async () => {
+test('while the project is still read, cards ask the forge for titles but read no run records', async () => {
   const failed = item('issue-3', 'check', 'failed');
-  seedBoard([]);
+  seedBoard([{ ...failed, item: { ...failed.item, title: null } }]);
   invalidate('projects');
-  set(K.boardDecide('web'), {
-    items: [{ ...failed, item: { ...failed.item, title: null } }],
-    next: null,
-    totals: { ...NONE, failed: 1 },
-  });
   const asked: string[] = [];
   // Every read the board makes stays out, the project's included.
   const board = await mountBoard(url => {
@@ -667,7 +696,9 @@ test('while the project is still read, its packs are unknown and no card asks th
   });
   try {
     expect(board.container.querySelector('[data-item="issue-3"]')).not.toBeNull();
-    expect(asked.filter(url => url.includes('/forge/'))).toEqual([]);
+    expect(asked.filter(url => url.includes('/forge/'))).not.toEqual([]);
+    // Which runs a card reads comes from its pack, which is unknown until the project is read.
+    expect(asked.filter(url => url.includes('/runs/records'))).toEqual([]);
   } finally {
     await board.unmount();
   }
@@ -702,8 +733,6 @@ test('the Overview tiles and the Board count the same items: in flight, merged a
     { ...dropped, runs: dropped.runs.map(run => ({ ...run, outcome: 'dropped' })) },
   ];
   seedBoard(reads);
-  // The stage-only read holds the moving items alone, as the server answers it.
-  set(K.board('web'), reads.slice(0, 2));
   set(K.packGraph('web', 'flow'), graph);
   // The pack ships no curated view file, so the Overview draws the derived flow it counts in.
   set(K.packView('web', 'flow'), { path: null, view: null, problems: [] });
@@ -715,6 +744,10 @@ test('the Overview tiles and the Board count the same items: in flight, merged a
   const mergedShown = board.querySelector('[data-merged] [data-count]')?.textContent;
   expect(tile('in-flight')).toBe(String(onStages));
   expect(onStages).toBe(2);
+  // Both pages say how many are on a stage from the one every-item read: the moving items only,
+  // not the merged or dropped ones beside them.
+  expect(overview.querySelector('[role="status"]')?.textContent).toBe('2 on a stage');
+  expect(board.querySelector('[role="status"]')?.textContent).toBe('2 on a stage');
   expect(overview.querySelector('[data-flow-group="merged"] [data-count]')?.textContent).toBe(
     mergedShown
   );

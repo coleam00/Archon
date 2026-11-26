@@ -639,11 +639,13 @@ Archon's forge seam, so the browser never calls it:
   operations recorded, else by head on the item's run branches. A `branchRun` whose item
   recorded no branch and no merge has no change and no entry.
 
-Answers are cached on the server: a change that has not merged for 60 seconds, a merge for
-good, an issue for 10 minutes, a stale answer served while it refreshes. A first lookup still
-running after 4 seconds answers `merged: "pending"` (a change) or `pending: true` (an issue) for
-that read only, so read again shortly; a lookup that failed answers `unknown` (a change) or
-null fields (an issue) and is cached like any other. A `changeRun` without its `changeUrl`, or a
+Answers are cached on the server, in memory and in a file under its home so a restarted server
+keeps them: a change that has not merged for 60 seconds, a merge for good, an issue for 6 hours,
+a stale answer served while it refreshes. A first lookup still running after 4 seconds answers
+`merged: "pending"` (a change) or `pending: true` (an issue) for that read only, so read again
+shortly; a lookup that failed answers `unknown` (a change, cached 60 seconds) or null fields (an
+issue, cached 10 minutes); the file keeps them with their time, so a restarted server shows them
+at once and asks again in the background. A `changeRun` without its `changeUrl`, or a
 number that is not a positive whole number, returns **400**; an unknown `codebaseId` returns
 **404**.
 

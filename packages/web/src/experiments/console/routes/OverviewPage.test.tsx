@@ -88,7 +88,6 @@ test('the Needs you line is the open-ask count, linking to the Needs you tab, an
 test('the Overview shows its asks as the one count link, never as ask rows', () => {
   seedPack();
   set(K.projects, [{ id: 'p1', name: 'p', itemPacks: ['flow'] } as unknown as Project]);
-  set(K.board('p1'), [merged]);
   set(K.boardOrders('p1'), [merged]);
   set(K.runsAttention, {
     runs: [],

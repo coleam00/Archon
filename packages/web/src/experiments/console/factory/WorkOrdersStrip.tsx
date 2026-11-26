@@ -53,7 +53,7 @@ export function WorkOrdersStrip({
   )?.view?.words;
   // An order's title is its issue's when its own title column is empty, as on a card.
   const titles = useForgeTitles(
-    cards?.packs == null ? null : cards.projectId,
+    cards?.projectId ?? null,
     orders.flatMap(order => order.read ?? [])
   );
   if (error !== undefined && !counted)

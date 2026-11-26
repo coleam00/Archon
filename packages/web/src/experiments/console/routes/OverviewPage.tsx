@@ -23,10 +23,10 @@ import { PackMap, usePackView } from '../factory/PackMap';
 import { useBoardItems } from '../factory/useBoardItems';
 import type { Project } from '../primitives/project';
 import * as skill from '../skills';
-import { getPackGraph, listItems, type ItemRead, type PackGraph } from '../skills/items';
+import { getPackGraph, type ItemRead, type PackGraph } from '../skills/items';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
-import { MOVING } from './BoardPage';
+import { isMoving } from './board/standing';
 
 /**
  * The project's open asks as one line linking to its Needs you tab. Nothing while the asks are
@@ -113,14 +113,15 @@ export function OverviewPage(): ReactElement {
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
   const project = projects?.find(candidate => candidate.id === projectId);
   const packs = project?.itemPacks ?? [];
-  // The same read, under the same key, as the board: opening one after the other reads once.
-  const open = useEntity<ItemRead[]>(K.board(projectId), () => listItems(projectId, MOVING));
   const { data: attention } = useEntity<skill.RunsAttention>(
     K.runsAttention,
     skill.listRunsNeedingAttention
   );
   const itemAsks = useItemAsks(attention, projectId);
+  // The board's every-item read, under its key: opening one page after the other reads once,
+  // and the items on a stage are its open ones.
   const every = useBoardItems(projectId);
+  const open = { data: every.data?.filter(isMoving), error: every.error };
   const needYou = attention === undefined ? undefined : itemAsks.asks.length;
   return (
     <section className="flex h-full min-h-0 flex-col">

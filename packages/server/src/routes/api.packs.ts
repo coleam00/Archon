@@ -6,8 +6,10 @@
  *
  * A page that draws the factory map asks for both at once, and the view needs the graph, so
  * the two routes share one graph read while it runs (`shareWhileRunning`): the server computes
- * a pack's graph once per page, not twice. Nothing is kept once the read settles, so a later
- * request always reads the pack as it is then.
+ * a pack's graph once per page, not twice. The graph's workflow discovery, nearly all of its
+ * cost, is kept while the files it reads are unchanged (`createDiscoveryCache`, which the
+ * server passes in); the rest of the read (bindings, trigger checks, settings, capacity) runs
+ * on every request, so a later request reads the pack as it is then.
  */
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { isAbsolute } from 'node:path';

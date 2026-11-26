@@ -41,20 +41,13 @@ import { itemMatches } from '../factory/lib/item-card';
 import { workOrders } from '../factory/lib/work-orders';
 import type { Project } from '../primitives/project';
 import * as skill from '../skills';
-import {
-  getPackGraph,
-  listItems,
-  listItemsPage,
-  type ItemPage,
-  type ItemRead,
-  type PackGraph,
-} from '../skills/items';
+import { getPackGraph, type ItemRead, type PackGraph } from '../skills/items';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import { CardList } from './board/ItemCard';
-import { isMoving, MOVING, stageAt } from './board/standing';
+import { isMoving, stageAt } from './board/standing';
 
-export { chipOf, MOVING } from './board/standing';
+export { chipOf } from './board/standing';
 
 // console-token-exception md:min-h-[34rem] -- the board area's floor in a short window: the toolbar, the work orders and room for a card or two.
 const BOARD_AREA = 'flex flex-col md:h-full md:min-h-[34rem] md:shrink-0';
@@ -138,19 +131,14 @@ function Column({
 const DECIDE_SHOWN = 6;
 const MORE_PAGE = 20;
 
-interface Newest {
-  data: ItemPage | undefined;
-  error: Error | undefined;
-}
-
 /**
- * The newest few items of a list and more of them a page at a time: what the needs-a-decision
- * strip shows. `newest` is the cached first page; `read` fetches the page
- * after a cursor.
+ * The first few items of a list, and more of them a page at a time: what the needs-a-decision
+ * strip shows. The list is already read whole (the board's every-item read), so showing more
+ * reads nothing.
  */
 function useMore(
-  newest: Newest,
-  read: (after: string) => Promise<ItemPage>
+  reads: readonly ItemRead[] | undefined,
+  error: Error | undefined
 ): {
   shown: ItemRead[];
   more: boolean;
@@ -160,32 +148,19 @@ function useMore(
   load: () => void;
   collapse: () => void;
 } {
-  const [extra, setExtra] = useState<ItemPage | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
-  const next = extra === null ? newest.data?.next : extra.next;
-  const load = async (): Promise<void> => {
-    if (next == null) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      const page = await read(next);
-      setExtra({ ...page, items: [...(extra?.items ?? []), ...page.items] });
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'The items could not be read.');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const [count, setCount] = useState(DECIDE_SHOWN);
+  const all = reads ?? [];
   return {
-    shown: [...(newest.data?.items ?? []), ...(extra?.items ?? [])],
-    more: next != null,
-    expanded: extra !== null,
-    busy,
-    error: newest.error?.message ?? error,
-    load: () => void load(),
+    shown: all.slice(0, count),
+    more: all.length > count,
+    expanded: count > DECIDE_SHOWN,
+    busy: false,
+    error: error?.message,
+    load: () => {
+      setCount(count + MORE_PAGE);
+    },
     collapse: () => {
-      setExtra(null);
+      setCount(DECIDE_SHOWN);
     },
   };
 }
@@ -219,21 +194,24 @@ function MoreControls({
   );
 }
 
-const DECIDE = ['failed', 'stopped'] as const;
+const DECIDE: readonly string[] = ['failed', 'stopped'];
 
 /**
  * The items nothing moves until an operator decides: the last run failed, or it ended with
- * an outcome and nothing followed. Newest first, a few shown, each with its reason.
+ * an outcome and nothing followed. Newest first, a few shown, each with its reason. They are
+ * the failed and stopped items of the board's every-item read, which the server orders newest
+ * first as a failed-and-stopped read would, so the strip asks the server for nothing more.
  */
-function DecisionStrip({ projectId }: { projectId: string }): ReactElement | null {
-  const newest = useEntity<ItemPage>(K.boardDecide(projectId), () =>
-    listItemsPage(projectId, DECIDE, { limit: DECIDE_SHOWN })
-  );
-  const totals = newest.data?.totals;
-  const total = totals == null ? 0 : totals.failed + totals.stopped;
-  const list = useMore(newest, after =>
-    listItemsPage(projectId, DECIDE, { limit: MORE_PAGE, after })
-  );
+function DecisionStrip({
+  projectId,
+  every,
+}: {
+  projectId: string;
+  every: { data: ItemRead[] | undefined; error: Error | undefined };
+}): ReactElement | null {
+  const decide = every.data?.filter(read => DECIDE.includes(read.standing.state));
+  const total = decide?.length ?? 0;
+  const list = useMore(decide, every.error);
   if (list.shown.length === 0 && list.error === undefined) return null;
   return (
     <section data-needs-decision className="mb-6">
@@ -514,7 +492,6 @@ export function BoardPage(): ReactElement {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
   const project = projects?.find(candidate => candidate.id === projectId);
-  const open = useEntity<ItemRead[]>(K.board(projectId), () => listItems(projectId, MOVING));
   const { data: attention } = useEntity<skill.RunsAttention>(
     K.runsAttention,
     skill.listRunsNeedingAttention
@@ -523,11 +500,11 @@ export function BoardPage(): ReactElement {
   const [filter, setFilter] = useState('');
   const [order, setOrder] = useState<string | null>(null);
   const { view, earlier, setView } = useBoardView();
-  // Every item, which every group and count reads; the open ones stand in until it answers.
+  // Every item, which every group, count and strip reads: one read, so the board asks the
+  // server to place its items once (DESIGN.md, "Speed is a requirement").
   const every = useBoardItems(projectId);
-  const all = every.data ?? open.data ?? [];
-  // Only from every item: the open ones alone would give a wrong total (the strip waits).
-  const orders = workOrders(every.data ?? []);
+  const all = every.data ?? [];
+  const orders = workOrders(all);
   const lit = orders.find(entry => entry.item.id === order);
   const litIds = lit === undefined ? null : new Set(lit.members.map(member => member.item.id));
   // The filter searches what each card shows: its issue title and its key as a person reads it.
@@ -558,7 +535,10 @@ export function BoardPage(): ReactElement {
             <h1 className="truncate text-base font-medium text-text-primary">
               {project?.name ?? 'Project'}
             </h1>
-            <OnStageStatus open={open} packs={packs} />
+            <OnStageStatus
+              open={{ data: every.data?.filter(isMoving), error: every.error }}
+              packs={packs}
+            />
           </div>
           <ProjectViewTabs projectId={projectId} active="board" />
         </header>
@@ -585,7 +565,7 @@ export function BoardPage(): ReactElement {
               lit={litIds}
             />
           </div>
-          <DecisionStrip projectId={projectId} />
+          <DecisionStrip projectId={projectId} every={every} />
           <BoardSetAside projectId={projectId} packs={packs} every={every.data} matches={matches} />
         </div>
       </section>

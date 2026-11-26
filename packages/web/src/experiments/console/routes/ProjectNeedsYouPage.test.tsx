@@ -212,6 +212,16 @@ test('rows carry the issue title and the key as the board prints it', () => {
   expect(row('issue-199-board-card')?.textContent).toContain('#199 · board card');
 });
 
+test('titles are asked for only the items with asks, not every board item', () => {
+  // Under the one title read for #198: a read that also asked for #300 would be another entry.
+  seed([ask('ask:a', 'issue-198')], [read('issue-198'), read('issue-300')]);
+  set(K.forgeTitles('web', [198]), TITLE_198);
+  const doc = render('/console/p/web/needs-you');
+  expect(doc.querySelector('[data-item-key="issue-198"] [data-item-title]')?.textContent).toBe(
+    'Asks show in full'
+  );
+});
+
 test('the recommendation reads as a suggestion by its label', () => {
   seed([
     ask('ask:a', 'issue-198'),
