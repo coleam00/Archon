@@ -153,7 +153,7 @@ export async function triggerCheckFixture() {
       const chunks: string[] = stdout.mock.calls.map(([chunk]: readonly unknown[]) =>
         String(chunk)
       );
-      const printed = chunks.findLast(chunk => chunk.startsWith('{\n')) ?? '';
+      const printed = chunks.filter(chunk => chunk.startsWith('{\n')).pop() ?? '';
       if (printed === '') throw error;
       return {
         ...(JSON.parse(printed) as {
