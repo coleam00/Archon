@@ -202,6 +202,12 @@ function assertPackTree(
       );
     }
   }
+  const { skill } = manifest;
+  if (skill && !files.has(`${skill.path}/SKILL.md`)) {
+    throw new Error(
+      `Refusing ${ref.id}: skill "${skill.name}" names ${skill.path}, which has no SKILL.md`
+    );
+  }
 }
 
 export async function installPack(
@@ -327,6 +333,12 @@ export async function installPack(
       console.log(`  ${ref.owner}/${manifest.name}:${name}`);
     }
     console.log(`  These workflows and their scripts were published by ${ref.owner}.`);
+    // Install writes nothing into a project; the operator adds the skill with a command.
+    if (manifest.skill) {
+      console.log(
+        `  Ships the agent skill ${manifest.skill.name}. Add it to a project: archon skill add --pack ${ref.id}`
+      );
+    }
   } finally {
     await rm(staging, { recursive: true, force: true });
   }

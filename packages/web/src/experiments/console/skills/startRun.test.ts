@@ -1,5 +1,6 @@
 /**
- * Request-shape tests for startRun's declared-inputs channel (#2554).
+ * Request-shape tests for startRun: its declared-inputs channel (#2554), and what
+ * happens to the conversation it creates when the run route refuses (#5641).
  *
  * The JSON and multipart branches carry the same map two different ways, and the
  * multipart encoding has to agree byte-for-byte with what the run route's multipart
@@ -193,5 +194,70 @@ describe('startRun — declared inputs (#2554)', () => {
       bodySnippet: `${html.slice(0, 200)}...`,
       serverError: undefined,
     });
+  });
+});
+
+describe('startRun — a refused start discards its conversation (#5641)', () => {
+  const originalWarn = console.warn;
+
+  beforeEach(() => {
+    globalThis.window = { location: { origin: 'http://localhost' } } as Window & typeof globalThis;
+    console.warn = () => undefined;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+    console.warn = originalWarn;
+  });
+
+  function deleteCalls(): string[] {
+    return calls.filter(c => c.init?.method === 'DELETE').map(c => c.url);
+  }
+
+  test('a 400 refusal deletes the conversation and rethrows the refusal', async () => {
+    stubFetch(400, { error: 'Missing required input: diff' });
+
+    await expect(
+      startRun({ projectId: 'p1', workflow: 'review-block', message: 'go' })
+    ).rejects.toMatchObject({ status: 400, serverError: 'Missing required input: diff' });
+    expect(deleteCalls()).toEqual(['/api/conversations/web-test-1']);
+  });
+
+  test('a started run keeps its conversation', async () => {
+    stubFetch();
+
+    await startRun({ projectId: 'p1', workflow: 'review-block', message: 'go' });
+    expect(deleteCalls()).toEqual([]);
+  });
+
+  test('a 5xx keeps the conversation, since the start may have been accepted', async () => {
+    stubFetch(502, { error: 'Bad gateway' });
+
+    await expect(
+      startRun({ projectId: 'p1', workflow: 'review-block', message: 'go' })
+    ).rejects.toMatchObject({ status: 502 });
+    expect(deleteCalls()).toEqual([]);
+  });
+
+  test('a failed cleanup still surfaces the original refusal', async () => {
+    calls = [];
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (init?.method === 'DELETE') {
+        return Promise.resolve(Response.json({ error: 'db down' }, { status: 500 }));
+      }
+      return Promise.resolve(
+        url.includes('/api/conversations')
+          ? Response.json({ conversationId: 'web-test-1' })
+          : Response.json({ error: 'Missing required input: diff' }, { status: 400 })
+      );
+    }) as typeof fetch;
+
+    await expect(
+      startRun({ projectId: 'p1', workflow: 'review-block', message: 'go' })
+    ).rejects.toMatchObject({ status: 400, serverError: 'Missing required input: diff' });
+    expect(deleteCalls()).toEqual(['/api/conversations/web-test-1']);
   });
 });

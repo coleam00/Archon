@@ -138,8 +138,7 @@ describe('per-run gate deferral — real SQLite', () => {
           legacyWorkflow: workflow,
           userMessage: 'goal',
         });
-        expect(admission.accepted).toBe(true);
-        if (admission.accepted) await admission.settled;
+        await admission.settled;
       };
       let expectedCalls = gateCount;
       for (let index = 0; index < gateCount; index++) {
@@ -283,8 +282,7 @@ describe('per-run gate deferral — real SQLite', () => {
           legacyWorkflow: workflow,
           userMessage: 'goal',
         });
-        expect(admission.accepted).toBe(true);
-        if (admission.accepted) await admission.settled;
+        await admission.settled;
         expect((await getWorkflowRun(id))?.status).toBe('completed');
         expect(providerCalls).toBe(1);
         expect(prompts).toBe(1);
@@ -434,8 +432,7 @@ describe('per-run gate deferral — real SQLite', () => {
         legacyWorkflow: workflow,
         userMessage: 'goal',
       });
-      expect(admission.accepted).toBe(true);
-      if (admission.accepted) await admission.settled;
+      await admission.settled;
     };
     await resume();
     expect(messages.filter(message => message.includes('**Approval required**'))).toHaveLength(1);
@@ -504,8 +501,7 @@ describe('per-run gate deferral — real SQLite', () => {
           legacyWorkflow: workflow,
           userMessage: 'goal',
         });
-        expect(admission.accepted).toBe(true);
-        if (admission.accepted) await admission.settled;
+        await admission.settled;
       };
       const snapshot = await deps.store.getDagResumeSnapshot(id);
       expect(snapshot.completedNodeOutputs.size).toBe(0);

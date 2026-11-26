@@ -342,9 +342,11 @@ export function createInMemoryResourceStartStore(
     liftInstallHold: async () => null,
     listHeldStarts: async () => [],
     listHeldItemStarts: async () => [],
+    listAllHeldItemStarts: async () => [],
+    listPreparingStarts: async () => [],
+    listRefusedStarts: async () => [],
     listSkippedItemStarts: async () => [],
     readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
-    listWaitedItemHolders: async () => [],
     getResourceStartRequest: async (
       id
     ): ReturnType<IResourceStartStore['getResourceStartRequest']> => {
@@ -368,8 +370,9 @@ export function createInMemoryResourceStartStore(
       const request = requests.get(id);
       if (request?.status !== 'queued') return null;
       request.status = 'withdrawn';
-      return structuredClone(request.launch);
+      return { launch: structuredClone(request.launch) };
     },
+    listUnreadableQueuedStarts: async () => [],
     claimStartBindingPreparation: async (
       input
     ): ReturnType<IResourceStartStore['claimStartBindingPreparation']> => {
@@ -409,6 +412,31 @@ export function createInMemoryResourceStartStore(
       item.status = 'pending';
       item.ownerId = null;
       return true;
+    },
+    replaceStartBindingIntent: async (
+      input
+    ): ReturnType<IResourceStartStore['replaceStartBindingIntent']> => {
+      const item = owned(input);
+      if (!item?.intent) return false;
+      const { checkoutFrom } = item.intent;
+      const { checkoutFrom: _replaced, ...intent } = structuredClone(input.intent);
+      item.intent = checkoutFrom ? { ...intent, checkoutFrom } : intent;
+      item.bindingRevision = input.intent.bindingRevision;
+      item.hostId = input.intent.hostId;
+      return true;
+    },
+    returnQueuedStartToPreparation: async (
+      input
+    ): ReturnType<IResourceStartStore['returnQueuedStartToPreparation']> => {
+      const request = requests.get(input.requestId);
+      const item = binding(input);
+      if (request?.status !== 'queued' || item?.disposition?.requestId !== request.id) return null;
+      request.status = 'withdrawn';
+      item.status = 'pending';
+      item.ownerId = null;
+      item.disposition = null;
+      item.requestStatus = null;
+      return structuredClone(request.launch);
     },
   };
 }

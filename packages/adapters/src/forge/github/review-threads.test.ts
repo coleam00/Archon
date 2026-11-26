@@ -420,6 +420,29 @@ describe('pr.thread.reply and pr.thread.resolve', () => {
       )
     ).toMatchObject({ ok: false, mutation: { outcome: 'verification_failed' } });
   });
+
+  test('a resolve whose read-back is denied keeps the GraphQL error kind', async () => {
+    let resolved = false;
+    const github = fakeGitHub(call => {
+      if (call.query?.startsWith('mutation')) {
+        resolved = true;
+        return { data: { resolveReviewThread: { thread: { id: 't1' } } } };
+      }
+      return resolved
+        ? { errors: [{ type: 'FORBIDDEN', message: 'Resource not accessible' }] }
+        : threadOwner();
+    });
+    expect(
+      await handleGithubOperation(
+        { operationId: 's', op: 'pr.thread.resolve', ref, thread: 't1' },
+        { token: 'token', fetch: github.fetch }
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { kind: 'authorization' },
+      mutation: { outcome: 'verification_failed', leaveBehind: 'the thread may be resolved' },
+    });
+  });
 });
 
 describe('workitem.edit-body', () => {
@@ -452,6 +475,27 @@ describe('workitem.edit-body', () => {
     expect(github.calls.filter(call => call.method === 'PATCH' && call.url === ISSUE)).toHaveLength(
       1
     );
+  });
+
+  test('an edit whose read-back fails keeps the read-back error', async () => {
+    const github = fakeGitHub(() => issue('The contract.'));
+    let patched = false;
+    const response = await handleGithubOperation(
+      { operationId: 'e', op: 'workitem.edit-body', ref, body: 'A new body' },
+      {
+        token: 'token',
+        fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+          if (init?.method === 'PATCH') patched = true;
+          else if (patched) return json({ message: 'Bad credentials' }, 401);
+          return github.fetch(input, init);
+        }) as typeof fetch,
+      }
+    );
+    expect(response).toMatchObject({
+      ok: false,
+      error: { kind: 'authorization', status: 401 },
+      mutation: { outcome: 'verification_failed', leaveBehind: 'the issue body may have changed' },
+    });
   });
 
   test('an unchanged body writes nothing, and a pull request is refused', async () => {

@@ -12,6 +12,7 @@ import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { existsSync } from 'node:fs';
 import { relative } from 'node:path';
 import {
+  PackSettingsError,
   projectPackSettingsPath,
   readProjectPackSettings,
   validateProjectPackSettings,
@@ -146,6 +147,22 @@ async function installedArrows(
   return installed;
 }
 
+/**
+ * The values the project sets, or none when its settings file does not read; that error is
+ * among the settings file's problems. A setting naming a missing file still shows its value.
+ */
+async function projectValues(
+  cwd: string,
+  pack: Parameters<typeof readProjectPackSettings>[1]
+): Promise<Record<string, string>> {
+  try {
+    return await readProjectPackSettings(cwd, pack);
+  } catch (error) {
+    if (error instanceof PackSettingsError) return {};
+    throw error;
+  }
+}
+
 /** The pack's declared settings with the project's values, and its settings file. */
 async function packSettings(
   cwd: string,
@@ -153,10 +170,15 @@ async function packSettings(
   workflows: ReturnType<typeof packWorkflows>
 ): Promise<Pick<PackGraph, 'settings' | 'settingsFile'>> {
   // Every workflow of a pack carries its declaration, and the nearest scope's wins.
-  const pack = workflows.find(entry => entry.workflow.pack?.key === packKey)?.workflow.pack;
-  const problems = pack === undefined ? [] : await validateProjectPackSettings(cwd, pack);
-  const values =
-    pack !== undefined && problems.length === 0 ? await readProjectPackSettings(cwd, pack) : {};
+  const own = workflows.filter(entry => entry.workflow.pack?.key === packKey);
+  const pack = own[0]?.workflow.pack;
+  // A missing `file` setting is checked through the inputs of each workflow that reads it.
+  const problems = [
+    ...new Set(
+      (await Promise.all(own.map(entry => validateProjectPackSettings(cwd, entry.workflow)))).flat()
+    ),
+  ];
+  const values = pack === undefined ? {} : await projectValues(cwd, pack);
   return {
     settings: Object.entries(pack?.settings ?? {}).map(([name, spec]) => ({
       name,

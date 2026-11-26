@@ -84,14 +84,11 @@ export interface WorkflowResumeInput extends WorkflowEngineCallBase {
   }>;
 }
 
-export type WorkflowResumeAdmission =
-  | { accepted: false; reason: 'nothing-to-resume' }
-  | {
-      accepted: true;
-      runId: string;
-      /** Settles this execution segment, which may pause rather than finish the run. */
-      settled: Promise<WorkflowExecutionResult>;
-    };
+export interface WorkflowResumeAdmission {
+  runId: string;
+  /** Settles this execution segment, which may pause rather than finish the run. */
+  settled: Promise<WorkflowExecutionResult>;
+}
 
 /** One committed event of the subscribed run tree. Resubscribing `after` its cursor continues the feed. */
 export interface WorkflowRunDelivery {

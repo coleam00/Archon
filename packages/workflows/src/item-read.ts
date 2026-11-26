@@ -4,8 +4,9 @@
  * on the item, each oldest first, and the links from and to it. Its starts still waiting
  * are listed with the queue order recorded for them, and its refused starts beside them. A
  * start waiting or refused because another run of its workflow works the item names that
- * run (`item-hold`). Where the item stands (`standing`) is derived here on every read, so
- * each reader places the item the same way; nothing about it is stored.
+ * run (`item-hold`). It computes no stage and stores nothing. Two states are derived here on
+ * every read: where the item stands (`standing`), so each reader places the item the same
+ * way, and a work order's, from its members (`work-order.ts`).
  */
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
@@ -24,25 +25,19 @@ import {
 } from './schemas/attention-degraded';
 import { itemActFields } from './schemas/item-act';
 import { operatorPause, operatorPauseSchema } from './schemas/operator-pause';
-import {
-  itemLinkDegradedSchema,
-  itemLinkKindSchema,
-  type ItemLink,
-  type ItemLinkDegraded,
-} from './schemas/item-link';
-import {
-  itemRulingDegradedSchema,
-  itemRulingSchema,
-  type ItemRulingDegraded,
-  type ItemRuling,
-} from './schemas/item-ruling';
+import { itemLinkDegradedSchema, itemLinkKindSchema, type ItemLink } from './schemas/item-link';
+import { itemRulingDegradedSchema, itemRulingSchema } from './schemas/item-ruling';
 import {
   itemMergeDegradedSchema,
   itemMergeSchema,
   type ItemMergeDegraded,
 } from './schemas/item-merge';
 import { itemLandingUnresolvedSchema, resolvedItemLandingSchema } from './schemas/item-landing';
+import { itemEndDegradedSchema, itemEndSchema } from './schemas/item-end';
+import { readHoldingItemEnd } from './item-end';
 import { ItemLandingUnresolvedError, resolveItemLanding } from './item-landing';
+import { readWorkOrder } from './work-order';
+import { workOrderMemberUnreadableSchema, workOrderSchema } from './schemas/work-order';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import { parseRunUsage } from './schemas/run-usage';
 import { workflowRunStatusSchema } from './schemas/run-status';
@@ -77,8 +72,10 @@ import { itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 import { readCompletedRunResult, resultCommitOf } from './run-result';
 import { getTerminalRecord } from './terminal-record';
+import { changeSizeSchema } from './schemas/change-size';
+import { readChangeSize } from './change-size';
 import { runPack, runPackSchema } from './run-pack';
-import { startLimitStandingSchema } from './start-limit';
+import { itemStartLimitSchema, type LimitBindingsReader, withLimitBindings } from './start-limit';
 import { readLinked } from './item-parts';
 import { itemStanding, itemStandingSchema, type ItemStanding } from './item-standing';
 import { askAnswers, itemAnswer } from './item-answers';
@@ -162,6 +159,8 @@ export const itemRunSchema = z.object({
    * held at commits.
    */
   resultCommit: z.string().nullable(),
+  /** The change the run ended with, as `archon workflow runs --item` documents it; null when unknown, never zero. */
+  changeSize: changeSizeSchema.nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
 
@@ -326,14 +325,18 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * branch a fresh run on the item is cut from and proposes against, and where it came from:
  * the item's own record, or the nearest item it is `part_of`. Null when neither records
  * one, or when it cannot be resolved. The read does not check that the branch is on the
- * remote; a run does when it starts. `waits` are what the item waits for outside Archon:
+ * remote; a run does when it starts. `ended` is the operator's end of the item while it
+ * holds (`schemas/item-end.ts`): the item is at rest until a run on it starts or resumes
+ * after the end, or a start waits on it in `queued` or `held`. Null when the item was
+ * never ended, the end no longer holds, or its row could not be read (`end_unreadable`, by
+ * `endId`). `workOrder`: see `WorkOrder`; null when nothing is `part_of` the item, and a
+ * member part that could not be read is `member_unreadable`. `waits` are what the item waits for outside Archon:
  * the open waits completed runs left on it (`returns.waits`), each with when it opened and
  * fell due, and `overdue` once that time has passed. An overdue set is also among
- * `questions`. `startLimits` are the start limits of the bindings that started work on the
- * item: for each, how many starts it allows, how many are used, granted and left, and since
- * when it counts. A binding at `left: 0` is refused its next start on the item, and the
- * refusal is on its receipt (`trigger inspect`). `standing` is where the item stands: see
- * `itemStandingSchema`.
+ * `questions`. `startLimits` are the start limits bindings counted on the item, each with
+ * its count (`startLimitStanding`) and the trigger files under it; at `left: 0` the next
+ * start is refused, and the refusal is on its receipt (`trigger inspect`). `standing` is
+ * where the item stands: see `itemStandingSchema`.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
@@ -344,13 +347,15 @@ export const itemReadSchema = z.object({
   hold: installHoldSchema.nullable(),
   held: z.array(itemHeldStartSchema),
   runLimit: runLimitSchema.nullable(),
-  startLimits: z.array(startLimitStandingSchema),
+  startLimits: z.array(itemStartLimitSchema),
   waits: z.array(itemOpenWaitSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
   links: z.array(itemReadLinkSchema),
   merged: itemMergeSchema.nullable(),
   landing: resolvedItemLandingSchema.nullable(),
+  ended: itemEndSchema.nullable(),
+  workOrder: workOrderSchema.nullable(),
   degraded: z.array(
     z.discriminatedUnion('reason', [
       attentionDegradedSchema,
@@ -358,6 +363,8 @@ export const itemReadSchema = z.object({
       itemMergeDegradedSchema,
       itemLinkDegradedSchema,
       itemLandingUnresolvedSchema,
+      itemEndDegradedSchema,
+      workOrderMemberUnreadableSchema,
     ])
   ),
 });
@@ -372,6 +379,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listItemRulings'
       | 'getItemMerge'
       | 'getItemLanding'
+      | 'getHoldingItemEnd'
       | 'listItemLinks'
       | 'listItemAsks'
       | 'listOpenItemWaits'
@@ -382,10 +390,12 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'readItemStartLimits'
       | 'getInstallHold'
       | 'listHeldItemStarts'
+      | 'listAllHeldItemStarts'
       | 'getRunLimit'
     >;
   /** Observes an awaiting start's executor; without it, the start reads `unknown`. */
   startExecutor?: StartExecutorObserver;
+  limitBindings?: LimitBindingsReader;
 }
 
 function readResult(
@@ -446,6 +456,7 @@ async function itemRun(
     heldBehind,
     operatorPause: operatorPause(run),
     ...readResult(run, terminalEvents.get(run.id) ?? []),
+    changeSize: readChangeSize(run),
   };
 }
 
@@ -580,7 +591,7 @@ export async function readInstallFacts(source: ItemReadSource) {
   // Held starts before any item's queued starts and runs, the order a start moves through:
   // one that moves on between two reads shows twice, never in neither.
   const hold = await source.store.getInstallHold();
-  const held = await source.store.listHeldItemStarts();
+  const held = await source.store.listAllHeldItemStarts();
   return {
     hold,
     held,
@@ -610,32 +621,46 @@ async function readLanding(source: ItemReadSource, item: WorkflowItem) {
   }
 }
 
-/** The facts recorded on the item itself: its rulings, its links, its merge and its landing. */
+type EndRead = Awaited<ReturnType<typeof readHoldingItemEnd>>;
+
+/**
+ * The facts on the item itself: rulings, links, merge, landing, end, and its work order.
+ * The merge, the links and the end are read by `placeItem`, which needs them to place the
+ * item, and passed in so each is read once.
+ */
 async function readItemFacts(
   source: ItemReadSource,
   item: WorkflowItem,
   merge: Awaited<ReturnType<ItemReadSource['store']['getItemMerge']>>,
-  linkReads: Awaited<ReturnType<ItemReadSource['store']['listItemLinks']>>
+  linkReads: Awaited<ReturnType<ItemReadSource['store']['listItemLinks']>>,
+  end: EndRead
 ) {
   const itemId = item.id;
-  const rulings: ItemRuling[] = [];
-  const unreadableRulings: ItemRulingDegraded[] = [];
-  for (const read of await source.store.listItemRulings(itemId))
-    if ('type' in read) unreadableRulings.push(read);
-    else rulings.push(read);
-  const links: ItemReadLink[] = [];
-  const unreadableLinks: ItemLinkDegraded[] = [];
-  for (const read of linkReads)
-    if ('type' in read) unreadableLinks.push(read);
-    else links.push(readLink(itemId, read));
+  const rulingReads = await source.store.listItemRulings(itemId);
+  const unreadableRulings = rulingReads.filter(read => 'type' in read);
+  const rulings = rulingReads.flatMap(read => ('type' in read ? [] : [read]));
+  const unreadableLinks = linkReads.filter(read => 'type' in read);
+  const links = linkReads.flatMap(read => ('type' in read ? [] : [readLink(itemId, read)]));
   const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
   const landing = await readLanding(source, item);
+  // An unreadable end is reported, not thrown.
+  const unreadableEnd = end !== null && 'type' in end ? [end] : [];
+  const workOrder = await readWorkOrder(source.store, item, linkReads);
   return {
     rulings,
     links,
     merged: merge !== null && !('type' in merge) ? merge : null,
     landing: landing.landing,
-    degraded: [...unreadableRulings, ...unreadableMerge, ...unreadableLinks, ...landing.degraded],
+    ended: end !== null && !('type' in end) ? end : null,
+    workOrder: workOrder.workOrder,
+    degraded: [
+      ...unreadableRulings,
+      ...unreadableMerge,
+      ...unreadableLinks,
+      ...landing.degraded,
+      ...unreadableEnd,
+      ...workOrder.degraded,
+    ],
   };
 }
 
@@ -696,6 +721,14 @@ export async function placeItem(
   }));
   const merge = await source.store.getItemMerge(found.item.id);
   const linkReads = await source.store.listItemLinks(found.item.id);
+  // The one rule for whether an end holds, given the held starts already read for the install.
+  const end = await readHoldingItemEnd(
+    {
+      getHoldingItemEnd: itemId => source.store.getHoldingItemEnd(itemId),
+      listHeldItemStarts: async () => held,
+    },
+    found.item.id
+  );
   const linked = await readLinked(source.store, found.item, linkReads, visiting, (other, inside) =>
     placeItem(source, other, install, inside).then(place => place?.standing.state === 'done')
   );
@@ -707,6 +740,8 @@ export async function placeItem(
     questions,
     // A merge row that does not read still says the change merged.
     merged: merge !== null,
+    // An end row that does not read does not hold: the item stands as it would without it.
+    ended: end !== null && !('type' in end),
     ...linked,
   });
   const read = async (): Promise<ItemRead> => {
@@ -714,12 +749,16 @@ export async function placeItem(
       tree.size === 0
         ? new Map<string, WorkflowEventRow[]>()
         : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
-    const facts = await readItemFacts(source, found.item, merge, linkReads);
+    const {
+      rulings,
+      degraded: factsDegraded,
+      ...facts
+    } = await readItemFacts(source, found.item, merge, linkReads, end);
     const terminalEvents = await completionEvents(source, own.values);
     const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
     const answers = [
       ...[...events.values()].flat().map(itemAnswer),
-      ...facts.rulings,
+      ...rulings,
       ...askAnswers(asks.values, new Set(asks.degraded.map(report => report.runId))),
     ]
       // Stable, so rows that tie on `at` keep their store order: append order within a run,
@@ -762,13 +801,11 @@ export async function placeItem(
       hold,
       held,
       runLimit: runLimit && { limit: runLimit.limit, live: runLimit.live },
-      startLimits: startLimits.limits,
+      startLimits: await withLimitBindings(startLimits.limits, source.limitBindings),
       waits,
       questions,
       answers,
-      links: facts.links,
-      merged: facts.merged,
-      landing: facts.landing,
+      ...facts,
       // A paused item run the store could not read is in both reports, and an unreadable
       // open ask in the queue's and the item's; list each run once.
       degraded: [
@@ -777,7 +814,7 @@ export async function placeItem(
           ...degraded.filter(report => tree.has(report.runId)),
           ...asks.degraded,
         ]),
-        ...facts.degraded,
+        ...factsDegraded,
       ],
     };
   };

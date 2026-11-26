@@ -8,6 +8,7 @@ import {
   runEndedInputSourceSchema,
 } from './binding-input-source';
 import { itemLinkKindSchema } from './item-link';
+import { handoffRefusalSchema } from './run-metadata';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
@@ -120,6 +121,16 @@ export const resourceStartReceiptOriginSchema = z
   .strict();
 export type ResourceStartRunMetadata = z.infer<typeof resourceStartReceiptOriginSchema>;
 
+/** The receipt and binding that requested this run's start, from its `resource_start` metadata. */
+export function readResourceStartOrigin(
+  metadata: Readonly<Record<string, unknown>> | undefined
+): ResourceStartRunMetadata | undefined {
+  const origin = resourceStartReceiptOriginSchema.safeParse(
+    metadata?.[RESOURCE_START_METADATA_KEY]
+  );
+  return origin.success ? origin.data : undefined;
+}
+
 /**
  * The receipt that requested this run's start, from its `resource_start` metadata.
  * Attribution only: a missing or malformed origin reads as no receipt.
@@ -127,10 +138,7 @@ export type ResourceStartRunMetadata = z.infer<typeof resourceStartReceiptOrigin
 export function readResourceStartReceiptId(
   metadata: Readonly<Record<string, unknown>> | undefined
 ): string | undefined {
-  const origin = resourceStartReceiptOriginSchema.safeParse(
-    metadata?.[RESOURCE_START_METADATA_KEY]
-  );
-  return origin.success ? origin.data.receiptId : undefined;
+  return readResourceStartOrigin(metadata)?.receiptId;
 }
 
 /**
@@ -264,6 +272,11 @@ export const queuedItemStartSchema = z.object({
   hostId: z.string(),
   queuedAt: z.string().datetime(),
   ahead: z.number().int().nonnegative(),
+  /**
+   * The first request queued ahead of it whose stored launch does not read, or null: admission
+   * keeps queue order, so nothing behind that request is admitted until it is withdrawn.
+   */
+  blockedBy: z.string().nullable(),
 });
 export type QueuedItemStart = z.infer<typeof queuedItemStartSchema>;
 
@@ -589,6 +602,9 @@ const sourceReceiptAcceptanceBaseSchema = z
             bindingRevision: z.string().min(1).nullable(),
             status: startBindingPreparationStatusSchema.extract(['unmatched', 'rejected']),
             reason: z.string(),
+            refused: handoffRefusalSchema.optional(),
+            /** The item the binding maps the event to, when it got that far before refusing. */
+            itemKey: z.string().min(1).optional(),
           })
           .strict()
       )

@@ -1387,3 +1387,76 @@ for (const mode of [{ notices: true }, { countBy: 'project' }]) {
     }
   );
 }
+
+test('runs paused on one provider limit list as one entry until they resume', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-cli-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  const host = createHost();
+  const { store } = host.deps;
+  const retryAt = (hours: number): string => new Date(Date.now() + hours * 3_600_000).toISOString();
+  const pause = async (node: string, provider: string, resumeAt: string): Promise<string> => {
+    const run = await store.createWorkflowRun({ workflow_name: 'deliver', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    // The node's failure record names its bound provider; the wait itself stores none.
+    await store.persistWorkflowEvent({
+      workflow_run_id: run.id,
+      event_type: 'node_failed',
+      step_name: node,
+      data: { provider, provider_failure: { class: 'quota_exhausted', evidence: 'limit' } },
+    });
+    await store.pauseWorkflowRunForWait(
+      run.id,
+      {
+        owner: 'node',
+        nodeId: node,
+        kind: 'quota',
+        pauseId: `limit-${run.id}`,
+        waitingSince: new Date().toISOString(),
+        resumeAt,
+      },
+      { kind: 'started', stepName: node }
+    );
+    return run.id;
+  };
+  const [firstAt, secondAt] = [retryAt(1), retryAt(2)];
+  const first = await pause('implement', 'claude', firstAt);
+  const second = await pause('review', 'claude', secondAt);
+  const other = await pause('plan', 'codex', retryAt(3));
+  const listed = async (): Promise<string> => {
+    const lines: string[] = [];
+    const log = spyOn(console, 'log').mockImplementation((line: string) => {
+      lines.push(line);
+    });
+    try {
+      expect(await workflowAttentionCommand(host, root, undefined, { all: true, labels: [] })).toBe(
+        0
+      );
+    } finally {
+      log.mockRestore();
+    }
+    return lines.join('\n');
+  };
+
+  const text = await listed();
+  expect(text).toContain('2 item(s) need attention');
+  expect(text.match(/claude usage or rate limit/g)).toHaveLength(1);
+  expect(text).toContain('claude usage or rate limit, holding 2 runs');
+  expect(text).toContain(`implement: tries again by itself at ${firstAt}`);
+  expect(text).toContain(`review: tries again by itself at ${secondAt}`);
+  for (const id of [first, second, other]) expect(text).toContain(`archon workflow resume ${id}`);
+  expect(text).toContain('codex usage or rate limit, holding 1 run');
+
+  // A resumed run leaves its limit's entry. No process owns it in this fixture, so it is
+  // listed again as running with its owner gone, which is a separate item.
+  const heldLine = (id: string): string => `${id}  deliver  (no project)  paused`;
+  await store.resumeWorkflowRun(first);
+  const resumed = await listed();
+  expect(resumed).toContain('claude usage or rate limit, holding 1 run');
+  expect(resumed).not.toContain(heldLine(first));
+  expect(resumed).toContain(heldLine(second));
+
+  await store.resumeWorkflowRun(second);
+  const bothResumed = await listed();
+  expect(bothResumed).not.toContain('claude usage or rate limit');
+  expect(bothResumed).toContain('codex usage or rate limit, holding 1 run');
+});

@@ -18,8 +18,10 @@ import { displayedRunOutcome, type WorkflowRun } from './schemas/workflow-run';
  * Read from what runs recorded, never from a run's public name (`run-pack.ts`). Null when no
  * run of the item recorded one.
  *
- * Its parts are the items joined to it by an active `part_of` link pointing at it. What it
- * depends on are the items its own active `depends_on` links point at.
+ * Its parts are the items joined to it by an active `part_of` link pointing at it; a part is
+ * done when it merged, an operator's end holds on it, or it stands `done`, as a work order
+ * counts its members. What it depends on are the items its own active `depends_on` links
+ * point at; one of those is done when it merged or stands `done`, never by an end alone.
  *
  * `state`, the first that holds:
  * - `running`: a run of the item is running.
@@ -29,18 +31,21 @@ import { displayedRunOutcome, type WorkflowRun } from './schemas/workflow-run';
  * - `done`: its change merged, whatever its last run did, or the run `runId` names completed
  *   with an outcome its workflow declares final (`returns.final`), or it has parts and every
  *   one of them is done.
+ * - `resting`, when an operator's end holds on it (`readHoldingItemEnd`): the end is the
+ *   decision a failed or stopped item waited for, and nothing more will happen on it.
  * - `resting`, when it has parts: its work goes on in them, so it never needs a decision of
  *   its own, whatever its last run did.
  * - `failed`: that run failed.
  * - `waiting`, when an item it depends on is not done: it waits for that item.
  * - `stopped`: that run completed with an outcome and nothing followed: the engine recorded
  *   the stop (the attention queue's `stopped` item), or the run is from before stops and
- *   final outcomes were recorded, or its next start was refused or never prepared.
+ *   final outcomes were recorded, or its next start was refused or never prepared; or a
+ *   start no run caused was refused on it and nothing started since (`refused_start`).
  * - `resting`: nothing runs, is queued or waits, and none of the above: its last run was
  *   cancelled or declared no outcome, or it has no run.
  *
- * A `failed` or `stopped` item needs a decision: it stays so until a newer run starts on it
- * or its change merges. An item reads `done` only when the engine knows it is.
+ * A `failed` or `stopped` item needs a decision: it stays so until a newer run starts on it,
+ * its change merges or it is ended. An item reads `done` only when the engine knows it is.
  */
 export const ITEM_STANDING_STATES = [
   'running',
@@ -69,9 +74,11 @@ export function itemStanding(facts: {
   waits: readonly unknown[];
   questions: readonly { kind: string }[];
   merged: boolean;
-  /** The item's parts, each with whether it is done (merged, or standing `done`). */
+  /** An operator's end holds on the item (`readHoldingItemEnd`). */
+  ended: boolean;
+  /** The item's parts, each with whether it is done (merged, ended, or standing `done`). */
   parts: readonly { done: boolean }[];
-  /** What the item depends on, each with whether it is done, as for `parts`. */
+  /** What the item depends on, each with whether it is done (merged, or standing `done`). */
   dependsOn: readonly { done: boolean }[];
 }): ItemStanding {
   const { runs, parts } = facts;
@@ -79,8 +86,11 @@ export function itemStanding(facts: {
     runs.some(run => run.status === wanted);
   const live = runs.filter(run => ['pending', 'running', 'paused'].includes(run.status));
   const at = live.at(-1) ?? runs.at(-1);
-  const stopped = facts.questions.some(question => question.kind === 'stopped');
-  const asked = facts.questions.some(question => question.kind !== 'stopped');
+  // A stop and a refused start take no answer: they need a decision, so they do not make the
+  // item wait. Every other question is one the item waits on.
+  const needsDecision = (kind: string): boolean => kind === 'stopped' || kind === 'refused_start';
+  const stopped = facts.questions.some(question => needsDecision(question.kind));
+  const asked = facts.questions.some(question => !needsDecision(question.kind));
   // An item with no parts is not done by them: `every` holds on an empty list.
   const partsDone = parts.length > 0 && parts.every(part => part.done);
   const state = ((): ItemStanding['state'] => {
@@ -89,12 +99,12 @@ export function itemStanding(facts: {
     if (status('pending') || facts.queued.length > 0 || facts.held.length > 0) return 'queued';
     if (facts.merged || (at !== undefined && readItemFinal(at.metadata)) || partsDone)
       return 'done';
-    if (parts.length > 0) return 'resting';
+    if (facts.ended || parts.length > 0) return 'resting';
     if (at?.status === 'failed') return 'failed';
     if (facts.dependsOn.some(other => !other.done)) return 'waiting';
     // A completed run with an outcome that nothing followed, recorded as a stop or not.
-    const ended = at?.status === 'completed' && displayedRunOutcome(at) !== null;
-    return stopped || ended ? 'stopped' : 'resting';
+    const completed = at?.status === 'completed' && displayedRunOutcome(at) !== null;
+    return stopped || completed ? 'stopped' : 'resting';
   })();
   const keys = runs.map(runPackKey).filter(key => key !== null);
   const pack = (at === undefined ? null : runPackKey(at)) ?? keys.at(-1) ?? null;

@@ -21,7 +21,6 @@ type ResumeStore = ResumeStoreDeps['store'];
 
 function makeStore(overrides: Partial<ResumeStore> = {}): ResumeStore {
   return {
-    listEventsForRuns: mock<ResumeStore['listEventsForRuns']>(async () => new Map()),
     getDagResumeSnapshot: mock<ResumeStore['getDagResumeSnapshot']>(() => {
       throw new Error('Unexpected getDagResumeSnapshot');
     }),
@@ -91,10 +90,10 @@ describe('hydrateResumableRun', () => {
       ),
     });
     const inspection = await inspectResumableRun(makeDeps(store), candidate);
-    expect(inspection?.priorCompletedNodes.get('work')?.output).toBe('["a","b"]');
-    expect(inspection?.priorUsage.costUsd).toBe(0);
-    expect(inspection?.priorUsage.tokens).toBeUndefined();
-    expect(inspection?.priorUsage.tokensUnknown).toBe(false);
+    expect(inspection.priorCompletedNodes.get('work')?.output).toBe('["a","b"]');
+    expect(inspection.priorUsage.costUsd).toBe(0);
+    expect(inspection.priorUsage.tokens).toBeUndefined();
+    expect(inspection.priorUsage.tokensUnknown).toBe(false);
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
   });
 
@@ -121,7 +120,7 @@ describe('hydrateResumableRun', () => {
       priorFailedNodes: new Map(),
       priorUsage: snapshot,
     });
-    expect(result?.priorUsage).toBe(snapshot);
+    expect(result.priorUsage).toBe(snapshot);
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
     expect(store.listWorkflowRunNodeSessions).not.toHaveBeenCalled();
   });
@@ -258,8 +257,8 @@ describe('hydrateResumableRun', () => {
         resumeWorkflowRun: mock(async () => makeRun({ status: 'running', metadata })),
       });
       const result = await hydrateResumableRun(makeDeps(store), makeRun({ status, metadata }));
-      received[name] = result?.resumeCause;
-      expect(result?.priorFailedNodes).toBe(failedNodes);
+      received[name] = result.resumeCause;
+      expect(result.priorFailedNodes).toBe(failedNodes);
     }
     expect(received).toEqual(Object.fromEntries(cases.map(({ name, cause }) => [name, cause])));
   });
@@ -301,264 +300,33 @@ describe('hydrateResumableRun', () => {
     });
     const deps = makeDeps(store);
     const result = await hydrateResumableRun(deps, candidate);
-    expect(result).not.toBeNull();
-    expect(result?.preCreatedRun).toBe(resumed);
-    expect(result?.priorCompletedNodes).toBe(priorNodes);
-    expect(result?.priorUsage).toBe(snapshot);
-    expect(result?.priorNodeSessions.map(row => row.node_id)).toEqual(['n1']);
+    expect(result.preCreatedRun).toBe(resumed);
+    expect(result.priorCompletedNodes).toBe(priorNodes);
+    expect(result.priorUsage).toBe(snapshot);
+    expect(result.priorNodeSessions.map(row => row.node_id)).toEqual(['n1']);
     expect(store.listWorkflowRunNodeSessions).toHaveBeenCalledWith('prior-failed');
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('prior-failed');
   });
 
-  it('returns null when candidate has no completed nodes and no interactive-loop state', async () => {
+  it('claims a failed run with no completed nodes so it runs again from its first node', async () => {
     const candidate = makeRun({ id: 'empty-prior', status: 'failed' });
+    const resumed = makeRun({ id: 'empty-prior', status: 'running' });
     const store = makeStore({
       getDagResumeSnapshot: mock(async () => ({
         completedNodeOutputs: new Map(),
         fanOutSnapshots: new Map(),
         failedNodes: new Map(),
         unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 0, output: 0 },
-        costUsd: 0,
-      })),
-    });
-    const deps = makeDeps(store);
-    const result = await hydrateResumableRun(deps, candidate);
-    expect(result).toBeNull();
-    // Must not transition the run — there is nothing to resume.
-    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { events: [], resumable: false },
-    { events: ['source_released'], resumable: true },
-    { events: ['node_started', 'source_released'], resumable: true },
-    { events: ['source_released', 'node_started'], resumable: false },
-  ])('inspects failed zero-node source recovery: %j', async ({ events, resumable }) => {
-    const candidate = makeRun({ status: 'failed' });
-    const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: new Map(),
-        fanOutSnapshots: new Map(),
-        failedNodes: new Map(),
-        unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        costUsd: 0,
-      })),
-      listEventsForRuns: mock(
-        async () =>
-          new Map([
-            [
-              candidate.id,
-              events.map((event_type, index) => ({
-                id: String(index),
-                workflow_run_id: candidate.id,
-                event_type,
-                step_index: null,
-                step_name: 'first',
-                data: {},
-                created_at: '2026-10-22T10:00:00Z',
-              })),
-            ],
-          ])
-      ),
-    });
-    expect((await inspectResumableRun(makeDeps(store), candidate)) !== null).toBe(resumable);
-    expect(store.listEventsForRuns).toHaveBeenCalledWith(
-      [candidate.id],
-      ['source_released', 'node_started']
-    );
-    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('hydrates fan-out-only recovery state before any inner node completed', async () => {
-    const fanOutSnapshots = new Map([
-      [
-        'fan',
-        [
-          {
-            ordinal: 0,
-            identity: 'instance-a',
-            item: 'a',
-            inputs: { item: 'a' },
-          },
-        ],
-      ],
-    ]);
-    const candidate = makeRun({ id: 'fan-out-only', status: 'failed' });
-    const resumed = makeRun({ id: 'fan-out-only', status: 'running' });
-    const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: new Map(),
-        failedNodes: new Map(),
-        fanOutSnapshots,
-        unresolvedNodeStarts: new Set(['fan__instance-a']),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },
         costUsd: 0,
       })),
       resumeWorkflowRun: mock(async () => resumed),
     });
-
     const result = await hydrateResumableRun(makeDeps(store), candidate);
-
-    expect(result).not.toBeNull();
-    expect(store.resumeWorkflowRun).toHaveBeenCalledWith('fan-out-only');
-  });
-
-  it('returns hydrated run when interactive-loop state is present even with zero completed nodes', async () => {
-    const candidate = makeRun({
-      id: 'paused-loop',
-      status: 'paused',
-      metadata: {
-        approval: { type: 'interactive_loop', nodeId: 'loop-1', message: 'Iterate?', iteration: 2 },
-      },
-    });
-    const resumed = makeRun({ id: 'paused-loop', status: 'running' });
-    const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: new Map(),
-        fanOutSnapshots: new Map(),
-        failedNodes: new Map(),
-        unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 0, output: 0 },
-        costUsd: 0,
-      })),
-      resumeWorkflowRun: mock(async () => resumed),
-    });
-    const deps = makeDeps(store);
-    const result = await hydrateResumableRun(deps, candidate);
-    expect(result).not.toBeNull();
-    expect(result?.priorCompletedNodes.size).toBe(0);
-    expect(store.resumeWorkflowRun).toHaveBeenCalledWith('paused-loop');
-  });
-
-  it.each([
-    [
-      'first-node wait',
-      'paused',
-      {
-        wait: {
-          owner: 'node',
-          nodeId: 'delay',
-          kind: 'time',
-          waitingSince: '2026-08-24T10:00:00.000Z',
-          resumeAt: '2026-08-24T11:00:00.000Z',
-        },
-      },
-    ],
-    [
-      'first-node quota continuation',
-      'failed',
-      {
-        scheduled_resume: {
-          reason: 'quota',
-          resumeAt: '2026-08-24T11:00:00.000Z',
-          deadlineAt: '2026-08-25T11:00:00.000Z',
-          attempt: 1,
-          maxAttempts: 1,
-          error: 'usage limit reached',
-        },
-      },
-    ],
-  ] as const)('hydrates a %s with zero completed nodes', async (_label, status, metadata) => {
-    const candidate = makeRun({ id: 'first-node-continuation', status, metadata });
-    const resumed = makeRun({ id: 'first-node-continuation', status: 'running', metadata });
-    const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: new Map(),
-        fanOutSnapshots: new Map(),
-        failedNodes: new Map(),
-        unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 0, output: 0 },
-        costUsd: 0,
-      })),
-      resumeWorkflowRun: mock(async () => resumed),
-    });
-
-    const result = await hydrateResumableRun(makeDeps(store), candidate);
-
-    expect(result).not.toBeNull();
-    expect(result?.priorCompletedNodes.size).toBe(0);
-    expect(store.resumeWorkflowRun).toHaveBeenCalledWith('first-node-continuation');
-  });
-
-  it('#2714 regression: resumes a first-node legacy on_reject gate with a genuinely staged rework, even with zero completed nodes', async () => {
-    // rejectWorkflow's stage-rework path (workflow-operations.ts) never writes
-    // node_completed — it only stamps metadata.approval.resolved/rejection_reason
-    // on the run. Before the reRunsOwnNodeOnResume fix, a first-node gate in
-    // this state was unresumable: priorCompletedNodes.size === 0 and the old
-    // hasReRunGateState check omitted 'approval' entirely.
-    const candidate = makeRun({
-      id: 'paused-first-gate',
-      status: 'paused',
-      metadata: {
-        approval: {
-          type: 'approval',
-          nodeId: 'review',
-          message: 'Please review',
-          resolved: 'rejected',
-          onRejectPrompt: 'Fix: $REJECTION_REASON',
-        },
-        rejection_reason: 'needs more tests',
-        rejection_count: 1,
-      },
-    });
-    const resumed = makeRun({ id: 'paused-first-gate', status: 'running' });
-    const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: new Map(),
-        fanOutSnapshots: new Map(),
-        failedNodes: new Map(),
-        unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 0, output: 0 },
-        costUsd: 0,
-      })),
-      resumeWorkflowRun: mock(async () => resumed),
-    });
-    const deps = makeDeps(store);
-    const result = await hydrateResumableRun(deps, candidate);
-    expect(result).not.toBeNull();
-    expect(result?.priorCompletedNodes.size).toBe(0);
-    expect(store.resumeWorkflowRun).toHaveBeenCalledWith('paused-first-gate');
-  });
-
-  it('#2714: an unresolved (not-yet-rejected) legacy on_reject gate with zero completed nodes is NOT resumable', async () => {
-    // A fresh pause (nobody has rejected it yet) has onRejectPrompt set but no
-    // rejection_reason and resolved !== 'rejected' — there is nothing staged
-    // to re-run, so this must still return null (approve/reject, not resume,
-    // is the correct next action).
-    const candidate = makeRun({
-      id: 'paused-unresolved-gate',
-      status: 'paused',
-      metadata: {
-        approval: {
-          type: 'approval',
-          nodeId: 'review',
-          message: 'Please review',
-          onRejectPrompt: 'Fix: $REJECTION_REASON',
-        },
-      },
-    });
-    const store = makeStore({
-      getDagResumeSnapshot: mock(async () => ({
-        completedNodeOutputs: new Map(),
-        fanOutSnapshots: new Map(),
-        failedNodes: new Map(),
-        unresolvedNodeStarts: new Set<string>(),
-        budget: { workUnits: 0, spendUsd: 0 },
-        tokens: { input: 0, output: 0 },
-        costUsd: 0,
-      })),
-    });
-    const deps = makeDeps(store);
-    const result = await hydrateResumableRun(deps, candidate);
-    expect(result).toBeNull();
-    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+    expect(result.preCreatedRun).toBe(resumed);
+    expect(result.priorCompletedNodes.size).toBe(0);
+    expect(store.resumeWorkflowRun).toHaveBeenCalledWith('empty-prior');
   });
 
   it('#2707 new-mode gate needs no carve-out: resolving it writes node_completed, so priorCompletedNodes already covers resume', async () => {
@@ -586,8 +354,7 @@ describe('hydrateResumableRun', () => {
     });
     const deps = makeDeps(store);
     const result = await hydrateResumableRun(deps, candidate);
-    expect(result).not.toBeNull();
-    expect(result?.priorCompletedNodes).toBe(priorNodes);
+    expect(result.priorCompletedNodes).toBe(priorNodes);
   });
 
   it('propagates DB errors from getDagResumeSnapshot (no silent fallback)', async () => {

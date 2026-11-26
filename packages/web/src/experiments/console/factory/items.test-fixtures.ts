@@ -34,6 +34,7 @@ export function itemOn(
         operatorPause: null,
         hasResult: false,
         resultCommit: null,
+        changeSize: null,
       },
     ],
     queued: [],
@@ -50,6 +51,8 @@ export function itemOn(
     links: [],
     merged: null,
     landing: null,
+    ended: null,
+    workOrder: null,
     degraded: [],
   };
 }

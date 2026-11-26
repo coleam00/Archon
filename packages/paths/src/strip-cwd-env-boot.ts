@@ -9,6 +9,7 @@
  * // packages/cli/src/cli.ts — must be the very first import
  * import '@archon/paths/strip-cwd-env-boot';
  */
-import { stripCwdEnv } from './strip-cwd-env';
+import { type CwdEnvStrip, stripCwdEnv } from './strip-cwd-env';
 
-stripCwdEnv();
+/** What the boot strip removed in this process; `archon doctor` shows it. */
+export const cwdEnvStrip: CwdEnvStrip = stripCwdEnv();

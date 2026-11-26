@@ -283,6 +283,27 @@ describe('assertRunForgeAccess', () => {
       ]);
     });
 
+    test('does not check file settings: the run checks them in the checkout it opens them in', async () => {
+      const filed = {
+        ...settingNaming,
+        pack: {
+          ...settingNaming.pack,
+          settings: { ...settingNaming.pack.settings, policy: { type: 'string', file: true } },
+        },
+      } as const;
+      const cwd = capableMirror();
+      mkdirSync(join(cwd, '.archon', 'packs'), { recursive: true });
+      writeFileSync(
+        join(cwd, '.archon', 'packs', 'factory.yaml'),
+        'settings:\n  repo_host: github.com\n  repo_path: o/target\n  policy: docs/missing.md\n'
+      );
+      const check = mock<ForgeCheck>(async () => undefined);
+      await assertRunForgeAccess(noGithub, filed, prepared, site(cwd), check);
+      expect(check.mock.calls.map(([request]) => request)).toEqual([
+        { repo: { host: 'github.com', path: 'o/target' }, operations: ['pr.view'] },
+      ]);
+    });
+
     test('is refused without a check when only one input is set', async () => {
       const check = mock<ForgeCheck>(async () => undefined);
       const failures = await refusal(run({ repo_host: '', repo_path: 'o/target' }, check));

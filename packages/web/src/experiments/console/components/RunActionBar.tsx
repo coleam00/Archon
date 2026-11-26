@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from 'react';
 import { useNavigate } from 'react-router';
+import { rerunPath } from '../lib/rerun';
 import * as skill from '../skills';
 import { HttpError } from '../lib/http';
 import { invalidate } from '../store/cache';
@@ -164,9 +165,7 @@ function RerunAction({ run }: RunActionBarProps): ReactElement | null {
 
   const onRerun = (): void => {
     if (!canRerun || run.projectId === null) return;
-    const params = new URLSearchParams({ rerun: '1', workflow: run.workflow });
-    if (run.userMessage !== '') params.set('message', run.userMessage);
-    navigate(`/console/p/${run.projectId}?${params.toString()}`);
+    navigate(rerunPath({ ...run, projectId: run.projectId }));
   };
 
   return canRerun ? (

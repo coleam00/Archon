@@ -262,7 +262,8 @@ export interface GlobalConfig {
     /**
      * Opt-in install-wide cap on simultaneous provider attempts, keyed by provider
      * registration ID (e.g. `claude: 4`). Pi also honors `assistants.pi.maxConcurrent`.
-     * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`.
+     * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`; a settings
+     * write refuses a value that read would refuse.
      */
     providers?: Record<string, number>;
   };
@@ -426,8 +427,9 @@ export interface MergedConfig {
   baseBranch?: string;
   /**
    * Git remote name from repo config (worktree.remote).
-   * When undefined, callers auto-detect at runtime via getDefaultRemote()
-   * or fall back to 'origin'.
+   * When undefined, callers auto-detect at runtime via getDefaultRemote(); none
+   * falls back to an 'origin' that does not exist. Merge cleanup accepts only an
+   * existing origin and keeps the worktrees of a repository without one.
    */
   remote?: string;
   /**

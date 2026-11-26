@@ -1,10 +1,6 @@
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
-import {
-  mockRunLiveOwnerClose,
-  mockStartRunLiveOwner,
-  createTestWorkflowHost,
-} from '../test-support/workflow-command-harness';
+import { createTestWorkflowHost } from '../test-support/workflow-command-harness';
 
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
 
@@ -23,7 +19,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
 
-describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
+describe('workflowRunCommand — resume of a prior run', () => {
   let tempRoot: string;
   let priorRun: WorkflowRun;
   let consoleSpy: ReturnType<typeof spyOn>;
@@ -43,21 +39,20 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   });
 
   /**
-   * Stub discovery and a dead prior run. `status` drives the run's terminality
-   * and `isolationEnvs` seeds the isolation records the resume path matches —
-   * empty for an in-place prior run, the surviving worktree record by default.
+   * Stub discovery and a dead prior run whose worktree survives. `status` drives the
+   * run's terminality; `running` is an ownerless run its killed process left behind.
    */
   async function stubFailedPriorRun(
-    status: 'failed' | 'running' | 'paused' = 'failed',
-    isolationEnvs: Array<Record<string, unknown>> = [
+    status: 'failed' | 'running' | 'paused' = 'failed'
+  ): Promise<void> {
+    const isolationEnvs = [
       {
         id: 'env-1',
         codebase_id: 'cb-resume',
         working_path: tempRoot,
         branch_name: 'fix/issue-3124',
       },
-    ]
-  ): Promise<void> {
+    ];
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'archon-ship' }, 'project')],
@@ -84,62 +79,6 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
     (isolationDb.listByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce(isolationEnvs);
   }
 
-  it('refuses and names the same-branch relaunch with --supersedes', async () => {
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
-    await stubFailedPriorRun();
-    mockStartRunLiveOwner.mockClear();
-    mockRunLiveOwnerClose.mockClear();
-    (hydrateResumableRun as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      expect(mockStartRunLiveOwner).toHaveBeenCalledWith('run-dead', {});
-      return null;
-    });
-
-    const write = spyOn(fs, 'writeFileSync').mockImplementation(() => {});
-    const close = spyOn(fs, 'closeSync').mockImplementation(() => {});
-    process.env[DETACHED_RESUME_RECEIPT_ENV] = '1';
-    try {
-      await expect(
-        workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
-          resume: true,
-          continuationRun: priorRun,
-        })
-      ).rejects.toThrow(
-        /no completed nodes and no interactive-loop state[\s\S]*archon workflow run archon-ship --branch fix\/issue-3124 --supersedes run-dead/
-      );
-
-      expect(write).not.toHaveBeenCalled();
-    } finally {
-      Reflect.deleteProperty(process.env, DETACHED_RESUME_RECEIPT_ENV);
-      write.mockRestore();
-      close.mockRestore();
-    }
-
-    // The refusal is still a refusal: no run is started.
-    expect(executeWorkflow).not.toHaveBeenCalled();
-    expect(mockRunLiveOwnerClose).toHaveBeenCalledTimes(1);
-  });
-
-  it('suggests a fresh in-place relaunch when no isolation record matched', async () => {
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
-    await stubFailedPriorRun('failed', []);
-    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-
-    // An in-place relaunch cannot carry --branch: the prior run's branch is the
-    // main checkout's own, so suggesting it would hand the operator a command
-    // this same CLI refuses.
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
-        resume: true,
-        continuationRun: priorRun,
-      })
-    ).rejects.toThrow(
-      /^Cannot resume: the prior run for 'archon-ship' has no completed nodes and no interactive-loop state\.\nNothing can be skipped, so start a fresh run instead:\n  archon workflow run archon-ship --supersedes run-dead$/
-    );
-    expect(executeWorkflow).not.toHaveBeenCalled();
-  });
-
   it('reports a resume refused for capacity as a busy resource, not lost state', async () => {
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
@@ -155,24 +94,6 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
       })
     ).rejects.toThrow(
       /^Cannot resume workflow 'archon-ship' now: Workflow run 'run-dead' cannot resume while resource owner 'holder-1' has priority\. It stays paused;/
-    );
-    expect(executeWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('names the abandon step for a stale-running orphan before the relaunch', async () => {
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
-    await stubFailedPriorRun('running');
-    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-
-    // --supersedes refuses a still-running run, so the message must first release it.
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
-        resume: true,
-        continuationRun: priorRun,
-      })
-    ).rejects.toThrow(
-      /no completed nodes and no interactive-loop state[\s\S]*archon workflow abandon run-dead[\s\S]*archon workflow run archon-ship --branch fix\/issue-3124 --supersedes run-dead/
     );
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
@@ -227,24 +148,28 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
     });
   }
 
-  it('still resumes when the prior run has completed nodes', async () => {
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
-    await stubFailedPriorRun();
-    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      preCreatedRun: { id: 'run-dead', workflow_name: 'archon-ship' },
-      priorCompletedNodes: new Map([['triage', 'done']]),
-    });
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'run-dead',
-    });
+  for (const status of ['failed', 'running'] as const) {
+    it(`restarts a ${status} run with no completed node in place, under its own id`, async () => {
+      const { executeWorkflow } = await import('@archon/workflows/executor');
+      await stubFailedPriorRun(status);
+      (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+        success: true,
+        workflowRunId: 'run-dead',
+      });
 
-    await workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
-      resume: true,
-      continuationRun: priorRun,
-    });
+      await workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'archon-ship', 'go', {
+        resume: true,
+        continuationRun: priorRun,
+      });
 
-    expect(executeWorkflow).toHaveBeenCalledTimes(1);
-  });
+      expect(executeWorkflow).toHaveBeenCalledTimes(1);
+      const call = (executeWorkflow as ReturnType<typeof mock>).mock.calls[0] as unknown[];
+      const opts = call.at(-1) as {
+        preCreatedRun?: { id: string };
+        priorCompletedNodes?: Map<string, unknown>;
+      };
+      expect(opts.preCreatedRun?.id).toBe('run-dead');
+      expect(opts.priorCompletedNodes?.size).toBe(0);
+    });
+  }
 });

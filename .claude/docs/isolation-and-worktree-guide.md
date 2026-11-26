@@ -36,7 +36,7 @@ Five request types, all extending `IsolationRequestBase` (which carries `codebas
 
 ---
 
-## The 7-Step Resolution Order (`packages/isolation/src/resolver.ts`)
+## The Resolution Order (`packages/isolation/src/resolver.ts`)
 
 `IsolationResolver.resolve()` executes these steps in strict order. Each can short-circuit.
 
@@ -45,6 +45,11 @@ If `request.existingEnvId` is set, checks DB row + filesystem path via `worktree
 
 ### Step 2: No Codebase
 If `request.codebase` is `null` → `{ status: 'none', cwd: '/workspace' }`.
+
+### Step 2b: Folder Project
+If `request.codebase.kind === 'folder'`, calls `resolveFolderBackend(codebase, { container: false })` and then `backend.prepare()`. Returns `{ status: 'none', cwd }` with the real folder path, not the `/workspace` sentinel; no worktree is created. Only `prepared.cwd` is passed on, because the `'none'` result has no execution-context field.
+
+Before Step 3, `resolveCanonicalPath()` finds the codebase's repository path; it can return `blocked`.
 
 ### Step 3: Workflow Reuse
 `store.findActiveByWorkflow(codebaseId, workflowType, workflowId)` — finds existing env with same workflow identity. If filesystem valid → reuse it. If filesystem gone → mark destroyed, fall through.
@@ -55,16 +60,13 @@ When `hints.linkedIssues` is non-empty, iterates issue numbers and tries `findAc
 ### Step 5: PR Branch Adoption
 When `hints.prBranch` is set, calls `findWorktreeByBranch(canonicalPath, prBranch)` to scan `git worktree list --porcelain`. If found and path exists → creates DB row with `metadata: { adopted: true, adopted_from: 'skill' }`.
 
-### Step 6: Limit Check + Auto-cleanup
-Compares `store.countActiveByCodebase()` against `maxWorktrees` (default 25). If at limit → tries `cleanup.makeRoom()` (removes merged branches). If still at limit → `blocked` with formatted user message.
-
-### Step 7: Create New Environment
+### Step 6: Create New Environment
 1. Constructs concrete `IsolationRequest` from `workflowType` + hints
 2. Calls `provider.create(isolationRequest)`
 3. On known error → `blocked` with classified message
 4. On unknown error → re-throws (crash)
 5. On success → `store.create()` to register
-6. If `store.create()` fails → destroys orphaned worktree before re-throwing
+6. If `store.create()` fails → re-throws after a best-effort rollback (`registerWorktree()` in `store.ts`): it removes only a worktree this call created, and keeps it when a new registration for the path appeared or the store cannot confirm ownership. An adopted worktree stays on disk.
 
 ---
 
@@ -196,20 +198,18 @@ After environment cleanup: `sessionDb.deleteOldSessions(30)` (session retention)
 
 ---
 
-## `makeRoom()` Strategy
+## Merged Cleanup
 
-When at worktree limit: only removes **merged branches** (not stale ones); it is `cleanupMergedWorktrees`, the same path as `archon isolation cleanup --merged`. For each environment:
-- Judge the merge (below)
-- Skip if uncommitted changes, or a workflow run can still claim it (running, pending, paused, or failed-but-resumable)
+`cleanupMergedWorktrees()` in `services/cleanup/merged-sweep.ts` runs from chat `/worktree cleanup merged` and `archon isolation cleanup --merged`. For each environment:
+- Judge the merge (below). It acts on a `merged` verdict, or on `pr-closed` when the CLI passes `--include-closed`
+- Skip if uncommitted changes, a running, pending or paused run, or a start that was handed the checkout and still waits. A failed run does not block: the qualifying verdict releases its lock
 - Remove with `deleteRemoteBranch: true`
-
-If merged cleanup frees space → proceed with creation. If not → block with formatted limit message showing breakdown of merged/stale/active counts.
 
 ### How cleanup decides a branch is merged
 
-`judgeBranchForRemoval()` in `services/cleanup/merge-verdict.ts` is the shared decision for the scheduled sweep, `makeRoom()` and `--merged`. It first checks base-branch ancestry and `git cherry` patch equivalence, requiring Git integration to cover both the worktree HEAD and local branch ref where they exist.
+`judgeBranchForRemoval()` in `services/cleanup/merge-verdict.ts` is the shared decision for the scheduled sweep (`scheduled-sweep.ts`) and the merged cleanup above. It first checks base-branch ancestry and `git cherry` patch equivalence, requiring Git integration to cover both the worktree HEAD and local branch ref where they exist.
 
-If Git does not prove integration, cleanup looks up a PR by the local branch name, then discovers candidates through GitHub's commit-to-PR lookup for each existing local tip. This also finds PRs published under a different branch name. One **MERGED PR** must cover every existing local tip: each tip must equal or be an ancestor of that same PR head (`isRevCoveredBy` fetches a missing head). Manual `--include-closed` also accepts a closed but unmerged PR with the same coverage check; scheduled cleanup and `makeRoom()` do not opt in.
+If Git does not prove integration, cleanup looks up a PR by the local branch name, then discovers candidates through GitHub's commit-to-PR lookup for each existing local tip. This also finds PRs published under a different branch name. One **MERGED PR** must cover every existing local tip: each tip must equal or be an ancestor of that same PR head (`isRevCoveredBy` fetches a missing head). Manual `--include-closed` also accepts a closed but unmerged PR with the same coverage check; scheduled cleanup and chat `/worktree cleanup merged` do not opt in.
 
 A tip past the proving PR head stays: run branch names get reused, and a detached HEAD can hold commits no ref protects. A base inspection or candidate comparison error immediately stops judgment for that environment, retains the worktree, and is reported. Cleanup does not try PR evidence after a base inspection error or later candidates after a comparison error. A failed PR lookup (`UNAVAILABLE`) retains and reports it when Git has not already proved integration; it never counts as merged.
 
@@ -227,7 +227,7 @@ A tip past the proving PR head stays: run branch names get reused, and a detache
 | Isolation request types | `packages/isolation/src/types.ts` |
 | `IIsolationStore` interface | `packages/isolation/src/store.ts` |
 | Factory / singleton | `packages/isolation/src/factory.ts` |
-| 7-step resolver | `packages/isolation/src/resolver.ts` |
+| Resolver | `packages/isolation/src/resolver.ts` |
 | `WorktreeProvider` | `packages/isolation/src/providers/worktree.ts` |
 | File copy utilities | `packages/isolation/src/worktree-copy.ts` |
 | Error classification | `packages/isolation/src/errors.ts` |

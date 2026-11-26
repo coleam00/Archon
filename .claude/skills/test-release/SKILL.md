@@ -305,55 +305,72 @@ If you *do* have `claudeBinaryPath` set globally, skip this test or temporarily 
 
 ### Test 4 — Env-leak guard strips sensitive keys from .env
 
-Create a second throwaway repo with a fake sensitive key:
+Create a second throwaway repo with a fake sensitive key and a one-node workflow. The
+node compares the key it sees with the planted value inside the run and prints only a
+fixed marker, never a value:
 
 ```bash
 LEAKREPO=/tmp/archon-test-leak-$(date +%s)
-mkdir -p "$LEAKREPO"
+mkdir -p "$LEAKREPO/.archon/workflows"
 cd "$LEAKREPO"
 git init -q
 git commit -q --allow-empty -m init
 printf 'ANTHROPIC_API_KEY=sk-ant-test-fake\n' > .env
-"$BINARY" workflow run archon-investigate --no-worktree "hello" 2>&1 | tee /tmp/archon-test-leak.log
+cat > .archon/workflows/env-leak-probe.yaml <<'YAML'
+name: env-leak-probe
+description: Reports whether the target repo's ANTHROPIC_API_KEY reached the run
+nodes:
+  - id: probe
+    bash: |
+      if [ "${ANTHROPIC_API_KEY:-}" = "sk-ant-test-fake" ]; then echo "probe: LEAKED"
+      elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then echo "probe: OTHER"
+      else echo "probe: CLEAN"; fi
+YAML
 ```
 
-**Pass criteria** (current behaviour — the guard **strips**, it does not refuse):
+**Pass criteria** (current behaviour — the guard **strips** silently, it does not refuse):
 
-- Output contains a strip line naming the repo and the source file, of the form:
-  `[archon] stripped N keys from <repo> (.env) to prevent target repo env from leaking into Archon processes`
-- `N` equals the number of keys planted (1 for the `.env` above) — a count of `0`
-  means the file was not read at all, which is a real regression
-- The workflow is then allowed to proceed and complete normally
+- Run on a fresh scratch Archon home with no inherited `ANTHROPIC_API_KEY` or
+  `DATABASE_URL`, the probe workflow completes and prints `probe: CLEAN`. With no other
+  source for the key, any other marker means the planted key, or some key, reached the run
+- No `[archon] stripped` line on stderr: the guard no longer prints on every command
+- `archon doctor` in the repo names this repo's `.env` and the planted key:
+  `Target repo .env: 1 key from <repo>/.env is kept out of runs, …: ANTHROPIC_API_KEY`
 
-Assert on the strip line — pinned to **this** repo and **this** key count, so a
-strip from some other directory cannot produce a false pass. Capture the exit
-status too: under the strip design the workflow is expected to succeed, so a
-non-zero exit is its own failure.
+The probe is the security check: it observes the run itself. The doctor line only
+checks the operator-facing report. The scratch home keeps your own configured key from
+masking a broken guard or appearing in the log, and keeps the run off your database.
 
 ```bash
-"$BINARY" workflow run archon-investigate --no-worktree "hello" > /tmp/archon-test-leak.log 2>&1
+PROBE_HOME=$(mktemp -d)
+probe() { env -u ANTHROPIC_API_KEY -u DATABASE_URL ARCHON_HOME="$PROBE_HOME" "$BINARY" "$@"; }
+probe workflow run env-leak-probe --no-worktree > /tmp/archon-test-leak.log 2>&1
 leak_exit=$?
+probe doctor > /tmp/archon-test-leak-doctor.log 2>&1
+rm -rf "$PROBE_HOME"
 
 # $LEAKREPO may be a symlinked path (/tmp -> /private/tmp on macOS); the binary
-# logs the resolved form, so compare against that.
+# reports the resolved form, so compare against that.
 resolved_repo=$(cd "$LEAKREPO" && pwd -P)
-expected="[archon] stripped 1 keys from ${resolved_repo} (.env) to prevent target repo env from leaking into Archon processes"
+expected="Target repo .env: 1 key from ${resolved_repo}/.env is kept out of runs"
 
 if [ "$leak_exit" -ne 0 ]; then
   echo "FAIL: workflow exited $leak_exit — the guard strips and proceeds, it should not abort"
-elif grep -qxF "$expected" /tmp/archon-test-leak.log; then
-  echo "PASS: env-leak guard stripped exactly the planted key from this repo"
+elif ! grep -qx 'probe: CLEAN' /tmp/archon-test-leak.log; then
+  echo "FAIL: the run saw a key. Probe said: $(grep -o 'probe: [A-Z]*' /tmp/archon-test-leak.log || echo nothing)"
+elif grep -qF '[archon] stripped' /tmp/archon-test-leak.log; then
+  echo "FAIL: the per-command strip line is back on stderr"
+elif grep -F "$expected" /tmp/archon-test-leak-doctor.log | grep -qF ': ANTHROPIC_API_KEY'; then
+  echo "PASS: the planted key stayed out of the run, and doctor reports it for this repo"
 else
-  echo "FAIL: expected strip line absent. Got:"
-  grep -F '[archon] stripped' /tmp/archon-test-leak.log || echo "  (no strip line at all — guard inactive)"
+  echo "FAIL: expected doctor line absent. Got:"
+  grep -F 'Target repo .env' /tmp/archon-test-leak-doctor.log || echo "  (no doctor line at all)"
 fi
 ```
 
-An exact-match assertion is deliberate here. A looser pattern such as
-`stripped [1-9][0-9]* keys .*\.env` passes on **any** positive count from **any**
-path, so a strip belonging to a different repository — or a count inflated by an
-unrelated `.env` — reads as success while the regression it is meant to catch
-goes unnoticed.
+The doctor assertion is pinned to **this** repo, **this** count and **this** key. A
+looser pattern such as `[1-9][0-9]* keys .*\.env` passes on **any** positive count
+from **any** path, so a report belonging to a different repository reads as success.
 
 > **History — do not re-assert the old criteria.** This test previously expected a
 > *refusal* (`Cannot add codebase` / `Cannot run workflow`, non-zero exit), which
@@ -366,9 +383,9 @@ goes unnoticed.
 
 **Common failures:**
 
-- No strip line at all → the guard is not active; the `.env` is reaching subprocesses
-- `stripped 0 keys` → the file was located but not parsed
-- Strip line names the wrong file or repo → path resolution regression
+- The probe prints `LEAKED` → the guard is not active; the `.env` reaches runs
+- Doctor reports `skip` (no `.env` keys) → the file was not found or not parsed
+- Doctor names the wrong file or repo → path resolution regression
 
 Clean up the leak test repo:
 

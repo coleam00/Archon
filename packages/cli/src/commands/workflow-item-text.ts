@@ -133,6 +133,12 @@ function runLines(run: ItemRun): string[] {
       `            result: archon workflow get ${run.id} --json${holds ? `, ${holds}` : ''}`
     );
   else if (holds) lines.push(`            result: ${holds}`);
+  if (run.changeSize) {
+    const { files, added, removed, base, commit } = run.changeSize;
+    lines.push(
+      `            change: ${files} file${files === 1 ? '' : 's'}, +${added} -${removed} at ${commit.slice(0, 12)} from ${base.slice(0, 12)}`
+    );
+  }
   if (run.operatorPause) lines.push(`            ${describeOperatorPause(run.operatorPause)}`);
   if (run.awaitingExecution)
     lines.push(`            ${awaitingExecutionText(run.awaitingExecution)}`);
@@ -181,7 +187,12 @@ function queuedLines(
     `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, ${waits}, queued ${minute(start.queuedAt)}`,
   ];
   if (start.heldBehind) lines.push(...heldBehindLines('waits behind', start.heldBehind));
-  if (!held) lines.push(`            ${admittedByText(start.hostId, served)}`);
+  // Admission keeps queue order: nothing admits it while an unreadable request is ahead.
+  if (start.blockedBy !== null)
+    lines.push(
+      `            not admitted while request ${start.blockedBy} ahead of it cannot be read; withdraw that one: archon trigger withdraw ${start.blockedBy}`
+    );
+  else if (!held) lines.push(`            ${admittedByText(start.hostId, served)}`);
   return lines;
 }
 
@@ -280,12 +291,61 @@ function waitLines(read: ItemRead): string[] {
   );
 }
 
-/** The facts under the item's name: its merge and the branch it lands on. */
+/**
+ * A work order's state and the members it names: those open, or those whose state cannot be
+ * told. Each member part that could not be read gets its own line, whatever the state.
+ */
+function workOrderLines(read: ItemRead): string[] {
+  const order = read.workOrder;
+  if (order === null) return [];
+  const name = (item: ItemRead['item']) =>
+    item.projectKey === read.item.projectKey ? item.key : `${item.projectKey}/${item.key}`;
+  const keys = (state: (typeof order.members)[number]['state']) =>
+    order.members.filter(member => member.state === state).map(({ item }) => name(item));
+  const total = String(order.members.length);
+  const lines: string[] = [];
+  switch (order.state) {
+    case 'open': {
+      const open = keys('open');
+      lines.push(
+        `Work order: open, ${String(open.length)} of ${total} members open: ${open.join(', ')}`
+      );
+      break;
+    }
+    case 'done':
+      lines.push(`Work order: done, all ${total} members merged, ended or done`);
+      break;
+    case 'unknown': {
+      const unknown = keys('unknown');
+      lines.push(
+        unknown.length > 0
+          ? `Work order: unknown, the state of member(s) cannot be told: ${unknown.join(', ')}`
+          : 'Work order: unknown, a link of this item could not be read'
+      );
+    }
+  }
+  const part = { merge_unreadable: 'merge', end_unreadable: 'end', link_unreadable: 'link' };
+  for (const report of read.degraded)
+    if (report.reason === 'member_unreadable')
+      lines.push(
+        `  The ${part[report.report.reason]} recorded on member ${name(report.member)} could not be read.`
+      );
+  return lines;
+}
+
+/** The facts under the item's name: its end, its merge, its work order and the branch it lands on. */
 function itemFactLines(read: ItemRead): string[] {
   const lines: string[] = [];
+  if (read.ended !== null)
+    lines.push(
+      `Ended ${minute(read.ended.at)}${answererText(read.ended.by)} via ${read.ended.via}: ${read.ended.reason}`
+    );
+  if (read.degraded.some(report => report.reason === 'end_unreadable'))
+    lines.push('The end recorded on this item could not be read.');
   if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
   if (read.degraded.some(report => report.reason === 'merge_unreadable'))
     lines.push('The merge recorded on this item could not be read.');
+  lines.push(...workOrderLines(read));
   if (read.landing !== null)
     lines.push(`Lands on: ${read.landing.branch} (${landingSourceText(read.landing)})`);
   for (const report of read.degraded)

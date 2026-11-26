@@ -49,6 +49,7 @@ function item(key: string, stage: string | null, state: ItemRead['standing']['st
         operatorPause: null,
         hasResult: false,
         resultCommit: null,
+        changeSize: null,
       },
     ],
     queued: [],
@@ -63,6 +64,8 @@ function item(key: string, stage: string | null, state: ItemRead['standing']['st
     links: [],
     merged: null,
     landing: null,
+    ended: null,
+    workOrder: null,
     degraded: [],
   };
 }

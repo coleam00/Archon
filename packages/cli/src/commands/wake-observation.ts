@@ -68,6 +68,8 @@ export async function observingReport(host: WorkflowHost, schedules: NativeSched
     source: source.sourceInstanceId,
     everySeconds: source.everySeconds,
     labels: source.labels,
+    openedIssues: source.openedIssues,
+    unservedBindings: source.unservedBindings,
   }));
   if (sources.length === 0) return undefined;
   const server = `an Archon server started with ARCHON_WEBHOOK_SOURCES runs for this install`;

@@ -467,6 +467,8 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       ['project/.archon/workflows/pack/flow/beta.yaml', 'name: beta\n'],
       ['project/.archon/commands/do.md', '# do\n'],
       ['global/scripts/run.sh', 'echo hi\n'],
+      // Captures taken before `.env` files were left out still hold them, and verify.
+      ['project/.archon/scripts/.env', 'SECRET=1\n'],
       ['bundled/workflows/defaults/bundled.yaml', 'name: bundled\n'],
       ['bundled/commands/defaults/bundled.md', '# bundled\n'],
     ];
@@ -475,7 +477,7 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, content);
     }
-    const digest = '8622a93dc7846a9b6bb977235940555166e11d507839e84f74c35c7f17c0a03d';
+    const digest = '4decaea61878efa1ba273a8fc78b4b0693f88da21ecda89b1edf0fbb6fd61a50';
     await writeFile(
       join(captureRoot, 'manifest.json'),
       `${JSON.stringify({
@@ -485,7 +487,7 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
         captured_at: '2026-01-01T00:00:00.000Z',
         digest,
         file_count: files.length,
-        byte_count: 77,
+        byte_count: 86,
         scopes: ['project', 'global', 'bundled'],
         source_config: DEFAULT_WORKFLOW_SOURCE_CONFIG,
       })}\n`

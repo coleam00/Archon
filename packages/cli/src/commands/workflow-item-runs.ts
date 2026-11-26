@@ -48,6 +48,7 @@ export async function findRunsCodebase(
   try {
     const inherited = await inheritedWorkflowCodebase(host, opts.all);
     if (inherited !== undefined || opts.all) return inherited;
+    // `resolveRunIdArg` uses this same lookup on the same cwd, so a listed prefix resolves.
     return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
   } catch (error) {
     const err = error as Error;

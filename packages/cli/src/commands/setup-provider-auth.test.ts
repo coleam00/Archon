@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import * as prompts from '@clack/prompts';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { listPiModels, PiProvider } from '@archon/providers/community/pi';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import {
   collectPiConfig,
   detectClaudeExecutablePath,
@@ -192,6 +193,31 @@ describe('writeHomePiModelConfig', () => {
     writeFileSync(configPath(), broken);
     await writeHomePiModelConfig('xai/grok-4.7');
     expect(readFileSync(configPath(), 'utf-8')).toBe(broken);
+  });
+
+  it('refuses to save over a provider cap that admission would refuse, leaving the file as it was', async () => {
+    const badCap = 'concurrency:\n  providers:\n    claude: 0\n';
+    writeFileSync(configPath(), badCap);
+    await expect(writeHomePiModelConfig('xai/grok-4.7')).rejects.toThrow(
+      /concurrency\.providers\.claude/
+    );
+    expect(readFileSync(configPath(), 'utf-8')).toBe(badCap);
+  });
+
+  it('refuses a zero cap inherited through a YAML merge key, leaving the file as it was', async () => {
+    const inherited = 'base: &b\n  providers:\n    claude: 0\nconcurrency:\n  <<: *b\n';
+    writeFileSync(configPath(), inherited);
+    await expect(writeHomePiModelConfig('xai/grok-4.7')).rejects.toThrow(
+      /concurrency\.providers\.claude/
+    );
+    expect(readFileSync(configPath(), 'utf-8')).toBe(inherited);
+  });
+
+  it('saves over a valid cap inherited through a YAML merge key', async () => {
+    registerBuiltinProviders(); // the cap check needs `claude` registered, as the CLI does
+    writeFileSync(configPath(), 'caps: &c\n  claude: 4\nconcurrency:\n  providers:\n    <<: *c\n');
+    await writeHomePiModelConfig('xai/grok-4.7');
+    expect(piModel()).toBe('xai/grok-4.7');
   });
 
   it('keeps a model name with double quotes intact', async () => {

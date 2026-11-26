@@ -62,6 +62,8 @@ function read(key: string, partOf: string | null = null): ItemRead {
           ] as unknown as ItemRead['links']),
     merged: null,
     landing: null,
+    ended: null,
+    workOrder: null,
     degraded: [],
   };
 }

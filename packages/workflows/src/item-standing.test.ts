@@ -31,6 +31,7 @@ function standing(
   runs: Run[],
   facts: {
     merged?: boolean;
+    ended?: boolean;
     parts?: { done: boolean }[];
     dependsOn?: { done: boolean }[];
     stopped?: boolean;
@@ -43,6 +44,7 @@ function standing(
     waits: [],
     questions: facts.stopped === true ? [{ kind: 'stopped' }] : [],
     merged: facts.merged ?? false,
+    ended: facts.ended ?? false,
     parts: facts.parts ?? [],
     dependsOn: facts.dependsOn ?? [],
   });

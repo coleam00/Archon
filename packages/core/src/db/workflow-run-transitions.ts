@@ -14,6 +14,7 @@ import {
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { WORKTREE_REMOVAL_OWNER } from '@archon/isolation/types';
 import {
+  claimedFailureStatuses,
   sourceReleaseMetadata,
   DETACHED_LAUNCH_METADATA_KEY,
   EXECUTION_CLAIM_METADATA_KEY,
@@ -21,6 +22,7 @@ import {
   sourceReleasedEvent,
   operatorPauseRequestWrite,
   operatorPauseWrite,
+  PendingClaimRefusedError,
   RunLimitError,
   type FanOutCancelReason,
   type OperatorPauseRequest,
@@ -29,6 +31,7 @@ import {
 } from '@archon/workflows/store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
+import { CHANGE_SIZE_METADATA_KEY } from '@archon/workflows/schemas/change-size';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
@@ -65,6 +68,7 @@ import { insertStartReceipt } from './start-receipt-writes';
 import { recordStartLimitReset } from './start-limits';
 import { insertLinkedStarts } from './linked-starts';
 import { openItemAsksForCompletedRun } from './item-asks';
+import { recordRefusedHandoffStops } from './item-stops';
 import { openItemWaitsForCompletedRun } from './item-waits';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
@@ -223,6 +227,40 @@ async function isPending(query: TransactionQuery, id: string): Promise<boolean> 
 }
 
 /**
+ * True when the checkout the run in `remote_agent_workflow_runs` starts from (its path, or
+ * `$2`) has worktree records and none is active, or one is being removed: no claim may start
+ * it. The claim and its refusal read the same fragment.
+ */
+function claimCheckoutReleased(): string {
+  return `EXISTS (
+            SELECT 1 FROM remote_agent_isolation_environments e
+             WHERE e.provider = 'worktree'
+               AND e.codebase_id = remote_agent_workflow_runs.codebase_id
+               AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
+             GROUP BY e.working_path
+            HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
+                OR SUM(CASE WHEN e.status = 'active' AND ${getDialect().jsonText('e.metadata', WORKTREE_REMOVAL_OWNER)} IS NOT NULL THEN 1 ELSE 0 END) > 0
+          )`;
+}
+
+/**
+ * True when run `$1` has no start request (a hand start), or its request is admitted and
+ * still holds its resource slot. The claim and its refusal read the same fragment.
+ */
+function claimAdmissionHeld(): string {
+  return `(
+            NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
+            OR EXISTS (
+              SELECT 1
+                FROM remote_agent_resource_start_requests q
+                JOIN remote_agent_resource_slot_holders h
+                  ON h.resource_key = q.resource_key AND h.holder_kind = 'run' AND h.holder_id = CAST(q.id AS TEXT)
+               WHERE q.id = $1 AND q.status = 'admitted'
+            )
+          )`;
+}
+
+/**
  * A run whose checkout belongs only to destroyed worktree records, or to any record
  * being removed, cannot start. Cleanup's removal claim commits before its final
  * claimant check, so a run that reused the checkout too late to be seen, even through
@@ -246,38 +284,38 @@ export async function claimPendingWorkflowRun(
       (await heldItemRefusal(query, id, ['pending'])) ??
       ((await isPending(query, id)) ? await runLimitRefusal(query, id) : undefined);
     if (held) throw held;
+    const checkoutReleased = claimCheckoutReleased();
+    const admissionHeld = claimAdmissionHeld();
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},
               working_path = COALESCE(working_path, CAST($2 AS TEXT)),
               metadata = ${getDialect().jsonMerge('metadata', 3)}
         WHERE id = $1 AND status = 'pending'
-          AND NOT EXISTS (
-            SELECT 1 FROM remote_agent_isolation_environments e
-             WHERE e.provider = 'worktree'
-               AND e.codebase_id = remote_agent_workflow_runs.codebase_id
-               AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
-             GROUP BY e.working_path
-            HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
-                OR SUM(CASE WHEN e.status = 'active' AND ${getDialect().jsonText('e.metadata', WORKTREE_REMOVAL_OWNER)} IS NOT NULL THEN 1 ELSE 0 END) > 0
-          )
-          AND (
-            NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
-            OR EXISTS (
-              SELECT 1
-                FROM remote_agent_resource_start_requests q
-                JOIN remote_agent_resource_slot_holders h
-                  ON h.resource_key = q.resource_key AND h.holder_kind = 'run' AND h.holder_id = CAST(q.id AS TEXT)
-               WHERE q.id = $1 AND q.status = 'admitted'
-            )
-          )`,
+          AND NOT ${checkoutReleased}
+          AND ${admissionHeld}`,
       [
         id,
         workingPath ?? null,
         JSON.stringify({ [EXECUTION_OWNER_METADATA_KEY]: currentExecutionOwner() }),
       ]
     );
-    if (claimed.rowCount !== 1) return null;
+    if (claimed.rowCount !== 1) {
+      // Read with the same predicates why a still-pending run was refused. A run that left
+      // pending belongs to whoever moved it (null); so does one whose refusal cleared since.
+      type Refusal = { released: boolean | number; held: boolean | number };
+      const row = (
+        await query<Refusal>(
+          `SELECT ${checkoutReleased} AS released, ${admissionHeld} AS held
+             FROM remote_agent_workflow_runs WHERE id = $1 AND status = 'pending'`,
+          [id, workingPath ?? null]
+        )
+      ).rows[0];
+      if (row === undefined) return null;
+      if (row.released) throw new PendingClaimRefusedError(id, 'checkout_released');
+      if (!row.held) throw new PendingClaimRefusedError(id, 'admission_revoked');
+      return null;
+    }
     const selected = await query<WorkflowRunRow>(
       'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
@@ -437,6 +475,8 @@ export async function completeWorkflowRun(
         // And the waits, replacing its workflow's open set of waits on the item.
         if (result?.waits !== undefined)
           await openItemWaitsForCompletedRun(query, id, result.waits);
+        // A start refused at the hand-off is recorded on this run, as the stop it causes.
+        await recordRefusedHandoffStops(query, started);
       }
       return { update, started };
     });
@@ -472,24 +512,33 @@ export async function failWorkflowRun(
   error: string,
   options: NonNullable<Parameters<IWorkflowStore['failWorkflowRun']>[2]> = {}
 ): ReturnType<IWorkflowStore['failWorkflowRun']> {
-  const { exitReason, signal, pendingLaunchToken, expectedExecutionClaim, pendingOnly } = options;
+  const {
+    exitReason,
+    signal,
+    pendingLaunchToken,
+    expectedExecutionClaim,
+    pendingOnly,
+    changeSize,
+  } = options;
+  const claimed = claimedFailureStatuses(options).map(status => `'${status}'`);
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
   // ran again. A previous failure's copy is removed before the merge, since a run can
   // reach 'running' again carrying a stale stop reason (resume, or a fan-out cancel
   // recovery) and a new failure need not write one. A failed run is not paused at
-  // anything, so its last pause cause goes too.
+  // anything, so its last pause cause goes too, and so does an earlier pass's change size.
   const metadataWithoutPriorFailure = dialect.jsonRemove(
     'metadata',
     'scheduled_resume',
     RUN_STOP_REASON_METADATA_KEY,
-    PAUSE_CAUSE_METADATA_KEY
+    PAUSE_CAUSE_METADATA_KEY,
+    CHANGE_SIZE_METADATA_KEY
   );
   const claimPredicate =
     expectedExecutionClaim === undefined
       ? ''
-      : ` AND status = 'running' AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${
+      : ` AND status IN (${claimed.join(', ')}) AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${
           expectedExecutionClaim === null
             ? 'IS NULL'
             : `= $${pendingLaunchToken !== undefined ? 4 : 3}`
@@ -505,12 +554,13 @@ export async function failWorkflowRun(
          WHERE id = $1 AND ${
            pendingLaunchToken !== undefined
              ? `status = 'pending' AND ${dialect.jsonText('metadata', DETACHED_LAUNCH_METADATA_KEY)} = $3`
-             : "status IN ('running', 'pending')"
+             : `status IN (${[...claimed, "'pending'"].join(', ')})`
          }${pendingOnly ? " AND status = 'pending'" : ''}${claimPredicate}`,
         [
           id,
           JSON.stringify({
             error,
+            ...(changeSize !== undefined ? { [CHANGE_SIZE_METADATA_KEY]: changeSize } : {}),
             ...(exitReason !== undefined
               ? {
                   [RUN_STOP_REASON_METADATA_KEY]: {

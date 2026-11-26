@@ -139,6 +139,11 @@ export function createFileAdmissionStore(
     liftInstallHold: async () => null,
     listHeldStarts: async () => [],
     listHeldItemStarts: async () => [],
+    listAllHeldItemStarts: async () => [],
+    // The file store records no preparer process, so no preparer can be proven gone.
+    listPreparingStarts: async () => [],
+    // The file store keeps no items, so no refused start is any item's step.
+    listRefusedStarts: async () => [],
     // The file store keeps no run limit: `assertFileStoreConfiguration` refuses the key.
     getRunLimit: async () => null,
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
@@ -157,7 +162,6 @@ export function createFileAdmissionStore(
     // No start names an item here (`FileStoreUnsupportedError('items')`).
     listSkippedItemStarts: async () => [],
     readItemStartLimits: async () => ({ limits: [], countedUnder: {} }),
-    listWaitedItemHolders: async () => [],
     getResourceStartRequest: id =>
       query(async tx => {
         const row = await tx.request(id);
@@ -204,8 +208,10 @@ export function createFileAdmissionStore(
         tx.documents[pathFor('requests', id)] = row;
         const resource = await tx.slot(row.resource);
         resource.queue = resource.queue.filter(key => key !== id);
-        return row.launch;
+        return { launch: row.launch };
       }),
+    // Every request document is parsed when it is read, so none sits unreadable in a queue.
+    listUnreadableQueuedStarts: async () => [],
     ...createReceiptOperations(root, write, query),
   };
 }

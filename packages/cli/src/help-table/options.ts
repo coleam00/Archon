@@ -70,7 +70,8 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--input <name>=<value>',
-    description: 'Supply a declared workflow input; repeat per input',
+    description:
+      "Supply a declared workflow input; for 'trigger fire': set one event input as text; repeat per input",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -194,13 +195,14 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--as <name>',
     description:
-      "For 'workflow approve/reject/respond/answer/rule/link/pause': the name the answerer declares for itself,\nrecorded with an attention wait's answer, a ruling, a link or a pause as a claim (never checked; refused at a gate)",
+      "For 'workflow approve/reject/respond/answer/rule/end/link/pause': the name the answerer declares for itself,\nrecorded with an attention wait's answer, a ruling, an end, a link or a pause as a claim (never checked; refused at a gate)",
     owners: [
       { command: 'workflow', subcommand: 'approve' },
       { command: 'workflow', subcommand: 'reject' },
       { command: 'workflow', subcommand: 'respond' },
       { command: 'workflow', subcommand: 'answer' },
       { command: 'workflow', subcommand: 'rule' },
+      { command: 'workflow', subcommand: 'end' },
       { command: 'workflow', subcommand: 'link' },
       { command: 'workflow', subcommand: 'pause' },
     ],
@@ -239,11 +241,12 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--item <key>',
     description:
-      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow title': the item the title is set on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on",
+      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow title': the item the title is set on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on",
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'workflow', subcommand: 'runs' },
       { command: 'workflow', subcommand: 'rule' },
+      { command: 'workflow', subcommand: 'end' },
       { command: 'workflow', subcommand: 'merged' },
       { command: 'workflow', subcommand: 'landing' },
       { command: 'workflow', subcommand: 'title' },

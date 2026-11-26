@@ -82,7 +82,7 @@ async function itemLaunchRunConfig(
     // Resolved within the launch project, as the supersession itself resolves it: a short
     // prefix passed through unresolved would find no run and silently drop the config.
     const superseded = await host.deps.store.getWorkflowRun(
-      await resolveRunIdArg(host, options.supersedesRunId, undefined, false, codebase.id)
+      await resolveRunIdArg(host, options.supersedesRunId, undefined, 'pass-through', codebase.id)
     );
     item = superseded?.item_id ? await host.deps.store.getItem(superseded.item_id) : null;
   }

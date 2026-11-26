@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
-import { checkConfigFiles, checkProviderDeprecation } from './doctor-config';
+import { join } from 'path';
+import { checkConfigFiles, checkCwdEnvIsolation, checkProviderDeprecation } from './doctor-config';
 
 describe('checkConfigFiles', () => {
   it('passes and names the resolved default assistant', async () => {
@@ -41,5 +42,26 @@ describe('checkProviderDeprecation', () => {
       throw new Error('bad config');
     });
     expect(result.status).toBe('skip');
+  });
+});
+
+describe('checkCwdEnvIsolation', () => {
+  it('names the stripped files and keys', () => {
+    const result = checkCwdEnvIsolation({
+      cwd: '/repo',
+      files: ['.env', '.env.local'],
+      keys: ['LOCAL_KEY', 'OTHER_KEY', 'SECRET_KEY'],
+    });
+    expect(result).toEqual({
+      label: 'Target repo .env',
+      status: 'pass',
+      message:
+        `3 keys from ${join('/repo', '.env')}, ${join('/repo', '.env.local')} are kept out of runs, ` +
+        "so the target repo's secrets cannot reach Archon's processes: LOCAL_KEY, OTHER_KEY, SECRET_KEY",
+    });
+  });
+
+  it('skips when nothing was stripped', () => {
+    expect(checkCwdEnvIsolation({ cwd: '/repo', files: [], keys: [] }).status).toBe('skip');
   });
 });
