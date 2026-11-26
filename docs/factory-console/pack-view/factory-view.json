@@ -1092,6 +1092,9 @@
     }
   },
   "answers": {
+    "landed:fix": {
+      "label": "fix ordered"
+    },
     "triage:build": {
       "label": "build"
     },
