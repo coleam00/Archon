@@ -59,8 +59,8 @@ export function formatSpecLine(spec: string, description: string): string {
     // Spec overflows the column: description goes on its own line at col 29.
     firstLine = `  ${spec}\n${' '.repeat(HELP_DESC_COLUMN)}${first}`;
   } else if (spec.length + 2 <= HELP_DESC_COLUMN) {
-    // Pad spec so description lands at col 29.
-    const pad = ' '.repeat(HELP_DESC_COLUMN - spec.length - 2);
+    // Pad toward col 29, always leaving a separator.
+    const pad = ' '.repeat(Math.max(1, HELP_DESC_COLUMN - spec.length - 2));
     firstLine = `  ${spec}${pad}${first}`;
   } else {
     // Spec fills 28–35 chars: one space separator.

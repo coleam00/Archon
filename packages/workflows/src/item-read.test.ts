@@ -584,6 +584,7 @@ describe('reading an item', () => {
       links: [],
       ended: null,
       workOrder: null,
+      dependsOn: [],
       degraded: [],
     });
   });

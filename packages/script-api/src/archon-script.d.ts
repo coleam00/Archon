@@ -2946,6 +2946,15 @@ declare module 'archon:script' {
         readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
       }>;
     } | null;
+    readonly dependsOn: ReadonlyArray<{
+      readonly item: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+        readonly title?: string | null;
+      };
+      readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+    }>;
     readonly degraded: ReadonlyArray<{
       readonly type: 'degraded';
       readonly reason: 'run_unreadable';
@@ -3716,6 +3725,15 @@ declare module 'archon:script' {
           readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
         }>;
       } | null;
+      readonly dependsOn: ReadonlyArray<{
+        readonly item: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+          readonly title?: string | null;
+        };
+        readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+      }>;
       readonly degraded: ReadonlyArray<{
         readonly type: 'degraded';
         readonly reason: 'run_unreadable';

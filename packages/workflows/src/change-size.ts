@@ -45,6 +45,7 @@ export async function measureChangeSize(
       '--find-renames',
       '--no-ext-diff',
       '--no-textconv',
+      '--ignore-submodules=none',
       base,
       endCommit,
     ]);

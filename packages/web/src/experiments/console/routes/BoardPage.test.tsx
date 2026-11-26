@@ -72,6 +72,7 @@ function item(key: string, stage: string | null, state: ItemRead['standing']['st
     landing: null,
     ended: null,
     workOrder: null,
+    dependsOn: [],
     degraded: [],
   };
 }

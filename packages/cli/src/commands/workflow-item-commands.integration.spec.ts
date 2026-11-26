@@ -380,7 +380,11 @@ test.serial(
 );
 
 /** A run of `item-proof` on `key`: still running, or ended at once, stopping the item or failed. */
-async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Promise<string> {
+async function seedEnded(
+  key: string,
+  end: 'running' | 'stopped' | 'failed',
+  refusals: Parameters<typeof itemStoppedMetadata>[1] = {}
+): Promise<string> {
   let id = '';
   const result = await captureWorkflowCommand(archonHome, async host => {
     const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
@@ -399,7 +403,7 @@ async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Pr
       await host.deps.store.completeWorkflowRun(
         seeded.id,
         { duration_ms: 1 },
-        itemStoppedMetadata('Folded into another item.'),
+        itemStoppedMetadata('Folded into another item.', refusals),
         { outcome: { kind: 'enum', value: 'fold' } }
       );
   });
@@ -596,6 +600,73 @@ test.serial(
     // In the item's project, the stage its end started has not been prepared: the stop waits.
     await unpreparedStart('item-next', { cwd: projectRoot, workflowName: 'build' }, endedBy);
     expect(await stoppedRefs()).not.toContain(`stopped:${stopped}`);
+  }
+);
+
+test.serial(
+  'an item that depends on an open item waits on it, and is listed as stopped once it ends',
+  async () => {
+    const stoppedRefs = async () =>
+      (
+        succeeded(
+          await invoke(host =>
+            workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+          )
+        ) as { items: { kind: string; ref: string }[] }
+      ).items.flatMap(item => (item.kind === 'stopped' ? [item.ref] : []));
+    const link = async (request: Parameters<typeof workflowLinkCommand>[2]) =>
+      succeeded(
+        await invoke(host => workflowLinkCommand(host, projectRoot, request, true, callerEnv))
+      );
+    const waiting = await seedEnded('item-waiting', 'stopped');
+    // A refused start needs someone whatever the item waits on.
+    const refused = await seedEnded('item-refused', 'stopped', {
+      refused: [
+        {
+          receiptId: 'receipt-1',
+          bindingId: 'build',
+          workflow: 'build',
+          reason: 'inputs_unmapped',
+          refusedAt: '2026-11-26T10:00:00Z',
+        },
+      ],
+    });
+    await link({ item: 'item-waiting', kind: 'depends_on', to: 'item-blocker' });
+    await link({ item: 'item-refused', kind: 'depends_on', to: 'item-blocker' });
+    // The blocker is a work order whose member stays open after the blocker ends.
+    await link({ item: 'item-member', kind: 'part_of', to: 'item-blocker' });
+
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([
+      { item: { key: 'item-blocker' }, state: 'open' },
+    ]);
+    expect(await stoppedRefs()).not.toContain(`stopped:${waiting}`);
+    expect(await stoppedRefs()).toContain(`stopped:${refused}`);
+
+    // The blocker is ended and nothing starts on the waiting item: it is stopped again.
+    succeeded(
+      await invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'Nothing more on the blocker.'],
+          values: { item: 'item-blocker', as: 'triage-agent', json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
+      )
+    );
+    expect((await readItemJson('item-blocker')).workOrder).toMatchObject({ state: 'open' });
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([{ state: 'ended' }]);
+    expect(await stoppedRefs()).toContain(`stopped:${waiting}`);
+    // Standing's rule is stricter than attention's: an operator's end says nothing more happens
+    // on the blocker, not that it delivered, so the board keeps the item waiting (`item-parts.ts`).
+    expect((await readItemJson('item-waiting')).standing).toMatchObject({ state: 'waiting' });
   }
 );
 

@@ -65,6 +65,7 @@ function read(key: string, partOf: string | null = null): ItemRead {
     landing: null,
     ended: null,
     workOrder: null,
+    dependsOn: [],
     degraded: [],
   };
 }

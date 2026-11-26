@@ -84,6 +84,7 @@ function item(key: string, runs: ItemRead['runs']): ItemRead {
     landing: null,
     ended: null,
     workOrder: null,
+    dependsOn: [],
     degraded: [],
   } as ItemRead;
 }

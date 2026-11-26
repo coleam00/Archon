@@ -41,9 +41,19 @@ describe('parseInputAssignments (#2554)', () => {
     expect(parseInputAssignments([])).toEqual({});
   });
 
-  test('rejects an entry with no =', () => {
-    expect(() => parseInputAssignments(['scope'])).toThrow(WorkflowInputContractError);
-    expect(() => parseInputAssignments(['scope'])).toThrow(/expected 'name=value'/);
+  test('rejects an entry with no = by position without echoing it', () => {
+    const parse = () => parseInputAssignments(['scope=api', 'hunter2']);
+    expect(parse).toThrow(WorkflowInputContractError);
+    expect(parse).toThrow(/position 2/);
+    expect(parse).toThrow(/expected 'name=value'/);
+    expect(parse).not.toThrow(/hunter2/);
+  });
+
+  test('uses the path grammar without echoing an entry with no =', () => {
+    const parse = () => parseInputAssignments(['hunter2'], 'path');
+    expect(parse).toThrow(/position 1/);
+    expect(parse).toThrow(/expected 'name=path'/);
+    expect(parse).not.toThrow(/hunter2/);
   });
 
   test('rejects a name that is not a valid input name', () => {

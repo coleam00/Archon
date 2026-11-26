@@ -684,9 +684,11 @@ describe('trigger CLI durable execution', () => {
     const both = await fire(mappedConfig, ['--inputs', inputs, '--input', 'key=issue-947'], false);
     expect(both.exitCode).not.toBe(0);
     expect(both.stderr).toContain("Input 'key' is given by both --inputs and --input");
-    const malformed = await fire(mappedConfig, ['--input', 'oops'], false);
+    const malformed = await fire(mappedConfig, ['--input', 'hunter2'], false);
     expect(malformed.exitCode).not.toBe(0);
-    expect(malformed.stderr).toContain("'oops'");
+    expect(malformed.stderr).toContain('Invalid input assignment at position 1');
+    expect(malformed.stderr).toContain("expected 'name=value'");
+    expect(malformed.stderr).not.toContain('hunter2');
     expect(receipts()).toBe(recorded);
 
     // An --input value is an event input, not a launch literal: a workflow that declares no
