@@ -52,8 +52,15 @@ CLI commands inside the running container as `appuser`:
 docker compose exec -u appuser app bun run cli version
 ```
 
-Workflow commands act on a git repository inside the container; pass it with
-`--cwd`, for example `bun run cli workflow list --cwd /.archon/workspaces/<repo>`.
+Workflow commands act on a git checkout inside the container; pass it with
+`--cwd`. A project Archon cloned from a URL is checked out at
+`/.archon/workspaces/<owner>/<repo>/source` (see the
+[directory layout](/reference/archon-directories/#directory-structure)):
+
+```bash
+docker compose exec -u appuser app bun run cli workflow list --cwd /.archon/workspaces/<owner>/<repo>/source
+```
+
 The image has no `archon` executable on its `PATH`, and the container starts the
 server whatever arguments `docker run` passes.
 
