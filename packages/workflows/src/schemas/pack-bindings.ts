@@ -104,8 +104,8 @@ export const packEventBindingSchema = z
     /**
      * Wake the open wait `wait` that a run of `workflow`, a workflow of this pack, left on an
      * item, when the event's field `about` holds exactly the value the wait names. When the
-     * event names its subject, `item` is required with it (checked by the source plugin when
-     * the binding is generated), and only a wait on that item matches.
+     * event names its subject, only a wait on the item `item` maps it to matches, or, with no
+     * `item`, only a wait that names the same subject.
      */
     wake: z
       .object({ workflow: z.string().min(1), wait: z.string().min(1), about: z.string().min(1) })

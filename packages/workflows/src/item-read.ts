@@ -43,6 +43,7 @@ import { workOrderMemberUnreadableSchema, workOrderSchema } from './schemas/work
 import { recordSurfaceSchema } from './schemas/record-surface';
 import { parseRunUsage } from './schemas/run-usage';
 import { chosenAskOption, type StoredItemAsk } from './schemas/item-ask';
+import { itemWaitSubjectSchema } from './schemas/item-wait';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import {
   attentionAnswererSchema,
@@ -289,6 +290,7 @@ export const itemAnswerKindSchema = z.enum({
 export const itemOpenWaitSchema = z.object({
   event: z.string(),
   about: z.string(),
+  subject: itemWaitSubjectSchema.nullable(),
   workflow: z.string(),
   runId: z.string(),
   waitingSince: z.string().datetime(),
@@ -819,6 +821,7 @@ export async function assembleItemRead(
     waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
       event: wait.event,
       about: wait.about,
+      subject: wait.subject,
       workflow: wait.workflowName,
       runId: wait.runId,
       waitingSince: wait.openedAt,
