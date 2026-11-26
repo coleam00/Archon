@@ -264,19 +264,36 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
     }
   });
 
-  test("resuming a failed run below the item's runs opens the item", async () => {
+  test('open work excludes ended descendants, keeps itemless descendants, and returns after a descendant resumes', async () => {
     const harness = await makeHarness();
     try {
+      const itemless = await harness.store.createWorkflowRun({
+        workflow_name: 'deliver',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+      });
+      const itemlessChild = await startOnItem(harness, itemless.id);
+      await harness.store.failWorkflowRun(itemlessChild, 'itemless child failed');
+      await harness.store.failWorkflowRun(itemless.id, 'itemless root failed');
+      await backdate(harness, itemless.id, 1);
+      await backdate(harness, itemlessChild, 1);
       const parent = await startOnItem(harness);
       const child = await startOnItem(harness, parent);
+      const grandchild = await startOnItem(harness, child);
+      await harness.store.failWorkflowRun(grandchild, 'grandchild failed');
       await harness.store.failWorkflowRun(child, 'child failed');
       await harness.store.failWorkflowRun(parent, 'parent failed');
       await recordItemEnd(harness.store, end, operator, 'cli');
       expect(await holding(harness)).not.toBeNull();
-      await harness.store.resumeWorkflowRun(child);
+      expect((await openWorkIds(harness)).sort()).toEqual([itemless.id, itemlessChild].sort());
+      expect(await openWorkIds(harness, 1)).toHaveLength(1);
+      await harness.store.resumeWorkflowRun(grandchild);
       expect(await holding(harness)).toBeNull();
-      await harness.store.failWorkflowRun(child, 'child failed again');
+      await harness.store.failWorkflowRun(grandchild, 'grandchild failed again');
       expect(await holding(harness)).toBeNull();
+      expect((await openWorkIds(harness)).sort()).toEqual(
+        [parent, child, grandchild, itemless.id, itemlessChild].sort()
+      );
     } finally {
       await harness.close();
     }

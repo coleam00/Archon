@@ -661,6 +661,7 @@ export const workflowRunsQuerySchema = z.object({
   // contract explicit (the handler treats only 'true' as on).
   mine: z.enum(['true', 'false']).optional(),
   // Open-work inbox (#2747): 'true' lists terminal failed runs nothing has
-  // adopted or superseded. Mutually exclusive with status/conversationId.
+  // adopted or superseded, excluding items whose end holds. Mutually exclusive with
+  // status/conversationId.
   open: z.enum(['true', 'false']).optional(),
 });

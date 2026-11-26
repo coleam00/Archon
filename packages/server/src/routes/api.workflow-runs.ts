@@ -68,6 +68,7 @@ const listWorkflowRunsRoute = createRoute({
       content: { 'application/json': { schema: workflowRunListResponseSchema } },
       description: 'OK',
     },
+    400: jsonError('Invalid limit'),
     500: jsonError('Server error'),
   },
 });
@@ -180,6 +181,9 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
       // Open-work inbox (#2747): failed runs with no adopter/successor or holding item end.
       // Mutually exclusive with the other filters by contract; the inbox wins when combined.
       if (c.req.query('open') === 'true') {
+        if (c.req.query('limit') !== undefined && (!Number.isInteger(limitRaw) || limitRaw < 1)) {
+          return apiError(c, 400, 'Limit must be a positive integer');
+        }
         const openRuns = await readOpenWorkRuns(createWorkflowStore(), { codebaseId, limit });
         return c.json({ runs: openRuns.map(toApiWorkflowRun) });
       }

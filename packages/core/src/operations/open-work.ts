@@ -4,10 +4,11 @@
  * end rule; a run on no item remains eligible under the store's status and adopter rules.
  */
 import { readHoldingItemEnd, type ItemEndStore } from '@archon/workflows/item-end';
+import { readRunItemId } from '@archon/workflows/item-of-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowStore } from '@archon/workflows/store';
 
-type OpenWorkStore = ItemEndStore & Pick<IWorkflowStore, 'findOpenWorkRuns'>;
+type OpenWorkStore = ItemEndStore & Pick<IWorkflowStore, 'findOpenWorkRuns' | 'getWorkflowRun'>;
 
 export async function readOpenWorkRuns(
   store: OpenWorkStore,
@@ -20,7 +21,8 @@ export async function readOpenWorkRuns(
   const runs: WorkflowRun[] = [];
   for (const run of candidates) {
     if (runs.length === options.limit) break;
-    if (run.item_id !== null && (await readHoldingItemEnd(store, run.item_id)) !== null) continue;
+    const itemId = await readRunItemId(store, run);
+    if (itemId !== null && (await readHoldingItemEnd(store, itemId)) !== null) continue;
     runs.push(run);
   }
   return runs;

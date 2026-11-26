@@ -344,6 +344,22 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       });
       expect(await rejection(store.deleteOldWorkflowRuns(-1))).toBeInstanceOf(Error);
     });
+    test('open work with a null limit returns every candidate beyond the numeric default', async () => {
+      const expected: string[] = [];
+      for (let index = 0; index < 51; index++) {
+        const run = await create(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
+        await store.failWorkflowRun(run.id, 'failed');
+        expected.push(run.id);
+      }
+      const runs = await store.findOpenWorkRuns({
+        codebaseId: CONFORMANCE_CODEBASE_ID,
+        limit: null,
+      });
+      expect(runs.map(run => run.id).sort()).toEqual(expected.sort());
+      expect(await store.findOpenWorkRuns({ codebaseId: CONFORMANCE_CODEBASE_ID })).toHaveLength(
+        50
+      );
+    });
     test('cleanup keeps an old tree while a run in it is live and removes it once it ends', async () => {
       const old = new Date(Date.now() - 10 * 86_400_000);
       const finish = (id: string) => store.completeWorkflowRun(id, { duration_ms: 1 });

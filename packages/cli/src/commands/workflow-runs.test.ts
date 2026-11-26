@@ -64,6 +64,7 @@ describe('workflowRunsCommand', () => {
         completed_at: new Date(),
         active_nodes: [],
         item_id: null,
+        parent_run_id: null,
       }));
       const list = (
         open ? workflowDb.findOpenWorkRuns : workflowDb.listDashboardRuns
@@ -162,6 +163,7 @@ describe('workflowRunsCommand', () => {
       started_at: new Date(),
       completed_at: new Date(),
       item_id: 'item-ended',
+      parent_run_id: null,
     };
     const withoutItem = { ...ended, id: 'run-without-item', item_id: null };
     (workflowDb.findOpenWorkRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
@@ -710,7 +712,14 @@ describe('workflowRunsCommand', () => {
       const workflowDb = await import('@archon/core/db/workflows');
       const eventsDb = await import('@archon/core/db/workflow-events');
       (workflowDb.findOpenWorkRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
-        { id: 'run-open', status: 'failed', metadata: {}, completed_at: null, item_id: null },
+        {
+          id: 'run-open',
+          status: 'failed',
+          metadata: {},
+          completed_at: null,
+          item_id: null,
+          parent_run_id: null,
+        },
       ]);
       (eventsDb.listEventsForRuns as ReturnType<typeof mock>).mockRejectedValueOnce(
         new Error('database is locked')

@@ -33,6 +33,7 @@
     "./attention-watch": "./src/attention-watch.ts",
     "./attention-needs": "./src/attention-needs.ts",
     "./item-read": "./src/item-read.ts",
+    "./item-of-run": "./src/item-of-run.ts",
     "./item-window": "./src/item-window.ts",
     "./item-end": "./src/item-end.ts",
     "./item-landing": "./src/item-landing.ts",
