@@ -379,7 +379,11 @@ test.serial(
 );
 
 /** A run of `item-proof` on `key`: still running, or ended at once, stopping the item or failed. */
-async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Promise<string> {
+async function seedEnded(
+  key: string,
+  end: 'running' | 'stopped' | 'failed',
+  refusals: Parameters<typeof itemStoppedMetadata>[1] = {}
+): Promise<string> {
   let id = '';
   const result = await captureWorkflowCommand(archonHome, async host => {
     const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
@@ -398,7 +402,7 @@ async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Pr
       await host.deps.store.completeWorkflowRun(
         seeded.id,
         { duration_ms: 1 },
-        itemStoppedMetadata('Folded into another item.'),
+        itemStoppedMetadata('Folded into another item.', refusals),
         { outcome: { kind: 'enum', value: 'fold' } }
       );
   });
@@ -595,6 +599,71 @@ test.serial(
     // In the item's project, the stage its end started has not been prepared: the stop waits.
     await unpreparedStart('item-next', { cwd: projectRoot, workflowName: 'build' }, endedBy);
     expect(await stoppedRefs()).not.toContain(`stopped:${stopped}`);
+  }
+);
+
+test.serial(
+  'an item that depends on an open item waits on it, and is listed as stopped once it merges',
+  async () => {
+    const stoppedRefs = async () =>
+      (
+        succeeded(
+          await invoke(host =>
+            workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+          )
+        ) as { items: { kind: string; ref: string }[] }
+      ).items.flatMap(item => (item.kind === 'stopped' ? [item.ref] : []));
+    const dependsOnBlocker = async (item: string) =>
+      succeeded(
+        await invoke(host =>
+          workflowLinkCommand(
+            host,
+            projectRoot,
+            { item, kind: 'depends_on', to: 'item-blocker' },
+            true,
+            callerEnv
+          )
+        )
+      );
+    const waiting = await seedEnded('item-waiting', 'stopped');
+    // A refused start needs someone whatever the item waits on.
+    const refused = await seedEnded('item-refused', 'stopped', {
+      refused: [
+        {
+          receiptId: 'receipt-1',
+          bindingId: 'build',
+          workflow: 'build',
+          reason: 'inputs_unmapped',
+          refusedAt: '2026-11-26T10:00:00Z',
+        },
+      ],
+    });
+    await dependsOnBlocker('item-waiting');
+    await dependsOnBlocker('item-refused');
+
+    const read = await readItemJson('item-waiting');
+    expect(read.dependsOn).toMatchObject([{ item: { key: 'item-blocker' }, state: 'open' }]);
+    expect(await stoppedRefs()).not.toContain(`stopped:${waiting}`);
+    expect(await stoppedRefs()).toContain(`stopped:${refused}`);
+
+    // The blocker lands and nothing starts on the waiting item: it is stopped again.
+    succeeded(
+      await invoke(host =>
+        workflowMergedCommand(
+          host,
+          projectRoot,
+          {
+            item: 'item-blocker',
+            change: 'https://github.com/acme/web/pull/9',
+            at: '2026-11-26T11:00:00Z',
+          },
+          true,
+          callerEnv
+        )
+      )
+    );
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([{ state: 'merged' }]);
+    expect(await stoppedRefs()).toContain(`stopped:${waiting}`);
   }
 );
 

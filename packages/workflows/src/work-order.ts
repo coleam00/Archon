@@ -5,7 +5,8 @@
  * or is itself a work order that is done. A work order's own merge or end does not close it:
  * only its members do. The state is derived on every read from the
  * links, merges and ends the store already holds, so it cannot drift from its members:
- * nothing is written, no timer decides, and no stage ends a work order.
+ * nothing is written, no timer decides, and no stage ends a work order. The same rule gives
+ * any item's state (`readItemState`), which is what a `depends_on` waits on.
  */
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import type { ItemLink, ItemLinkRead } from './schemas/item-link';
@@ -17,7 +18,7 @@ import type {
 import type { WorkflowItem } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 
-type WorkOrderStore = ItemEndStore & Pick<IWorkflowStore, 'listItemLinks' | 'getItemMerge'>;
+export type WorkOrderStore = ItemEndStore & Pick<IWorkflowStore, 'listItemLinks' | 'getItemMerge'>;
 
 /**
  * The walk's shared state. Links are operator data and may form a cycle. A member's state
@@ -117,4 +118,16 @@ export async function readWorkOrder(
   const walk: Walk = { store, walking: new Set(), degraded: new Map() };
   const workOrder = await walkWorkOrder(walk, item, links);
   return { workOrder, degraded: [...walk.degraded.values()] };
+}
+
+/**
+ * The state of `item` by the rule a work order's member has: open, merged, ended, done
+ * (a work order whose members are all done) or unknown. What could not be read is not
+ * reported here: `unknown` is the report, and the item's own read names its unreadable rows.
+ */
+export async function readItemState(
+  store: WorkOrderStore,
+  item: WorkflowItem
+): Promise<WorkOrderMemberState> {
+  return memberState({ store, walking: new Set(), degraded: new Map() }, item);
 }

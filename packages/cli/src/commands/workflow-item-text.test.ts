@@ -167,6 +167,7 @@ const read: ItemRead = {
     fromRun: null,
   },
   workOrder: null,
+  dependsOn: [],
   merged: {
     change: 'https://github.com/acme/web/pull/12',
     commit: null,
@@ -201,6 +202,22 @@ test('a work order prints its state and names the members that keep it open', ()
   expect(unknown).toStartWith('Work order: unknown');
   expect(unknown).toContain('issue-a');
   expect(workOrderText(null)).toBeUndefined();
+});
+
+test('an item names the open items it waits on and the state of the rest', () => {
+  const item = (key: string, projectKey = 'acme/web') => ({ id: `${key}-row`, projectKey, key });
+  const lines = itemReadLines(
+    {
+      ...read,
+      dependsOn: [
+        { item: item('issue-a'), state: 'open' },
+        { item: item('issue-b', 'acme/api'), state: 'merged' },
+      ],
+    },
+    SERVED
+  );
+  expect(lines).toContain('Waiting on: issue-a');
+  expect(lines).toContain('Depends on: acme/api/issue-b (merged)');
 });
 
 test('an unreadable member part prints under an open work order too, naming the member', () => {

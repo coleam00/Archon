@@ -291,6 +291,11 @@ function waitLines(read: ItemRead): string[] {
   );
 }
 
+/** Another item's key, qualified by its project when that is not the read item's. */
+function otherItemName(read: ItemRead, item: ItemRead['item']): string {
+  return item.projectKey === read.item.projectKey ? item.key : `${item.projectKey}/${item.key}`;
+}
+
 /**
  * A work order's state and the members it names: those open, or those whose state cannot be
  * told. Each member part that could not be read gets its own line, whatever the state.
@@ -298,8 +303,7 @@ function waitLines(read: ItemRead): string[] {
 function workOrderLines(read: ItemRead): string[] {
   const order = read.workOrder;
   if (order === null) return [];
-  const name = (item: ItemRead['item']) =>
-    item.projectKey === read.item.projectKey ? item.key : `${item.projectKey}/${item.key}`;
+  const name = (item: ItemRead['item']) => otherItemName(read, item);
   const keys = (state: (typeof order.members)[number]['state']) =>
     order.members.filter(member => member.state === state).map(({ item }) => name(item));
   const total = String(order.members.length);
@@ -333,7 +337,24 @@ function workOrderLines(read: ItemRead): string[] {
   return lines;
 }
 
-/** The facts under the item's name: its end, its merge, its work order and the branch it lands on. */
+/** What the item depends on: the open items it waits on, then the rest with their state. */
+function dependsOnLines(read: ItemRead): string[] {
+  const waiting = read.dependsOn.filter(dep => dep.state === 'open');
+  const rest = read.dependsOn.filter(dep => dep.state !== 'open');
+  const lines: string[] = [];
+  if (waiting.length > 0)
+    lines.push(`Waiting on: ${waiting.map(dep => otherItemName(read, dep.item)).join(', ')}`);
+  if (rest.length > 0)
+    lines.push(
+      `Depends on: ${rest.map(dep => `${otherItemName(read, dep.item)} (${dep.state})`).join(', ')}`
+    );
+  return lines;
+}
+
+/**
+ * The facts under the item's name: its end, its merge, its work order, what it depends on
+ * and the branch it lands on.
+ */
 function itemFactLines(read: ItemRead): string[] {
   const lines: string[] = [];
   if (read.ended !== null)
@@ -345,7 +366,7 @@ function itemFactLines(read: ItemRead): string[] {
   if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
   if (read.degraded.some(report => report.reason === 'merge_unreadable'))
     lines.push('The merge recorded on this item could not be read.');
-  lines.push(...workOrderLines(read));
+  lines.push(...workOrderLines(read), ...dependsOnLines(read));
   if (read.landing !== null)
     lines.push(`Lands on: ${read.landing.branch} (${landingSourceText(read.landing)})`);
   for (const report of read.degraded)

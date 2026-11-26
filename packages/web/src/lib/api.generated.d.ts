@@ -9519,6 +9519,15 @@ export interface components {
           state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
         }[];
       } | null;
+      dependsOn: {
+        item: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        /** @enum {string} */
+        state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+      }[];
       degraded: (
         | {
             /** @enum {string} */
@@ -10471,6 +10480,15 @@ export interface components {
             state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
           }[];
         } | null;
+        dependsOn: {
+          item: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          /** @enum {string} */
+          state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+        }[];
         degraded: (
           | {
               /** @enum {string} */
