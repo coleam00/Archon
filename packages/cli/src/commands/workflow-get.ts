@@ -7,6 +7,8 @@ import {
   terminalReason,
 } from '@archon/workflows/terminal-record';
 import { runThroughput, type RunThroughput } from '@archon/workflows/throughput';
+import { readRunUsageReport } from '@archon/workflows/run-usage-read';
+import type { RunUsageReport } from '@archon/workflows/schemas/run-usage-report';
 import { buildNodeSummaries, listRunEvents } from './workflow-node-summaries';
 import { writeJsonLine } from '../utils/stdout';
 import { requestedBy, type RequestedBy } from '../utils/requested-by';
@@ -68,6 +70,7 @@ export async function workflowGetCommand(
   const history = await readGetHistory(host, run, json, rawEvents, throughput);
   if (!history) return 1;
   const { events, terminalRecord, throughputReport } = history;
+  const usage = await readRunUsageReport(host.deps.store, run);
 
   // Leave-behind view (#2747): what did this run leave, and where. Assembled
   // from existing data — status/outcome, adoption chain, and its artifact file
@@ -89,7 +92,7 @@ export async function workflowGetCommand(
   const origin = await requestedBy(host, run.metadata);
   if (json) {
     return writeWorkflowGetJson(
-      { ...run, requested_by: origin },
+      { ...run, requested_by: origin, usage },
       transcriptPath,
       terminalRecord,
       leaveBehind,
@@ -100,13 +103,13 @@ export async function workflowGetCommand(
     );
   }
 
-  const detail = { transcriptPath, terminalRecord, leaveBehind, events, verbose };
+  const detail = { transcriptPath, terminalRecord, leaveBehind, events, verbose, usage };
   printRunDetail(run, { ...detail, requestedBy: origin, throughput: throughputReport });
   return 0;
 }
 
 async function writeWorkflowGetJson(
-  run: WorkflowRun & { requested_by: RequestedBy },
+  run: WorkflowRun & { requested_by: RequestedBy; usage: RunUsageReport },
   transcriptPath: string | null,
   terminalRecord: ReturnType<typeof getTerminalRecord>,
   leaveBehind: LeaveBehind | undefined,

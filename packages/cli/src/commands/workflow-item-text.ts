@@ -18,6 +18,7 @@ import type {
 import { describeOperatorPause } from '@archon/workflows/schemas/operator-pause';
 import { landingSourceText } from '@archon/workflows/item-landing';
 import { answererText, attentionItemLines } from './workflow-attention-text';
+import { formatUsageReport } from '@archon/workflows/run-usage-report';
 
 /** A recorded time to the minute, or the stored text when it does not parse. */
 function minute(at: string): string {
@@ -125,6 +126,7 @@ function runLines(run: ItemRun): string[] {
   const ended = run.completedAt === null ? '' : ` → ${minute(run.completedAt)}`;
   const lines = [
     `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`,
+    ...formatUsageReport({ totals: run.spend, coverage: run.spend.coverage }),
   ];
   // A result can hold at a commit without being readable (a truncated untyped result).
   const holds = run.resultCommit ? `holds at ${run.resultCommit.slice(0, 12)}` : null;
@@ -359,7 +361,11 @@ function itemFactLines(read: ItemRead): string[] {
  * start is told admits it.
  */
 export function itemReadLines(read: ItemRead, served: ReadonlySet<string>): string[] {
-  const lines = [`Item ${read.item.key} (${read.item.projectKey})`, ...itemFactLines(read)];
+  const lines = [
+    `Item ${read.item.key} (${read.item.projectKey})`,
+    ...itemFactLines(read),
+    ...formatUsageReport({ totals: read.spend, coverage: read.spend.coverage }),
+  ];
   lines.push('', 'Runs:');
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));

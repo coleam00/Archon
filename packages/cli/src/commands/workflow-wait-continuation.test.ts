@@ -140,9 +140,7 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
             expect(reads).toBe(replacement === 'first-read' ? 1 : replacement === 'poll' ? 2 : 4);
             if (replacement !== 'none') expect(resume).not.toHaveBeenCalled();
             else {
-              expect(output).toHaveBeenCalledWith(
-                '  Usage (recorded totals; completeness unknown):'
-              );
+              expect(output).toHaveBeenCalledWith('  Usage (recorded totals):');
               expect(resume).toHaveBeenCalledWith(
                 expect.objectContaining({
                   cursor: {

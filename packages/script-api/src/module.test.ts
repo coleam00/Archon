@@ -65,7 +65,8 @@ if (command === 'forge') {
   else writeFileSync(${JSON.stringify(join(root, 'notice.json'))}, JSON.stringify(args.slice(2)));
 } else if (command === 'workflow' && sub === 'runs') {
   const runId = args[args.indexOf('--item-of') + 1];
-  if (runId === 'on-item') answer({ item: { key: 'issue-7' }, answers: [{ kind: 'ruling' }] });
+  if (runId === 'full-item') answer({ item: { key: 'full' }, spend: { usd: 0.5, inputTokens: 8, outputTokens: 4, coverage: { usd: { state: 'complete', contributedAiNodes: 2, aiNodes: 2, gaps: [] } } } });
+  else if (runId === 'on-item') answer({ item: { key: 'issue-7' }, answers: [{ kind: 'ruling' }], spend: { usd: 0.25, inputTokens: 8, outputTokens: 4, coverage: { usd: { state: 'partial', contributedAiNodes: 1, aiNodes: 2, gaps: [{ runId: 'fixture', path: 'review', source: 'node', reason: 'unsupported' }] } } } });
   else if (runId === 'no-item') answer({ ok: false, error: 'not_found', run: runId }, 1);
   else answer({ ok: false, error: 'database locked' }, 1);
 } else if (command === 'workflow' && sub === 'items') {
@@ -213,8 +214,31 @@ test('notice sends its text after the labels, and a refusal is the host error', 
 });
 
 test("item reads this run's item, null when the run is on none, and a host failure throws", () => {
+  process.env.WORKFLOW_ID = 'full-item';
+  expect(item()?.spend).toMatchObject({
+    usd: 0.5,
+    inputTokens: 8,
+    outputTokens: 4,
+    coverage: { usd: { state: 'complete', contributedAiNodes: 2, aiNodes: 2, gaps: [] } },
+  });
   process.env.WORKFLOW_ID = 'on-item';
-  expect(item()).toEqual({ item: { key: 'issue-7' }, answers: [{ kind: 'ruling' }] } as never);
+  expect(item()).toMatchObject({
+    item: { key: 'issue-7' },
+    answers: [{ kind: 'ruling' }],
+    spend: {
+      usd: 0.25,
+      inputTokens: 8,
+      outputTokens: 4,
+      coverage: {
+        usd: {
+          state: 'partial',
+          contributedAiNodes: 1,
+          aiNodes: 2,
+          gaps: [{ runId: 'fixture', path: 'review', source: 'node', reason: 'unsupported' }],
+        },
+      },
+    },
+  });
   process.env.WORKFLOW_ID = 'no-item';
   expect(item()).toBeNull();
   process.env.WORKFLOW_ID = 'broken';
@@ -334,6 +358,9 @@ export function refusal(error: unknown): string | undefined {
 export const rulings: string[] = (item()?.answers ?? []).flatMap(answer =>
   answer.kind === 'ruling' && answer.withdrawn === null ? [answer.text] : []
 );
+export const cost: number | null | undefined = item()?.spend.usd;
+export const coverage: number | null | undefined = item()?.spend.coverage.usd.aiNodes;
+export const source: 'node' | 'coverage' | undefined = item()?.spend.coverage.usd.gaps[0]?.source;
 `
   );
   const program = ts.createProgram([script, declaration], {

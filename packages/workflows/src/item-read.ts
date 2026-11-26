@@ -40,7 +40,6 @@ import { ItemLandingUnresolvedError, resolveItemLanding } from './item-landing';
 import { readWorkOrder } from './work-order';
 import { workOrderMemberUnreadableSchema, workOrderSchema } from './schemas/work-order';
 import { recordSurfaceSchema } from './schemas/record-surface';
-import { parseRunUsage } from './schemas/run-usage';
 import { chosenAskOption, type StoredItemAsk } from './schemas/item-ask';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import {
@@ -78,11 +77,12 @@ import { changeSizeSchema } from './schemas/change-size';
 import { readChangeSize } from './change-size';
 import { runPack, runPackSchema } from './run-pack';
 import { itemStartLimitSchema, type LimitBindingsReader, withLimitBindings } from './start-limit';
+import { recordedSpendSchema, type RunUsageReport } from './schemas/run-usage-report';
+import { readItemUsage } from './run-usage-read';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('workflow.item-read');
-  return cachedLog;
+  return (cachedLog ??= createLogger('workflow.item-read'));
 }
 
 /**
@@ -129,11 +129,7 @@ export const itemRunSchema = z.object({
    */
   startLimit: z.string().nullable(),
   /** The totals recorded on the run row; null where the run recorded no figure. */
-  spend: z.object({
-    usd: z.number().nullable(),
-    inputTokens: z.number().nullable(),
-    outputTokens: z.number().nullable(),
-  }),
+  spend: recordedSpendSchema,
   /**
    * Set while the run is a pending start waiting for another run of its workflow on the
    * item, and kept on a start that was refused for it (`--no-wait`), which is cancelled.
@@ -337,6 +333,7 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * start is refused, and the refusal is on its receipt (`trigger inspect`).
  */
 export const itemReadSchema = z.object({
+  spend: recordedSpendSchema,
   item: workflowItemSchema,
   runs: z.array(itemRunSchema),
   queued: z.array(itemQueuedStartSchema),
@@ -372,6 +369,7 @@ export interface ItemReadSource extends AttentionQueueSource {
     Pick<
       IWorkflowStore,
       | 'getItemRuns'
+      | 'getWorkflowRunsByIds'
       | 'listEventsForRuns'
       | 'listItemRulings'
       | 'getItemMerge'
@@ -411,7 +409,6 @@ function readResult(
   }
 }
 
-/** The `workflow_completed` events of the completed runs, which hold their results. */
 async function completionEvents(
   source: ItemReadSource,
   runs: readonly WorkflowRun[]
@@ -427,12 +424,12 @@ async function itemRun(
   request: ResourceStartRequestInspection | null,
   heldBehind: ItemHeldBehind | null,
   terminalEvents: ReadonlyMap<string, WorkflowEventRow[]>,
-  startLimit: string | null
+  startLimit: string | null,
+  report: RunUsageReport
 ): Promise<ItemRun> {
   // The receipt stays the one owner of why a start happened; this only reads it.
   const receiptId = readResourceStartReceiptId(run.metadata);
   const receipt = receiptId ? await source.store.getStartReceipt(receiptId) : null;
-  const usage = parseRunUsage(run.metadata);
   return {
     id: run.id,
     workflow: run.workflow_name,
@@ -444,11 +441,7 @@ async function itemRun(
     cause: receipt ? startCause(receipt) : null,
     awaitingExecution: await awaitingExecution(request, run, source.startExecutor),
     startLimit,
-    spend: {
-      usd: usage.costUsd ?? null,
-      inputTokens: usage.tokens?.input ?? null,
-      outputTokens: usage.tokens?.output ?? null,
-    },
+    spend: { ...report.totals, coverage: report.coverage },
     heldBehind,
     operatorPause: operatorPause(run),
     ...readResult(run, terminalEvents.get(run.id) ?? []),
@@ -765,6 +758,11 @@ export async function assembleItemRead(
       : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
   const { rulings, degraded: factsDegraded, ...facts } = await readItemFacts(source, found.item);
   const terminalEvents = await completionEvents(source, own.values);
+  const usage = await readItemUsage(
+    source.store,
+    own.values,
+    own.degraded.map(report => report.runId)
+  );
   const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
   const answers = [
     ...[...events.values()].flat().map(itemAnswer),
@@ -794,15 +792,17 @@ export async function assembleItemRead(
     });
   return {
     item: found.item,
+    spend: { ...usage.aggregate.totals, coverage: usage.aggregate.coverage },
     runs: await Promise.all(
-      own.values.map(async run =>
+      own.values.map(async (run, index) =>
         itemRun(
           source,
           run,
           holds.request(run.id),
           (await holds.runHeldBehind(run)) ?? null,
           terminalEvents,
-          startLimits.countedUnder[run.id] ?? null
+          startLimits.countedUnder[run.id] ?? null,
+          usage.reports[index]
         )
       )
     ),

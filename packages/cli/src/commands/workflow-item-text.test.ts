@@ -1,12 +1,25 @@
 import { expect, test } from 'bun:test';
 import type { ItemRead } from '@archon/workflows/item-read';
 import { itemReadLines } from './workflow-item-text';
+import { unknownRunUsageReport } from '@archon/workflows/run-usage-report';
 
 // The hosts this install drains; the fixture's starts wait on 'host'.
 const SERVED: ReadonlySet<string> = new Set(['host']);
 
 const read: ItemRead = {
   item: { id: 'item-row', projectKey: 'acme/web', key: 'issue-7' },
+  spend: {
+    usd: 0.5,
+    inputTokens: 100,
+    outputTokens: 20,
+    coverage: unknownRunUsageReport(
+      {
+        id: 'run-done-1',
+        metadata: { total_cost_usd: 0.5, total_tokens_in: 100, total_tokens_out: 20 },
+      },
+      'history_absent'
+    ).coverage,
+  },
   runs: [
     {
       id: 'run-done-1',
@@ -19,7 +32,18 @@ const read: ItemRead = {
       cause: null,
       awaitingExecution: null,
       startLimit: null,
-      spend: { usd: 0.5, inputTokens: 100, outputTokens: 20 },
+      spend: {
+        usd: 0.5,
+        inputTokens: 100,
+        outputTokens: 20,
+        coverage: unknownRunUsageReport(
+          {
+            id: 'run-done-1',
+            metadata: { total_cost_usd: 0.5, total_tokens_in: 100, total_tokens_out: 20 },
+          },
+          'history_absent'
+        ).coverage,
+      },
       heldBehind: null,
       operatorPause: null,
       hasResult: true,
@@ -232,7 +256,7 @@ test('an unreadable member part prints under an open work order too, naming the 
 
 test('an item read prints its runs, open questions and answers', () => {
   const lines = itemReadLines(read, SERVED);
-  const runLine = lines.find(line => line.includes('run-done'));
+  const runLine = lines.find(line => line.includes('run-done') && line.includes('deliver'));
   expect(runLine).toContain('deliver');
   expect(runLine).toContain('completed');
   expect(runLine).toContain('succeeded');

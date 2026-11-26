@@ -23,6 +23,8 @@ import type { CLIAdapter } from '../adapters/cli-adapter';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import { formatRunUsage } from './workflow-usage';
+import { readRunUsageReport } from '@archon/workflows/run-usage-read';
+import type { RunUsageReport } from '@archon/workflows/schemas/run-usage-report';
 import { refusedStartLines } from './workflow-attention-text';
 import { readItemStopped } from '@archon/workflows/schemas/run-metadata';
 import { formatSkipCause } from './workflow-node-summaries';
@@ -197,6 +199,7 @@ export async function presentRunResult(
       );
     else printPausedRun(run, result.workflowRunId);
   } else if (result.success) {
+    const usage = await readPresentationUsage(host, run);
     // Surface workflow result to Web UI as a result card (mirrors the background dispatch
     // result message in core's orchestrator/dispatch/background-run.ts).
     // Paused workflows are handled in the branch above and intentionally do not get a result card.
@@ -206,16 +209,17 @@ export async function presentRunResult(
         conversationId,
         workflow.name,
         result.workflowRunId,
-        result.summary
+        `${result.summary}\n\n${runUsageLines(run, usage).join('\n')}`
       );
     }
     if (!printRunFacts(workflow, run, '\nWorkflow finished.')) {
       console.log('\nWorkflow completed successfully.');
     }
     printRefusedStart(run);
-    printRunUsage(run);
+    printRunUsage(run, usage);
   } else {
-    printRunUsage(run);
+    const usage = await readPresentationUsage(host, run);
+    printRunUsage(run, usage);
     throw new WorkflowRunFailedError(failureReason(result), detachedProcessOwner);
   }
   return undefined;
@@ -310,6 +314,23 @@ function printRunFacts(workflow: ResolvedWorkflow, run: WorkflowRun | null, lead
   return true;
 }
 
+async function readPresentationUsage(
+  host: WorkflowHost,
+  run: WorkflowRun | null
+): Promise<RunUsageReport | undefined> {
+  return run === null ? undefined : readRunUsageReport(host.deps.store, run);
+}
+
+function runUsageLines(run: WorkflowRun | null, usage?: RunUsageReport): string[] {
+  return run === null
+    ? ['  Usage: unavailable (persisted run unavailable)']
+    : formatRunUsage(run.metadata, usage);
+}
+
+function printRunUsage(run: WorkflowRun | null, usage?: RunUsageReport): void {
+  for (const line of runUsageLines(run, usage)) console.log(line);
+}
+
 /**
  * The run completed, but a start its end caused was refused: say so, from its stop. Here and
  * in `workflow get`, which `trigger fire` points to for a detached run.
@@ -319,14 +340,6 @@ export function printRefusedStart(run: WorkflowRun | null): void {
   if (refused === undefined) return;
   console.log('  Next stage not started:');
   for (const line of refusedStartLines(refused)) console.log(`    ${line}`);
-}
-
-function printRunUsage(run: WorkflowRun | null): void {
-  const lines =
-    run === null
-      ? ['  Usage: unavailable (persisted run unavailable)']
-      : formatRunUsage(run.metadata);
-  for (const line of lines) console.log(line);
 }
 
 async function presentDurableWait(

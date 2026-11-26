@@ -2232,6 +2232,254 @@ declare module 'archon:script' {
 
   /** The item a run belongs to: its runs, open questions, answers with rulings, oldest first, and links. */
   export type ItemRead = {
+    readonly spend: {
+      readonly usd: number | null;
+      readonly inputTokens: number | null;
+      readonly outputTokens: number | null;
+      readonly coverage: {
+        readonly usd: {
+          readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+          readonly aiNodes: number | null;
+          readonly observedAiNodes: number;
+          readonly contributedAiNodes: number;
+          readonly contributors: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+          }>;
+          readonly recordedNodes: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+          }>;
+          readonly gaps: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly source: 'node';
+            readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+          } | {
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly source: 'coverage';
+            readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+          }>;
+          readonly partial: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly partial: true;
+          }>;
+          readonly limitations: ReadonlyArray<{
+            readonly runId: string;
+            readonly path?: string;
+            readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+          }>;
+        };
+        readonly inputTokens: {
+          readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+          readonly aiNodes: number | null;
+          readonly observedAiNodes: number;
+          readonly contributedAiNodes: number;
+          readonly contributors: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+          }>;
+          readonly recordedNodes: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+          }>;
+          readonly gaps: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly source: 'node';
+            readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+          } | {
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly source: 'coverage';
+            readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+          }>;
+          readonly partial: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly partial: true;
+          }>;
+          readonly limitations: ReadonlyArray<{
+            readonly runId: string;
+            readonly path?: string;
+            readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+          }>;
+        };
+        readonly outputTokens: {
+          readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+          readonly aiNodes: number | null;
+          readonly observedAiNodes: number;
+          readonly contributedAiNodes: number;
+          readonly contributors: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+          }>;
+          readonly recordedNodes: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+          }>;
+          readonly gaps: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly source: 'node';
+            readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+          } | {
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly source: 'coverage';
+            readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+          }>;
+          readonly partial: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly partial: true;
+          }>;
+          readonly limitations: ReadonlyArray<{
+            readonly runId: string;
+            readonly path?: string;
+            readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+          }>;
+        };
+        readonly excluded: ReadonlyArray<{
+          readonly runId: string;
+          readonly path: string;
+          readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+          readonly provider?: string;
+          readonly invocationId?: string;
+          readonly loopPath?: ReadonlyArray<{
+            readonly groupId: string;
+            readonly iteration: number;
+          }>;
+          readonly attemptId?: string;
+          readonly reason: 'skipped' | 'replayed' | 'not_applicable';
+          readonly lifecycleReason?: 'prior_success' | 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'timeout' | 'stale_dependency';
+          readonly tokensReason?: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+          readonly costReason?: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+        }>;
+      };
+    };
     readonly item: {
       readonly id: string;
       readonly projectKey: string;
@@ -2279,6 +2527,249 @@ declare module 'archon:script' {
         readonly usd: number | null;
         readonly inputTokens: number | null;
         readonly outputTokens: number | null;
+        readonly coverage: {
+          readonly usd: {
+            readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+            readonly aiNodes: number | null;
+            readonly observedAiNodes: number;
+            readonly contributedAiNodes: number;
+            readonly contributors: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly recordedNodes: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly gaps: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'node';
+              readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+            } | {
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'coverage';
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+            readonly partial: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly partial: true;
+            }>;
+            readonly limitations: ReadonlyArray<{
+              readonly runId: string;
+              readonly path?: string;
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+          };
+          readonly inputTokens: {
+            readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+            readonly aiNodes: number | null;
+            readonly observedAiNodes: number;
+            readonly contributedAiNodes: number;
+            readonly contributors: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly recordedNodes: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly gaps: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'node';
+              readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+            } | {
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'coverage';
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+            readonly partial: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly partial: true;
+            }>;
+            readonly limitations: ReadonlyArray<{
+              readonly runId: string;
+              readonly path?: string;
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+          };
+          readonly outputTokens: {
+            readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+            readonly aiNodes: number | null;
+            readonly observedAiNodes: number;
+            readonly contributedAiNodes: number;
+            readonly contributors: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly recordedNodes: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly gaps: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'node';
+              readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+            } | {
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'coverage';
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+            readonly partial: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly partial: true;
+            }>;
+            readonly limitations: ReadonlyArray<{
+              readonly runId: string;
+              readonly path?: string;
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+          };
+          readonly excluded: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly reason: 'skipped' | 'replayed' | 'not_applicable';
+            readonly lifecycleReason?: 'prior_success' | 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'timeout' | 'stale_dependency';
+            readonly tokensReason?: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+            readonly costReason?: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+          }>;
+        };
       };
       readonly heldBehind: {
         readonly runId: string;
@@ -2982,6 +3473,254 @@ declare module 'archon:script' {
       readonly until: string;
     };
     readonly items: ReadonlyArray<{
+      readonly spend: {
+        readonly usd: number | null;
+        readonly inputTokens: number | null;
+        readonly outputTokens: number | null;
+        readonly coverage: {
+          readonly usd: {
+            readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+            readonly aiNodes: number | null;
+            readonly observedAiNodes: number;
+            readonly contributedAiNodes: number;
+            readonly contributors: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly recordedNodes: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly gaps: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'node';
+              readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+            } | {
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'coverage';
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+            readonly partial: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly partial: true;
+            }>;
+            readonly limitations: ReadonlyArray<{
+              readonly runId: string;
+              readonly path?: string;
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+          };
+          readonly inputTokens: {
+            readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+            readonly aiNodes: number | null;
+            readonly observedAiNodes: number;
+            readonly contributedAiNodes: number;
+            readonly contributors: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly recordedNodes: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly gaps: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'node';
+              readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+            } | {
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'coverage';
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+            readonly partial: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly partial: true;
+            }>;
+            readonly limitations: ReadonlyArray<{
+              readonly runId: string;
+              readonly path?: string;
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+          };
+          readonly outputTokens: {
+            readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+            readonly aiNodes: number | null;
+            readonly observedAiNodes: number;
+            readonly contributedAiNodes: number;
+            readonly contributors: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly recordedNodes: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+            }>;
+            readonly gaps: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'node';
+              readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+            } | {
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly source: 'coverage';
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+            readonly partial: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly partial: true;
+            }>;
+            readonly limitations: ReadonlyArray<{
+              readonly runId: string;
+              readonly path?: string;
+              readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+            }>;
+          };
+          readonly excluded: ReadonlyArray<{
+            readonly runId: string;
+            readonly path: string;
+            readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+            readonly provider?: string;
+            readonly invocationId?: string;
+            readonly loopPath?: ReadonlyArray<{
+              readonly groupId: string;
+              readonly iteration: number;
+            }>;
+            readonly attemptId?: string;
+            readonly reason: 'skipped' | 'replayed' | 'not_applicable';
+            readonly lifecycleReason?: 'prior_success' | 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'timeout' | 'stale_dependency';
+            readonly tokensReason?: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+            readonly costReason?: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+          }>;
+        };
+      };
       readonly item: {
         readonly id: string;
         readonly projectKey: string;
@@ -3029,6 +3768,249 @@ declare module 'archon:script' {
           readonly usd: number | null;
           readonly inputTokens: number | null;
           readonly outputTokens: number | null;
+          readonly coverage: {
+            readonly usd: {
+              readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              readonly aiNodes: number | null;
+              readonly observedAiNodes: number;
+              readonly contributedAiNodes: number;
+              readonly contributors: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+              }>;
+              readonly recordedNodes: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+              }>;
+              readonly gaps: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+                readonly source: 'node';
+                readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+              } | {
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+                readonly source: 'coverage';
+                readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+              }>;
+              readonly partial: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+                readonly partial: true;
+              }>;
+              readonly limitations: ReadonlyArray<{
+                readonly runId: string;
+                readonly path?: string;
+                readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+              }>;
+            };
+            readonly inputTokens: {
+              readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              readonly aiNodes: number | null;
+              readonly observedAiNodes: number;
+              readonly contributedAiNodes: number;
+              readonly contributors: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+              }>;
+              readonly recordedNodes: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+              }>;
+              readonly gaps: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+                readonly source: 'node';
+                readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+              } | {
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+                readonly source: 'coverage';
+                readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+              }>;
+              readonly partial: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+                readonly partial: true;
+              }>;
+              readonly limitations: ReadonlyArray<{
+                readonly runId: string;
+                readonly path?: string;
+                readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+              }>;
+            };
+            readonly outputTokens: {
+              readonly state: 'complete' | 'partial' | 'unknown' | 'not_applicable';
+              readonly aiNodes: number | null;
+              readonly observedAiNodes: number;
+              readonly contributedAiNodes: number;
+              readonly contributors: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+              }>;
+              readonly recordedNodes: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+              }>;
+              readonly gaps: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+                readonly source: 'node';
+                readonly reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+              } | {
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+                readonly source: 'coverage';
+                readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+              }>;
+              readonly partial: ReadonlyArray<{
+                readonly runId: string;
+                readonly path: string;
+                readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+                readonly provider?: string;
+                readonly invocationId?: string;
+                readonly loopPath?: ReadonlyArray<{
+                  readonly groupId: string;
+                  readonly iteration: number;
+                }>;
+                readonly attemptId?: string;
+                readonly partial: true;
+              }>;
+              readonly limitations: ReadonlyArray<{
+                readonly runId: string;
+                readonly path?: string;
+                readonly reason: 'history_unavailable' | 'history_absent' | 'record_unreadable' | 'measurement_source_absent' | 'node_kind_unavailable' | 'unfinished_execution' | 'total_unavailable' | 'total_invalid' | 'total_mismatch' | 'scope_unattributed' | 'child_unavailable' | 'child_usage_mismatch' | 'child_cycle';
+              }>;
+            };
+            readonly excluded: ReadonlyArray<{
+              readonly runId: string;
+              readonly path: string;
+              readonly nodeKind?: 'agent' | 'exec' | 'loop' | 'loop_group' | 'gate' | 'halt' | 'wait' | 'workflow' | 'compose_fan_out' | 'compose_fan_out_instance';
+              readonly provider?: string;
+              readonly invocationId?: string;
+              readonly loopPath?: ReadonlyArray<{
+                readonly groupId: string;
+                readonly iteration: number;
+              }>;
+              readonly attemptId?: string;
+              readonly reason: 'skipped' | 'replayed' | 'not_applicable';
+              readonly lifecycleReason?: 'prior_success' | 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'timeout' | 'stale_dependency';
+              readonly tokensReason?: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+              readonly costReason?: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid' | 'incomplete';
+            }>;
+          };
         };
         readonly heldBehind: {
           readonly runId: string;

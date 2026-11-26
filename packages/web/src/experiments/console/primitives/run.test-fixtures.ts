@@ -3,6 +3,18 @@ import type { components } from '@/lib/api.generated';
 type Detail = components['schemas']['WorkflowRunDetail'];
 export type TerminalRecord = NonNullable<Detail['run']['terminal_record']>;
 
+const unknownCoverage: Detail['run']['usage']['coverage']['usd'] = {
+  state: 'unknown',
+  aiNodes: null,
+  observedAiNodes: 0,
+  contributedAiNodes: 0,
+  contributors: [],
+  recordedNodes: [],
+  gaps: [],
+  partial: [],
+  limitations: [{ runId: 'run-1', reason: 'history_absent' }],
+};
+
 export function terminalRecord(
   returns: TerminalRecord['returns'],
   outcome: TerminalRecord['outcome'] = 'failed'
@@ -39,6 +51,15 @@ export const detailFixture: Detail = {
     completed_outcome: 'failed',
     user_message: '',
     metadata: {},
+    usage: {
+      totals: { usd: null, inputTokens: null, outputTokens: null },
+      coverage: {
+        usd: unknownCoverage,
+        inputTokens: unknownCoverage,
+        outputTokens: unknownCoverage,
+        excluded: [],
+      },
+    },
     supplied_inputs: {},
     started_at: '2026-10-05T10:00:00Z',
     active_phase_started_at: null,

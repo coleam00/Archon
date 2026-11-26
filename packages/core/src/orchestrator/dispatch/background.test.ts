@@ -1,5 +1,12 @@
 // @archon-test-isolated
 import { makeRun } from '../../test/orchestrator-agent-fixtures';
+import {
+  finishNodeExecution,
+  newNodeInvocation,
+  startNodeExecution,
+} from '@archon/workflows/node-execution';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { testRunOwnerLease } from '@archon/workflows/store-conformance';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
@@ -198,6 +205,8 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
 const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() =>
   Promise.resolve({ failed: true })
 );
+const mockUsageRun = mock(async (): Promise<ReturnType<typeof makeRun> | null> => null);
+const mockUsageEvents = mock(async (): Promise<Map<string, WorkflowEventRow[]>> => new Map());
 mock.module('../../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     providers: providerRegistry,
@@ -206,6 +215,9 @@ mock.module('../../workflows/store-adapter', () => ({
       failWorkflowRun: mockFailWorkflowRun,
       updateWorkflowRun: mock(async () => {}),
       getCodebaseEnvVars: async () => ({}),
+      getWorkflowRun: mockUsageRun,
+      listEventsForRuns: mockUsageEvents,
+      getWorkflowRunsByIds: async () => [],
     },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,
@@ -546,6 +558,10 @@ describe('dispatchBackgroundWorkflow', () => {
   }
 
   beforeEach(() => {
+    mockUsageRun.mockReset();
+    mockUsageRun.mockResolvedValue(null);
+    mockUsageEvents.mockReset();
+    mockUsageEvents.mockResolvedValue(new Map());
     platform = new MockPlatformAdapter();
     deferExecuteWorkflowAdoption = false;
     releaseExecuteWorkflowAdoption?.();
@@ -731,6 +747,104 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(prepare).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
+
+  test.each([false, true])(
+    'settled background result cards preserve the summary and measured coverage, partial=%s',
+    async partial => {
+      const recorded = makeRun({
+        id: 'run-1',
+        status: 'completed',
+        metadata: { total_cost_usd: 0.25, total_tokens_in: 8, total_tokens_out: 4 },
+      });
+      const events = ['build', 'review'].map((path, index) => {
+        const start = startNodeExecution({
+          runId: recorded.id,
+          path,
+          node: { id: path, kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+          invocation: newNodeInvocation(),
+          provider: partial && index === 1 ? 'codex' : 'claude',
+        });
+        const end = finishNodeExecution(
+          start,
+          { status: 'completed' },
+          { costUsd: partial && index === 1 ? undefined : 0.125, tokens: { input: 4, output: 2 } }
+        );
+        if (partial && index === 1)
+          end.spend.costUsd = { source: 'unavailable', reason: 'unsupported' };
+        return {
+          ...serializeNodeStateRecord(end),
+          id: path,
+          created_at: '2026-11-25T00:00:00Z',
+          step_index: index,
+        };
+      });
+      if (partial) recorded.metadata.total_cost_usd = 0.125;
+      mockUsageRun.mockResolvedValue(recorded);
+      mockUsageEvents.mockResolvedValue(new Map([[recorded.id, events]]));
+      mockExecuteWorkflow.mockResolvedValueOnce({
+        success: true,
+        workflowRunId: recorded.id,
+        summary: 'Authored summary',
+      });
+      await dispatchBackgroundWorkflow(
+        makeRoutingCtx(),
+        makeWorkflow({ worktree: { enabled: false } })
+      );
+      await flushBackgroundExecution();
+      const card = platform.sendMessage.mock.calls.find(
+        call => call[2]?.category === 'workflow_result'
+      );
+      expect(card?.[1]).toContain('Authored summary');
+      expect(card?.[1]).toContain('2/2 AI nodes');
+      expect(card?.[1]).not.toContain('completeness unknown');
+      if (partial) expect(card?.[1]).toContain('node unsupported');
+      else expect(card?.[1]).toContain('all executed AI nodes recorded this metric');
+      expect(card?.[2]?.workflowResult).toEqual({
+        workflowName: 'bg-workflow',
+        runId: recorded.id,
+      });
+    }
+  );
+
+  test.each(['missing', 'rejected'] as const)(
+    'a %s usage read degrades a successful result card without changing its outcome',
+    async failure => {
+      const error = new Error('usage read failed');
+      if (failure === 'rejected') mockUsageRun.mockRejectedValueOnce(error);
+      mockExecuteWorkflow.mockResolvedValueOnce({
+        success: true,
+        workflowRunId: 'run-1',
+        summary: 'Authored summary',
+      });
+      await dispatchBackgroundWorkflow(
+        makeRoutingCtx(),
+        makeWorkflow({ worktree: { enabled: false } })
+      );
+      await flushBackgroundExecution();
+      const cards = platform.sendMessage.mock.calls.filter(
+        call => call[2]?.category === 'workflow_result'
+      );
+      expect(cards).toHaveLength(1);
+      expect(cards[0]?.[1]).toContain('Authored summary');
+      expect(cards[0]?.[1]).toContain('Usage: unavailable (persisted run unavailable)');
+      expect(cards[0]?.[1]).not.toContain('Workflow **bg-workflow** failed');
+      expect(cards[0]?.[2]?.workflowResult).toEqual({
+        workflowName: 'bg-workflow',
+        runId: 'run-1',
+      });
+      expect(mockFailWorkflowRun).not.toHaveBeenCalled();
+      if (failure === 'rejected')
+        expect(
+          mockLogger.warn.mock.calls.some(
+            ([fields]) =>
+              typeof fields === 'object' &&
+              fields !== null &&
+              'err' in fields &&
+              fields.err === error
+          )
+        ).toBe(true);
+    }
+  );
 
   test.each(['own', 'composed'] as const)(
     'a workflow with its %s approval gate dispatches in the background',
