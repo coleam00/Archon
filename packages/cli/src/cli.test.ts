@@ -3212,10 +3212,13 @@ it('validate names unknown keys in the manifest of the plugin directory it runs 
     const { results } = JSON.parse(result.stdout) as {
       results: { workflowName: string; issues: { field: string; message: string }[] }[];
     };
-    expect(results.map(r => r.workflowName).sort()).toEqual(['archon-plugin.json', 'probe']);
-    expect(
-      results.find(r => r.workflowName === 'archon-plugin.json')?.issues.map(i => i.message)
-    ).toEqual(["unknown key 'skils' is ignored", "unknown key 'compatibility.min' is ignored"]);
+    // A plugin below the project root is named by its path from the root.
+    const label = join('packs', 'probe', 'archon-plugin.json');
+    expect(results.map(r => r.workflowName).sort()).toEqual([label, 'probe']);
+    expect(results.find(r => r.workflowName === label)?.issues.map(i => i.message)).toEqual([
+      "unknown key 'skils' is ignored",
+      "unknown key 'compatibility.min' is ignored",
+    ]);
   } finally {
     await removeTempTree(root);
   }
