@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { packGraphSchema } from '@archon/workflows/pack-graph';
@@ -192,6 +192,9 @@ async function makeFixture(label: string): Promise<Fixture> {
         ARCHON_NODE_EXECUTION: '',
         ARCHON_TRIGGER_HOST: '',
         DATABASE_URL: '',
+        // A shell inside an Archon run exports its own provider and webhook sources.
+        DEFAULT_AI_ASSISTANT: '',
+        ARCHON_WEBHOOK_SOURCES: '',
         ARCHON_HOME: archonHome,
         GITHUB_TOKEN: '',
         GH_TOKEN: '',
@@ -579,6 +582,44 @@ describe('a run-ended binding', () => {
     expect(runs.map(run => run.workflow_name)).toEqual(['stage-a', 'stage-b']);
   }, 90_000);
 
+  test('the end of a step that starts only an observing stage stops its item; one that starts a step does not', async () => {
+    const fixture = await makeFixture('observer-only');
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'workflows', 'shadow-b.yaml'),
+      STAGE_B.replace('name: stage-b', 'name: shadow-b\nobserves: true')
+    );
+    fixture.bind('shadow-after-plan', RUN_ENDED, { workflowName: 'shadow-b' });
+    const stopped = async () =>
+      (
+        JSON.parse(await fixture.cli(['workflow', 'attention', '--json'])) as {
+          items: { kind: string; item?: { key: string }; stoppedIn?: { workflow: string } }[];
+        }
+      ).items
+        .filter(item => item.kind === 'stopped')
+        .map(item => [item.item?.key ?? '', item.stoppedIn?.workflow ?? ''])
+        // Attention orders ties by ref, which holds a random run id; the item key does not.
+        .sort(([a], [b]) => a.localeCompare(b));
+    const runA = (issue: string) =>
+      fixture.cli([
+        ...['workflow', 'run', 'stage-a', '--no-worktree', '--item', issue],
+        ...['--input', 'plan=p1', '--input', `issue=${issue}`],
+      ]);
+
+    await runA('issue-1');
+    await waitFor(() => completedRuns(fixture, 2), 'A and the observing stage its end started');
+    expect(await stopped()).toEqual([['issue-1', 'stage-a']]);
+
+    // Bound to a step instead, the started stage moves the item on. That stage declares no
+    // outcome and starts nothing, so it stops the item in its turn.
+    fixture.bind('shadow-after-plan', RUN_ENDED);
+    await runA('issue-2');
+    await waitFor(() => completedRuns(fixture, 4), 'A and the step its end started');
+    expect(await stopped()).toEqual([
+      ['issue-1', 'stage-a'],
+      ['issue-2', 'stage-b'],
+    ]);
+  }, 90_000);
+
   test('a hand run starts the stage its end caused even behind a page of older pending work on the host', async () => {
     const fixture = await makeFixture('backlog');
     fixture.bind('build-after-plan', RUN_ENDED);
@@ -932,6 +973,25 @@ await closeDatabase();
     expect(last).toMatchObject({ ok: true, settled: true });
     expect(last.notStarted).toHaveLength(1);
     expect(fixture.rows<RunRow>(RUNS_SQL).map(run => run.workflow_name)).toEqual(['ask-plan']);
+    // The asking run declares no outcome; the refused start still stops the item on it.
+    const read = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+    );
+    const attention = JSON.parse(
+      await fixture.cli(['workflow', 'attention', '--all', '--json'])
+    ) as { items: { kind: string }[] };
+    for (const queue of [read.questions, attention.items])
+      expect(queue.filter(item => item.kind === 'stopped')).toEqual([
+        expect.objectContaining({
+          stoppedIn: expect.objectContaining({ workflow: 'ask-plan', outcome: null }),
+          refused: [
+            expect.objectContaining({
+              bindingId: 'build-after-answers',
+              workflow: 'build-answers',
+            }),
+          ],
+        }),
+      ]);
   }, 90_000);
 
   test('trigger check reports a binding on a workflow with no asks, not one that starts its own', async () => {
@@ -1452,5 +1512,302 @@ describe('a start limit', () => {
     const next = await stopped();
     expect(next).toHaveLength(1);
     expect(next[0]?.stoppedIn?.runId).not.toBe(runs[2]?.id);
+  }, 90_000);
+});
+
+// An AI stage whose only prompt is skipped, so it needs a provider to start and never calls one.
+const STAGE_AI = `name: stage-ai
+description: Judge what stage A planned.
+mutates_checkout: false
+inputs:
+  plan: { required: true }
+  issue: { required: true }
+nodes:
+  - id: gate
+    bash: echo no
+  - id: judge
+    depends_on: [gate]
+    when: "$gate.output == 'yes'"
+    prompt: Judge the plan.
+`;
+
+// Plans an item and asks one question in the same end.
+const PLAN_ASKS = `name: plan-asks
+description: Plan an item and ask what it cannot decide.
+mutates_checkout: false
+inputs:
+  plan: { required: true }
+  issue: { required: true }
+returns: { node: decide, outcome: outcome, asks: asks }
+nodes:
+  - id: decide
+    bash: |
+      echo '${JSON.stringify({
+        outcome: 'planned',
+        plan: 'planned',
+        asks: [
+          {
+            question: 'Keep the flag?',
+            context: 'The issue reads two ways.',
+            options: [
+              { id: 'keep', does: 'Keep it.', cost: 'More to maintain.' },
+              { id: 'drop', does: 'Drop it.', cost: 'Configs break.' },
+            ],
+            recommendation: { option: 'keep', why: 'Nothing needs it gone.' },
+            artifacts: [],
+          },
+        ],
+      })}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [planned] }
+        plan: { type: string }
+      required: [outcome, plan]
+`;
+
+/** A fixture with the AI stage and a CLI on a home with no default provider. */
+async function noProviderFixture(label: string) {
+  const fixture = await makeFixture(label);
+  writeFileSync(join(fixture.projectRoot, '.archon', 'workflows', 'stage-ai.yaml'), STAGE_AI);
+  // A Claude key that passes the credential check and reaches nothing: the stage's only
+  // prompt is skipped by its `when:`, so no provider is called.
+  const claude = {
+    CLAUDE_CONFIG_DIR: join(fixture.root, 'claude-config'),
+    ANTHROPIC_API_KEY: 'fixture-key',
+    ANTHROPIC_BASE_URL: 'http://127.0.0.1:9',
+    CLAUDE_API_KEY: '',
+    CLAUDE_CODE_OAUTH_TOKEN: '',
+    ANTHROPIC_AUTH_TOKEN: '',
+    CLAUDE_CODE_USE_BEDROCK: '0',
+    CLAUDE_CODE_USE_VERTEX: '0',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  };
+  mkdirSync(claude.CLAUDE_CONFIG_DIR);
+  const cli = (args: string[]) => fixture.cli(args, claude);
+  const attention = async () =>
+    (
+      JSON.parse(await cli(['workflow', 'attention', '--all', '--json'])) as {
+        items: {
+          kind: string;
+          ref: string;
+          item?: { key: string };
+          stoppedIn?: { runId: string };
+          refused?: { workflow: string; reason: string }[];
+        }[];
+      }
+    ).items;
+  return { fixture, cli, attention };
+}
+
+describe('a start refused before launch', () => {
+  test('stops its item on the run whose end caused it, in the item read and attention, until a later run on the item', async () => {
+    const { fixture, cli } = await noProviderFixture('no-provider');
+    fixture.bind('judge-after-plan', RUN_ENDED, { workflowName: 'stage-ai' });
+    const run = (workflow: string) =>
+      cli([
+        ...['workflow', 'run', workflow, '--no-worktree', '--item', 'issue-1'],
+        ...['--input', 'plan=p1', '--input', 'issue=i1'],
+      ]);
+    const stopped = async () => {
+      const read = itemReadSchema.parse(
+        JSON.parse(await cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+      );
+      const attention = JSON.parse(await cli(['workflow', 'attention', '--json'])) as {
+        items: { kind: string; ref: string }[];
+      };
+      return {
+        onItem: read.questions.flatMap(question => (question.kind === 'stopped' ? [question] : [])),
+        inAttention: attention.items.filter(item => item.kind === 'stopped'),
+      };
+    };
+
+    const output = await run('stage-a');
+    const [planned] = fixture.rows<RunRow>(RUNS_SQL);
+    const before = await stopped();
+    expect(before.onItem).toEqual([
+      expect.objectContaining({
+        item: expect.objectContaining({ key: 'issue-1' }),
+        stoppedIn: { runId: planned?.id, workflow: 'stage-a', outcome: 'planned' },
+        refused: [
+          {
+            receiptId: expect.any(String),
+            bindingId: 'judge-after-plan',
+            workflow: 'stage-ai',
+            reason: 'no_default_provider',
+            refusedAt: expect.any(String),
+          },
+        ],
+      }),
+    ]);
+    const [refusal] = before.onItem[0]?.refused ?? [];
+    expect(before.onItem[0]?.pausedAt).toBe(refusal?.refusedAt);
+    expect(before.inAttention.map(item => item.ref)).toEqual(before.onItem.map(item => item.ref));
+    // Every text view names the refused start and the remedy: the stage that caused it, the
+    // run view `trigger fire` points to, the item read and attention.
+    const texts = [
+      output,
+      await cli(['workflow', 'get', planned?.id ?? '']),
+      await cli(['workflow', 'runs', '--item', 'issue-1']),
+      await cli(['workflow', 'attention']),
+    ];
+    for (const text of texts)
+      for (const fact of [
+        'judge-after-plan',
+        'stage-ai',
+        refusal?.receiptId,
+        refusal?.refusedAt,
+        'archon ai default',
+      ])
+        expect(text).toContain(fact ?? 'a recorded fact');
+
+    await cli(['ai', 'default', 'claude']);
+    await run('stage-ai');
+    // The later run closes that stop. It declares no outcome and starts nothing, so it stops
+    // the item itself, with nothing refused.
+    const after = await stopped();
+    expect(after.onItem.map(item => [item.stoppedIn.workflow, item.refused])).toEqual([
+      ['stage-ai', undefined],
+    ]);
+  }, 90_000);
+
+  test('for a pack file setting the started stage reads that names no file, naming the setting and path, until the file is restored', async () => {
+    const fixture = await makeFixture('file-setting');
+    const pack = join(fixture.projectRoot, '.archon', 'workflows', 'chain');
+    // chain-plan reads no setting; chain-build reads `policy` from its environment.
+    for (const [name, body] of [
+      ['chain-plan', STAGE_A.replace('name: stage-a', 'name: chain-plan')],
+      [
+        'chain-build',
+        STAGE_B.replace('name: stage-b', 'name: chain-build').replace(
+          'echo "building $INPUTS_PLAN"',
+          'cat "$INPUTS_POLICY"'
+        ),
+      ],
+    ] as const) {
+      mkdirSync(join(pack, name), { recursive: true });
+      writeFileSync(join(pack, name, `${name}.yaml`), body);
+    }
+    mkdirSync(join(pack, '.pack'), { recursive: true });
+    writeFileSync(join(pack, '.pack', 'pack.yaml'), 'inputs:\n  policy:\n    file: true\n');
+    mkdirSync(join(fixture.projectRoot, '.archon', 'packs'), { recursive: true });
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'packs', 'chain.yaml'),
+      'settings:\n  policy: docs/policy.md\n'
+    );
+    fixture.bind(
+      'build-after-plan',
+      { runEnded: { ...RUN_ENDED.runEnded, workflowName: 'chain-plan' } },
+      { workflowName: 'chain-build' }
+    );
+    const run = (workflow: string) =>
+      fixture.cli([
+        ...['workflow', 'run', workflow, '--no-worktree', '--item', 'issue-1'],
+        ...['--input', 'plan=p1', '--input', 'issue=i1'],
+      ]);
+    const stoppedOnItem = async () =>
+      itemReadSchema
+        .parse(JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json'])))
+        .questions.flatMap(question => (question.kind === 'stopped' ? [question] : []));
+    const policy = join(fixture.projectRoot, 'docs', 'policy.md');
+    // The path as the engine reports it: joined as the value is written, not normalized, so
+    // `docs/policy.md` keeps its `/` on Windows.
+    const reported = `${fixture.projectRoot}${sep}docs/policy.md`;
+
+    // The stage that does not read the setting runs; the one its end starts is refused.
+    await run('chain-plan');
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(row => [row.workflow_name, row.status])).toEqual([
+      ['chain-plan', 'completed'],
+    ]);
+    expect((await stoppedOnItem()).map(item => item.refused)).toEqual([
+      [
+        expect.objectContaining({
+          workflow: 'chain-build',
+          reason: 'file_setting_missing',
+          fileSetting: { setting: 'policy', path: reported, origin: 'project' },
+        }),
+      ],
+    ]);
+    const attention = await fixture.cli(['workflow', 'attention']);
+    for (const fact of ["'policy'", reported]) expect(attention).toContain(fact);
+
+    // Restored, the stage that reads it starts and runs.
+    mkdirSync(join(fixture.projectRoot, 'docs'));
+    writeFileSync(policy, 'ask before every merge\n');
+    await run('chain-build');
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(row => [row.workflow_name, row.status])).toEqual([
+      ['chain-plan', 'completed'],
+      ['chain-build', 'completed'],
+    ]);
+    // The refused start's stop is closed; the run that declares no outcome stops the item.
+    expect((await stoppedOnItem()).map(item => [item.stoppedIn.workflow, item.refused])).toEqual([
+      ['chain-build', undefined],
+    ]);
+  }, 90_000);
+
+  test('is recorded on a run that also left an ask, and stops its item once the ask is answered', async () => {
+    const { fixture, cli, attention } = await noProviderFixture('no-provider-asks');
+    writeFileSync(join(fixture.projectRoot, '.archon', 'workflows', 'plan-asks.yaml'), PLAN_ASKS);
+    fixture.bind(
+      'judge-after-plan',
+      { runEnded: { ...RUN_ENDED.runEnded, workflowName: 'plan-asks' } },
+      { workflowName: 'stage-ai' }
+    );
+    const output = await cli([
+      ...['workflow', 'run', 'plan-asks', '--no-worktree', '--item', 'issue-1'],
+      ...['--input', 'plan=p1', '--input', 'issue=i1'],
+    ]);
+    const [planned] = fixture.rows<RunRow>(RUNS_SQL);
+    const [receipt] = fixture.rows<{ receipt_id: string }>(
+      "SELECT receipt_id FROM remote_agent_start_receipt_bindings WHERE preparation_status = 'rejected'"
+    );
+    // The stage says what it did not start; the item waits on its ask first.
+    expect(output).toContain(receipt?.receipt_id ?? 'a receipt');
+    const asked = await attention();
+    expect(asked.map(item => item.kind)).toEqual(['attention']);
+
+    await cli(['workflow', 'answer', '--ref', asked[0]?.ref ?? '', '--recommended']);
+    expect(await attention()).toEqual([
+      expect.objectContaining({
+        kind: 'stopped',
+        stoppedIn: expect.objectContaining({ runId: planned?.id }),
+        refused: [expect.objectContaining({ workflow: 'stage-ai', reason: 'no_default_provider' })],
+      }),
+    ]);
+  }, 90_000);
+
+  test('is recorded on the run whose end caused a start on a linked item', async () => {
+    const { fixture, cli, attention } = await noProviderFixture('no-provider-linked');
+    fixture.bind(
+      'judge-order',
+      {
+        runEnded: {
+          workflowName: 'stage-a',
+          outcome: 'planned',
+          linked: { kind: 'part_of', holder: 'to' },
+          inputs: { plan: { result: '/plan' }, issue: { item: 'key' } },
+        },
+      },
+      { workflowName: 'stage-ai' }
+    );
+    // A link names items of a registered project, and the first run registers it.
+    await cli([
+      ...['workflow', 'run', 'stage-b', '--no-worktree'],
+      ...['--input', 'plan=p', '--input', 'issue=i'],
+    ]);
+    await cli(['workflow', 'link', '--item', 'm1', '--kind', 'part_of', '--to', 'order-1']);
+    await cli([
+      ...['workflow', 'run', 'stage-a', '--no-worktree', '--item', 'm1'],
+      ...['--input', 'plan=m1', '--input', 'issue=i1'],
+    ]);
+    const member = fixture.rows<RunRow>(RUNS_SQL).find(run => run.workflow_name === 'stage-a');
+    expect(await attention()).toEqual([
+      expect.objectContaining({
+        kind: 'stopped',
+        item: expect.objectContaining({ key: 'm1' }),
+        stoppedIn: expect.objectContaining({ runId: member?.id }),
+        refused: [expect.objectContaining({ workflow: 'stage-ai', reason: 'no_default_provider' })],
+      }),
+    ]);
   }, 90_000);
 });

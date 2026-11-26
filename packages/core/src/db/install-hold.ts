@@ -17,6 +17,8 @@ import { INSTALL_HOLD_ID, lockAdmission, readInstallHold } from './resource-slot
 import { readRunLimitWaiting } from './run-room';
 import { parseStoredJson, storedWorkflowName } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
+import { storedStartCause } from './item-step';
+import { parseProcessOwner, type ProcessOwner } from '@archon/paths/process-owner';
 import { loadRunLimit } from '../config/concurrency-config';
 
 export async function getInstallHold(): Promise<InstallHold | null> {
@@ -69,7 +71,7 @@ const heldIntentSchema = z.object({
 });
 
 /** The stored intent's workflow and checkout, or null when it does not read. */
-function heldIntent(intent: unknown): { workflow: string; cwd: string } | null {
+export function heldIntent(intent: unknown): { workflow: string; cwd: string } | null {
   try {
     const parsed = heldIntentSchema.safeParse(parseStoredJson(intent));
     return parsed.success
@@ -79,6 +81,112 @@ function heldIntent(intent: unknown): { workflow: string; cwd: string } | null {
     // Malformed JSON: the start is still listed, without its workflow.
     return null;
   }
+}
+
+/** A binding a process is preparing, as stored; `store-adapter` places it in its project. */
+export interface PreparingBinding {
+  receiptId: string;
+  bindingId: string;
+  hostId: string | null;
+  ownerId: string;
+  preparer: ProcessOwner | null;
+  workflow: string | null;
+  cwd: string | null;
+  itemKey: string | null;
+  claimedAt: string;
+}
+
+/**
+ * Every binding a process is preparing now (`preparation_status = 'preparing'`), with the
+ * process that claimed it. A claim by an older binary records none, and a record that does
+ * not read is treated the same: such a preparer can never be proven gone.
+ */
+export async function listPreparingBindings(): Promise<PreparingBinding[]> {
+  const rows = await getDatabase().query<{
+    receipt_id: string;
+    binding_id: string;
+    host_id: string | null;
+    intent: unknown;
+    item_key: string | null;
+    receipt_item_key: string | null;
+    preparation_owner: string | null;
+    preparation_process: unknown;
+    updated_at: string | Date;
+  }>(
+    `SELECT b.receipt_id, b.binding_id, b.host_id, b.intent, b.item_key, b.preparation_owner,
+            b.preparation_process, b.updated_at, r.item_key AS receipt_item_key
+       FROM remote_agent_start_receipt_bindings b
+       JOIN remote_agent_start_receipts r ON r.id = b.receipt_id
+      WHERE b.preparation_status = 'preparing' AND b.preparation_owner IS NOT NULL
+      ORDER BY b.updated_at, b.binding_id`
+  );
+  return rows.rows.map(row => {
+    const intent = heldIntent(row.intent);
+    return {
+      receiptId: String(row.receipt_id),
+      bindingId: row.binding_id,
+      hostId: row.host_id,
+      ownerId: String(row.preparation_owner),
+      preparer: storedPreparer(row.preparation_process),
+      workflow: intent?.workflow ?? null,
+      cwd: intent?.cwd ?? null,
+      itemKey: row.item_key ?? row.receipt_item_key,
+      claimedAt: toHydratedTimestamp(row.updated_at).toISOString(),
+    };
+  });
+}
+
+function storedPreparer(stored: unknown): ProcessOwner | null {
+  if (stored == null) return null;
+  try {
+    return parseProcessOwner(parseStoredJson(stored), 'remote_agent_start_receipt_bindings');
+  } catch {
+    // Unreadable is unknown, never gone: the start is listed nowhere as lost.
+    return null;
+  }
+}
+
+/**
+ * The bindings on item key `itemKey` that have not been prepared yet: waiting, being prepared,
+ * or retrying after a preparation that failed, under the install hold or not. Each carries its
+ * checkout, which `store-adapter` resolves to the item's project, and its cause. Its role is
+ * `unprepared` (`item-step.ts`): nothing records one before preparation.
+ */
+export async function listUnpreparedStarts(itemKey: string): Promise<
+  {
+    receiptId: string;
+    bindingId: string;
+    cwd: string | null;
+    cause: ReturnType<typeof storedStartCause>;
+  }[]
+> {
+  const rows = await getDatabase().query<{
+    receipt_id: string;
+    binding_id: string;
+    intent: unknown;
+    source_instance_id: string;
+    source_actor: unknown;
+  }>(
+    `SELECT CAST(b.receipt_id AS TEXT) AS receipt_id, b.binding_id, b.intent,
+            r.source_instance_id, r.source_actor
+       FROM remote_agent_start_receipt_bindings b
+       JOIN remote_agent_start_receipts r ON r.id = b.receipt_id
+      WHERE r.outcome = 'matched'
+        AND b.preparation_status IN ('pending', 'preparing', 'failed')
+        AND COALESCE(b.item_key, r.item_key) = $1
+      ORDER BY b.created_at, b.binding_id`,
+    [itemKey]
+  );
+  return rows.rows.map(row => ({
+    receiptId: row.receipt_id,
+    bindingId: row.binding_id,
+    cwd: heldIntent(row.intent)?.cwd ?? null,
+    cause: storedStartCause({
+      id: row.receipt_id,
+      sourceInstanceId: row.source_instance_id,
+      sourceActor: row.source_actor,
+    }),
+  }));
 }
 
 export async function listHeldStarts(): Promise<HeldStart[]> {

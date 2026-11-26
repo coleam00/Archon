@@ -1,7 +1,8 @@
 // @archon-test-isolated
 /**
  * The item commands against a real SQLite store, in-process: `workflow run --item` and
- * `--supersedes`, `workflow runs --item` and `--item-of`, `workflow rule`, `workflow merged`,
+ * `--supersedes`, `workflow runs --item` and `--item-of`, `workflow rule`, `workflow end`,
+ * `workflow merged`,
  * the merge record an applied forge `pr.merge` writes,
  * `workflow items` and `workflow link`. The store's conformance tests prove what is
  * recorded; these prove each command's request, refusal codes and JSON and text output.
@@ -31,6 +32,9 @@ import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
 import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
+import { itemEndSchema } from '@archon/workflows/schemas/item-end';
+import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
+import { RUN_ENDED_SOURCE_ACTOR } from '@archon/workflows/schemas/resource-start';
 import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
 import { recordRunMerge } from './forge-merge-record';
@@ -41,6 +45,9 @@ import { workflowLandingCommand } from './workflow-landing';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
+import { runWorkflowEnd } from '../routes/workflow';
+import * as workflowCommands from './workflow';
+import { workflowAttentionCommand } from './workflow-attention';
 import { workflowRunCommand } from './workflow-run-owned';
 
 mock.module('@archon/core/services/title-generator', () => ({
@@ -272,12 +279,75 @@ test.serial(
       workflowRunsCommand(host, projectRoot, { item: 'item-9', json: true })
     );
     expect(unknown.exitCode).toBe(1);
-    expect(JSON.parse(unknown.stdout)).toEqual({ ok: false, error: 'not_found', item: 'item-9' });
+    expect(JSON.parse(unknown.stdout)).toEqual({
+      ok: false,
+      error: 'not_found',
+      item: 'item-9',
+      refused: [],
+    });
     const textUnknown = await invoke(host =>
       workflowRunsCommand(host, projectRoot, { item: 'item-9' })
     );
     expect(textUnknown.exitCode).toBe(1);
     expect(textUnknown.stderr).toContain("No item 'item-9'");
+
+    // A start refused before any start made its item names it all the same.
+    await invoke(async host => {
+      const receiptId = crypto.randomUUID();
+      const { store } = host.deps;
+      await store.acceptStartReceipt({
+        receipt: {
+          id: receiptId,
+          sourceInstanceId: 'fire',
+          deliveryId: null,
+          contentDigest: receiptId,
+          receivedAt: new Date().toISOString(),
+          occurredAt: null,
+          sourceActor: null,
+          itemKey: 'item-8',
+        },
+        outcome: 'matched',
+        bindings: [
+          {
+            bindingId: 'triage',
+            bindingRevision: null,
+            hostId: 'host',
+            runAsUserId: 'operator',
+            resource: 'pool',
+            overlap: 'queue',
+            launch: {
+              cwd: projectRoot,
+              workflowName: 'triage',
+              inputs: {},
+              isolation: { kind: 'in-place' },
+            },
+          },
+        ],
+      });
+      const identity = { receiptId, bindingId: 'triage', ownerId: crypto.randomUUID() };
+      await store.claimStartBindingPreparation(identity);
+      await store.failStartBindingPreparation({
+        ...identity,
+        error: 'launch_preparation_failed',
+        retryable: false,
+        refusal: 'no_default_provider',
+      });
+    });
+    const refusedJson = await invoke(host =>
+      workflowRunsCommand(host, projectRoot, { item: 'item-8', json: true })
+    );
+    expect(refusedJson.exitCode).toBe(1);
+    expect(JSON.parse(refusedJson.stdout)).toMatchObject({
+      error: 'not_found',
+      refused: [
+        { kind: 'refused_start', start: { itemKey: 'item-8', reason: 'no_default_provider' } },
+      ],
+    });
+    const refusedText = await invoke(host =>
+      workflowRunsCommand(host, projectRoot, { item: 'item-8' })
+    );
+    expect(refusedText.stderr).toContain('no start has made it yet');
+    expect(refusedText.stderr).toContain('archon ai default <provider>');
     const writable = new Database(database);
     try {
       writable.run(
@@ -305,6 +375,387 @@ test.serial(
         .filter(row => row.continues !== null)
         .map(({ continues, item_key }) => ({ continues, item_key }))
     ).toEqual([{ continues: bare.id, item_key: 'item-2' }]);
+  }
+);
+
+/** A run of `item-proof` on `key`: still running, or ended at once, stopping the item or failed. */
+async function seedEnded(
+  key: string,
+  end: 'running' | 'stopped' | 'failed',
+  refusals: Parameters<typeof itemStoppedMetadata>[1] = {}
+): Promise<string> {
+  let id = '';
+  const result = await captureWorkflowCommand(archonHome, async host => {
+    const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
+    if (!codebase) throw new Error('The seed run did not register the project');
+    const seeded = await host.deps.store.createWorkflowRun({
+      workflow_name: 'item-proof',
+      user_message: 'go',
+      codebase_id: codebase.id,
+      working_path: projectRoot,
+      item_key: key,
+    });
+    id = seeded.id;
+    await host.deps.store.claimPendingWorkflowRun(seeded.id, projectRoot);
+    if (end === 'failed') await host.deps.store.failWorkflowRun(seeded.id, 'boom');
+    else if (end === 'stopped')
+      await host.deps.store.completeWorkflowRun(
+        seeded.id,
+        { duration_ms: 1 },
+        itemStoppedMetadata('Folded into another item.', refusals),
+        { outcome: { kind: 'enum', value: 'fold' } }
+      );
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return id;
+}
+
+test.serial(
+  'a run whose outcome finishes its item ends it: the item read says the engine ended it and why',
+  async () => {
+    writeFileSync(
+      join(projectRoot, '.archon', 'workflows', 'finish.yaml'),
+      `name: finish
+description: Close an item.
+mutates_checkout: false
+returns: { node: decide, outcome: outcome, ends: [close], summary: why }
+nodes:
+  - id: decide
+    bash: |
+      echo '{"outcome": "close", "why": "Fixed upstream."}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [close, again] }
+        why: { type: string }
+      required: [outcome, why]
+`
+    );
+    const started = await invoke(host =>
+      workflowRunCommand(host, projectRoot, 'finish', 'go', {
+        noWorktree: true,
+        item: 'item-close',
+      })
+    );
+    expect(started.exitCode, started.stderr).toBe(0);
+
+    const reason = "Workflow 'finish' ended the item with outcome 'close': Fixed upstream.";
+    expect((await readItemJson('item-close')).ended).toMatchObject({
+      reason,
+      via: 'engine',
+      by: null,
+    });
+    const text = await invoke(host =>
+      workflowRunsCommand(host, projectRoot, { item: 'item-close' })
+    );
+    expect(text.stdout).toContain(`via engine: ${reason}`);
+    const attention = succeeded(
+      await invoke(host =>
+        workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+      )
+    ) as { items: { item?: { key: string } }[] };
+    expect(attention.items.map(item => item.item?.key)).not.toContain('item-close');
+  }
+);
+
+test.serial('a run of an observing workflow leaves a stopped item listed as stopped', async () => {
+  const decide = (name: string, observes: boolean) =>
+    `name: ${name}
+description: ${name}
+mutates_checkout: false
+${observes ? 'observes: true\n' : ''}returns: { node: decide, outcome: outcome }
+nodes:
+  - id: decide
+    bash: |
+      echo '{"outcome": "not_ready"}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [not_ready, ready] }
+      required: [outcome]
+`;
+  const workflows = join(projectRoot, '.archon', 'workflows');
+  writeFileSync(join(workflows, 'review.yaml'), decide('review', false));
+  writeFileSync(join(workflows, 'shadow.yaml'), decide('shadow', true));
+  const stopsOnItem = async () => {
+    const read = await invoke(host =>
+      workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+    );
+    const items = (JSON.parse(read.stdout) as { items: { kind: string; item?: { key: string } }[] })
+      .items;
+    return items.filter(item => item.kind === 'stopped' && item.item?.key === 'item-observed');
+  };
+  const runOn = async (workflow: string) => {
+    const result = await invoke(host =>
+      workflowRunCommand(host, projectRoot, workflow, 'go', {
+        noWorktree: true,
+        item: 'item-observed',
+      })
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+  };
+
+  // `not_ready` starts nothing and ends nothing, so the step stops its item.
+  await runOn('review');
+  expect(await stopsOnItem()).toHaveLength(1);
+  // The observing run on the item completes with the same quiet outcome; the stop stays.
+  await runOn('shadow');
+  expect(await stopsOnItem()).toMatchObject([{ stoppedIn: { workflow: 'review' } }]);
+});
+
+/** A binding start on `key` not yet prepared, as a fire or a run's end writes it. */
+async function unpreparedStart(
+  key: string,
+  launch: { cwd: string; workflowName: string },
+  sourceActor: { source: string; id: string } | null = null
+): Promise<void> {
+  const result = await captureWorkflowCommand(archonHome, async host => {
+    const receiptId = crypto.randomUUID();
+    await host.deps.store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: `start-${receiptId}`,
+        deliveryId: null,
+        contentDigest: receiptId,
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: sourceActor as never,
+        itemKey: key,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: launch.workflowName,
+          bindingRevision: null,
+          hostId: 'host',
+          runAsUserId: 'operator',
+          resource: 'pool',
+          overlap: 'queue',
+          launch: { ...launch, inputs: {}, isolation: { kind: 'in-place' } },
+        },
+      ],
+    });
+  });
+  expect(result.status, result.stderr).toBe(0);
+}
+
+test.serial(
+  'a start not yet prepared neither reopens an ended item nor refuses its end, as during a hold',
+  async () => {
+    const end = () =>
+      invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'Done by hand.'],
+          values: { item: 'item-held', as: 'triage-agent', json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
+      );
+    const stopped = await seedEnded('item-held', 'stopped');
+    succeeded(await end());
+    // What the install hold keeps waiting: a fire of an observing workflow onto the item.
+    await unpreparedStart('item-held', { cwd: projectRoot, workflowName: 'shadow' });
+
+    expect((await readItemJson('item-held')).ended).toMatchObject({ reason: 'Done by hand.' });
+    const attention = succeeded(
+      await invoke(host =>
+        workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+      )
+    ) as { items: { ref?: string }[] };
+    expect(attention.items.map(item => item.ref)).not.toContain(`stopped:${stopped}`);
+    succeeded(await end());
+  }
+);
+
+test.serial(
+  "a start not yet prepared that a run's end caused on its item holds that run's stop back",
+  async () => {
+    const stoppedRefs = async () =>
+      (
+        succeeded(
+          await invoke(host =>
+            workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+          )
+        ) as { items: { kind: string; ref: string }[] }
+      ).items.flatMap(item => (item.kind === 'stopped' ? [item.ref] : []));
+    const stopped = await seedEnded('item-next', 'stopped');
+    expect(await stoppedRefs()).toContain(`stopped:${stopped}`);
+    const endedBy = { source: RUN_ENDED_SOURCE_ACTOR, id: stopped };
+
+    // The same key launched from a checkout outside the item's project is another item.
+    const elsewhere = join(root, 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    await unpreparedStart('item-next', { cwd: elsewhere, workflowName: 'build' }, endedBy);
+    expect(await stoppedRefs()).toContain(`stopped:${stopped}`);
+
+    // In the item's project, the stage its end started has not been prepared: the stop waits.
+    await unpreparedStart('item-next', { cwd: projectRoot, workflowName: 'build' }, endedBy);
+    expect(await stoppedRefs()).not.toContain(`stopped:${stopped}`);
+  }
+);
+
+test.serial(
+  'an item that depends on an open item waits on it, and is listed as stopped once it ends',
+  async () => {
+    const stoppedRefs = async () =>
+      (
+        succeeded(
+          await invoke(host =>
+            workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+          )
+        ) as { items: { kind: string; ref: string }[] }
+      ).items.flatMap(item => (item.kind === 'stopped' ? [item.ref] : []));
+    const link = async (request: Parameters<typeof workflowLinkCommand>[2]) =>
+      succeeded(
+        await invoke(host => workflowLinkCommand(host, projectRoot, request, true, callerEnv))
+      );
+    const waiting = await seedEnded('item-waiting', 'stopped');
+    // A refused start needs someone whatever the item waits on.
+    const refused = await seedEnded('item-refused', 'stopped', {
+      refused: [
+        {
+          receiptId: 'receipt-1',
+          bindingId: 'build',
+          workflow: 'build',
+          reason: 'inputs_unmapped',
+          refusedAt: '2026-11-26T10:00:00Z',
+        },
+      ],
+    });
+    await link({ item: 'item-waiting', kind: 'depends_on', to: 'item-blocker' });
+    await link({ item: 'item-refused', kind: 'depends_on', to: 'item-blocker' });
+    // The blocker is a work order whose member stays open after the blocker ends.
+    await link({ item: 'item-member', kind: 'part_of', to: 'item-blocker' });
+
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([
+      { item: { key: 'item-blocker' }, state: 'open' },
+    ]);
+    expect(await stoppedRefs()).not.toContain(`stopped:${waiting}`);
+    expect(await stoppedRefs()).toContain(`stopped:${refused}`);
+
+    // The blocker is ended and nothing starts on the waiting item: it is stopped again.
+    succeeded(
+      await invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'Nothing more on the blocker.'],
+          values: { item: 'item-blocker', as: 'triage-agent', json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
+      )
+    );
+    expect((await readItemJson('item-blocker')).workOrder).toMatchObject({ state: 'open' });
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([{ state: 'ended' }]);
+    expect(await stoppedRefs()).toContain(`stopped:${waiting}`);
+  }
+);
+
+test.serial(
+  'workflow end takes a stopped item out of attention, and the item read says who ended it and why',
+  async () => {
+    const attention = async () =>
+      (
+        await invoke(host =>
+          workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+        )
+      ).stdout;
+    // `archon workflow end --item <key> [--as <name>] --json -- <reason>`, as argv routes it.
+    const end = (key: string, as: string | undefined, env: NodeJS.ProcessEnv = callerEnv) =>
+      invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'A duplicate of item-2.'],
+          values: { item: key, ...(as === undefined ? {} : { as }), json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: env,
+          forgeTrustedEnv: env,
+        })
+      );
+    const stopped = await seedEnded('item-stop', 'stopped');
+    expect(await attention()).toContain(`stopped:${stopped}`);
+    // The real command, through the CLI's own dispatch and argument parsing.
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        join(import.meta.dir, '..', 'cli.ts'),
+        ...['workflow', 'end', '--item', 'item-stop', '--as', 'triage-agent', '--json'],
+        ...['--', 'A duplicate of item-2.'],
+      ],
+      {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          ...callerEnv,
+          ARCHON_HOME: archonHome,
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const [code, out, err] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(code, err || out).toBe(0);
+    itemEndSchema.parse(JSON.parse(out));
+    expect(await attention()).not.toContain(`stopped:${stopped}`);
+    expect((await readItemJson('item-stop')).ended).toMatchObject({
+      reason: 'A duplicate of item-2.',
+      by: { declared: 'triage-agent' },
+      via: 'cli',
+    });
+
+    // A failed item is ended by its key alone, and without --as the CLI identity says who.
+    await seedEnded('item-fail', 'failed');
+    succeeded(await end('item-fail', undefined, { ...callerEnv, ARCHON_USER_ID: 'ops' }));
+    expect((await readItemJson('item-fail')).ended).toMatchObject({
+      by: { declared: 'ops' },
+    });
+
+    // Refusals exit 1 with a code: a live run named, nobody named, an unknown key.
+    const running = await seedEnded('item-live', 'running');
+    const refusal = async (result: Promise<{ exitCode: number; stdout: string }>) => {
+      const { exitCode, stdout } = await result;
+      expect(exitCode).toBe(1);
+      return JSON.parse(stdout) as unknown;
+    };
+    expect(await refusal(end('item-live', 'triage-agent'))).toMatchObject({
+      error: 'run',
+      blocker: { kind: 'run', runId: running, status: 'running' },
+    });
+    const nobody = { ...callerEnv, ARCHON_USER_ID: '', USER: '', USERNAME: '' };
+    expect(await refusal(end('item-stop', undefined, nobody))).toMatchObject({
+      error: 'unattributed',
+    });
+    expect(await refusal(end('item-none', 'triage-agent'))).toEqual({
+      ok: false,
+      error: 'not_found',
+    });
   }
 );
 
@@ -858,7 +1309,20 @@ test.serial(
     expect(untouched.merged).toBeNull();
     expect(untouched.landing).toBeNull();
 
-    expect(await record(onItem.id, facts.at)).toBe('recorded');
+    // A landing the operator set before the merge is recorded is kept, and the result says so.
+    const env = nodeEnv(onItem.id);
+    succeeded(
+      await invoke(host =>
+        workflowLandingCommand(
+          host,
+          projectRoot,
+          { itemOf: onItem.id, branch: 'release/planned' },
+          true,
+          env
+        )
+      )
+    );
+    expect(await record(onItem.id, facts.at)).toBe('landing_kept');
     const item = await readItemJson('item-1');
     expect(item.merged).toMatchObject({
       change: facts.change,
@@ -867,10 +1331,10 @@ test.serial(
       via: 'forge',
       fromRun: { runId: onItem.id, nodePath: 'land' },
     });
-    expect(item.landing).toMatchObject({ branch: 'dev', from: { kind: 'own' } });
+    expect(item.landing).toMatchObject({ branch: 'release/planned', from: { kind: 'own' } });
 
-    // A pack that still records the merge and landing afterwards changes nothing.
-    const env = nodeEnv(onItem.id);
+    // A pack that still records the merge afterwards keeps the first; its own landing call
+    // sets the branch, as `workflow landing` always does.
     const merged = await invoke(host =>
       workflowMergedCommand(
         host,
@@ -891,8 +1355,150 @@ test.serial(
     expect(after.landing?.branch).toBe('dev');
     expect(merges()).toEqual([{ n: 1 }]);
 
+    // A repeat, or the merge of another pull request, keeps both records as they are,
+    // including a landing the operator corrected since.
+    succeeded(
+      await invoke(host =>
+        workflowLandingCommand(
+          host,
+          projectRoot,
+          { itemOf: onItem.id, branch: 'release/next' },
+          true,
+          env
+        )
+      )
+    );
+    for (const repeat of [facts, { ...facts, change: 'https://github.com/acme/web/pull/5' }]) {
+      let outcome: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
+      await invoke(async () => {
+        outcome = await recordRunMerge(onItem.id, { ...repeat, branch: 'main' }, env);
+      });
+      expect(outcome).toBe('already_recorded');
+      const repeated = await readItemJson('item-1');
+      expect(repeated.merged).toEqual(item.merged);
+      expect(repeated.landing?.branch).toBe('release/next');
+    }
+
     // A run on no item writes nothing.
     expect(await record(bare.id, facts.at)).toBe('no_item');
     expect(merges()).toEqual([{ n: 1 }]);
+
+    // A merge recorded by hand, which writes no landing, gets its landing from the forge's
+    // answer for that same change; the merge stays as it was recorded.
+    const second = runsWithItems().find(row => row.item_key === 'item-2');
+    if (!second) throw new Error('Expected a run on item-2');
+    succeeded(
+      await invoke(host =>
+        workflowMergedCommand(
+          host,
+          projectRoot,
+          { item: 'item-2', change: facts.change, at: facts.at },
+          true,
+          env
+        )
+      )
+    );
+    const byHand = (await readItemJson('item-2')).merged;
+    expect(byHand).toMatchObject({ change: facts.change, via: 'cli' });
+    let filled: Awaited<ReturnType<typeof recordRunMerge>> | undefined;
+    const fill = await invoke(async () => {
+      filled = await recordRunMerge(
+        second.id,
+        { ...facts, branch: 'release/1' },
+        nodeEnv(second.id)
+      );
+    });
+    expect(fill.exitCode, fill.stderr).toBe(0);
+    expect(filled).toBe('recorded');
+    const recovered = await readItemJson('item-2');
+    expect(recovered.merged).toEqual(byHand);
+    expect(recovered.landing?.branch).toBe('release/1');
+  }
+);
+
+test.serial(
+  'a work order reads open while a member is open, done once every member merged or ended, and open again when one reopens',
+  async () => {
+    for (const member of ['item-1', 'item-2'])
+      succeeded(
+        await invoke(host =>
+          workflowLinkCommand(
+            host,
+            projectRoot,
+            { item: member, kind: 'part_of', to: 'order-1' },
+            true,
+            callerEnv
+          )
+        )
+      );
+    succeeded(
+      await invoke(host =>
+        workflowMergedCommand(
+          host,
+          projectRoot,
+          {
+            item: 'item-2',
+            change: 'https://github.com/acme/web/pull/2',
+            at: '2026-11-02T10:00:00Z',
+          },
+          true,
+          callerEnv
+        )
+      )
+    );
+    const order = async () => {
+      const read = await readItemJson('order-1');
+      expect(read.runs).toEqual([]);
+      return {
+        state: read.workOrder?.state,
+        members: read.workOrder?.members.map(({ item, state }) => [item.key, state]),
+      };
+    };
+    expect(await order()).toEqual({
+      state: 'open',
+      members: [
+        ['item-1', 'open'],
+        ['item-2', 'merged'],
+      ],
+    });
+    // The text read names the state and the member that keeps it open.
+    const text = await invoke(host => workflowRunsCommand(host, projectRoot, { item: 'order-1' }));
+    expect(text.exitCode, text.stderr).toBe(0);
+    const line = text.stdout.split('\n').find(row => row.startsWith('Work order'));
+    expect(line).toContain('open');
+    expect(line).toContain('item-1');
+    expect(line).not.toContain('item-2');
+
+    // Ending the open member closes the order with no run on it.
+    const member = (await readItemJson('item-1')).item;
+    const ended = await captureWorkflowCommand(archonHome, async host => {
+      await host.deps.store.recordItemEnd({
+        itemId: member.id,
+        key: member.key,
+        reason: 'Folded into item-2.',
+        via: 'cli',
+        by: null,
+        fromRun: null,
+      });
+    });
+    expect(ended.status, ended.stderr).toBe(0);
+    expect((await order()).state).toBe('done');
+    // Reading it done wrote nothing on the order.
+    expect(
+      rows(
+        `SELECT 1 FROM remote_agent_item_ends e JOIN remote_agent_items i
+           ON i.id = e.item_id WHERE i.key = 'order-1'`
+      )
+    ).toEqual([]);
+
+    // A newer run on the ended member reopens it, and with it the order.
+    await seedRuns(['item-1']);
+    expect(await order()).toEqual({
+      state: 'open',
+      members: [
+        ['item-1', 'open'],
+        ['item-2', 'merged'],
+      ],
+    });
   }
 );

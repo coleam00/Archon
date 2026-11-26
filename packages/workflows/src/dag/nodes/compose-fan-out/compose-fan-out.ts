@@ -1,4 +1,5 @@
 import { ParentStatusReadError } from '../../../parent-status-read';
+import { readUnknownOutcomes, type UnknownOutcome } from '../../../unknown-outcome';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeExecutionRecord, type NodeFailureKind } from '../../../schemas/node-execution';
@@ -302,8 +303,15 @@ export async function executeComposeFanOutNode(
   const fanOutScopeName =
     ctx.stepNamePrefix + composeFanOutScopeSegment(node.id, ctx.loopGroupPath);
   let resumeSnapshot: DagResumeSnapshot;
+  let unknownOutcomes: readonly UnknownOutcome[];
   try {
     resumeSnapshot = await deps.store.getDagResumeSnapshot(parentRun.id);
+    // Read once for every instance, and only when some failure's outcome is unknown.
+    unknownOutcomes = [...resumeSnapshot.failedNodes.values()].some(
+      failure => failure.failureKind === 'outcome_unknown'
+    )
+      ? await readUnknownOutcomes(deps.store, parentRun)
+      : [];
   } catch (err) {
     const msg =
       `composed fan-out node '${node.id}' could not load durable resume state: ` +
@@ -367,7 +375,7 @@ export async function executeComposeFanOutNode(
   }
 
   // Execute incomplete identities through a bounded sliding window.
-  const scope = { ctx, node, fanOutScopeName, resumeSnapshot, ...body };
+  const scope = { ctx, node, fanOutScopeName, resumeSnapshot, unknownOutcomes, ...body };
   const settled = await mapWithLimit(snapshots, fanOut.max_parallel, snapshot =>
     runComposeInstance(scope, snapshot)
   );

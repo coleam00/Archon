@@ -30,9 +30,9 @@ export type AttentionWatchLevel = z.infer<typeof attentionWatchLevelSchema>;
  *
  * `needs` says only what someone must do:
  * - `answer`: an item that takes an answer.
- * - `look`: an item nothing can describe; a usage-limit wait that replaces an item that
- *   needed someone; a run that failed, completed with a failed outcome, or lost its owner;
- *   and a stream that lost coverage or ended.
+ * - `look`: an item nothing can describe; a usage-limit wait, which the operator may end
+ *   sooner by changing the credential or the limit; a run that failed, completed with a
+ *   failed outcome, or lost its owner; and a stream that lost coverage or ended.
  * - `nothing`: everything else, including the close of an item (`resolved`, `unmatched`),
  *   which leaves nothing to do.
  *
@@ -64,10 +64,12 @@ export function attentionWatchReader(
           case 'owner_lost':
           case 'overdue_wait':
           case 'stopped':
+          case 'refused_start':
+          case 'preparation_lost':
+          case 'unreadable_start':
+          case 'usage_limit':
             shown.add(line.item.ref);
             return { needs: 'look' };
-          case 'usage_limit':
-            return { needs: shown.delete(line.item.ref) ? 'look' : 'nothing' };
         }
         return line.item satisfies never;
       case 'resolved':

@@ -40,6 +40,7 @@ test('auto-resume propagates a published-pause error without failing the success
     preCreatedRun: run,
     priorCompletedNodes: new Map(),
     resumeCause: 'continue_after_wait',
+    claimedByHand: false,
     priorFailedNodes: new Map(),
     priorUsage: {},
     priorNodeSessions: [],
@@ -93,7 +94,8 @@ test('auto-resume notifies the operator when parent hydration fails', async () =
       { childRunId: 'child', childStatus: 'completed' }
     );
     expect(result).toBeUndefined();
-    expect(hydrate).toHaveBeenCalledWith(deps, run);
+    // A continuation by itself, so the claim can refuse a parent holding an unknown outcome.
+    expect(hydrate).toHaveBeenCalledWith(deps, run, { kind: 'child', childRunId: 'child' });
     expect(notifyStuck).toHaveBeenCalledTimes(1);
     expect(notifyStuck).toHaveBeenCalledWith('preparing the parent for resume failed');
     expect(execute).not.toHaveBeenCalled();

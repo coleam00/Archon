@@ -6,7 +6,7 @@
 import { resolve } from 'path';
 import { BUNDLED_VERSION, getPluginsPath } from '@archon/paths';
 import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from '../attachment-commands';
-import { type CliRouteContext, fail, printUsageFor } from './context';
+import { type CliRouteContext, fail, isPathDirectory, printUsageFor } from './context';
 import { loadRoute, usesDatabaseStore } from './route-loader';
 
 export async function runScript({
@@ -230,6 +230,7 @@ export async function runTrigger({
       owner: typeof values.owner === 'string' ? values.owner : undefined,
       deliveryId: typeof values['delivery-id'] === 'string' ? values['delivery-id'] : undefined,
       inputs: typeof values.inputs === 'string' ? values.inputs : undefined,
+      input: Array.isArray(values.input) ? values.input : undefined,
       item: typeof values.item === 'string' ? values.item : undefined,
       noItem: values['no-item'] === true,
       limit: typeof values.limit === 'string' ? values.limit : undefined,
@@ -439,6 +440,7 @@ export async function runIsolation({
 export async function runValidate({
   subcommand,
   positionals,
+  values,
   cwd,
   effectiveCwd,
   json,
@@ -448,14 +450,22 @@ export async function runValidate({
     () => import('../commands/validate')
   );
   switch (subcommand) {
-    case 'workflows':
+    case 'workflows': {
+      // Resolved against the process cwd, not --cwd, as `workflow run` resolves it.
+      const flag = values['workflow-source'];
+      const source = typeof flag === 'string' ? resolve(flag) : undefined;
+      if (source !== undefined && !(await isPathDirectory(source))) {
+        return await fail(json, `Error: --workflow-source is not a directory: ${source}`);
+      }
       return await validateWorkflowsCommand(
         effectiveCwd,
         positionals[2],
         json,
         forgeTrustedEnv,
-        cwd
+        cwd,
+        source
       );
+    }
 
     case 'commands':
       return await validateCommandsCommand(effectiveCwd, positionals[2], json);
@@ -638,6 +648,7 @@ export async function runTelemetry({ subcommand, json }: CliRouteContext): Promi
 export async function runSkill({
   subcommand,
   positionals,
+  values,
   cwd,
   json,
 }: CliRouteContext): Promise<number> {
@@ -659,9 +670,14 @@ export async function runSkill({
   }
   const targetArg = positionals[2];
   const targetPath = targetArg ? resolve(targetArg) : cwd;
-  const { skillInstallCommand } = await loadRoute(() => import('../commands/skill'), {
-    providers: false,
-  });
+  const { packSkillInstallCommand, skillInstallCommand } = await loadRoute(
+    () => import('../commands/skill'),
+    { providers: false }
+  );
+  if (typeof values.pack === 'string') {
+    // The trusted plugins directory, as `archon plugin` uses, so repo env cannot redirect it.
+    return await packSkillInstallCommand(values.pack, targetPath, getPluginsPath());
+  }
   return await skillInstallCommand(targetPath);
 }
 

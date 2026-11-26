@@ -609,6 +609,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   checkout_from TEXT,
   preparation_status VARCHAR(20) NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
   preparation_owner TEXT,
+  preparation_process TEXT,
   preparation_error TEXT,
   forge_refusal TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -750,6 +751,15 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS item_ke
 -- preparation_error, which keeps only the failed boundary.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS forge_refusal TEXT;
 
+-- The process preparing a binding (host, pid and instance, JSON), written when it claims the
+-- preparation. Only with it can a reader prove a preparer that died is gone; null (an older
+-- binary's claim) leaves the preparer unknown.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS preparation_process TEXT;
+
+-- Why a binding start was refused (JSON: a reason code, and a start limit's standing), written
+-- by the write that refuses it, so a read names the reason without parsing preparation_error.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS refusal TEXT;
+
 -- A binding's start limit (JSON) and the name of the limit it grants (#6109), beside the
 -- intent for the same reason as event_input_names. On each start request, the limit it
 -- counted under and the limit it granted, each JSON with the window it was counted in:
@@ -777,6 +787,11 @@ ALTER TABLE remote_agent_resource_start_requests
   ADD COLUMN IF NOT EXISTS item_id UUID REFERENCES remote_agent_items(id);
 ALTER TABLE remote_agent_workflow_runs
   ADD COLUMN IF NOT EXISTS item_id UUID REFERENCES remote_agent_items(id);
+-- The newest top-level run deleted from the item, by its start and its id (the tie-break the
+-- item's run order uses): a deleted run moved the item on, so a stop from before it stays
+-- closed though the run is gone.
+ALTER TABLE remote_agent_items ADD COLUMN IF NOT EXISTS moved_on_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE remote_agent_items ADD COLUMN IF NOT EXISTS moved_on_tie UUID;
 
 -- The outcome a run completed with (#5660), from its workflow's returns.outcome: an enum
 -- value as it is, a boolean as 'succeeded' or 'failed'. Written only by the write that
@@ -805,6 +820,37 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
   from_node_path TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   CHECK ((withdraws IS NULL) = (text IS NOT NULL))
+);
+
+-- Ends of an item: an operator's statement that nothing more will happen on it. Append-only,
+-- like rulings: no row is updated or deleted, and nothing writes one by itself. from_run_id
+-- has no foreign key, so run cleanup keeps the end.
+CREATE TABLE IF NOT EXISTS remote_agent_item_ends (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  -- Recording order; timestamps tie within a millisecond and `id` is random.
+  seq BIGSERIAL NOT NULL UNIQUE,
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  reason TEXT NOT NULL,
+  by_declared TEXT,
+  by_user_id TEXT,
+  via TEXT NOT NULL,
+  from_run_id TEXT,
+  from_node_path TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- The runs an end saw on its item and below its runs, copied in the transaction that records
+-- it, each with its execution_claim, the run's metadata claim that every resume writes fresh.
+-- The end holds while every run in the item's tree is one it saw, unresumed since, and none is live: a run created or resumed later, even by a
+-- transaction that overlapped the end's, opens the item while that run exists. The rule reads
+-- only the runs that exist, so deleting a run changes nothing stored: deleting runs the end
+-- saw leaves it holding, and deleting the run that opened the item makes it hold again.
+-- run_id has no foreign key, so run cleanup keeps the row.
+CREATE TABLE IF NOT EXISTS remote_agent_item_end_runs (
+  end_id TEXT NOT NULL REFERENCES remote_agent_item_ends(id),
+  run_id TEXT NOT NULL,
+  execution_claim TEXT,
+  PRIMARY KEY (end_id, run_id)
 );
 
 -- The merge of an item's change, as the forge reported it to the caller that recorded it.
@@ -994,6 +1040,8 @@ CREATE INDEX IF NOT EXISTS idx_start_limit_resets_item
 -- Item rulings
 CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id
   ON remote_agent_item_rulings(item_id);
+CREATE INDEX IF NOT EXISTS idx_item_ends_item_id
+  ON remote_agent_item_ends(item_id);
 
 -- Item links
 CREATE UNIQUE INDEX IF NOT EXISTS idx_item_links_active

@@ -2,7 +2,12 @@ import { expect, test } from 'bun:test';
 import type { AttentionQueueItem, AttentionQueueScope } from '@archon/workflows/attention-queue';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { workflowEventCursor } from '@archon/workflows/store';
-import { attentionItemLines, attentionStreamText } from './workflow-attention-text';
+import {
+  attentionItemLines,
+  attentionListBlocks,
+  attentionStreamText,
+  refusedStartLines,
+} from './workflow-attention-text';
 
 const scope: AttentionQueueScope = { kind: 'all' };
 const cursor = workflowEventCursor('c');
@@ -66,6 +71,52 @@ test.each([
   expect(opened({ ...unadvised, form })).toContain(answer);
 });
 
+test('the list shows one entry per provider limit, naming each run it holds and how to retry it', () => {
+  const limited = (
+    id: string,
+    provider: string | undefined
+  ): Extract<AttentionQueueItem, { kind: 'usage_limit' }> => ({
+    ...base,
+    labels: {},
+    kind: 'usage_limit',
+    ref: id,
+    run: { ...held, id, node: `node-${id}` },
+    resetAt: `2026-11-27T10:00:00.000Z`,
+    ...(provider === undefined ? {} : { provider }),
+  });
+  const blocks = attentionListBlocks([
+    limited('a', 'claude'),
+    ask,
+    limited('b', 'codex'),
+    limited('c', 'claude'),
+    limited('d', undefined),
+    limited('e', undefined),
+  ]).map(block => block.join('\n'));
+  // Each provider's limit is one entry, at its first run's place; other items stay their own,
+  // and so does each wait that recorded no provider, since nothing says they share a limit.
+  expect(blocks).toHaveLength(5);
+  const [claude, asked, codex, unrecorded, alsoUnrecorded] = blocks;
+  expect(asked).toContain('Merge pull request 42?');
+  expect(claude).toContain('claude usage or rate limit, holding 2 runs');
+  for (const id of ['a', 'c']) {
+    expect(claude).toContain(`node-${id}: tries again by itself at 2026-11-27T10:00:00.000Z`);
+    expect(claude).toContain(`archon workflow resume ${id}`);
+  }
+  expect(claude).not.toContain('node-b');
+  expect(codex).toContain('codex usage or rate limit, holding 1 run');
+  for (const [block, id] of [
+    [unrecorded, 'd'],
+    [alsoUnrecorded, 'e'],
+  ] as const) {
+    expect(block).toContain('usage or rate limit (provider not recorded), holding 1 run');
+    expect(block).toContain(`archon workflow resume ${id}`);
+  }
+  // The single read names the provider too.
+  expect(attentionItemLines(limited('a', 'claude'), 'full').join('\n')).toContain(
+    'node-a: claude usage or rate limit reached'
+  );
+});
+
 test('a gate names its occurrence in the answer command', () => {
   const block = opened({
     ...base,
@@ -127,6 +178,18 @@ test('an unreadable item, a failed run and a lost owner say which run and what s
   expect(listed).toContain('item issue-7');
   expect(listed).toContain('archon workflow resume run-1');
   expect(listed).toContain('archon workflow abandon run-1');
+  // A pending start no process runs is started by its request, not resumed.
+  const unstarted = opened({
+    ...base,
+    kind: 'owner_lost',
+    ref: 'run-1',
+    run: held,
+    observedStatus: 'pending',
+    start: { requestId: 'run-1', hostId: 'h1' },
+  });
+  expect(unstarted).toContain('archon trigger execute run-1 --host h1');
+  expect(unstarted).toContain('archon workflow abandon run-1');
+  expect(unstarted).not.toContain('resume');
   // A run that ended well needs nobody, so it points nowhere.
   expect(
     text({ type: 'terminal', ...run, status: 'completed', outcome: null, cause: null })
@@ -229,6 +292,90 @@ test('an ask with no recommendation says it has none and offers none to accept',
   expect(reasoned).not.toContain('recommended: none');
 });
 
+test('a refused start names its item, its reason and what moves it on', () => {
+  const start = {
+    receiptId: 'r-1',
+    bindingId: 'build',
+    hostId: 'h1',
+    workflow: 'build',
+    itemKey: 'issue-1',
+  };
+  const lines = (
+    reason: string,
+    limit?: {
+      name: string;
+      starts: number;
+      granted: number;
+      used: number;
+      bindingId: string;
+      workflow: string;
+    }
+  ) =>
+    attentionItemLines(
+      {
+        ...base,
+        kind: 'refused_start',
+        ref: 'refused:r-1:build',
+        start: { ...start, reason, ...(limit === undefined ? {} : { limit }) },
+      },
+      'brief'
+    ).join('\n');
+  const provider = lines('no_default_provider');
+  expect(provider).toContain('refused start');
+  expect(provider).toContain('on item issue-1');
+  expect(provider).toContain('archon ai default <provider>');
+  expect(provider).toContain('archon trigger inspect r-1');
+  const limited = lines('start_limit', {
+    name: 'rounds',
+    starts: 1,
+    granted: 0,
+    used: 1,
+    bindingId: 'build',
+    workflow: 'build',
+  });
+  expect(limited).toContain("start limit 'rounds': 1 of 1 starts used");
+  // A code a newer binary wrote reads as it is.
+  expect(lines('a_newer_code')).toContain('a_newer_code');
+});
+
+test('a lost preparation names its start and the recovery that returns it to pending', () => {
+  const block = attentionItemLines(
+    {
+      ...base,
+      kind: 'preparation_lost',
+      ref: 'preparing:r-1:build',
+      start: {
+        receiptId: 'r-1',
+        bindingId: 'build',
+        hostId: 'h1',
+        workflow: 'build',
+        itemKey: 'issue-1',
+        ownerId: 'o-1',
+      },
+    },
+    'brief'
+  ).join('\n');
+  expect(block).toContain('preparer gone');
+  expect(block).toContain('on item issue-1');
+  expect(block).toContain('archon trigger recover-preparation r-1 build --owner o-1 --yes');
+  expect(block).toContain('archon trigger drain --host h1');
+});
+
+test('an unreadable queued start names what it holds and the withdrawal that frees it', () => {
+  const block = attentionItemLines(
+    {
+      ...base,
+      kind: 'unreadable_start',
+      ref: 'unreadable-start:q-1',
+      start: { requestId: 'q-1', resource: 'pool', hostId: 'h1', behind: 2 },
+    },
+    'brief'
+  ).join('\n');
+  expect(block).toContain('unreadable start');
+  expect(block).toContain('the 2 starts queued behind it wait');
+  expect(block).toContain('archon trigger withdraw q-1');
+});
+
 test('a stopped item names its stage and outcome, and its commands work from any directory', () => {
   const stopped: Extract<AttentionQueueItem, { kind: 'stopped' }> = {
     ...base,
@@ -249,6 +396,37 @@ test('a stopped item names its stage and outcome, and its commands work from any
     "archon workflow run <workflow> --item 'release 1' --cwd '/srv/acme web'"
   );
 
+  // A failed run: its error, and the restart from its record that closes it.
+  const failed = attentionItemLines(
+    {
+      ...stopped,
+      stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
+      summary: null,
+      failed: { error: '(exec_failed) no pr input given' },
+    },
+    'brief'
+  ).join('\n');
+  expect(failed).toContain('check failed: (exec_failed) no pr input given');
+  expect(failed).toContain('archon workflow run --supersedes run-9');
+  expect(failed).toContain('archon workflow run check --supersedes run-9 --input');
+  // One that failed with an unknown outcome names the nodes and is resumed or abandoned: a
+  // restart would not close it, and with no item there is no item to read.
+  const { item: _item, ...withoutItem } = stopped;
+  const unknown = attentionItemLines(
+    {
+      ...withoutItem,
+      stoppedIn: { runId: 'run-9', workflow: 'check', outcome: null },
+      summary: null,
+      failed: { error: null, outcomeUnknown: ['fan__b__write'] },
+    },
+    'brief'
+  ).join('\n');
+  expect(unknown).toContain('fan__b__write');
+  expect(unknown).toContain('archon workflow resume run-9');
+  expect(unknown).toContain('archon workflow abandon run-9');
+  expect(unknown).not.toContain('--supersedes');
+  expect(unknown).not.toContain('--item-of');
+
   // Stopped by a start refused at its limit: it names the limit and starts that workflow.
   const limited = attentionItemLines(
     {
@@ -267,4 +445,38 @@ test('a stopped item names its stage and outcome, and its commands work from any
   expect(limited).toContain("'build-rounds'");
   expect(limited).toContain('3 of 3');
   expect(limited).toContain("archon workflow run build --item 'release 1' --cwd '/srv/acme web'");
+
+  // A refused start says what was refused, never that nothing started: a sibling may have.
+  const refusal = (bindingId: string) => ({
+    receiptId: `r-${bindingId}`,
+    bindingId,
+    workflow: 'triage',
+    reason: 'no_default_provider' as const,
+    refusedAt: '2026-11-25T08:00:00.000Z',
+  });
+  const one = attentionItemLines({ ...stopped, refused: [refusal('a')] }, 'brief').join('\n');
+  expect(one).toContain("deliver ended as 'replan'; a start it caused was refused");
+  expect(one).not.toContain('nothing started');
+  const two = attentionItemLines(
+    { ...stopped, refused: [refusal('a'), refusal('b')] },
+    'brief'
+  ).join('\n');
+  expect(two).toContain('2 starts it caused were refused');
+});
+
+test('a missing file setting points the fix at whoever owns the value', () => {
+  const refused = (origin: 'supplied' | 'project') =>
+    refusedStartLines([
+      {
+        receiptId: 'r-1',
+        bindingId: 'build',
+        workflow: 'chain-build',
+        reason: 'file_setting_missing',
+        refusedAt: '2026-11-25T00:00:00.000Z',
+        fileSetting: { setting: 'policy', path: '/p/docs/policy.md', origin },
+      },
+    ]).join('\n');
+  // A supplied value beats the project file, so editing that file would not clear it.
+  expect(refused('supplied')).not.toContain('.archon/packs');
+  expect(refused('project')).toContain('.archon/packs');
 });

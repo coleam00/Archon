@@ -72,7 +72,8 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
-| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`) and inputs filled from an earlier run's result (`result_of`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`), the outcomes that finish the run's item (`returns.ends`) and inputs filled from an earlier run's result (`result_of`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `observes` | `true` declares that the workflow's runs act on an item without being steps of it: an advice stage, a shadow judgment, a drain, a check after a merge. An observing run never stops, ends or moves its item. The stop and end rules read past it to the item's last step, so a stopped item stays listed while it runs and after it completes or fails, an ended item stays ended, and an observing run that fails is not listed itself. It can still leave asks and waits on the item. It cannot be combined with `returns.ends`. Default `false`. See [`returns.ends`](#workflow-signature-inputs-returns-and-inputs). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
@@ -1020,6 +1021,7 @@ Archon puts a failure it detects itself in a bucket by its kind:
 | A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
 | A cancelled node | FATAL | Never |
 | A provider error without a typed class | UNKNOWN | No (unless `on_error: all`) |
+| A failure recorded as `outcome_unknown`: the node may have had a side effect whose outcome Archon cannot know | FATAL | Never. See [A failure whose outcome is unknown](#a-failure-whose-outcome-is-unknown) |
 
 A failure recorded before Archon stored failure kinds counts as UNKNOWN.
 
@@ -1131,6 +1133,32 @@ Plain `archon workflow run` never resumes implicitly.
 **Session context on resume**: Handles required by an explicit `context: { resume: node-id }` selector are restored for completed nodes. The ambient sequential cursor is not reconstructed; a downstream node that relies on implicit inherited context should use an explicit selector or re-read durable artifacts.
 
 **Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip).
+
+### A failure whose outcome is unknown
+
+A node failure can record the kind `outcome_unknown`: the node may have had a side effect (a write, a call that timed out after sending) and Archon cannot know whether it happened. No built-in node records this kind yet; a node that writes through a tool is the intended first use.
+
+The rule: while a run holds a live unknown outcome, nothing continues it by itself. A node's failure is live while its latest stored record is that failure, unless it sits in a composed fan-out whose join, in the same loop round, completed after it (`join: all_done` absorbs a failed instance, as today).
+
+- The node is never retried, whatever its `retry.on_error` says.
+- When a node fails over a live unknown outcome it owns, the walk it ran in starts nothing more: no queued node of the same layer and no later layer, an `always_run` node or one with `trigger_rule: all_done` included. At the top level Archon fails the run right then with stop reason `outcome_unknown`, and nodes still running beside it are stopped, as at any run end. Inside a `loop_group` body or a composed fan-out instance, the body or instance ends there and its aggregate fails over it.
+- A node owns its own record and the records of what ran under it: the body of the `loop_group` it is, and the instances of the composed fan-out it is. Another node's record does not stop its walk. So a node that fails ordinarily while an instance of a running `join: all_done` fan-out holds such a failure records an ordinary failure (stop reason `node_error`), and a resume by hand past an ordinary failure still reaches the uncertain node and runs it again.
+- A pause that a parallel `wait:` or gate of the same pass published does not survive: the pass fails the run, not leaves it paused.
+- Every claim that would continue the run by itself is refused while the run holds a live unknown outcome anywhere: a timed or event wait coming due, an answered gate or wait, a source release, and a parent continued after the child it waited on. A run whose sibling's source is unreadable is failed instead of released. A node that fails this way after a provider usage limit fails the run before it waits.
+- `archon workflow attention` lists the failed run as `stopped`, naming the nodes whose outcome is unknown, also when it is a child run or has no item, until it is resumed or abandoned. A new run on its item does not close it.
+
+The operator decides what happens next: check what the node did, then resume the run with `archon workflow resume <run-id>`, which runs the failed node again when the pass reaches it, or discard it with `archon workflow abandon <run-id>`. The unknown outcome never refuses a resume by hand; the usual admission checks (the item, the run limit, a busy resource) still apply. Only that resume by hand runs an uncertain node again: a continuation by itself never does, and a join it recomputes gets back the failure its own join absorbed instead of running that instance again.
+
+What each aggregate does with a node or instance that fails this way:
+
+| Where it fails | What happens |
+|---|---|
+| A composed fan-out instance under `join: all_success` | The fan-out node fails once its instances finish, and the run ends with the reason |
+| A composed fan-out instance under `join: all_done` | A failed instance, as today: the other instances run, the join completes with the `archon_failed` marker in that slot, and the run goes on. A later failure is reported as any failure. A later pass that recomputes the join (its cached result went stale) gets that instance's recorded failure back and does not run it again. An instance whose failure only an inner fan-out's join absorbed runs again, so its ordinary failure is retried |
+| A `loop_group` body node | The body starts nothing more, the group fails, and the run ends with the reason. A loop group that completes over the failure still holds it |
+| A child run of a `workflow:` node or fan-out | The child run ends with the reason, and attention lists the child. The parent treats it as any failed child. A parent continued by itself does not drive that child again; a parent resumed by hand does |
+
+This is separate from `retryable: false`, which a `bash:`/`script:` contract failure records and which only stops the immediate retry of that node. A failure with `retryable: false` keeps the later layers, usage-limit wait, source release and stop reason of any other failure.
 
 ### Opting Out of Resume Caching
 
@@ -1854,7 +1882,12 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
   `result_of` input as `null`.
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
-get a value from it, and `resultCommit`: the commit its result holds at.
+get a value from it, `resultCommit`: the commit its result holds at, and `changeSize`: how
+large the change was when the run completed or failed (`files`, `added`, `removed`) from
+`base`, the commit the item's work was cut from, to `commit`, the clean commit it ended on.
+A run on a checkout another run left (a hand-off, or `--adopt`) keeps that run's base.
+`changeSize` is `null` when the checkout ended on no clean commit or no cut-from is known for
+its work, such as a branch reused with `--branch`, never zeros.
 
 ### The result that holds at this run's commit
 
@@ -1947,7 +1980,8 @@ nodes:
 ```
 
 `item().runs[].resultCommit` and `archon workflow runs --item <key> --json` show the commit
-each run's result holds at, so a node that got `null` can say why.
+each run's result holds at, so a node that got `null` can say why. `changeSize` beside it lets
+a stage see whether the change grew since an earlier run on the item.
 
 ## Reading a project's items over a window
 
@@ -2463,31 +2497,62 @@ nodes:
 - **`returns.waits`**: a property of the `returns:` node's output, defined and required by the engine, that holds what
   the run's item now waits for outside Archon. See [Waits](#waits-what-an-item-waits-for-outside-archon).
 
-- **`returns.final`**: the outcomes after which the run's item needs nothing more, such as a
-  landed change. Each entry is a value `returns.outcome` can take: one of its `enum` values, or
+- **`returns.ends`**: the outcomes that finish the run's item, such as a landed change or a
+  dropped one. Each entry is a value `returns.outcome` can take: one of its `enum` values, or
   `succeeded` or `failed` for the boolean form. It needs `returns.outcome`, and a value the
-  outcome cannot take or one listed twice fails the workflow at load.
+  outcome cannot take or one listed twice fails the workflow at load. A workflow that declares
+  `observes: true` cannot declare it.
 
-  It decides when an item has stopped. A top-level run on an item stops the item when it
-  completes with an outcome that is not final, its end starts nothing (no
-  [run-ended binding](/guides/workflow-triggers/) starts from that outcome), and it leaves no
-  ask and no wait. Nothing follows such a run, so
+  A top-level run on an item that completes with one of these outcomes ends the item. The
+  write that completes the run records the same end
+  [`archon workflow end`](/reference/cli/#workflow-end) records, `via: engine`, from the run
+  and its `returns:` node, with the reason `Workflow '<name>' ended the item with outcome
+  '<value>'`, followed by the `returns.summary` value when the run gave one. It does so even
+  when the run also leaves an ask or a wait. The item leaves the attention queue, the asks
+  and waits still open on it included (they stay open, and show again if a newer step opens
+  the item), and the item read shows the end. The end sees the steps up to the finishing
+  run, so a step started on the item after it, even one already finished, opens it. A stage the outcome starts does not
+  keep the end from being written: an observing stage (a check after the merge) leaves it
+  holding, and a step started on the item opens it, as any new step opens an end.
+
+  Every other ending of a step stops its item. A top-level run on an item, of a workflow that
+  does not declare `observes: true`, stops the item when it completes with an outcome that
+  is not in `returns.ends`, or with no outcome at all, and leaves no ask and no wait. What
+  the outcome is called does not matter, and no timer is involved. The write that completes
+  the run records the stop, and
   [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
-  `stopped` until another run starts on the item, whatever its status. A run on no item, a run
-  that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
-  workflow that declares no `final` has none, so every unbound outcome stops its item. A run
-  whose end does start a binding also stops its item when admission refuses that start at
-  its [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item); the
-  listing then names the limit.
+  `stopped` until another step starts on the item, whatever its status, unless the item's
+  [merge is recorded](/reference/cli/#workflow-merged). A stage the run's end starts on the
+  item through a [run-ended binding](/guides/workflow-triggers/), its settled asks or one of
+  its nodes is such a step once its run exists; while the start waits to be prepared (during
+  an install hold too) or in its resource's queue, the stop is held back. A queued start of a
+  stage that declares `observes: true` holds nothing back, and its run is no step, so the
+  stop shows. A start not yet prepared has no role, so it opens an end only once it is
+  prepared as a step. A `linked` binding starts on other items and
+  moves nothing here. A
+  run on no item, an observing run, a run that ended its item, and a run that left an ask or
+  a wait stop nothing. A run whose end does start a binding also stops its item when
+  admission refuses that start at its
+  [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item), or
+  when that start is refused before launch, once the run's own asks and waits are closed; the
+  listing then names the limit or the refusal. `archon validate workflows` warns for each
+  outcome of a step workflow that does not end the item and that no binding its pack
+  declares starts a step on (a binding that starts only an observing stage counts for none), saying when an ask or wait the workflow can leave would keep
+  the item moving instead.
+
+  `returns.final`, which marked an outcome as never stopping its item, was removed. A
+  workflow that declares it fails to load with a message naming `returns.ends` and
+  `observes`.
 
 - **`returns.summary`**: a string property of the `returns:` node's output that the attention
-  queue shows, as one line, on a `stopped` item: why the stage stopped. The node's
+  queue shows, as one line, on a `stopped` item: why the stage stopped. An end the run
+  records gives it in its reason. The node's
   `output_format` must declare it with `type: string`; it need not be required, and a run that
   leaves it out shows none. It is read only because it is declared here, never because a
   property is called `summary`, and it changes nothing about the run.
 
 ```yaml
-returns: { node: result, outcome: stage, final: [landed], summary: why }
+returns: { node: result, outcome: stage, ends: [landed], summary: why }
 nodes:
   - id: result
     prompt: Say where the change stands.
@@ -2499,8 +2564,9 @@ nodes:
       required: [stage]
 ```
 
-A run of this workflow that ends `landed` stops nothing. One that ends `replan` with no
-binding for it and no ask lists its item as `stopped` with `why` as the summary.
+A run of this workflow that ends `landed` ends its item, with `why` in the reason. One that
+ends `replan` with no binding for it and no ask lists its item as `stopped` with `why` as the
+summary.
 
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.
@@ -2617,7 +2683,9 @@ What the engine does with them:
 - **Only a top-level run opens them.** A `workflow:` child has no item of its own; its asks stay
   data in the result it hands its parent.
 - **A newer set replaces the open one.** A later completed run of the same workflow on the same
-  item closes that workflow's open asks as `replaced`, even when it leaves none itself.
+  item closes that workflow's open asks as `replaced`, even when it leaves none itself. While
+  an end holds on the item ([`returns.ends`](#workflow-signature-inputs-returns-and-inputs), or
+  `archon workflow end`), its open asks stay open and out of the attention queue.
 - **They are answered by ref.** Open asks are listed in the attention queue with no run behind
   them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
   --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
@@ -2680,7 +2748,8 @@ What the engine does with them:
   no item, is refused before any node runs, as for asks. The file store holds no items.
 - **They open with the completion.** The waits open on the run's item in the write that
   completes the run, and a later completed run of the same workflow on the same item closes the
-  ones still open as `replaced`, even when it leaves none. Only a top-level run opens them.
+  ones still open as `replaced`, even when it leaves none. While an end holds on the item, its
+  open waits stay open and out of the attention queue. Only a top-level run opens them.
 - **They are one set, met once.** The waits a run leaves are alternatives. The first event that
   meets one closes the whole set as met and starts the binding's stage on the item, in the
   transaction that records the event. Another delivery of the same event, or a second event
@@ -2902,10 +2971,18 @@ Two optional keys are for a reader that lists a pack's settings, such as a setti
   together, in the order the pack lists them; a setting without one belongs to a default group.
   How groups are shown is the reader's choice. The engine does not interpret the name.
 - `file: true` says the value is a path to a file, relative to the project or absolute. It is
-  allowed only on a `string` setting. [`archon validate workflows`](/reference/cli/#validate-workflows-name)
-  reports a file setting whose value, or default when the project sets none, names a path that
-  does not exist or is not a file. An empty value is not an error. A run does not check the
-  file at start; the node that reads it does.
+  allowed only on a `string` setting. A fresh run of a workflow that reads the setting is
+  refused at start when its value names a path that does not exist or is not a file, and
+  [`archon validate workflows`](/reference/cli/#validate-workflows-name) reports the same
+  value on that workflow. The value is resolved as the run resolves it: supplied, else the
+  project file, else the workflow's input default, else the pack's default. A workflow reads
+  the setting when `$INPUTS.<name>` appears anywhere in it, including its included blocks
+  and command files, or a bash or script body reads `INPUTS_<NAME>` (or `input('<name>')`)
+  by its literal name. A computed lookup is not seen. A setting no node of the workflow reads
+  does not block it, and an empty value is not an error. A start a binding makes is refused
+  before launch and [stops its item](/guides/workflow-triggers/) with reason
+  `file_setting_missing`, except a start in another run's checkout (`checkout: ended-run` or
+  `checkout: asking-run`), whose run checks the file in that checkout when it starts.
 
 An unknown key on a setting is ignored, so a pack can use a key a newer Archon adds, and
 `archon validate workflows` lists each one as a `parse_warning`. Releases before this one
@@ -3040,7 +3117,7 @@ bindings:
     workflow: review-follow-up
     resource: follow-up
     overlap: queue
-    item: { field: number, prefix: pr- }  # a key of the fire's --inputs
+    item: { field: number, prefix: pr- }  # a key of the fire's event inputs
   fix:
     workflow: review-fix
     resource: fix
@@ -3172,9 +3249,9 @@ and its fields are checked against the source plugin when a binding is generated
 an optional fixed `prefix`; see
 [putting a start on its event's item](/guides/workflow-triggers/#put-a-start-on-the-item-its-event-names).
 An event binding's `field` is a source plugin event field, checked when the binding is
-generated; a fire-only binding's is a key of the fire's `--inputs`. A timer binding with
-`item:` is refused at load, since a tick is about no item, and so is a run-ended binding with
-`item:`, since its start is on the ended run's item.
+generated; a fire-only binding's is a key of the fire's event inputs (`--inputs` or
+`--input`). A timer binding with `item:` is refused at load, since a tick is about no
+item, and so is a run-ended binding with `item:`, since its start is on the ended run's item.
 
 ### Pack forge needs
 
@@ -3330,7 +3407,9 @@ when the child declares named `inputs:` or when its `command:` bodies need named
 - **Failure & recovery.** A failed child fails the node and the parent run. Recovery is
   resume-through-parent: `/workflow resume <parentRunId>` re-drives the failed child once.
   `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
-  run).
+  run). When the parent's process died while the child was running, the child is left
+  `running`: resuming the parent pauses it blocked on that child and names
+  `archon workflow resume <childRunId>`, which continues the child and then the parent.
 - **Cancel cascade.** Abandoning the parent attempts to cancel discovered descendants except completed
   and cancelled runs, within the [500-parent expansion bound](#max_parallel-bounds-concurrency-not-count).
   Cancellation is cooperative: their executors abort at the next status check, within ~10s. A running

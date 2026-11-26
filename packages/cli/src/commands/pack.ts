@@ -768,12 +768,15 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
   }
   lines.push('', `Arrows: ${String(graph.arrows.length)}`);
   for (const arrow of graph.arrows) lines.push(arrowText(arrow));
-  const nothing = graph.stages.flatMap(stage =>
-    (stage.outcome?.values ?? [])
-      .filter(v => v.startsNothing && !v.final)
-      .map(v => `  ${stage.name}:${v.value}${stage.asks || stage.waits ? '' : ' (item stops)'}`)
-  );
-  if (nothing.length > 0) lines.push('', 'Outcomes that start nothing:', ...nothing);
+  // `stops` counts an arrow to an observing stage as starting no step.
+  const nothing = graph.stages.flatMap(stage => {
+    const stops =
+      stage.asks || stage.waits ? ' (item stops unless it asks or waits)' : ' (item stops)';
+    return (stage.outcome?.values ?? [])
+      .filter(v => v.stops || (v.startsNothing && !v.ends))
+      .map(v => `  ${stage.name}:${v.value}${v.stops ? stops : ''}`);
+  });
+  if (nothing.length > 0) lines.push('', 'Outcomes that start no step:', ...nothing);
   if (graph.discoveryErrors.length > 0)
     lines.push(
       '',

@@ -82,14 +82,50 @@ In your Archon checkout, first check for local changes:
 git status
 ```
 
-Commit or stash your changes before updating. The `main` branch contains releases;
-`dev` is the working development branch.
+Commit or stash your changes before updating. Then follow one of two branches:
+`main` holds releases and is the recommended branch, and `dev` is the working
+development branch.
+
+The commands below use Bash syntax (`&&` and `\` line continuations). On native
+Windows, run them in Git Bash in the same checkout.
+
+### Follow releases
+
+If `git branch --list main` prints nothing, your checkout has no local `main`
+yet. Create it once from origin's `main`, with origin's `main` as its upstream
+so a plain `git pull` on it also works:
 
 ```bash
-git switch main
-git pull --ff-only
-bun install --frozen-lockfile
-bun run cli version
+git fetch origin main && \
+  git branch main FETCH_HEAD && \
+  git config branch.main.remote origin && \
+  git config branch.main.merge refs/heads/main
+```
+
+Then update. Each step runs only if the one before it succeeded:
+
+```bash
+git fetch origin main && \
+  git switch main && \
+  git merge --ff-only FETCH_HEAD && \
+  bun install --frozen-lockfile && \
+  bun run cli version
+```
+
+This fetches `main` by name, so it works on a clone made with
+`--single-branch` of `dev`, which never fetches `main` on its own.
+
+### Follow development
+
+Use this on a checkout whose `dev` branch tracks the repository's `dev`, as a
+normal clone does. A clone made with `--single-branch` of `main` has no `dev`;
+follow releases instead.
+
+```bash
+git switch dev && \
+  git pull --ff-only && \
+  bun install --frozen-lockfile && \
+  bun run cli version
 ```
 
 If you serve the console from source, rebuild it with `bun run build:web` before

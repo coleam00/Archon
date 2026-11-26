@@ -29,6 +29,11 @@ export interface StartLimitRow {
   /** The request's queue position: the order requests were written in. */
   position: number;
   status: 'queued' | 'admitted' | 'skipped' | 'withdrawn';
+  /**
+   * True for an admitted request whose run ended without ever being claimed: cancelled or
+   * failed while still pending, so the start it counted never ran.
+   */
+  endedUnstarted: boolean;
   counted: StartLimit | null;
   /** The name of the limit this start raised, or null. */
   grant: string | null;
@@ -71,10 +76,11 @@ export function startLimitStanding(
   rows: readonly StartLimitRow[],
   reset: StartLimitReset | null
 ): StartLimitStanding {
+  // A start counts while it is queued, or admitted with a run that is live or was claimed.
   const used = rows.filter(
     row =>
       row.counted?.name === limit.name &&
-      (row.status === 'queued' || row.status === 'admitted') &&
+      (row.status === 'queued' || (row.status === 'admitted' && !row.endedUnstarted)) &&
       afterReset(row, reset)
   ).length;
   const granted = rows.filter(

@@ -25,7 +25,7 @@ import { createLogger } from '@archon/paths';
 import { RUN_GITHUB_IDENTITY_HANDOFF_ENV } from '@archon/paths/github-token-env';
 import type { WorkflowEnvironment } from './deps';
 import type { JsonValue } from './output-ref';
-import { resolveRunStartInputs } from './pack-settings';
+import { resolveRunStartValues } from './pack-settings';
 import { resolveWorkflowGithubEnvironment, type WorkflowGithubDeps } from './run-credential-env';
 import type { ForgeRefusalFailure } from './schemas/resource-start';
 import type { ResolvedWorkflow } from './schemas/workflow';
@@ -218,7 +218,7 @@ async function forgeTarget(
   const inputs =
     names === undefined
       ? undefined
-      : (await resolveRunStartInputs(site.settingsCwd, workflow, site.supplied)).inputs;
+      : (await resolveRunStartValues(site.settingsCwd, workflow, site.supplied)).inputs;
   const named = namedRepository(names, inputs);
   if (named !== undefined && 'missing' in named) {
     return {

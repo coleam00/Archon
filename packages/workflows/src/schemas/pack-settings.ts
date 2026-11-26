@@ -38,6 +38,29 @@ const enumSetting = z.object({
   values: z.array(z.string().min(1)).min(1),
 });
 
+/**
+ * Where a fresh run's value for a setting came from, in the order start resolves it: each
+ * beats the ones after it.
+ */
+export const PACK_SETTING_ORIGINS = [
+  'supplied',
+  'project',
+  'workflow_default',
+  'pack_default',
+] as const;
+export type PackSettingOrigin = (typeof PACK_SETTING_ORIGINS)[number];
+
+/**
+ * The pack setting a `file_setting_missing` refusal is about: its name, the path that was
+ * checked, and where the value came from. Project configuration, not exception text.
+ */
+export const fileSettingRefusalSchema = z.object({
+  setting: z.string(),
+  path: z.string(),
+  origin: z.enum(PACK_SETTING_ORIGINS),
+});
+export type FileSettingRefusal = z.infer<typeof fileSettingRefusalSchema>;
+
 /** Every key a setting may carry, derived from the schema so the two cannot drift. */
 export const PACK_SETTING_KEYS: ReadonlySet<string> = new Set([
   ...Object.keys(plainSetting.shape),
@@ -105,6 +128,12 @@ export interface WorkflowPack {
  */
 export interface WorkflowPackMember extends WorkflowPack {
   readonly workflow: string;
+  /**
+   * The `file: true` settings this workflow reads (`packSettingReads`), set by include
+   * expansion, which alone sees command and named-script bodies. A fresh run checks only
+   * these files. Absent, as on a workflow built outside discovery, every file setting counts.
+   */
+  readonly fileSettingReads?: readonly string[];
 }
 
 /**

@@ -1,11 +1,9 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
-import { getArchonHome } from '@archon/paths';
 import {
   drainResourceStartHost,
   isPreparationStageFailure,
@@ -13,10 +11,11 @@ import {
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import type { StartedExecutor } from '@archon/core/workflows/start-executor';
-import { getTriggersPath } from '@archon/core/workflows/run-ended';
+import { getTriggersPath, triggerRevision } from '@archon/core/workflows/run-ended';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
+import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import {
   awaitingExecution,
   SourceReceiptDigestConflictError,
@@ -32,7 +31,8 @@ import {
   type SourceReceiptInput,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
-import { assertItemKey, readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
+import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
+import { releaseQueuedLaunchSource } from '@archon/core/workflows/queued-launch-source';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { drainFailureReasons } from '../utils/install-hosts';
@@ -43,32 +43,20 @@ import {
 } from '../utils/detached-run-control';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { addTriggerFile } from '../triggers/add-trigger-file';
-import {
-  inspectNativeSchedule,
-  installNativeSchedule,
-  removeNativeSchedule,
-  type NativeScheduleOptions,
-} from '../triggers/native-schedule';
+import type { NativeScheduleOptions } from '../triggers/native-schedule';
 import { fireConfig } from '../triggers/fire-binding-check';
 import { resolveCliUserId } from './auth';
 import { readCallingNode } from '../utils/calling-node';
 import { requestedBy } from '../utils/requested-by';
 import { checkTriggers } from './trigger-check';
+import { scheduleTimer } from './trigger-schedule';
 
 export { spawnAdmitted } from '../utils/spawn-admitted';
 
-/** A configuration a clock can start. One without `schedule` is fire-only and is not this. */
-type TimerTriggerConfig = TriggerConfig & {
-  schedule: NonNullable<TriggerConfig['schedule']>;
-};
 /** The input names a binding maps, for a message that tells the operator what to pass. */
 function mappedNames(inputs: Readonly<Record<string, unknown>> | undefined): string {
   const names = Object.keys(inputs ?? {});
   return names.length === 0 ? 'it maps none' : names.join(', ');
-}
-
-function isTimerConfig(config: TriggerConfig): config is TimerTriggerConfig {
-  return config.schedule !== undefined;
 }
 
 async function loadFireConfig(path: string): Promise<TriggerConfig> {
@@ -100,6 +88,7 @@ type TriggerOptions = {
   limit?: string;
   deliveryId?: string;
   inputs?: string;
+  input?: readonly string[];
   item?: string;
   noItem?: boolean;
 };
@@ -254,8 +243,8 @@ function assertItemOptions(options: TriggerOptions): void {
 
 /**
  * The item a fire's start is on: `--item` first, none with `--no-item`, then the
- * binding's `item` mapping read from `--inputs`, then the calling run's item, read through
- * `inherited` only when nothing before it decides. A binding that maps its item never
+ * binding's `item` mapping read from the event inputs (`--inputs` and `--input`), then
+ * the calling run's item, read through `inherited` only when nothing before it decides. A binding that maps its item never
  * inherits one, and a fire whose inputs cannot name the item is refused before anything
  * is recorded. A recorded delivery keeps its first acceptance's item, so only `--item` and
  * `--no-item` are read for it.
@@ -279,9 +268,42 @@ export async function fireItemKey(fire: {
   );
   if (!mapped.ok)
     throw new Error(
-      `Binding '${config.binding.bindingId}' names its item from the fire's --inputs, but its ${mapped.reason}. Nothing was recorded or started.`
+      `Binding '${config.binding.bindingId}' names its item from the fire's --inputs or --input, but its ${mapped.reason}. Nothing was recorded or started.`
     );
   return mapped.key;
+}
+
+/**
+ * A fire's event inputs: the `--inputs` JSON file and each `--input name=value`, in the
+ * grammar `workflow run --input` speaks, so their values are text. A name given by both is
+ * refused rather than merged, as `workflow run` refuses one given by `--input` and
+ * `--input-file`. Neither flag reads as undefined, not `{}`, so a fire without inputs
+ * records the intent it always has and a redelivery of it still replays.
+ *
+ * @throws on an unreadable or invalid file, a malformed assignment, or a name given twice.
+ */
+async function readEventInputs(
+  options: Pick<TriggerOptions, 'inputs' | 'input'>
+): Promise<z.infer<typeof resourceStartBindingIntentSchema>['eventInputs']> {
+  let fromFile: z.infer<typeof resourceStartBindingIntentSchema>['eventInputs'];
+  if (options.inputs !== undefined) {
+    try {
+      fromFile = z
+        .record(z.string().min(1), jsonValueSchema)
+        .parse(JSON.parse(await readFile(options.inputs, 'utf8')) as unknown);
+    } catch (error) {
+      throw new Error(
+        '--inputs must name a readable file containing a JSON object with non-empty input names.',
+        { cause: error }
+      );
+    }
+  }
+  if (!options.input?.length) return fromFile;
+  const assigned = parseInputAssignments(options.input);
+  for (const name of Object.keys(assigned))
+    if (fromFile && Object.hasOwn(fromFile, name))
+      throw new Error(`Input '${name}' is given by both --inputs and --input: supply it once.`);
+  return { ...fromFile, ...assigned };
 }
 
 async function triggerFire(
@@ -294,19 +316,7 @@ async function triggerFire(
   if (!options.config) throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
   if (options.deliveryId !== undefined && options.deliveryId.length === 0)
     throw new Error('--delivery-id must not be empty.');
-  let eventInputs: z.infer<typeof resourceStartBindingIntentSchema>['eventInputs'];
-  if (options.inputs !== undefined) {
-    try {
-      eventInputs = z
-        .record(z.string().min(1), jsonValueSchema)
-        .parse(JSON.parse(await readFile(options.inputs, 'utf8')) as unknown);
-    } catch (error) {
-      throw new Error(
-        '--inputs must name a readable file containing a JSON object with non-empty input names.',
-        { cause: error }
-      );
-    }
-  }
+  const eventInputs = await readEventInputs(options);
   assertItemOptions(options);
   const config = await loadFireConfig(options.config);
   // A fire has no ended or asking run to take the checkout from; starting the stage anyway would
@@ -340,7 +350,7 @@ async function triggerFire(
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
-    bindingRevision: createHash('sha256').update(JSON.stringify(config.binding)).digest('hex'),
+    bindingRevision: triggerRevision(config),
   };
   const receipt = await host.deps.store
     .acceptStartReceipt({
@@ -647,21 +657,27 @@ async function recoverTriggerPreparation(
 
 async function withdrawTrigger(host: WorkflowHost, args: string[]): Promise<void> {
   if (!args[0]) throw new Error('Usage: archon trigger withdraw <queued-request-id>');
-  const launch = await host.deps.store.withdrawQueuedResourceStart(args[0]);
-  if (!launch) throw new Error('Only untouched queued requests can be withdrawn.');
-  const source = readWorkflowSourceState(launch.run.metadata);
-  if (source.kind === 'recorded') await rm(source.record.root, { recursive: true, force: true });
-  if (source.kind === 'unreadable')
-    throw new Error(
-      'Request withdrawn, but its source record is unreadable; inspect storage before cleanup.'
-    );
+  const withdrawn = await host.deps.store.withdrawQueuedResourceStart(args[0]);
+  if (!withdrawn) throw new Error('Only untouched queued requests can be withdrawn.');
+  const { launch } = withdrawn;
+  // An unreadable launch names no source to remove; the request no longer holds the queue.
+  if (launch === null) {
+    await writeJsonLine({ requestId: args[0], withdrawn: true, launch: 'unreadable' });
+    return;
+  }
+  try {
+    await releaseQueuedLaunchSource(launch);
+  } catch (error) {
+    throw new Error(`Request withdrawn, but ${(error as Error).message}`, { cause: error });
+  }
   await writeJsonLine({ requestId: args[0], withdrawn: true });
 }
 
 async function scheduleTrigger(
   host: WorkflowHost,
   args: string[],
-  options: TriggerOptions
+  options: TriggerOptions,
+  schedules: NativeScheduleOptions
 ): Promise<void> {
   const operation = args[0];
   if (
@@ -672,52 +688,12 @@ async function scheduleTrigger(
       'Usage: archon trigger schedule <install|remove|status> --config <timer-binding.json>'
     );
   const config = await loadFireConfig(options.config);
-  const bindingId = config.binding.bindingId;
-  const target = {
-    id: createHash('sha256')
-      .update(JSON.stringify([getArchonHome(), config.sourceInstanceId, bindingId]))
-      .digest('hex'),
-    archonHome: getArchonHome(),
-  };
-  // Remove and status need no schedule, so a timer installed before the file lost its
-  // `schedule` can still be inspected and removed.
-  if (operation === 'status') {
-    const installed = await inspectNativeSchedule(target);
-    await writeJsonLine({
-      bindingId,
-      schedule: operation,
-      ...(installed ? { installed: true, ...installed } : { installed: false }),
-    });
-    return;
-  }
-  if (operation === 'remove') await removeNativeSchedule(target);
-  else {
-    if (!isTimerConfig(config))
-      throw new Error(
-        `Binding '${bindingId}' is fire-only: its configuration has no schedule, so there is no timer to install. Start it with: archon trigger fire --config ${options.config}`
-      );
-    await assertKnownRunAsUser(host, config);
-    await installTimer(config, target.id, resolve(options.config));
-  }
-  await writeJsonLine({ bindingId, schedule: operation });
-}
-
-/** Only a timer configuration can be installed; the type refuses a fire-only one. */
-async function installTimer(
-  config: TimerTriggerConfig,
-  scheduleId: string,
-  configPath: string
-): Promise<void> {
-  const [executable, ...prefix] = cliProgramArguments();
-  await installNativeSchedule({
-    id: scheduleId,
-    programArguments: [executable, ...prefix, 'trigger', 'fire', '--config', configPath],
-    workingDirectory: config.binding.launch.cwd,
-    archonHome: getArchonHome(),
-    path: process.env.PATH ?? '',
-    schedule: config.schedule,
-    output: 'log',
-    removeCommand: `archon trigger schedule remove --config ${configPath}`,
+  await scheduleTimer({
+    operation,
+    config,
+    configPath: resolve(options.config),
+    schedules,
+    assertKnownRunAsUser: () => assertKnownRunAsUser(host, config),
   });
 }
 
@@ -732,7 +708,7 @@ export interface TriggerDependencies {
   dispatch?: TriggerDispatch;
   /** The environment `fire` reads the calling node's identity from; by default `process.env`. */
   env?: NodeJS.ProcessEnv;
-  /** Where `check` reads installed timers from; by default this host's scheduler directories. */
+  /** The scheduler `check` and `schedule` use; by default this host's. */
   schedules?: NativeScheduleOptions;
   /** How long `fire` waits for another process preparing its binding; by default a minute. */
   preparationWait?: PreparationWait;
@@ -780,7 +756,7 @@ export async function triggerCommand(
     case 'withdraw':
       return withdrawTrigger(host, args);
     case 'schedule':
-      return scheduleTrigger(host, args, options);
+      return scheduleTrigger(host, args, options, dependencies.schedules ?? {});
     default:
       throw new Error(
         'Usage: archon trigger <fire|drain|execute|list|add|check|inspect|withdraw|recover-preparation|schedule|whoami>'

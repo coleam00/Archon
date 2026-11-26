@@ -243,6 +243,24 @@ export interface IWorkflowStore
     input: { rulingId: string; projectKey?: string } & ItemAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
   /**
+   * The newest end on an item while no step on it is live or started or resumed since, or
+   * null. Runs only: readers call `readHoldingItemEnd`, which adds `listItemStarts`. An
+   * unreadable row is reported, not thrown.
+   */
+  getHoldingItemEnd(
+    itemId: string
+  ): Promise<
+    import('./schemas/item-end').ItemEnd | import('./schemas/item-end').ItemEndDegraded | null
+  >;
+  /**
+   * Record an end on item `itemId` (named `key` in the refusal), naming its latest run.
+   * Throws `ItemEndRefusedError` and writes nothing while a run on the item or below one of
+   * its runs is live, or a start is queued, or an ask or a wait is open on it.
+   */
+  recordItemEnd(
+    input: { itemId: string; key: string; reason: string } & ItemAct
+  ): Promise<import('./schemas/item-end').ItemEnd>;
+  /**
    * The items of a project with one of their own runs (`item_id` set, so not a
    * `workflow:` child) started in `[since, until)`, ordered by item id, after
    * `afterItemId` when given. The id order is a resume key, not a ranking.
@@ -351,10 +369,12 @@ export interface IWorkflowStore
    */
   withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
   /**
-   * Completed runs that stopped their item (`readItemStopped`) and are still its last run; any
-   * run started on the item after one ends its stop. A store without items has none.
+   * Steps (not `observes: true` runs) that stopped their item while its last step, and every
+   * run that failed with stop reason `outcome_unknown` until resumed or abandoned.
    */
   listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]>;
+  /** Top-level `pending`, `running` or `paused` runs, oldest first; see `OwnerObserver`. */
+  listUnfinishedRuns(): Promise<AttentionRead<WorkflowRun>[]>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ runs: DeletedWorkflowRun[] }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
@@ -604,6 +624,9 @@ export interface IWorkflowStore
    *
    * `result.waits` is the same for `returns.waits`: the open waits of that workflow on the
    * run's item close as `replaced` and these open, in the same transaction.
+   *
+   * `result.end` is the end its outcome records on the item (`returns.ends`), likewise, `via:
+   * engine` from this run and its returns `node`; refused for a run with no item.
    */
   completeWorkflowRun(
     id: string,
@@ -615,6 +638,7 @@ export interface IWorkflowStore
       linkedStarts?: readonly LinkedRunEndedStart[];
       asks?: readonly ItemAsk[];
       waits?: readonly ItemWait[];
+      end?: { readonly reason: string; readonly node: string };
     }
   ): Promise<{ startReceipts: SourceReceiptAcceptance[] }>;
   /**

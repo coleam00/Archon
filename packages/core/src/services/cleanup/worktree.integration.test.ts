@@ -54,6 +54,15 @@ const { cleanupStaleWorktrees, onConversationClosed, runScheduledCleanup } = awa
   '../cleanup-service'
 );
 const { cleanupMergedWorktrees } = await import('./merged-sweep');
+const { NO_MERGE_REMOTE_REASON } = await import('./merge-verdict');
+/** The merged sweep on a checkout that exists: what it swept. */
+async function sweepMerged(
+  ...args: Parameters<typeof cleanupMergedWorktrees>
+): Promise<import('./merged-sweep').CleanupOperationResult> {
+  const outcome = await cleanupMergedWorktrees(...args);
+  if (outcome.kind !== 'swept') throw new Error(`Expected a swept outcome, got ${outcome.kind}`);
+  return outcome.result;
+}
 const { removeEnvironment } = await import('./remove-environment');
 const { assessCompletedRunWorktree, reclaimRunWorktree, releaseCompletedRunWorktree } =
   await import('./run-worktree');
@@ -576,10 +585,12 @@ describe('owned worktree release', () => {
     const release = reclaimRunWorktree(run, store);
     try {
       await entered.promise;
-      const claim = claimPendingWorkflowRun(adopter, env.working_path);
+      const claim = claimPendingWorkflowRun(adopter, env.working_path).catch(
+        (error: unknown) => error
+      );
       finish.resolve();
       await release;
-      expect(await claim).toBeNull();
+      expect(await claim).toMatchObject({ reason: 'checkout_released' });
     } finally {
       finish.resolve();
       await release.catch(() => {});
@@ -614,7 +625,9 @@ describe('owned worktree release', () => {
       );
       finish.resolve();
       await release;
-      expect(await claimPendingWorkflowRun(await lateRun)).toBeNull();
+      await expect(claimPendingWorkflowRun(await lateRun)).rejects.toMatchObject({
+        reason: 'checkout_released',
+      });
     } finally {
       finish.resolve();
       await release.catch(() => {});
@@ -752,6 +765,20 @@ describe('completed run worktree release', () => {
       reason: 'unpushed_commits',
       detail: '1 commit(s) on no remote',
     });
+  });
+
+  test('in a repository with no remote, a commit keeps the checkout with no git error', async () => {
+    await rm(join(repo, '.archon'), { recursive: true });
+    await git(repo, 'remote', 'remove', 'upstream');
+    await commitInWorktree();
+    // With no remote, the base commit is on no remote either.
+    expect(await assess()).toEqual({
+      disposition: 'retained',
+      reason: 'unpushed_commits',
+      detail: '2 commit(s) on no remote',
+    });
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
   });
 
   test('a commit made after a push that left tracking refs stale keeps the checkout', async () => {
@@ -940,6 +967,32 @@ describe('completed run worktree release', () => {
   });
 });
 
+test('both sweeps keep a worktree in a repository with no remote, reporting why', async () => {
+  await git(repo, 'remote', 'remove', 'upstream');
+  await writeFile(join(env.working_path, 'work'), 'work');
+  await git(env.working_path, 'add', 'work');
+  await git(env.working_path, 'commit', '-qm', 'work');
+  await db.query(
+    `UPDATE remote_agent_isolation_environments SET created_at = datetime('now', '-30 days') WHERE id = $1`,
+    [env.id]
+  );
+
+  const manual = await sweepMerged(codebaseId, repo);
+  expect(manual).toMatchObject({
+    errors: [],
+    removed: [],
+    skipped: [{ branchName: env.branch_name, reason: NO_MERGE_REMOTE_REASON }],
+  });
+  // The scheduled sweep also sees earlier tests' environments, so assert on this one.
+  const scheduled = await runScheduledCleanup();
+  expect(scheduled.errors.filter(entry => entry.id === env.id)).toEqual([]);
+  expect(scheduled.skipped.filter(entry => entry.id === env.id)).toEqual([
+    { id: env.id, reason: NO_MERGE_REMOTE_REASON },
+  ]);
+  expect(await status()).toBe('active');
+  expect(existsSync(env.working_path)).toBe(true);
+});
+
 describe('the age sweep keeps work that exists nowhere else', () => {
   const age = (id: string): Promise<unknown> =>
     db.query(
@@ -1079,7 +1132,7 @@ test.each(['both', 'head-only', 'branch-only'] as const)(
     const branchPr = spyOn(isolationModule, 'getPrState').mockResolvedValue({ state: 'NONE' });
     const commitPr = spyOn(isolationModule, 'getPrsForCommit').mockResolvedValue({ state: 'NONE' });
     try {
-      const result = await cleanupMergedWorktrees(codebaseId, repo);
+      const result = await sweepMerged(codebaseId, repo);
       expect(result.errors).toEqual([]);
       expect(result.removed).toEqual([]);
       expect(result.skipped).toContainEqual({
@@ -1132,11 +1185,11 @@ test.each(
     const commitPr = spyOn(isolationModule, 'getPrsForCommit').mockResolvedValue({ state: 'NONE' });
     try {
       if (signal === 'closed') {
-        const withoutOptIn = await cleanupMergedWorktrees(codebaseId, repo);
+        const withoutOptIn = await sweepMerged(codebaseId, repo);
         expect(withoutOptIn.removed).toEqual([]);
         expect(await status()).toBe('active');
       }
-      const result = await cleanupMergedWorktrees(codebaseId, repo, {
+      const result = await sweepMerged(codebaseId, repo, {
         includeClosed: signal === 'closed',
       });
       const reclaimed = mode === 'covered';
@@ -1249,7 +1302,7 @@ test.each([
     return originalExec(file, args, options);
   });
   try {
-    const result = await cleanupMergedWorktrees(codebaseId, repo);
+    const result = await sweepMerged(codebaseId, repo);
     expect(result.errors).toEqual([]);
     expect(result.removed).toEqual(reclaimed ? [env.branch_name] : []);
     expect(existsSync(env.working_path)).toBe(!reclaimed);
@@ -1338,7 +1391,7 @@ test.each([
       ? 'no pull request covers all local work — a local commit was not found in the configured repository'
       : 'PR state lookup failed — merge state unverifiable';
   try {
-    const manual = await cleanupMergedWorktrees(codebaseId, repo);
+    const manual = await sweepMerged(codebaseId, repo);
     expect(manual.errors).toEqual([]);
     expect(manual.removed).toEqual([]);
     expect(manual.skipped).toEqual([{ branchName: env.branch_name, reason }]);
@@ -1398,7 +1451,7 @@ test.each([false, true])(
       }
     );
     try {
-      const result = await cleanupMergedWorktrees(codebaseId, repo);
+      const result = await sweepMerged(codebaseId, repo);
       expect(result.errors).toEqual([]);
       expect(result.removed).toEqual(merged ? [env.branch_name] : []);
       expect(existsSync(env.working_path)).toBe(!merged);
@@ -1416,6 +1469,35 @@ test.each([false, true])(
   }
 );
 
+test('merged cleanup reports a gone checkout and leaves its worktrees and records alone', async () => {
+  // A worktree outside the checkout survives the checkout's deletion, so the sweep could touch it.
+  const outside = join(root, 'outside');
+  await git(repo, 'worktree', 'add', '-q', '-b', 'outside', outside);
+  const outsideEnv = await isolationDb.create({
+    codebase_id: codebaseId,
+    workflow_type: 'task',
+    workflow_id: 'outside',
+    working_path: outside,
+    branch_name: toBranchName('outside'),
+  });
+  await rm(repo, { recursive: true, force: true });
+  expect(existsSync(outside)).toBe(true);
+
+  const outcome = await cleanupMergedWorktrees(codebaseId, repo);
+
+  expect(outcome.kind).toBe('repository-gone');
+  if (outcome.kind !== 'repository-gone') return;
+  expect(outcome.environments).toHaveLength(2);
+  expect(outcome.environments).toContainEqual({
+    branchName: env.branch_name,
+    workingPath: env.working_path,
+  });
+  expect(outcome.environments).toContainEqual({ branchName: 'outside', workingPath: outside });
+  expect(existsSync(join(outside, 'file'))).toBe(true);
+  expect(await status()).toBe('active');
+  expect((await isolationDb.getById(outsideEnv.id))?.status).toBe('active');
+});
+
 test('merged cleanup retires locally and reports the retained published branch', async () => {
   await git(repo, 'remote', 'rename', 'upstream', 'origin');
   await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
@@ -1428,7 +1510,7 @@ test('merged cleanup retires locally and reports the retained published branch',
     headSha: await git(env.working_path, 'rev-parse', 'HEAD'),
   });
   try {
-    const result = await cleanupMergedWorktrees(codebaseId, repo);
+    const result = await sweepMerged(codebaseId, repo);
     expect(result.removed).toEqual([env.branch_name]);
     expect(result.warnings).toEqual([
       {

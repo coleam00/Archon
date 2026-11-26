@@ -34,6 +34,7 @@ import {
   parseOptionalField,
   parseWorkflowResource,
   parseRequires,
+  parseObserves,
   parseReturns,
   parseRunBudget,
   parseTags,
@@ -245,6 +246,7 @@ interface WorkflowFields {
   readonly inputs: WorkflowDefinition['inputs'];
   readonly returns: WorkflowDefinition['returns'];
   readonly result: WorkflowDefinition['result'];
+  readonly observes: boolean | undefined;
   readonly deprecated: WorkflowDefinition['deprecated'];
 }
 
@@ -307,6 +309,8 @@ function parseWorkflowFields(
   if ('error' in inputs) return inputs.error;
   const returns = parseReturns(raw.returns, dagNodes, filename);
   if ('error' in returns) return returns.error;
+  const observes = parseObserves(raw.observes);
+  if ('error' in observes) return observes.error;
   const effort = resolveEffort(
     raw.effort,
     modelReasoningEffort,
@@ -340,6 +344,7 @@ function parseWorkflowFields(
     inputs: inputs.value,
     returns: returns.value?.node,
     result: returns.value?.result,
+    observes: observes.value,
     deprecated: deprecated.value,
   };
 }
@@ -388,6 +393,7 @@ function runPolicies(fields: WorkflowFields): Partial<WorkflowDefinition> {
     ...(fields.inputs !== undefined ? { inputs: fields.inputs } : {}),
     ...(fields.returns !== undefined ? { returns: fields.returns } : {}),
     ...(fields.result !== undefined ? { result: fields.result } : {}),
+    ...(fields.observes === true ? { observes: true } : {}),
     ...(fields.deprecated !== undefined ? { deprecated: fields.deprecated } : {}),
   };
 }

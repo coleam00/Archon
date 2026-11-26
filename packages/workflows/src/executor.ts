@@ -82,6 +82,11 @@ type ResumePayload =
       /** The prior pass's failures; replayed only when `resumeCause` is `continue_after_wait`. */
       priorFailedNodes?: Map<string, PriorFailedNode>;
       resumeCause?: ResumeCause;
+      /**
+       * The pass was claimed by an operator's resume by hand. Only such a pass re-drives a
+       * child that holds an unknown outcome; absent, it does not.
+       */
+      claimedByHand?: boolean;
       priorUsage?: PriorRunUsage;
       priorNodeSessions?: readonly WorkflowRunNodeSession[];
     }
@@ -90,6 +95,7 @@ type ResumePayload =
       priorCompletedNodes?: undefined;
       priorFailedNodes?: undefined;
       resumeCause?: undefined;
+      claimedByHand?: undefined;
       priorUsage?: undefined;
       priorNodeSessions?: undefined;
     };
@@ -601,6 +607,7 @@ function dagArgs(
         resolvedModelOverrides,
         effectiveRunConfig,
         baseBranch,
+        opts.claimedByHand === true,
         opts.resolveChildIsolation
       ),
     priorUsage: opts.priorUsage,

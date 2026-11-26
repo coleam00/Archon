@@ -73,7 +73,9 @@ test('failed resume cannot bypass queued promises or a new holder; paused contin
   });
   // A delayed starter cannot reclaim a run after admission has pruned its holder.
   await store.updateWorkflowRun(first.launch.run.id, { status: 'pending' });
-  expect(await store.claimPendingWorkflowRun(first.launch.run.id)).toBeNull();
+  await expect(store.claimPendingWorkflowRun(first.launch.run.id)).rejects.toMatchObject({
+    reason: 'admission_revoked',
+  });
   await store.cancelWorkflowRun(next.launch.run.id);
   await commitModule.commit(root, [first.launch.run.id], async runs => {
     const run = runs.get(first.launch.run.id)!;
@@ -500,7 +502,7 @@ test('a persisted malformed guard stays inspectable without stalling independent
     launch: { run: { metadata: { admission_checkout_guard: 'false' } } },
   });
   expect(await store.getWorkflowRun(id)).toBeNull();
-  expect(await store.withdrawQueuedResourceStart(id)).toMatchObject({ run: { id } });
+  expect(await store.withdrawQueuedResourceStart(id)).toMatchObject({ launch: { run: { id } } });
 });
 
 async function finishRun(root: string, id: string): Promise<void> {

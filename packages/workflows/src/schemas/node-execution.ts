@@ -109,10 +109,20 @@ export function composedOrigin(node: NodeDescriptor): ComposedNodeOrigin | undef
   return 'composed' in node ? node.composed : undefined;
 }
 
+/** One composed fan-out instance: its fan-out's scope and the instance's identity in its plan. */
+export const fanOutFrameSchema = z.object({ scope: z.string(), identity: z.string() });
+export type FanOutFrame = z.infer<typeof fanOutFrameSchema>;
+
 export const nodeInvocationSchema = z.object({
   id: z.string(),
   startedAt: z.string().datetime({ offset: true }),
   loopPath: z.array(z.object({ groupId: z.string(), iteration: z.number().int() })),
+  /**
+   * The composed fan-out instances the invocation ran in, outermost first; empty outside
+   * one. Step names cannot say this: a node id may itself look like an instance's path.
+   * Absent on records written before this field existed.
+   */
+  fanOutPath: z.array(fanOutFrameSchema).optional(),
   /**
    * The checkout when this invocation's first attempt started. Later attempts, inner loop
    * turns, and a resumed continuation keep it; only a new invocation samples again.
@@ -144,6 +154,10 @@ export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
  * by the engine's own validation; the rest name engine-detected causes. Every kind maps to a retry class in
  * `executor-shared.ts`. Absent on records written before this field existed; retry
  * treats an absent kind as `unknown`.
+ *
+ * `outcome_unknown` says the engine does not know whether the node's side effect happened,
+ * so nothing may run it again by itself (`unknown-outcome.ts`). That is distinct from
+ * `retryable: false`, which only stops the node's immediate retry.
  */
 export const nodeFailureKindSchema = z.enum([
   'fatal',
@@ -159,6 +173,7 @@ export const nodeFailureKindSchema = z.enum([
   'child_failed',
   'cancelled',
   'config',
+  'outcome_unknown',
 ]);
 export type NodeFailureKind = z.infer<typeof nodeFailureKindSchema>;
 

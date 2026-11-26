@@ -176,6 +176,8 @@ server on their own, and a `DATABASE_URL` in `.env` is not read.
 
 If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.postgres_schema_init_failed`.
 
+Prisma Postgres works with the connection string it issues. Keep `sslmode=require` in it: without the parameter the first database operation fails with `read ECONNRESET`. Point a server at the direct host (`db.prisma.io`). The pooled host (`pooled.db.prisma.io`) pools in transaction mode: schema initialization, CLI commands and the API work through it, but it does not deliver `LISTEN` notifications, so the server logs `pg_notify.listening` and the console still shows runs started from the CLI only when the dashboard poller's 10-second backstop reads them.
+
 ## Local PostgreSQL via Docker
 
 Use the `with-db` Docker Compose profile for automatic PostgreSQL setup.
@@ -235,7 +237,8 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Nullable `user_id` records which user triggered the run
   - Nullable `item_id` references the [item](/reference/cli/#items) the run belongs to. Written once at creation; null for a run started with no item
   - Nullable `completed_outcome` is the outcome the run completed with, from its workflow's [`returns.outcome`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs): an enum value as it is, a boolean as `succeeded` or `failed`. Written only by the write that completes the run, so it is null on any run that has not completed. Nullable `outcome` holds the boolean form only (its constraint admits `succeeded` and `failed`) and is written by that same write; binaries before `completed_outcome` wrote it while the run was still running
-  - The `item_stopped` key of `metadata`, `{ summary }`, is written by the write that completes a top-level run on an item that stopped the item: its outcome is not in [`returns.final`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs), its end started nothing, and it left no ask or wait. The attention queue lists the item as `stopped` while that run is the item's last. Older binaries ignore the key
+  - The `item_stopped` key of `metadata`, `{ summary }`, is written by the write that completes a top-level run on an item that stopped the item: its outcome is not in [`returns.ends`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs) and it left no ask or wait, whether or not its end started a stage. The attention queue lists the item as `stopped` while that run is the item's last step, no start its end caused (a receipt delivered under the run's id) still waits to be prepared or in a resource queue, and no readable merge is recorded on the item. An older binary ignores the key, but lists such a run as stopped while the stage it started is still waiting
+  - The `observes_item` key of `metadata`, `true`, is written when a run of a workflow that declares [`observes: true`](/reference/workflow-language/#workflow-fields) is created. Such a run is not a step of its item: it is never listed as stopped, it does not close a stop, and it neither opens an end nor keeps one from holding. Older binaries ignore the key and count the run as a step
   - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.
   - `conversation_id` cascades on conversation delete: a hard `DELETE` of a conversation would erase its run rows and silently drop the live-run cleanup pin for their isolation environments (#2868). Soft delete is the only supported path — a future hard-delete must resolve live runs first.
 
@@ -330,6 +333,13 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `item_id`, `text`, `by_declared` or `by_user_id` (who, when they said), `via` (the surface), `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
   - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
 
+- **`remote_agent_item_ends`** - Ends of an item: a statement that nothing more will happen on it, by an operator (`archon workflow end`) or by the engine when a run completes with an outcome its workflow lists in [`returns.ends`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs) (`via` `engine`, `from_run_id` the run, `from_node_path` its `returns:` node, no `by_*`)
+  - Append-only: no row is updated or deleted. `seq` is the recording order and `id` is text in both dialects
+  - `item_id`, `reason`, `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at`, as for rulings
+  - A binary that predates the table never reads it and shows the item as before
+- **`remote_agent_item_end_runs`** - The runs an end saw on its item's steps and below them, copied in the transaction that records the end; an end a finishing outcome records copies only the steps that started no later than its run
+  - One row per run: `end_id`, `run_id` (no foreign key) and `execution_claim`, the run's metadata claim, which every resume writes fresh
+  - An end holds while every step on its item, and every run below one, is one it saw and not resumed since, none of them is live, and no start of a step is queued on the item. A run that records `observes_item` is not a step and is not read, and a queued start whose prepared launch records it counts for nothing; a binding not yet prepared has no role and does not open the end. A new step or a resume, even from a transaction that overlapped the end's, opens the item while that run exists. The rule reads only the runs that exist, so deleting runs the end saw leaves it holding, and deleting the run that opened the item makes it hold again
 - **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
   - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
   - `change` (the forge's identity of the merged change, never parsed), `merge_commit` (nullable), `merged_at` (the forge's merge time), `via`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`

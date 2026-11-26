@@ -43,6 +43,8 @@ type ReceiptOperations = Pick<
   | 'completeStartBindingPreparation'
   | 'failStartBindingPreparation'
   | 'resetStartBindingPreparation'
+  | 'replaceStartBindingIntent'
+  | 'returnQueuedStartToPreparation'
 >;
 
 /** The file admission store's source receipts and the start bindings each one records. */
@@ -257,6 +259,37 @@ export function createReceiptOperations(
         item.status = 'pending';
         item.ownerId = null;
         return true;
+      }),
+    replaceStartBindingIntent: input =>
+      write(async tx => {
+        const item = await tx.owned(input);
+        if (!item?.intent) return false;
+        // The recorded hand-off is kept, as the database store keeps its column.
+        const { checkoutFrom } = item.intent;
+        const { checkoutFrom: _replaced, ...intent } = input.intent;
+        item.intent = checkoutFrom ? { ...intent, checkoutFrom } : intent;
+        item.bindingRevision = input.intent.bindingRevision;
+        item.hostId = input.intent.hostId;
+        return true;
+      }),
+    returnQueuedStartToPreparation: input =>
+      write(async tx => {
+        const row = await tx.request(input.requestId);
+        const item = await tx.binding(input);
+        if (row?.status !== 'queued' || !item?.requestIds.includes(row.id)) return null;
+        if (item.status !== 'complete')
+          throw new Error(
+            `Binding '${input.bindingId}' of receipt '${input.receiptId}' is not complete; request '${input.requestId}' stays queued`
+          );
+        // Withdrawn and dropped from the binding, so its next preparation is its one disposition.
+        row.status = 'withdrawn';
+        tx.documents[pathFor('requests', row.id)] = row;
+        const slot = await tx.slot(row.resource);
+        slot.queue = slot.queue.filter(id => id !== row.id);
+        item.requestIds = item.requestIds.filter(id => id !== row.id);
+        item.status = 'pending';
+        item.ownerId = null;
+        return row.launch;
       }),
   };
 }

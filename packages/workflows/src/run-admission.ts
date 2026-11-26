@@ -1,3 +1,4 @@
+import { observesItemMetadata } from './schemas/item-role';
 import { CONTAINER_ISOLATION_MARKER, ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { currentExecutionOwner, executionClaim } from './store';
@@ -39,6 +40,7 @@ import { resolveResultInputs, unsuppliedResultInputs } from './run-result';
 import {
   ConcurrencyConfigError,
   InstallHeldError,
+  PendingClaimRefusedError,
   RunLimitError,
   WorkflowItemHeldError,
 } from './store/errors';
@@ -203,7 +205,7 @@ async function notifyResumingRun(
   const resumeMsg =
     priorCompletedNodes.size > 0
       ? `▶️ **Resuming** workflow \`${workflowName}\` — skipping ${String(priorCompletedNodes.size)} already-completed node(s).`
-      : `▶️ **Resuming** workflow \`${workflowName}\` — continuing interactive loop.`;
+      : `▶️ **Resuming** workflow \`${workflowName}\`.`;
   await safeSendMessage(platform, conversationId, resumeMsg);
 }
 
@@ -238,6 +240,7 @@ async function createWorkflowRunRow(
           ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? CONTINUATION_MODES.adopt } }
           : {}),
         ...freshInvocationMetadata(opts, dispatch),
+        ...observesItemMetadata(workflow),
         // `abandon` shows this record when no owner answers (#2325). The pending claim
         // records it again, in the update that makes the run `running`.
         [EXECUTION_OWNER_METADATA_KEY]: currentExecutionOwner(),
@@ -345,6 +348,9 @@ async function claimPendingRun(
           return {
             done: await refuseStart(deps, platform, conversationId, workflowRun, error.message),
           };
+        // No claimant can start it, so this process, which knows why, ends it with the reason.
+        if (error instanceof PendingClaimRefusedError)
+          return { done: await failRefusedClaim(deps, platform, conversationId, error) };
         claim.error = error;
       }
       return { done: undefined };
@@ -372,14 +378,14 @@ async function claimPendingRun(
   }
   const claimed = claim.run;
   if (!claimed) {
+    // The run left pending first: whoever moved it owns it, so this process writes nothing.
     getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.pending_claim_lost');
     return {
       stopped: true,
       result: {
         success: false,
         workflowRunId: workflowRun.id,
-        error:
-          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
+        error: 'Workflow run is no longer pending',
       },
     };
   }
@@ -392,6 +398,31 @@ async function claimPendingRun(
   // Its manifest is written, and the baseline persisted, once the run's artifacts
   // directory exists. A resume never samples: it keeps the baseline the run started with.
   return { stopped: false, value: await sampleCheckout(cwd, execContext) };
+}
+
+/**
+ * Fail a run whose claim was refused for a reason no claimant gets past, while it is still
+ * pending, so it ends with that reason instead of staying pending and holding its slot.
+ */
+async function failRefusedClaim(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  refusal: PendingClaimRefusedError
+): Promise<WorkflowExecutionResult> {
+  getLog().warn(
+    { workflowRunId: refusal.runId, reason: refusal.reason },
+    'workflow.pending_claim_refused'
+  );
+  const { failed } = await requireTerminalStatusWrite(
+    deps.store.failWorkflowRun(refusal.runId, refusal.message, {
+      pendingOnly: true,
+      exitReason: 'launch_failed',
+    }),
+    { workflowRunId: refusal.runId, site: 'workflow.pending_claim_refused', failure: refusal }
+  );
+  if (failed) await sendCriticalMessage(platform, conversationId, `❌ ${refusal.message}`);
+  return { success: false, workflowRunId: refusal.runId, error: refusal.message };
 }
 
 async function stampPreCreatedRun(

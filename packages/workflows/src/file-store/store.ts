@@ -22,6 +22,7 @@ import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '../store';
 import { isTerminalRunStatus, type WorkflowRun } from '../schemas/workflow-run';
 import {
+  PendingClaimRefusedError,
   WorkflowRunDeleteRefusedError,
   liveAdoptersRefusal,
   liveDescendantsRefusal,
@@ -234,12 +235,15 @@ export async function createFileWorkflowStore(
     claimPendingWorkflowRun: (id, path) =>
       write([id], async (view, admission) => {
         const run = await view.getWorkflowRun(id);
-        if (
-          !run ||
-          !(await admission.canClaim(id)) ||
-          (await options.isCheckoutReleased?.(run, path))
-        )
-          return null;
+        if (!run) return null;
+        // A still-pending run refused by its own state: the claimant that tried fails it with
+        // the reason. Any other run is the view's compare-and-set to refuse.
+        if (run.status === 'pending') {
+          if (await options.isCheckoutReleased?.(run, path))
+            throw new PendingClaimRefusedError(id, 'checkout_released');
+          if (!(await admission.canClaim(id)))
+            throw new PendingClaimRefusedError(id, 'admission_revoked');
+        }
         return view.claimPendingWorkflowRun(id, path);
       }),
     updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
@@ -377,6 +381,11 @@ export async function createFileWorkflowStore(
     withdrawItemRuling: async () => {
       throw new FileStoreUnsupportedError('items');
     },
+    // An end belongs to an item: none holds here, and none can be recorded.
+    getHoldingItemEnd: async () => null,
+    recordItemEnd: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listItemsInWindow: async () => {
       throw new FileStoreUnsupportedError('items');
     },
@@ -415,8 +424,7 @@ export async function createFileWorkflowStore(
     // A wait belongs to an item too: none are open, and none can be withdrawn.
     listOpenItemWaits: async () => [],
     withdrawItemWaits: async () => ({ kind: 'not_found' }),
-    // Only a run on an item stops one.
-    listStoppedItemRuns: async () => [],
+    listStoppedItemRuns: () => query('all', view => view.listStoppedItemRuns()),
     listWorkflowRuns: async options => {
       const result = await query('all', view => view.listWorkflowRuns(options));
       result.runs = await Promise.all(
@@ -457,6 +465,7 @@ export async function createFileWorkflowStore(
     labelAttentionWait: (id, labelWrite) =>
       write([id], view => view.labelAttentionWait(id, labelWrite)),
     listAttentionQueueRows: () => query('all', view => view.listAttentionQueueRows()),
+    listUnfinishedRuns: () => query('all', view => view.listUnfinishedRuns()),
     signalWorkflowWait: (id, wait, payload) =>
       write([id], view => view.signalWorkflowWait(id, wait, payload)),
     // Cleanup archives logs without hydrating current-state events.

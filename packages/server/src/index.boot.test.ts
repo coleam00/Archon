@@ -81,7 +81,9 @@ class DisabledAdapter {
   constructor(..._args: unknown[]) {}
 }
 
-mock.module('@archon/paths/strip-cwd-env-boot', () => ({}));
+mock.module('@archon/paths/strip-cwd-env-boot', () => ({
+  cwdEnvStrip: { cwd: '', files: [], keys: [] },
+}));
 mock.module('./boot/claude-auth-posture', () => ({
   shouldDefaultClaudeGlobalAuth: (): boolean => false,
   hasClaudeBootAuthPosture: (): boolean => true,

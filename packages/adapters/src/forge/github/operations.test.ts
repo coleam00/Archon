@@ -76,6 +76,7 @@ describe('GitHub outbound producer', () => {
         'workitem.edit-body',
         'workitem.list',
         'workitem.label.added',
+        'workitem.opened',
         'workitem.search',
         'repo.labels.list',
         'repo.label.ensure',

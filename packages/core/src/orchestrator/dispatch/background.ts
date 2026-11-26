@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { continuationInheritsEstate } from '@archon/workflows/schemas/workflow-run';
 import type { ResolvedRunContinuation } from '../../operations/workflow-continuation';
 // Background dispatch: run a workflow in a hidden worker conversation, bridged to the
@@ -461,6 +462,7 @@ function preCreateRun(
       ...(ctx.declaredContinuation
         ? { [CONTINUATION_METADATA_KEY]: ctx.declaredContinuation.stamp }
         : {}),
+      ...observesItemMetadata(workflow),
     },
     ...(ctx.declaredContinuation ? { adopted_from_run_id: ctx.declaredContinuation.run.id } : {}),
   });

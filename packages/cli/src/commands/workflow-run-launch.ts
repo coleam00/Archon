@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { recordWorktreeAdoption } from '@archon/isolation';
 import type {
@@ -263,12 +264,6 @@ export interface ForegroundLaunch {
   readonly continuation: LaunchContinuation;
   /** The prior run a resume continues; the executor performs no implicit resume detection. */
   readonly resumable: WorkflowRun | null;
-  /**
-   * Branch of the prior run's worktree, from the isolation record the resume path
-   * matches. Only a worktree-isolated run has one; the no-completed-nodes refusal
-   * names it in the relaunch command it suggests (#3154).
-   */
-  readonly resumeBranch: string | undefined;
   /** Only an explicit --branch looks one up. */
   readonly existingBranchEnv: IsolationEnvironmentRow | null | undefined;
   readonly preparedAiConfiguration: PreparedRunAiConfiguration;
@@ -311,12 +306,7 @@ export async function prepareForegroundLaunch(
     codebase,
     continuation.declaration
   );
-  const { resumable, resumeBranch } = await bindResumableRun(
-    request,
-    admission,
-    codebase,
-    workspace
-  );
+  const resumable = await bindResumableRun(request, admission, codebase, workspace);
   if (!admission.wantsIsolation && codebase?.kind !== 'folder') {
     await assertInheritedWorkflowExecutionCwd(host, workspace.workingCwd);
   }
@@ -348,7 +338,6 @@ export async function prepareForegroundLaunch(
     base,
     continuation,
     resumable,
-    resumeBranch,
     existingBranchEnv,
     preparedAiConfiguration,
     workspace,
@@ -446,9 +435,9 @@ async function bindResumableRun(
   admission: OwnedRunAdmission,
   codebase: Codebase | null,
   workspace: RunWorkspace
-): Promise<{ resumable: WorkflowRun | null; resumeBranch: string | undefined }> {
+): Promise<WorkflowRun | null> {
   const { host, cwd, workflowName, options } = request;
-  if (!options.resume) return { resumable: null, resumeBranch: undefined };
+  if (!options.resume) return null;
   if (!codebase) {
     throw new Error(
       'Cannot resume: Not in a git repository.\n' +
@@ -487,7 +476,7 @@ async function bindResumableRun(
   console.log(`Working path: ${workspace.workingCwd}`);
   console.log('');
 
-  return { resumable, resumeBranch: matchingEnv?.branch_name };
+  return resumable;
 }
 
 function foregroundLaneConfig(
@@ -746,6 +735,7 @@ function createSetupRun(
       ...(admission.resolvedInputs && { [SUBRUN_METADATA_KEYS.inputs]: admission.resolvedInputs }),
       ...(declaration ? { [CONTINUATION_METADATA_KEY]: declaration.stamp } : {}),
       ...(handoff && { [CHECKOUT_HANDOFF_METADATA_KEY]: handoff }),
+      ...observesItemMetadata(admission.workflow),
     },
     ...(declaration ? { adopted_from_run_id: declaration.runId } : {}),
     ...(request.options.item === undefined ? {} : { item_key: request.options.item }),

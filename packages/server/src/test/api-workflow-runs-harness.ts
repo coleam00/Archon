@@ -454,6 +454,7 @@ const unusedItemRulings = unusedExports(await import('@archon/core/db/item-rulin
 const unusedItemMerges = unusedExports(await import('@archon/core/db/item-merges'));
 const unusedItemLinks = unusedExports(await import('@archon/core/db/item-links'));
 const unusedItemLandings = unusedExports(await import('@archon/core/db/item-landings'));
+const unusedItemEnds = unusedExports(await import('@archon/core/db/item-ends'));
 const unusedItemAsks = unusedExports(await import('@archon/core/db/item-asks'));
 export const mockGetItemRuns = mock<typeof import('@archon/core/db/items')['getItemRuns']>(
   async () => null
@@ -512,6 +513,13 @@ mock.module('@archon/core/db/item-merges', () => ({
 mock.module('@archon/core/db/item-landings', () => ({
   ...unusedItemLandings,
   getItemLanding: mock(async () => null),
+}));
+type ItemEndsDb = typeof import('@archon/core/db/item-ends');
+export const mockRecordItemEnd = mock<ItemEndsDb['recordItemEnd']>(unexpected('recordItemEnd'));
+mock.module('@archon/core/db/item-ends', () => ({
+  ...unusedItemEnds,
+  getHoldingItemEnd: mock(async () => null),
+  recordItemEnd: mockRecordItemEnd,
 }));
 
 type ItemLinksDb = typeof import('@archon/core/db/item-links');
@@ -604,6 +612,7 @@ export const mockHydrateResumableRun = mock<
   priorCompletedNodes: new Map(),
   priorFailedNodes: new Map(),
   resumeCause: run.status === 'paused' ? 'continue_after_wait' : 'retry_failed',
+  claimedByHand: true,
   priorUsage: { costUsd: 0 },
   priorNodeSessions: [],
 }));

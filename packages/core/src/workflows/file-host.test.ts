@@ -167,7 +167,9 @@ test('file host records persist across hosts and released worktrees fence pendin
     codebase_id: codebase.id,
     working_path: env.working_path,
   });
-  expect(await reopened.deps.store.claimPendingWorkflowRun(run.id)).toBeNull();
+  await expect(reopened.deps.store.claimPendingWorkflowRun(run.id)).rejects.toMatchObject({
+    reason: 'checkout_released',
+  });
   const recreated = await reopened.records.isolation.create({
     ...env,
     created_by_platform: env.created_by_platform ?? undefined,

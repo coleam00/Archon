@@ -8,6 +8,7 @@ import type { MessageChunk } from '@archon/provider-contract';
 import { getProviderCapabilities, providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
+import { attentionQueueItemForRun } from '@archon/workflows/attention-queue';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { RUN_STOP_REASON_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
@@ -138,7 +139,6 @@ async function wake(
       legacyWorkflow: continued,
       cursor,
     });
-    if (!admission.accepted) return { kind: 'not-accepted' };
     settled.push(admission.settled);
     return { kind: 'accepted', run, settled: admission.settled };
   });
@@ -146,11 +146,17 @@ async function wake(
   return outcomes.filter(outcome => outcome.kind === 'accepted').map(outcome => outcome.runId);
 }
 
-test('a typed usage limit with a reset waits, then the continuation host continues the run after the reset', async () => {
+test('a typed usage limit with a reset waits on the provider it hit, then the continuation host continues the run after the reset', async () => {
   const resetAt = new Date(Date.now() + 3_600_000).toISOString();
   const { engine, store, calls } = harness([{ resetAt }, 'ok']);
 
-  const runId = await submit(engine);
+  // The node runs on another provider than the configured default, and its queue item names it.
+  const onCodex = makeTestResolvedWorkflow({
+    name: 'usage-limit',
+    nodes: [{ id: 'implement', prompt: 'Implement it', provider: 'codex' }],
+  });
+
+  const runId = await submit(engine, onCodex);
   const waiting = await store.getWorkflowRun(runId);
   expect(waiting?.status).toBe('paused');
   expect(waiting?.metadata.wait).toMatchObject({
@@ -158,12 +164,16 @@ test('a typed usage limit with a reset waits, then the continuation host continu
     nodeId: 'implement',
     resumeAt: resetAt,
   });
+  if (waiting === null) return;
+  expect(
+    await attentionQueueItemForRun({ store, branchOf: async () => null }, waiting)
+  ).toMatchObject({ kind: 'usage_limit', run: { node: 'implement' }, provider: 'codex' });
 
   // Nothing is due before the reset: one continuation, at the reset time.
-  expect(await wake(engine, store, new Date(Date.parse(resetAt) - 1000))).toEqual([]);
+  expect(await wake(engine, store, new Date(Date.parse(resetAt) - 1000), onCodex)).toEqual([]);
   expect(calls()).toBe(1);
 
-  expect(await wake(engine, store, new Date(Date.parse(resetAt) + 1000))).toEqual([runId]);
+  expect(await wake(engine, store, new Date(Date.parse(resetAt) + 1000), onCodex)).toEqual([runId]);
   const finished = await store.getWorkflowRun(runId);
   expect(finished?.status).toBe('completed');
   expect(finished?.metadata.wait).toBeUndefined();
@@ -293,7 +303,6 @@ test('a rate-limit pause resumed by hand continues before its deadline', async (
     userMessage: run.user_message,
     legacyWorkflow: setupThenImplement,
   });
-  if (!admission.accepted) throw new Error('resume not accepted');
   await admission.settled;
 
   const finished = await store.getWorkflowRun(runId);
