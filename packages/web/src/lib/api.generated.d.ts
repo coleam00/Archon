@@ -5307,6 +5307,10 @@ export interface components {
             groupId: string;
             iteration: number;
           }[];
+          fanOutPath?: {
+            scope: string;
+            identity: string;
+          }[];
           checkoutStart?:
             | {
                 /** @enum {string} */
@@ -7057,6 +7061,10 @@ export interface components {
             loopPath: {
               groupId: string;
               iteration: number;
+            }[];
+            fanOutPath?: {
+              scope: string;
+              identity: string;
             }[];
             checkoutStart?:
               | {

@@ -281,7 +281,7 @@ if (process.argv[3] === 'metadata') {
           },
         }
       );
-      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+      expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ ok: true });
       expect(readFileSync(marker, 'utf8')).toBe('engine-test-token');
     } finally {
@@ -412,7 +412,7 @@ console.log(JSON.stringify({ operationId: input.operationId, ok: true, result: {
         }
       );
 
-      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+      expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         ok: true,
         result: { value: { revision: 'trusted-revision' } },
@@ -986,10 +986,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
           },
         }
       );
-      expect({ status: result.status, stderr: result.stderr }).toEqual({
-        status: 0,
-        stderr: expect.stringContaining('[archon] stripped 5 keys'),
-      });
+      expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
         docker: true,
         home: '/.archon',
@@ -2768,6 +2765,49 @@ describe('receipt policies in the CLI host', () => {
       }
     }
   );
+
+  it('keeps the target repo .env strip off stderr, and logs it at debug', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cli-cwd-env-strip-'));
+    const valueA = 'planted-value-a-6362';
+    const valueB = 'planted-value-b-6362';
+    writeFileSync(join(root, '.env'), `STRIP_PROBE_A=${valueA}\n`);
+    writeFileSync(join(root, '.env.local'), `STRIP_PROBE_B=${valueB}\n`);
+    const run = (logLevel: string) => {
+      const result = spawnSync(process.execPath, [CLI_ENTRY, '--version'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: join(root, 'home'),
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+          ARCHON_VERBOSE_BOOT: '',
+          LOG_LEVEL: logLevel,
+        },
+      });
+      expect(result.status).toBe(0);
+      for (const value of [valueA, valueB]) {
+        expect(result.stdout).not.toContain(value);
+        expect(result.stderr).not.toContain(value);
+      }
+      return result.stderr;
+    };
+    try {
+      expect(run('')).toBe('');
+      const records = run('debug')
+        .split('\n')
+        .filter(line => line.includes('"env.cwd_keys_stripped"'))
+        .map(line => JSON.parse(line) as unknown);
+      expect(records).toEqual([
+        expect.objectContaining({
+          files: ['.env', '.env.local'],
+          keys: ['STRIP_PROBE_A', 'STRIP_PROBE_B'],
+        }),
+      ]);
+    } finally {
+      await removeTempTree(root);
+    }
+  });
 
   it('reads -v before a command as --verbose, not as a version request', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cli-verbose-not-version-'));

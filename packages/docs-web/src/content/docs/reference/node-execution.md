@@ -11,7 +11,7 @@ Archon captures a node's execution facts in `nodeExecutionRecordSchema`. The sha
 
 ## Identity and execution context
 
-The node descriptor identifies the authored node and its kind. A node that came in through an include also carries `composed`: its id as written, the workflow that declared it, and the include ids that brought it in, outermost first. Node emitter events carry the same `composed` next to `nodeName`. `path` identifies the node's location in the run, including composed structure. An invocation identifies the logical execution, while an attempt identifies one execution attempt within it. Retrying can create another attempt without creating another invocation. `invocation.loopPath` identifies enclosing loop groups and iterations.
+The node descriptor identifies the authored node and its kind. A node that came in through an include also carries `composed`: its id as written, the workflow that declared it, and the include ids that brought it in, outermost first. Node emitter events carry the same `composed` next to `nodeName`. `path` identifies the node's location in the run, including composed structure. An invocation identifies the logical execution, while an attempt identifies one execution attempt within it. Retrying can create another attempt without creating another invocation. `invocation.loopPath` identifies enclosing loop groups and iterations, and `invocation.fanOutPath` the enclosing composed fan-out instances (each scope and instance identity), outermost first.
 
 The invocation's checkout observation captures the checkout at its first attempt. Later attempts and resumed continuations retain it; each attempt can also have its own checkout observation. An observation describes Git content, a positively established non-Git directory, or an unavailable observation. It is evidence, not a policy against dirty starts.
 
@@ -206,6 +206,10 @@ Presence is relative to the containing object: a required child of an optional p
 | `invocation.loopPath[]` | `object` | item | — |
 | `invocation.loopPath[].groupId` | `string` | required | — |
 | `invocation.loopPath[].iteration` | `integer` | required | — |
+| `invocation.fanOutPath` | `array<object>` | optional | — |
+| `invocation.fanOutPath[]` | `object` | item | — |
+| `invocation.fanOutPath[].scope` | `string` | required | — |
+| `invocation.fanOutPath[].identity` | `string` | required | — |
 | `invocation.checkoutStart` | `object` | optional | `invocation.checkoutStart.kind = "git"` |
 | `invocation.checkoutStart.kind` | `"git"` | required | `invocation.checkoutStart.kind = "git"` |
 | `invocation.checkoutStart.sampledAt` | `string` | required | `invocation.checkoutStart.kind = "git"` |
@@ -622,6 +626,10 @@ Presence is relative to the containing object: a required child of an optional p
 | `invocation.loopPath[]` | `object` | item | — |
 | `invocation.loopPath[].groupId` | `string` | required | — |
 | `invocation.loopPath[].iteration` | `integer` | required | — |
+| `invocation.fanOutPath` | `array<object>` | optional | — |
+| `invocation.fanOutPath[]` | `object` | item | — |
+| `invocation.fanOutPath[].scope` | `string` | required | — |
+| `invocation.fanOutPath[].identity` | `string` | required | — |
 | `invocation.checkoutStart` | `object` | optional | `invocation.checkoutStart.kind = "git"` |
 | `invocation.checkoutStart.kind` | `"git"` | required | `invocation.checkoutStart.kind = "git"` |
 | `invocation.checkoutStart.sampledAt` | `string` | required | `invocation.checkoutStart.kind = "git"` |
@@ -1053,6 +1061,10 @@ Presence is relative to the containing object: a required child of an optional p
 | `invocation.loopPath[]` | `object` | item | — |
 | `invocation.loopPath[].groupId` | `string` | required | — |
 | `invocation.loopPath[].iteration` | `integer` | required | — |
+| `invocation.fanOutPath` | `array<object>` | optional | — |
+| `invocation.fanOutPath[]` | `object` | item | — |
+| `invocation.fanOutPath[].scope` | `string` | required | — |
+| `invocation.fanOutPath[].identity` | `string` | required | — |
 | `invocation.checkoutStart` | `object` | optional | `invocation.checkoutStart.kind = "git"` |
 | `invocation.checkoutStart.kind` | `"git"` | required | `invocation.checkoutStart.kind = "git"` |
 | `invocation.checkoutStart.sampledAt` | `string` | required | `invocation.checkoutStart.kind = "git"` |

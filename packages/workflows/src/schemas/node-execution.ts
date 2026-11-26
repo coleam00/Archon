@@ -109,10 +109,20 @@ export function composedOrigin(node: NodeDescriptor): ComposedNodeOrigin | undef
   return 'composed' in node ? node.composed : undefined;
 }
 
+/** One composed fan-out instance: its fan-out's scope and the instance's identity in its plan. */
+export const fanOutFrameSchema = z.object({ scope: z.string(), identity: z.string() });
+export type FanOutFrame = z.infer<typeof fanOutFrameSchema>;
+
 export const nodeInvocationSchema = z.object({
   id: z.string(),
   startedAt: z.string().datetime({ offset: true }),
   loopPath: z.array(z.object({ groupId: z.string(), iteration: z.number().int() })),
+  /**
+   * The composed fan-out instances the invocation ran in, outermost first; empty outside
+   * one. Step names cannot say this: a node id may itself look like an instance's path.
+   * Absent on records written before this field existed.
+   */
+  fanOutPath: z.array(fanOutFrameSchema).optional(),
   /**
    * The checkout when this invocation's first attempt started. Later attempts, inner loop
    * turns, and a resumed continuation keep it; only a new invocation samples again.
