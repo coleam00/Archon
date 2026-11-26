@@ -3,7 +3,7 @@ import { stageHandOffs, type MapArrow } from '../lib/graph-structure';
 import type { CuratedView } from '../lib/curated-view';
 
 /**
- * "Where items go from here": each arrow the pack graph draws out of the stage, as the view file
+ * "Where items go from here": each arrow the pack graph draws out of the stage, as the pack
  * words it, "<label> → <stage>", one chip each. It is where every outcome a map pill folds into
  * "+N" reads in full. Nothing while the graph is read, or when it has no arrow out.
  */

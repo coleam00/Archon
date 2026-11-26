@@ -30,8 +30,8 @@ interface CuratedMapProps {
 }
 
 /**
- * The curated map: the view file's cards in the pack's columns, the arrows the pack graph draws
- * between them in the file's words, and live chips from the items read; and the stage
+ * The curated map: the pack graph's stages in the pack's columns, the arrows the pack graph draws
+ * between them in the pack's words, and live chips from the items read; and the stage
  * `?stage=` opens over it, from the same live read. The modal is the canvas's sibling, outside
  * the frame that pans.
  */

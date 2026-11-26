@@ -1,0 +1,43 @@
+name: report
+description: |
+  Leave the factory's report where a change is proposed: one comment a maintainer
+  can read without having followed the item, replaced as the item moves, and each
+  finding on the line it is about. Writes on the change's page and nowhere else;
+  changes nothing in the change.
+
+model: ['@reporter', medium]
+
+inputs:
+  change:
+    description: Where the change is proposed.
+  verdict:
+    default: ""
+    description: What this round's checks concluded, merged into one verdict. Empty when no check round ran now, such as when delivery ends on the host.
+  item_lines:
+    default: ""
+    description: The review's reading of what the item asks for, line by line. Empty when no review ran now.
+  builder_reply:
+    default: ""
+    description: What the builder says it did about what was returned before this round. Empty in the first round.
+  ending:
+    default: ""
+    description: What the stage that calls this ended with, its round, and the asks it left.
+  host:
+    default: ""
+    description: What the project's own checks and reviews said, when the host round has run.
+
+returns: report
+
+nodes:
+  - id: report
+    display: { label: Writes the report }
+    command: report
+    mutates_checkout: false
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        posted: { type: boolean, description: 'Whether the report comment is on the change now.' }
+        on_lines: { type: integer, description: 'How many findings and notes you put on their lines in this run.' }
+        problem: { type: string, description: 'What could not be written, and why. Empty when everything was.' }
+      required: [posted, on_lines, problem]

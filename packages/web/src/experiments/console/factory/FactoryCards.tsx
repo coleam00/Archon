@@ -1,6 +1,6 @@
 /**
  * What board cards read beyond the item read, shared by every card list of a board: each of the
- * project's packs' graph and factory view, and the project's open asks by item. A card list
+ * project's packs' graph (with the words it gives), and the project's open asks by item. A card list
  * reads the run records and forge answers its own cards need in batches (`useCardList`). With no
  * provider (a test drawing a pack board alone) cards show what the item read alone gives.
  */
@@ -11,13 +11,13 @@ import { K } from '../store/keys';
 import {
   forgePending,
   getForgeSubjects,
-  getPackViewRead,
   getRunRecords,
   type ForgeSubjects,
   type RunRecord,
   type RunRecords,
 } from './api';
 import { CardsContext, useFactoryCards, type FactoryCards } from './cards-context';
+import { graphWords } from './lib/graph-view';
 import { issueNumber } from '../lib/item-key';
 import { itemAsksOf, type AskRead } from './lib/item-asks';
 import {
@@ -30,18 +30,13 @@ import {
   type CardProgress,
 } from './lib/item-card';
 
-/**
- * What one pack's reads gave: its graph's stages and its view, or that its graph could not be
- * read. A view that could not be read still gives the stages, so the board places by them, and
- * marks the cards unread.
- */
-type PackReadResult = (CardPack & { viewFailed: boolean }) | 'error';
+/** What one pack's read gave: its graph's stages and words, or that its graph could not be read. */
+type PackReadResult = CardPack | 'error';
 
 /**
- * One pack's graph and factory view, reported to the provider. The graph is read through the
- * board's own `K.packGraph` entry, so the stage columns and the cards share one read. The view
- * is asked for at the same time: the server answers both from one graph read
- * (`shareWhileRunning`, over its kept discovery), so neither waits on the other.
+ * One pack's graph, reported to the provider with the words it gives (`graphWords`). The graph
+ * is read through the board's own `K.packGraph` entry, so the stage columns and the cards share
+ * one read; the pack's view file is not a card's to read.
  */
 function PackRead({
   projectId,
@@ -53,18 +48,13 @@ function PackRead({
   onRead: (pack: string, result: PackReadResult) => void;
 }): null {
   const graph = useEntity(K.packGraph(projectId, pack), () => getPackGraph(projectId, pack));
-  const view = useEntity(K.packView(projectId, pack), () => getPackViewRead(projectId, pack));
-  const stages = graph.data?.stages;
+  const data = graph.data;
   const failed = graph.error !== undefined;
-  const viewFailed = view.error !== undefined;
-  const viewRead = view.data !== undefined;
-  // The map reads the whole view read under this key; a card reads only its view.
-  const viewData = view.data?.view ?? null;
   useEffect(() => {
     if (failed) onRead(pack, 'error');
-    else if (stages !== undefined && (viewRead || viewFailed))
-      onRead(pack, { stages, view: viewFailed ? null : viewData, viewFailed });
-  }, [failed, onRead, pack, stages, viewData, viewRead, viewFailed]);
+    // `graphWords` is kept per graph object, so the same graph reports the same words.
+    else if (data !== undefined) onRead(pack, { stages: data.stages, words: graphWords(data) });
+  }, [failed, onRead, pack, data]);
   return null;
 }
 
@@ -93,7 +83,7 @@ export function FactoryCardsProvider({
     // Cards read records once every pack has answered, so a card is never read under a pack
     // whose stages are still unknown and then read again.
     packs: packs !== null && packs.every(pack => read.has(pack)) ? readPacks : null,
-    packsError: [...read.values()].some(result => result === 'error' || result.viewFailed),
+    packsError: [...read.values()].some(result => result === 'error'),
     itemAsks,
   };
   return (
@@ -119,7 +109,7 @@ function recordsAsk(packs: ReadonlyMap<string, CardPack>, reads: readonly ItemRe
   for (const read of reads) {
     const pack = packOf(packs, read);
     for (const id of pack === null ? [] : runsToRead(pack, read)) runs.add(id);
-    for (const key of pack?.view == null ? [] : resultKeys(pack.view)) result.add(key);
+    for (const key of pack === null ? [] : resultKeys(pack.words)) result.add(key);
   }
   return { runs: [...runs].sort(), result: [...result] };
 }

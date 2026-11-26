@@ -1,9 +1,9 @@
 /**
  * The factory's structure, read from the pack graph (`GET /api/packs/{pack}/graph`): the steps
  * of a stage and the arrows between stages, each worded by the outcome or answer it carries:
- * the view file's label for the outcome or ask option where it gives one (DESIGN.md, COMBINED
- * direction). An outcome the file does not word reads as its value in words (`outcomeWords`);
- * `check:factory-view` reports it.
+ * the pack's label for the outcome or ask option where it gives one (its workflow's `display:`,
+ * `graph-view.ts`). An outcome the pack does not word reads as its value in words
+ * (`outcomeWords`); `archon validate` warns on it.
  *
  * Pure.
  */

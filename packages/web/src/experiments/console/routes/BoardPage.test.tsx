@@ -12,8 +12,8 @@ import { packBoard } from '../factory/lib/board-numbers';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import type { Project } from '../primitives/project';
 import type { ItemAsk } from '../primitives/run';
-import type { FactoryView } from '../factory/api';
-import { shippedFile, shippedGraph } from '../factory/curated.test-fixtures';
+import { graphWords } from '../factory/lib/graph-view';
+import { shippedGraph } from '../factory/curated.test-fixtures';
 import type { ItemRead, PackGraph } from '../skills/items';
 import { invalidate, set } from '../store/cache';
 import { K } from '../store/keys';
@@ -466,16 +466,16 @@ test('stages a pack groups share a column, and each card there says its own stag
     ['Make', ['issue-1', 'issue-2']],
     ['check', []],
   ]);
-  // No view file: the stage reads as its id in words, as the column header names it.
+  // The pack gives the stage no words: it reads as its id in words, as the column header names it.
   expect(page.querySelector('[data-item="issue-2"] [data-card-meta]')?.textContent).toMatch(
     /^Plan · /
   );
 });
 
-/** A pack board drawn with the pack's view file, as the board's cards read it. */
-function renderWithView(packGraph: PackGraph, view: FactoryView | null, reads: ItemRead[]) {
+/** A pack board drawn with the words its graph gives, as the board's cards read them. */
+function renderWithWords(packGraph: PackGraph, reads: ItemRead[]) {
   set(K.packGraph('web', 'flow'), packGraph);
-  const packs = new Map([['flow', { stages: packGraph.stages, view }]]);
+  const packs = new Map([['flow', { stages: packGraph.stages, words: graphWords(packGraph) }]]);
   return render(
     '/console/p/web/board',
     <CardsContext.Provider
@@ -486,7 +486,7 @@ function renderWithView(packGraph: PackGraph, view: FactoryView | null, reads: I
   );
 }
 
-test("a column header names its stages in the view file's words, and an ungrouped stage's column by its label", () => {
+test("a column header names its stages in the pack's words, and an ungrouped stage's column by its label", () => {
   // The shipped graph, with `stage-host` taken out of every group so it heads a column alone.
   const graph: PackGraph = {
     ...shippedGraph,
@@ -496,7 +496,7 @@ test("a column header names its stages in the view file's words, and an ungroupe
       stages: group.stages.filter(stage => stage !== 'stage-host'),
     })),
   };
-  const page = renderWithView(graph, shippedFile, [
+  const page = renderWithWords(graph, [
     item('issue-1', 'stage-build', 'running'),
     item('issue-2', 'stage-host', 'running'),
   ]);
@@ -508,8 +508,8 @@ test("a column header names its stages in the view file's words, and an ungroupe
   expect(host?.getAttribute('title')).toBe('stage-host');
 });
 
-test("a card in a column of several stages names its stage by the view file's label, not its id (#261)", () => {
-  const page = renderWithView({ ...shippedGraph, pack: 'flow' }, shippedFile, [
+test("a card in a column of several stages names its stage by the pack's label, not its id (#261)", () => {
+  const page = renderWithWords({ ...shippedGraph, pack: 'flow' }, [
     item('issue-1', 'stage-build', 'running'),
   ]);
   const column = page.querySelector('[data-stage="Plan and build"]');
@@ -519,13 +519,11 @@ test("a card in a column of several stages names its stage by the view file's la
   expect(meta).not.toContain('stage-build');
 });
 
-test("with no view file, a stage's column is headed by its id in words", () => {
+test('a stage the pack gives no words heads its column by its id in words', () => {
   const stages = graph.stages.map(stage =>
     stage.workflow === 'build' ? { ...stage, workflow: 'stage-build' } : stage
   );
-  const page = renderWithView({ ...graph, stages }, null, [
-    item('issue-1', 'stage-build', 'running'),
-  ]);
+  const page = renderWithWords({ ...graph, stages }, [item('issue-1', 'stage-build', 'running')]);
   const column = page.querySelector('[data-stage="stage-build"]');
   expect(column?.querySelector('h3')?.textContent).toBe('Stage build');
   expect(column?.querySelector('header p')?.textContent).toBe('Stage build');
@@ -702,15 +700,21 @@ function delivered(key: string): ItemRead {
   };
 }
 
-/** The board mounted with its pack's graph and a view that retires `deliver` as `retired`. */
-async function mountPlaced(reads: ItemRead[], retired: unknown[]) {
+/**
+ * The board mounted with its pack's graph, its `build` stage replacing the retired workflows
+ * `replaces` names (`display.replaces`).
+ */
+async function mountPlaced(reads: ItemRead[], replaces: string[]) {
   seedBoard(reads);
-  set(K.packGraph('web', 'flow'), graph);
-  set(K.packView('web', 'flow'), {
-    path: null,
-    view: { retired, stages: {} } as unknown as FactoryView,
-    problems: [],
-  });
+  const stages = graph.stages.map(stage =>
+    stage.workflow === 'build' && replaces.length > 0
+      ? {
+          ...stage,
+          display: { label: 'build', replaces: replaces.map(workflow => ({ workflow })) },
+        }
+      : stage
+  );
+  set(K.packGraph('web', 'flow'), { ...graph, stages });
   const board = await mountBoard(nothingFetched);
   const columns = (): string[][] =>
     [...board.container.querySelectorAll('[data-pack="flow"] [data-stage]')].map(stage => [
@@ -737,12 +741,6 @@ test("the board's columns are the groups the pack's document declares, through t
     ...graph,
     groups: [{ name: 'Make', blurb: 'x', stages: ['plan', 'build'], kind: 'build' }],
   });
-  // The view file carries no groups: a leftover `groups` key would be an unknown key it drops.
-  set(K.packView('web', 'flow'), {
-    path: null,
-    view: { stages: {} } as unknown as FactoryView,
-    problems: [],
-  });
   const board = await mountBoard(nothingFetched);
   try {
     expect(
@@ -765,11 +763,6 @@ test("a map link's ?group= brings an ungrouped stage's column into view by its i
   );
   seedBoard([item('issue-1', 'stage-build', 'running')]);
   set(K.packGraph('web', 'flow'), { ...graph, stages });
-  set(K.packView('web', 'flow'), {
-    path: null,
-    view: { stages: {} } as unknown as FactoryView,
-    problems: [],
-  });
   const board = await mountBoard(nothingFetched, '/console/p/web/board?group=stage-build');
   try {
     const column = board.container.querySelector('[data-stage="stage-build"]');
@@ -781,10 +774,10 @@ test("a map link's ?group= brings an ungrouped stage's column into view by its i
   }
 });
 
-test('an item on a retired workflow stands at the stage the view maps it to', async () => {
+test('an item on a retired workflow stands at the stage that replaces it', async () => {
   const board = await mountPlaced(
     [item('issue-1', 'plan', 'running'), delivered('issue-6')],
-    [{ workflow: 'deliver', stage: 'build' }]
+    ['deliver']
   );
   try {
     expect(board.columns()).toEqual([['plan', 'issue-1'], ['build', 'issue-6'], ['check']]);
@@ -798,14 +791,14 @@ test('an open item at no stage is set aside with the reason, never in a column',
   const board = await mountPlaced(
     [
       item('issue-1', 'plan', 'running'),
-      // Retired with no stage to place at.
+      // A retired workflow no stage replaces.
       delivered('issue-6'),
-      // A workflow the pack no longer has and the view does not retire.
+      // A workflow the pack no longer has and no stage replaces.
       item('issue-4', 'gone', 'queued'),
       // A run of no pack.
       item('issue-5', null, 'running'),
     ],
-    ['deliver']
+    []
   );
   try {
     expect(board.columns()).toEqual([['plan', 'issue-1'], ['build'], ['check']]);
@@ -833,7 +826,6 @@ test('the board filter finds a card by the issue title and the key the card prin
   const reads = [untitled('issue-2', 'plan'), untitled('issue-3', 'check')];
   seedBoard(reads);
   set(K.packGraph('web', 'flow'), graph);
-  set(K.packView('web', 'flow'), { path: null, view: null, problems: [] });
   // The titles the board's filter reads, and those each column's cards read.
   const titles = [issue(2, 'Asks show in full'), issue(3, 'Board furniture')];
   set(K.forgeTitles('web', [2, 3]), { issues: titles, changes: [] });
@@ -869,7 +861,7 @@ test('the board filter finds a card by the issue title and the key the card prin
   }
 });
 
-test('the graph, the view and the titles are asked for at once; the columns draw when the graph answers', async () => {
+test('the graph and the titles are asked for at once, and no view file; the columns draw when the graph answers', async () => {
   // Untitled issue-keyed items, whose cards ask the forge for their titles: one in a column,
   // and one in the decision strip.
   const failed = item('issue-3', 'check', 'failed');
@@ -886,19 +878,13 @@ test('the graph, the view and the titles are asked for at once; the columns draw
           resolve(json(graph));
         };
       });
-    if (url.includes('/view'))
-      return Promise.resolve(json({ path: null, view: null, problems: [] }));
     if (url.includes('/forge/subjects')) return Promise.resolve(json({ issues: [], changes: [] }));
     return nothingFetched(url);
   });
   try {
-    // While the graph read is out, nothing waits on it: the server answers the view from the
-    // same graph read, and the strip's card asks for its title, which needs only its item read.
-    expect([...asked].sort()).toEqual([
-      '/api/forge/subjects',
-      '/api/packs/flow/graph',
-      '/api/packs/flow/view',
-    ]);
+    // While the graph read is out, the strip's card asks for its title, which needs only its
+    // item read. The board reads its words from the graph: it never asks for the view file.
+    expect([...asked].sort()).toEqual(['/api/forge/subjects', '/api/packs/flow/graph']);
     expect(board.container.querySelectorAll('[data-stage]').length).toBe(0);
     await board.act(async () => {
       answerGraph();
@@ -906,7 +892,7 @@ test('the graph, the view and the titles are asked for at once; the columns draw
     });
     // The columns draw, and the column's card asks for its title.
     expect(board.container.querySelectorAll('[data-stage]').length).toBeGreaterThan(0);
-    expect(asked.slice(3)).toEqual(['/api/forge/subjects']);
+    expect(asked.slice(2)).toEqual(['/api/forge/subjects']);
   } finally {
     await board.unmount();
   }

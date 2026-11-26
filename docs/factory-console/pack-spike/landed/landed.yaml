@@ -1,0 +1,140 @@
+name: landed
+description: |
+  After a change of ours merged: is the branch it landed on still sound, and if not,
+  whose failure is it and what should happen? It reads the host and the project's land
+  policy. It merges, reverts and writes nothing itself. Since 2026-11-18 one result is
+  acted on: when the change broke the branch and the stage writes a work order, a binding
+  starts that order as new work on this run's item. Every other result is only recorded.
+
+model: ['@judge', medium]
+
+inputs:
+  item:
+    description: The work item as text.
+  change:
+    description: Where the change was proposed.
+  land_on:
+    default: ""
+    description: The branch this item's change landed on. Empty means the project's base branch. Passed on to the work order a break starts.
+
+# The check after a merge. `broken_here` starts a fix through a binding. The item's merge
+# is recorded, so the engine never lists it as stopped: every other outcome that needs an
+# operator (unclear, broken_before, not_landed, waiting) leaves an ask, made by the
+# `verdict` node, so it shows in attention. `fix` orders the work order as new work;
+# `dismiss` leaves it.
+# `observes: true`: its runs act on an item without being steps of it, so they never
+# stop, end or move the item, and never hide a stop on it. It can still leave asks.
+observes: true
+returns:
+  node: verdict
+  outcome: outcome
+  asks: asks
+  summary: why
+  options:
+    - id: fix
+      does: The work order this check wrote (or its finding, when it wrote none) is ordered as new work.
+      cost: A new item goes through triage and the rest of the factory.
+    - id: dismiss
+      does: Nothing more happens. The finding stays in this run's report.
+      cost: If the branch is broken, nothing fixes it.
+
+display:
+  label: Merged
+  short: The change is merged
+  blurb: The change is merged.
+  story: The factory checked the branch after the merge
+  outcomes:
+    broken_before: { label: broken before the merge }
+    broken_here: { label: broke the branch }
+    clear: { label: branch sound }
+    none: { label: nothing to check }
+    not_landed: { label: not merged }
+    unclear: { label: unclear }
+    waiting: { label: waiting on CI }
+  answers:
+    fix: { label: fix ordered }
+  phases:
+    - label: After the merge
+      cards:
+        - { title: Is the branch still sound, text: "Reads the branch after the merge, orders a fix when the change broke it, and asks you when it cannot tell", icon: shield-check, kind: agent, covers: [landed, verdict] }
+
+nodes:
+  - id: landed
+    display: { label: Checks the branch after the merge }
+    command: landed
+    mutates_checkout: false
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        outcome: { type: string, enum: [clear, broken_here, broken_before, unclear, waiting, not_landed, none] }
+        would: { type: string, enum: [nothing, fix_forward, roll_back, report, ask, wait] }
+        why: { type: string, description: 'Two or three sentences.' }
+        facts:
+          type: object
+          additionalProperties: false
+          description: 'What you read on the host, not what you were told.'
+          properties:
+            landed_at: { type: string, description: 'The commit the change landed as. Empty when it is not merged.' }
+            branch: { type: string, description: 'The branch it landed on.' }
+            checks: { type: string, description: 'The state of the checks the policy names at that commit.' }
+            before: { type: string, description: 'The state of the same checks at the commit just before. Empty when you did not need it.' }
+          required: [landed_at, branch, checks, before]
+        failures:
+          type: array
+          description: 'Each thing that failed at the landing commit. Empty when nothing did.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              check: { type: string }
+              what: { type: string, description: 'The test or step that failed.' }
+              evidence: { type: string, description: 'The lines of the log that show it.' }
+              whose: { type: string, enum: [this_change, earlier, flake, unknown] }
+            required: [check, what, evidence, whose]
+        candidates:
+          type: array
+          items: { type: string }
+          description: 'When several changes landed between two check runs: each change the failure may belong to. Empty otherwise.'
+        work_order: { type: string, description: 'When you would start a fix: the work order as text that stands alone. Empty otherwise.' }
+        for_next: { type: string, description: 'Anything the operator who reads this needs from you that has no field here.' }
+      required: [outcome, would, why, facts, failures, candidates, work_order, for_next]
+
+  # Turns an outcome that needs an operator into an ask, so it shows in attention.
+  - id: verdict
+    display: { label: Asks you when the branch needs a decision }
+    depends_on: [landed]
+    runtime: bun
+    mutates_checkout: false
+    with:
+      found: $landed.output
+    script: |
+      import { emit, input } from 'archon:script';
+      const f = JSON.parse(input('found'));
+      const needs = ['unclear', 'broken_before', 'not_landed', 'waiting'].includes(f.outcome);
+      const order = f.work_order || [f.why, ...(f.failures ?? []).map((x: any) => `${x.check}: ${x.what}`)].filter(Boolean).join('\n');
+      const failures = (f.failures ?? []).map((x: any) => `- ${x.check}: ${x.what} (${x.whose})`).join('\n');
+      emit({
+        ...f,
+        work_order: order,
+        asks: needs ? [{
+          question: `After this change merged, the check reads "${f.outcome}": ${f.why} Order a fix, or leave it?`,
+          context: [
+            `Branch ${f.facts?.branch || '(unknown)'} at ${f.facts?.landed_at || '(not merged)'}. Checks: ${f.facts?.checks || '(not read)'}.`,
+            failures ? `What failed:\n${failures}` : '',
+            (f.candidates ?? []).length ? `Changes it may belong to: ${f.candidates.join(', ')}` : '',
+            f.for_next,
+          ].filter(Boolean).join('\n\n'),
+          recommendation: f.would === 'fix_forward'
+            ? { option: 'fix', why: f.why }
+            : { option: null, why: `The check would ${f.would}; it has no basis to choose between fixing and leaving it.` },
+          artifacts: [],
+        }] : [],
+      });
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [clear, broken_here, broken_before, unclear, waiting, not_landed, none] }
+        why: { type: string }
+        work_order: { type: string }
+      required: [outcome, why, work_order]

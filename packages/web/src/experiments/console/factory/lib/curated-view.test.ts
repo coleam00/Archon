@@ -108,15 +108,17 @@ describe('the slim file over the af6d0b4a graph', () => {
     expect(columns.at(-1)?.tone).toBe('merged');
   });
 
-  test('a file that names no merged stage leaves the last in-flow stage there', () => {
-    const { merged: _named, ...file } = shippedFile;
-    const view = curatedView(file, shippedGraph);
+  test('a document that names no exit stage leaves the last in-flow stage there', () => {
+    const { exit: _named, ...document } = shippedGraph.document!;
+    const view = curatedView(shippedFile, { ...shippedGraph, document });
     expect([view.landed.stage, view.columns.at(-1)?.stages]).toEqual(['close', ['close']]);
   });
 
-  test('a stage the file gives no words is named by its id in words, not the raw id', () => {
-    const { 'stage-host': _host, ...stages } = shippedFile.stages;
-    const view = curatedView({ ...shippedFile, stages }, shippedGraph);
+  test('a stage the pack gives no words is named by its id in words, not the raw id', () => {
+    const stages = shippedGraph.stages.map(({ display, ...stage }) =>
+      stage.workflow === 'stage-host' ? stage : { ...stage, display }
+    );
+    const view = curatedView(shippedFile, { ...shippedGraph, stages });
     expect(view.stages.find(entry => entry.id === 'stage-host')?.label).toBe('Stage host');
   });
 });

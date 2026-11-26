@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import type { CuratedDrilldownCard as Card, CuratedView } from '../lib/curated-view';
 import { engineIdTitle, stepLabel } from '../lib/step-label';
 import { cardTone } from '../tones';
-import { ICONS, KINDS } from './drilldown-kinds';
+import { iconOf, kindOf } from './drilldown-kinds';
 
 /**
  * One card of a drill-down: its kind's colour along the top, its icon and kind, its title and
@@ -10,8 +10,8 @@ import { ICONS, KINDS } from './drilldown-kinds';
  * box is `.factory-card`'s (factory.css), tinted in its kind's colour.
  */
 export function DrilldownCard({ view, card }: { view: CuratedView; card: Card }): ReactElement {
-  const kind = KINDS[card.kind];
-  const Icon = ICONS[card.icon];
+  const kind = kindOf(card.kind);
+  const Icon = iconOf(card.icon);
   const workflow = card.covers[0]?.workflow;
   const step = card.covers[0]?.steps[0];
   // The schema holds `covers` to at least one step.

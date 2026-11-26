@@ -1,0 +1,83 @@
+name: plan
+description: |
+  Plan one work item: the ways it could be built, a recommendation, and the plan for a builder. Reads the project, changes nothing.
+
+model: ['@planner', large]
+
+inputs:
+  item:
+    description: The work item as text.
+  land_on:
+    default: ""
+    description: The branch this item's change lands on. Empty means the project's base branch. This stage passes it on.
+  judgment:
+    result_of: triage
+    description: What triage concluded about the item. Read from the item when the start does not pass it.
+  answers:
+    default: "None."
+    description: Decisions an operator already made on this item.
+  links:
+    default: "Nothing."
+    description: The items that had to land before this one.
+  sent_back:
+    default: "Nothing."
+    description: What the build or check run that sent this item back to planning ended with, as its result.
+
+# The engine defines the `asks` property, adds it to the plan node's output and opens what a
+# completed run leaves there on the item. So the node below does not declare it.
+# A plan that ends `stop` shows the item as stopped in attention, with `stop` as the reason.
+returns: { node: plan, outcome: outcome, asks: asks, summary: stop }
+
+display:
+  label: Plan
+  short: Plans how to build it
+  blurb: Works out how to build the item and writes the plan down.
+  outcomes:
+    ask: { label: asked you, story: Plan asked you before writing the approach }
+    planned: { label: planned, story: Plan wrote the approach }
+    stop: { label: Stopped at planning, story: Plan stopped it }
+  phases:
+    - label: Plan
+      cards:
+        - { title: Plan, text: Works out how to build the item and writes the plan down, icon: clipboard-list, kind: agent, covers: [plan] }
+
+nodes:
+  - id: plan
+    display: { label: Writes the plan }
+    command: plan
+    mutates_checkout: false
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        outcome: { type: string, enum: [planned, ask, stop] }
+        options:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              name: { type: string, description: 'smallest, complete, or a short name for a different way.' }
+              does: { type: string }
+              builds_on: { type: string, description: 'What already exists in the project that it uses.' }
+              size: { type: string, enum: [xs, s, m, l, xl], description: 'How far it reaches. xs: one place, a function or a file and its test. s: one part, a few files in one component. m: several parts of one area that have to change together. l: crosses areas, or changes something others depend on, such as a stored format, a public shape or a contract. xl: a new part of the system.' }
+              cost: { type: string, description: 'What choosing it costs.' }
+            required: [name, does, builds_on, size, cost]
+        recommend: { type: string, description: 'The name of the option you recommend, or none.' }
+        why: { type: string, description: 'One line: why this one.' }
+        plan: { type: string, description: 'The plan for a builder. Empty when there is none.' }
+        proves:
+          type: array
+          items: { type: string }
+          description: 'For each thing the item asks for, how the change will be shown to do it.'
+        reaches: { type: string, description: 'Who or what is meant to see or use the outcome, through which path, and what would show that it arrives there.' }
+        carried_by: { type: string, description: 'The existing primitive or owner that carries the outcome, where it lives, and why the change extends it and does not add beside it. Or: that nothing carries it, what you looked at, and where the new thing belongs.' }
+        disappears: { type: string, description: 'What the change removes or makes unnecessary: a branch, a guard, a copy of a rule, a special case, a superseded path. Nothing, when it only adds, with why no smaller shape exists.' }
+        not_doing:
+          type: array
+          items: { type: string }
+          description: 'Each thing next to the item that the change leaves alone, one a line, with why when it is not plain. Empty when nothing is near enough to tempt.'
+        stop: { type: string, description: 'Why it cannot be planned, and what has to happen first. Empty otherwise.' }
+        notes: { type: string, description: 'Anything worth saying that has no field here: caveats, doubts, things noticed.' }
+        for_next: { type: string, description: 'Anything the engineer who builds this needs from you that has no field here. Write it to them.' }
+      required: [outcome, options, recommend, why, plan, proves, reaches, carried_by, disappears, not_doing, stop, notes, for_next]

@@ -46,7 +46,7 @@ export function useStageTab(
 
 /**
  * One stage opened, as the Overview's modal shows it: its label and blurb, where items go from
- * it, then three tabs. "What this stage does" is the view file's summary, "Items here now" what
+ * it, then three tabs. "What this stage does" is the stage's own summary, "Items here now" what
  * sits in it, and "The real workflow" the steps of each workflow behind it, from the pack graph. The
  * caller holds the tab (`useStageTab`). `frame` lays out the head and the body; the modal
  * passes one that scrolls the body alone under a fixed head.
@@ -151,7 +151,7 @@ function TabBody({
     );
   return (
     <>
-      <p className={SOURCE}>The factory's summary of this stage, from its view file.</p>
+      <p className={SOURCE}>The factory's summary of this stage, from its workflow.</p>
       {stage.drilldown === undefined ? (
         <EmptyNote
           icon={BookOpen}

@@ -43,13 +43,19 @@ import {
   type PackDeclaration,
 } from '@archon/workflows/pack-settings';
 import { discoverInstalledForgePlugins } from './forge';
-import { checkGroups, loadPackDocument, ungroupedStages } from '@archon/workflows/pack-document';
+import {
+  checkGroups,
+  exitProblem,
+  loadPackDocument,
+  ungroupedStages,
+} from '@archon/workflows/pack-document';
+import { replacedStillPresent, unlabelled } from '@archon/workflows/pack-graph-words';
 import {
   PLUGIN_MANIFEST_FILE,
   unknownManifestKeys,
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
-import { readFile, stat } from 'node:fs/promises';
+import { access, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -154,6 +160,11 @@ export async function validateWorkflowsCommand(
   // The manifest is not a workflow, so the name filter does not apply to it.
   filteredResults.push(...(await manifestResults(source ?? pluginRoot)));
   filteredResults.push(...(await packDocumentResults(source ?? pluginRoot, workflowEntries)));
+  filteredResults = withDisplayIssues(
+    filteredResults,
+    await packDisplayIssues(source ?? pluginRoot, workflowEntries),
+    name
+  );
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -317,7 +328,7 @@ function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, Validat
 async function packStages(
   packDir: string,
   entries: readonly WorkflowWithSource[]
-): Promise<{ allowed: string[]; required: string[] }> {
+): Promise<{ allowed: string[]; required: string[]; graph?: ReturnType<typeof buildPackGraph> }> {
   const manifest = workflowPackManifestSchema.safeParse(
     JSON.parse(await readFile(join(packDir, PLUGIN_MANIFEST_FILE), 'utf-8'))
   );
@@ -331,24 +342,24 @@ async function packStages(
     );
     return { allowed: names, required: [] };
   }
-  const inFlow = buildPackGraph({
+  const graph = buildPackGraph({
     packKey: key ?? '',
     stages: own.map(entry => entry.workflow),
     declared,
     installed: [],
     workflows: entries.map(entry => entry.workflow),
     discoveryErrors: [],
-  })
-    .stages.filter(stage => stage.inFlow)
-    .map(stage => stage.workflow);
-  return { allowed: inFlow, required: inFlow };
+  });
+  const inFlow = graph.stages.filter(stage => stage.inFlow).map(stage => stage.workflow);
+  return { allowed: inFlow, required: inFlow, graph };
 }
 
 /**
  * What is wrong with the pack's document (the manifest's `document`, else its
  * `how-it-works.md`): errors when it is missing or does not read, when a group names a stage
- * that is not in the pack's flow or that another group holds, and when an in-flow stage is in
- * no group (`pack-document.ts`, the checks `archon pack graph` makes). A frontmatter key this
+ * that is not in the pack's flow or that another group holds, when an in-flow stage is in
+ * no group, and when `exit` names a stage not in the flow (`pack-document.ts`, the checks
+ * `archon pack graph` makes). A frontmatter key this
  * Archon does not read is a warning, as an unknown manifest key is.
  */
 async function packDocumentResults(
@@ -365,6 +376,7 @@ async function packDocumentResults(
     ...read.problems,
     ...checkGroups(read.groups, stages.allowed).problems,
     ...ungroupedStages(read.groups, stages.required),
+    ...exitProblem(read.exit, stages.allowed),
   ];
   const issues = [
     ...errors.map(
@@ -387,6 +399,64 @@ async function packDocumentResults(
   return issues.length > 0
     ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
     : [];
+}
+
+/**
+ * What the pack's in-flow stages leave a reader without words for, as warnings (a reader shows
+ * the id instead), and a `display.replaces` naming a stage the pack still has, as an error
+ * (`pack-graph-words.ts`), by the stage's workflow name. A folder with no pack manifest, or a
+ * pack with no flow, has nothing to check.
+ */
+async function packDisplayIssues(
+  packDir: string,
+  entries: readonly WorkflowWithSource[]
+): Promise<Map<string, ValidationIssue[]>> {
+  const byStage = new Map<string, ValidationIssue[]>();
+  try {
+    await access(join(packDir, PLUGIN_MANIFEST_FILE));
+  } catch {
+    return byStage;
+  }
+  let graph: ReturnType<typeof buildPackGraph> | undefined;
+  try {
+    ({ graph } = await packStages(packDir, entries));
+  } catch {
+    // A manifest that does not read is reported by `manifestResults`.
+    return byStage;
+  }
+  if (graph === undefined) return byStage;
+  const add = (stage: string, issue: ValidationIssue): void => {
+    byStage.set(stage, [...(byStage.get(stage) ?? []), issue]);
+  };
+  for (const { stage, message, hint } of unlabelled(graph))
+    add(stage, { level: 'warning', field: 'display', message, hint });
+  for (const { stage, message, hint } of replacedStillPresent(graph))
+    add(stage, { level: 'error', field: 'display', message, hint });
+  return byStage;
+}
+
+/**
+ * `results` with each stage's display issues added to its workflow's own result, so a stage
+ * reads as one entry. A stage with no result of its own gets one, unless `name` filters it out.
+ */
+function withDisplayIssues(
+  results: WorkflowValidationResult[],
+  byStage: ReadonlyMap<string, ValidationIssue[]>,
+  name: string | undefined
+): WorkflowValidationResult[] {
+  const merged = results.map(result => {
+    const issues = byStage.get(result.workflowName);
+    return issues === undefined
+      ? result
+      : makeWorkflowResult(result.workflowName, [...result.issues, ...issues], result.filename);
+  });
+  for (const [stage, issues] of byStage)
+    if (
+      !results.some(result => result.workflowName === stage) &&
+      (name === undefined || name === stage)
+    )
+      merged.push(makeWorkflowResult(stage, issues));
+  return merged;
 }
 
 /**

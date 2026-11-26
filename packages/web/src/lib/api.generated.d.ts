@@ -4301,7 +4301,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** The factory view a pack ships (.shared/factory-view.json), or null, with what is wrong with it against the pack's graph */
+    /** The view file a pack ships (.shared/factory-view.json), its How it works explainer, or null, with what is wrong with it against the pack's graph */
     get: {
       parameters: {
         query: {
@@ -6494,6 +6494,65 @@ export interface components {
       deprecated?: {
         message: string;
       };
+      display?: {
+        label: string;
+        short?: string;
+        blurb?: string;
+        story?:
+          | string
+          | {
+              withChange: string;
+              withoutChange: string;
+            };
+        outcomes?: {
+          [key: string]: {
+            label?: string;
+            story?:
+              | string
+              | {
+                  withChange: string;
+                  withoutChange: string;
+                };
+          };
+        };
+        answers?: {
+          [key: string]: {
+            label: string;
+          };
+        };
+        phases?: {
+          label: string;
+          cards: {
+            title: string;
+            text: string;
+            icon: string;
+            kind: string;
+            covers: string[];
+          }[];
+        }[];
+        marks?: {
+          node: string;
+          outcome: string;
+          means: string;
+        }[];
+        results?: {
+          [key: string]: string;
+        };
+        replaces?: {
+          workflow: string;
+          loops?: {
+            [key: string]: string;
+          };
+          marks?: {
+            node: string;
+            outcome: string;
+            means: string;
+          }[];
+          results?: {
+            [key: string]: string;
+          };
+        }[];
+      };
       nodes: components['schemas']['DagNode'][];
       result?: {
         outcome?: string;
@@ -6514,6 +6573,10 @@ export interface components {
     DagNode: {
       id: string;
       description?: string;
+      display?: {
+        label: string;
+        text?: string;
+      };
       depends_on?: string[];
       when?: string;
       /** @enum {string} */
@@ -13166,6 +13229,15 @@ export interface components {
             startsNothing: boolean;
             ends: boolean;
             stops: boolean;
+            display?: {
+              label?: string;
+              story?:
+                | string
+                | {
+                    withChange: string;
+                    withoutChange: string;
+                  };
+            };
           }[];
         } | null;
         observes: boolean;
@@ -13183,7 +13255,59 @@ export interface components {
           fanOut: {
             workflow: string;
           } | null;
+          display?: {
+            label: string;
+            text?: string;
+          };
         }[];
+        display?: {
+          label: string;
+          short?: string;
+          blurb?: string;
+          story?:
+            | string
+            | {
+                withChange: string;
+                withoutChange: string;
+              };
+          answers?: {
+            [key: string]: {
+              label: string;
+            };
+          };
+          phases?: {
+            label: string;
+            cards: {
+              title: string;
+              text: string;
+              icon: string;
+              kind: string;
+              covers: string[];
+            }[];
+          }[];
+          marks?: {
+            node: string;
+            outcome: string;
+            means: string;
+          }[];
+          results?: {
+            [key: string]: string;
+          };
+          replaces?: {
+            workflow: string;
+            loops?: {
+              [key: string]: string;
+            };
+            marks?: {
+              node: string;
+              outcome: string;
+              means: string;
+            }[];
+            results?: {
+              [key: string]: string;
+            };
+          }[];
+        };
       }[];
       entries: {
         binding: string;
@@ -13195,6 +13319,10 @@ export interface components {
         path: string;
         problems: string[];
         text: string;
+        words?: {
+          [key: string]: string;
+        };
+        exit?: string;
       } | null;
       metricViews: {
         names: {
@@ -13341,6 +13469,10 @@ export interface components {
           fanOut: {
             workflow: string;
           } | null;
+          display?: {
+            label: string;
+            text?: string;
+          };
         }[];
       }[];
       discoveryErrors: {
@@ -13354,129 +13486,7 @@ export interface components {
       view: {
         /** @enum {number} */
         version: 1;
-        title: string;
         summary: string;
-        stages: {
-          [key: string]: {
-            label: string;
-            short?: string;
-            blurb: string;
-            steps?: {
-              [key: string]: string;
-            };
-            drilldown?: {
-              phases: {
-                label: string;
-                cards: {
-                  title: string;
-                  text: string;
-                  /** @enum {string} */
-                  icon:
-                    | 'inbox'
-                    | 'scale'
-                    | 'link'
-                    | 'ruler'
-                    | 'scissors'
-                    | 'database'
-                    | 'clipboard-list'
-                    | 'pencil'
-                    | 'wrench'
-                    | 'git-branch'
-                    | 'search-code'
-                    | 'flask-conical'
-                    | 'monitor-check'
-                    | 'gavel'
-                    | 'message-square'
-                    | 'circle-alert'
-                    | 'git-pull-request'
-                    | 'flag'
-                    | 'send'
-                    | 'shield-check'
-                    | 'git-merge';
-                  /** @enum {string} */
-                  kind: 'agent' | 'check' | 'script' | 'you';
-                  covers: string[];
-                }[];
-              }[];
-            };
-          };
-        };
-        outcomes?: {
-          [key: string]: {
-            label?: string;
-            story?:
-              | string
-              | {
-                  withChange: string;
-                  withoutChange: string;
-                };
-            /** @enum {string} */
-            reads?: 'ended' | 'parked' | 'awaits' | 'returned';
-            next?: string;
-          };
-        };
-        answers?: {
-          [key: string]: {
-            label?: string;
-            starts?: string;
-          };
-        };
-        words?: {
-          round?: string;
-          rounds?: string;
-          sentBack?: string;
-          parked?: string;
-          workOrder?: string;
-          workOrders?: string;
-        };
-        retired?: (
-          | string
-          | {
-              workflow: string;
-              stage: string;
-            }
-        )[];
-        rounds?:
-          | {
-              workflow: string;
-              loop: string;
-            }
-          | {
-              workflow: string;
-              round: string;
-              allowance: string;
-            }
-          | (
-              | {
-                  workflow: string;
-                  loop: string;
-                }
-              | {
-                  workflow: string;
-                  round: string;
-                  allowance: string;
-                }
-            )[];
-        returns?: {
-          workflow: string;
-          node: string;
-          outcome: string;
-        }[];
-        approves?: {
-          workflow: string;
-          node: string;
-          outcome: string;
-        }[];
-        change?:
-          | {
-              workflow: string;
-              pointer: string;
-            }
-          | {
-              workflow: string;
-              pointer: string;
-            }[];
-        merged?: string;
         howItWorks: {
           title: string;
           caption: string;
@@ -13532,7 +13542,7 @@ export interface components {
       } | null;
       problems: {
         /** @enum {string} */
-        kind: 'unreadable' | 'invalid' | 'unknown' | 'dropped' | 'retired' | 'unworded';
+        kind: 'unreadable' | 'unknown' | 'dropped';
         path: (string | number)[];
         message: string;
       }[];

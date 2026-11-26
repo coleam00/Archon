@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { checkGroups, loadPackDocument, ungroupedStages } from './pack-document';
+import { checkGroups, exitProblem, loadPackDocument, ungroupedStages } from './pack-document';
 
 const track = trackTempRoots();
 
@@ -106,6 +106,28 @@ describe("a pack's document", () => {
       'colour',
       'groups[0].colour',
     ]);
+  });
+});
+
+describe("a document's words and exit", () => {
+  test('are read as written, and an exit not in flow is a problem', async () => {
+    const read = await loadPackDocument(
+      await pack(
+        'docs/how.md',
+        '---\nwords:\n  round: check round\n  sentBack: sent back\nexit: landed\n---\n# How\n'
+      )
+    );
+    expect(read).toMatchObject({
+      words: { round: 'check round', sentBack: 'sent back' },
+      exit: 'landed',
+      problems: [],
+      warnings: [],
+    });
+    expect(exitProblem('landed', ['plan', 'landed'])).toEqual([]);
+    expect(exitProblem('landed', ['plan'])).toEqual([
+      "exit 'landed' is not a stage of the pack's flow",
+    ]);
+    expect(exitProblem(undefined, [])).toEqual([]);
   });
 });
 

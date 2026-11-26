@@ -15,8 +15,8 @@ import {
   standingRun,
   type OutcomeWords,
 } from '../../routes/board/standing';
-import type { FactoryView } from '../api';
-import { retiredOf, type PackGraphStage } from './item-card';
+import type { FactoryWords } from './graph-view';
+import type { PackGraphStage } from './item-card';
 
 /** How many local calendar days the Merged column lists, today included. */
 export const MERGED_DAYS = 7;
@@ -50,7 +50,7 @@ export const isOrder = (read: ItemRead): boolean =>
 
 export interface SetAside {
   read: ItemRead;
-  /** Why it is off the board, in the engine's facts and the view's words. */
+  /** Why it is off the board, in the engine's facts and the pack's words. */
   why: string;
   /** When its last run ended; null when that is not recorded. */
   since: string | null;
@@ -105,11 +105,15 @@ export type Place = (read: ItemRead) => string | undefined;
 
 /**
  * The one placement rule the Board and the Overview share: the in-flow stage `stageAt` puts an
- * item at, given the pack graph's stages and its view's `retired` (a retired workflow's runs
- * place where the view maps them). Undefined for an item at no stage of the flow.
+ * item at, given the pack graph's stages and the retired workflows its stages replace
+ * (`graph-view.ts`: a retired workflow's runs place at the stage that replaces it). Undefined
+ * for an item at no stage of the flow.
  */
-export function placeFor(stages: readonly PackGraphStage[], view: FactoryView | null): Place {
-  const retired = retiredOf(view);
+export function placeFor(
+  stages: readonly PackGraphStage[],
+  words: Pick<FactoryWords, 'retired'>
+): Place {
+  const { retired } = words;
   const inFlow = new Set(stages.filter(stage => stage.inFlow).map(stage => stage.workflow));
   return read => {
     const at = stageAt(read, stages, retired);

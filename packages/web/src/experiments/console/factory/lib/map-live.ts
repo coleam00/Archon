@@ -60,7 +60,7 @@ export function stageLive(
   /** The graph's stages, which place a run that recorded no workflow name (`stageAt`). */
   graphStages: PackGraph['stages'] | undefined,
   asks: AskRead | null,
-  /** The view's retired workflows, which place their runs' items (`stageAt`). */
+  /** The retired workflows the pack's stages replace, which place their runs' items (`stageAt`). */
   retired: readonly Retired[] = []
 ): MapLive {
   const stages = new Map<string, StageLive>(

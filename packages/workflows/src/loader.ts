@@ -26,6 +26,7 @@ import {
   parseBetas,
   parseContainerPolicy,
   parseDeprecation,
+  parseDisplay,
   parseFallbackModel,
   parseWorkflowModel,
   inputEnvKeyCollision,
@@ -248,6 +249,7 @@ interface WorkflowFields {
   readonly result: WorkflowDefinition['result'];
   readonly observes: boolean | undefined;
   readonly deprecated: WorkflowDefinition['deprecated'];
+  readonly display: WorkflowDefinition['display'];
 }
 
 /**
@@ -311,6 +313,8 @@ function parseWorkflowFields(
   if ('error' in returns) return returns.error;
   const observes = parseObserves(raw.observes);
   if ('error' in observes) return observes.error;
+  const display = parseDisplay(raw.display);
+  if ('error' in display) return display.error;
   const effort = resolveEffort(
     raw.effort,
     modelReasoningEffort,
@@ -346,6 +350,7 @@ function parseWorkflowFields(
     result: returns.value?.result,
     observes: observes.value,
     deprecated: deprecated.value,
+    display: display.value,
   };
 }
 
@@ -395,6 +400,7 @@ function runPolicies(fields: WorkflowFields): Partial<WorkflowDefinition> {
     ...(fields.result !== undefined ? { result: fields.result } : {}),
     ...(fields.observes === true ? { observes: true } : {}),
     ...(fields.deprecated !== undefined ? { deprecated: fields.deprecated } : {}),
+    ...(fields.display !== undefined ? { display: fields.display } : {}),
   };
 }
 

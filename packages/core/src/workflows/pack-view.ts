@@ -1,8 +1,8 @@
 /**
- * The factory view a pack ships (`<pack>/.shared/factory-view.json`, `schemas/factory-view.ts`)
- * for the project at `cwd`, read entry by entry and reconciled with the pack's graph
- * (`servedFactoryView`): an entry that does not read or names what the graph lacks is left out
- * and listed, the rest served. It is read through `readPackDeclarations` from the same copy of
+ * The view file a pack ships (`<pack>/.shared/factory-view.json`, `schemas/factory-view.ts`),
+ * its How it works explainer, for the project at `cwd`, read and reconciled with the pack's
+ * graph (`servedFactoryView`): a key it does not have, or a stage or edge its picture names that
+ * the graph lacks, is left out and listed, the rest served. It is read through `readPackDeclarations` from the same copy of
  * the pack the graph was read from. `GET /api/packs/{pack}/view` serves it.
  */
 import { FACTORY_VIEW_PATH } from '@archon/workflows/factory-view-check';

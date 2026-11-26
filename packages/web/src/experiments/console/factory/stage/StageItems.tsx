@@ -51,7 +51,7 @@ export function ItemsHere({
   empty,
 }: {
   projectId: string;
-  /** The view file's words for stages and outcomes. */
+  /** The pack's words for stages and outcomes. */
   view: Pick<CuratedView, 'stageLabels' | 'outcomeLabels'>;
   live: StageRead;
   /** What it says when nothing is in the stage. */

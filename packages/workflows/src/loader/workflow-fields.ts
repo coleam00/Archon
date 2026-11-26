@@ -5,6 +5,7 @@ import { INPUT_NAME_PATTERN, inputEnvKey } from '../schemas/node-bindings';
 import type { EffortLevel } from '../schemas/effort';
 import { modelRefSchema, type WorkflowModelRef } from '../schemas/model-binding';
 import { declaredAskOptionsSchema } from '../schemas/ask-option';
+import { workflowDisplaySchema, type WorkflowDisplay } from '../schemas/display';
 import {
   resourceNameSchema,
   workflowResourceSchema,
@@ -386,6 +387,23 @@ export function parseReturns(
     ...(summary === undefined ? {} : { summary }),
   };
   return { value: { node, result: Object.keys(result).length === 0 ? undefined : result } };
+}
+
+/**
+ * Parse optional `display:`, the workflow's words for a person. Malformed REJECTS, and an
+ * unknown key at any level is refused rather than stripped: a misspelt key would otherwise
+ * show no words without saying why. Its outcome keys are checked against the declared
+ * outcome with the result contract (`validateWorkflowResultContract`), where the outcome's
+ * values are known.
+ */
+export function parseDisplay(raw: unknown): ParsedField<WorkflowDisplay> {
+  if (raw === undefined) return { value: undefined };
+  const parsed = workflowDisplaySchema.safeParse(raw);
+  if (!parsed.success)
+    return {
+      error: `Invalid 'display': expected { label, short?, blurb?, story?, outcomes?, answers?, phases?, marks?, results?, replaces? } (${z.prettifyError(parsed.error)})`,
+    };
+  return { value: parsed.data };
 }
 
 /** `resource: build` or `resource: { name: build, capacity: 3 }`, as one shape. */

@@ -1,18 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { readFactoryView } from './factory-view-read';
 
-/** A file that reads whole: two stages, one outcome, and a How it works root. */
+/** A file that reads whole: a summary and a How it works root. */
 function file(): Record<string, unknown> {
   return {
     version: 1,
-    title: 'Factory',
     summary: 'Work comes in, gets built, lands.',
-    stages: {
-      make: { label: 'Make', blurb: 'Makes it.' },
-      land: { label: 'Land', blurb: 'Lands it.' },
-    },
-    outcomes: { 'make:done': { label: 'made' } },
-    rounds: { workflow: 'make', round: '/round', allowance: '/allowance' },
     howItWorks: {
       title: 'How it works',
       caption: 'x',
@@ -42,75 +35,63 @@ const listed = (r: ReturnType<typeof readFactoryView>): string[] =>
 test('a whole file reads with no problem', () => {
   const r = read(() => undefined);
   expect(r.problems).toEqual([]);
-  expect(Object.keys(r.view?.stages ?? {})).toEqual(['make', 'land']);
+  expect(r.view?.summary).toBe('Work comes in, gets built, lands.');
 });
 
 describe('a key the schema does not know is dropped, and the rest reads', () => {
-  test("an older file's hand-placed `map`", () => {
-    const r = read(f => void (f.map = { cards: [{ id: 'make', stages: ['make'] }] }));
-    expect(listed(r)).toEqual(['unknown map']);
+  test("an older file's words and declarations: the pack's workflows carry them now", () => {
+    const r = read(f => {
+      f.title = 'Factory';
+      f.stages = { make: { label: 'Make', blurb: 'Makes it.' } };
+      f.rounds = { workflow: 'make', round: '/round', allowance: '/allowance' };
+    });
+    expect(listed(r)).toEqual(['unknown title', 'unknown stages', 'unknown rounds']);
     expect(r.view).not.toBeNull();
-    expect(r.view && 'map' in r.view).toBe(false);
+    expect(Object.keys(r.view ?? {})).toEqual(['version', 'summary', 'howItWorks']);
   });
 
-  test('a misspelt key inside a stage keeps the stage', () => {
+  test("each old key's message says where it moved or that it was removed; an invented key is just unknown", () => {
+    const old = [
+      'title',
+      'stages',
+      'outcomes',
+      'answers',
+      'words',
+      'retired',
+      'rounds',
+      'returns',
+      'approves',
+      'change',
+      'merged',
+    ];
     const r = read(f => {
-      (f.stages as Record<string, Record<string, unknown>>).make!.lable = 'Typo';
+      for (const key of old) f[key] = {};
+      f.colour = 'blue';
     });
-    expect(listed(r)).toEqual(['unknown stages.make.lable']);
-    expect(r.view?.stages.make).toEqual({ label: 'Make', blurb: 'Makes it.' });
+    const said = Object.fromEntries(r.problems.map(p => [String(p.path[0]), p.message]));
+    // Every top-level key the shipped pre-#277 file had has a stated fate.
+    for (const key of old) expect(said[key]).toMatch(/any more: (moved|removed): /);
+    expect(said.title).toContain('removed: nothing reads it; delete it');
+    expect(said.title).not.toContain('display:');
+    expect(said.stages).toContain("its workflow's display: block");
+    expect(said.words).toContain("the pack document's front matter (`words`)");
+    expect(said.merged).toContain("the pack document's front matter (`exit`)");
+    expect(said.colour).toBe('is not a key a view file has');
   });
-});
 
-describe('an entry that fails its schema drops alone', () => {
-  test('an over-long label drops only its stage', () => {
+  test('a misspelt key inside the picture keeps the picture', () => {
     const r = read(f => {
-      (f.stages as Record<string, Record<string, unknown>>).make!.label = 'x'.repeat(81);
+      (f.howItWorks as Record<string, unknown>).captoin = 'Typo';
     });
-    expect(listed(r)).toEqual(['invalid stages.make.label']);
-    expect(Object.keys(r.view?.stages ?? {})).toEqual(['land']);
-  });
-
-  test('a bad outcome key drops only that outcome', () => {
-    const r = read(f => void (f.outcomes = { 'make:done': { label: 'made' }, nocolon: {} }));
-    expect(listed(r)).toEqual(['invalid outcomes.nocolon']);
-    expect(Object.keys(r.view?.outcomes ?? {})).toEqual(['make:done']);
-  });
-
-  test('a list entry drops alone, and one of a one-or-list source keeps its form', () => {
-    const r = read(f => {
-      f.rounds = [
-        { workflow: 'make', round: '/round', allowance: '/allowance' },
-        { workflow: 'x' },
-      ];
-    });
-    expect(listed(r)).toEqual(['invalid rounds.1']);
-    expect(r.view?.rounds).toEqual([
-      { workflow: 'make', round: '/round', allowance: '/allowance' },
-    ]);
-    expect(read(() => undefined).view?.rounds).toEqual({
-      workflow: 'make',
-      round: '/round',
-      allowance: '/allowance',
-    });
-  });
-
-  test("an older file's groups are an unknown key: the pack's document declares them, and the file still draws", () => {
-    const r = read(
-      f => void (f.groups = [{ name: 'Build', blurb: 'x', stages: ['make', 'land'] }])
-    );
-    expect(listed(r)).toEqual(['unknown groups']);
-    expect(r.view).not.toBeNull();
-    expect(r.view && 'groups' in r.view).toBe(false);
-    expect(Object.keys(r.view?.stages ?? {})).toEqual(['make', 'land']);
+    expect(listed(r)).toEqual(['unknown howItWorks.captoin']);
+    expect(r.view?.howItWorks.caption).toBe('x');
   });
 });
 
 describe('a file whose envelope does not read has no view', () => {
   test.each<[string, (f: Record<string, unknown>) => void]>([
     ['a wrong version', f => void (f.version = 2)],
-    ['no title', f => void delete f.title],
-    ['stages that are not an object', f => void (f.stages = [])],
+    ['no summary', f => void delete f.summary],
     ['no How it works', f => void delete f.howItWorks],
   ])('%s', (_name, edit) => {
     const r = read(edit);

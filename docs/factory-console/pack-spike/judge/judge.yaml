@@ -1,0 +1,137 @@
+name: judge
+description: |
+  Decide what should happen to one work item, the way its maintainers would:
+  the options that realistically apply, a recommendation and why. Reads the
+  project, changes nothing.
+
+model: ['@judge', medium]
+
+inputs:
+  item:
+    description: >-
+      The work item as text: its title, its body, and the discussion on it.
+  triage_policy:
+    default: ""
+    description: The pack setting of the same name, declared here so a workflow that includes this stage can pass it through.
+  members:
+    default: "[]"
+    description: The other members of the work order or split this item is part of, as JSON, each with its `key` and `title`. Empty when it is part of none.
+  depends_on:
+    default: "[]"
+    description: Keys of the items the order says must land before this one, as JSON. Empty when none.
+  admit_policy:
+    default: ""
+    description: The pack setting of the same name, declared here so a workflow that includes this block can pass it through.
+
+returns: judge
+
+nodes:
+  - id: judge
+    display: { label: Decides whether to build }
+    command: judge
+    mutates_checkout: false
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        recommend:
+          type: string
+          enum: &verbs [build, narrow, split, shape, recipe, native, fold, park, deprecate, decline, close]
+          description: 'The option you recommend. It is one of the options below.'
+        why: { type: string, description: 'One line: why this one.' }
+        options:
+          type: array
+          description: 'The two or three that realistically apply, the recommended one among them.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              verb: { type: string, enum: *verbs }
+              does: { type: string, description: 'What happens to the item under this option.' }
+              cost: { type: string, description: 'What choosing it costs.' }
+            required: [verb, does, cost]
+        summary: { type: string, description: 'For a maintainer who has not read the item.' }
+        size:
+          type: string
+          enum: [xs, s, m, l, xl, none]
+          description: 'For build or narrow: how far the smallest change that meets it reaches. xs: one place, a function or a file and its test. s: one part, a few files in one component. m: several parts of one area that have to change together. l: crosses areas, or changes something others depend on, such as a stored format, a public shape or a contract. xl: a new part of the system. Otherwise none.'
+        cites:
+          type: array
+          items: { type: string }
+          description: 'What the result rests on: files, docs, commits, other items.'
+        notes: { type: string, description: 'Anything worth saying that has no field here: caveats, doubts, things noticed.' }
+        open_questions:
+          type: array
+          items: { type: string }
+          description: 'For shape: what a maintainer has to decide before this can be planned, the questions that decide the most first. Otherwise empty.'
+        for_next: { type: string, description: 'Anything the engineer who plans this item needs from you that has no field here. Write it to them.' }
+      required: [recommend, why, options, summary, size, cites, notes, open_questions, for_next]
+
+  # Shadow measurement, 2026-11-16: may this item start without an operator? Recorded in the
+  # run and read by nothing. It is not part of what triage returns and starts no stage.
+  # Nothing is admitted automatically: every item starts because an operator ordered it.
+  # The `admitted` node below records what the judgment would have done, so the prompt
+  # and the project's admit policy can be tuned against what then happened to the item.
+  - id: admit
+    display: { label: Would it start on its own }
+    command: admit
+    model: ['@judge', medium]
+    mutates_checkout: false
+    depends_on: [judge]
+    when: "$judge.output.recommend == 'build' || $judge.output.recommend == 'narrow'"
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        admit: { type: string, enum: [auto, ask] }
+        criterion: { type: string, description: 'The line of the policy that decided it, or: all hold. When there is no policy: no policy.' }
+        why: { type: string, description: 'One or two sentences.' }
+        asks:
+          type: array
+          description: 'When it is an ask: the one question you would put to the operator. Empty when auto.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              question: { type: string }
+              context: { type: string }
+              options:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    id: { type: string, description: 'kebab-case, one token, such as keep-the-flag. The answer names it.' }
+                    does: { type: string }
+                    cost: { type: string }
+                  required: [id, does, cost]
+              recommendation:
+                type: object
+                additionalProperties: false
+                properties:
+                  option: { type: string, description: 'The id of the option you would take. It is one of the options above.' }
+                  why: { type: string, description: 'Why that one. If you are not sure, say what would change your mind.' }
+                required: [option, why]
+            required: [question, context, options, recommendation]
+        sure: { type: string, enum: [high, medium, low] }
+      required: [admit, criterion, why, asks, sure]
+
+  # What admit would have done, as records for `archon metrics`: one per item, latest wins.
+  - id: admitted
+    display: { label: Records the admit measurement }
+    depends_on: [admit]
+    runtime: bun
+    mutates_checkout: false
+    with:
+      admit: $admit.output
+    script: |
+      import { emit, input, item } from 'archon:script';
+      let said = '';
+      try { said = JSON.parse(input('admit') || '{}').admit ?? ''; } catch {}
+      const subject = item()?.item.key ?? null;
+      const count = (name: string, value: number) => ({ name, unit: 'items', subject, kind: 'count', value });
+      emit({
+        would: said,
+        metrics: said ? [count('sf.admit_would_start', said === 'auto' ? 1 : 0), count('sf.admit_would_ask', said === 'ask' ? 1 : 0)] : [],
+      });
+    output_format: { type: object }

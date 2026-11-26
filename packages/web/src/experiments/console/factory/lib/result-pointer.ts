@@ -1,6 +1,6 @@
 /**
- * The value at a JSON pointer (RFC 6901) in a run's result. The pointers come from the view
- * file, never from a run's prose; the result is the run's structured `returns:` value.
+ * The value at a JSON pointer (RFC 6901) in a run's result. The pointers come from the pack's
+ * `display.results`, never from a run's prose; the result is the run's structured `returns:` value.
  */
 import type { RunRecord } from '../api';
 

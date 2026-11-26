@@ -16,6 +16,14 @@ groups:
     blurb: Gate, merge, and what follows the merge
     kind: merge
     stages: [landgate, land, landed, discoveries, close]
+words:
+  round: check round
+  rounds: check rounds
+  sentBack: sent back
+  parked: Parked
+  workOrder: work order
+  workOrders: work orders
+exit: landed
 ---
 # How the factory works
 

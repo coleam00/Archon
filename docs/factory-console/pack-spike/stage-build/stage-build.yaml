@@ -1,0 +1,141 @@
+name: stage-build
+description: |
+  Delivery as three stages, stage one: the builder makes the planned change, or, when a
+  check, the host or an operator sent it back, continues it in the session it last had on
+  this item. One run. The pack's bindings start the check or the host round after it.
+
+inputs:
+  item:
+    description: The work item as text.
+  plan:
+    result_of: plan
+    description: What plan concluded, as its result. Read from the item when the start does not pass it.
+  land_on:
+    default: ""
+    description: The branch this item's change lands on. Empty means the project's base branch.
+  answers:
+    default: "None."
+    description: Decisions an operator already made on this item.
+  returned:
+    default: "null"
+    description: What a check, the host or an asking stage returned for the builder to act on. `null` on a first build.
+  next:
+    default: check
+    description: The stage that looks at the change after this build. `host` when the host returned it, so our own checks do not run again. `land` when the land stage found it behind its landing branch, so the catch-up stage looks at it.
+
+# The options every ask of this stage offers. The id an operator chooses decides what starts
+# next: the pack's asks-settled bindings name them.
+returns:
+  node: end
+  outcome: outcome
+  asks: asks
+  summary: summary
+  options:
+    - id: send-back
+      does: The same builder continues on the change with what you say in your answer, and the checks look at it again.
+      cost: One build run and one check round.
+    - id: replan
+      does: The item goes back to planning with what you say in your answer.
+      cost: The work so far may be discarded.
+    - id: take-as-is
+      does: The change goes on to the host round as it is.
+      cost: What the builder left open stays open.
+    - id: drop
+      does: The change is closed without merging and the item ends here. Your answer is written on the change as the reason.
+      cost: The work on this change is given up; its branch stays.
+    - id: reshape
+      does: The change is closed without merging, its branch kept, and nothing more is built until the item is shaped again. Your answer is written on the change.
+      cost: The item waits for shaping, and the next build starts a new change from what is decided then.
+
+display:
+  label: Build
+  short: Writes the change and PR
+  blurb: "Writes the change and opens a draft pull request, then fixes what comes back."
+  outcomes:
+    ask: { label: asked you, story: Build asked you }
+    built: { label: built, story: Build wrote the change }
+    built_for_host: { label: fixed for CI, story: Build fixed what CI and the reviews raised }
+    built_for_land: { label: brought up to date, story: Build brought the change up to date with its landing branch }
+    replan: { label: plan again, story: Build sent it back to planning }
+  answers:
+    send-back: { label: sent back }
+    other: { label: something else }
+    take-as-is: { label: taken as it is }
+    replan: { label: plan again }
+    drop: { label: dropped by you }
+    reshape: { label: needs shaping }
+  phases:
+    - label: Write
+      cards:
+        - { title: Write or fix the change, text: "Writes or fixes the change, in the session it had", icon: pencil, kind: agent, covers: [build__build] }
+    - label: Hand off
+      cards:
+        - { title: Count the round, text: "Counts the build rounds, and sends it back to Plan when they are used up", icon: ruler, kind: script, covers: [limit] }
+        - { title: Hand off, text: Says whether the change goes to the checks or back to CI, icon: send, kind: script, covers: [end] }
+  results: { change: /change }
+  replaces:
+    - workflow: deliver
+      loops: { round: rounds }
+      marks:
+        - { node: rounds.verdict__verdict, outcome: return, means: returns }
+        - { node: hostrounds.host__host, outcome: return, means: returns }
+        - { node: rounds.verdict__verdict, outcome: approve, means: approves }
+      results: { change: /change }
+
+nodes:
+  # The first build and every later fix are this one node on purpose: `context: same` in
+  # the build block continues the session this node last had on the item, and a session is
+  # kept per workflow and node. A separate fix node would start without the builder's context.
+  - id: build
+    include: build
+    with:
+      item: $INPUTS.item
+      plan: $INPUTS.plan
+      answers: $INPUTS.answers
+      before: $INPUTS.returned
+      land_on: $INPUTS.land_on
+      build_policy: $INPUTS.build_policy
+
+  # A builder that ends `stop` sends the item back to planning by itself, once on an item
+  # (the limit of the `replan-after-build` binding). After that it ends in an ask.
+  - id: limit
+    display: { label: Counts the round }
+    depends_on: [build]
+    runtime: bun
+    script: limit
+    with:
+      stage: stage-build
+      last: $build.output
+      ends_as: '{"stop":"replan"}'
+    output_format:
+      type: object
+      properties:
+        round: { type: integer }
+        state: { type: string, enum: [open, used_up] }
+      required: [round, state]
+
+  # The engine defines the `asks` property of the result, so the output format leaves it out.
+  - id: end
+    display: { label: Hands the change on }
+    depends_on: [limit]
+    runtime: bun
+    script: ending
+    with:
+      stage: stage-build
+      last: $build.output
+      change: $build.output.proposed
+      returned: $INPUTS.returned
+      next: $INPUTS.next
+      limit: $limit.output
+      checked: ""     # host stage only
+      exhausted: ""   # check and host stages only
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [built, built_for_host, built_for_land, replan, ask] }
+        change: { type: string }
+        summary: { type: string }
+        for_next: { type: string }
+        returned: { type: string, description: 'What the builder was given to act on. Empty on a first build.' }
+        reply: { type: string, description: 'What the builder says it did about what it was given. Empty on a first build.' }
+      required: [outcome, change, summary, for_next, returned, reply]

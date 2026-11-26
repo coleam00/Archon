@@ -21,7 +21,8 @@ import { AsksUnread } from '../factory/AsksUnread';
 import { FactoryNumbers, type NeedYou } from '../factory/FactoryNumbers';
 import { askReadOf, type AskRead } from '../factory/lib/item-asks';
 import { packBoard, placeFor } from '../factory/lib/board-numbers';
-import { PackMap, usePackView } from '../factory/PackMap';
+import { graphWords } from '../factory/lib/graph-view';
+import { PackMap } from '../factory/PackMap';
 import { useBoardItems } from '../factory/useBoardItems';
 import type { Project } from '../primitives/project';
 import * as skill from '../skills';
@@ -83,11 +84,8 @@ export function PackOverview({
   const { data: graph, error } = useEntity<PackGraph>(K.packGraph(projectId, pack), () =>
     getPackGraph(projectId, pack)
   );
-  // The view under the key the map reads it with, so placing items adds no read.
-  const view = usePackView(projectId, pack);
-  const settled = view.data !== undefined || view.error !== undefined;
-  const place =
-    graph === undefined || !settled ? undefined : placeFor(graph.stages, view.data?.view ?? null);
+  // The graph places items, with the retired workflows its stages replace (`graph-view.ts`).
+  const place = graph === undefined ? undefined : placeFor(graph.stages, graphWords(graph));
   const board = items === undefined ? undefined : packBoard(items, pack, new Date(), place);
   const heading = 'text-sm font-medium text-text-primary';
   // As on the board: a pack with nothing on its board has nothing to show.

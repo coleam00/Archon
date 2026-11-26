@@ -1,0 +1,89 @@
+name: close
+description: |
+  An operator answered `drop` or `reshape` on a stage's ask. This carries the answer out on
+  the proposed change: both close it without merging and keep its branch. After `reshape`
+  the item waits to be shaped again, and the next plan builds a new change, so an open draft
+  would only linger. Either way the operator's words are written on the change. It judges nothing and
+  starts nothing: after `drop` the item has ended, after `reshape` it waits to be shaped.
+
+inputs:
+  change:
+    default: ""
+    description: Where the change is proposed. Empty when the item stopped before a change was proposed.
+  answers:
+    description: The settled asks the operator answered, as the binding passes them.
+
+# `ends`: `dropped` finishes the item. Any other outcome stops it in attention with
+# `summary` as the reason.
+# After `drop` the item has ended. After `reshape`, and when the change could not be
+# closed, it needs an operator.
+returns: { node: close, outcome: outcome, ends: [dropped], summary: why }
+
+display:
+  label: Drop or reshape
+  short: Carries out your answer
+  blurb: "Closes the pull request without merging when you drop it, or leaves it as a draft when you send it back to shaping."
+  outcomes:
+    dropped: { label: Dropped by you, story: { withChange: "You dropped it; the factory closed the PR without merging", withoutChange: You dropped it before a change was proposed } }
+    none: { label: nothing to do, story: Drop or reshape found no drop or reshape answer and did nothing }
+    not_closed: { label: "The forge would not close the PR: close or draft it by hand", story: "The factory could not carry out your drop or reshape on the change; do it by hand" }
+    reshape: { label: Needs shaping, story: { withChange: "You sent it back to shaping; the PR stays open as a draft", withoutChange: You sent it back to shaping before a change was proposed } }
+  phases:
+    - label: Drop or reshape
+      cards:
+        - { title: Drop or reshape, text: "Closes or drafts the change you dropped or reshaped, and says why on it", icon: git-pull-request, kind: script, covers: [close] }
+
+nodes:
+  - id: close
+    display: { label: Carries out drop or reshape }
+    runtime: bun
+    mutates_checkout: false
+    with:
+      change: $INPUTS.change
+      answers: $INPUTS.answers
+    script: |
+      import { emit, forge, input } from 'archon:script';
+      const change = input('change').trim();
+      let answers: any[] = [];
+      try { answers = JSON.parse(input('answers') || '[]'); } catch { answers = []; }
+      // The binding starts this only when every answer of the set chose the same option.
+      const chosen = answers.map(a => String(a?.option?.id ?? '')).find(id => id === 'drop' || id === 'reshape');
+      const said = answers.map(a => String(a?.answer?.text ?? '').trim()).filter(Boolean).join('\n\n');
+      const by = String(answers[0]?.by ?? '').trim();
+      if (!chosen) emit({ outcome: 'none', change, why: 'No answer of the set chose drop or reshape.' });
+      else if (!change) emit({ outcome: chosen === 'drop' ? 'dropped' : 'reshape', change, why: 'No change was proposed, so there is nothing to close.' });
+      else {
+        let why = '';
+        let done = false;
+        try {
+          const where = forge('resolve', { remote: change, web: true });
+          if (where.kind !== 'resolved' || where.subject?.kind !== 'pr') why = `The change is not a pull request on a forge this install can reach: ${change}`;
+          else {
+            const ref = { repo: where.repo, number: where.subject.number };
+            const head = chosen === 'drop'
+              ? 'An operator dropped this change. It is closed without merging, and its branch stays.'
+              : 'An operator sent this item back to shaping. The change is closed without merging, and its branch stays. When the item is shaped again, the next build starts from what is decided then.';
+            const marker = '<!-- software-factory:closed -->';
+            forge('workitem.comment.upsert', {
+              subject: { kind: 'pr', ref },
+              marker,
+              // The forge keeps one comment per marker, and the body must begin with it.
+              body: [marker, head, said ? `What the operator said:\n\n${said}` : '', by ? `Answered by ${by}.` : ''].filter(Boolean).join('\n\n'),
+            });
+            forge('pr.close', { ref });
+            done = true;
+          }
+        } catch (error) {
+          why = error instanceof Error ? error.message : String(error);
+        }
+        // A change the forge would not close is said in the result, so the operator who
+        // answered can do it by hand; the answer itself stands.
+        emit({ outcome: done ? (chosen === 'drop' ? 'dropped' : 'reshape') : 'not_closed', change, why });
+      }
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [dropped, reshape, not_closed, none] }
+        change: { type: string }
+        why: { type: string }
+      required: [outcome, change, why]

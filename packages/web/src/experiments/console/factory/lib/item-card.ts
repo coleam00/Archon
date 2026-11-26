@@ -3,19 +3,20 @@
  * its check rounds, how often it was sent back and why, its pull request, and how many asks
  * are open on it. Composed here, in the web, from generic reads:
  * the item read, run records, the forge's answers, the attention list's asks, and the pack's
- * factory view for every name and word. The engine knows none of these words.
+ * graph for every name, word and declaration (`graph-view.ts`). The engine knows none of these words.
  *
  * The board furniture builds on `cardProgress` and `CardProgress`: keep them stable.
  */
 import type { ItemRead } from '../../skills/items';
 import type { ItemAsk } from '../../primitives/run';
-import type { FactoryView, ForgeSubjects, RunRecord } from '../api';
+import type { ForgeSubjects, RunRecord } from '../api';
+import type { FactoryWords } from './graph-view';
 import { displayItemKey, issueNumber } from '../../lib/item-key';
-import { retiredRun, type OutcomeWords, type Retired } from '../../routes/board/standing';
+import { retiredRun, type OutcomeWords } from '../../routes/board/standing';
 import { arrowLabels } from './curated-view';
 import { outcomeWords } from './graph-structure';
 import { stageLabel, stageWords } from './stage-words';
-import { listOf, runFacts, type RoundVerdict, type RunFacts, type RunRounds } from './run-facts';
+import { runFacts, type RoundVerdict, type RunFacts, type RunRounds } from './run-facts';
 
 type ReadRun = { run: ItemRun; workflow: string | null; facts: RunFacts };
 
@@ -26,10 +27,10 @@ const byStart = (a: ItemRun, b: ItemRun): number =>
 /** A graph stage as cards read it: its published name, its workflow and whether it is in flow. */
 export type PackGraphStage = { name: string; workflow: string; inFlow: boolean };
 
-/** The pack the board reads an item under: its graph's stages and its view, when it ships one. */
+/** The pack the board reads an item under: its graph's stages and the words the graph gives. */
 export interface CardPack {
   stages: readonly PackGraphStage[];
-  view: FactoryView | null;
+  words: FactoryWords;
 }
 
 export interface CardProgress {
@@ -39,7 +40,7 @@ export interface CardProgress {
   titleIsKey: boolean;
   /** The item's key as a person reads it: `#123`, `#199 · board furniture`. */
   keyText: string;
-  /** The newest running run's stage and step, in the view's words. */
+  /** The newest running run's stage and step, in the pack's words. */
   running: {
     stage: string;
     step: string | null;
@@ -76,7 +77,7 @@ export function viewWorkflow(
   if (run.pack !== null) return run.pack.workflow;
   const stage = pack.stages.find(entry => entry.name === run.workflow);
   if (stage !== undefined) return stage.workflow;
-  return retiredRun(pack.stages, retiredOf(pack.view), run.workflow)?.workflow ?? null;
+  return retiredRun(pack.stages, pack.words.retired, run.workflow)?.workflow ?? null;
 }
 
 /**
@@ -88,7 +89,7 @@ export function runStageName(
   run: Pick<ItemRun, 'workflow' | 'pack'>
 ): string {
   const workflow = pack === null ? (run.pack?.workflow ?? null) : viewWorkflow(pack, run);
-  return workflow === null ? stageWords(run.workflow) : stageLabel(pack?.view, workflow);
+  return workflow === null ? stageWords(run.workflow) : stageLabel(pack?.words, workflow);
 }
 
 /** A run's outcome as a person reads it: `outcomeWords` for the view workflow the run is. */
@@ -98,7 +99,7 @@ export function runOutcomeWords(
   outcome: string
 ): string {
   const workflow = pack === null ? (run.pack?.workflow ?? null) : viewWorkflow(pack, run);
-  return outcomeWords(arrowLabels(pack?.view ?? null), workflow, outcome);
+  return outcomeWords(arrowLabels(pack?.words ?? null), workflow, outcome);
 }
 
 /**
@@ -111,16 +112,6 @@ export function outcomeWordsFor(
 ): OutcomeWords {
   const pack = packs === null ? null : packOf(packs, read);
   return (run, outcome) => runOutcomeWords(pack, run, outcome);
-}
-
-/**
- * The view's `retired` entries in one shape: a bare name places nowhere, `{ workflow, stage }`
- * at that stage. Every reader of `retired` goes through this.
- */
-export function retiredOf(view: Pick<FactoryView, 'retired'> | null | undefined): Retired[] {
-  return (view?.retired ?? []).map(entry =>
-    typeof entry === 'string' ? { workflow: entry, stage: null } : entry
-  );
 }
 
 /**
@@ -142,33 +133,34 @@ export function packOf(packs: ReadonlyMap<string, CardPack>, read: ItemRead): Ca
   return null;
 }
 
-/** The workflows whose runs' records the card reads: every one the view's progress names. */
-export function declaredWorkflows(view: FactoryView): Set<string> {
+/** The workflows whose runs' records the card reads: every one the pack's declarations name. */
+export function declaredWorkflows(words: FactoryWords): Set<string> {
   return new Set([
-    ...listOf(view.rounds).map(s => s.workflow),
-    ...(view.returns ?? []).map(p => p.workflow),
-    ...(view.approves ?? []).map(p => p.workflow),
-    ...listOf(view.change).map(s => s.workflow),
+    ...words.rounds.map(s => s.workflow),
+    ...words.returns.map(p => p.workflow),
+    ...words.approves.map(p => p.workflow),
+    ...words.change.map(s => s.workflow),
   ]);
 }
 
 /** The runs of `read` whose records a card needs: declared workflows' runs, and running runs. */
 export function runsToRead(pack: CardPack, read: ItemRead): string[] {
-  if (pack.view === null) return [];
-  const declared = declaredWorkflows(pack.view);
+  const declared = declaredWorkflows(pack.words);
   return read.runs
     .filter(run => run.status === 'running' || declared.has(viewWorkflow(pack, run) ?? ''))
     .map(run => run.id);
 }
 
-/** The top-level result keys the view's pointers start with: all a records read keeps. */
-export function resultKeys(view: FactoryView): string[] {
+/** The top-level result keys the pack's pointers start with: all a records read keeps. */
+export function resultKeys(words: FactoryWords): string[] {
   const top = (pointer: string): string =>
     (pointer.split('/')[1] ?? '').replaceAll('~1', '/').replaceAll('~0', '~');
   return [
     ...new Set([
-      ...listOf(view.rounds).flatMap(s => ('round' in s ? [top(s.round), top(s.allowance)] : [])),
-      ...listOf(view.change).map(s => top(s.pointer)),
+      ...words.rounds.flatMap(s =>
+        'round' in s ? [top(s.round), ...(s.allowance === undefined ? [] : [top(s.allowance)])] : []
+      ),
+      ...words.change.map(s => top(s.pointer)),
     ]),
   ];
 }
@@ -201,11 +193,11 @@ function cleanedId(stepId: string): string {
  * rounds are its own; a stage-form source's rounds run across its runs, newest back while each
  * older round is numbered below the one after it (the rounds since the item was last planned).
  */
-function itemRound(view: FactoryView, runs: readonly ReadRun[]): RunRounds | null {
+function itemRound(words: FactoryWords, runs: readonly ReadRun[]): RunRounds | null {
   const newestFirst = [...runs].reverse();
   const recorded = newestFirst.find(entry => (entry.facts.rounds?.rounds.length ?? 0) > 0);
   if (recorded?.facts.rounds == null) return null;
-  const source = listOf(view.rounds).find(s => s.workflow === recorded.workflow);
+  const source = words.rounds.find(s => s.workflow === recorded.workflow);
   if (source === undefined || 'loop' in source) return recorded.facts.rounds;
   const taken: { iteration: number; verdict: RoundVerdict; max: number | null }[] = [];
   for (const entry of newestFirst) {
@@ -227,11 +219,9 @@ function itemRound(view: FactoryView, runs: readonly ReadRun[]): RunRounds | nul
  * Whether a run of a stage-form rounds workflow works the item now: a round its result has not
  * numbered yet, so it is never one of `itemRound`'s, which only completed runs give.
  */
-function newRoundRunning(view: FactoryView, runs: readonly ReadRun[]): boolean {
+function newRoundRunning(words: FactoryWords, runs: readonly ReadRun[]): boolean {
   const running = [...runs].reverse().find(entry => entry.run.status === 'running');
-  return listOf(view.rounds).some(
-    source => !('loop' in source) && source.workflow === running?.workflow
-  );
+  return words.rounds.some(source => !('loop' in source) && source.workflow === running?.workflow);
 }
 
 /**
@@ -243,25 +233,25 @@ function newRoundRunning(view: FactoryView, runs: readonly ReadRun[]): boolean {
  * past the allowance is not one the card can name.
  */
 function roundField(
-  view: FactoryView,
+  words: FactoryWords,
   rounds: RunRounds | null,
   next: boolean
 ): CardProgress['round'] {
-  const round = view.words?.round ?? 'round';
+  const round = words.words.round ?? 'round';
   if (rounds === null || rounds.rounds.length === 0)
     return next
       ? { dots: [{ iteration: 1, verdict: 'running' }], text: `first ${round} running` }
       : null;
   const dots = [...rounds.rounds];
   const last = dots.at(-1)?.iteration ?? 0;
-  const words = view.words?.rounds ?? 'rounds';
+  const plural = words.words.rounds ?? 'rounds';
   // The pack counts a round that came back after check approved (the landing gate, the host
   // round) against the same allowance, so a recorded round can pass it. Past it the round is a
   // plain count: "4 of 3" would read as a broken limit.
   const counted =
     rounds.max === null || last > rounds.max
-      ? `${String(last)} ${words}`
-      : `${String(last)} of ${String(rounds.max)} ${words}`;
+      ? `${String(last)} ${plural}`
+      : `${String(last)} of ${String(rounds.max)} ${plural}`;
   if (!next) return { dots, text: counted };
   // The running dot's iteration is only its key.
   return {
@@ -330,41 +320,39 @@ function prOf(
 
 /** The item's runs whose records were read, in start order, with their facts. */
 function readRuns(read: ItemRead, pack: CardPack | null, reads: CardReads): ReadRun[] {
-  const view = pack?.view ?? null;
-  if (pack === null || view === null) return [];
+  if (pack === null) return [];
   return [...read.runs].sort(byStart).flatMap(run => {
     const record = reads.records.get(run.id);
     if (record === undefined) return [];
     const workflow = viewWorkflow(pack, run);
-    return [{ run, workflow, facts: runFacts(view, workflow, run, record) }];
+    return [{ run, workflow, facts: runFacts(pack.words, workflow, run, record) }];
   });
 }
 
 /**
- * The newest running run's stage and step in the view's words. Only a pack with a view reads
- * records, so with none there is no running line. The stage is named by `stageLabel`, so one
- * the view gives no label reads as its id in words, never the raw id; a step the view gives no
- * words reads as its cleaned step id.
+ * The newest running run's stage and step in the pack's words. The stage is named by
+ * `stageLabel`, so one the pack gives no label reads as its id in words, never the raw id; a
+ * step the pack gives no words reads as its cleaned step id.
  */
-function runningField(view: FactoryView, runs: readonly ReadRun[]): CardProgress['running'] {
+function runningField(words: FactoryWords, runs: readonly ReadRun[]): CardProgress['running'] {
   const running = [...runs].reverse().find(entry => entry.run.status === 'running');
   if (running === undefined) return null;
-  const words = running.workflow === null ? undefined : view.stages[running.workflow];
+  const stage = running.workflow === null ? undefined : words.stages[running.workflow];
   const step = running.facts.active;
   return {
-    stage: stageLabel(view, running.workflow ?? running.run.workflow),
-    step: step === null ? null : (words?.steps?.[step] ?? cleanedId(step)),
+    stage: stageLabel(words, running.workflow ?? running.run.workflow),
+    step: step === null ? null : (stage?.steps[step] ?? cleanedId(step)),
     stepId: step,
     workflow: running.workflow,
   };
 }
 
-function returnedField(view: FactoryView, runs: readonly ReadRun[]): CardProgress['returned'] {
+function returnedField(words: FactoryWords, runs: readonly ReadRun[]): CardProgress['returned'] {
   const returns = runs.flatMap(entry => entry.facts.returns);
   if (returns.length === 0) return null;
   return {
     count: returns.length,
-    text: `${view.words?.sentBack ?? 'sent back'} ${String(returns.length)}x`,
+    text: `${words.words.sentBack ?? 'sent back'} ${String(returns.length)}x`,
     reason: returns.at(-1)?.summary ?? null,
   };
 }
@@ -376,20 +364,20 @@ export function cardProgress(
   reads: CardReads,
   asks: readonly ItemAsk[]
 ): CardProgress {
-  const view = pack?.view ?? null;
+  const words = pack?.words ?? null;
   const wanted = pack === null ? [] : runsToRead(pack, read);
   const unread = wanted.some(id => reads.asked.has(id) && !reads.records.has(id));
   const runs = readRuns(read, pack, reads);
-  const declared = view === null ? new Set<string>() : declaredWorkflows(view);
+  const declared = words === null ? new Set<string>() : declaredWorkflows(words);
   const progressRuns = runs.filter(entry => declared.has(entry.workflow ?? ''));
-  const counted = view !== null && !unread;
+  const counted = words !== null && !unread;
   return {
     ...itemTitle(read, reads.forge?.issues),
-    running: view === null ? null : runningField(view, runs),
+    running: words === null ? null : runningField(words, runs),
     round: counted
-      ? roundField(view, itemRound(view, progressRuns), newRoundRunning(view, progressRuns))
+      ? roundField(words, itemRound(words, progressRuns), newRoundRunning(words, progressRuns))
       : null,
-    returned: counted ? returnedField(view, progressRuns) : null,
+    returned: counted ? returnedField(words, progressRuns) : null,
     pr: prOf(read, progressRuns, reads.forge),
     asks: asks.length === 0 ? null : { count: asks.length },
     unread,

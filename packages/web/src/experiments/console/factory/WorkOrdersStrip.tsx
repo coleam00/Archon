@@ -46,12 +46,12 @@ export function WorkOrdersStrip({
 }): ReactElement | null {
   const [open, setOpen] = useState(true);
   const list = useId();
-  // What a pack's view calls a work order; the orders are the project's, so the first view
-  // that words them does.
+  // What a pack calls a work order; the orders are the project's, so the first pack that
+  // words them does.
   const cards = useFactoryCards();
   const words = [...(cards?.packs?.values() ?? [])].find(
-    pack => pack.view?.words?.workOrder !== undefined
-  )?.view?.words;
+    pack => pack.words.words.workOrder !== undefined
+  )?.words.words;
   // An order's title is its issue's when its own title column is empty, as on a card.
   const titles = useForgeTitles(
     cards?.projectId ?? null,

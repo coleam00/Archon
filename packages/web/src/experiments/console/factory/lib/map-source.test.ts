@@ -30,7 +30,7 @@ describe('which map a view read draws', () => {
   test('a file with problems still draws the curated map, carrying every one of them', () => {
     const problems = [
       problem('dropped', 'names stage "stage-check", which pack "p" does not have'),
-      problem('unworded', 'stage "stage-review" has no words'),
+      problem('unknown', 'is not a key a view file has'),
     ];
     const source = mapSource({ data: { path: PATH, view: shippedFile, problems } });
     expect(source).toMatchObject({ kind: 'curated', problems });

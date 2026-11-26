@@ -1,0 +1,181 @@
+name: split
+description: |
+  Decide how one item that is worth building in full is built: whole, or as members that
+  each prove something on their own, by its kind (a PRD, an epic, a bundle of tasks, or
+  parts that must land apart). Each member with a brief becomes a work item of its own,
+  part of this one, and is ordered like a member of any work order: one that depends on
+  another member waits until that one has landed. A member that waits on a ruling or a
+  signal is kept in the result with what it waits on. Triage starts
+  it on an item it judged `split`; an operator can start it on an epic or a PRD directly.
+  Reads the project, changes nothing in it.
+
+model: ['@planner', large]
+
+inputs:
+  item:
+    description: The work item as text.
+  judgment:
+    result_of: triage
+    description: What triage concluded about the item. Read from the item when the start does not pass it.
+  answers:
+    default: "None."
+    description: Decisions an operator already made on this item.
+  land_on:
+    default: ""
+    description: The branch the whole lands on. Empty means the project's base branch.
+  earlier:
+    result_of: split
+    description: What the last split of this item returned, so members already started are not started again.
+
+# The engine defines the `asks` property of the result, so the `members` node's output format leaves it out.
+# A split that ends `waiting` with no ask shows the item as stopped in attention, with `why`.
+# `split` ends this item: the work goes on as its members, each its own item.
+returns: { node: members, outcome: outcome, asks: asks, ends: [split], summary: why }
+
+display:
+  label: Split
+  short: Cuts it into pieces
+  blurb: "Cuts an item triage judged to be more than one change into pieces, and starts each piece as a work order."
+  outcomes:
+    split: { label: Split into pieces, story: Split cut it into pieces }
+    waiting: { label: waiting to split, story: Split is waiting before it can cut it }
+    whole: { label: kept whole, story: Split kept it as one change }
+  phases:
+    - label: Split
+      cards:
+        - { title: Cut it into pieces, text: Decides how an item that is not one change is split, icon: scissors, kind: agent, covers: [cut] }
+        - { title: Start the pieces, text: Orders each piece that can start now as an item of its own, icon: inbox, kind: script, covers: [members] }
+
+nodes:
+  - id: cut
+    display: { label: Decides how to split it }
+    command: cut
+    mutates_checkout: false
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        kind: { type: string, enum: [prd, epic, bundle, parts, whole] }
+        why: { type: string, description: 'Two or three sentences, from the item and the project: why this kind, and why it splits this way or stays whole.' }
+        members:
+          type: array
+          description: 'Every piece, those that start now and those that wait. When whole: empty, or only a remainder that waits on a ruling.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              id: { type: string, description: 'kebab-case, short, unique among the members, such as host-identity. A member an earlier split named keeps its id.' }
+              title: { type: string, description: 'The outcome in one line, as a change title would say it.' }
+              proves: { type: string, description: 'What becomes observably true when this member lands.' }
+              apart: { type: string, description: 'Why this member cannot be part of the same change as the rest.' }
+              start: { type: string, enum: [now, later], description: 'now: it becomes a work item now. With depends_on it is held until those members have landed, and starts by itself then. later: it waits on a ruling or a signal, and becomes a work item when the split runs again.' }
+              brief: { type: string, description: 'For a member that starts now, held or not: the member as a work item that stands alone. Empty for one that starts later.' }
+              depends_on: { type: array, items: { type: string }, description: 'Ids of members that must land before this one can be built. Empty when none.' }
+              waits_on: { type: string, description: 'For a member that starts later: the ruling or the signal it waits on. Empty for one that starts now.' }
+            required: [id, title, proves, apart, start, brief, depends_on, waits_on]
+        landing:
+          type: object
+          additionalProperties: false
+          properties:
+            together: { type: boolean, description: 'True when the members land on one branch that is then landed once.' }
+            branch: { type: string, description: 'The branch they land on together. Empty when each lands where the item lands.' }
+            why: { type: string }
+          required: [together, branch, why]
+        asks:
+          type: array
+          description: 'Decisions an operator owes before a member can start, or before the item can be cut at all. Empty when there are none.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              question: { type: string }
+              context: { type: string }
+              options:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    id: { type: string, description: 'kebab-case, one token, such as keep-the-flag. The answer names it.' }
+                    does: { type: string }
+                    cost: { type: string }
+                  required: [id, does, cost]
+              recommendation:
+                type: object
+                additionalProperties: false
+                properties:
+                  option: { type: string, description: 'The id of the option you would take. It is one of the options above.' }
+                  why: { type: string, description: 'Why that one. If you are not sure, say what would change your mind.' }
+                required: [option, why]
+            required: [question, context, options, recommendation]
+        sure: { type: string, enum: [high, medium, low] }
+        for_next: { type: string, description: 'Anything the operator who reads this split needs from you that has no field here.' }
+      required: [kind, why, members, landing, asks, sure, for_next]
+
+  # The one thing code does here: it owns the outcome and the members' keys, which the
+  # pack's bindings route on, and it records each member that starts now as part of this
+  # item, which is the one link no judgment is needed for. What a member depends on goes
+  # to the order stage with the member, as it does for a member of any work order. Recording the link writes the member's item when nothing has named it yet, and
+  # recording it again leaves the one link. It starts nothing: the `order-after-split`
+  # binding starts the order stage on each member listed in `start`, and the order stage
+  # takes a member once.
+  - id: members
+    display: { label: Starts the pieces }
+    depends_on: [cut]
+    runtime: bun
+    mutates_checkout: false
+    with:
+      cut: $cut.output
+      land_on: $INPUTS.land_on
+    script: |
+      import { emit, input, item, linkItem } from 'archon:script';
+      const cut = JSON.parse(input('cut'));
+      const parent = item()?.item.key;
+      if (!parent) throw new Error('split: the run is on no item, so its members cannot be part of one');
+      const keyOf = (id: unknown) => `${parent}-${String(id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`;
+      const landOn = cut.landing?.together && cut.landing?.branch ? String(cut.landing.branch) : input('land_on').trim();
+      const whole = cut.kind === 'whole';
+      // A member that starts now and depends on another is ordered with what it depends
+      // on: the order stage holds it until that has landed, and orders it again then.
+      const members = (cut.members ?? []).map((m: any) => {
+        const dependsOn = (m.depends_on ?? []).map(keyOf);
+        const now = !whole && m.start === 'now' && String(m.brief ?? '').trim() !== '';
+        return {
+          key: keyOf(m.id), title: m.title, proves: m.proves, apart: m.apart,
+          start: now ? 'now' : 'later',
+          brief: now ? m.brief : '',
+          depends_on: dependsOn,
+          waits_on: now ? (dependsOn.length ? `${dependsOn.join(', ')} to land` : '') : String(m.waits_on || 'a later split'),
+        };
+      });
+      const start = members.filter((m: any) => m.start === 'now');
+      // Each member that starts now is recorded as part of this run's own item.
+      for (const m of start) linkItem({ kind: 'part_of', from: m.key });
+      emit({
+        outcome: whole ? 'whole' : start.length ? 'split' : 'waiting',
+        kind: cut.kind,
+        why: cut.why,
+        parent,
+        land_on: landOn,
+        landing: cut.landing,
+        members,
+        // What the order stage is given for each member: its text is the whole work item.
+        start: start.map((m: any) => ({
+          key: m.key, title: m.title, depends_on: m.depends_on,
+          text: `# ${m.title}\n\n${m.brief}\n\nThis is one piece of the larger item \`${parent}\`, which was split into members that are each built on their own.`,
+        })),
+        sure: cut.sure,
+        for_next: cut.for_next,
+        asks: (cut.asks ?? []).map((ask: any) => ({ ...ask, artifacts: [] })),
+      });
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [whole, split, waiting] }
+        kind: { type: string, enum: [prd, epic, bundle, parts, whole] }
+        why: { type: string, description: 'Why this kind, and why it splits this way or stays whole.' }
+        parent: { type: string, description: 'The key of the item that was split.' }
+        land_on: { type: string, description: 'The branch the members land on. Empty means the base branch.' }
+        members: { type: array, description: 'Every member with its key: those that start now with their brief, and what each waits on.' }
+        start: { type: array, description: 'The members this run made work items: key, title, depends_on and the member as a work item in `text`.' }
+      required: [outcome, kind, parent, land_on, members, start]

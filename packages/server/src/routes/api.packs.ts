@@ -90,7 +90,7 @@ const getPackViewRoute = createRoute({
   path: '/api/packs/{pack}/view',
   tags: ['Workflows'],
   summary:
-    "The factory view a pack ships (.shared/factory-view.json), or null, with what is wrong with it against the pack's graph",
+    "The view file a pack ships (.shared/factory-view.json), its How it works explainer, or null, with what is wrong with it against the pack's graph",
   request: { params: packGraphParamsSchema, query: packGraphQuerySchema },
   responses: {
     200: {

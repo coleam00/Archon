@@ -3,9 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '../packages/paths/src/test-utils';
-import { servedFactoryView } from '../packages/workflows/src/factory-view-read';
 import type { PackGraph } from '../packages/workflows/src/pack-graph';
-import type { FactoryView } from '../packages/workflows/src/schemas/factory-view';
 import {
   UNKNOWN_COMMIT,
   checkView,
@@ -49,10 +47,7 @@ const graph = {
 
 const view = (stage: string) => ({
   version: 1,
-  title: 'Factory',
   summary: 'x',
-  stages: { [stage]: { label: 'Make', blurb: 'x', steps: { write: 'Writes' } } },
-  merged: stage,
   howItWorks: {
     title: 'x',
     caption: 'x',
@@ -61,7 +56,16 @@ const view = (stage: string) => ({
       top: {
         cards: [
           { id: 'a', title: 'a', text: 'a', icon: 'hammer', kind: 'stage', col: 1, row: 1 },
-          { id: 'b', title: 'b', text: 'b', icon: 'hammer', kind: 'stage', col: 2, row: 1 },
+          {
+            id: 'b',
+            title: 'b',
+            text: 'b',
+            icon: 'hammer',
+            kind: 'stage',
+            col: 2,
+            row: 1,
+            stages: [stage],
+          },
         ],
         edges: [{ from: 'b', to: 'a', kind: 'loops-back' }],
       },
@@ -74,60 +78,25 @@ test('the committed docs copy reads clean against the pack graph it is written f
   expect(checkView(readDocsCopy(), shippedGraph)).toEqual({ code: 0, lines: ['0 problems'] });
 });
 
-test("a renamed stage costs the shipped view only that stage's words, and keeps its round meaning (#232)", () => {
-  const renamed = JSON.parse(
-    JSON.stringify(shippedGraph).replaceAll('stage-check', 'stage-review')
-  ) as PackGraph;
-  const file = readDocsCopy() as FactoryView;
-  const { view, problems } = servedFactoryView(file, renamed);
-  expect(view?.stages['stage-check']).toBeUndefined();
-  expect(Object.keys(view?.stages ?? {})).toHaveLength(Object.keys(file.stages).length - 1);
-  // The board's cards read rounds, returns, approvals and the change from these: all kept.
-  const onCheck = (entries: unknown): unknown[] =>
-    (Array.isArray(entries) ? entries : [entries]).filter(
-      entry => (entry as { workflow?: string }).workflow === 'stage-check'
-    );
-  for (const key of ['rounds', 'returns', 'approves', 'change'] as const)
-    expect(onCheck(view?.[key])).toEqual(onCheck(file[key]));
-  expect(view?.retired).toEqual([...(file.retired ?? []), 'stage-check']);
-  expect(problems.filter(problem => problem.kind === 'retired')).toHaveLength(4);
-});
-
 describe('checkView', () => {
-  test('passes a view naming and wording only what the graph has, with a summary line', () => {
+  test('passes a file whose picture names only what the graph has, with a summary line', () => {
     expect(checkView(view('make'), graph)).toEqual({ code: 0, lines: ['0 problems'] });
-  });
-
-  test('exits 1 on a stale stage: every problem is an error, each printed with its kind', () => {
-    const report = checkView(view('deploy'), graph);
-    expect(report.code).toBe(1);
-    expect(report.lines.map(entry => entry.replace(/\] .*$/, ']'))).toEqual([
-      'stages.deploy: [dropped]',
-      'merged: [dropped]',
-      'stages.make: [unworded]',
-      'stages.make.steps.write: [unworded]',
-      '4 problems',
-    ]);
   });
 
   /** Each printed problem as `path: [kind]`, without its message. */
   const kinds = (report: ReturnType<typeof checkView>): string[] =>
     report.lines.slice(0, -1).map(entry => entry.replace(/\] .*$/, ']'));
 
-  test('exits 1 on a key the schema does not know, though the rest still reads', () => {
-    const report = checkView({ ...view('make'), map: { cards: [] } }, graph);
+  test('exits 1 on a stale stage: every problem is an error, each printed with its kind', () => {
+    const report = checkView(view('deploy'), graph);
     expect(report.code).toBe(1);
-    expect(kinds(report)).toEqual(['map: [unknown]']);
+    expect(kinds(report)).toEqual(['howItWorks.views.top.cards.1.stages.0: [dropped]']);
   });
 
-  test('exits 1 when the only problem is a step without words', () => {
-    const file = view('make');
-    const report = checkView(
-      { ...file, stages: { make: { label: 'Make', blurb: 'x', steps: {} } } },
-      graph
-    );
+  test("exits 1 on a key the file does not have, an older file's stage words among them", () => {
+    const report = checkView({ ...view('make'), stages: { make: { label: 'Make' } } }, graph);
     expect(report.code).toBe(1);
-    expect(kinds(report)).toEqual(['stages.make.steps.write: [unworded]']);
+    expect(kinds(report)).toEqual(['stages: [unknown]']);
   });
 
   test('exits 1 on a file whose envelope does not read', () => {

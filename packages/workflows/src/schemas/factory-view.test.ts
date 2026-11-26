@@ -15,14 +15,11 @@ const card = (id: string, col: number, row: number, extra: Partial<Card> = {}): 
   ...extra,
 });
 
-/** Words for one stage, and a How it works root of three cards with one drill-down. */
+/** A summary, and a How it works root of three cards with one drill-down. */
 function valid(): FactoryView {
   return {
     version: 1,
-    title: 'Factory',
     summary: 'Work comes in, gets built, lands.',
-    stages: { make: { label: 'Make', blurb: 'Makes it.' } },
-    merged: 'land',
     howItWorks: {
       title: 'How it works',
       caption: 'Work comes in, gets built, lands.',
@@ -65,44 +62,16 @@ test('accepts the valid view', () => {
   expect(issues(valid())).toEqual([]);
 });
 
-test('accepts where progress lives in a run: one rounds source or a list, returns, change', () => {
-  expect(
-    issues({
-      ...valid(),
-      retired: ['old'],
-      rounds: [
-        { workflow: 'old', loop: 'rounds' },
-        { workflow: 'make', round: '/round', allowance: '/allowance' },
-      ],
-      returns: [{ workflow: 'make', node: 'write', outcome: 'return' }],
-      approves: [{ workflow: 'make', node: 'write', outcome: 'approve' }],
-      change: { workflow: 'make', pointer: '/change' },
-    })
-  ).toEqual([]);
-});
-
-test('an answer reads with a label, a starts sentence or both, and is refused with neither', () => {
-  const answers = (entry: object): unknown => ({ ...valid(), answers: { 'make:drop': entry } });
-  expect(issues(answers({ label: 'dropped' }))).toEqual([]);
-  expect(issues(answers({ starts: 'Closes it.' }))).toEqual([]);
-  expect(issues(answers({}))).toEqual(['answers.make:drop']);
-});
-
-test('a rounds source missing a key is refused, and the refusal names the key', () => {
-  const parsed = factoryViewSchema.safeParse({
-    ...valid(),
-    rounds: { workflow: 'make', round: '/round' },
-  });
-  const issues = parsed.error?.issues ?? [];
-  expect(issues.map(issue => issue.path.join('.'))).toEqual(['rounds']);
-  expect(issues[0]?.message).toContain('allowance');
-});
-
 describe('factoryViewSchema rejects', () => {
   test.each<[string, (v: FactoryView) => unknown]>([
     ['placement, which the server computes', v => ({ ...v, placement: { 'make:done': 'make' } })],
     ['verdicts, which the web words from outcomes', v => ({ ...v, verdicts: {} })],
     ['a hand-placed map, which the graph lays out', v => ({ ...v, map: { cards: [] } })],
+    [
+      "stage words, which the pack's workflows carry in display:",
+      v => ({ ...v, stages: { make: { label: 'Make' } } }),
+    ],
+    ["progress declarations, which the pack's workflows carry", v => ({ ...v, rounds: [] })],
   ])('a removed field: %s', (_name, edit) => {
     expect(
       factoryViewSchema.safeParse(edited(edit)).error?.issues.map(issue => issue.code)
@@ -112,11 +81,6 @@ describe('factoryViewSchema rejects', () => {
   // One row per rule: what is refused, the change to `valid()`, and its issues. A row marked
   // `some` checks only that its issue is among them: a broken layout often breaks more than one.
   test.each<[string, (v: FactoryView) => unknown, string[], 'some'?]>([
-    [
-      'next on an outcome that does not await anyone',
-      v => ({ ...v, outcomes: { 'make:done': { label: 'Done', next: 'Do it.' } } }),
-      ['outcomes.make:done.next awaits'],
-    ],
     [
       'a How it works root naming no view',
       v => ({ ...v, howItWorks: { ...v.howItWorks, root: 'nope' } }),

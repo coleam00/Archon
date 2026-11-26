@@ -14,14 +14,21 @@
 import { observesItem } from './schemas/item-role';
 import { z } from 'zod';
 import { declaredItemFate, declaredOutcome, outcomeValues } from './completed-outcome';
-import { readComposedMeta } from './compiled-command';
 import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
-import { loopBodyStepNamePrefix, resolvedBodyNodes } from './graph-plan';
-import { isComposeFanOutNode, isLoopGroupNode } from './schemas/node-guards';
+import { resolvedBodyNodes } from './graph-plan';
+import { fanOutBlocks, stageNodes } from './pack-graph-nodes';
+import { isLoopGroupNode } from './schemas/node-guards';
 import { isBinaryBuild } from './defaults/bundled-defaults';
-import { packGroupSchema } from './pack-document';
+import { packGroupSchema, packWordsSchema } from './pack-document';
 import { metricViewSchema } from './schemas/metric-view';
+import {
+  nodeDisplaySchema,
+  outcomeDisplaySchema,
+  outcomeWords,
+  stageDisplay,
+  stageDisplaySchema,
+} from './schemas/display';
 import { readsLinkedEntry } from './schemas/binding-input-source';
 import {
   asksSettledTriggerSchema,
@@ -55,6 +62,8 @@ const packGraphNodeSchema = z.object({
    * time; `workflow` names its body in the graph's `fanOutBlocks`. Null for any other node.
    */
   fanOut: z.object({ workflow: z.string() }).nullable(),
+  /** The node's `display:`, an included node's as its included workflow authored it. */
+  display: nodeDisplaySchema.optional(),
 });
 
 const packGraphStageSchema = z.object({
@@ -103,6 +112,8 @@ const packGraphStageSchema = z.object({
            * none.
            */
           stops: z.boolean(),
+          /** The stage's `display.outcomes` entry for this value. */
+          display: outcomeDisplaySchema.optional(),
         })
       ),
     })
@@ -117,6 +128,8 @@ const packGraphStageSchema = z.object({
   /** The stage declares `result.waits`, so a run can end leaving its item waiting on an event. */
   waits: z.boolean(),
   nodes: z.array(packGraphNodeSchema),
+  /** The stage's `display:` without its outcomes'. Each `display` is absent, never null, when unset. */
+  display: stageDisplaySchema.optional(),
 });
 
 /**
@@ -253,6 +266,13 @@ export const packGraphSchema = z.object({
       problems: z.array(z.string()),
       /** The document's markdown after its frontmatter, as the pack wrote it. */
       text: z.string(),
+      /** The frontmatter's `words`, as written; absent when it declares none. */
+      words: packWordsSchema.optional(),
+      /**
+       * The frontmatter's `exit`, the stage items leave the flow by, by `workflow` name; absent
+       * when it declares none or names a stage not in flow (see `problems`).
+       */
+      exit: z.string().optional(),
     })
     .nullable(),
   /**
@@ -506,59 +526,10 @@ export interface InstalledArrow {
   startsStep: boolean;
 }
 
-type Stage = Pick<ResolvedWorkflow, 'name' | 'returns' | 'result' | 'nodes' | 'pack' | 'observes'>;
-type GraphNode = PackGraph['stages'][number]['nodes'][number];
-
-/**
- * A stage's nodes, with each loop group's body after the group, recursively. Body nodes
- * take the step names the engine runs them under (`loopBodyStepNamePrefix`).
- */
-function stageNodes(stage: Pick<Stage, 'nodes'>, group: string | null = null): GraphNode[] {
-  const prefix = group === null ? '' : loopBodyStepNamePrefix(group);
-  return stage.nodes.flatMap(node => {
-    const id = prefix + node.id;
-    const graphNode: GraphNode = {
-      id,
-      kind: node.kind,
-      // The loader checks a body node's `depends_on` against its own body, so every one is a sibling.
-      dependsOn: (node.depends_on ?? []).map(dep => prefix + dep),
-      loopGroup: group,
-      blocks: (readComposedMeta(node)?.boundaries ?? []).map(({ boundary }) => ({
-        include: boundary.includeId,
-        workflow: boundary.workflow,
-      })),
-      fanOut: isComposeFanOutNode(node) ? { workflow: node.include } : null,
-    };
-    return isLoopGroupNode(node)
-      ? [graphNode, ...stageNodes({ nodes: resolvedBodyNodes(node.loop_group) }, id)]
-      : [graphNode];
-  });
-}
-
-/**
- * The body of every fan-out include reachable from the stages, resolved by name among
- * `workflows` as discovery resolved it, and the bodies those bodies fan out to.
- */
-function fanOutBlocks(
-  stages: readonly Pick<Stage, 'nodes'>[],
-  workflows: readonly Pick<Stage, 'name' | 'nodes'>[]
-): PackGraph['fanOutBlocks'] {
-  const blocks: PackGraph['fanOutBlocks'] = [];
-  const pending = stages.flatMap(stage => stageNodes(stage));
-  for (let node = pending.shift(); node !== undefined; node = pending.shift()) {
-    const name = node.fanOut?.workflow;
-    if (name === undefined || blocks.some(block => block.workflow === name)) continue;
-    // Discovery has already qualified an installed pack's include to its own full name.
-    const body = workflows.find(w => w.name === name);
-    // Discovery refuses a fan-out whose target does not resolve, so this is a caller's bug.
-    if (body === undefined)
-      throw new Error(`Fan-out include '${name}' is not a discovered workflow`);
-    const nodes = stageNodes(body);
-    blocks.push({ workflow: name, nodes });
-    pending.push(...nodes);
-  }
-  return blocks;
-}
+export type Stage = Pick<
+  ResolvedWorkflow,
+  'name' | 'returns' | 'result' | 'nodes' | 'pack' | 'observes' | 'display'
+>;
 
 interface GraphInput {
   packKey: string;
@@ -729,6 +700,7 @@ function graphStage(
           startsNothing: !started.has(key),
           ends: stage.result?.ends?.includes(value) === true,
           stops: declaredItemFate(stage, value, startedOnItem.has(key)) === 'stops',
+          ...outcomeWords(stage.display, value),
         };
       }),
     };
@@ -747,6 +719,7 @@ function graphStage(
     asks: stage.result?.asks !== undefined,
     waits: stage.result?.waits !== undefined,
     nodes: stageNodes(stage),
+    ...stageDisplay(stage.display),
   };
 }
 

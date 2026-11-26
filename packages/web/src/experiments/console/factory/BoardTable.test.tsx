@@ -8,7 +8,8 @@ import { CardList } from '../routes/board/ItemCard';
 import type { ItemRead } from '../skills/items';
 import { invalidate, set } from '../store/cache';
 import { K } from '../store/keys';
-import type { FactoryView, RunRecord } from './api';
+import type { RunRecord } from './api';
+import { wordsOf } from './lib/graph-view.test-fixtures';
 import { BoardTable } from './BoardTable';
 import { CardsContext } from './cards-context';
 import fixture from './lib/__fixtures__/card-items.json';
@@ -22,10 +23,9 @@ afterEach(() => {
 const PREFIX = 'Wirasm/archon-software-factory:';
 const WORKFLOWS = ['plan', 'stage-build', 'stage-check', 'stage-host'];
 /** The fixture's rounds and returns declarations, as `item-card.test.ts` reads them. */
-const VIEW = {
-  stages: {},
+const WORDS = wordsOf({
   words: { round: 'check round', rounds: 'check rounds', sentBack: 'sent back' },
-  retired: ['deliver'],
+  retired: [{ workflow: 'deliver', stage: null }],
   rounds: [
     { workflow: 'deliver', loop: 'rounds' },
     { workflow: 'stage-check', round: '/round', allowance: '/allowance' },
@@ -35,10 +35,10 @@ const VIEW = {
     { workflow: 'stage-check', node: 'verdict__verdict', outcome: 'return' },
     { workflow: 'stage-host', node: 'rounds__host', outcome: 'return' },
   ],
-} as unknown as FactoryView;
+});
 const PACK: CardPack = {
   stages: WORKFLOWS.map(workflow => ({ name: `${PREFIX}${workflow}`, workflow, inFlow: true })),
-  view: VIEW,
+  words: WORDS,
 };
 const reads = (fixture.items as unknown as ItemRead[]).map(read => ({
   ...read,

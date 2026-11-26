@@ -1,7 +1,6 @@
 /**
  * The map derived from the pack graph (DESIGN.md, COMBINED direction), drawn as a graph: the
- * groups left to right (the view file's when it declares them, else the pack document's,
- * `groupsOf`), a card per flow stage in each, under its group's name, the hand-offs between
+ * groups left to right (the pack document's, `groupsOf`), a card per flow stage in each, under its group's name, the hand-offs between
  * them as arrows and the send-backs, each pill worded as on the curated map (`arrowWords`). On
  * a project's Overview each card carries the project's counts and opens its board; on How it
  * works, which is the pack's page and names no project (DESIGN.md, owner change 1 of
@@ -25,7 +24,7 @@ import {
 } from './canvas-lines';
 import { GraphSkeleton } from './GraphSkeleton';
 import { MERGED_DAYS, type BoardNumbers } from './lib/board-numbers';
-import type { FactoryView } from './api';
+import type { FactoryWords } from './lib/graph-view';
 import { fullWorkflowLayout, MERGED, type FullLayout } from './lib/full-workflow-layout';
 import { toneOfKind, type ColumnTone } from './lib/map-columns';
 import { MapLegend } from './map/MapLegend';
@@ -53,7 +52,7 @@ export function flowCounts<C extends StageGroup>(
   items: readonly ItemRead[],
   stages: PackGraph['stages'] | undefined,
   asks: AskRead | null,
-  /** The view's retired workflows, which place their runs' items (`stageAt`). */
+  /** The retired workflows the pack's stages replace, which place their runs' items (`stageAt`). */
   retired: readonly Retired[] = []
 ): (C & StageAt)[] {
   return columns.map(column => {
@@ -127,7 +126,7 @@ export function DerivedFlow({
    * curated map does (`arrowLabels`); null names stages and outcomes
    * by id in words, and an ask's pill by its raw option.
    */
-  view?: FactoryView | null;
+  view?: FactoryWords | null;
   live?: FlowLive;
   graph: PackGraph | undefined;
   counts?: ReadonlyMap<string, StageAt>;
@@ -407,7 +406,7 @@ export function DerivedStructure({
   projectId: string;
   pack: string;
   /** The pack's view, when it has one: its groups are the columns, as on the curated map. */
-  view?: FactoryView;
+  view?: FactoryWords;
 }): ReactElement {
   const graph = usePackGraph(projectId, pack);
   if (graph.data === undefined)

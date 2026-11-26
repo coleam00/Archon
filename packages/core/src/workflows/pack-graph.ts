@@ -18,7 +18,12 @@ import {
   validateProjectPackSettings,
 } from '@archon/workflows/pack-settings';
 import { loadPackMetricViews } from '@archon/workflows/metric-views';
-import { checkGroups, loadPackDocument, ungroupedStages } from '@archon/workflows/pack-document';
+import {
+  checkGroups,
+  exitProblem,
+  loadPackDocument,
+  ungroupedStages,
+} from '@archon/workflows/pack-document';
 import {
   buildPackGraph,
   graphLink,
@@ -245,9 +250,14 @@ export async function readPackGraph(
               ...read.problems,
               ...checked.problems,
               ...ungroupedStages(read.groups, inFlow),
+              ...exitProblem(read.exit, inFlow),
               ...read.warnings,
             ],
             text: read.text,
+            ...(read.words === undefined ? {} : { words: read.words }),
+            ...(read.exit === undefined || exitProblem(read.exit, inFlow).length > 0
+              ? {}
+              : { exit: read.exit }),
           },
     metricViews: views === null ? null : { names: {}, cards: [], problem: null, ...views },
     groups: checked.groups,

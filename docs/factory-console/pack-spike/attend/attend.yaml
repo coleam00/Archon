@@ -1,0 +1,117 @@
+name: attend
+description: |
+  Advice, since 2026-11-25. When a stage leaves asks on an item, an agent reads them the
+  way an operator's own agent would and records the answer it would give to each, or that
+  it would bring the ask to the operator. Whoever answers reads that as advice beside the
+  ask. It answers nothing, starts nothing and changes nothing on the item or its change.
+  The project's attend policy says which asks are the operator's whatever the advice, and
+  which kinds the agent could answer alone; that last part is recorded only, to be
+  compared with what the operator answered before anything acts on it.
+
+model: ['@manager', large]
+
+inputs:
+  stage:
+    description: The stage whose run ended and left the asks. The binding names it.
+  asks:
+    default: "[]"
+    description: The asks that run left, as its result holds them.
+
+# `observes: true`: its runs act on an item without being steps of it, so they never
+# stop, end or move the item, and never hide a stop on it.
+observes: true
+returns: { node: end, outcome: outcome, summary: summary }
+
+display:
+  label: Attend
+  short: Your agent's advice
+  blurb: "Reads the asks a stage left the way your own agent would, and records the answer it would give or that it would bring the ask to you. Advice only: it answers nothing."
+  outcomes:
+    none: { label: no asks to advise on, story: Attend found no open asks to advise on }
+    recorded: { label: advice recorded, story: Attend recorded how your agent would answer the asks }
+  phases:
+    - label: Read the asks
+      cards:
+        - { title: Count the asks, text: "Counts the asks the stage left, so no agent starts when there are none", icon: clipboard-list, kind: script, covers: [given] }
+    - label: Advise
+      cards:
+        - { title: Advise, text: "Says how your agent would answer each ask, or that it would bring the ask to you", icon: message-square, kind: agent, covers: [attend] }
+    - label: Record
+      cards:
+        - { title: Record, text: "Records the advice beside the asks; nothing acts on it", icon: database, kind: script, covers: [end] }
+
+nodes:
+  # A link run that waits ends `waiting` with or without an ask. Count the asks, so the
+  # agent is not started to say there are none.
+  - id: given
+    display: { label: Counts the asks }
+    runtime: bun
+    mutates_checkout: false
+    with:
+      asks: $INPUTS.asks
+    script: |
+      import { emit, input } from 'archon:script';
+      let asks: unknown = [];
+      try { asks = JSON.parse(input('asks') || '[]'); } catch {}
+      emit({ asks: Array.isArray(asks) ? asks.length : 0 });
+
+  - id: attend
+    display: { label: Advises on each ask }
+    depends_on: [given]
+    when: "$given.output.asks > 0"
+    command: attend
+    mutates_checkout: false
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        answers:
+          type: array
+          description: 'One entry for each ask the run left that is still open.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              ref: { type: string, description: 'The ask''s ref, `ask:<id>`, as the item lists it.' }
+              would: { type: string, description: 'The id of the option you would choose, exactly as the ask offers it; or `escalate` when you would bring the ask to the operator instead.' }
+              text: { type: string, description: 'The answer text you would give with it, which the next stage reads as a decision. When you escalate: what you would tell the operator.' }
+              why: { type: string, description: 'Why that answer, or why it is the operator''s. One to three sentences.' }
+              confidence: { type: string, enum: [high, medium, low] }
+              alone: { type: boolean, description: 'True only when the project''s attend policy names this kind of ask as one you may answer without the operator, and you would answer it. Recorded; nothing acts on it.' }
+              read: { type: string, description: 'What you read that the asking stage did not have: earlier rounds, earlier answers or rulings, the code. Empty when nothing.' }
+            required: [ref, would, text, why, confidence, alone, read]
+        summary: { type: string, description: 'One line for whoever reads this item later.' }
+      required: [answers, summary]
+
+  # What the advice was, as records for `archon metrics`: three per ask, under the ask's
+  # ref. It acts on nothing.
+  - id: end
+    display: { label: Records the advice }
+    depends_on: [given, attend]
+    trigger_rule: none_failed_min_one_success
+    runtime: bun
+    mutates_checkout: false
+    with:
+      attend: $attend.output
+    script: |
+      import { emit, input } from 'archon:script';
+      let said: any = null;
+      try { said = JSON.parse(input('attend') || 'null'); } catch {}
+      const answers: any[] = Array.isArray(said?.answers) ? said.answers : [];
+      const count = (name: string, subject: string, value: number) => ({ name, unit: 'asks', subject, kind: 'count', value });
+      emit({
+        outcome: answers.length ? 'recorded' : 'none',
+        summary: String(said?.summary ?? ''),
+        answers,
+        metrics: answers.flatMap(a => {
+          const escalates = a.would === 'escalate';
+          return [count('sf.attend_would_answer', String(a.ref), escalates ? 0 : 1), count('sf.attend_would_escalate', String(a.ref), escalates ? 1 : 0), count('sf.attend_would_answer_alone', String(a.ref), !escalates && a.alone === true ? 1 : 0)];
+        }),
+      });
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [recorded, none] }
+        summary: { type: string }
+        answers: { type: array }
+      required: [outcome, summary, answers]

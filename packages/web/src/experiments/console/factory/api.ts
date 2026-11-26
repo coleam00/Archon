@@ -1,15 +1,17 @@
 /**
- * The factory's generic reads, for the map and the board cards: a pack's factory view, run
- * records without events, and what the project's forge says of issues and changes. Types come
- * from the generated API; nothing here knows a pack's words.
+ * The factory's generic reads, for the map and the board cards: a pack's view file (its How it
+ * works explainer), run records without events, and what the project's forge says of issues and
+ * changes. Types come from the generated API; nothing here knows a pack's words, which come
+ * from the pack graph (`lib/graph-view.ts`).
  */
 import type { components, paths } from '@/lib/api.generated';
 import { HttpError, requestJson } from '../lib/http';
 
 export type PackView = components['schemas']['PackView'];
-export type FactoryView = NonNullable<PackView['view']>;
-/** The How it works picture of a factory view. */
-export type HowItWorks = FactoryView['howItWorks'];
+/** A pack's view file as served: its summary and How it works explainer. */
+export type ViewFile = NonNullable<PackView['view']>;
+/** The How it works picture of a view file. */
+export type HowItWorks = ViewFile['howItWorks'];
 export type RunRecords = components['schemas']['RunRecords'];
 export type RunRecord = RunRecords['records'][number];
 export type ForgeSubjects = components['schemas']['ForgeSubjects'];
@@ -18,9 +20,9 @@ export type ForgeSubjects = components['schemas']['ForgeSubjects'];
 export const READ_MAX = 100;
 
 /**
- * The one read of the factory view a pack ships, whole: its path (null when the pack ships
- * none), the view (null when the file does not read) and its problems against the graph. The
- * map chooses curated or derived from all three (`lib/map-source.ts`); board cards read `.view`.
+ * The one read of the view file a pack ships, whole: its path (null when the pack ships none),
+ * the file (null when it does not read) and its problems against the graph. The map chooses
+ * curated or derived from all three (`lib/map-source.ts`).
  */
 export async function getPackViewRead(projectId: string, pack: string): Promise<PackView> {
   return requestJson('/api/packs/{pack}/view', 'get', {

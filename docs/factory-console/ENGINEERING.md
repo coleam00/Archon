@@ -37,15 +37,16 @@ The factory building this repository runs Archon from another checkout, on the h
   the newest wholly answered set of asks per item and workflow, so the board and item pages have
   real asks to look at. Use it only for looking: never confirm an answer on the copy, because settling an
   item's asks there can start a real agent run.
-- The installed pack ships no factory view file yet, so on the copy the board cards show titles,
-  asks and PR links but no check rounds, returns or running step. To see those, copy
-  `docs/factory-console/pack-view/factory-view.json` into the copy's installed pack,
-  `.console-home/plugins/packs/<owner>/<name>/<commit>/.shared/`. Both the view file and the
-  overlay `docs/factory-console/pack-spike/` (the groups) are written for the pack's dev tree at
-  af6d0b4a, not the older commit the live home installs: replace that pack folder with the
-  af6d0b4a tree, then copy the overlay's files over it, as `fc-runtime/gate_combined.sh` does
-  (`pack-view/README.md`). On the older tree the Overview lists document problems for the
-  stages it lacks.
+- The pack the live home installs is older than the one the console is written for: its
+  workflows carry no `display:` blocks and it ships no view file, so on the copy the board cards
+  show titles, asks, PR links and the running step (named by its id in words) but no check
+  rounds or returns, and the map reads stage ids in words. To see the pack's words and its
+  rounds and returns, replace the copy's installed pack folder
+  (`.console-home/plugins/packs/<owner>/<name>/<commit>/`) with the pack's dev tree at af6d0b4a,
+  copy the overlay `docs/factory-console/pack-spike/` over it (the words, the declarations and
+  the document's front matter), and copy `docs/factory-console/pack-view/factory-view.json` into
+  its `.shared/`, as `fc-runtime/gate_combined.sh` does (`pack-view/README.md`). On the older tree
+  the Overview lists document problems for the stages it lacks.
 - Pick a free port (not 3090, 3190 or 8864, which are in use); check it first.
 - Stop every server and browser you start before you finish. Kill by the PID you started, never by
   process name: other factories run on this machine.
@@ -58,48 +59,56 @@ The factory building this repository runs Archon from another checkout, on the h
   older code its own issue does not cover (DESIGN.md, "While main is being slimmed").
 - No database migrations and no change to engine tables. New server code only reads.
 - The engine reads only generic things: items, runs and outcomes, asks with the options their
-  workflow declares, item links, the pack graph (`GET /api/packs/{pack}/graph`) and the view
-  file. No new pack-specific read model in `packages/workflows`, `packages/core` or
+  workflow declares, item links, the pack graph (`GET /api/packs/{pack}/graph`, with the
+  workflows' `display:` blocks served as written) and the view file. No new pack-specific read
+  model in `packages/workflows`, `packages/core` or
   `packages/server`: nothing there knows rounds, returns, shadows, parked items, discoveries,
   work orders, item stories or stage groups. The web composes those.
-- The view file is one file a pack ships, `<pack>/.shared/factory-view.json`, with one schema
-  (`packages/workflows/src/schemas/factory-view.ts`, its How it works picture in
-  `factory-view-how-it-works.ts`), read through the generic `pack-declarations.ts` reader from
-  the copy of the pack the graph was read from (`packages/core/src/workflows/pack-view.ts`) and
-  served by `GET /api/packs/{pack}/view`. It is presentation only: words, the stage
-  items leave the map by, How it works, drill-down cards and story wording (no map layout: the
-  Overview map is drawn from the graph), and where a console finds an item's check rounds, returns and change
-  in its runs' records (`retired`, `rounds`, `returns`, `approves`, `change`, in
-  `factory-view-progress.ts`; operator ruling of 2026-11-25, declare-in-view), and the stage a
-  retired workflow's items stand at on the board (a `retired` entry `{ workflow, stage }`; a bare
-  name places them at none, so they are set aside). The engine reads none of those; the web
-  counts rounds and returns, and places those items, from generic run records with them. It holds no step lists, outcome lists, arrows, ask flags, shadow flags,
-  settings, groups or stage-group enum; it names the graph's stages, steps and outcomes. Groups
-  come from the pack's document front matter (`packages/workflows/src/pack-document.ts`: the
-  manifest's `document`, else `how-it-works.md`), each with an optional `blurb` and a `kind` the
-  engine serves as an opaque slug; `readPackGraph` and `archon validate` check them against the
-  flow, and the graph serves them with each stale stage dropped and the problems in
+- Everything a console shows about a pack comes from the pack graph, not a side file (DESIGN.md,
+  COMBINED direction, "No hand-synced view file"). Words live in each workflow's optional
+  `display:` block (`packages/workflows/src/schemas/display.ts`): a workflow's `label`, `short`,
+  `blurb` and `story`, its outcomes' and answers' words and its stage-modal `phases`, and a node's
+  `label`, served under the id its runs record it by. The meaning a console reads runs with is
+  declared there too: `marks` (a step's outcome and an opaque `means`), `results` (named JSON
+  pointers into the workflow's result) and `replaces` (a retired workflow whose runs stand at
+  this stage, with its own `loops`, `marks` and `results`). The pack's count words and the stage
+  items leave the map by are its document's front matter (`words`, `exit`,
+  `packages/workflows/src/pack-document.ts`). The engine validates them against the workflow
+  and serves them as written, slugs and names opaque; `archon validate` warns on an in-flow
+  stage, step, outcome or asks-settled option with no words and refuses a `replaces` naming a
+  stage the pack still has. `lib/graph-view.ts` `graphWords(graph)` is the one place the web
+  gives them meaning (`means: returns` and `approves`, the results `round`, `allowance` and
+  `change`, the loop `round`), derived once per graph object, so no screen waits on a second
+  read; the map, the stage modal, the board cards and the board's placement all read it. The
+  engine reads none of that meaning; the web counts rounds and returns, and places a retired
+  workflow's items, from generic run records with it.
+- Groups come from the pack's document front matter (`pack-document.ts`: the manifest's
+  `document`, else `how-it-works.md`), each with an optional `blurb` and a `kind` the engine
+  serves as an opaque slug; `readPackGraph` and `archon validate` check them and `exit` against
+  the flow, and the graph serves them with each stale stage dropped and the problems in
   `document.problems`. `lib/view-groups.ts` `groupsOf(graph)` is the one place the map, Full
-  workflow and the board take their groups from, and maps `kind` to the console's colours. One path reads it, `servedFactoryView` (`factory-view-read.ts`), when the file is
-  read and in `bun run check:factory-view <pack dir>`: each entry is read alone with its own
-  schema, then `reconcileFactoryView` (`factory-view-check.ts`) drops each entry naming what the
-  graph lacks, keeps a `rounds`, `returns`, `approves` or `change` entry for a missing workflow as
-  retired, and reports every in-flow stage, step, outcome and ask option without words. Every problem is a
-  typed error (`kind`): the console shows them all and draws what is left, and the check exits 1
-  on any. The progress declarations are checked too: a workflow is a graph stage or retired, a
-  retired workflow's `stage` is one of the graph's flow (else only that placement is dropped), a
-  step or loop is one the stage has, and a stage's `returns` agree with its outcomes that read
-  `returned`. The Wirasm pack's file is kept at
-  `docs/factory-console/pack-view/` until the owner's pack ships it, and the document lines the
-  console needs from the pack (its `document` key and the groups' `blurb` and `kind`) in the
-  overlay `docs/factory-console/pack-spike/` (`pack-view/README.md`).
+  workflow and the board take their groups from, and maps `kind` to the console's colours.
+- The view file is one file a pack ships, `<pack>/.shared/factory-view.json`, holding the How it
+  works explainer only: a `summary` and the hand-laid How it works picture (schema
+  `packages/workflows/src/schemas/factory-view.ts`, the picture in
+  `factory-view-how-it-works.ts`). It is read through the generic `pack-declarations.ts` reader
+  from the copy of the pack the graph was read from (`packages/core/src/workflows/pack-view.ts`)
+  and served by `GET /api/packs/{pack}/view`. One path reads it, `servedFactoryView`
+  (`factory-view-read.ts`), when the file is read and in `bun run check:factory-view <pack dir>`:
+  a key the file does not have (an older file's `stages` or `rounds`) is reported `unknown` and
+  left out, and `reconcileFactoryView` (`factory-view-check.ts`) drops a picture card's stage or
+  an edge the graph lacks. Every problem is a typed error (`kind`): the console shows them all
+  and draws what is left, and the check exits 1 on any. The Wirasm pack's file is kept at
+  `docs/factory-console/pack-view/` until the owner's pack ships it, and the YAML lines the
+  console needs from the pack (its `display:` blocks, its `document` key and its document's
+  front matter) in the overlay `docs/factory-console/pack-spike/` (`pack-view/README.md`).
 - Factory web code stays under `packages/web/src/experiments/console/factory/` (components, pure
   `lib/`, the page routes). On `combined` it holds the curated map, How it works and the stage
   modal, the board card's layer and the board furniture (work orders, Merged, Set aside, the
   Table and the number tiles). It is mounted from Rasmus's pages, and only these files outside
   the folder import from it, tests included: `ConsoleApp.tsx` (the How it works routes and
   `factory.css`), `routes/OverviewPage.tsx` (the number tiles and the map, through
-  `factory/PackMap.tsx`), Rasmus's board, `routes/BoardPage.tsx` and its test,
+  `factory/PackMap.tsx`, and the placement's words, through `factory/lib/graph-view.ts`), Rasmus's board, `routes/BoardPage.tsx` and its test,
   `routes/board/ItemCard.tsx` and its test, and the project's Needs you tab,
   `routes/ProjectNeedsYouPage.tsx` (the board read, and the board's item key, title and option
   words) and its mounted test, `routes/ProjectNeedsYouPage.dom.test.tsx` (the folder's

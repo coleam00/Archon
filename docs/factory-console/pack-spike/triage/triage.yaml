@@ -1,0 +1,133 @@
+name: triage
+description: |
+  Take one work item through triage: judge what should happen to it. The run
+  ends with the judgment's recommendation as its outcome, which a binding can
+  start the next stage on: the link stage for an item that should be built.
+
+inputs:
+  item:
+    description: >-
+      The work item as text: its title, its body, and the discussion on it.
+  land_on:
+    default: ""
+    description: The branch this item's change lands on. Empty means the project's base branch. This stage passes it on.
+  members:
+    default: "[]"
+    description: The other members of the work order or split this item is part of, as JSON, each with its `key` and `title`. The order stage's result carries them.
+  depends_on:
+    default: "[]"
+    description: Keys of the items the order says must land before this one, as JSON. The order stage's result carries them.
+
+# Every judgment but `build`, `narrow` and `split` is a call a maintainer has to make
+# (shape it, close it, fold it, park it), so the `verdict` node leaves an ask with the
+# judgment, its reason and its options. The ask shows in attention; its answer starts
+# the next stage: `build` the link stage, `split` the split stage, `drop` and `reshape`
+# the close stage, which ends the item or leaves it waiting to be shaped.
+returns:
+  node: verdict
+  outcome: outcome
+  asks: asks
+  summary: why
+  options:
+    - id: build
+      does: The item is built as it stands. It goes on to the link stage and then to plan.
+      cost: Work starts on something triage judged should not be built as it is.
+    - id: split
+      does: The item is split into smaller items, each ordered and triaged on its own.
+      cost: One split run; the pieces may still need shaping.
+    - id: reshape
+      does: Nothing is built. The item waits to be shaped, with triage's open questions on it.
+      cost: It stays open until someone shapes it and orders it again.
+    - id: drop
+      does: Nothing is built and the item ends here. Your answer is the reason.
+      cost: The work it asked for is not done under this item.
+
+display:
+  label: Triage
+  short: "Is it worth building?"
+  blurb: "Judges whether an item is worth building, the way the project's maintainers would."
+  outcomes:
+    build: { label: build, story: Triage judged it worth building }
+    close: { label: Closed by triage, story: Triage judged it should be closed }
+    decline: { label: Closed by triage, story: Triage judged it should be declined }
+    deprecate: { label: Closed by triage, story: Triage judged it should be deprecated }
+    fold: { label: Folded into another item, story: Triage judged it belongs in another item }
+    narrow: { label: narrow, story: "Triage judged it worth building, in a narrower form" }
+    native: { label: Handled another way, story: Triage judged it is handled another way }
+    park: { label: Parked by triage, story: Triage judged it should be parked for later }
+    recipe: { label: Handled another way, story: Triage judged it is handled another way }
+    shape: { label: Needs shaping, story: "Triage judged it worth doing, once a maintainer settles its open questions" }
+    split: { label: split, story: Triage judged it is more than one change }
+  answers:
+    build: { label: build }
+    split: { label: split }
+    drop: { label: dropped by you }
+    reshape: { label: needs shaping }
+  phases:
+    - label: Decide
+      cards:
+        - { title: Decide, text: "Decides whether the item is worth building, and how", icon: scale, kind: agent, covers: [judge__judge] }
+    - label: Follow up
+      cards:
+        - { title: Would it start on its own, text: Decides whether it would start without you, icon: ruler, kind: agent, covers: [judge__admit] }
+        - { title: Record, text: Records the measurement, icon: database, kind: script, covers: [judge__admitted] }
+    - label: Hand on
+      cards:
+        - { title: The call, text: "Hands on build, narrow or split, and asks you about every other call", icon: send, kind: script, covers: [verdict] }
+
+nodes:
+  - id: judge
+    include: judge
+    with:
+      item: $INPUTS.item
+      triage_policy: $INPUTS.triage_policy
+      members: $INPUTS.members
+      depends_on: $INPUTS.depends_on
+      admit_policy: $INPUTS.admit_policy
+
+  # Builds the ask for a judgment that does not start the next stage by itself.
+  - id: verdict
+    display: { label: Asks you when the call is yours }
+    # all_done: the include's last nodes (the admit shadow) are skipped for every
+    # judgment but build and narrow, and this node must run after every judgment.
+    depends_on: [judge]
+    trigger_rule: all_done
+    runtime: bun
+    mutates_checkout: false
+    with:
+      judged: $judge.output
+    script: |
+      import { emit, input } from 'archon:script';
+      const j = JSON.parse(input('judged'));
+      const verb = String(j.recommend ?? '');
+      const goesOn = ['build', 'narrow', 'split'].includes(verb);
+      // What each of triage's own verbs means as one of the ask's options.
+      const asOption: Record<string, string> = {
+        build: 'build', narrow: 'build', split: 'split',
+        shape: 'reshape', recipe: 'reshape', native: 'reshape', fold: 'reshape',
+        park: 'drop', deprecate: 'drop', decline: 'drop', close: 'drop',
+      };
+      const options = (j.options ?? []).map((o: any) => `- ${o.verb}: ${o.does} Cost: ${o.cost}`).join('\n');
+      const open = (j.open_questions ?? []).map((q: string) => `- ${q}`).join('\n');
+      const context = [
+        j.summary,
+        `Triage recommends ${verb}: ${j.why}`,
+        options ? `The options triage weighed:\n${options}` : '',
+        open ? `What has to be decided before it can be planned:\n${open}` : '',
+      ].filter(Boolean).join('\n\n');
+      emit({
+        outcome: verb,
+        why: j.why,
+        asks: goesOn ? [] : [{
+          question: `Triage recommends "${verb}" for this item, so nothing is built yet. Build it anyway, split it, keep it for shaping, or drop it?`,
+          context,
+          recommendation: { option: asOption[verb] ?? null, why: j.why },
+          artifacts: [],
+        }],
+      });
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [build, narrow, split, shape, recipe, native, fold, park, deprecate, decline, close] }
+        why: { type: string }
+      required: [outcome, why]

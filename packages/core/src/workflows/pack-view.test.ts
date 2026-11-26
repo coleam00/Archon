@@ -38,10 +38,7 @@ const read = (project: string) =>
 
 const view = (stage: string) => ({
   version: 1,
-  title: 'Chain',
   summary: 'One stage.',
-  stages: { [stage]: { label: 'A', blurb: 'Does a.' } },
-  merged: stage,
   howItWorks: {
     title: 'How it works',
     caption: 'One stage.',
@@ -49,7 +46,16 @@ const view = (stage: string) => ({
     views: {
       top: {
         cards: [
-          { id: 'one', title: 'One', text: 'x', icon: 'hammer', kind: 'stage', col: 1, row: 1 },
+          {
+            id: 'one',
+            title: 'One',
+            text: 'x',
+            icon: 'hammer',
+            kind: 'stage',
+            col: 1,
+            row: 1,
+            stages: [stage],
+          },
           { id: 'two', title: 'Two', text: 'x', icon: 'hammer', kind: 'stage', col: 2, row: 1 },
         ],
         edges: [{ from: 'two', to: 'one', kind: 'loops-back' }],
@@ -69,15 +75,14 @@ describe('readPackView', () => {
     }
   });
 
-  test("a file is reconciled with the pack's graph when it is read, a stale entry dropped alone", async () => {
+  test("a file is reconciled with the pack's graph when it is read, a stale stage dropped alone", async () => {
     const good = await read(await packProject(JSON.stringify(view('chain-a'))));
-    expect([good.view?.title, good.problems]).toEqual(['Chain', []]);
+    expect([good.view?.summary, good.problems]).toEqual(['One stage.', []]);
     const stale = await read(await packProject(JSON.stringify(view('chain-z'))));
-    expect(stale.view?.title).toBe('Chain');
-    expect(stale.view?.stages).toEqual({});
+    expect(stale.view?.summary).toBe('One stage.');
+    expect(stale.view?.howItWorks.views.top?.cards[0]).not.toHaveProperty('stages');
     expect(stale.problems.map(problem => [problem.kind, problem.path.join('.')])).toEqual([
-      ['dropped', 'stages.chain-z'],
-      ['dropped', 'merged'],
+      ['dropped', 'howItWorks.views.top.cards.0.stages.0'],
     ]);
   });
 });

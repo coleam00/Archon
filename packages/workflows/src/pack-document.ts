@@ -1,9 +1,11 @@
 /**
  * A pack's own document: one markdown file the pack's manifest names (`document`), else its
  * `how-it-works.md`, which explains the pack to an operator. Its frontmatter may declare
- * `groups`, how the pack's stages group into a few columns for display. The engine reads the
- * groups and checks them against the pack's flow; it gives the document's text and a group's
- * `kind` no meaning and serves them as written.
+ * `groups`, how the pack's stages group into a few columns for display, `words`, the pack's
+ * own words for what a reader counts across its runs, and `exit`, the stage items leave the
+ * pack's flow by. The engine reads them and checks the groups and `exit` against the pack's
+ * flow; it gives the document's text, a group's `kind` and the `words` no meaning and serves
+ * them as written.
  */
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -28,7 +30,23 @@ export const packGroupSchema = z.object({
 });
 export type PackGroup = z.infer<typeof packGroupSchema>;
 
-const frontmatterSchema = z.object({ groups: z.array(packGroupSchema).optional() });
+/**
+ * The pack's words for what a reader counts across its runs, by a name the reader looks them up
+ * by (for example a round, a work order). Opaque to the engine, as a group's `kind` is.
+ */
+export const packWordsSchema = z.record(
+  z.string().regex(/^[a-z][A-Za-z0-9_-]*$/, 'a word name'),
+  z.string().trim().min(1).max(80)
+);
+export type PackWords = z.infer<typeof packWordsSchema>;
+
+const frontmatterSchema = z.object({
+  groups: z.array(packGroupSchema).optional(),
+  words: packWordsSchema.optional(),
+  /** The stage items leave the pack's flow by, by its authored `name:`. */
+  exit: z.string().min(1).optional(),
+});
+type Frontmatter = z.infer<typeof frontmatterSchema>;
 
 /** The document a pack's manifest falls back to when it names none. */
 export const DEFAULT_PACK_DOCUMENT = 'how-it-works.md';
@@ -72,12 +90,14 @@ export function documentBody(text: string): string {
 }
 
 /**
- * The groups a document's frontmatter declares (none without frontmatter), with a warning for
+ * What a document's frontmatter declares (nothing without frontmatter), with a warning for
  * each key it does not know, or why it does not read.
  */
 export function documentGroups(
   text: string
-): { groups: PackGroup[]; warnings: string[] } | { problem: string } {
+):
+  | { groups: PackGroup[]; words?: PackWords; exit?: string; warnings: string[] }
+  | { problem: string } {
   const yaml = frontmatter(text);
   if (yaml === undefined) return { groups: [], warnings: [] };
   let raw: unknown;
@@ -88,9 +108,12 @@ export function documentGroups(
   }
   const parsed = frontmatterSchema.safeParse(raw ?? {});
   if (!parsed.success)
-    return { problem: `its frontmatter 'groups' is invalid: ${z.prettifyError(parsed.error)}` };
+    return { problem: `its frontmatter is invalid: ${z.prettifyError(parsed.error)}` };
+  const { words, exit }: Frontmatter = parsed.data;
   return {
     groups: parsed.data.groups ?? [],
+    ...(words === undefined ? {} : { words }),
+    ...(exit === undefined ? {} : { exit }),
     warnings: unknownKeys(raw).map(key => `unknown front-matter key '${key}' is ignored`),
   };
 }
@@ -126,6 +149,13 @@ export function checkGroups(
   return { groups: kept, problems };
 }
 
+/** Why `exit` cannot be the stage items leave the flow by: it is not one of the flow's stages. */
+export function exitProblem(exit: string | undefined, inFlow: readonly string[]): string[] {
+  return exit === undefined || inFlow.includes(exit)
+    ? []
+    : [`exit '${exit}' is not a stage of the pack's flow`];
+}
+
 /**
  * Each in-flow stage no group holds, once the document declares any group: a pack that
  * groups its stages groups all of them, so a stage added to the flow and left out of the
@@ -142,6 +172,8 @@ interface PackDocumentRead {
   document: string | null;
   text: string;
   groups: PackGroup[];
+  words?: PackWords;
+  exit?: string;
   /** Why the document or its frontmatter does not read: errors, and then it has no groups. */
   problems: string[];
   /** Keys the frontmatter has that this Archon does not read. */
@@ -202,6 +234,8 @@ export async function loadPackDocument(packDir: string): Promise<PackDocumentRea
         fallback,
         text: body,
         groups: read.groups,
+        ...(read.words === undefined ? {} : { words: read.words }),
+        ...(read.exit === undefined ? {} : { exit: read.exit }),
         problems: [],
         warnings: read.warnings.map(warning => `${where}: ${warning}`),
       };

@@ -334,6 +334,7 @@ describe('workflow-level field parity (#2457)', () => {
       yaml: 'deprecated:\n  message: Switch instead.',
       present: w => w.deprecated?.message === 'Switch instead.',
     },
+    display: { yaml: 'display: { label: Only }', present: w => w.display?.label === 'Only' },
   };
 
   const schemaKeys = [...KNOWN_WORKFLOW_KEYS];

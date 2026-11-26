@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { ItemAsk } from '../../primitives/run';
 import type { ItemRead } from '../../skills/items';
-import type { FactoryView, ForgeSubjects, RunRecord } from '../api';
+import type { ForgeSubjects, RunRecord } from '../api';
+import { wordsOf } from './graph-view.test-fixtures';
 import fixture from './__fixtures__/card-items.json';
 import { stageWords } from './stage-words';
 import {
@@ -21,11 +22,8 @@ import {
  */
 const PREFIX = 'Wirasm/archon-software-factory:';
 
-/** The pack view's progress declarations, as `docs/factory-console/pack-view/factory-view.json` has them. */
-const VIEW = {
-  version: 1,
-  title: 'Factory',
-  summary: 'x',
+/** The pack's words and declarations, as the Wirasm pack's workflows declare them (`graph-view.ts`). */
+const WORDS = wordsOf({
   stages: {
     plan: { label: 'Plan', blurb: 'x', steps: { write: 'Writes the plan' } },
     'stage-build': { label: 'Build', blurb: 'x' },
@@ -33,7 +31,7 @@ const VIEW = {
     'stage-host': { label: 'Host', blurb: 'x' },
   },
   words: { round: 'check round', rounds: 'check rounds', sentBack: 'sent back' },
-  retired: ['deliver'],
+  retired: [{ workflow: 'deliver', stage: null }],
   rounds: [
     { workflow: 'deliver', loop: 'rounds' },
     { workflow: 'stage-check', round: '/round', allowance: '/allowance' },
@@ -52,15 +50,14 @@ const VIEW = {
     workflow,
     pointer: '/change',
   })),
-  howItWorks: { title: 'x', caption: 'x', root: 'top', views: {} },
-} as unknown as FactoryView;
+});
 
 const STAGES = ['plan', 'stage-build', 'stage-check', 'stage-host'].map(workflow => ({
   name: `${PREFIX}${workflow}`,
   workflow,
   inFlow: true,
 }));
-const PACK: CardPack = { stages: STAGES, view: VIEW };
+const PACK: CardPack = { stages: STAGES, words: WORDS };
 
 // The fixture was read before the item read gained `standing.pack`; its runs recorded none.
 const items = (fixture.items as unknown as ItemRead[]).map(read => ({
@@ -123,9 +120,9 @@ describe('rounds and returns from run records', () => {
     expect(card.round?.text).toBe('4 check rounds');
   });
 
-  test('a view that declares no rounds source shows no rounds', () => {
-    const view = { ...VIEW, rounds: undefined } as FactoryView;
-    expect(cardProgress(byKey('111'), { stages: STAGES, view }, allRead(), []).round).toBeNull();
+  test('a pack that declares no rounds source shows no rounds', () => {
+    const words = { ...WORDS, rounds: [] };
+    expect(cardProgress(byKey('111'), { stages: STAGES, words }, allRead(), []).round).toBeNull();
   });
 
   test('a record that could not be read shows no rounds or returns, and says so', () => {
@@ -140,16 +137,16 @@ describe('rounds and returns from run records', () => {
     expect(card.returned).toBeNull();
   });
 
-  test('with no view file there are no rounds or returns, and the PR is the recorded merge', () => {
-    const card = cardProgress(byKey('111'), { stages: STAGES, view: null }, allRead(), []);
+  test('a pack that declares nothing has no rounds or returns, and the PR is the recorded merge', () => {
+    const card = cardProgress(byKey('111'), { stages: STAGES, words: wordsOf() }, allRead(), []);
     expect(card.round).toBeNull();
     expect(card.returned).toBeNull();
     expect(card.pr?.url).toBe(byKey('111').merged?.change);
   });
 
-  test('the words come from the view: a view that says "returned" reads "returned 1x"', () => {
-    const view = { ...VIEW, words: { ...VIEW.words, sentBack: 'returned' } } as FactoryView;
-    const card = cardProgress(byKey('111'), { stages: STAGES, view }, allRead(), []);
+  test('the words come from the pack: a pack that says "returned" reads "returned 1x"', () => {
+    const words = { ...WORDS, words: { ...WORDS.words, sentBack: 'returned' } };
+    const card = cardProgress(byKey('111'), { stages: STAGES, words }, allRead(), []);
     expect(card.returned?.text).toBe('returned 1x');
   });
 
@@ -183,14 +180,11 @@ describe('rounds and returns from run records', () => {
     expect(card.running).toMatchObject({ stage: 'Check', step: 'review' });
   });
 
-  test('a running stage the view gives no label reads as its id in words, never the raw id (#261)', () => {
+  test('a running stage the pack gives no label reads as its id in words, never the raw id (#261)', () => {
     const { read, records: all } = checkRunning(byKey('125'));
-    const { label: _, ...unlabelled } = VIEW.stages['stage-check']!;
-    const view = {
-      ...VIEW,
-      stages: { ...VIEW.stages, 'stage-check': unlabelled },
-    } as unknown as FactoryView;
-    const card = cardProgress(read, { stages: STAGES, view }, allRead(all), []);
+    const { 'stage-check': _, ...others } = WORDS.stages;
+    const words = { ...WORDS, stages: others };
+    const card = cardProgress(read, { stages: STAGES, words }, allRead(all), []);
     expect(card.running?.stage).toBe(stageWords('stage-check'));
     expect(card.running?.stage).not.toBe('stage-check');
   });
@@ -233,7 +227,7 @@ describe('which runs are read, and as which workflow', () => {
     };
     const read = { ...base, runs: [...base.runs, plan] };
     expect(runsToRead(PACK, read)).toEqual([deliver!.id, 'running-plan']);
-    expect(resultKeys(VIEW).sort()).toEqual(['allowance', 'change', 'round']);
+    expect(resultKeys(WORDS).sort()).toEqual(['allowance', 'change', 'round']);
   });
 });
 

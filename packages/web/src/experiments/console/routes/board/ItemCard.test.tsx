@@ -4,7 +4,8 @@ import { act, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import { NO_ITEM_ASKS } from '../../components/ItemAsksSection';
-import type { FactoryView, RunRecord } from '../../factory/api';
+import type { RunRecord } from '../../factory/api';
+import { wordsOf } from '../../factory/lib/graph-view.test-fixtures';
 import { CardsContext } from '../../factory/cards-context';
 import type { CardPack } from '../../factory/lib/item-card';
 import type { ItemAsk } from '../../primitives/run';
@@ -274,7 +275,7 @@ test("a failed card's reason names its stage by the view file's label, not its w
       'flow',
       {
         stages: [{ name: 'acme/flow:check', workflow: 'check', inFlow: true }],
-        view: { stages: { check: { label: 'Checks' } } } as unknown as FactoryView,
+        words: wordsOf({ stages: { check: { label: 'Checks' } } }),
       },
     ],
   ]);
@@ -294,7 +295,7 @@ const worded = (outcomes: Record<string, { label: string }> = {}): Map<string, C
       'flow',
       {
         stages: [{ name: 'acme/flow:check', workflow: 'check', inFlow: true }],
-        view: { stages: { check: { label: 'Checks' } }, outcomes } as unknown as FactoryView,
+        words: wordsOf({ stages: { check: { label: 'Checks' } }, outcomes }),
       },
     ],
   ]);
@@ -502,12 +503,12 @@ test('an item with no run is not a link', async () => {
 /** Pack `flow`: each `check` run is one check round, numbered in its result; its judge returns. */
 const FLOW: CardPack = {
   stages: [{ name: 'acme/flow:check', workflow: 'check', inFlow: true }],
-  view: {
+  words: wordsOf({
     stages: { check: { label: 'Check', blurb: 'x' } },
     words: { rounds: 'check rounds', sentBack: 'sent back' },
-    rounds: { workflow: 'check', round: '/round', allowance: '/allowance' },
+    rounds: [{ workflow: 'check', round: '/round', allowance: '/allowance' }],
     returns: [{ workflow: 'check', node: 'judge', outcome: 'return' }],
-  } as unknown as FactoryView,
+  }),
 };
 
 const record = (id: string, round: number, outcome: string): RunRecord => ({

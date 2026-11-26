@@ -1,0 +1,121 @@
+name: review
+description: |
+  Review one built change against its item, in a checkout of its commit, and
+  decide whether it should land. Changes nothing in the change.
+
+model: ['@reviewer', large]
+
+inputs:
+  item:
+    description: The work item as text.
+  answers:
+    default: "None."
+    description: Decisions an operator already made on this item.
+  base:
+    description: The commit the change was built on.
+  review_policy:
+    default: ""
+    description: The pack setting of the same name, declared here so a workflow that includes this stage can pass it through.
+  returned_before:
+    default: "Nothing. This is the first time this change is checked."
+    description: What the checks returned the last time this change was checked.
+  builder_reply:
+    default: "Nothing."
+    description: What the builder says it did about what was returned.
+
+returns: { node: review, outcome: outcome }
+
+nodes:
+  - id: review
+    display: { label: Code review }
+    command: review
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        outcome: { type: string, enum: [approve, return, replan, ask] }
+        summary: { type: string, description: 'For a maintainer deciding whether to land it, who reads only this. First sentence: the decision. Then what must change, or what makes it safe to land. Three or four sentences.' }
+        item_lines:
+          type: array
+          description: 'One entry for each thing the item asks for: an outcome, something that must hold, an acceptance line.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              line: { type: string, description: 'What the item asks for, in its words.' }
+              verdict: { type: string, enum: [met, not_met, not_checked] }
+              how: { type: string, description: 'How you know, or why it was not checked.' }
+              evidence: { type: string, enum: [ran, read, none] }
+            required: [line, verdict, how, evidence]
+        findings:
+          type: array
+          description: 'With return or replan: each thing that must change. Empty otherwise.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              what: { type: string }
+              where: { type: string }
+              disagrees_with: { type: string, description: 'The other side: what the changed code now disagrees with, and where. Empty when the fault is within the changed lines.' }
+              evidence: { type: string, description: 'What you ran or read, and what it showed.' }
+              evidence_kind: { type: string, enum: [ran, read] }
+              cost_to_leave: { type: string }
+              if_wrong: { type: string, description: 'What you would expect to see if this finding is wrong, for example the same fault on the base commit, and whether you looked.' }
+            required: [what, where, disagrees_with, evidence, evidence_kind, cost_to_leave, if_wrong]
+        noticed:
+          type: array
+          description: 'Things wrong or odd that this change did not cause. Each is a report for the project, not a finding against the change.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              what: { type: string }
+              where: { type: string }
+              kind: { type: string, enum: [defect, odd] }
+            required: [what, where, kind]
+        checked:
+          type: array
+          items: { type: string }
+          description: 'Each thing you ran or read to decide, and what it showed.'
+        asks:
+          type: array
+          description: 'Each decision that belongs to a maintainer. Empty when there is none.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              question: { type: string }
+              context: { type: string }
+              options:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    id: { type: string, description: 'kebab-case, one token, such as keep-the-flag. The answer names it.' }
+                    does: { type: string }
+                    cost: { type: string }
+                  required: [id, does, cost]
+              recommendation:
+                type: object
+                additionalProperties: false
+                properties:
+                  option: { type: string, description: 'The id of the option you would take. It is one of the options above.' }
+                  why: { type: string, description: 'Why that one. If you are not sure, say what would change your mind.' }
+                required: [option, why]
+            required: [question, context, options, recommendation]
+        reaches: { type: string, description: 'Which callers and other ways in reach what this change adds or alters, and what you saw there. Trial from 2026-11-16.' }
+        nearest_case: { type: string, description: 'The nearest case the item did not name, and what the change does in it. Trial from 2026-11-16.' }
+        least_sure:
+          type: string
+          description: 'The part of this change you are least sure of, and what you did about it. Answer it on an approve too.'
+        safety_net:
+          type: string
+          description: "If you missed something in this change, what in the project's own checks would catch it: a test, a type, a lint or structural (AST) rule, a check in CI. Name what exists and whether it was run on this change. Where nothing would catch a mistake of this kind, say so and name the check that would; that is a suggestion for the project, not a finding against the change."
+        not_checked:
+          type: array
+          items: { type: string }
+          description: 'Each thing a maintainer would expect you to have run or read that you did not, and why: a suite, a platform, a check the project requires before a change is proposed. Empty when there is none.'
+        notes: { type: string, description: 'Anything worth saying that has no field here: doubts, things noticed.' }
+        for_next: { type: string, description: 'Anything the engineer who fixes what you returned, or the maintainer who lands it needs from you that has no field here. Write it to them.' }
+      required: [outcome, summary, item_lines, findings, noticed, checked, reaches, nearest_case, least_sure, safety_net, not_checked, asks, notes, for_next]

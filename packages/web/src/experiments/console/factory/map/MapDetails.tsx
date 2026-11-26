@@ -14,7 +14,7 @@ interface StageDetails {
 
 interface MapDetailsProps {
   projectId: string;
-  /** The view file's words for stages and outcomes. */
+  /** The pack's words for stages and outcomes. */
   view: CuratedView;
   /** The card's label. */
   title: string;

@@ -39,7 +39,7 @@ import {
   type PackBoardGroups,
   type Place,
 } from '../factory/lib/board-numbers';
-import type { FactoryView } from '../factory/api';
+import type { FactoryWords } from '../factory/lib/graph-view';
 import type { TableRow } from '../factory/lib/board-table';
 import { itemMatches, outcomeWordsFor } from '../factory/lib/item-card';
 import { workOrders } from '../factory/lib/work-orders';
@@ -71,13 +71,13 @@ export type BoardColumn = StageGroup & {
 
 /**
  * A pack's columns: each of `groups` (by default the graph's, which its document declares),
- * then each stage of its flow that no group holds, in the graph's order, named by `view`'s label
+ * then each stage of its flow that no group holds, in the graph's order, named by `words`' label
  * for it. A workflow only other workflows call is not a stage.
  */
 export function columnsOf(
   graph: PackGraph | undefined,
   groups: readonly StageGroup[] = groupsOf(graph),
-  view: Pick<FactoryView, 'stages'> | null = null
+  words: Pick<FactoryWords, 'stages'> | null = null
 ): BoardColumn[] {
   const stages = (graph?.stages ?? []).filter(stage => stage.inFlow).map(stage => stage.workflow);
   const grouped = new Set(groups.flatMap(group => group.stages));
@@ -93,7 +93,7 @@ export function columnsOf(
       .map(stage => ({
         name: stage,
         stages: [stage],
-        heading: stageLabel(view, stage),
+        heading: stageLabel(words, stage),
         grouped: false,
       })),
   ].filter(column => column.stages.length > 0);
@@ -347,10 +347,10 @@ export function PackBoard({
   );
   const stageOf = place ?? ((read: ItemRead): string | undefined => stageAt(read, graph?.stages));
   // The same groups the map draws: the pack document's.
-  const packView = useFactoryCards()?.packs?.get(pack)?.view ?? null;
+  const packWords = useFactoryCards()?.packs?.get(pack)?.words ?? null;
   const groups = groupsOf(graph);
-  const columns = columnsOf(graph, groups, packView);
-  const labelOf = (workflow: string): string => stageLabel(packView, workflow);
+  const columns = columnsOf(graph, groups, packWords);
+  const labelOf = (workflow: string): string => stageLabel(packWords, workflow);
   const focus = useSearchParams()[0].get('group');
   const items = board.moving;
   // A pack with nothing on its board has nothing to show.
@@ -431,7 +431,7 @@ function usePlaces(packs: readonly string[]): ReadonlyMap<string, Place> {
   const places = new Map<string, Place>();
   for (const pack of packs) {
     const cardPack = read?.get(pack);
-    if (cardPack !== undefined) places.set(pack, placeFor(cardPack.stages, cardPack.view));
+    if (cardPack !== undefined) places.set(pack, placeFor(cardPack.stages, cardPack.words));
   }
   return places;
 }

@@ -1,5 +1,5 @@
 /**
- * The map's one feedback lane: every send-back the view file declares (`map-layout.ts` says
+ * The map's one feedback lane: every send-back the pack graph draws (`map-layout.ts` says
  * which arrows are send-backs) drawn on a single line under the row of cards, running right
  * to left. A send-back leaves its source card's bottom edge on the card's one source leg,
  * runs along the lane, and rises into its target stage's leg on the target card. A card has

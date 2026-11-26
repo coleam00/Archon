@@ -1,11 +1,11 @@
 /**
  * Where an item stands, as "Items here now" says it (DESIGN.md, The map: "the run line of the
  * run working it, or the board's ... label"). It takes the Board's own words: a running item's
- * line is the board card's (`cardProgress`'s running stage and step, in the view's words), and
+ * line is the board card's (`cardProgress`'s running stage and step, in the pack's words), and
  * an item with open asks reads Needs you even while a run works it (`shownChip` in
  * `item-asks.ts`, as the stage's "N need you" counts it), and every other state is the board
  * card's label (`CHIP` of its state). A merged item reads "Merged",
- * as the Board's Merged column says it. The view file only adds where: the label of the stage the
+ * as the Board's Merged column says it. The pack's words only add where: the label of the stage the
  * item stands at, or, for an item at rest, its outcome's label.
  */
 import { CHIP, standingRun } from '../../routes/board/standing';

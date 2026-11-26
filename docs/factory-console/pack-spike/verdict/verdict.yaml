@@ -1,0 +1,119 @@
+name: verdict
+description: |
+  Put the reports several checks made on one change into one report and one
+  outcome. Says of each thing found whether it is inside the item, caused by
+  the change or beside the item, and sorts it into findings, notes and things noticed.
+  Trusts the reports; checks nothing again and reads no code.
+
+model: ['@verdict', small]
+
+inputs:
+  item:
+    description: The work item as text.
+  answers:
+    default: "None."
+    description: Decisions an operator already made on this item.
+  reports:
+    description: Each check's result, labelled with the check it came from.
+  plan:
+    default: "No plan was given."
+    description: What plan concluded, as its result. Its `reaches` says who the outcome is for, and its `not_doing` what the change leaves alone.
+  sizes:
+    default: "Not measured: this change was checked on no item."
+    description: The change's size at the end of each delivery run on the item since it was last planned, as the engine recorded it.
+  review_policy:
+    default: ""
+    description: The pack setting of the same name, declared here so a workflow that includes this stage can pass it through.
+
+returns: { node: verdict, outcome: outcome }
+
+nodes:
+  - id: verdict
+    display: { label: Verdict }
+    command: verdict
+    mutates_checkout: false
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        outcome: { type: string, enum: [approve, return, replan, ask] }
+        summary: { type: string, description: 'Three lines for a maintainer deciding whether to land it.' }
+        findings:
+          type: array
+          description: 'Everything that must change, each once.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              kind: { type: string, enum: [inside, caused_by], description: 'inside: the item is not met. caused_by: what this change added or altered is wrong and the item did not ask for it; `what` says what to remove or shrink.' }
+              against: { type: string, description: 'With inside: the words of the item it fails, quoted. Empty otherwise.' }
+              what: { type: string }
+              where: { type: string }
+              path: { type: string, description: 'The one file this is best shown on, relative to the repository root, as the report names it. Empty when the report names no file.' }
+              line: { type: integer, description: 'The line in that file, on the changed side. 0 when the report names none.' }
+              evidence: { type: string }
+              cost_to_leave: { type: string }
+              reported_by: { type: array, items: { type: string }, description: 'Every check that reported it.' }
+            required: [kind, against, what, where, path, line, evidence, cost_to_leave, reported_by]
+        notes:
+          type: array
+          description: 'Real and on the record, and not a reason to return the change. Trial from 2026-11-17.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              kind: { type: string, enum: [inside, caused_by], description: 'As on a finding.' }
+              what: { type: string }
+              where: { type: string }
+              path: { type: string, description: 'As on a finding.' }
+              line: { type: integer, description: 'As on a finding.' }
+              evidence: { type: string }
+              why_a_note: { type: string, description: 'Which line of the review policy makes this a note and not a finding.' }
+              reported_by: { type: array, items: { type: string } }
+            required: [kind, what, where, path, line, evidence, why_a_note, reported_by]
+        disagreements:
+          type: array
+          items: { type: string }
+          description: 'Where two reports contradict each other. Empty when none do.'
+        noticed:
+          type: array
+          description: 'What is beside the item, each once: there before this change, a case the item does not name and the change did not make worse, or something the plan leaves alone.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              what: { type: string }
+              where: { type: string }
+              reported_by: { type: array, items: { type: string } }
+            required: [what, where, reported_by]
+        asks:
+          type: array
+          description: 'Every ask the reports left, unchanged.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              question: { type: string }
+              context: { type: string }
+              options:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    id: { type: string, description: 'kebab-case, one token, such as keep-the-flag. The answer names it.' }
+                    does: { type: string }
+                    cost: { type: string }
+                  required: [id, does, cost]
+              recommendation:
+                type: object
+                additionalProperties: false
+                properties:
+                  option: { type: string, description: 'The id of the option you would take. It is one of the options above.' }
+                  why: { type: string, description: 'Why that one. If you are not sure, say what would change your mind.' }
+                required: [option, why]
+              from: { type: string, description: 'The check that left it.' }
+            required: [question, context, options, recommendation, from]
+        growth: { type: string, description: 'How the change''s size moved across its rounds, from the sizes you were given, and after which return it grew.' }
+        for_next: { type: string, description: 'Anything the maintainer deciding on this change needs from you that has no field here. Write it to them.' }
+      required: [outcome, summary, findings, notes, disagreements, noticed, asks, growth, for_next]

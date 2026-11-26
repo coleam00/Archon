@@ -2,16 +2,14 @@
  * What one run contributes to its item's board card, from the run's record
  * (`GET /api/workflows/runs/records`): its deepest running step, its check rounds, how often
  * and why it sent the item back, and the change it named. Every name read here (steps,
- * outcomes, pointers into the run's result) comes from the view file; nothing here names a
- * pack's step or reads prose. Ported from v1 (`origin/main`, `factory/lib/run-facts.ts`).
+ * outcomes, pointers into the run's result) comes from the pack's own declarations, through
+ * the graph (`graph-view.ts`); nothing here names a pack's step or reads prose. Ported from v1 (`origin/main`, `factory/lib/run-facts.ts`).
  */
-import type { FactoryView, RunRecord } from '../api';
+import type { RunRecord } from '../api';
+import type { ChangeSource, DecisionPoint, FactoryWords, RoundsSource } from './graph-view';
 import { valueAt } from './result-pointer';
 
 type Outcomes = RunRecord['node_outcomes']['nodes'];
-type DecisionPoint = NonNullable<FactoryView['returns']>[number];
-export type RoundsSource = Exclude<NonNullable<FactoryView['rounds']>, unknown[]>;
-type ChangeSource = Exclude<NonNullable<FactoryView['change']>, unknown[]>;
 
 /**
  * How one check round ended: `returned` when a declared return point sent the item back,
@@ -44,12 +42,6 @@ export interface RunFacts {
   returns: { summary: string | null }[];
   /** The URL at the declared change pointer; null when the run names none. */
   change: string | null;
-}
-
-/** A list declaration given as one entry or several, as a list. */
-export function listOf<T extends object>(declared: T | T[] | undefined): T[] {
-  if (declared === undefined) return [];
-  return Array.isArray(declared) ? declared : [declared];
 }
 
 function field(output: unknown, name: string): unknown {
@@ -149,7 +141,10 @@ function stageRound(
     : decides(points.approves)
       ? 'approved'
       : 'undecided';
-  return { max: countAt(record, source.allowance), rounds: [{ iteration, verdict }] };
+  return {
+    max: source.allowance === undefined ? null : countAt(record, source.allowance),
+    rounds: [{ iteration, verdict }],
+  };
 }
 
 function runChange(sources: readonly ChangeSource[], record: RunRecord): string | null {
@@ -160,18 +155,18 @@ function runChange(sources: readonly ChangeSource[], record: RunRecord): string 
   return null;
 }
 
-/** The facts of one run of `workflow`, as the view names it (null for none it declares). */
+/** The facts of one run of `workflow`, as the pack declares it (null for none it declares). */
 export function runFacts(
-  view: FactoryView,
+  view: FactoryWords,
   workflow: string | null,
   run: RunState,
   record: RunRecord
 ): RunFacts {
-  const ofWorkflow = (list: readonly DecisionPoint[] | undefined): DecisionPoint[] =>
-    (list ?? []).filter(point => point.workflow === workflow);
+  const ofWorkflow = (list: readonly DecisionPoint[]): DecisionPoint[] =>
+    list.filter(point => point.workflow === workflow);
   const points = { returns: ofWorkflow(view.returns), approves: ofWorkflow(view.approves) };
   const outcomes = record.node_outcomes.nodes;
-  const source = listOf(view.rounds).find(entry => entry.workflow === workflow);
+  const source = view.rounds.find(entry => entry.workflow === workflow);
   return {
     active: deepestRunning(record.running),
     rounds:
@@ -189,7 +184,7 @@ export function runFacts(
       )
       .map(entry => ({ summary: summaryOf(entry.output) })),
     change: runChange(
-      listOf(view.change).filter(entry => entry.workflow === workflow),
+      view.change.filter(entry => entry.workflow === workflow),
       record
     ),
   };

@@ -3,8 +3,8 @@
  * the pack graph alone: one card per flow stage, stacked in a column per document group (Intake,
  * Plan and build, Checks, Landing), the columns left to right in the document's order, then a
  * Merged card. An arrow into a later column runs forward, card to card; one into the same or an
- * earlier column is a send-back, drawn in the lanes under the cards. Every pill reads the view
- * file's words for what the arrow carries, as the curated map's do (`arrowWords`).
+ * earlier column is a send-back, drawn in the lanes under the cards. Every pill reads the pack's
+ * words for what the arrow carries, as the curated map's do (`arrowWords`).
  *
  * Pure.
  */
@@ -299,7 +299,7 @@ function boundsOf(cards: readonly FullCard[], arrows: readonly FullArrow[], bott
 }
 
 /**
- * `labels` are the view file's words (`arrowLabels`); with none an outcome's pill reads its value
+ * `labels` are the pack's words (`arrowLabels`); with none an outcome's pill reads its value
  * in words (`outcomeWords`) and an ask's its raw option, as the curated map would.
  */
 export function fullWorkflowLayout(

@@ -1,24 +1,14 @@
 /**
- * A pack's factory view (`schemas/factory-view.ts`) reconciled with the pack graph (DESIGN.md,
- * COMBINED direction: "A stale entry drops only itself, and says so"). The view is
- * presentation only, so it may only name what the graph has. A pack changes under its file (a
- * stage renamed), so a name the graph lacks costs only the entry that names it: the entry
- * leaves the served view and is reported `dropped`. That covers a stage, step, outcome,
- * option or `merged` stage the graph lacks, a progress loop
- * or step of a stage the graph has but without it, and a How it works edge between stages no
- * arrow connects.
- *
- * Meaning entries are the exception: a `rounds`, `returns`, `approves` or `change` entry
- * naming a workflow the graph lacks is kept, and the workflow is served as `retired`
- * (reported `retired`), because old runs carry the old name and board cards read their rounds
- * from them. What the graph has and the file gives no words (a stage, step, outcome value, or
- * option a hand-off leaves on) is `unworded`. Groups are not the file's: the pack's document
- * declares them and the engine checks them (`pack-document.ts`). Every problem is an error for `check:factory-view`; a console shows them and
- * draws what is left. Read time (`packViewOf`, through `servedFactoryView`) and the check run
- * this one pass.
+ * A pack's view file (`schemas/factory-view.ts`) reconciled with the pack graph. The file is
+ * the How it works explainer only; where its picture names stages, it may only name what the
+ * graph has and draw edges the graph's arrows back. A name or an edge the graph lacks costs only
+ * itself: it leaves the served view and is reported `dropped`. The pack's words, groups and
+ * declarations are not the file's: the graph serves them from the workflows' `display:` blocks
+ * and the pack's document, and `archon validate` checks them. Every problem is an error for
+ * `check:factory-view`; a console shows them and draws what is left. Read time (`packViewOf`,
+ * through `servedFactoryView`) and the check run this one pass.
  */
 import type { PackGraph } from './pack-graph';
-import { reconcileProgress } from './factory-view-progress-check';
 import { PACK_SHARED_DIRECTORY } from './packaged-workflow';
 import {
   FACTORY_VIEW_FILE,
@@ -26,22 +16,20 @@ import {
   type FactoryViewProblem,
 } from './schemas/factory-view';
 
-/** Where in a pack its factory view is, as `readPackDeclarations` takes it. */
+/** Where in a pack its view file is, as `readPackDeclarations` takes it. */
 export const FACTORY_VIEW_PATH = `${PACK_SHARED_DIRECTORY}/${FACTORY_VIEW_FILE}`;
 
 type ProblemPath = FactoryViewProblem['path'];
 type GraphStage = PackGraph['stages'][number];
-type StageWords = FactoryView['stages'][string];
-type Drilldown = NonNullable<StageWords['drilldown']>;
 
 /**
  * One reconcile in progress: `view` is the copy being pruned, and `add` records what happened
  * at a path of the file as written (so a path names the entry the author wrote).
  */
-export interface Reconciling {
+interface Reconciling {
   view: FactoryView;
   graph: PackGraph;
-  /** Graph stages by `workflow` name, the name the view uses. */
+  /** Graph stages by `workflow` name, the name the picture uses. */
   stages: ReadonlyMap<string, GraphStage>;
   add(kind: FactoryViewProblem['kind'], path: ProblemPath, message: string): void;
 }
@@ -62,143 +50,8 @@ function joinedPairs(graph: PackGraph): ReadonlySet<string> {
   return joined;
 }
 
-const splitKey = (key: string): { stage: string; name: string } => {
-  const at = key.lastIndexOf(':');
-  return { stage: key.slice(0, at), name: key.slice(at + 1) };
-};
-
 const noStage = (stage: string, graph: PackGraph): string =>
   `names stage "${stage}", which pack "${graph.pack}" does not have`;
-
-const noStep = (stage: string, id: string): string =>
-  `names step "${id}", which stage "${stage}" does not have`;
-
-/** A stage's step words for steps it has. */
-function reconcileStepWords(r: Reconciling, name: string, words: StageWords, steps: Set<string>) {
-  for (const id of Object.keys(words.steps ?? {}))
-    if (!steps.has(id)) {
-      delete words.steps?.[id];
-      r.add('dropped', ['stages', name, 'steps', id], noStep(name, id));
-    }
-}
-
-/**
- * A drill-down card's covered steps the stage has; a card covering none is dropped. A step two
- * cards cover is the file contradicting itself, which no drift causes.
- */
-function reconcileCard(
-  r: Reconciling,
-  at: ProblemPath,
-  card: Drilldown['phases'][number]['cards'][number],
-  steps: Set<string>,
-  covered: Map<string, string>
-): Drilldown['phases'][number]['cards'] {
-  const name = String(at[1]);
-  const covers = card.covers.filter((id, k) => {
-    if (!steps.has(id)) {
-      r.add('dropped', [...at, 'covers', k], noStep(name, id));
-      return false;
-    }
-    const first = covered.get(id);
-    if (first !== undefined)
-      r.add('invalid', [...at, 'covers', k], `covers step "${id}", which card "${first}" covers`);
-    else covered.set(id, card.title);
-    return true;
-  });
-  if (covers.length > 0) return [{ ...card, covers }];
-  r.add('dropped', at, `card "${card.title}" covers no step stage "${name}" has`);
-  return [];
-}
-
-/** A stage's drill-down; a phase or drill-down left with no card goes with its last card. */
-function reconcileDrilldown(r: Reconciling, name: string, words: StageWords, steps: Set<string>) {
-  if (words.drilldown === undefined) return;
-  const covered = new Map<string, string>();
-  const phases = words.drilldown.phases.flatMap((phase, p) => {
-    const at: ProblemPath = ['stages', name, 'drilldown', 'phases', p];
-    const cards = phase.cards.flatMap((card, c) =>
-      reconcileCard(r, [...at, 'cards', c], card, steps, covered)
-    );
-    if (cards.length > 0) return [{ ...phase, cards }];
-    r.add('dropped', at, `phase "${phase.label}" has no card left`);
-    return [];
-  });
-  if (phases.length > 0) words.drilldown = { ...words.drilldown, phases };
-  else {
-    delete words.drilldown;
-    r.add('dropped', ['stages', name, 'drilldown'], 'has no phase left');
-  }
-}
-
-/** Each `stages` entry's stage, its step names and the steps its drill-down covers. */
-function reconcileStages(r: Reconciling): void {
-  for (const [name, words] of Object.entries(r.view.stages)) {
-    const stage = r.stages.get(name);
-    if (stage === undefined) {
-      delete r.view.stages[name];
-      r.add('dropped', ['stages', name], noStage(name, r.graph));
-      continue;
-    }
-    const steps = new Set(stage.nodes.map(node => node.id));
-    reconcileStepWords(r, name, words, steps);
-    reconcileDrilldown(r, name, words, steps);
-  }
-}
-
-/**
- * Whether an asks-settled arrow of `stage` leaves on `option`. An arrow with no option backs
- * every option unless it is on `withdrawn`: an `answered` or `any` binding starts on whatever
- * answer was chosen, while a withdrawal chooses none.
- */
-const optionBacked = (graph: PackGraph, stage: GraphStage, option: string): boolean =>
-  graph.arrows.some(
-    ({ from }) =>
-      'settled' in from &&
-      from.stage === stage.name &&
-      (from.option === option || (from.option === undefined && from.settled !== 'withdrawn'))
-  );
-
-/** Why an `outcomes` key names what the graph lacks, or undefined. */
-function outcomeMissing(r: Reconciling, key: string): string | undefined {
-  const { stage: name, name: outcome } = splitKey(key);
-  const stage = r.stages.get(name);
-  if (stage === undefined) return noStage(name, r.graph);
-  if (outcome === '*' || stage.outcome?.values.some(entry => entry.value === outcome) === true)
-    return undefined;
-  return `names outcome "${outcome}", which stage "${name}" does not declare`;
-}
-
-/** Why an `answers` key names what the graph lacks, or undefined. */
-function answerMissing(r: Reconciling, key: string): string | undefined {
-  const { stage: name, name: option } = splitKey(key);
-  const stage = r.stages.get(name);
-  if (stage === undefined) return noStage(name, r.graph);
-  if (optionBacked(r.graph, stage, option)) return undefined;
-  return `names option "${option}" of stage "${name}", but no asks-settled hand-off of the pack leaves on it`;
-}
-
-/** The entries of an `outcomes` or `answers` object naming what the graph has. */
-function reconcileKeyed(
-  r: Reconciling,
-  key: 'outcomes' | 'answers',
-  missing: (r: Reconciling, entry: string) => string | undefined
-): void {
-  const entries = r.view[key];
-  if (entries === undefined) return;
-  for (const name of Object.keys(entries)) {
-    const why = missing(r, name);
-    if (why === undefined) continue;
-    delete entries[name];
-    r.add('dropped', [key, name], why);
-  }
-}
-
-/** The stage `merged` names; without it the map takes the last in-flow stage. */
-function reconcileMerged(r: Reconciling): void {
-  if (r.view.merged === undefined || r.stages.has(r.view.merged)) return;
-  r.add('dropped', ['merged'], noStage(r.view.merged, r.graph));
-  delete r.view.merged;
-}
 
 type Picture = FactoryView['howItWorks']['views'][string];
 
@@ -252,79 +105,9 @@ function reconcileHowItWorks(r: Reconciling): void {
   }
 }
 
-/** The label an outcome value reads as: its exact entry's, else its stage's `stage:*` entry's. */
-export function outcomeLabelOf(
-  view: Pick<FactoryView, 'outcomes'>,
-  workflow: string,
-  value: string
-): string | undefined {
-  return view.outcomes?.[`${workflow}:${value}`]?.label ?? view.outcomes?.[`${workflow}:*`]?.label;
-}
-
-/** The label an ask option of a stage reads as on a map arrow: its exact entry's only. */
-function answerLabelOf(
-  view: Pick<FactoryView, 'answers'>,
-  workflow: string,
-  option: string
-): string | undefined {
-  return view.answers?.[`${workflow}:${option}`]?.label;
-}
-
-/** The options the graph's asks-settled arrows out of `stage` leave on, each once, in order. */
-const optionsOf = (graph: PackGraph, stage: GraphStage): string[] => [
-  ...new Set(
-    graph.arrows.flatMap(({ from }) =>
-      'settled' in from && from.stage === stage.name && from.option !== undefined
-        ? [from.option]
-        : []
-    )
-  ),
-];
-
 /**
- * An in-flow stage with no words, a step of it with none, and an outcome value or an ask option
- * of it with no label: a console would show the raw id ("Build · build", "take-as-is"). Only
- * in-flow stages: no item stands at the rest.
- */
-function unworded(r: Reconciling): void {
-  for (const stage of r.graph.stages.filter(entry => entry.inFlow)) {
-    const { workflow } = stage;
-    const words = r.view.stages[workflow];
-    if (words === undefined)
-      r.add('unworded', ['stages', workflow], `stage "${workflow}" has no words`);
-    for (const node of stage.nodes)
-      if (words?.steps?.[node.id] === undefined)
-        r.add(
-          'unworded',
-          ['stages', workflow, 'steps', node.id],
-          `step "${node.id}" of stage "${workflow}" has no words`
-        );
-    for (const { value } of stage.outcome?.values ?? [])
-      if (outcomeLabelOf(r.view, workflow, value) === undefined)
-        r.add(
-          'unworded',
-          ['outcomes', `${workflow}:${value}`],
-          `outcome "${value}" of stage "${workflow}" has no label`
-        );
-    unwordedOptions(r, stage);
-  }
-}
-
-/** The options an in-flow stage's asks-settled arrows leave on that have no label. */
-function unwordedOptions(r: Reconciling, stage: GraphStage): void {
-  const { workflow } = stage;
-  for (const option of optionsOf(r.graph, stage))
-    if (answerLabelOf(r.view, workflow, option) === undefined)
-      r.add(
-        'unworded',
-        ['answers', `${workflow}:${option}`],
-        `option "${option}" of stage "${workflow}" has no label`
-      );
-}
-
-/**
- * `view` with every entry naming what `graph` lacks taken out (meaning entries kept, their
- * workflows retired), and the problems in the order they were found. `view` is not changed.
+ * `view` with every picture card's stage and edge the graph lacks taken out, and the problems in
+ * the order they were found. `view` is not changed.
  */
 export function reconcileFactoryView(
   view: FactoryView,
@@ -337,12 +120,6 @@ export function reconcileFactoryView(
     stages: new Map(graph.stages.map(stage => [stage.workflow, stage])),
     add: (kind, path, message) => problems.push({ kind, path, message }),
   };
-  reconcileStages(r);
-  reconcileKeyed(r, 'outcomes', outcomeMissing);
-  reconcileKeyed(r, 'answers', answerMissing);
-  reconcileMerged(r);
   reconcileHowItWorks(r);
-  reconcileProgress(r, view);
-  unworded(r);
   return { view: r.view, problems };
 }

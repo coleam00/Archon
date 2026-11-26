@@ -23,6 +23,7 @@ import { mapSource } from '../lib/map-source';
 import { factoryPackPath } from '../lib/views';
 import { usePackGraph } from '../map-structure';
 import { OverviewBody } from '../overview/OverviewPage';
+import { graphWords } from '../lib/graph-view';
 import { useFullWorkflow, usePackView } from '../PackMap';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { DocumentProblems, ViewProblems } from '../ViewProblems';
@@ -103,6 +104,7 @@ export function HowItWorksPage(): ReactElement {
 function HowItWorks({ projectId, pack }: { projectId: string; pack: string }): ReactElement {
   const source = mapSource(usePackView(projectId, pack));
   const graph = usePackGraph(projectId, pack);
+  const words = graph.data === undefined ? undefined : graphWords(graph.data);
   const [full, choose] = useFullWorkflow();
   if (source.kind === 'loading')
     return (
@@ -121,7 +123,7 @@ function HowItWorks({ projectId, pack }: { projectId: string; pack: string }): R
         )}
         <ViewProblems problems={source.problems} drawn={false} />
         <DocumentProblems graph={graph.data} />
-        <DerivedStructure projectId={projectId} pack={pack} />
+        <DerivedStructure projectId={projectId} pack={pack} view={words} />
         {document == null || document.text === '' ? null : (
           <div
             data-document
@@ -158,7 +160,7 @@ function HowItWorks({ projectId, pack }: { projectId: string; pack: string }): R
       <ViewProblems problems={source.problems} drawn />
       <DocumentProblems graph={graph.data} />
       {full ? (
-        <DerivedStructure projectId={projectId} pack={pack} view={source.view} />
+        <DerivedStructure projectId={projectId} pack={pack} view={words} />
       ) : (
         <OverviewBody overview={source.view.howItWorks} />
       )}

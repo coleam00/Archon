@@ -1,6 +1,6 @@
 /**
- * A pack's map on the project Overview: the curated map, laid out from the pack graph and
- * worded by the pack's view file, whenever the server could read that file, with what the file
+ * A pack's map on the project Overview: the curated map, laid out and worded from the pack graph
+ * (`graph-view.ts`), whenever the server could read the pack's view file, with what the file
  * gets wrong listed above it; else the map derived from the pack graph (`mapSource`, the one
  * place that chooses). The curated map offers the derived one as "Full workflow"
  * (`?map=full`). The routes import the factory's map through this file only.
@@ -11,12 +11,12 @@ import { columnsOf } from '../routes/BoardPage';
 import type { PackGraph } from '../skills/items';
 import { useEntity, type EntityView } from '../store/cache';
 import { K } from '../store/keys';
-import { getPackViewRead, type FactoryView, type PackView } from './api';
+import { getPackViewRead, type PackView, type ViewFile } from './api';
 import { DerivedFlow, flowCounts, stageCounts } from './DerivedFlow';
 import { FactoryCardsProvider } from './FactoryCards';
 import { GraphSkeleton } from './GraphSkeleton';
 import { curatedView } from './lib/curated-view';
-import { retiredOf } from './lib/item-card';
+import { graphWords } from './lib/graph-view';
 import { mapSource } from './lib/map-source';
 import { groupsOf } from './lib/view-groups';
 import type { PackBoardGroups } from './lib/board-numbers';
@@ -73,24 +73,24 @@ export function PackMap({ projectId, pack, board, itemsError, asks }: PackMapPro
   const viewRead = usePackView(projectId, pack);
   const source = mapSource(viewRead);
   const graph = usePackGraph(projectId, pack);
-  const retired = retiredOf(viewRead.data?.view);
+  const words = graph.data === undefined ? null : graphWords(graph.data);
+  const retired = words?.retired ?? [];
   const [full, choose] = useFullWorkflow();
   const boardPath = `/console/p/${encodeURIComponent(projectId)}/board`;
   // The derived map's columns are the same groups the curated map draws, so a card's heading
   // is its group's on both.
-  const view = source.kind === 'curated' ? source.view : null;
   const groups = groupsOf(graph.data);
   const derived = (
     <DerivedFlow
       flow={flowCounts(
-        columnsOf(graph.data, groups, view),
+        columnsOf(graph.data, groups, words),
         board?.moving ?? [],
         graph.data?.stages,
         asks,
         retired
       )}
       graph={graph.data}
-      view={view}
+      view={words}
       counts={stageCounts(board?.moving ?? [], graph.data?.stages, asks, retired)}
       live={{ board: boardPath, numbers: board?.numbers, failed: itemsError !== undefined }}
     />
@@ -180,7 +180,7 @@ function Curated({
 }: {
   projectId: string;
   pack: string;
-  file: FactoryView;
+  file: ViewFile;
   graph: EntityView<PackGraph>;
   board: PackBoardGroups | undefined;
   itemsError: Error | undefined;
@@ -202,9 +202,9 @@ function Curated({
       board.merged.recent,
       graph.data?.stages,
       asks,
-      retiredOf(file)
+      graph.data === undefined ? [] : graphWords(graph.data).retired
     );
-  }, [view, board, itemsError, graph.data, file, asks]);
+  }, [view, board, itemsError, graph.data, asks]);
   if (view === undefined)
     return graph.error === undefined ? (
       <GraphSkeleton label="Loading the map" />

@@ -8,6 +8,8 @@ env/
 venv/
 ENV/
 build/
+# The pack overlay's build stage is a pack workflow, not build output.
+!docs/factory-console/pack-spike/build/
 *.egg-info/
 
 # Node.js
