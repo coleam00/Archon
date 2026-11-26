@@ -6,12 +6,12 @@
  * fire-only binding. The checks that span bindings run here, where all are visible: a
  * sibling reference names a declared binding that is written as a file `trigger fire`
  * reads (a timer or fire-only binding), an event field is read only by an event binding, the
- * met wait only by an event binding with `wake`, a
- * part of the run only by a run-ended or asks-settled binding, the ended run's item key
- * only by a run-ended binding, a linked entry only by a linked run-ended binding with
- * `items`, the settled answers only by an asks-settled binding, and the item's answers by
- * either, except a linked run-ended binding. A `grants` names a declared binding with a
- * `limit`.
+ * met wait only by an event binding with `wake`, a part of the run only by a run-ended or
+ * asks-settled binding, except that an event binding with `wake` reads the inputs of the
+ * run that left the met wait, the ended run's item key only by a run-ended binding, a
+ * linked entry only by a linked run-ended binding with `items`, the settled answers only by
+ * an asks-settled binding, and the item's answers by any of these three, except a linked
+ * run-ended binding. A `grants` names a declared binding with a `limit`.
  */
 import type { Fail } from './pack-settings';
 import { readsItemAnswers, readsLinkedEntry } from './schemas/binding-input-source';
@@ -122,10 +122,25 @@ function inputProblem(
     return kind === 'event'
       ? undefined
       : 'reads an event field, but only an event binding has an event';
+  const wakes = kind === 'event' && 'wake' in binding && binding.wake !== undefined;
   if ('wait' in input)
-    return kind === 'event' && 'wake' in binding && binding.wake !== undefined
-      ? undefined
-      : 'reads the met wait, but only an event binding with wake has one';
+    return wakes ? undefined : 'reads the met wait, but only an event binding with wake has one';
+  return wakes ? wakeSourceProblem(binding, kind, input) : runSourceProblem(binding, kind, input);
+}
+
+/**
+ * An input a wake binding reads besides the event and the met wait: the inputs of the run
+ * that left the met wait and the item's answers. Not its result, which a wake start does not
+ * read; any other run source is refused as for an event binding.
+ */
+function wakeSourceProblem(
+  binding: PackBinding,
+  kind: PackBindingKind,
+  input: Exclude<PackBindingInput, string>
+): string | undefined {
+  if ('input' in input || readsItemAnswers(input)) return undefined;
+  if ('result' in input)
+    return "reads a result, but a wake start reads the waiting run's inputs, not its result";
   return runSourceProblem(binding, kind, input);
 }
 
@@ -153,10 +168,10 @@ function runSourceProblem(
     : 'reads the ended run, but only a run-ended or asks-settled binding has a run to read';
 }
 
-/** The item's answers belong to the item a run-ended or asks-settled start is on. */
+/** The item's answers belong to the item a run-ended, asks-settled or wake start is on. */
 function itemAnswersProblem(binding: PackBinding, kind: PackBindingKind): string | undefined {
   if (kind !== 'run_ended' && kind !== 'asks_settled')
-    return "reads the item's answers, but only a run-ended or asks-settled binding starts on an item that has them";
+    return "reads the item's answers, but only a run-ended, asks-settled or wake binding starts on an item that has them";
   return 'run_ended' in binding && binding.run_ended.linked !== undefined
     ? "reads the item's answers, but a linked start is on a holder item; read them in the started stage"
     : undefined;

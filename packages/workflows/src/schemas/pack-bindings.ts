@@ -18,6 +18,7 @@ import {
 } from './binding-input-source';
 import {
   asksSettledTriggerSchema,
+  bindingWakeSchema,
   itemMappingSchema,
   linkedTakesNoCheckout,
   resourceStartBindingIntentSchema,
@@ -36,10 +37,11 @@ export const packBindingNameSchema = z
  * One launch input: literal text, a part of the operator's repository, the file written
  * for a sibling binding, (event bindings only) a field of the event, (event bindings with
  * `wake` only) the wait the event met, (run-ended and asks-settled bindings only) a part of
- * the run that ended or left the asks, as `on.runEnded.inputs` reads it, (run-ended
+ * the run that ended or left the asks, as `on.runEnded.inputs` reads it, (event bindings
+ * with `wake` only) one of the inputs of the run that left the met wait, (run-ended
  * bindings only) the key of the ended run's item, (linked run-ended bindings with `items`
  * only) a part of the started item's own entry, (asks-settled bindings only) the settled
- * answers, or (asks-settled and non-linked run-ended bindings) every answer on the item.
+ * answers, or (asks-settled, wake and non-linked run-ended bindings) every answer on the item.
  */
 const packBindingInputSchema = z.union([
   z.string(),
@@ -86,6 +88,22 @@ export const packTimerBindingSchema = z
   })
   .strict();
 
+/** The engine picks the lane of a start on another run's checkout, so none is fixed here. */
+const checkoutTakesDefaultIsolation = {
+  check: (binding: {
+    isolation: { kind: string };
+    run_ended?: { checkout?: string };
+    asks_settled?: { checkout?: string };
+    wake?: { checkout?: string };
+  }): boolean =>
+    (binding.run_ended?.checkout ?? binding.asks_settled?.checkout ?? binding.wake?.checkout) ===
+      undefined || binding.isolation.kind === 'default',
+  message: {
+    message: "with checkout, isolation must be left out: the engine picks the start's lane",
+    path: ['isolation'],
+  },
+};
+
 /**
  * `event` is the source plugin's selector without its `repository`, which the operator
  * supplies. Its vocabulary belongs to the plugin that reads the generated binding, so it
@@ -105,14 +123,21 @@ export const packEventBindingSchema = z
      * Wake the open wait `wait` that a run of `workflow`, a workflow of this pack, left on an
      * item, when the event's field `about` holds exactly the value the wait names. When the
      * event names its subject, only a wait on the item `item` maps it to matches, or, with no
-     * `item`, only a wait that names the same subject.
+     * `item`, only a wait that names the same subject. `checkout: waiting-run` starts it in
+     * the checkout the run that left the met wait recorded when it completed.
      */
     wake: z
-      .object({ workflow: z.string().min(1), wait: z.string().min(1), about: z.string().min(1) })
+      .object({
+        workflow: z.string().min(1),
+        wait: z.string().min(1),
+        about: z.string().min(1),
+        checkout: bindingWakeSchema.shape.checkout,
+      })
       .strict()
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine(checkoutTakesDefaultIsolation.check, checkoutTakesDefaultIsolation.message);
 
 const runEndedOutcomeSchema = runEndedTriggerSchema.shape.outcome;
 const asksSettledOptionSchema = asksSettledTriggerSchema.shape.option.unwrap();
@@ -129,21 +154,6 @@ function oneOrDistinct<T extends z.ZodString>(value: T, plural: string) {
       }),
   ]);
 }
-
-/** The engine picks the lane of a start on another run's checkout, so none is fixed here. */
-const checkoutTakesDefaultIsolation = {
-  check: (binding: {
-    isolation: { kind: string };
-    run_ended?: { checkout?: string };
-    asks_settled?: { checkout?: string };
-  }): boolean =>
-    (binding.run_ended?.checkout === undefined && binding.asks_settled?.checkout === undefined) ||
-    binding.isolation.kind === 'default',
-  message: {
-    message: "with checkout, isolation must be left out: the engine picks the start's lane",
-    path: ['isolation'],
-  },
-};
 
 /**
  * Starts when a run of `run_ended.workflow`, a workflow of this pack, completes with one

@@ -45,6 +45,7 @@ import type { DagNode, AgentNode, NodeOutput, WorkflowRun } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 import type { RunEndedFacts, WorkflowDeps } from '../deps';
 import type { LinkedRunEndedStart, SourceReceiptAcceptance } from '../schemas/resource-start';
+import { packEventBindingSchema } from '../schemas/pack-bindings';
 
 /**
  * #2469 — a run's spend has to survive its outcome. Usage used to be written only in
@@ -2025,6 +2026,67 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     expect(twice.failWorkflowRun.mock.calls[0]?.[1]).toContain(
       "returns.waits 'waits' on node 'decide': [1].event 'checks' is named more than once"
     );
+  });
+
+  it('records its checkout only for a wake its pack declares that takes it for a wait it leaves', async () => {
+    const waits = [{ event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 30 }];
+    const handoff = { runId: 'waits-run', branch: 'archon/host', commit: 'b'.repeat(40) };
+    /** Complete a run of `waits` whose pack declares one wake binding on it. */
+    const leaveWaits = async (wake: Record<string, unknown>) => {
+      mockStructuredResult({ summary: 'done', waits });
+      const store = createMockStore();
+      const read: unknown[] = [];
+      await executeDagWorkflow(
+        dagOptions({
+          deps: {
+            ...createMockDeps(store),
+            asksCheckout: async (_run, left) => {
+              read.push(left);
+              return { handoff, worktree: '/worktrees/host' };
+            },
+          },
+          conversationId: 'conv-waits',
+          cwd: testDir,
+          workflow: {
+            name: 'waits',
+            nodes: [resultNode],
+            returns: 'decide',
+            result: { waits: 'waits' },
+            pack: {
+              key: 'factory',
+              workflow: 'waits',
+              source: 'project',
+              bindings: {
+                'checks-done': packEventBindingSchema.parse({
+                  workflow: 'waits',
+                  resource: 'host',
+                  overlap: 'queue',
+                  event: { kind: 'check.changed' },
+                  wake: { workflow: 'waits', wait: 'checks', about: 'check.revision', ...wake },
+                }),
+              },
+            },
+          },
+          workflowRun: makeWorkflowRun('waits-run'),
+        })
+      );
+      const metadata = store.completeWorkflowRun.mock.calls[0]?.[2] as
+        | Record<string, unknown>
+        | undefined;
+      return { read, recorded: metadata?.asks_checkout };
+    };
+    // A wake that takes the checkout: it is read now and recorded for the start.
+    expect(await leaveWaits({ checkout: 'waiting-run' })).toEqual({
+      read: [{ waits: true }],
+      recorded: { handoff, worktree: '/worktrees/host' },
+    });
+    // A wake that carries event fields only: nothing is read, so the worktree is released.
+    expect(await leaveWaits({})).toEqual({ read: [], recorded: undefined });
+    // A wake that takes the checkout for a wait this run does not leave: released as well.
+    expect(await leaveWaits({ wait: 'review', checkout: 'waiting-run' })).toEqual({
+      read: [],
+      recorded: undefined,
+    });
   });
 
   it('fails the run naming the field when an ask does not hold together, and opens none', async () => {
