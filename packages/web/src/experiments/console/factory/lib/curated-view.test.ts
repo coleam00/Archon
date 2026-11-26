@@ -23,7 +23,7 @@ const FLOW = [
   'close',
 ];
 
-describe('the slim file over the c1104737 graph', () => {
+describe('the slim file over the af6d0b4a graph', () => {
   test('one map stage per in-flow graph stage, in flow order, with its words from the file', () => {
     expect(shippedView.stages.map(entry => [entry.id, entry.workflows])).toEqual(
       FLOW.map(workflow => [workflow, [workflow]])
@@ -107,7 +107,7 @@ describe('the slim file over the c1104737 graph', () => {
   });
 });
 
-describe("the map's arrows over the c1104737 graph", () => {
+describe("the map's arrows over the af6d0b4a graph", () => {
   const label = (from: string, to: string) =>
     shippedArrows.find(arrow => arrow.from === from && arrow.to === to)?.label;
 

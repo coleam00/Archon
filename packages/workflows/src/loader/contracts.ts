@@ -1,3 +1,4 @@
+import { observesItem } from '../schemas/item-role';
 import type { WorkflowDefinition, DagNode, IncludeDirective } from '../schemas';
 import {
   isComposeFanOutNode,
@@ -15,7 +16,7 @@ import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { isDeepStrictEqual } from 'node:util';
 
 /**
- * Validate the result contract (`returns: { node, outcome, asks, options, waits, final, summary }`) against its selected node.
+ * Validate the result contract (`returns: { node, outcome, asks, options, waits, ends, summary }`) against its selected node.
  *
  * Include aliases are deliberately deferred: `parseWorkflow` can only see the
  * `include:` directive, while `expandWorkflowIncludes` owns rebinding that alias
@@ -23,16 +24,18 @@ import { isDeepStrictEqual } from 'node:util';
  * on the final flat workflow, where every selected node is executable.
  */
 export function validateWorkflowResultContract(
-  workflow: Pick<WorkflowDefinition, 'name' | 'returns' | 'result'> & {
+  workflow: Pick<WorkflowDefinition, 'name' | 'returns' | 'result' | 'observes'> & {
     readonly nodes: readonly (DagNode | IncludeDirective)[];
   }
 ): string | null {
   if (workflow.result?.options !== undefined && workflow.result.asks === undefined)
     return 'Workflow returns.options declares the options of asks; declare returns.asks too';
   const declared = declaredResultFields(workflow.result);
-  const final = workflow.result?.final;
-  if (final !== undefined && workflow.result?.outcome === undefined)
-    return 'Workflow declares returns.final but no returns.outcome; returns.final names outcomes, so it needs returns.outcome';
+  const ends = workflow.result?.ends;
+  if (ends !== undefined && workflow.result?.outcome === undefined)
+    return 'Workflow declares returns.ends but no returns.outcome; returns.ends names outcomes, so it needs returns.outcome';
+  if (ends !== undefined && observesItem(workflow))
+    return 'Workflow declares both observes: true and returns.ends; a run that observes an item is not one of its steps, so it never ends the item';
   const [first] = declared;
   if (first === undefined) return null;
   if (workflow.returns === undefined)
@@ -55,26 +58,26 @@ export function validateWorkflowResultContract(
     );
     if (error !== null) return error;
   }
-  return final === undefined ? null : finalOutcomesError(workflow, final);
+  return ends === undefined ? null : endingOutcomesError(workflow, ends);
 }
 
 /**
- * Each `returns.final` entry is a value the declared outcome can take, named once. Checked
+ * Each `returns.ends` entry is a value the declared outcome can take, named once. Checked
  * after the outcome's own schema, so the form it is read against is a valid one.
  */
-function finalOutcomesError(
+function endingOutcomesError(
   workflow: Parameters<typeof declaredOutcome>[0],
-  final: readonly string[]
+  ends: readonly string[]
 ): string | null {
   const outcome = declaredOutcome(workflow);
   // Unreachable: the outcome was validated before this runs.
   if (outcome === undefined) return null;
   const values = outcomeValues(outcome.form);
-  for (const [index, value] of final.entries()) {
+  for (const [index, value] of ends.entries()) {
     if (!values.includes(value))
-      return `Workflow returns.final names '${value}', which returns.outcome: '${outcome.field}' cannot take (it takes: ${values.join(', ')})`;
-    if (final.indexOf(value) !== index)
-      return `Workflow returns.final names '${value}' twice; name each final outcome once`;
+      return `Workflow returns.ends names '${value}', which returns.outcome: '${outcome.field}' cannot take (it takes: ${values.join(', ')})`;
+    if (ends.indexOf(value) !== index)
+      return `Workflow returns.ends names '${value}' twice; name each outcome once`;
   }
   return null;
 }

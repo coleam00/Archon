@@ -63,8 +63,20 @@ export interface ChildResumeCursor {
   childRunId?: string;
 }
 
+/**
+ * A failed child its parent drives again by itself (`resumeFailedChildRun`), so the claim
+ * refuses a child that holds an unknown outcome by then. Never persisted.
+ */
+export interface RedriveResumeCursor {
+  kind: 'redrive';
+}
+
 /** Every cursor `IWorkflowStore.resumeWorkflowRun` accepts. */
-export type ResumeClaimCursor = WorkflowResumeCursor | OwnerlessResumeCursor | ChildResumeCursor;
+export type ResumeClaimCursor =
+  | WorkflowResumeCursor
+  | OwnerlessResumeCursor
+  | ChildResumeCursor
+  | RedriveResumeCursor;
 
 /** A cursor a caller carries to a resume before it holds the run's live-owner lease. */
 export type ResumeRequestCursor = WorkflowResumeCursor | OwnerlessResumeCheck;
@@ -148,6 +160,8 @@ export function resumeCursorMatches(
         (gate.type === 'child_workflow' || gate.type === 'fan_out')
       );
     }
+    case 'redrive':
+      return run.status === 'failed';
   }
 }
 

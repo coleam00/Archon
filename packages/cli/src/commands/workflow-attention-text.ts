@@ -214,7 +214,8 @@ const shellWord = (text: string): string =>
 /**
  * What a stopped item says: the stage, the outcome it ended in and its summary, and the
  * commands that read the item and move it, each working from any directory: the item is
- * read through its run, and a start names the project's checkout. A new run closes it.
+ * read through its run, and a start names the project's checkout. A new step closes it; a
+ * run of a workflow that observes the item does not, and its end may have started one.
  */
 function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string[] {
   const { runId, workflow, outcome } = item.stoppedIn;
@@ -229,7 +230,7 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
       : [
           // A refused start says only what was refused: others the end caused may have started.
           refused === undefined
-            ? `${ended(workflow, outcome)}; nothing started and it left no ask`
+            ? `${ended(workflow, outcome)}; no step followed it and it left no ask (a stage that observes the item moves it on not at all)`
             : `${ended(workflow, outcome)}; ${refused.length === 1 ? 'a start it caused was' : `${String(refused.length)} starts it caused were`} refused`,
         ];
   lines.push(...refusedStartLines(refused ?? []));
@@ -247,7 +248,7 @@ function stoppedLines(item: Extract<AttentionQueueItem, { kind: 'stopped' }>): s
       `run ${next === undefined ? '<workflow>' : shellWord(next)} --item ${shellWord(item.item.key)}${cwd}`
     );
     lines.push(
-      `run a stage on it, which closes this: ${start}${item.checkout === null ? ", from the item's project" : ''}`
+      `run a step on it, which closes this (a workflow that observes the item does not): ${start}${item.checkout === null ? ", from the item's project" : ''}`
     );
   }
   return lines;

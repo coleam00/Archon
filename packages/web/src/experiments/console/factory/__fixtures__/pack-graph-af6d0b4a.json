@@ -23,20 +23,24 @@
           {
             "value": "ready",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "work_order",
             "startsNothing": true,
-            "final": false
+            "ends": true,
+            "stops": false
           },
           {
             "value": "refused",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -69,60 +73,72 @@
           {
             "value": "build",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "narrow",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "split",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "shape",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "recipe",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "native",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "fold",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "park",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "deprecate",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "decline",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "close",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": true,
       "waits": false,
       "nodes": [
@@ -179,30 +195,36 @@
           {
             "value": "place",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "waiting",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": true
           },
           {
             "value": "fold",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "dropped",
             "startsNothing": true,
-            "final": true
+            "ends": true,
+            "stops": false
           },
           {
             "value": "none",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": true,
       "waits": false,
       "nodes": [
@@ -251,20 +273,24 @@
           {
             "value": "whole",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "split",
             "startsNothing": true,
-            "final": false
+            "ends": true,
+            "stops": false
           },
           {
             "value": "waiting",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": true,
       "waits": false,
       "nodes": [
@@ -305,15 +331,18 @@
           {
             "value": "recorded",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "none",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           }
         ]
       },
+      "observes": true,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -354,20 +383,24 @@
           {
             "value": "planned",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "stop",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": true,
       "waits": false,
       "nodes": [
@@ -400,15 +433,18 @@
           {
             "value": "recorded",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "none",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           }
         ]
       },
+      "observes": true,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -457,30 +493,36 @@
           {
             "value": "built",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "built_for_host",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "built_for_land",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "replan",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": true,
       "waits": false,
       "nodes": [
@@ -549,25 +591,30 @@
           {
             "value": "approve",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "return",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "replan",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": true,
       "waits": false,
       "nodes": [
@@ -705,25 +752,30 @@
           {
             "value": "ready",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "return",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "waiting",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": true,
       "waits": false,
       "nodes": [
@@ -793,15 +845,18 @@
           {
             "value": "ready",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "changed",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -858,15 +913,18 @@
           {
             "value": "land",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": true,
       "waits": false,
       "nodes": [
@@ -907,30 +965,36 @@
           {
             "value": "landed",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "behind",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "returned",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "stop",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": true,
       "waits": false,
       "nodes": [
@@ -963,7 +1027,7 @@
         }
       ],
       "inFlow": true,
-      "returns": "landed",
+      "returns": "verdict",
       "outcome": {
         "field": "outcome",
         "form": "enum",
@@ -971,47 +1035,63 @@
           {
             "value": "clear",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "broken_here",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": false
           },
           {
             "value": "broken_before",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": false
           },
           {
             "value": "unclear",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": false
           },
           {
             "value": "waiting",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": false
           },
           {
             "value": "not_landed",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": false
           },
           {
             "value": "none",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           }
         ]
       },
-      "asks": false,
+      "observes": true,
+      "asks": true,
       "waits": false,
       "nodes": [
         {
           "id": "landed",
           "kind": "agent",
           "dependsOn": [],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "verdict",
+          "kind": "exec",
+          "dependsOn": ["landed"],
           "loopGroup": null,
           "blocks": [],
           "fanOut": null
@@ -1031,6 +1111,7 @@
       "inFlow": true,
       "returns": "drain",
       "outcome": null,
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1066,25 +1147,30 @@
           {
             "value": "dropped",
             "startsNothing": true,
-            "final": true
+            "ends": true,
+            "stops": false
           },
           {
             "value": "reshape",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "not_closed",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "none",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1117,20 +1203,24 @@
           {
             "value": "built",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "stop",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1163,30 +1253,36 @@
           {
             "value": "clear",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "return",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "waiting",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "none",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1231,25 +1327,30 @@
           {
             "value": "approve",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "return",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "replan",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           }
         ]
       },
+      "observes": true,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1336,6 +1437,7 @@
       "inFlow": false,
       "returns": "judge",
       "outcome": null,
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1384,20 +1486,24 @@
           {
             "value": "approve",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "return",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1424,6 +1530,7 @@
       "inFlow": false,
       "returns": "report",
       "outcome": null,
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1456,25 +1563,30 @@
           {
             "value": "approve",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "return",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "replan",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1507,60 +1619,72 @@
           {
             "value": "build",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "narrow",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "split",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "shape",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "recipe",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "native",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "fold",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "park",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "deprecate",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "decline",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           },
           {
             "value": "close",
             "startsNothing": true,
-            "final": true
+            "ends": false,
+            "stops": false
           }
         ]
       },
+      "observes": true,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1609,20 +1733,24 @@
           {
             "value": "sound",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "return",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -1655,25 +1783,30 @@
           {
             "value": "approve",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "return",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "replan",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           },
           {
             "value": "ask",
             "startsNothing": true,
-            "final": false
+            "ends": false,
+            "stops": true
           }
         ]
       },
+      "observes": false,
       "asks": false,
       "waits": false,
       "nodes": [
@@ -2371,6 +2504,21 @@
       "active": false,
       "declared": {
         "binding": "order-after-landed",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:landed",
+        "settled": "answered",
+        "option": "fix"
+      },
+      "to": "Wirasm/archon-software-factory:order",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "order-after-landed-answers",
         "problems": []
       },
       "installed": null

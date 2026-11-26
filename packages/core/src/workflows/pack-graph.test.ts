@@ -198,7 +198,27 @@ describe('readPackGraph', () => {
     expect(graph.stages.find(s => s.name === 'chain-a')?.outcome?.values).toContainEqual({
       value: 'ready',
       startsNothing: true,
-      final: false,
+      ends: false,
+      stops: true,
+    });
+  });
+
+  test('a file whose target observes its item, outside the pack, starts no step', async () => {
+    const { project, write, deps } = await fixture('project');
+    await writeFile(
+      join(project, '.archon', 'workflows', 'shadow.yaml'),
+      'name: shadow\ndescription: shadow\nobserves: true\nnodes:\n  - id: look\n    bash: echo look\n'
+    );
+    await write('shadow', trigger('shadow', project, { to: 'shadow' }));
+
+    const graph = await readPackGraph(project, 'chain', deps);
+
+    expect(graph.arrows[0]).toMatchObject({ active: true, installed: { problems: [] } });
+    expect(graph.stages.find(s => s.name === 'chain-a')?.outcome?.values).toContainEqual({
+      value: 'ready',
+      startsNothing: false,
+      ends: false,
+      stops: true,
     });
   });
 
@@ -217,7 +237,8 @@ describe('readPackGraph', () => {
     expect(graph.stages.find(s => s.name === 'chain-a')?.outcome?.values).toContainEqual({
       value: 'ready',
       startsNothing: true,
-      final: false,
+      ends: false,
+      stops: true,
     });
   });
 

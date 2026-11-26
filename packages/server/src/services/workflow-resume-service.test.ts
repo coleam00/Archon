@@ -228,6 +228,7 @@ describe('workflow continuation scanner', () => {
         priorCompletedNodes: new Map(),
         priorFailedNodes: new Map(),
         resumeCause: 'continue_after_wait',
+        claimedByHand: true,
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -277,6 +278,7 @@ describe('workflow continuation scanner', () => {
         priorCompletedNodes: new Map(),
         priorFailedNodes: new Map(),
         resumeCause: 'continue_after_wait',
+        claimedByHand: true,
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -325,6 +327,7 @@ describe('workflow continuation scanner', () => {
         priorCompletedNodes: new Map(),
         priorFailedNodes: new Map(),
         resumeCause: 'continue_after_wait',
+        claimedByHand: true,
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -487,6 +490,7 @@ describe('workflow continuation scanner', () => {
       priorCompletedNodes: new Map(),
       priorFailedNodes: new Map(),
       resumeCause: 'continue_after_wait',
+      claimedByHand: true,
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
@@ -535,6 +539,7 @@ describe('workflow continuation scanner', () => {
       priorCompletedNodes: new Map(),
       priorFailedNodes: new Map(),
       resumeCause: 'continue_after_wait',
+      claimedByHand: true,
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
@@ -722,6 +727,7 @@ describe('workflow continuation scanner', () => {
         priorCompletedNodes: new Map(),
         priorFailedNodes: new Map(),
         resumeCause: 'continue_after_wait' as const,
+        claimedByHand: true,
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       };
@@ -829,6 +835,7 @@ describe('workflow continuation scanner', () => {
         priorCompletedNodes: new Map(),
         priorFailedNodes: new Map(),
         resumeCause: 'continue_after_wait',
+        claimedByHand: true,
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -885,6 +892,7 @@ describe('workflow continuation scanner', () => {
       priorCompletedNodes: new Map(),
       priorFailedNodes: new Map(),
       resumeCause: 'continue_after_wait',
+      claimedByHand: true,
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
@@ -970,6 +978,7 @@ describe('workflow continuation scanner', () => {
       priorCompletedNodes: new Map(),
       priorFailedNodes: new Map(),
       resumeCause: 'continue_after_wait',
+      claimedByHand: true,
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });

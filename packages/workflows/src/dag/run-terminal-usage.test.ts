@@ -2095,7 +2095,7 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
   });
 });
 
-describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#6108)', () => {
+describe('executeDagWorkflow -- what a run on an item records about it as it completes', () => {
   let testDir: string;
 
   const anAsk = {
@@ -2114,6 +2114,9 @@ describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#
     value: Record<string, unknown>,
     options: {
       asks?: boolean;
+      waits?: boolean;
+      observes?: boolean;
+      noOutcome?: boolean;
       workflowRun?: WorkflowRun;
       receipts?: readonly SourceReceiptAcceptance[];
     } = {}
@@ -2149,11 +2152,15 @@ describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#
           ],
           returns: 'result',
           result: {
-            outcome: 'stage',
-            final: ['landed'],
+            ...(options.noOutcome === true ? {} : { outcome: 'stage' }),
+            ...(options.observes === true || options.noOutcome === true
+              ? {}
+              : { ends: ['landed'] }),
             summary: 'why',
             ...(options.asks === true ? { asks: 'asks' } : {}),
+            ...(options.waits === true ? { waits: 'waits' } : {}),
           },
+          ...(options.observes === true ? { observes: true } : {}),
         },
         workflowRun: options.workflowRun ?? makeWorkflowRun('stop-run', { item_id: 'item-1' }),
       })
@@ -2180,7 +2187,56 @@ describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#
     await removeTempTree(testDir);
   });
 
-  it('records the stop with its declared summary when the outcome is not final and nothing follows', async () => {
+  /** The item facts the one completion write carried beside the metadata. */
+  const completedResult = (store: MockWorkflowStore) =>
+    store.completeWorkflowRun.mock.calls[0]?.[3];
+
+  it('records the end, naming the workflow, outcome and summary, for an outcome that ends the item', async () => {
+    const store = createMockStore();
+    await run(
+      store,
+      { stage: 'landed', why: 'merged as abc123' },
+      {
+        receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance],
+      }
+    );
+
+    expect(completedMetadata(store)).not.toHaveProperty('item_stopped');
+    expect(completedResult(store)?.end).toEqual({
+      reason: "Workflow 'deliver' ended the item with outcome 'landed': merged as abc123",
+      node: 'result',
+    });
+  });
+
+  it('records the end for an outcome that ends the item, even when the run also left an ask', async () => {
+    const store = createMockStore();
+    await run(store, { stage: 'landed', why: 'merged', asks: [anAsk] }, { asks: true });
+
+    expect(completedMetadata(store)).not.toHaveProperty('item_stopped');
+    expect(completedResult(store)?.end?.reason).toBe(
+      "Workflow 'deliver' ended the item with outcome 'landed': merged"
+    );
+  });
+
+  it('records the stop for a run on an item that completes with no outcome', async () => {
+    const store = createMockStore();
+    await run(store, { stage: 'replan' }, { noOutcome: true });
+
+    expect(completedMetadata(store)?.item_stopped).toEqual({ summary: null });
+  });
+
+  it('records the stop even when its end starts a stage, which moves the item on once it runs', async () => {
+    const store = createMockStore();
+    await run(
+      store,
+      { stage: 'replan', why: 'Started the build.' },
+      { receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance] }
+    );
+
+    expect(completedMetadata(store)?.item_stopped).toEqual({ summary: 'Started the build.' });
+  });
+
+  it('records the stop with its declared summary when the outcome starts nothing and ends nothing', async () => {
     const store = createMockStore();
     await run(store, { stage: 'replan', why: '  The plan missed the schema change.  ' });
 
@@ -2189,29 +2245,24 @@ describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#
     });
   });
 
-  it('records that the outcome was final, and only then', async () => {
-    const final = createMockStore();
-    await run(final, { stage: 'landed', why: 'merged' });
-    expect(completedMetadata(final)?.item_final).toBe(true);
-
-    const stopped = createMockStore();
-    await run(stopped, { stage: 'replan', why: 'x' });
-    expect(completedMetadata(stopped)).not.toHaveProperty('item_final');
-  });
-
   it.each([
-    ['ended in a final outcome', { stage: 'landed', why: 'merged' }, {}],
+    ['observes its item', { stage: 'replan', why: 'x' }, { observes: true }],
     ['left an ask', { stage: 'replan', why: 'x', asks: [anAsk] }, { asks: true }],
     [
-      'started the next stage',
-      { stage: 'replan', why: 'x' },
-      { receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance] },
+      'left a wait',
+      {
+        stage: 'replan',
+        why: 'x',
+        waits: [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 60 }],
+      },
+      { waits: true },
     ],
-    ['is on no item', { stage: 'replan', why: 'x' }, { workflowRun: makeWorkflowRun('stop-run') }],
-  ] as const)('records no stop for a run that %s', async (_, value, options) => {
+    ['is on no item', { stage: 'landed', why: 'x' }, { workflowRun: makeWorkflowRun('stop-run') }],
+  ] as const)('records neither a stop nor an end for a run that %s', async (_, value, options) => {
     const store = createMockStore();
     await run(store, value, options);
 
     expect(completedMetadata(store)).not.toHaveProperty('item_stopped');
+    expect(completedResult(store)?.end).toBeUndefined();
   });
 });

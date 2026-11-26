@@ -85,6 +85,7 @@ const graph: PackGraph = {
     inFlow: workflow !== 'lint',
     returns: null,
     outcome: null,
+    observes: false,
     asks: false,
     waits: false,
     nodes: [],

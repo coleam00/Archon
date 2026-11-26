@@ -607,6 +607,44 @@ bindings:
     expect(runs.map(run => run.workflow_name)).toEqual(['stage-a', 'stage-b']);
   }, 90_000);
 
+  test('the end of a step that starts only an observing stage stops its item; one that starts a step does not', async () => {
+    const fixture = await makeFixture('observer-only');
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'workflows', 'shadow-b.yaml'),
+      STAGE_B.replace('name: stage-b', 'name: shadow-b\nobserves: true')
+    );
+    fixture.bind('shadow-after-plan', RUN_ENDED, { workflowName: 'shadow-b' });
+    const stopped = async () =>
+      (
+        JSON.parse(await fixture.cli(['workflow', 'attention', '--json'])) as {
+          items: { kind: string; item?: { key: string }; stoppedIn?: { workflow: string } }[];
+        }
+      ).items
+        .filter(item => item.kind === 'stopped')
+        .map(item => [item.item?.key ?? '', item.stoppedIn?.workflow ?? ''])
+        // Attention orders ties by ref, which holds a random run id; the item key does not.
+        .sort(([a], [b]) => a.localeCompare(b));
+    const runA = (issue: string) =>
+      fixture.cli([
+        ...['workflow', 'run', 'stage-a', '--no-worktree', '--item', issue],
+        ...['--input', 'plan=p1', '--input', `issue=${issue}`],
+      ]);
+
+    await runA('issue-1');
+    await waitFor(() => completedRuns(fixture, 2), 'A and the observing stage its end started');
+    expect(await stopped()).toEqual([['issue-1', 'stage-a']]);
+
+    // Bound to a step instead, the started stage moves the item on. That stage declares no
+    // outcome and starts nothing, so it stops the item in its turn.
+    fixture.bind('shadow-after-plan', RUN_ENDED);
+    await runA('issue-2');
+    await waitFor(() => completedRuns(fixture, 4), 'A and the step its end started');
+    expect(await stopped()).toEqual([
+      ['issue-1', 'stage-a'],
+      ['issue-2', 'stage-b'],
+    ]);
+  }, 90_000);
+
   test('a hand run starts the stage its end caused even behind a page of older pending work on the host', async () => {
     const fixture = await makeFixture('backlog');
     fixture.bind('build-after-plan', RUN_ENDED);
@@ -1650,7 +1688,12 @@ describe('a start refused before launch', () => {
 
     await cli(['ai', 'default', 'claude']);
     await run('stage-ai');
-    expect(await stopped()).toEqual({ onItem: [], inAttention: [] });
+    // The later run closes that stop. It declares no outcome and starts nothing, so it stops
+    // the item itself, with nothing refused.
+    const after = await stopped();
+    expect(after.onItem.map(item => [item.stoppedIn.workflow, item.refused])).toEqual([
+      ['stage-ai', undefined],
+    ]);
   }, 90_000);
 
   test('for a pack file setting the started stage reads that names no file, naming the setting and path, until the file is restored', async () => {
@@ -1721,7 +1764,10 @@ describe('a start refused before launch', () => {
       ['chain-plan', 'completed'],
       ['chain-build', 'completed'],
     ]);
-    expect(await stoppedOnItem()).toEqual([]);
+    // The refused start's stop is closed; the run that declares no outcome stops the item.
+    expect((await stoppedOnItem()).map(item => [item.stoppedIn.workflow, item.refused])).toEqual([
+      ['chain-build', undefined],
+    ]);
   }, 90_000);
 
   test('is recorded on a run that also left an ask, and stops its item once the ask is answered', async () => {

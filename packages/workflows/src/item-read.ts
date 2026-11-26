@@ -391,6 +391,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getInstallHold'
       | 'listHeldItemStarts'
       | 'listAllHeldItemStarts'
+      | 'listItemStarts'
       | 'getRunLimit'
     >;
   /** Observes an awaiting start's executor; without it, the start reads `unknown`. */
@@ -721,14 +722,9 @@ export async function placeItem(
   }));
   const merge = await source.store.getItemMerge(found.item.id);
   const linkReads = await source.store.listItemLinks(found.item.id);
-  // The one rule for whether an end holds, given the held starts already read for the install.
-  const end = await readHoldingItemEnd(
-    {
-      getHoldingItemEnd: itemId => source.store.getHoldingItemEnd(itemId),
-      listHeldItemStarts: async () => held,
-    },
-    found.item.id
-  );
+  // The one rule for whether an end holds. It lists the item's starts only when an end is
+  // recorded, so the batch read stays free of per-item start listing for items never ended.
+  const end = await readHoldingItemEnd(source.store, found.item.id);
   const linked = await readLinked(source.store, found.item, linkReads, visiting, (other, inside) =>
     placeItem(source, other, install, inside).then(place => place?.standing.state === 'done')
   );
@@ -741,7 +737,7 @@ export async function placeItem(
     // A merge row that does not read still says the change merged.
     merged: merge !== null,
     // An end row that does not read does not hold: the item stands as it would without it.
-    ended: end !== null && !('type' in end),
+    ended: end === null || 'type' in end ? null : end.via === 'engine' ? 'outcome' : 'operator',
     ...linked,
   });
   const read = async (): Promise<ItemRead> => {

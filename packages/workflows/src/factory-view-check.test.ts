@@ -25,8 +25,14 @@ const stage = (
       : {
           field: 'outcome',
           form: 'enum',
-          values: outcomes.map(value => ({ value, startsNothing: false, final: false })),
+          values: outcomes.map(value => ({
+            value,
+            startsNothing: false,
+            ends: false,
+            stops: false,
+          })),
         },
+  observes: false,
   asks: false,
   waits: false,
   nodes: steps.map(id => ({

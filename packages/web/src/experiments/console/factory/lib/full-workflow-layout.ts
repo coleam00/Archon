@@ -172,7 +172,7 @@ function stagePairs(graph: PackGraph, byId: ReadonlyMap<string, FullCard>): Pair
   for (const stage of graph.stages) {
     if (!stage.inFlow) continue;
     for (const value of stage.outcome?.values ?? [])
-      if (value.final) add(stage.workflow, MERGED, value.value);
+      if (value.ends) add(stage.workflow, MERGED, value.value);
   }
   return [...pairs.values()];
 }

@@ -14,6 +14,7 @@ const stage = (name: string, nodes: string[]): Stage => ({
   waits: false,
   returns: nodes.at(-1) ?? null,
   outcome: null,
+  observes: false,
   asks: false,
   nodes: nodes.map(id => ({
     id,
