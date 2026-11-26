@@ -370,13 +370,10 @@ export const checkoutHandoffSchema = z.object({
 });
 export type CheckoutHandoff = z.infer<typeof checkoutHandoffSchema>;
 
-/**
- * The checkout a run left when it ended, read for a binding that takes it: the hand-off, or
- * why there is none. The refusal is tried first, so a record carrying both is refused.
- */
+/** The checkout a run left when it ended, read for a binding that takes it: the hand-off, or why there is none. */
 export const endedCheckoutSchema = z.union([
-  z.object({ refused: z.string().min(1) }),
-  z.object({ handoff: checkoutHandoffSchema }),
+  z.object({ handoff: checkoutHandoffSchema }).strict(),
+  z.object({ refused: z.string().min(1) }).strict(),
 ]);
 export type EndedCheckout = z.infer<typeof endedCheckoutSchema>;
 
@@ -416,11 +413,20 @@ export function readCheckoutHandoff(run: {
  */
 export const ASKS_CHECKOUT_METADATA_KEY = 'asks_checkout';
 
-// The refusal is tried first, so a record carrying both a hand-off and a refusal is refused.
-export const asksCheckoutSchema = z.union([
-  z.object({ refused: z.string().min(1) }),
-  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }),
-]);
+/**
+ * A record that carries `refused` is a refusal, whatever else it carries: its hand-off is
+ * never read, and a refusal without a valid reason does not parse.
+ */
+export const asksCheckoutSchema = z.preprocess(
+  value =>
+    typeof value === 'object' && value !== null && 'refused' in value
+      ? { refused: value.refused }
+      : value,
+  z.union([
+    z.object({ refused: z.string().min(1) }),
+    z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }),
+  ])
+);
 export type AsksCheckout = z.infer<typeof asksCheckoutSchema>;
 
 /** The metadata that records an asking run's checkout. */

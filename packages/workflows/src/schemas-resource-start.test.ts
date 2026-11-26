@@ -205,6 +205,14 @@ describe('persisted records a newer binary may have written', () => {
         metadata: { asks_checkout: { handoff, worktree: '/w', refused: 'gone' } },
       })
     ).toEqual({ refused: 'gone' });
+    // A refusal key with no valid reason is an invalid record, never the hand-off beside it.
+    for (const refused of ['', null, false])
+      expect(
+        readAsksCheckout({
+          id: 'run',
+          metadata: { asks_checkout: { handoff, worktree: '/w', refused } },
+        })
+      ).toEqual({ refused: "run 'run' has an invalid recorded asks_checkout" });
     const launch = (isolation: object) => ({
       version: 2,
       run: {

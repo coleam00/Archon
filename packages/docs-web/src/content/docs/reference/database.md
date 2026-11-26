@@ -471,7 +471,9 @@ remove what a newer one wrote.
 The engine-written records read this way:
 
 - the prepared launch in `remote_agent_resource_start_requests.launch`, including its
-  `run`, `run.origin`, `execution` and lane, kept on write-back;
+  `run`, `run.origin`, `execution` and lane. A version 2 launch is kept on write-back. A
+  version 1 launch is converted to version 2 when it is read, and the conversion drops
+  its unknown keys;
 - the run's `origin`;
 - the `checkout_handoff`, `asks_checkout`, `resource_start` and `owned_worktree` keys of
   run `metadata`, and the hand-off in `remote_agent_start_receipt_bindings.checkout_from`;
@@ -479,15 +481,24 @@ The engine-written records read this way:
   other streams' entries as stored;
 - a receipt's `source_actor`;
 - the file store's request and receipt documents and the `origin` in its run documents,
-  kept on write-back. A receipt's bindings are read the same way but not kept on
-  write-back, and the intents inside them stay strict (see the table below);
+  kept on write-back;
 - the top-level keys of `metadata.wait`. Its nested options, recommendation and answer
   stay strict (see the table below).
 
+Only the records marked above keep an unknown key on write-back. Everywhere else a key
+the reader does not know is dropped when the record is written again:
+
+- The SQL run row's `origin` column is written from the known origin fields, so an
+  unknown key in a launch's `run.origin` does not reach the run it starts.
+- The file store drops unknown top-level keys of its run documents, and unknown keys of a
+  receipt's bindings, including those inside a binding intent's `checkoutFrom`, when it
+  writes the receipt back.
+
 A record that is wrong, not merely newer, is still refused: a wrong type, a missing
 required field, a `version` or discriminator value the reader does not know, or a record
-that mixes two variants. An in-place launch lane that names a branch is refused. A
-checkout record that carries both a hand-off and a refusal reads as the refusal. In the
+that mixes two variants. An in-place launch lane that names a branch is refused. An
+`asks_checkout` record that carries `refused` is a refusal whatever else it carries, and
+one whose `refused` is not a reason is invalid, which also refuses the checkout. In the
 SQL stores, a queued launch the reader cannot read holds its queue, is listed in the
 attention queue, and is withdrawn with `archon trigger withdraw <request-id>`.
 
