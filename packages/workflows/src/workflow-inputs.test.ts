@@ -48,9 +48,19 @@ describe('parseInputAssignments (#2554)', () => {
 
   test('names a no-= entry by its position, never its text', () => {
     // With no `=` the whole entry may be a secret value, so only its position is safe.
-    const parse = () => parseInputAssignments(['scope=api', 'ghp_secret']);
-    expect(parse).toThrow(/Input assignment 2 has no '='/);
-    expect(parse).not.toThrow(/ghp_secret/);
+    // Two different entries at the same position must give the same message: that
+    // catches a partial echo (a prefix or fragment), not only the whole entry.
+    const messageFor = (entry: string): string => {
+      try {
+        parseInputAssignments(['scope=api', entry]);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error('expected parseInputAssignments to throw');
+    };
+    const message = messageFor('ghp_secret');
+    expect(message).toMatch(/Input assignment 2 has no '='/);
+    expect(messageFor('other_text')).toBe(message);
   });
 
   test('rejects a name that is not a valid input name', () => {
