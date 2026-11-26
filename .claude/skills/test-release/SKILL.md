@@ -330,20 +330,22 @@ YAML
 
 **Pass criteria** (current behaviour — the guard **strips** silently, it does not refuse):
 
-- Run on a fresh scratch Archon home with no inherited `ANTHROPIC_API_KEY` or
-  `DATABASE_URL`, the probe workflow completes and prints `probe: CLEAN`. With no other
-  source for the key, any other marker means the planted key, or some key, reached the run
+- Run on a fresh scratch Archon home with the planted value also exported to the CLI
+  (`ANTHROPIC_API_KEY=sk-ant-test-fake`) and no `DATABASE_URL`, the probe workflow
+  completes and prints `probe: CLEAN`. The release binary never loads the repo's `.env`
+  itself, so the exported key is what the guard must strip: it removes every key the
+  repo's `.env` names, whatever its source. `probe: LEAKED` means the guard let it through
 - No `[archon] stripped` line on stderr: the guard no longer prints on every command
 - `archon doctor` in the repo names this repo's `.env` and the planted key:
   `Target repo .env: 1 key from <repo>/.env is kept out of runs, …: ANTHROPIC_API_KEY`
 
 The probe is the security check: it observes the run itself. The doctor line only
 checks the operator-facing report. The scratch home keeps your own configured key from
-masking a broken guard or appearing in the log, and keeps the run off your database.
+masking or standing in for the planted one, and keeps the run off your database.
 
 ```bash
 PROBE_HOME=$(mktemp -d)
-probe() { env -u ANTHROPIC_API_KEY -u DATABASE_URL ARCHON_HOME="$PROBE_HOME" "$BINARY" "$@"; }
+probe() { env -u DATABASE_URL ANTHROPIC_API_KEY=sk-ant-test-fake ARCHON_HOME="$PROBE_HOME" "$BINARY" "$@"; }
 probe workflow run env-leak-probe --no-worktree > /tmp/archon-test-leak.log 2>&1
 leak_exit=$?
 probe doctor > /tmp/archon-test-leak-doctor.log 2>&1
