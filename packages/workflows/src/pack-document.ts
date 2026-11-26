@@ -1,22 +1,54 @@
 /**
- * A pack's own document: one markdown file the pack's manifest names (`document`), which
- * explains the pack to an operator. Its frontmatter may declare `groups`, how the pack's
- * stages group into a few columns for display. The engine reads the groups and checks them
- * against the pack's stages; it gives the document's text no meaning and serves it as written.
+ * A pack's own document: one markdown file the pack's manifest names (`document`), else its
+ * `how-it-works.md`, which explains the pack to an operator. Its frontmatter may declare
+ * `groups`, how the pack's stages group into a few columns for display. The engine reads the
+ * groups and checks them against the pack's flow; it gives the document's text and a group's
+ * `kind` no meaning and serves them as written.
  */
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { PLUGIN_MANIFEST_FILE, workflowPackManifestSchema } from '@archon/plugin-manifest';
 
-/** A group of stages for display: a name and its stages, by their authored `name:`, in order. */
-export const packGroupSchema = z.strictObject({
+/**
+ * A group of stages for display: a name and its stages, by their authored `name:`, in order,
+ * with an optional plain line (`blurb`) and an optional `kind`. `kind` is an opaque slug the
+ * engine gives no meaning: a console maps it to its own colours. The object strips keys it
+ * does not know rather than refusing them, so a document written for a newer Archon still
+ * reads here; `documentGroups` reports each as a warning.
+ */
+export const packGroupSchema = z.object({
   name: z.string().trim().min(1),
+  blurb: z.string().trim().min(1).max(160).optional(),
   stages: z.array(z.string().min(1)).min(1),
+  kind: z
+    .string()
+    .regex(/^[a-z][a-z0-9-]*$/, 'a kind is a lowercase slug')
+    .optional(),
 });
 export type PackGroup = z.infer<typeof packGroupSchema>;
 
 const frontmatterSchema = z.object({ groups: z.array(packGroupSchema).optional() });
+
+/** The document a pack's manifest falls back to when it names none. */
+export const DEFAULT_PACK_DOCUMENT = 'how-it-works.md';
+
+/** Each key of the frontmatter, or of one of its groups, that the schemas above do not read. */
+function unknownKeys(raw: unknown): string[] {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  const top = Object.keys(raw).filter(key => !(key in frontmatterSchema.shape));
+  const groups = (raw as { groups?: unknown }).groups;
+  const nested = Array.isArray(groups)
+    ? groups.flatMap((group: unknown, index) =>
+        group !== null && typeof group === 'object' && !Array.isArray(group)
+          ? Object.keys(group)
+              .filter(key => !(key in packGroupSchema.shape))
+              .map(key => `groups[${index}].${key}`)
+          : []
+      )
+    : [];
+  return [...top, ...nested];
+}
 
 /** The YAML between a leading `---` line and the next one; undefined when the text has none. */
 function frontmatter(text: string): string | undefined {
@@ -39,10 +71,15 @@ export function documentBody(text: string): string {
         .trimStart();
 }
 
-/** The groups a document's frontmatter declares (none without frontmatter), or why it does not read. */
-export function documentGroups(text: string): { groups: PackGroup[] } | { problem: string } {
+/**
+ * The groups a document's frontmatter declares (none without frontmatter), with a warning for
+ * each key it does not know, or why it does not read.
+ */
+export function documentGroups(
+  text: string
+): { groups: PackGroup[]; warnings: string[] } | { problem: string } {
   const yaml = frontmatter(text);
-  if (yaml === undefined) return { groups: [] };
+  if (yaml === undefined) return { groups: [], warnings: [] };
   let raw: unknown;
   try {
     raw = Bun.YAML.parse(yaml);
@@ -52,61 +89,120 @@ export function documentGroups(text: string): { groups: PackGroup[] } | { proble
   const parsed = frontmatterSchema.safeParse(raw ?? {});
   if (!parsed.success)
     return { problem: `its frontmatter 'groups' is invalid: ${z.prettifyError(parsed.error)}` };
-  return { groups: parsed.data.groups ?? [] };
+  return {
+    groups: parsed.data.groups ?? [],
+    warnings: unknownKeys(raw).map(key => `unknown front-matter key '${key}' is ignored`),
+  };
 }
 
 /**
- * What is wrong with `groups` for a pack whose stages are `stages`: a stage a group names
- * that is not one of them, or one named twice. A stage in no group is fine: it keeps a
- * column of its own.
+ * `groups` checked against `stages`, the workflow names a group may hold: each group keeps
+ * the stages that are among them and not already in an earlier group, and a group left with
+ * none is dropped, so a stale name costs only itself. The problems name each stage dropped.
  */
-export function groupProblems(groups: readonly PackGroup[], stages: readonly string[]): string[] {
+export function checkGroups(
+  groups: readonly PackGroup[],
+  stages: readonly string[]
+): { groups: PackGroup[]; problems: string[] } {
   const seen = new Set<string>();
   const problems: string[] = [];
-  for (const group of groups)
-    for (const stage of group.stages) {
-      if (!stages.includes(stage))
+  const kept = groups.flatMap(group => {
+    const held = group.stages.filter(stage => {
+      if (!stages.includes(stage)) {
         problems.push(
           `group '${group.name}' names '${stage}', which is not a stage of the pack's flow`
         );
-      else if (seen.has(stage)) problems.push(`stage '${stage}' is in more than one group`);
+        return false;
+      }
+      if (seen.has(stage)) {
+        problems.push(`stage '${stage}' is in more than one group`);
+        return false;
+      }
       seen.add(stage);
-    }
-  return problems;
+      return true;
+    });
+    return held.length === 0 ? [] : [{ ...group, stages: held }];
+  });
+  return { groups: kept, problems };
 }
 
 /**
- * The document a pack directory's manifest names and the groups it declares. `document` is
- * null when the directory has no pack manifest or the manifest names none. A document that
- * is missing or does not read is a problem, with no groups.
+ * Each in-flow stage no group holds, once the document declares any group: a pack that
+ * groups its stages groups all of them, so a stage added to the flow and left out of the
+ * document is caught.
  */
-export async function loadPackDocument(
-  packDir: string
-): Promise<{ document: string | null; text: string; groups: PackGroup[]; problems: string[] }> {
+export function ungroupedStages(groups: readonly PackGroup[], inFlow: readonly string[]): string[] {
+  if (groups.length === 0) return [];
+  const held = new Set(groups.flatMap(group => group.stages));
+  return inFlow.filter(stage => !held.has(stage)).map(stage => `stage '${stage}' is in no group`);
+}
+
+interface PackDocumentRead {
+  /** The document's path within the pack; null when the pack has none. */
+  document: string | null;
+  text: string;
+  groups: PackGroup[];
+  /** Why the document or its frontmatter does not read: errors, and then it has no groups. */
+  problems: string[];
+  /** Keys the frontmatter has that this Archon does not read. */
+  warnings: string[];
+  /** Whether the manifest names no document and `how-it-works.md` was read in its place. */
+  fallback: boolean;
+}
+
+const NO_DOCUMENT: PackDocumentRead = {
+  document: null,
+  text: '',
+  groups: [],
+  problems: [],
+  warnings: [],
+  fallback: false,
+};
+
+/**
+ * The document a pack directory's manifest names and the groups it declares. A manifest that
+ * names none falls back to `how-it-works.md` at the pack root, for packs that lost the pointer
+ * (Rasmus, 11/26); `document` says which file was read, and is null when the directory has no
+ * pack manifest, or the manifest names none and the pack has no such file. A named document
+ * that is missing or does not read is a problem, with no groups. The groups are as written:
+ * `checkGroups` checks them against the pack's flow.
+ */
+export async function loadPackDocument(packDir: string): Promise<PackDocumentRead> {
   let manifest: z.infer<typeof workflowPackManifestSchema>;
   try {
     const raw: unknown = JSON.parse(await readFile(join(packDir, PLUGIN_MANIFEST_FILE), 'utf-8'));
     manifest = workflowPackManifestSchema.parse(raw);
   } catch {
     // No manifest, or one discovery already reports: the pack has no document.
-    return { document: null, text: '', groups: [], problems: [] };
+    return NO_DOCUMENT;
   }
-  const document = manifest.document ?? null;
-  if (document === null) return { document, text: '', groups: [], problems: [] };
+  const document = manifest.document ?? DEFAULT_PACK_DOCUMENT;
+  const fallback = manifest.document === undefined;
+  // Every message names the file, and says why a file the manifest never named was read.
+  const where = fallback ? `${document} (read because the manifest names no document)` : document;
   let text: string;
   try {
     text = await readFile(join(packDir, document), 'utf-8');
   } catch (error) {
+    // Only the fallback may be absent: a pack that never had the file has no document.
+    if (fallback && (error as NodeJS.ErrnoException).code === 'ENOENT') return NO_DOCUMENT;
     return {
+      ...NO_DOCUMENT,
       document,
-      text: '',
-      groups: [],
-      problems: [`${document} could not be read: ${(error as Error).message}`],
+      fallback,
+      problems: [`${where} could not be read: ${(error as Error).message}`],
     };
   }
   const read = documentGroups(text);
   const body = documentBody(text);
   return 'problem' in read
-    ? { document, text: body, groups: [], problems: [`${document}: ${read.problem}`] }
-    : { document, text: body, groups: read.groups, problems: [] };
+    ? { ...NO_DOCUMENT, document, fallback, text: body, problems: [`${where}: ${read.problem}`] }
+    : {
+        document,
+        fallback,
+        text: body,
+        groups: read.groups,
+        problems: [],
+        warnings: read.warnings.map(warning => `${where}: ${warning}`),
+      };
 }

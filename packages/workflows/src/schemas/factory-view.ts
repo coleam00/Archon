@@ -1,8 +1,8 @@
 /**
  * A pack's factory view: how a console presents the pack as a software factory. The pack's
  * author ships it as `<pack>/.shared/factory-view.json`, hand-curated, and it is presentation
- * only: words for the pack's stages, steps and outcomes, its groups, which stage items leave
- * the map by (`merged`), the How it works picture (`factory-view-how-it-works.ts`), drill-down
+ * only: words for the pack's stages, steps and outcomes, which stage items leave the map by
+ * (`merged`), the How it works picture (`factory-view-how-it-works.ts`), drill-down
  * cards and story wording, and where a console finds an item's rounds, returns and change in its
  * runs' records (`factory-view-progress.ts`). The Overview map lays itself out from the pack
  * graph; nothing here places its cards or draws its arrows.
@@ -132,18 +132,6 @@ export const wordsSchema = z.strictObject({
 });
 
 /**
- * One group of the factory: its name, one plain line, its stages in flow order, and its kind:
- * which of the console's group colours and kind labels its card and board column take. A group
- * without a kind, or `neutral`, takes the neutral one; a console never infers it from position.
- */
-export const groupSchema = z.strictObject({
-  name: labelSchema,
-  blurb: z.string().min(1).max(160),
-  stages: z.array(stageNameSchema).min(1),
-  kind: z.enum(['intake', 'build', 'check', 'merge', 'neutral']).optional(),
-});
-
-/**
  * How one option of an ask reads. `label` is the short form an arrow the option takes reads
  * as on the map (the graph and the ask's declared options carry only its id, and the reserved
  * `other` is never declared). `starts` is what choosing it starts, in one plain sentence, for
@@ -160,12 +148,6 @@ export const factoryViewSchema = z.strictObject({
   title: labelSchema,
   /** One paragraph, plain words: what goes in, what comes out, where people step in. */
   summary: z.string().min(1).max(1200),
-  /**
-   * The factory's groups in drawing order, each holding its stages in flow order. The file
-   * declares them because a pack need not (its document's groups are gone on the pack's main);
-   * where both do, the file's win (DESIGN.md, COMBINED direction).
-   */
-  groups: z.array(groupSchema).optional(),
   /** Words for the graph's stages, by `workflow` name. */
   stages: z.record(stageNameSchema, stageSchema),
   /** How each outcome reads, by `stage:outcome` or `stage:*`. */
@@ -197,19 +179,18 @@ export type FactoryView = z.infer<typeof factoryViewSchema>;
  *   dropped alone.
  * - `unknown`: a key the schema does not know (an older file's `map`, a misspelt key); the key
  *   is dropped and its entry kept.
- * - `dropped`: an entry names a stage, step, outcome, option or group the pack graph lacks, or
+ * - `dropped`: an entry names a stage, step, outcome or option the pack graph lacks, or
  *   joins stages no arrow connects; it is dropped alone.
  * - `retired`: a `rounds`, `returns`, `approves` or `change` entry names a workflow the graph
  *   lacks and the file does not retire. It is kept and its workflow treated as retired, so
  *   old runs still count.
  * - `unworded`: an in-flow stage, one of its steps, one of its outcome values, or an ask option
  *   one of its hand-offs leaves on has no words.
- * - `ungrouped`: the file declares groups and an in-flow stage is in none of them.
  *
  * `path` is where in the file, as a zod issue path, naming the entry as the author wrote it.
  */
 export const factoryViewProblemSchema = z.object({
-  kind: z.enum(['unreadable', 'invalid', 'unknown', 'dropped', 'retired', 'unworded', 'ungrouped']),
+  kind: z.enum(['unreadable', 'invalid', 'unknown', 'dropped', 'retired', 'unworded']),
   path: z.array(z.union([z.string(), z.number()])),
   message: z.string(),
 });

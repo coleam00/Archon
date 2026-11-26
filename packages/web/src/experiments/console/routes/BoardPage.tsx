@@ -22,7 +22,7 @@ import { ColumnHeader } from '../factory/ColumnHeader';
 import { TONES } from '../factory/tones';
 import { toneOfKind } from '../factory/lib/map-columns';
 import { stageLabel } from '../factory/lib/stage-words';
-import { groupsOf, type GroupKind } from '../factory/lib/view-groups';
+import { groupsOf, type ViewGroup } from '../factory/lib/view-groups';
 import { useFactoryCards } from '../factory/cards-context';
 import { FactoryCardsProvider, useForgeTitles } from '../factory/FactoryCards';
 import { askReadOf } from '../factory/lib/item-asks';
@@ -56,9 +56,10 @@ const BOARD_AREA = 'flex flex-col md:h-full md:min-h-[34rem] md:shrink-0';
 
 /**
  * A column: a group, or one stage, with its stages by their names in the pack, and the kind the
- * pack's view file gives the group (its colour; none reads neutral, never a colour by position).
+ * pack's document gives the group when this console draws it (its colour; none reads neutral,
+ * never a colour by position).
  */
-export type StageGroup = PackGraph['groups'][number] & { kind?: GroupKind };
+export type StageGroup = ViewGroup;
 
 /** A column as the board and the map draw it. `name` stays its key; `heading` is display only. */
 export type BoardColumn = StageGroup & {
@@ -69,13 +70,13 @@ export type BoardColumn = StageGroup & {
 };
 
 /**
- * A pack's columns: each group its document declares (or each of `groups`, a factory map's own),
+ * A pack's columns: each of `groups` (by default the graph's, which its document declares),
  * then each stage of its flow that no group holds, in the graph's order, named by `view`'s label
  * for it. A workflow only other workflows call is not a stage.
  */
 export function columnsOf(
   graph: PackGraph | undefined,
-  groups: readonly StageGroup[] = graph?.groups ?? [],
+  groups: readonly StageGroup[] = groupsOf(graph),
   view: Pick<FactoryView, 'stages'> | null = null
 ): BoardColumn[] {
   const stages = (graph?.stages ?? []).filter(stage => stage.inFlow).map(stage => stage.workflow);
@@ -345,9 +346,9 @@ export function PackBoard({
     getPackGraph(projectId, pack)
   );
   const stageOf = place ?? ((read: ItemRead): string | undefined => stageAt(read, graph?.stages));
-  // The same groups the map draws: the view file's, else the pack document's.
+  // The same groups the map draws: the pack document's.
   const packView = useFactoryCards()?.packs?.get(pack)?.view ?? null;
-  const groups = groupsOf(packView, graph);
+  const groups = groupsOf(graph);
   const columns = columnsOf(graph, groups, packView);
   const labelOf = (workflow: string): string => stageLabel(packView, workflow);
   const focus = useSearchParams()[0].get('group');

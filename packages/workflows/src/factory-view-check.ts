@@ -2,9 +2,9 @@
  * A pack's factory view (`schemas/factory-view.ts`) reconciled with the pack graph (DESIGN.md,
  * COMBINED direction: "A stale entry drops only itself, and says so"). The view is
  * presentation only, so it may only name what the graph has. A pack changes under its file (a
- * stage renamed, a document without groups), so a name the graph lacks costs only the entry
- * that names it: the entry leaves the served view and is reported `dropped`. That covers a
- * stage, step, outcome, option, group stage or `merged` stage the graph lacks, a progress loop
+ * stage renamed), so a name the graph lacks costs only the entry that names it: the entry
+ * leaves the served view and is reported `dropped`. That covers a stage, step, outcome,
+ * option or `merged` stage the graph lacks, a progress loop
  * or step of a stage the graph has but without it, and a How it works edge between stages no
  * arrow connects.
  *
@@ -12,8 +12,8 @@
  * naming a workflow the graph lacks is kept, and the workflow is served as `retired`
  * (reported `retired`), because old runs carry the old name and board cards read their rounds
  * from them. What the graph has and the file gives no words (a stage, step, outcome value, or
- * option a hand-off leaves on) is `unworded`, and an in-flow stage the file's groups leave out
- * is `ungrouped`. Every problem is an error for `check:factory-view`; a console shows them and
+ * option a hand-off leaves on) is `unworded`. Groups are not the file's: the pack's document
+ * declares them and the engine checks them (`pack-document.ts`). Every problem is an error for `check:factory-view`; a console shows them and
  * draws what is left. Read time (`packViewOf`, through `servedFactoryView`) and the check run
  * this one pass.
  */
@@ -193,35 +193,6 @@ function reconcileKeyed(
   }
 }
 
-/**
- * The file's groups keep the stages the graph has, each in one group; a group left with none
- * is dropped, and the map falls back to the graph's groups when no group is left.
- */
-function reconcileGroups(r: Reconciling): void {
-  const { groups } = r.view;
-  if (groups === undefined) return;
-  const holder = new Map<string, string>();
-  const kept = groups.flatMap((group, g) => {
-    const stages = group.stages.filter((stage, s) => {
-      const at: ProblemPath = ['groups', g, 'stages', s];
-      const first = holder.get(stage);
-      if (!r.stages.has(stage)) r.add('dropped', at, noStage(stage, r.graph));
-      else if (first !== undefined)
-        r.add('invalid', at, `names stage "${stage}", which group "${first}" holds already`);
-      else {
-        holder.set(stage, group.name);
-        return true;
-      }
-      return false;
-    });
-    if (stages.length > 0) return [{ ...group, stages }];
-    r.add('dropped', ['groups', g], `group "${group.name}" has no stage of the pack left`);
-    return [];
-  });
-  if (kept.length > 0) r.view.groups = kept;
-  else delete r.view.groups;
-}
-
 /** The stage `merged` names; without it the map takes the last in-flow stage. */
 function reconcileMerged(r: Reconciling): void {
   if (r.view.merged === undefined || r.stages.has(r.view.merged)) return;
@@ -352,21 +323,6 @@ function unwordedOptions(r: Reconciling, stage: GraphStage): void {
 }
 
 /**
- * Where the file declares groups, every in-flow stage is in one, apart from the stage items
- * leave the map by, which the map draws on its own.
- */
-function ungrouped(r: Reconciling): void {
-  const { groups } = r.view;
-  if (groups === undefined) return;
-  const inFlow = r.graph.stages.filter(stage => stage.inFlow).map(stage => stage.workflow);
-  const merged = r.view.merged ?? inFlow.at(-1);
-  const held = new Set(groups.flatMap(group => group.stages));
-  for (const workflow of inFlow)
-    if (workflow !== merged && !held.has(workflow))
-      r.add('ungrouped', ['groups'], `stage "${workflow}" is in none of the file's groups`);
-}
-
-/**
  * `view` with every entry naming what `graph` lacks taken out (meaning entries kept, their
  * workflows retired), and the problems in the order they were found. `view` is not changed.
  */
@@ -384,11 +340,9 @@ export function reconcileFactoryView(
   reconcileStages(r);
   reconcileKeyed(r, 'outcomes', outcomeMissing);
   reconcileKeyed(r, 'answers', answerMissing);
-  reconcileGroups(r);
   reconcileMerged(r);
   reconcileHowItWorks(r);
   reconcileProgress(r, view);
   unworded(r);
-  ungrouped(r);
   return { view: r.view, problems };
 }

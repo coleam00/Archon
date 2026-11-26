@@ -1,37 +1,52 @@
 /**
- * The groups a factory map draws (DESIGN.md, COMBINED direction): the view file's own groups
- * when it declares any, else the pack document's groups the graph serves, else none (a column
- * per stage). The file's win where both exist, so one file draws the same map on a pack that
- * has document groups and on one that does not. A stage's card heading comes from its group,
- * never from the column it happens to land in. Pure.
+ * The groups a factory map draws (DESIGN.md, COMBINED direction: "No hand-synced view file"):
+ * the pack document's groups, as the graph serves them, else none (a column per stage). The
+ * engine has already dropped a stale stage from its group and lists why in
+ * `graph.document.problems`. A stage's card heading comes from its group, never from the
+ * column it happens to land in. Pure.
  */
 import type { PackGraph } from '../../skills/items';
-import type { FactoryView } from '../api';
 
-/** Which of the console's group colours and kind labels a group takes (`map-columns.ts`). */
-export type GroupKind = NonNullable<NonNullable<FactoryView['groups']>[number]['kind']>;
+/**
+ * The group kinds this console draws, each with its colour and kind label (`map-columns.ts`).
+ * The engine serves a group's `kind` as an opaque slug; any other reads neutral.
+ */
+const GROUP_KINDS = ['intake', 'build', 'check', 'merge'] as const;
+export type GroupKind = (typeof GROUP_KINDS)[number];
+
+const isGroupKind = (kind: string): kind is GroupKind =>
+  (GROUP_KINDS as readonly string[]).includes(kind);
 
 export interface ViewGroup {
   name: string;
-  /** The file's line for the group; a document group has none. */
+  /** The document's line for the group. */
   blurb?: string;
   /** Its stages by `workflow` name, in flow order. */
   stages: string[];
-  /** The file's kind for the group; a document group has none, so it reads neutral. */
+  /** Its kind when this console draws it; none reads neutral. */
   kind?: GroupKind;
 }
 
-export function groupsOf(
-  view: Pick<FactoryView, 'groups'> | null | undefined,
-  graph: Pick<PackGraph, 'groups'> | undefined
-): ViewGroup[] {
-  const declared = view?.groups ?? [];
-  if (declared.length > 0)
-    return declared.map(group => ({
-      name: group.name,
-      blurb: group.blurb,
-      stages: [...group.stages],
-      ...(group.kind === undefined ? {} : { kind: group.kind }),
-    }));
-  return (graph?.groups ?? []).map(group => ({ name: group.name, stages: [...group.stages] }));
+export function groupsOf(graph: Pick<PackGraph, 'groups'> | undefined): ViewGroup[] {
+  return (graph?.groups ?? []).map(group => ({
+    name: group.name,
+    ...(group.blurb === undefined ? {} : { blurb: group.blurb }),
+    stages: [...group.stages],
+    ...(group.kind !== undefined && isGroupKind(group.kind) ? { kind: group.kind } : {}),
+  }));
+}
+
+/**
+ * What is wrong with the pack's document as this console reads it: the engine's problems,
+ * then each group whose `kind` this console does not draw (`neutral` says so on purpose).
+ */
+export function documentProblems(
+  graph: Pick<PackGraph, 'groups' | 'document'> | undefined
+): string[] {
+  const unknown = (graph?.groups ?? []).flatMap(({ name, kind }) =>
+    kind === undefined || kind === 'neutral' || isGroupKind(kind)
+      ? []
+      : [`group '${name}' has kind '${kind}', which this console does not draw; it reads neutral`]
+  );
+  return [...(graph?.document?.problems ?? []), ...unknown];
 }

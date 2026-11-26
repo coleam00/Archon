@@ -1,13 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { readFactoryView } from './factory-view-read';
 
-/** A file that reads whole: two stages, one outcome, one group, and a How it works root. */
+/** A file that reads whole: two stages, one outcome, and a How it works root. */
 function file(): Record<string, unknown> {
   return {
     version: 1,
     title: 'Factory',
     summary: 'Work comes in, gets built, lands.',
-    groups: [{ name: 'Build', blurb: 'x', stages: ['make', 'land'] }],
     stages: {
       make: { label: 'Make', blurb: 'Makes it.' },
       land: { label: 'Land', blurb: 'Lands it.' },
@@ -96,21 +95,13 @@ describe('an entry that fails its schema drops alone', () => {
     });
   });
 
-  test('a group naming a kind the console does not have drops alone', () => {
-    const r = read(f => {
-      f.groups = [
-        { name: 'Build', blurb: 'x', stages: ['make'], kind: 'build' },
-        { name: 'Ship', blurb: 'x', stages: ['land'], kind: 'shipping' },
-      ];
-    });
-    expect(listed(r)).toEqual(['invalid groups.1.kind']);
-    expect(r.view?.groups?.map(group => [group.name, group.kind])).toEqual([['Build', 'build']]);
-  });
-
-  test("combined's record-shaped groups drop as one entry, and the stages still read", () => {
-    const r = read(f => void (f.groups = { Build: { blurb: 'x' } }));
-    expect(listed(r)).toEqual(['invalid groups']);
-    expect(r.view?.groups).toBeUndefined();
+  test("an older file's groups are an unknown key: the pack's document declares them, and the file still draws", () => {
+    const r = read(
+      f => void (f.groups = [{ name: 'Build', blurb: 'x', stages: ['make', 'land'] }])
+    );
+    expect(listed(r)).toEqual(['unknown groups']);
+    expect(r.view).not.toBeNull();
+    expect(r.view && 'groups' in r.view).toBe(false);
     expect(Object.keys(r.view?.stages ?? {})).toEqual(['make', 'land']);
   });
 });

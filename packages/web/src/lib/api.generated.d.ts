@@ -13236,7 +13236,9 @@ export interface components {
       } | null;
       groups: {
         name: string;
+        blurb?: string;
         stages: string[];
+        kind?: string;
       }[];
       capacity: {
         resource: string;
@@ -13354,13 +13356,6 @@ export interface components {
         version: 1;
         title: string;
         summary: string;
-        groups?: {
-          name: string;
-          blurb: string;
-          stages: string[];
-          /** @enum {string} */
-          kind?: 'intake' | 'build' | 'check' | 'merge' | 'neutral';
-        }[];
         stages: {
           [key: string]: {
             label: string;
@@ -13537,14 +13532,7 @@ export interface components {
       } | null;
       problems: {
         /** @enum {string} */
-        kind:
-          | 'unreadable'
-          | 'invalid'
-          | 'unknown'
-          | 'dropped'
-          | 'retired'
-          | 'unworded'
-          | 'ungrouped';
+        kind: 'unreadable' | 'invalid' | 'unknown' | 'dropped' | 'retired' | 'unworded';
         path: (string | number)[];
         message: string;
       }[];

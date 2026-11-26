@@ -282,6 +282,94 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test("checks the pack document's groups against the stages its declared bindings put in flow", async () => {
+    const review = makeTestWorkflowWithSource({
+      name: 'review',
+      nodes: [
+        {
+          id: 'decide',
+          bash: 'true',
+          output_format: {
+            type: 'object',
+            properties: { outcome: { type: 'string', enum: ['ready', 'close'] } },
+            required: ['outcome'],
+          },
+        },
+      ],
+      returns: 'decide',
+      result: { outcome: 'outcome', ends: ['close'] },
+    });
+    const bindings = {
+      'build-after-review': packRunEndedBindingSchema.parse({
+        workflow: 'build',
+        resource: 'build',
+        overlap: 'queue',
+        run_ended: { workflow: 'review', outcome: 'ready' },
+      }),
+    };
+    review.workflow.pack = { key: 'factory', workflow: 'review', source: 'project', bindings };
+    const member = (name: string) => {
+      const entry = makeTestWorkflowWithSource({ name, nodes: [{ id: 'run', bash: 'true' }] });
+      entry.workflow.pack = { key: 'factory', workflow: name, source: 'project', bindings };
+      return entry;
+    };
+    // `helper` is a workflow of the pack that no binding puts in flow: no group must hold it.
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [review, member('build'), member('helper')],
+      errors: [],
+    });
+    // No `document` key: the pack's how-it-works.md is read.
+    await writeFile(
+      join(validationCwd, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'factory',
+        description: 'Factory workflows',
+        entrypoints: { review: 'review/review.yaml', build: 'build/build.yaml' },
+      })
+    );
+    const document = (frontmatter: string) =>
+      writeFile(join(validationCwd, 'how-it-works.md'), `---\n${frontmatter}---\n# How\n`);
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    const run = async () => {
+      write.mockClear();
+      const code = await validateWorkflowsCommand(validationCwd, undefined, true);
+      const results = JSON.parse(String(write.mock.calls[0]?.[0]))
+        .results as validator.WorkflowValidationResult[];
+      const issues = results.find(r => r.workflowName === 'archon-plugin.json')?.issues ?? [];
+      return { code, issues };
+    };
+    try {
+      // The manifest names no document: the warning says which file was read, and why.
+      await document('colour: blue\ngroups:\n  - name: Make\n    stages: [review, build]\n');
+      const warned = await run();
+      expect(warned.code).toBe(0);
+      expect(warned.issues).toHaveLength(1);
+      expect(warned.issues[0]).toMatchObject({ level: 'warning', field: 'pack_document' });
+      expect(warned.issues[0]?.message).toContain("'colour'");
+      expect(warned.issues[0]?.message).toContain('how-it-works.md');
+      expect(warned.issues[0]?.message).toContain('the manifest names no document');
+      expect(warned.issues[0]?.hint).toContain('how-it-works.md');
+
+      await document('groups:\n  - name: Make\n    stages: [review, build, ghost]\n');
+      const stale = await run();
+      expect(stale.code).toBe(1);
+      expect(stale.issues.map(issue => issue.level)).toEqual(['error']);
+      expect(stale.issues[0]?.message).toContain("'ghost'");
+      // The hint names the file and how to name a document, not a manifest key that is absent.
+      expect(stale.issues[0]?.hint).toContain("manifest's `document`");
+
+      await document('groups:\n  - name: Make\n    stages: [review]\n');
+      const ungrouped = await run();
+      expect(ungrouped.code).toBe(1);
+      expect(ungrouped.issues.map(issue => issue.level)).toEqual(['error']);
+      expect(ungrouped.issues[0]?.message).toContain("'build'");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('warns for a quiet outcome of a workflow outside a pack, which nothing starts from', async () => {
     const entry = makeTestWorkflowWithSource({
       name: 'standalone',

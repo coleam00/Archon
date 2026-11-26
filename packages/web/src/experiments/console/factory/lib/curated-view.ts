@@ -7,7 +7,7 @@
  * - A map **stage** is one in-flow stage of the graph, in the graph's order (its flow order),
  *   with its words from the file's `stages` (its label by `stageLabel`). Its id is the
  *   stage's `workflow` name.
- * - A **column** is a group (`groupsOf`: the file's groups, else the pack document's), holding
+ * - A **column** is a group (`groupsOf`: the pack document's, as the graph serves them), holding
  *   its in-flow stages in flow order. A stage no group holds is a column of its own. Columns
  *   come in the order their first stage comes in flow, which is the group order while each
  *   group is a run of neighbouring stages. With no groups at all, every stage is a column.
@@ -106,7 +106,7 @@ const slug = (name: string): string =>
 
 /**
  * The map's columns, by the rule in the header. A group's column takes the group's name and
- * the file's line for it; a stage in no group is a column of its own and takes its words.
+ * the document's line for it; a stage in no group is a column of its own and takes its words.
  */
 function columnsFor(
   groups: readonly ViewGroup[],
@@ -172,7 +172,7 @@ export function curatedView(view: FactoryView, graph: PackGraph): CuratedView {
     title: view.title,
     summary: view.summary,
     stages,
-    columns: columnsFor(groupsOf(view, graph), stages, merged),
+    columns: columnsFor(groupsOf(graph), stages, merged),
     landed: { stage: merged ?? '' },
     steps,
     stageLabels: Object.fromEntries(

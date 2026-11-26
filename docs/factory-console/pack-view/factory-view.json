@@ -2,52 +2,6 @@
   "version": 1,
   "title": "Software factory",
   "summary": "Work comes in as a work order, or as an issue someone adds the factory label to. Order turns each one into an item the factory can read. Triage decides whether the item is worth building. Link holds it until what it depends on has landed. Plan writes down the approach. Build writes the change and opens a draft pull request. Three checks then read it (a review, a test check and a product check) and send what they find back to the builder, for up to three rounds. Once they approve, the factory reads CI and the reviews on the pull request and fixes what they raise. A ready change goes to a merge gate that lets it through or asks you; told \"land\", the factory merges it itself. A change that fell behind its landing branch is brought up to date, and goes straight back to merging when it is unchanged and CI is green. A person steps in only to answer the questions an item asks, and to shape an item triage or your answer sent back to shaping.",
-  "groups": [
-    {
-      "name": "Intake",
-      "blurb": "Order, triage, split and link",
-      "stages": [
-        "order",
-        "triage",
-        "split",
-        "link",
-        "complexity"
-      ],
-      "kind": "intake"
-    },
-    {
-      "name": "Plan and build",
-      "blurb": "Plan, then build",
-      "stages": [
-        "plan",
-        "stage-build",
-        "attend"
-      ],
-      "kind": "build"
-    },
-    {
-      "name": "Checks",
-      "blurb": "Checks, CI and PR reviews, and catching up",
-      "stages": [
-        "stage-check",
-        "stage-host",
-        "catchup"
-      ],
-      "kind": "check"
-    },
-    {
-      "name": "Landing",
-      "blurb": "Gate, merge, and what follows the merge",
-      "stages": [
-        "landgate",
-        "land",
-        "landed",
-        "discoveries",
-        "close"
-      ],
-      "kind": "merge"
-    }
-  ],
   "stages": {
     "order": {
       "label": "Order",

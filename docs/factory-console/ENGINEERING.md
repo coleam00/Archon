@@ -40,7 +40,12 @@ The factory building this repository runs Archon from another checkout, on the h
 - The installed pack ships no factory view file yet, so on the copy the board cards show titles,
   asks and PR links but no check rounds, returns or running step. To see those, copy
   `docs/factory-console/pack-view/factory-view.json` into the copy's installed pack,
-  `.console-home/plugins/packs/<owner>/<name>/<commit>/.shared/` (`pack-view/README.md`).
+  `.console-home/plugins/packs/<owner>/<name>/<commit>/.shared/`. Both the view file and the
+  overlay `docs/factory-console/pack-spike/` (the groups) are written for the pack's dev tree at
+  af6d0b4a, not the older commit the live home installs: replace that pack folder with the
+  af6d0b4a tree, then copy the overlay's files over it, as `fc-runtime/gate_combined.sh` does
+  (`pack-view/README.md`). On the older tree the Overview lists document problems for the
+  stages it lacks.
 - Pick a free port (not 3090, 3190 or 8864, which are in use); check it first.
 - Stop every server and browser you start before you finish. Kill by the PID you started, never by
   process name: other factories run on this machine.
@@ -61,7 +66,7 @@ The factory building this repository runs Archon from another checkout, on the h
   (`packages/workflows/src/schemas/factory-view.ts`, its How it works picture in
   `factory-view-how-it-works.ts`), read through the generic `pack-declarations.ts` reader from
   the copy of the pack the graph was read from (`packages/core/src/workflows/pack-view.ts`) and
-  served by `GET /api/packs/{pack}/view`. It is presentation only: words, groups, the stage
+  served by `GET /api/packs/{pack}/view`. It is presentation only: words, the stage
   items leave the map by, How it works, drill-down cards and story wording (no map layout: the
   Overview map is drawn from the graph), and where a console finds an item's check rounds, returns and change
   in its runs' records (`retired`, `rounds`, `returns`, `approves`, `change`, in
@@ -69,9 +74,13 @@ The factory building this repository runs Archon from another checkout, on the h
   retired workflow's items stand at on the board (a `retired` entry `{ workflow, stage }`; a bare
   name places them at none, so they are set aside). The engine reads none of those; the web
   counts rounds and returns, and places those items, from generic run records with them. It holds no step lists, outcome lists, arrows, ask flags, shadow flags,
-  settings or stage-group enum; it names the graph's stages, steps and outcomes, and declares
-  its groups, each with the `kind` its colour comes from (`lib/view-groups.ts` `groupsOf` is the
-  one place the map, Full workflow and the board take their groups from). One path reads it, `servedFactoryView` (`factory-view-read.ts`), when the file is
+  settings, groups or stage-group enum; it names the graph's stages, steps and outcomes. Groups
+  come from the pack's document front matter (`packages/workflows/src/pack-document.ts`: the
+  manifest's `document`, else `how-it-works.md`), each with an optional `blurb` and a `kind` the
+  engine serves as an opaque slug; `readPackGraph` and `archon validate` check them against the
+  flow, and the graph serves them with each stale stage dropped and the problems in
+  `document.problems`. `lib/view-groups.ts` `groupsOf(graph)` is the one place the map, Full
+  workflow and the board take their groups from, and maps `kind` to the console's colours. One path reads it, `servedFactoryView` (`factory-view-read.ts`), when the file is
   read and in `bun run check:factory-view <pack dir>`: each entry is read alone with its own
   schema, then `reconcileFactoryView` (`factory-view-check.ts`) drops each entry naming what the
   graph lacks, keeps a `rounds`, `returns`, `approves` or `change` entry for a missing workflow as
@@ -81,7 +90,9 @@ The factory building this repository runs Archon from another checkout, on the h
   retired workflow's `stage` is one of the graph's flow (else only that placement is dropped), a
   step or loop is one the stage has, and a stage's `returns` agree with its outcomes that read
   `returned`. The Wirasm pack's file is kept at
-  `docs/factory-console/pack-view/` until the owner's pack ships it.
+  `docs/factory-console/pack-view/` until the owner's pack ships it, and the document lines the
+  console needs from the pack (its `document` key and the groups' `blurb` and `kind`) in the
+  overlay `docs/factory-console/pack-spike/` (`pack-view/README.md`).
 - Factory web code stays under `packages/web/src/experiments/console/factory/` (components, pure
   `lib/`, the page routes). On `combined` it holds the curated map, How it works and the stage
   modal, the board card's layer and the board furniture (work orders, Merged, Set aside, the

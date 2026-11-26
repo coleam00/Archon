@@ -244,8 +244,8 @@ export const packGraphSchema = z.object({
     z.object({ binding: z.string(), kind: z.enum(['timer', 'event', 'fire']), stage: z.string() })
   ),
   /**
-   * The document the pack's manifest names (`document`), as a path within the pack, with
-   * what is wrong with it; null for a pack that names none. See `pack-document.ts`.
+   * The pack's document (manifest `document`, else `how-it-works.md`), with what is wrong
+   * with it and its groups; null for a pack with neither. See `pack-document.ts`.
    */
   document: z
     .object({
@@ -268,9 +268,9 @@ export const packGraphSchema = z.object({
     })
     .nullable(),
   /**
-   * How the pack groups its stages for display, from its document's frontmatter: each a
-   * name and stages by their `workflow` name, in order. Empty when the pack declares none
-   * or its declaration has a problem: a group may name only stages that are `inFlow`.
+   * The document's groups for display: name, optional `blurb` and opaque `kind`, stages by
+   * `workflow` name in order, each stage not `inFlow` or already grouped left out (see
+   * `document.problems`). Empty when none is declared or the document does not read.
    */
   groups: z.array(packGroupSchema),
   /**

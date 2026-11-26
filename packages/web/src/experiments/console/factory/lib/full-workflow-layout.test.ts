@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { PackGraph } from '../../skills/items';
 import { columnsOf, type StageGroup } from '../../routes/BoardPage';
-import { shippedFile, shippedGraph, shippedView } from '../curated.test-fixtures';
+import { shippedGraph, shippedView } from '../curated.test-fixtures';
 import { LIVE_FITTING } from '../map/useMapCamera';
 import { fullWorkflowLayout, MERGED } from './full-workflow-layout';
 import { mapArrows, type StructureView } from './graph-structure';
@@ -12,7 +12,7 @@ import { groupsOf } from './view-groups';
 describe("the shipped pack's full workflow", () => {
   const layout = fullWorkflowLayout(
     shippedGraph,
-    columnsOf(shippedGraph, groupsOf(shippedFile, shippedGraph)),
+    columnsOf(shippedGraph, groupsOf(shippedGraph)),
     shippedView
   );
   const named = layout.arrows.map(arrow => ({

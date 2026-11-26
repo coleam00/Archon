@@ -25,7 +25,7 @@ import { usePackGraph } from '../map-structure';
 import { OverviewBody } from '../overview/OverviewPage';
 import { useFullWorkflow, usePackView } from '../PackMap';
 import { SegmentedControl } from '../ui/SegmentedControl';
-import { ViewProblems } from '../ViewProblems';
+import { DocumentProblems, ViewProblems } from '../ViewProblems';
 import { PackFrame } from './PackFrame';
 
 /** Every pack some project stages, in the projects read's order, each with that first project. */
@@ -120,6 +120,7 @@ function HowItWorks({ projectId, pack }: { projectId: string; pack: string }): R
           </p>
         )}
         <ViewProblems problems={source.problems} drawn={false} />
+        <DocumentProblems graph={graph.data} />
         <DerivedStructure projectId={projectId} pack={pack} />
         {document == null || document.text === '' ? null : (
           <div
@@ -155,6 +156,7 @@ function HowItWorks({ projectId, pack }: { projectId: string; pack: string }): R
       }
     >
       <ViewProblems problems={source.problems} drawn />
+      <DocumentProblems graph={graph.data} />
       {full ? (
         <DerivedStructure projectId={projectId} pack={pack} view={source.view} />
       ) : (

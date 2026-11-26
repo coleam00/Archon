@@ -101,10 +101,6 @@ function view(): FactoryView {
     version: 1,
     title: 'Factory',
     summary: 'x',
-    groups: [
-      { name: 'Build', blurb: 'x', stages: ['make', 'check'] },
-      { name: 'Ship', blurb: 'x', stages: ['land'] },
-    ],
     stages: {
       make: { ...words, steps: { write: 'Writes', end: 'Ends' } },
       check: {
@@ -181,11 +177,6 @@ describe('an entry naming what the graph lacks drops alone', () => {
       'answers.make:drop',
     ],
     [
-      'a group naming a stage the graph lacks',
-      v => void v.groups![1]!.stages.push('deploy'),
-      'groups.1.stages.1',
-    ],
-    [
       'a How it works edge between stages no arrow joins',
       v => void v.howItWorks.views.top!.edges.push({ from: 'b', to: 'a', kind: 'loops-back' }),
       'howItWorks.views.top.edges.1',
@@ -210,18 +201,6 @@ describe('an entry naming what the graph lacks drops alone', () => {
       'dropped stages.check.drilldown',
     ]);
     expect(served(edit).stages.check?.drilldown).toBeUndefined();
-  });
-
-  test('a group left with no stage of the pack goes; one stage in two groups is invalid', () => {
-    expect(
-      problems(v => {
-        v.groups = [
-          { name: 'Build', blurb: 'x', stages: ['make', 'check'] },
-          { name: 'Old', blurb: 'x', stages: ['deploy'] },
-          { name: 'Ship', blurb: 'x', stages: ['land', 'make'] },
-        ];
-      })
-    ).toEqual(['dropped groups.1.stages.0', 'dropped groups.1', 'invalid groups.2.stages.1']);
   });
 });
 
@@ -275,17 +254,6 @@ describe('what the graph has and the view gives no words is an error', () => {
     expect(g.stages.some(s => s.workflow === 'helper' && !s.inFlow)).toBe(true);
     expect(problems(undefined, g)).toEqual([]);
   });
-
-  test("an in-flow stage the file's groups leave out, apart from the one items leave by", () => {
-    expect(problems(v => void v.groups!.pop())).toEqual([]);
-    expect(problems(v => void v.groups![0]!.stages.pop())).toEqual(['ungrouped groups']);
-  });
-});
-
-test("a graph with no groups still serves the file's groups", () => {
-  const g = { ...graph(), groups: [] };
-  expect(problems(undefined, g)).toEqual([]);
-  expect(served(() => undefined, g).groups?.map(group => group.name)).toEqual(['Build', 'Ship']);
 });
 
 describe('progress declarations are reconciled with the graph', () => {

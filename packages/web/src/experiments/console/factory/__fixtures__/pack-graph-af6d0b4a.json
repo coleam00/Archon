@@ -1833,7 +1833,11 @@
       "stage": "Wirasm/archon-software-factory:order"
     }
   ],
-  "document": null,
+  "document": {
+    "path": "how-it-works.md",
+    "problems": [],
+    "text": "# How the factory works\n\nWork comes in as a work order, or as an issue someone adds the `factory` label to. Agents also find work while they do other work. Triage decides whether it is worth building. The link stage places it among the project's other work. Plan writes down how to build it. Build writes the change and opens a draft pull request. Three checks read it, then the project's own CI and the reviews on the pull request. The land gate lets it land or asks you, and the change lands on its branch.\n\nYou are asked only when a decision is yours. Each ask comes with its options, what each costs, and a recommendation when the stage has a basis for one.\n\n## How work gets in\n\n- **A work order.** Handed to the factory by an operator: one item, or several that belong together.\n- **An issue.** Someone adds the `factory` label to it.\n- **Found by agents.** Noticed outside their own task, and filed as new work after a change lands.\n\n## Triage\n\nTriage reads a new item and decides what should happen to it, the way the project's maintainers would.\n\n- **The item.** A work order, a labelled issue or a finding.\n- **Judge.** Decides what happens, as maintainers would.\n- **The call.** Build, narrow, split, shape, park or close. A call that does not start a build is shown to you; nothing is closed behind your back.\n\n## Link\n\nLink decides whether the item can be built now.\n\n- **Place it.** Sets it among the project's other open work and records what it depends on.\n- **Wait.** An item that cannot be built before another lands waits, and goes on by itself when that one lands.\n- **You.** Asked when what it waits on will not land: keep waiting, start anyway, or drop it.\n\n## Plan\n\nPlan reads the project and writes down how to build the item. It changes nothing. When it asks you, your answer starts it again with the answer in hand.\n\n- **Read the project.** Code, rules and history.\n- **Weigh the ways.** The smallest, the complete, and any other.\n- **The plan.** What a builder needs, with no questions left.\n- **You.** Asked when the choice is yours.\n\n## Build\n\nBuild writes the change in its own checkout and opens a draft pull request. What the checks and CI find comes back to the same builder to fix. A plan that cannot be built as written goes back to Plan.\n\n- **Build the change.** Writes and tests it in its own checkout.\n- **Draft pull request.** The change, ready to be read.\n- **What comes back.** Findings from the checks and from CI.\n\n## Checks\n\nThree checks read every change. The verdict approves it, sends it back to the same builder with what they found, or sends it back to Plan when it needs a different approach. After three rounds it asks you.\n\n- **Review.** Reads the code.\n- **Tests.** Judges the tests the change adds.\n- **Product.** Tries what a user sees.\n- **Verdict.** Approve, send back, or replan.\n\n## CI and reviews\n\nThe host round reads what the project's own CI and the reviewers on the pull request say, and sends what must change back to the builder.\n\n## Landing\n\n- **Land gate.** Decides whether the change lands without asking you. With no land policy it asks every time.\n- **Land.** Merges the change into its landing branch: the project's base branch, or the branch its work order names.\n- **Landed check.** Looks at the branch after the landing, and starts a fix when the change broke it.\n- **Discoveries.** What the agents noticed along the way becomes new work.\n- **Close.** A change you dropped is closed with your reason; one you sent back to shaping is closed too, its branch kept, and the item waits to be shaped again.\n\n## You\n\nAnswer what the factory asks. An answer is a decision: it starts what comes next and reaches that stage as already made.\n\n---\n\nThe explainer this page grew from was written by Cole Medin for the factory's first Console view.\n"
+  },
   "metricViews": {
     "names": {
       "sf.ended_ready": "Changes that reached the land gate",
@@ -1889,7 +1893,32 @@
     ],
     "problem": null
   },
-  "groups": [],
+  "groups": [
+    {
+      "name": "Intake",
+      "blurb": "Order, triage, split and link",
+      "stages": ["order", "triage", "split", "link", "complexity"],
+      "kind": "intake"
+    },
+    {
+      "name": "Plan and build",
+      "blurb": "Plan, then build",
+      "stages": ["plan", "stage-build", "attend"],
+      "kind": "build"
+    },
+    {
+      "name": "Checks",
+      "blurb": "Checks, CI and PR reviews, and catching up",
+      "stages": ["stage-check", "stage-host", "catchup"],
+      "kind": "check"
+    },
+    {
+      "name": "Landing",
+      "blurb": "Gate, merge, and what follows the merge",
+      "stages": ["landgate", "land", "landed", "discoveries", "close"],
+      "kind": "merge"
+    }
+  ],
   "capacity": [],
   "settings": [
     {

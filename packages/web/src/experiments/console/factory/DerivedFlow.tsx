@@ -420,7 +420,7 @@ export function DerivedStructure({
     );
   return (
     <DerivedFlow
-      flow={columnsOf(graph.data, groupsOf(view, graph.data), view ?? null)}
+      flow={columnsOf(graph.data, groupsOf(graph.data), view ?? null)}
       graph={graph.data}
       view={view ?? null}
     />

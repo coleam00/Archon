@@ -3,7 +3,7 @@
  * does not read costs only itself (DESIGN.md, COMBINED direction: "A stale entry drops only
  * itself, and says so"). The envelope (version, title, summary, How it works and a `stages`
  * object) must read, or the file is `unreadable` and there is no view. Then each stage,
- * outcome, answer, group, progress source and the `words` and `merged` keys are read alone
+ * outcome, answer, progress source and the `words` and `merged` keys are read alone
  * with their own schema: one that fails is dropped (`invalid`), and a key the schema does not
  * know is stripped from its entry or from the file (`unknown`), the rest kept.
  *
@@ -18,7 +18,6 @@ import {
   answerKeySchema,
   answerSchema,
   factoryViewSchema,
-  groupSchema,
   outcomeKeySchema,
   outcomeSchema,
   stageNameSchema,
@@ -193,7 +192,6 @@ export function readFactoryView(json: unknown): FactoryViewRead {
     version: data.version,
     title: data.title,
     summary: data.summary,
-    groups: reading.list(groupSchema, file.groups, ['groups']),
     stages: reading.record(stageNameSchema, stageSchema, data.stages, ['stages']) ?? {},
     outcomes: reading.record(outcomeKeySchema, outcomeSchema, file.outcomes, ['outcomes']),
     answers: reading.record(answerKeySchema, answerSchema, file.answers, ['answers']),

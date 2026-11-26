@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { shippedArrows, shippedFile, shippedGraph, shippedView } from '../curated.test-fixtures';
 import { curatedView } from './curated-view';
 import { mapColumns } from './map-columns';
+import { documentProblems } from './view-groups';
 
 const stage = (id: string) => shippedView.stages.find(entry => entry.id === id);
 const FLOW = [
@@ -47,18 +48,15 @@ describe('the slim file over the af6d0b4a graph', () => {
       ['Merged', ['landed'], 'merged'],
     ]);
     expect(shippedView.landed.stage).toBe('landed');
-  });
-
-  test("a graph with no groups draws the file's groups, each column headed by its group", () => {
-    const view = curatedView(shippedFile, { ...shippedGraph, groups: [] });
-    expect(mapColumns(view).map(column => [column.label, column.blurb, column.tone])).toEqual(
-      mapColumns(shippedView).map(column => [column.label, column.blurb, column.tone])
+    // Each group's line is the document's, served by the graph.
+    expect(shippedView.columns.map(column => column.blurb).slice(0, 4)).toEqual(
+      shippedGraph.groups.map(group => group.blurb ?? '')
     );
   });
 
-  test("a group's colour is its declared kind, so dropping a group moves no other's", () => {
-    const groups = (shippedFile.groups ?? []).filter(group => group.name !== 'Plan and build');
-    const tones = mapColumns(curatedView({ ...shippedFile, groups }, shippedGraph)).map(column => [
+  test("a group's colour is its document kind, so dropping a group moves no other's", () => {
+    const groups = shippedGraph.groups.filter(group => group.name !== 'Plan and build');
+    const tones = mapColumns(curatedView(shippedFile, { ...shippedGraph, groups })).map(column => [
       column.label,
       column.tone,
     ]);
@@ -66,31 +64,41 @@ describe('the slim file over the af6d0b4a graph', () => {
     expect(tones).toContainEqual(['Landing', 'land']);
   });
 
-  test('a group that declares no kind reads neutral', () => {
-    const groups = (shippedFile.groups ?? []).map(({ kind: _kind, ...group }) => group);
-    const columns = mapColumns(curatedView({ ...shippedFile, groups }, shippedGraph));
+  test('a group with no kind, or one this console does not draw, reads neutral', () => {
+    const groups = shippedGraph.groups.map(({ kind: _kind, ...group }, index) =>
+      index === 0 ? { ...group, kind: 'intake-ish' } : group
+    );
+    const columns = mapColumns(curatedView(shippedFile, { ...shippedGraph, groups }));
     expect(columns.filter(column => column.tone !== 'merged').map(column => column.tone)).toEqual([
       'other',
       'other',
       'other',
       'other',
     ]);
-  });
-
-  test("where the graph and the file both group, the file's groups win", () => {
-    const graph = { ...shippedGraph, groups: [{ name: 'Everything', stages: [...FLOW] }] };
-    expect(curatedView(shippedFile, graph).columns.map(column => column.label)).toEqual([
-      'Intake',
-      'Plan and build',
-      'Checks',
-      'Landing',
-      'Merged',
+    // Only the kind this console does not draw is a problem; none, or `neutral`, is not.
+    expect(documentProblems({ document: null, groups })).toEqual([
+      "group 'Intake' has kind 'intake-ish', which this console does not draw; it reads neutral",
     ]);
   });
 
-  test('with no groups anywhere, every stage is a column of its own, never a group it is not in', () => {
-    const { groups: _none, ...file } = shippedFile;
-    const columns = mapColumns(curatedView(file, { ...shippedGraph, groups: [] }));
+  test('a stage no group holds is a column of its own, between the groups in flow order', () => {
+    const groups = shippedGraph.groups.map(group => ({
+      ...group,
+      stages: group.stages.filter(stage => stage !== 'catchup'),
+    }));
+    const columns = mapColumns(curatedView(shippedFile, { ...shippedGraph, groups }));
+    expect(columns.map(column => [column.label, column.tone])).toEqual([
+      ['Intake', 'intake'],
+      ['Plan and build', 'build'],
+      ['Checks', 'check'],
+      [stage('catchup')?.label ?? '', 'other'],
+      ['Landing', 'land'],
+      ['Merged', 'merged'],
+    ]);
+  });
+
+  test('with no groups, every stage is a column of its own, never a group it is not in', () => {
+    const columns = mapColumns(curatedView(shippedFile, { ...shippedGraph, groups: [] }));
     expect(columns.map(column => column.stages)).toEqual([
       ...FLOW.filter(id => id !== 'landed').map(id => [id]),
       ['landed'],

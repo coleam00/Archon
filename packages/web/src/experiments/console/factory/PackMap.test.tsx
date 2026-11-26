@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { invalidate, set } from '../store/cache';
 import { K } from '../store/keys';
 import type { PackView } from './api';
+import type { PackGraph } from '../skills/items';
 import type { PackBoardGroups } from './lib/board-numbers';
 import { shippedFile, shippedGraph } from './curated.test-fixtures';
 import { asksOn, itemOn, MOVING_ITEMS } from './items.test-fixtures';
@@ -52,9 +53,14 @@ const BOARD: PackBoardGroups = {
 /** Open asks on the two items the map counts as needing you (b2 on build, g1 at the land gate). */
 const ASKS = asksOn(MOVING_ITEMS.filter(read => ['b2', 'g1'].includes(read.item.key)));
 
-async function mount(view: PackView, search = '', asks = ASKS): Promise<HTMLElement> {
+async function mount(
+  view: PackView,
+  search = '',
+  asks = ASKS,
+  graph: PackGraph = shippedGraph
+): Promise<HTMLElement> {
   set(K.packView(PROJECT, PACK), view);
-  set(K.packGraph(PROJECT, PACK), shippedGraph);
+  set(K.packGraph(PROJECT, PACK), graph);
   const mounted = await mountTree(
     <MemoryRouter initialEntries={[`/console/p/${PROJECT}/overview${search}`]}>
       <Routes>
@@ -79,6 +85,21 @@ async function mount(view: PackView, search = '', asks = ASKS): Promise<HTMLElem
 }
 
 const CURATED: PackView = { path: PATH, view: shippedFile, problems: [] };
+/**
+ * The shipped graph as the engine serves it when the pack's document leaves `stage-host` out of
+ * every group: the stage heads a column alone, and the document lists why.
+ */
+const withoutStageHost: PackGraph = {
+  ...shippedGraph,
+  document:
+    shippedGraph.document === null
+      ? null
+      : { ...shippedGraph.document, problems: ["stage 'stage-host' is in no group"] },
+  groups: shippedGraph.groups.map(group => ({
+    ...group,
+    stages: group.stages.filter(stage => stage !== 'stage-host'),
+  })),
+};
 const NO_FILE: PackView = { path: null, view: null, problems: [] };
 /** A file the server read with two problems it worked around: the map still draws from it. */
 const DRIFTED: PackView = {
@@ -170,6 +191,7 @@ describe('the one check where the map is drawn', () => {
   test('a clean file shows no problem line', async () => {
     const page = await mount(CURATED);
     expect(page.querySelector('[data-view-problems]')).toBeNull();
+    expect(page.querySelector('[data-document-problems]')).toBeNull();
   });
 
   test('a file that does not read draws the derived map, says so, and lists why', async () => {
@@ -196,15 +218,7 @@ describe('the one check where the map is drawn', () => {
   });
 
   test("the Full workflow heads an ungrouped stage's column by its label, a group's by its name (#261)", async () => {
-    // The shipped file with `stage-host` in no group, so it heads a column alone.
-    const view = {
-      ...shippedFile,
-      groups: (shippedFile.groups ?? []).map(group => ({
-        ...group,
-        stages: group.stages.filter(stage => stage !== 'stage-host'),
-      })),
-    };
-    const page = await mount({ ...CURATED, view }, '?map=full');
+    const page = await mount(CURATED, '?map=full', ASKS, withoutStageHost);
     const heading = (group: string): string | null | undefined =>
       page.querySelector(`[data-flow-group="${group}"] [data-flow-heading]`)?.textContent;
     expect(heading('stage-host')).toBe('CI and review');
@@ -217,6 +231,21 @@ describe('the one check where the map is drawn', () => {
     // No card on the map prints its own stage id.
     for (const node of page.querySelectorAll('[data-flow-stage]'))
       expect(node.textContent).not.toContain(node.getAttribute('data-flow-stage') ?? '');
+  });
+
+  test("the pack document's problems show above the map, and the groups left still draw", async () => {
+    const page = await mount(CURATED, '', ASKS, withoutStageHost);
+    const listed = page.querySelector('[data-document-problems]');
+    expect(listed?.querySelector('summary')?.textContent).toContain('how-it-works.md');
+    expect(listed?.querySelector('li')?.textContent).toBe("stage 'stage-host' is in no group");
+    expect(cards(page)).toEqual([
+      'intake',
+      'plan-and-build',
+      'checks',
+      'stage-host',
+      'landing',
+      'landed',
+    ]);
   });
 
   test("the Full workflow's Merged heading counts the Board's Merged column, not every merge", async () => {

@@ -487,15 +487,16 @@ function renderWithView(packGraph: PackGraph, view: FactoryView | null, reads: I
 }
 
 test("a column header names its stages in the view file's words, and an ungrouped stage's column by its label", () => {
-  // The shipped file, with `stage-host` taken out of every group so it heads a column alone.
-  const view: FactoryView = {
-    ...shippedFile,
-    groups: (shippedFile.groups ?? []).map(group => ({
+  // The shipped graph, with `stage-host` taken out of every group so it heads a column alone.
+  const graph: PackGraph = {
+    ...shippedGraph,
+    pack: 'flow',
+    groups: shippedGraph.groups.map(group => ({
       ...group,
       stages: group.stages.filter(stage => stage !== 'stage-host'),
     })),
   };
-  const page = renderWithView({ ...shippedGraph, pack: 'flow' }, view, [
+  const page = renderWithView(graph, shippedFile, [
     item('issue-1', 'stage-build', 'running'),
     item('issue-2', 'stage-host', 'running'),
   ]);
@@ -730,20 +731,20 @@ async function mountPlaced(reads: ItemRead[], retired: unknown[]) {
   return { ...board, columns, setAside };
 }
 
-test("a pack whose graph has no groups takes its board columns from the view file's groups", async () => {
+test("the board's columns are the groups the pack's document declares, through the graph", async () => {
   seedBoard([item('issue-1', 'plan', 'running'), item('issue-2', 'check', 'queued')]);
-  set(K.packGraph('web', 'flow'), graph);
+  set(K.packGraph('web', 'flow'), {
+    ...graph,
+    groups: [{ name: 'Make', blurb: 'x', stages: ['plan', 'build'], kind: 'build' }],
+  });
+  // The view file carries no groups: a leftover `groups` key would be an unknown key it drops.
   set(K.packView('web', 'flow'), {
     path: null,
-    view: {
-      groups: [{ name: 'Make', blurb: 'x', stages: ['plan', 'build'], kind: 'build' }],
-      stages: {},
-    } as unknown as FactoryView,
+    view: { stages: {} } as unknown as FactoryView,
     problems: [],
   });
   const board = await mountBoard(nothingFetched);
   try {
-    expect(graph.groups).toEqual([]);
     expect(
       [...board.container.querySelectorAll('[data-pack="flow"] [data-stage]')].map(stage => [
         stage.getAttribute('data-stage') ?? '',

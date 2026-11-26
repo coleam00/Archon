@@ -1,9 +1,10 @@
 /**
  * The map's columns in their colours. A column is a group, or one stage in none
- * (`curated-view.ts`). A column's colour and kind label come from its group's declared `kind`
- * (owner ruling on #237): never from where the column falls, so dropping or adding a group moves
- * no other group's colour. A group with no kind, or `neutral`, and a stage in no group, take
- * `other`; the column the board's Merged column is counted on takes the merged colour.
+ * (`curated-view.ts`). A column's colour and kind label come from its group's `kind` in the
+ * pack's document (owner ruling on #237): never from where the column falls, so dropping or
+ * adding a group moves no other group's colour. A group with no kind this console draws, and a
+ * stage in no group, take `other`; the column the board's Merged column is counted on takes the
+ * merged colour.
  */
 import type { GroupKind } from './view-groups';
 import type { CuratedColumn, CuratedView } from './curated-view';
@@ -16,7 +17,6 @@ const KIND_TONES: Record<GroupKind, ColumnTone> = {
   build: 'build',
   check: 'check',
   merge: 'land',
-  neutral: 'other',
 };
 
 /** The colour a group of `kind` takes; a group or stage with none is `other`. */

@@ -26,7 +26,7 @@ import { CuratedMap } from './map/CuratedMap';
 import { useMapStructure, usePackGraph } from './map-structure';
 import { ReadFailure } from './ReadFailure';
 import { SegmentedControl } from './ui/SegmentedControl';
-import { ViewProblems } from './ViewProblems';
+import { DocumentProblems, ViewProblems } from './ViewProblems';
 
 /** The search param that shows the derived map in place of the curated one. */
 const MAP_PARAM = 'map';
@@ -79,7 +79,7 @@ export function PackMap({ projectId, pack, board, itemsError, asks }: PackMapPro
   // The derived map's columns are the same groups the curated map draws, so a card's heading
   // is its group's on both.
   const view = source.kind === 'curated' ? source.view : null;
-  const groups = groupsOf(view, graph.data);
+  const groups = groupsOf(graph.data);
   const derived = (
     <DerivedFlow
       flow={flowCounts(
@@ -112,6 +112,7 @@ export function PackMap({ projectId, pack, board, itemsError, asks }: PackMapPro
           </p>
         )}
         <ViewProblems problems={source.problems} drawn={false} />
+        <DocumentProblems graph={graph.data} />
         {derived}
       </div>
     );
@@ -129,6 +130,7 @@ export function PackMap({ projectId, pack, board, itemsError, asks }: PackMapPro
       }
     >
       <ViewProblems problems={source.problems} drawn />
+      <DocumentProblems graph={graph.data} />
       {full ? (
         derived
       ) : (

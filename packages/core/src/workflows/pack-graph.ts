@@ -18,7 +18,7 @@ import {
   validateProjectPackSettings,
 } from '@archon/workflows/pack-settings';
 import { loadPackMetricViews } from '@archon/workflows/metric-views';
-import { groupProblems, loadPackDocument } from '@archon/workflows/pack-document';
+import { checkGroups, loadPackDocument, ungroupedStages } from '@archon/workflows/pack-document';
 import {
   buildPackGraph,
   graphLink,
@@ -230,25 +230,27 @@ export async function readPackGraph(
   const dir = copies.loaded[0]?.dir ?? null;
   const read = dir === null ? null : await loadPackDocument(dir);
   const views = dir === null ? null : await loadPackMetricViews(dir);
-  const problems =
-    read === null
-      ? []
-      : [
-          ...read.problems,
-          ...groupProblems(
-            read.groups,
-            graph.stages.filter(stage => stage.inFlow).map(stage => stage.workflow)
-          ),
-        ];
+  // A stale group entry drops only itself; the problems say which, and which stage is in none.
+  const inFlow = graph.stages.filter(stage => stage.inFlow).map(stage => stage.workflow);
+  const checked = read === null ? { groups: [], problems: [] } : checkGroups(read.groups, inFlow);
   return {
     ...graph,
     ...copies,
     document:
       read === null || read.document === null
         ? null
-        : { path: read.document, problems, text: read.text },
+        : {
+            path: read.document,
+            problems: [
+              ...read.problems,
+              ...checked.problems,
+              ...ungroupedStages(read.groups, inFlow),
+              ...read.warnings,
+            ],
+            text: read.text,
+          },
     metricViews: views === null ? null : { names: {}, cards: [], problem: null, ...views },
-    groups: read === null || problems.length > 0 ? [] : read.groups,
+    groups: checked.groups,
     ...(await packSettings(cwd, packKey, workflows)),
     capacity: await packCapacity(installed, deps),
   };

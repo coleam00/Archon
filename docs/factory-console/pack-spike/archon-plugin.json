@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "kind": "workflow-pack",
+  "name": "archon-software-factory",
+  "description": "A software factory on Archon: work items in, merged changes out, asks only when the decision is yours",
+  "document": "how-it-works.md",
+  "skill": {
+    "name": "archon-software-factory",
+    "path": "skill/archon-software-factory"
+  },
+  "entrypoints": {
+    "order": "order/order.yaml",
+    "triage": "triage/triage.yaml",
+    "judge": "judge/judge.yaml",
+    "link": "link/link.yaml",
+    "plan": "plan/plan.yaml",
+    "build": "build/build.yaml",
+    "review": "review/review.yaml",
+    "tests": "tests/tests.yaml",
+    "discoveries": "discoveries/discoveries.yaml",
+    "catchup": "catchup/catchup.yaml",
+    "land": "land/land.yaml",
+    "landed": "landed/landed.yaml",
+    "landgate": "landgate/landgate.yaml",
+    "close": "close/close.yaml",
+    "verdict": "verdict/verdict.yaml",
+    "product": "product/product.yaml",
+    "host": "host/host.yaml",
+    "inspect": "inspect/inspect.yaml",
+    "split": "split/split.yaml",
+    "stage-build": "stage-build/stage-build.yaml",
+    "stage-check": "stage-check/stage-check.yaml",
+    "stage-host": "stage-host/stage-host.yaml",
+    "report": "report/report.yaml",
+    "attend": "attend/attend.yaml",
+    "survey": "survey/survey.yaml",
+    "complexity": "complexity/complexity.yaml"
+  }
+}
