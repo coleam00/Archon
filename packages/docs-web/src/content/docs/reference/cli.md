@@ -1710,10 +1710,10 @@ archon workflow priority --item WO-12 --clear
 | `--json` | Print `{ priority }`, the item's priority after the write as the [item read](#workflow-runs) gives it (null when it has none), or `{ ok: false, error }` |
 
 Priority is recorded on the item, so every later start of it honours it without its trigger
-binding passing anything. `trigger fire --priority` gives the start's item priority as part
-of the fire. Called from inside a workflow node, the command records the node's run and node
-as `fromRun`. It needs the database store. An older Archon binary that opens the same
-database ignores priority and admits in the order starts queued.
+binding passing anything. To start an item with priority, give it priority first, then fire
+or run its start. Setting it again changes nothing. It needs the database store. An older
+Archon binary that opens the same database ignores priority and admits in the order starts
+queued.
 
 ### `workflow attention label`
 
@@ -3211,7 +3211,7 @@ To undo an install by hand: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgen
 
 An item is the durable thing runs are about: a key within a project, such as an issue reference. The engine gives the key no meaning and never parses it; it is 1 to 200 characters. The one reader that does is the [item tracker](/guides/workflow-triggers/#show-progress-on-the-items-tracker), and only by the key rules the deployment configures. `trigger fire --item <key>` and `workflow run --item <key>` name the item of the run they start, and that run's `item_id` points at it. The item is created the first time a start or run names it, before a queued start is admitted; naming the same key again in the same project is the same item, and the same key in another project is a different one.
 
-A `trigger fire` from inside a run that names no item inherits that run's item, so follow-up starts stay on it; from inside a `workflow:` sub-run it inherits the item of the top-level run. Inheritance stays inside the item's project. When the binding starts its run in another project, the fire is refused before anything is recorded or started, with a message that names both projects: pass `--item <key>` to name the item in that project, or `--no-item` to start it on none. A named item is always accepted, and names the item with that key in the started run's own project. `--no-item` starts the run on no item, from inside a run or outside one; it cannot be combined with `--item`. `--priority` gives the start's item [priority](#workflow-priority) before the start is prepared, so it queues ahead of ordinary starts; a fire with no item is refused with it before anything is recorded. A [script](/guides/script-nodes/#the-script-api) passes the same choice as `trigger.fire`'s `item` option.
+A `trigger fire` from inside a run that names no item inherits that run's item, so follow-up starts stay on it; from inside a `workflow:` sub-run it inherits the item of the top-level run. Inheritance stays inside the item's project. When the binding starts its run in another project, the fire is refused before anything is recorded or started, with a message that names both projects: pass `--item <key>` to name the item in that project, or `--no-item` to start it on none. A named item is always accepted, and names the item with that key in the started run's own project. `--no-item` starts the run on no item, from inside a run or outside one; it cannot be combined with `--item`. A [script](/guides/script-nodes/#the-script-api) passes the same choice as `trigger.fire`'s `item` option.
 
 A binding can also [map its item from its event](/guides/workflow-triggers/#put-a-start-on-the-item-its-event-names): a field of the fire's `--inputs` or `--input`, or of a webhook event, with an optional fixed prefix. A fire's item is chosen in this order: `--item`, then the binding's mapping, then the calling run's item. A binding that maps its item never inherits one, and a fire whose inputs lack the mapped field is refused before anything is recorded, naming the binding and the field.
 

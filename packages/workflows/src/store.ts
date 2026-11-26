@@ -307,7 +307,7 @@ export interface IWorkflowStore
   getItemPriority(itemId: string): Promise<import('./schemas/item-priority').ItemPriority | null>;
   /** Give the item `key` names its own priority, writing the item on first use. */
   setItemPriority(
-    input: import('./schemas/item-priority').ItemPriorityReport
+    input: import('./schemas/item-priority').ItemPriorityTarget
   ): Promise<import('./schemas/item-priority').ItemPriority>;
   /**
    * Remove the item's own priority and return what it still has through items it is

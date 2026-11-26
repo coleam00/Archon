@@ -348,7 +348,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `branch`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `recorded_at`
 - **`remote_agent_item_priorities`** - An item's own priority (`archon workflow priority`)
   - One row per item: `item_id` is the primary key, and the row existing means priority. Clearing deletes the row. An item `part_of` one with a row, through active links at any depth, has priority too; that is resolved on each read, never stored
-  - `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `recorded_at`
+  - `item_id` is its only column
   - Admission orders queued start requests by priority, then `queue_position`. No request column changes, so an older binary admits by `queue_position` alone
 - **`remote_agent_item_tracker_destinations`** - One row per item tracker destination (`tracker:<project>`)
   - The row exists once the destination's activation baseline is committed (`activated_at`), so a later activation by any process does not baseline again

@@ -631,10 +631,7 @@ export class SqliteAdapter implements IDatabase {
       );
       -- An item's own priority; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_priorities (
-        item_id TEXT PRIMARY KEY REFERENCES remote_agent_items(id),
-        from_run_id TEXT,
-        from_node_path TEXT,
-        recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+        item_id TEXT PRIMARY KEY REFERENCES remote_agent_items(id)
       );
       -- An item tracker destination's activation and pass holder; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_tracker_destinations (

@@ -6,11 +6,7 @@
  * every report of what is ahead agree. `queue_position` on the requests is never rewritten,
  * so an older binary sharing the database still admits in its own order.
  */
-import type {
-  ItemPriority,
-  ItemPriorityReport,
-  ItemPriorityTarget,
-} from '@archon/workflows/schemas/item-priority';
+import type { ItemPriority, ItemPriorityTarget } from '@archon/workflows/schemas/item-priority';
 import { getDatabase, pool } from './connection';
 import { ensureItemInProject } from './items';
 import type { TransactionQuery } from './resource-slots';
@@ -87,20 +83,12 @@ export function getItemPriority(itemId: string): Promise<ItemPriority | null> {
 }
 
 /** A work order is given priority before its members have runs, so the item is written on first use. */
-export async function setItemPriority(input: ItemPriorityReport): Promise<ItemPriority> {
+export async function setItemPriority(input: ItemPriorityTarget): Promise<ItemPriority> {
   return getDatabase().withTransaction(async query => {
     const itemId = await ensureItemInProject(query, input.projectKey, input.key);
     await query(
-      `INSERT INTO remote_agent_item_priorities (item_id, from_run_id, from_node_path, recorded_at)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (item_id) DO UPDATE SET from_run_id = excluded.from_run_id,
-         from_node_path = excluded.from_node_path, recorded_at = excluded.recorded_at`,
-      [
-        itemId,
-        input.fromRun?.runId ?? null,
-        input.fromRun?.nodePath ?? null,
-        new Date().toISOString(),
-      ]
+      'INSERT INTO remote_agent_item_priorities (item_id) VALUES ($1) ON CONFLICT (item_id) DO NOTHING',
+      [itemId]
     );
     const priority = await readPriority(query, itemId);
     if (priority === null)

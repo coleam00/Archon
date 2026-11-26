@@ -124,7 +124,7 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'fire',
-      spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>] [--input <name>=<value>] [--item <key> | --no-item] [--priority]',
+      spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>] [--input <name>=<value>] [--item <key> | --no-item]',
       description: 'Record a configured start and drain its execution host',
       scopedFlags: [
         {

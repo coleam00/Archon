@@ -42,11 +42,10 @@ import { projectAddCommand } from './project';
 import { workflowLinkCommand } from './workflow-link';
 import { workflowItemsCommand } from './workflow-items';
 import { workflowLandingCommand } from './workflow-landing';
-import { workflowPriorityCommand } from './workflow-priority';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
-import { runWorkflowEnd } from '../routes/workflow';
+import { runWorkflowEnd, runWorkflowPriority } from '../routes/workflow';
 import * as workflowCommands from './workflow';
 import { workflowAttentionCommand } from './workflow-attention';
 import { workflowRunCommand } from './workflow-run-owned';
@@ -532,9 +531,25 @@ nodes:
       })
     );
     expect(result.exitCode, result.stderr).toBe(0);
-    const priority = (request: Parameters<typeof workflowPriorityCommand>[2], json = true) =>
-      invoke(host => workflowPriorityCommand(host, projectRoot, request, json, callerEnv));
-    expect(succeeded(await priority({ item: 'WO-urgent', clear: false }))).toEqual({
+    // Through the route, so the flags it parses are what the command acts on.
+    const priority = (values: { item: string; clear?: true }) =>
+      invoke(host =>
+        runWorkflowPriority({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'priority'],
+          values: { ...values, json: true },
+          command: 'workflow',
+          subcommand: 'priority',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
+      );
+    expect(succeeded(await priority({ item: 'WO-urgent' }))).toEqual({
       priority: { own: true, inheritedFrom: [] },
     });
     succeeded(
@@ -565,10 +580,13 @@ nodes:
     };
     expect((await stopped())?.priority).toBe(true);
 
-    // A member's own clear leaves what the work order gives it, and says where to clear it.
-    const memberClear = await priority({ item: 'item-urgent', clear: true }, false);
-    expect(memberClear.exitCode, memberClear.stderr).toBe(0);
-    expect(memberClear.stdout).toContain('still priority through WO-urgent');
+    // A member's own clear leaves what the work order gives it.
+    expect(succeeded(await priority({ item: 'item-urgent' }))).toEqual({
+      priority: { own: true, inheritedFrom: [workOrder] },
+    });
+    expect(succeeded(await priority({ item: 'item-urgent', clear: true }))).toEqual({
+      priority: { own: false, inheritedFrom: [workOrder] },
+    });
     expect(succeeded(await priority({ item: 'WO-urgent', clear: true }))).toEqual({
       priority: null,
     });

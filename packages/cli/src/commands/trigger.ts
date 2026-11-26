@@ -91,8 +91,6 @@ type TriggerOptions = {
   input?: readonly string[];
   item?: string;
   noItem?: boolean;
-  /** Give the start's item priority before its start is prepared (`workflow priority`). */
-  priority?: boolean;
 };
 
 /**
@@ -237,28 +235,6 @@ async function inheritedItemKey(
   return item.key;
 }
 
-/** `--priority`: refuses a fire on no item, else returns what gives the start's item priority. */
-async function firedItemPriority(
-  host: WorkflowHost,
-  options: TriggerOptions,
-  cwd: string,
-  key: string | undefined,
-  env: NodeJS.ProcessEnv
-): Promise<() => Promise<unknown>> {
-  if (!options.priority) return async () => undefined;
-  if (key === undefined)
-    throw new Error(
-      '--priority needs an item: pass --item <key>. Nothing was recorded or started.'
-    );
-  const projectKey = await registeredProjectKeyForPath(cwd, host.records.codebases);
-  if (projectKey === null)
-    throw new Error(
-      `--priority names the start's item in its project, but the start's checkout (${cwd}) is not a registered project. Nothing was recorded or started.`
-    );
-  const fromRun = env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null;
-  return () => host.deps.store.setItemPriority({ projectKey, key, fromRun });
-}
-
 function assertItemOptions(options: TriggerOptions): void {
   if (options.item === undefined) return;
   if (options.noItem) throw new Error('--item and --no-item are mutually exclusive.');
@@ -371,13 +347,6 @@ async function triggerFire(
     recorded,
     inherited: () => inheritedItemKey(host, sourceActor, config.binding.launch.cwd),
   });
-  const givePriority = await firedItemPriority(
-    host,
-    options,
-    config.binding.launch.cwd,
-    itemKey,
-    env
-  );
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
@@ -408,8 +377,6 @@ async function triggerFire(
         );
       throw error;
     });
-  // Before the drain, so the start queues in the order the priority gives it.
-  await givePriority();
   await drainReceipt(host, receipt.receiptId, dispatch);
   await awaitOthersPreparation(host, receipt, wait);
   await writeFiredReceipt(host, receipt.receiptId);

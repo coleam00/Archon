@@ -76,8 +76,7 @@ export const cliArgOptions: CliArgOptions = {
   detach: { type: 'boolean' },
   'no-wait': { type: 'boolean' },
   'no-item': { type: 'boolean' },
-  // `trigger fire --priority`, and `workflow priority --clear`.
-  priority: { type: 'boolean' },
+  // `workflow priority --clear`.
   clear: { type: 'boolean' },
   all: { type: 'boolean' },
   status: { type: 'string' },

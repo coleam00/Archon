@@ -7,7 +7,6 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { ItemPriority } from '@archon/workflows/schemas/item-priority';
 import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
-import { readCallingNode } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
 import { type ItemTarget, NoRunItemError, resolveItemTarget } from './item-target';
 
@@ -27,16 +26,12 @@ export function prioritySourceText(priority: ItemPriority): string {
 async function write(
   host: WorkflowHost,
   cwd: string,
-  request: WorkflowPriorityRequest,
-  env: NodeJS.ProcessEnv
+  request: WorkflowPriorityRequest
 ): Promise<{ key: string; priority: ItemPriority | null }> {
   const { projectKey, key } = await resolveItemTarget(host, cwd, request);
   assertItemKey(key);
   const { store } = host.deps;
-  if (!request.clear) {
-    const fromRun = env.WORKFLOW_ID ? readCallingNode(env.WORKFLOW_ID, env) : null;
-    return { key, priority: await store.setItemPriority({ projectKey, key, fromRun }) };
-  }
+  if (!request.clear) return { key, priority: await store.setItemPriority({ projectKey, key }) };
   const cleared = await store.clearItemPriority({ projectKey, key });
   if (cleared === null) throw new Error(`No item '${key}' in project '${projectKey}'.`);
   return { key, priority: cleared.priority };
@@ -46,11 +41,10 @@ export async function workflowPriorityCommand(
   host: WorkflowHost,
   cwd: string,
   request: WorkflowPriorityRequest,
-  json: boolean | undefined,
-  env: NodeJS.ProcessEnv = process.env
+  json: boolean | undefined
 ): Promise<number> {
   try {
-    const { key, priority } = await write(host, cwd, request, env);
+    const { key, priority } = await write(host, cwd, request);
     if (json) await writeJsonLine({ priority });
     else if (priority === null) console.log(`Item ${key} has no priority.`);
     else if (request.clear)

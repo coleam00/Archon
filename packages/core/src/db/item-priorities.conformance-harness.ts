@@ -33,9 +33,8 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
     const harness = await makeHarness();
     try {
       const { store } = harness;
-      const fromRun = { runId: 'run-1', nodePath: 'order' };
       // A work order is given priority before anything else names it.
-      expect(await store.setItemPriority({ projectKey, key: 'wo', fromRun })).toEqual({
+      expect(await store.setItemPriority({ projectKey, key: 'wo' })).toEqual({
         own: true,
         inheritedFrom: [],
       });
@@ -53,7 +52,7 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
         inheritedFrom: [],
       });
 
-      await store.setItemPriority({ projectKey, key: 'task', fromRun: null });
+      await store.setItemPriority({ projectKey, key: 'task' });
       // Clearing a member's own priority leaves what its work order gives it.
       expect(await store.clearItemPriority({ projectKey, key: 'task' })).toEqual({
         priority: { own: false, inheritedFrom: [wo] },
@@ -70,7 +69,7 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
     }
   });
 
-  test('a queued start of an item with priority is admitted before older ordinary ones, at each resource', async () => {
+  test('queued starts of a priority work order’s members go first at each stage, FIFO, never taking a held slot', async () => {
     const harness = await makeHarness();
     try {
       const { store, db } = harness;
@@ -78,60 +77,99 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
         CONFORMANCE_CODEBASE_ID,
         CONFORMANCE_CONVERSATION_ID
       );
-      // Preparation writes a start's item onto its request; this stands in for it.
-      const queue = async (resource: string, item: string) => {
-        const intent = {
-          resource,
-          capacity: 1,
-          hostId: 'host',
-          overlap: 'queue',
-          launch: launch(),
-        } as const;
-        const disposition = await store.admitResourceStart(intent);
-        await db.query(
-          'INSERT INTO remote_agent_items (project_key, key) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-          [projectKey, item]
-        );
-        await db.query(
-          'UPDATE remote_agent_resource_start_requests SET item_id = $1 WHERE id = $2',
-          [await itemId(store, item), intent.launch.run.id]
-        );
-        return { id: intent.launch.run.id, disposition };
+      // A fire on `item`, prepared as a host's drain prepares it: the item comes from the receipt.
+      const fire = async (resource: string, capacity: number, item: string) => {
+        const receiptId = crypto.randomUUID();
+        await store.acceptStartReceipt({
+          receipt: {
+            id: receiptId,
+            sourceInstanceId: 'priority',
+            deliveryId: null,
+            contentDigest: receiptId,
+            receivedAt: new Date().toISOString(),
+            occurredAt: null,
+            sourceActor: null,
+            itemKey: item,
+          },
+          outcome: 'matched',
+          bindings: [
+            {
+              bindingId: 'stage',
+              bindingRevision: null,
+              hostId: 'host',
+              runAsUserId: 'operator',
+              resource,
+              capacity,
+              overlap: 'queue',
+              launch: {
+                cwd: '/conformance',
+                workflowName: 'conformance',
+                inputs: {},
+                isolation: { kind: 'in-place' },
+              },
+            },
+          ],
+        });
+        const identity = { receiptId, bindingId: 'stage', ownerId: 'owner' };
+        expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+        const prepared = launch();
+        const result = await store.completeStartBindingPreparation({
+          ...identity,
+          launch: prepared,
+        });
+        return { id: prepared.run.id, status: result?.status };
       };
-      const finish = (id: string) =>
-        db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [id]);
+      const setStatus = (id: string, status: string) =>
+        db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [status, id]);
       const drain = async (resource: string) =>
         (await store.drainResourceStarts({ resource, hostId: 'host' })).map(row => row.requestId);
+      const arrivalOrder = async (resource: string) =>
+        (
+          await db.query<{ id: string }>(
+            `SELECT id FROM remote_agent_resource_start_requests
+              WHERE resource_key = $1 AND status = 'queued' ORDER BY queue_position`,
+            [resource]
+          )
+        ).rows.map(row => String(row.id));
 
-      await partOf(store, 'member', 'wo');
-      const holder = await queue('build', 'holder');
-      expect(holder.disposition.status).toBe('admitted');
-      const a = await queue('build', 'a');
-      const b = await queue('build', 'b');
-      const c = await queue('build', 'member');
-      // Priority given after the start queued still reorders it.
-      await store.setItemPriority({ projectKey, key: 'wo', fromRun: null });
-      const member = await itemId(store, 'member');
-      expect((await store.listQueuedItemStarts(member)).map(start => start.ahead)).toEqual([0]);
-      expect((await store.listQueuedItemStarts(await itemId(store, 'a')))[0]?.ahead).toBe(1);
+      await partOf(store, 'm1', 'wo');
+      await partOf(store, 'm2', 'wo');
+      // Two slots, one held by a running run and one by a paused run that keeps it.
+      const running = await fire('build', 2, 'h1');
+      const paused = await fire('build', 2, 'h2');
+      expect([running.status, paused.status]).toEqual(['admitted', 'admitted']);
+      await setStatus(running.id, 'running');
+      await setStatus(paused.id, 'paused');
+      const a = await fire('build', 2, 'a');
+      const p1 = await fire('build', 2, 'm1');
+      const p2 = await fire('build', 2, 'm2');
+      expect([a.status, p1.status, p2.status]).toEqual(['queued', 'queued', 'queued']);
+      // Priority given after the starts queued still reorders them.
+      await store.setItemPriority({ projectKey, key: 'wo' });
+      // The stored order an older binary reads is untouched.
+      expect(await arrivalOrder('build')).toEqual([a.id, p1.id, p2.id]);
+      expect((await store.listQueuedItemStarts(await itemId(store, 'm1')))[0]?.ahead).toBe(0);
+      expect((await store.listQueuedItemStarts(await itemId(store, 'a')))[0]?.ahead).toBe(2);
 
-      // Nothing holding a slot is interrupted: the running holder keeps it.
       expect(await drain('build')).toEqual([]);
-      expect((await store.getWorkflowRun(holder.id))?.status).toBe('pending');
-      await finish(holder.id);
-      expect(await drain('build')).toEqual([c.id]);
-      await finish(c.id);
-      expect(await drain('build')).toEqual([a.id]);
-      await finish(a.id);
+      expect((await store.getWorkflowRun(running.id))?.status).toBe('running');
+      expect((await store.getWorkflowRun(paused.id))?.status).toBe('paused');
+      // Both slots free: both priority starts take them, oldest first, and ordinary work waits.
+      await setStatus(running.id, 'completed');
+      await setStatus(paused.id, 'completed');
+      expect(await drain('build')).toEqual([p1.id, p2.id]);
+      expect((await store.getResourceStartRequest(a.id))?.status).toBe('queued');
+      await setStatus(p1.id, 'completed');
+      await setStatus(p2.id, 'completed');
 
       // The member's next stage goes first too, with no one passing it priority.
-      const reviewer = await queue('review', 'holder');
-      const d = await queue('review', 'b');
-      const c2 = await queue('review', 'member');
-      await finish(reviewer.id);
-      expect(await drain('review')).toEqual([c2.id]);
+      const reviewer = await fire('review', 1, 'r');
+      const d = await fire('review', 1, 'd');
+      const next = await fire('review', 1, 'm1');
+      expect([reviewer.status, d.status, next.status]).toEqual(['admitted', 'queued', 'queued']);
+      await setStatus(reviewer.id, 'completed');
+      expect(await drain('review')).toEqual([next.id]);
       expect((await store.getResourceStartRequest(d.id))?.status).toBe('queued');
-      expect((await store.getResourceStartRequest(b.id))?.status).toBe('queued');
     } finally {
       await harness.close();
     }

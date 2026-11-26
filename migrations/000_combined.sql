@@ -885,12 +885,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_landings (
 -- own priority. An item `part_of` one with priority has it too. A queued start of an item
 -- with priority goes ahead of ordinary ones on its resource and host; queue_position on the
 -- start requests is unchanged, so an older binary still admits in its own order.
--- from_run_id has no foreign key, so run cleanup keeps the fact.
 CREATE TABLE IF NOT EXISTS remote_agent_item_priorities (
-  item_id UUID PRIMARY KEY REFERENCES remote_agent_items(id),
-  from_run_id TEXT,
-  from_node_path TEXT,
-  recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+  item_id UUID PRIMARY KEY REFERENCES remote_agent_items(id)
 );
 
 -- One row per item tracker destination ('tracker:<project>'). The row exists once the

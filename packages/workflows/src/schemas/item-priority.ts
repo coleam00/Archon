@@ -5,7 +5,6 @@
  * first in, first out. A slot already held is never taken.
  */
 import { z } from 'zod';
-import { attentionAnsweringRunSchema } from './run-wait';
 import { workflowItemSchema } from './workflow-run';
 
 /** Where an item's priority comes from. A read is null when the item has none. */
@@ -20,9 +19,4 @@ export type ItemPriority = z.infer<typeof itemPrioritySchema>;
 export interface ItemPriorityTarget {
   projectKey: string;
   key: string;
-}
-
-export interface ItemPriorityReport extends ItemPriorityTarget {
-  /** The run and node the call came from, reported by its environment and not verified. */
-  fromRun: z.infer<typeof attentionAnsweringRunSchema> | null;
 }
