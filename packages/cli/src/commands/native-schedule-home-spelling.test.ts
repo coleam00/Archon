@@ -58,7 +58,7 @@ async function invokeResult(
   const stdout = spyOnJsonStdout();
   try {
     const exitCode = await command(operation, schedules);
-    const printed = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+    const printed = stdout.mock.calls.map(([chunk]: readonly unknown[]) => String(chunk)).join('');
     return { exitCode, result: JSON.parse(printed) as Record<string, unknown> };
   } finally {
     stdout.mockRestore();
