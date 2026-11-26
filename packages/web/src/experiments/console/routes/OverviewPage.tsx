@@ -18,6 +18,7 @@ import { Link, useParams } from 'react-router';
 import { useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { FactoryNumbers } from '../factory/FactoryNumbers';
+import { askReadOf, type AskRead } from '../factory/lib/item-asks';
 import { packBoard, placeFor } from '../factory/lib/board-numbers';
 import { PackMap, usePackView } from '../factory/PackMap';
 import { useBoardItems } from '../factory/useBoardItems';
@@ -60,6 +61,7 @@ export function PackOverview({
   items,
   itemsError,
   needYou,
+  asks,
   children,
 }: {
   projectId: string;
@@ -69,6 +71,8 @@ export function PackOverview({
   itemsError: Error | undefined;
   /** The project's open asks; undefined until the attention list answers. */
   needYou: number | undefined;
+  /** The project's asks, which the map counts per stage (`PackMap`). */
+  asks: AskRead;
   /** The Needs you line, drawn under the tiles and above the map (DESIGN.md, Overview page). */
   children?: ReactNode;
 }): ReactElement {
@@ -103,7 +107,13 @@ export function PackOverview({
 
       <FactoryNumbers numbers={board?.numbers} needYou={needYou} error={itemsError} />
       {children}
-      <PackMap projectId={projectId} pack={pack} board={board} itemsError={itemsError} />
+      <PackMap
+        projectId={projectId}
+        pack={pack}
+        board={board}
+        itemsError={itemsError}
+        asks={asks}
+      />
     </section>
   );
 }
@@ -113,7 +123,7 @@ export function OverviewPage(): ReactElement {
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
   const project = projects?.find(candidate => candidate.id === projectId);
   const packs = project?.itemPacks ?? [];
-  const { data: attention } = useEntity<skill.RunsAttention>(
+  const { data: attention, error: attentionError } = useEntity<skill.RunsAttention>(
     K.runsAttention,
     skill.listRunsNeedingAttention
   );
@@ -122,7 +132,10 @@ export function OverviewPage(): ReactElement {
   // and the items on a stage are its open ones.
   const every = useBoardItems(projectId);
   const open = { data: every.data?.filter(isMoving), error: every.error };
+  // The tile counts asks, the Needs you tab's number, including asks on items at no stage; the
+  // map counts items with asks per stage (`PackMap`), so the two can differ on purpose.
   const needYou = attention === undefined ? undefined : itemAsks.asks.length;
+  const asks = askReadOf(attention, attentionError, itemAsks);
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex flex-col gap-3 border-b border-border px-4 py-4 md:px-6">
@@ -149,6 +162,7 @@ export function OverviewPage(): ReactElement {
             items={every.data}
             itemsError={every.error}
             needYou={needYou}
+            asks={asks}
           >
             {/* The count is the project's, so it is drawn once, under the first pack's tiles. */}
             {index === 0 ? <NeedsYouLine projectId={projectId} count={needYou} /> : null}

@@ -58,7 +58,14 @@ test('the Needs you line comes under the tiles and before the map', () => {
   seedPack();
   const html = renderToStaticMarkup(
     <MemoryRouter>
-      <PackOverview projectId="p1" pack="flow" items={[merged]} itemsError={undefined} needYou={12}>
+      <PackOverview
+        projectId="p1"
+        pack="flow"
+        items={[merged]}
+        itemsError={undefined}
+        needYou={12}
+        asks="reading"
+      >
         <NeedsYouLine projectId="p1" count={12} />
       </PackOverview>
     </MemoryRouter>

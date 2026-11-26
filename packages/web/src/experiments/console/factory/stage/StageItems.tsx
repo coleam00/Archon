@@ -111,7 +111,7 @@ function ItemRow({
   progress: CardProgress;
 }): ReactElement {
   const run = standingRun(read);
-  const state = itemStateLine(view, read, progress.running);
+  const state = itemStateLine(view, read, progress.running, progress.asks !== null);
   const body = (
     <>
       <span className="flex min-w-0 items-baseline gap-1.5">

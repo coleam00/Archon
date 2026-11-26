@@ -20,6 +20,7 @@ import { retiredOf } from './lib/item-card';
 import { mapSource } from './lib/map-source';
 import { groupsOf } from './lib/view-groups';
 import type { PackBoardGroups } from './lib/board-numbers';
+import type { AskRead } from './lib/item-asks';
 import { stageLive, type MapLive, type Unread } from './lib/map-live';
 import { CuratedMap } from './map/CuratedMap';
 import { useMapStructure, usePackGraph } from './map-structure';
@@ -62,11 +63,13 @@ interface PackMapProps {
   board: PackBoardGroups | undefined;
   /** The every-item read failed. */
   itemsError: Error | undefined;
+  /** The project's asks, which the map counts by the board cards' rule (`lib/item-asks.ts`). */
+  asks: AskRead;
 }
 
 const HEADING = 'text-console-12 font-medium uppercase tracking-console-label text-text-tertiary';
 
-export function PackMap({ projectId, pack, board, itemsError }: PackMapProps): ReactElement {
+export function PackMap({ projectId, pack, board, itemsError, asks }: PackMapProps): ReactElement {
   const viewRead = usePackView(projectId, pack);
   const source = mapSource(viewRead);
   const graph = usePackGraph(projectId, pack);
@@ -82,10 +85,11 @@ export function PackMap({ projectId, pack, board, itemsError }: PackMapProps): R
         columnsOf(graph.data, groups),
         board?.moving ?? [],
         graph.data?.stages,
+        asks,
         retired
       )}
       graph={graph.data}
-      counts={stageCounts(board?.moving ?? [], graph.data?.stages, retired)}
+      counts={stageCounts(board?.moving ?? [], graph.data?.stages, asks, retired)}
       live={{ board: boardPath, numbers: board?.numbers, failed: itemsError !== undefined }}
     />
   );
@@ -134,6 +138,7 @@ export function PackMap({ projectId, pack, board, itemsError }: PackMapProps): R
           board={board}
           itemsError={itemsError}
           boardPath={boardPath}
+          asks={asks}
         />
       )}
     </MapSection>
@@ -167,6 +172,7 @@ function Curated({
   board,
   itemsError,
   boardPath,
+  asks,
 }: {
   projectId: string;
   pack: string;
@@ -175,6 +181,7 @@ function Curated({
   board: PackBoardGroups | undefined;
   itemsError: Error | undefined;
   boardPath: string;
+  asks: AskRead;
 }): ReactElement {
   const view = useMemo(
     () => (graph.data === undefined ? undefined : curatedView(file, graph.data)),
@@ -185,8 +192,15 @@ function Curated({
     if (view === undefined || board === undefined)
       return itemsError === undefined ? 'loading' : 'failed';
     // The Merged card is the Board's Merged column: the items it lists, so the same count.
-    return stageLive(view, board.moving, board.merged.recent, graph.data?.stages, retiredOf(file));
-  }, [view, board, itemsError, graph.data, file]);
+    return stageLive(
+      view,
+      board.moving,
+      board.merged.recent,
+      graph.data?.stages,
+      asks,
+      retiredOf(file)
+    );
+  }, [view, board, itemsError, graph.data, file, asks]);
   if (view === undefined)
     return graph.error === undefined ? (
       <GraphSkeleton label="Loading the map" />
@@ -195,10 +209,11 @@ function Curated({
         The map could not read the pack's graph: {graph.error.message}
       </ReadFailure>
     );
-  // The board cards' reads, under the board's keys: an item's title and the step its run works
-  // now come from the same place the Board's card takes them (`useCardList` in StageItems).
+  // The board cards' reads, under the board's keys: an item's title, the step its run works now
+  // and whether it has open asks come from the same place the Board's card takes them
+  // (`useCardList` in StageItems).
   return (
-    <FactoryCardsProvider projectId={projectId} packs={[pack]} itemAsks={null}>
+    <FactoryCardsProvider projectId={projectId} packs={[pack]} itemAsks={asks}>
       {itemsError === undefined ? null : (
         <p role="alert" className="text-console-13 text-error">
           The pack's items could not be read: {itemsError.message}

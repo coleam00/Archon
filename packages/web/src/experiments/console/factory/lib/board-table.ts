@@ -5,8 +5,9 @@
  */
 import { ensureUtc } from '../../lib/format';
 import type { ItemRead } from '../../skills/items';
-import { CHIP, chipOf } from '../../routes/board/standing';
+import { CHIP } from '../../routes/board/standing';
 import { timeToMerged } from './board-numbers';
+import { shownChip } from './item-asks';
 import type { CardProgress } from './item-card';
 import { orderOf } from './work-orders';
 
@@ -61,7 +62,7 @@ function sortValue(
       return row.columnOrder;
     case 'state':
       // An item with open asks, whose cell carries its Needs you button, sorts as Needs you.
-      return CHIP_ORDER.indexOf(progress.asks === null ? chipOf(read) : 'needs_you');
+      return CHIP_ORDER.indexOf(shownChip(read, progress.asks !== null));
     case 'round':
       return progress.round?.dots.length ?? 0;
     case 'returned':

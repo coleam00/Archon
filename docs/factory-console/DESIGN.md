@@ -505,6 +505,13 @@ One 4/8 px grid: Tailwind's 4 px scale, every value a multiple of 4.
 - **"Needs you" is the one loud colour.** A card's Needs you state pill is the only filled pill
   (`--warning` background, semibold `--surface-inset` text), and only needs-you has the ping
   (rule 7). Chips that count needs-you (a column header, a map card) stay soft like the others.
+  *On `combined` (#241, #243) no card has a Needs you pill: a card's top-right chip is its state
+  label and its open asks are its "Needs you · N" button. A column header, the map, the derived
+  flow, a stage's "Items here now" and a work-order dot say an item needs you exactly when that
+  button is there (`factory/lib/item-asks.ts`), never from the item read's questions. Where a
+  surface names one state for an item (an "Items here now" line, a work-order dot, the Table's
+  State sort), open asks win over the run line (`shownChip`), so a stage's "N need you" equals
+  its lines that say Needs you.*
 - The brand gradient only where the console already uses it (the active tab bar).
 - Components never write raw hex or oklch: they use `var(--token)` or the token's Tailwind colour
   utility.

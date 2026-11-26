@@ -10,7 +10,7 @@
  */
 import { useMemo, type ReactElement } from 'react';
 import { Link } from 'react-router';
-import { chipOf, columnsOf, type StageGroup } from '../routes/BoardPage';
+import { columnsOf, type StageGroup } from '../routes/BoardPage';
 import { stageAt, type Retired } from '../routes/board/standing';
 import type { ItemRead, PackGraph } from '../skills/items';
 import {
@@ -34,45 +34,54 @@ import { usePackGraph } from './map-structure';
 import { ReadFailure } from './ReadFailure';
 import { cardTone, TONES, type Tone } from './tones';
 import { groupsOf } from './lib/view-groups';
+import { askedCount, askedOf, type AskRead } from './lib/item-asks';
 
-/** How many of a pack's items sit in each column, and how many of those wait on the operator. */
+/**
+ * How many items sit somewhere, and how many of those have open asks by the board cards' rule
+ * (`lib/item-asks.ts`); null while the asks are not known.
+ */
+interface StageAt {
+  count: number;
+  needYou: number | null;
+}
+
+/** How many of a pack's items sit in each column, and how many of those have open asks. */
 export function flowCounts(
   columns: readonly StageGroup[],
   items: readonly ItemRead[],
   stages: PackGraph['stages'] | undefined,
+  asks: AskRead | null,
   /** The view's retired workflows, which place their runs' items (`stageAt`). */
   retired: readonly Retired[] = []
-): { name: string; stages: string[]; count: number; needYou: number }[] {
+): (StageGroup & StageAt)[] {
   return columns.map(column => {
     const here = items.filter(read => column.stages.includes(stageAt(read, stages, retired) ?? ''));
-    return {
-      ...column,
-      count: here.length,
-      needYou: here.filter(read => chipOf(read) === 'needs_you').length,
-    };
+    return { ...column, count: here.length, needYou: askedCount(asks, here) };
   });
 }
 
-/** How many items sit at each stage (by workflow), and how many of those wait on the operator. */
+/** How many items sit at each stage (by workflow), and how many of those have open asks. */
 export function stageCounts(
   items: readonly ItemRead[],
   stages: PackGraph['stages'] | undefined,
+  asks: AskRead | null,
   retired: readonly Retired[] = []
-): Map<string, { count: number; needYou: number }> {
-  const counts = new Map<string, { count: number; needYou: number }>();
+): Map<string, StageAt> {
+  const counts = new Map<string, StageAt>();
   for (const read of items) {
     const at = stageAt(read, stages, retired);
     if (at === undefined) continue;
-    const entry = counts.get(at) ?? { count: 0, needYou: 0 };
+    const asked = askedOf(asks, read);
+    const entry = counts.get(at) ?? { count: 0, needYou: asked === null ? null : 0 };
     entry.count += 1;
-    if (chipOf(read) === 'needs_you') entry.needYou += 1;
+    if (asked === true && entry.needYou !== null) entry.needYou += 1;
     counts.set(at, entry);
   }
   return counts;
 }
 
 /** One column of the derived map, with the project's counts when it is drawn for one. */
-type FlowColumn = StageGroup & { count?: number; needYou?: number };
+type FlowColumn = StageGroup & Partial<StageAt>;
 
 /** What a project's derived map adds to the structure: its board and its numbers (`packBoard`). */
 interface FlowLive {
@@ -118,7 +127,7 @@ export function DerivedFlow({
   flow: readonly FlowColumn[];
   live?: FlowLive;
   graph: PackGraph | undefined;
-  counts?: ReadonlyMap<string, { count: number; needYou: number }>;
+  counts?: ReadonlyMap<string, StageAt>;
 }): ReactElement {
   const layout = useMemo(
     () => (graph === undefined ? undefined : fullWorkflowLayout(graph, flow)),
@@ -269,7 +278,7 @@ function StageLine({
   at,
 }: {
   stage: PackGraph['stages'][number] | undefined;
-  at: { count: number; needYou: number } | undefined;
+  at: StageAt | undefined;
 }): ReactElement {
   return (
     <>
@@ -286,7 +295,8 @@ function StageLine({
           {at.count} here
         </span>
       )}
-      {at === undefined || at.needYou === 0 ? null : (
+      {/* Drawn once the asks are known, and only above 0 (rule 9). */}
+      {at === undefined || at.needYou === null || at.needYou === 0 ? null : (
         <span
           data-need-you
           className="inline-flex h-5 shrink-0 items-center rounded-full bg-[color:var(--warning-soft)] px-2 tabular-nums text-warning"
@@ -315,7 +325,7 @@ function FlowCard({
   tone: Tone;
   group: string | undefined;
   stage: PackGraph['stages'][number] | undefined;
-  at: { count: number; needYou: number } | undefined;
+  at: StageAt | undefined;
   live: FlowLive | undefined;
   href: string | undefined;
 }): ReactElement {

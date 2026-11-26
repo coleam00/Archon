@@ -5,7 +5,6 @@
  * provider (a test drawing a pack board alone) cards show what the item read alone gives.
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
-import type { ItemAsks } from '../components/ItemAsksSection';
 import { getPackGraph, type ItemRead } from '../skills/items';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
@@ -19,7 +18,8 @@ import {
   type RunRecords,
 } from './api';
 import { CardsContext, useFactoryCards, type FactoryCards } from './cards-context';
-import { issueNumber, openAsksOf } from '../lib/item-key';
+import { issueNumber } from '../lib/item-key';
+import { itemAsksOf, type AskRead } from './lib/item-asks';
 import {
   cardProgress,
   OUTPUT_KEYS,
@@ -77,8 +77,8 @@ export function FactoryCardsProvider({
   projectId: string;
   /** The project's packs; null while the project is still being read. */
   packs: readonly string[] | null;
-  /** The project's asks, which the cards count; null where none are shown (the map). */
-  itemAsks: ItemAsks | null;
+  /** The project's asks, which the cards and their column headers count. */
+  itemAsks: AskRead;
   children: ReactNode;
 }): ReactElement {
   const [read, setRead] = useState<ReadonlyMap<string, PackReadResult>>(new Map());
@@ -270,10 +270,9 @@ export function useCardList(reads: readonly ItemRead[]): (read: ItemRead) => Car
     recordsAsk(packs, reads)
   );
   const progressOf = (read: ItemRead, forge: ForgeSubjects | null): CardProgress => {
-    // Counted as the Needs you tab counts the `?item=` its link carries (#225).
-    const asks = openAsksOf(cards?.itemAsks?.asks ?? [], cards?.itemAsks?.answered ?? [], [
-      read.item.key,
-    ]);
+    // While the asks are read, or could not be, a card shows no button (its header no count).
+    const ask = cards?.itemAsks;
+    const asks = ask === undefined || typeof ask === 'string' ? [] : itemAsksOf(ask, read);
     const progress = cardProgress(read, packOf(packs, read), { records, asked, forge }, asks);
     return cards?.packsError === true ? { ...progress, unread: true } : progress;
   };

@@ -23,6 +23,7 @@ import { toneOfKind } from '../factory/lib/map-columns';
 import { groupsOf, type GroupKind } from '../factory/lib/view-groups';
 import { useFactoryCards } from '../factory/cards-context';
 import { FactoryCardsProvider, useForgeTitles } from '../factory/FactoryCards';
+import { askReadOf } from '../factory/lib/item-asks';
 import { MergedColumn } from '../factory/MergedColumn';
 import { SetAsideStrip } from '../factory/SetAsideStrip';
 import { useBoardItems } from '../factory/useBoardItems';
@@ -46,8 +47,6 @@ import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import { CardList } from './board/ItemCard';
 import { isMoving, stageAt } from './board/standing';
-
-export { chipOf } from './board/standing';
 
 // console-token-exception md:min-h-[34rem] -- the board area's floor in a short window: the toolbar, the work orders and room for a card or two.
 const BOARD_AREA = 'flex flex-col md:h-full md:min-h-[34rem] md:shrink-0';
@@ -492,11 +491,12 @@ export function BoardPage(): ReactElement {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
   const project = projects?.find(candidate => candidate.id === projectId);
-  const { data: attention } = useEntity<skill.RunsAttention>(
+  const { data: attention, error: attentionError } = useEntity<skill.RunsAttention>(
     K.runsAttention,
     skill.listRunsNeedingAttention
   );
-  const itemAsks = useItemAsks(attention, projectId);
+  const asks = useItemAsks(attention, projectId);
+  const itemAsks = askReadOf(attention, attentionError, asks);
   const [filter, setFilter] = useState('');
   const [order, setOrder] = useState<string | null>(null);
   const { view, earlier, setView } = useBoardView();

@@ -3,6 +3,10 @@ import { Window } from 'happy-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { BoardPage, PackBoard } from './BoardPage';
+import { ColumnHeader } from '../factory/ColumnHeader';
+import { CardsContext } from '../factory/cards-context';
+import type { AskRead } from '../factory/lib/item-asks';
+import { NO_ITEM_ASKS } from '../components/ItemAsksSection';
 import { OverviewPage } from './OverviewPage';
 import { packBoard } from '../factory/lib/board-numbers';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
@@ -223,6 +227,110 @@ test('each open item is under the stage it stands at, in the order the pack grap
   expect(links.length).toBe(1);
   expect(links[0]?.textContent).toBe('Needs you · 1');
   expect(links[0]?.getAttribute('href')).toBe('/console/p/web/needs-you?item=issue-2');
+});
+
+/** One open attention ask on the item `key`. */
+const askOn = (key: string): ItemAsk => ({
+  ...ask,
+  ref: `ask:${key}`,
+  item: { id: `id-${key}`, projectKey: 'acme/web', key },
+});
+
+test("a column header's chips count its cards: needs you by their buttons, the rest by their labels (#243)", () => {
+  // A waiting item with an open ask, a waiting one whose read holds a question but no ask (the
+  // old rule counted it as needs you), and a running one with an open ask.
+  const reads = [
+    item('issue-a', 'build', 'waiting'),
+    { ...item('issue-b', 'build', 'waiting'), questions: [ask] } as unknown as ItemRead,
+    item('issue-c', 'build', 'running'),
+  ];
+  seedBoard(reads);
+  set(K.packGraph('web', 'flow'), graph);
+  set(K.runsAttention, {
+    runs: [],
+    ownerLost: [],
+    // issue-a holds two asks: the header counts cards with a button (2), not asks (3).
+    asks: [askOn('issue-a'), { ...askOn('issue-a'), ref: 'ask:issue-a-2' }, askOn('issue-c')],
+    answerRefusals: {},
+    itemIds: new Set(['id-issue-a', 'id-issue-c']),
+    degraded: [],
+  });
+
+  const page = render('/console/p/web/board', <BoardPage />);
+  const column = page.querySelector('[data-pack="flow"] [data-stage="build"]');
+  if (column === null) throw new Error('Expected the build column');
+  expect(keysIn(column)).toEqual(['issue-a', 'issue-b', 'issue-c']);
+  const header = Object.fromEntries(
+    [...column.querySelectorAll('[data-header-chip]')].map(chip => [
+      chip.getAttribute('data-header-chip'),
+      Number(chip.textContent?.replace(/\D+/g, '')),
+    ])
+  );
+  // What the cards show, counted from their own markup.
+  const buttons = column.querySelectorAll('[data-needs-you-link]').length;
+  const labels = [...column.querySelectorAll('[data-chip]')].map(chip =>
+    chip.getAttribute('data-chip')
+  );
+  const labelled = (state: string): number => labels.filter(label => label === state).length;
+  expect(buttons).toBe(2);
+  expect(header).toEqual({
+    needs_you: buttons,
+    running: labelled('running'),
+    waiting: labelled('waiting'),
+  });
+  expect(header).toEqual({ needs_you: 2, running: 1, waiting: 2 });
+  expect(column.querySelector('[data-chip-reading]')).toBeNull();
+});
+
+test('a column header waits for the asks: a skeleton while they are read, no needs-you chip if they failed', () => {
+  const reads = [item('issue-a', 'build', 'waiting'), item('issue-c', 'build', 'running')];
+  const header = (itemAsks: AskRead | null): Document => {
+    const html = renderToStaticMarkup(
+      itemAsks === null ? (
+        <ColumnHeader label="Build" subtitle="build" items={reads} />
+      ) : (
+        <CardsContext.Provider
+          value={{ projectId: 'web', packs: null, packsError: false, itemAsks }}
+        >
+          <ColumnHeader label="Build" subtitle="build" items={reads} />
+        </CardsContext.Provider>
+      )
+    );
+    const dom = new Window();
+    dom.document.body.innerHTML = html;
+    return dom.document as unknown as Document;
+  };
+  const chips = (doc: Document): (string | null)[] =>
+    [...doc.querySelectorAll('[data-header-chip]')].map(chip =>
+      chip.getAttribute('data-header-chip')
+    );
+  // The states are known, so their chips are drawn; only the needs-you count waits.
+  const reading = header('reading');
+  expect(reading.querySelector('[data-chip-reading]')).not.toBeNull();
+  expect(chips(reading)).toEqual(['running', 'waiting']);
+  // A failed read gives no card a button, so the header counts none either.
+  const failed = header('failed');
+  expect(failed.querySelector('[data-chip-reading]')).toBeNull();
+  expect(chips(failed)).toEqual(['running', 'waiting']);
+  // A pack board drawn with no provider is given no asks: no chip and no lasting skeleton.
+  const alone = header(null);
+  expect(alone.querySelector('[data-chip-reading]')).toBeNull();
+  expect(chips(alone)).toEqual(['running', 'waiting']);
+  // Asks read, none open on the column: no "needs you 0" (rule 9: only counts above 0).
+  const none = header(NO_ITEM_ASKS);
+  expect(none.querySelector('[data-chip-reading]')).toBeNull();
+  expect(chips(none)).toEqual(['running', 'waiting']);
+});
+
+test('the board page hands its headers the asks as unread until the attention list answers', () => {
+  seedBoard([item('issue-a', 'build', 'waiting')]);
+  set(K.packGraph('web', 'flow'), graph);
+  // The attention list has not answered: the header waits rather than guessing 0.
+  invalidate(K.runsAttention);
+  const page = render('/console/p/web/board', <BoardPage />);
+  const column = page.querySelector('[data-pack="flow"] [data-stage="build"]');
+  expect(column?.querySelector('[data-chip-reading]')).not.toBeNull();
+  expect(column?.querySelector('[data-header-chip="needs_you"]')).toBeNull();
 });
 
 /** An active `part_of` link from an item to work order `key`. */

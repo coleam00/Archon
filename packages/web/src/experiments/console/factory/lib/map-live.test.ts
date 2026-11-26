@@ -3,7 +3,7 @@ import { columnsOf } from '../../routes/BoardPage';
 import { shippedGraph, shippedView } from '../curated.test-fixtures';
 import { flowCounts } from '../DerivedFlow';
 import type { ItemRead } from '../../skills/items';
-import { itemOn, MOVING_ITEMS } from '../items.test-fixtures';
+import { asksOn, itemOn, MOVING_ITEMS } from '../items.test-fixtures';
 import { stageLive } from './map-live';
 
 /** The items the board's Merged column lists. */
@@ -22,8 +22,19 @@ const older: ItemRead = (() => {
 /** An item standing at a stage out of flow, which the map draws no row for. */
 const ITEMS = [...MOVING_ITEMS, older, itemOn('r1', 'review', 'running')];
 
+const byKey = (key: string): ItemRead => {
+  const read = ITEMS.find(entry => entry.item.key === key);
+  if (read === undefined) throw new Error(`No item ${key}`);
+  return read;
+};
+/**
+ * Open asks on a running item (b1) and a waiting one (g1). b2 waits with a question in its read
+ * and no ask, which is not an ask.
+ */
+const ASKS = asksOn([byKey('b1'), byKey('g1')]);
+
 describe("the map's live chips", () => {
-  const live = stageLive(shippedView, ITEMS, MERGED, shippedGraph.stages);
+  const live = stageLive(shippedView, ITEMS, MERGED, shippedGraph.stages, ASKS);
   const at = (stage: string) => live.stages.get(stage);
 
   test('an item sits on the row of the graph stage its standing run is of', () => {
@@ -32,13 +43,19 @@ describe("the map's live chips", () => {
     expect(at('landgate')?.items.map(read => read.item.key)).toEqual(['g1']);
   });
 
-  test("a running item is worked, and one waiting on an ask needs you, as the board's chip says", () => {
+  test("a running item is worked, and an item with open asks needs you, as its card's button says", () => {
     expect(at('stage-build')?.items).toHaveLength(2);
     expect(at('stage-build')?.working).toBe(1);
     expect(at('split')?.items).toHaveLength(1);
     expect(at('split')?.working).toBe(0);
-    expect(at('stage-build')?.needYou.map(read => read.item.key)).toEqual(['b2']);
+    // b1 runs and has an ask; b2 has a question in its read but no ask, so it is not counted.
+    expect(at('stage-build')?.needYou.map(read => read.item.key)).toEqual(['b1']);
     expect(at('landgate')?.needYou.map(read => read.item.key)).toEqual(['g1']);
+  });
+
+  test('no stage needs you while the asks are read, rather than a guess', () => {
+    const reading = stageLive(shippedView, ITEMS, MERGED, shippedGraph.stages, 'reading');
+    expect([...reading.stages.values()].flatMap(stage => stage.needYou)).toEqual([]);
   });
 
   test('a run that recorded no workflow name sits where the board puts it, by the graph stage name', () => {
@@ -67,7 +84,7 @@ describe("the map's live chips", () => {
         );
     const offMap = (workflows: readonly string[]): number =>
       live.notOnMap.filter(entry => workflows.includes(entry.workflow ?? '')).length;
-    for (const column of flowCounts(columnsOf(shippedGraph), ITEMS, shippedGraph.stages))
+    for (const column of flowCounts(columnsOf(shippedGraph), ITEMS, shippedGraph.stages, ASKS))
       expect([column.name, counted(column.stages) + offMap(column.stages)]).toEqual([
         column.name,
         column.count,
