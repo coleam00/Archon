@@ -82,6 +82,33 @@ it('keeps run source and isolation flags consistent with the parser', () => {
   }
 });
 
+describe('help spec spacing', () => {
+  it.each([
+    [26, 29],
+    [27, 30],
+    [28, 31],
+    [35, 38],
+  ])('separates a %i-character spec from its description', (length, descriptionColumn) => {
+    const spec = 'x'.repeat(length);
+    const rendered = formatSpecLine(spec, 'Description');
+    expect(rendered).toBe(`  ${spec} Description`);
+    expect(rendered.indexOf('Description')).toBe(descriptionColumn);
+  });
+
+  it('wraps the description after a 36-character spec', () => {
+    const spec = 'x'.repeat(36);
+    expect(formatSpecLine(spec, 'Description')).toBe(
+      `  ${spec}\n                             Description`
+    );
+  });
+
+  it('separates the real forge workitem.label.remove row from its description', () => {
+    expect(renderHelp('forge')).toContain(
+      '  forge workitem.label.remove Remove one label from an issue or pull request, keeping the rest'
+    );
+  });
+});
+
 describe('CLI help output', () => {
   const help = renderHelp();
 
