@@ -192,8 +192,9 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
 }
 
 /**
- * A run whose owner is gone while it holds its item. The engine never ends it by itself:
- * the operator resumes it, or abandons it so later starts on the item can run.
+ * A run whose owner is gone. The engine never ends it by itself: the operator resumes it,
+ * or abandons it so what it holds is free. A pending start no process runs is started once
+ * with `archon trigger execute`, which this card names rather than runs.
  */
 function OwnerLostCard({
   holder,
@@ -230,7 +231,6 @@ function OwnerLostCard({
       setBusy(false);
     }
   };
-  const item = holder.itemKey ?? '(unread)';
   return (
     <article
       data-owner-lost-run-id={holder.runId}
@@ -257,19 +257,32 @@ function OwnerLostCard({
           ) : null}
         </div>
         <p className="mt-3 text-sm text-text-primary">
-          {holder.observedStatus} but its owner is gone, holding item{' '}
-          <span className="font-mono">{item}</span>: later starts of {holder.workflow} on it wait
-          behind it.
+          {holder.start === null
+            ? `${holder.observedStatus} but its owner is gone`
+            : 'admitted but not started, and no process runs it'}
+          {holder.itemKey === null ? '' : ', holding item '}
+          {holder.itemKey === null ? null : <span className="font-mono">{holder.itemKey}</span>}
+          {holder.start === null ? null : (
+            <>
+              . Start it with{' '}
+              <span className="font-mono">
+                archon trigger execute {holder.start.requestId} --host {holder.start.hostId}
+              </span>
+            </>
+          )}
+          .
         </p>
         <div className="mt-3 flex items-center gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void act('resume')}
-            className="rounded border border-border px-3 py-1 text-console-12 text-text-primary hover:bg-surface-hover disabled:opacity-50"
-          >
-            Resume
-          </button>
+          {holder.start === null ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void act('resume')}
+              className="rounded border border-border px-3 py-1 text-console-12 text-text-primary hover:bg-surface-hover disabled:opacity-50"
+            >
+              Resume
+            </button>
+          ) : null}
           <button
             type="button"
             disabled={busy}

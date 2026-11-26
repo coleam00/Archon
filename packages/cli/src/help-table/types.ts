@@ -30,6 +30,16 @@ export interface HelpEntry {
   description: string;
   // Flags shown only in the matching command or subcommand Options block.
   scopedFlags?: FlagHelp[];
+  // The structured request this entry reads, shown only when it is the one entry selected.
+  request?: HelpRequest;
+}
+
+/** A request type, notes on its fields and one template invocation, shown in its own help. */
+export interface HelpRequest {
+  type: string;
+  /** `path: description` for each field whose schema describes it. */
+  notes: string[];
+  example: string;
 }
 
 /** One command group's rows: those the global index lists, and those only its scoped help shows. */

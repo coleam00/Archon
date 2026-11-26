@@ -52,11 +52,35 @@ export function stoppedRunIdOfRef(ref: string): string | undefined {
     : undefined;
 }
 
+const REFUSED_REF_PREFIX = 'refused:';
+
+/** The ref of a refused start no run caused; nothing reads it back. */
+export function refusedStartRef(receiptId: string, bindingId: string): string {
+  return `${REFUSED_REF_PREFIX}${receiptId}:${bindingId}`;
+}
+
+const PREPARING_REF_PREFIX = 'preparing:';
+
+/** The ref of a binding preparation whose preparer is gone; nothing reads it back. */
+export function preparingItemRef(receiptId: string, bindingId: string): string {
+  return `${PREPARING_REF_PREFIX}${receiptId}:${bindingId}`;
+}
+
+const UNREADABLE_START_REF_PREFIX = 'unreadable-start:';
+
+/** The ref of a queued request whose launch does not read; nothing reads it back. */
+export function unreadableStartRef(requestId: string): string {
+  return `${UNREADABLE_START_REF_PREFIX}${requestId}`;
+}
+
 /** True when `ref` has the form of an item no run holds, open or closed. */
 export function isItemWithoutRunRef(ref: string): boolean {
   return (
     askIdOfRef(ref) !== undefined ||
     waitRunIdOfRef(ref) !== undefined ||
-    stoppedRunIdOfRef(ref) !== undefined
+    stoppedRunIdOfRef(ref) !== undefined ||
+    (ref.startsWith(REFUSED_REF_PREFIX) && ref.length > REFUSED_REF_PREFIX.length) ||
+    (ref.startsWith(PREPARING_REF_PREFIX) && ref.length > PREPARING_REF_PREFIX.length) ||
+    (ref.startsWith(UNREADABLE_START_REF_PREFIX) && ref.length > UNREADABLE_START_REF_PREFIX.length)
   );
 }

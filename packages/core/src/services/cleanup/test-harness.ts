@@ -29,6 +29,8 @@ import type * as SessionDb from '../../db/sessions';
 import type * as CodebaseDb from '../../db/codebases';
 import type * as ConfigLoader from '../../config/config-loader';
 import type * as WorkflowDb from '../../db/workflows';
+import type * as CheckoutPresence from './checkout-presence';
+import type { CleanupOperationResult } from './merged-sweep';
 
 export const ageBasedPolicies = ['test', 'github', 'slack', 'cli', 'web', 'new-forge'].map(id => ({
   id,
@@ -170,6 +172,7 @@ export const mockExecFileAsync = mock<typeof Git.execFileAsync>();
 export const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChangesStrict>();
 export const mockWorktreeExists = mock<typeof Git.worktreeExists>();
 export const mockGetDefaultBranch = mock<typeof Git.getDefaultBranch>();
+export const mockGetDefaultRemote = mock<typeof Git.getDefaultRemote>();
 export const mockIsBranchMerged = mock<typeof Git.isBranchMerged>();
 export const mockIsPatchEquivalent = mock<typeof Git.isPatchEquivalent>();
 export const mockLocalBranchExists = mock<typeof Git.localBranchExists>();
@@ -188,7 +191,7 @@ mock.module('@archon/git', () => ({
   hasUncommittedChangesStrict: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
   getDefaultBranch: mockGetDefaultBranch,
-  getDefaultRemote: async () => 'origin',
+  getDefaultRemote: mockGetDefaultRemote,
   isBranchMerged: mockIsBranchMerged,
   isPatchEquivalent: mockIsPatchEquivalent,
   localBranchExists: mockLocalBranchExists,
@@ -347,6 +350,13 @@ mock.module('../../config/config-loader', () => ({
   loadRepoConfig: mockLoadRepoConfig,
 }));
 
+// The fixtures' checkout paths are fake, so the merged sweep's presence check is mocked;
+// it defaults to present.
+export const mockCheckoutExists = mock<typeof CheckoutPresence.checkoutExists>();
+mock.module('./checkout-presence', () => ({
+  checkoutExists: mockCheckoutExists,
+}));
+
 // Default for the merge judgment: the branch is not patch-equivalent, and the
 // worktree's HEAD (checked once a git signal proves the branch merged) sits at the
 // branch tip, so it is covered by whatever proved the merge.
@@ -362,6 +372,7 @@ export function resetCleanupMocks(): void {
   mockHasUncommittedChanges.mockReset().mockResolvedValue(false);
   mockWorktreeExists.mockReset().mockResolvedValue(false);
   mockGetDefaultBranch.mockReset().mockResolvedValue(toBranchName('main'));
+  mockGetDefaultRemote.mockReset().mockResolvedValue('origin');
   mockIsBranchMerged.mockReset().mockResolvedValue(false);
   mockIsPatchEquivalent.mockReset().mockImplementation(branchUnmergedHeadAtTip);
   mockLocalBranchExists.mockReset().mockResolvedValue(true);
@@ -401,6 +412,17 @@ export function resetCleanupMocks(): void {
   mockDeleteOldSessions.mockReset().mockResolvedValue(0);
   mockGetCodebase.mockReset().mockResolvedValue(makeCodebase());
   mockLoadRepoConfig.mockReset().mockResolvedValue({});
+  mockCheckoutExists.mockReset().mockResolvedValue(true);
+}
+
+/** Runs the merged sweep on a present checkout and returns what it swept. */
+export async function sweepMerged(
+  ...args: Parameters<typeof import('./merged-sweep').cleanupMergedWorktrees>
+): Promise<CleanupOperationResult> {
+  const { cleanupMergedWorktrees } = await import('./merged-sweep');
+  const outcome = await cleanupMergedWorktrees(...args);
+  if (outcome.kind !== 'swept') throw new Error(`Expected a swept outcome, got ${outcome.kind}`);
+  return outcome.result;
 }
 
 /** Lets removal read each environment back by id, as the database would. */

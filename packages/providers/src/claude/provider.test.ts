@@ -56,6 +56,7 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
 import {
   TOOL_OUTPUT_MAX_CHARS,
   createTurnMessageQueue,
+  providerCredentialKeySchema,
   type ProviderStopReason,
 } from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
@@ -3821,3 +3822,92 @@ for (const mode of ['success', 'abort', 'return'] as const) {
     expect(closed).toBe(true);
   });
 }
+
+describe('buildRequestSubprocessEnv credential input log', () => {
+  // Every input the diagnostic reads, so a developer's own Claude env cannot leak in.
+  const keys = providerCredentialKeySchema.options;
+  const saved: Partial<Record<(typeof keys)[number], string>> = {};
+  beforeEach(() => {
+    for (const key of keys) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+  afterEach(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  const credentialInputLogs = (): unknown[] =>
+    mockLogger.info.mock.calls
+      .filter(call => call[1] === 'claude.credential_input')
+      .map(call => call[0]);
+  const expectNoSecretsLogged = (): void => {
+    const logged = JSON.stringify(
+      [
+        mockLogger.trace,
+        mockLogger.debug,
+        mockLogger.info,
+        mockLogger.warn,
+        mockLogger.error,
+        mockLogger.fatal,
+      ].map(level => level.mock.calls)
+    );
+    expect(logged).not.toContain('user-secret-token');
+    expect(logged).not.toContain('install-secret-token');
+  };
+  const delivered = {
+    env: { CLAUDE_CODE_OAUTH_TOKEN: 'user-secret-token' },
+    userCredentialEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
+  };
+
+  test('a delivered per-user credential is logged as delivered, never as the global login', () => {
+    claudeModule.buildRequestSubprocessEnv(delivered);
+    expect(credentialInputLogs()).toEqual([
+      { credentialInput: 'delivered', credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN'] },
+    ]);
+    expect(mockLogger.info.mock.calls.some(call => call[1] === 'using_global_auth')).toBe(false);
+    expectNoSecretsLogged();
+  });
+
+  test('a delivered credential is still the one logged when an install key competes', () => {
+    process.env.ANTHROPIC_API_KEY = 'install-secret-token';
+    claudeModule.buildRequestSubprocessEnv(delivered);
+    expect(credentialInputLogs()).toEqual([
+      { credentialInput: 'delivered', credentialKeys: ['CLAUDE_CODE_OAUTH_TOKEN'] },
+    ]);
+    expectNoSecretsLogged();
+  });
+
+  test('install-wide keys, an auth header and a cloud selector are logged as forwarded inputs', () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'install-secret-token';
+    process.env.ANTHROPIC_CUSTOM_HEADERS = 'Authorization: Bearer install-secret-token';
+    process.env.CLAUDE_CODE_USE_BEDROCK = '1';
+    claudeModule.buildRequestSubprocessEnv({});
+    expect(credentialInputLogs()).toEqual([
+      {
+        credentialInput: 'forwarded',
+        credentialKeys: [
+          'CLAUDE_CODE_OAUTH_TOKEN',
+          'ANTHROPIC_CUSTOM_HEADERS',
+          'CLAUDE_CODE_USE_BEDROCK',
+        ],
+      },
+    ]);
+    expectNoSecretsLogged();
+  });
+
+  test('a request with no credential input is logged as none', () => {
+    claudeModule.buildRequestSubprocessEnv({});
+    expect(credentialInputLogs()).toEqual([{ credentialInput: 'none', credentialKeys: [] }]);
+  });
+
+  test('a request that clears the install token leaves no credential input', () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'install-secret-token';
+    const env = claudeModule.buildRequestSubprocessEnv({ env: { CLAUDE_CODE_OAUTH_TOKEN: '' } });
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('');
+    expect(credentialInputLogs()).toEqual([{ credentialInput: 'none', credentialKeys: [] }]);
+  });
+});

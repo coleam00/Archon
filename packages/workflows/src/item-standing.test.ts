@@ -31,9 +31,11 @@ function standing(
   runs: Run[],
   facts: {
     merged?: boolean;
+    ended?: boolean;
     parts?: { done: boolean }[];
     dependsOn?: { done: boolean }[];
     stopped?: boolean;
+    refused?: boolean;
   } = {}
 ) {
   return itemStanding({
@@ -41,8 +43,12 @@ function standing(
     queued: [],
     held: [],
     waits: [],
-    questions: facts.stopped === true ? [{ kind: 'stopped' }] : [],
+    questions: [
+      ...(facts.stopped === true ? [{ kind: 'stopped' }] : []),
+      ...(facts.refused === true ? [{ kind: 'refused_start' }] : []),
+    ],
     merged: facts.merged ?? false,
+    ended: facts.ended ?? false,
     parts: facts.parts ?? [],
     dependsOn: facts.dependsOn ?? [],
   });
@@ -94,6 +100,25 @@ describe('where an item stands', () => {
     // Once what it depends on is done, nothing moves it but a decision; a failure stays one.
     expect(standing(linked, { dependsOn: [{ done: true }] }).state).toBe('stopped');
     expect(standing([run('r1', 'failed')], { dependsOn: [{ done: false }] }).state).toBe('failed');
+  });
+
+  test('an item an operator ended is at rest, not failed or stopped, until work starts again', () => {
+    expect(standing([run('r1', 'failed')], { ended: true }).state).toBe('resting');
+    expect(standing([run('r1', 'completed', { outcome: 'blocked' })], { ended: true }).state).toBe(
+      'resting'
+    );
+    expect(standing([run('r1', 'completed')], { ended: true, stopped: true }).state).toBe(
+      'resting'
+    );
+    // A merge still says done; an end that holds while a run runs is impossible, but running wins.
+    expect(standing([run('r1', 'failed')], { ended: true, merged: true }).state).toBe('done');
+    expect(standing([run('r1', 'running')], { ended: true }).state).toBe('running');
+  });
+
+  test('a start refused on the item with nothing since needs a decision, not an answer', () => {
+    expect(standing([], { refused: true }).state).toBe('stopped');
+    expect(standing([run('r1', 'cancelled')], { refused: true }).state).toBe('stopped');
+    expect(standing([run('r1', 'failed')], { refused: true }).state).toBe('failed');
   });
 
   test('the pack is the key its standing run recorded, even without the workflow name', () => {

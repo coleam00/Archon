@@ -218,7 +218,9 @@ function OpenAsk({
       <AskedIn ask={ask} />
       {ask.recommendation === undefined ? (
         <p className="mt-1 text-console-12 text-text-primary">
-          No recommendation. Choose an option.
+          {ask.noRecommendation === undefined
+            ? 'No recommendation. Choose an option.'
+            : `No recommendation: ${ask.noRecommendation}`}
         </p>
       ) : null}
       <AttentionAnswerForm fields={ask} submit={submit} refusal={refusal} />

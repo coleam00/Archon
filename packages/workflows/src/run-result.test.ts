@@ -172,7 +172,7 @@ async function resultAfterExcursion(
   if (!mutatesCheckout) moveAway();
   await observeReturnsCheckout(ctx, 'judge', { state: 'completed' }, undefined);
   if (mutatesCheckout) moveAway();
-  return { x, held: await sampleResultCommit(run, 'run-1') };
+  return { x, held: (await sampleResultCommit(run, 'run-1')).resultCommit };
 }
 
 test('a run that takes no path lock holds at no commit when its checkout moved and came back', async () => {
@@ -227,7 +227,10 @@ test('a result holds at no commit when its checkout moved and came back while th
       { state: 'completed' },
       undefined
     );
-    expect(await sampleResultCommit(run, 'run-1')).toEqual({ held: false, reason: 'moved' });
+    expect((await sampleResultCommit(run, 'run-1')).resultCommit).toEqual({
+      held: false,
+      reason: 'moved',
+    });
   } finally {
     sampler.mockRestore();
   }

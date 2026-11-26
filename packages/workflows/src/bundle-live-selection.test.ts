@@ -26,7 +26,7 @@ await mkdir(join(app, 'workflows'), { recursive: true });
 await pack(join(app, 'workflows'), 'shipped', 'shipped-flow');
 await write(
   join(app, 'workflows', 'shipped', '.pack', 'pack.yaml'),
-  'inputs:\n  mode:\n    type: enum\n    values: [a, b]\n    default: a\n'
+  'inputs:\n  mode:\n    type: enum\n    values: [a, b]\n    default: a\n    section: Gates\n  policy:\n    file: true\n    section: Docs\n'
 );
 await pack(join(app, 'workflows'), 'excluded', 'excluded-flow');
 await pack(join(project, '.archon', 'workflows'), 'project-only', 'project-flow');
@@ -380,6 +380,10 @@ test.each([false, true])(
         });
         const shipped = result.workflows.find(entry => entry.workflow.name === 'shipped-flow');
         if (!shipped) throw new Error('shipped-flow not discovered');
+        expect(shipped.workflow.pack?.settings).toEqual({
+          mode: { type: 'enum', values: ['a', 'b'], default: 'a', section: 'Gates' },
+          policy: { type: 'string', file: true, section: 'Docs' },
+        });
         expect((await resolveRunStartInputs(project, shipped.workflow, undefined)).inputs).toEqual({
           mode: 'b',
         });

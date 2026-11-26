@@ -16,11 +16,14 @@ Place `archon-plugin.json` in your plugin root, either the repository root or a 
   "name": "review-kit",
   "description": "Review workflows",
   "compatibility": { "archon": ">=0.11.0" },
-  "entrypoints": { "review": "review/review.yaml" }
+  "entrypoints": { "review": "review/review.yaml" },
+  "skill": { "name": "review-kit", "path": "skill" }
 }
 ```
 
 Use lowercase words joined by hyphens for `name` and entrypoint names. Each entrypoint path is `<workflow folder>/<file>.yaml` (or `.yml`), relative to the plugin root. Other workflows are support workflows and cannot be dispatched directly. See the [pack layout and runtime identity](/guides/global-workflows/#installed-workflow-packs).
+
+`skill` is optional. It names a folder in the pack, holding a `SKILL.md` and any reference files, that teaches an operator's agent how to use the pack. Installing the pack refuses it when that folder has no `SKILL.md`, and tells the operator the pack ships a skill; `archon skill add --pack <id>` then copies the folder into a project as `.claude/skills/<name>/` and `.agents/skills/<name>/`. The names `archon-cli`, `archon` and `manage-run` are refused. A release from 0.15.0 that predates `skill` installs the pack and ignores the field; a release before 0.15.0 refuses the pack. See [`skill add --pack`](/reference/cli/#skill-add---pack-id-path).
 
 From Archon 0.15.0, Archon ignores a manifest key it does not know, so a manifest that uses a field from a newer Archon still installs on 0.15.0 or later. Releases before 0.15.0 refuse a manifest with any key they do not know, so a pack that must install on them can use only the fields they read. `archon validate workflows` run in the plugin root lists unknown keys as warnings, which catches a misspelled key. An unknown `schemaVersion` is refused. Do not add version, credentials, install scripts, dependencies, or permission grants: none of them is read. `compatibility.archon` is optional; when supplied, installation checks it. Put prerequisites and usage instructions in a `README.md` alongside the manifest. The index links to the README on GitHub; it does not execute plugin code or embed author-supplied HTML.
 
@@ -46,7 +49,7 @@ groups:
 
 A stage is named by its workflow's `name:`, as bindings name it. A stage belongs to at most one group; one in no group keeps a column of its own. A group that names something that is not a workflow of the pack fails validation, and [`archon pack graph`](/reference/cli/#pack-graph) refuses groups that name a workflow work does not flow through. The engine gives the rest of the document no meaning.
 
-To try the pack before you publish or install it, pass its folder as the source: `archon workflow run <workflow> --workflow-source <plugin root>` or `archon pack graph <name> --workflow-source <plugin root>`. Archon reads it as the project pack `<name>`; see [A pack folder as the source](/reference/cli/#a-pack-folder-as-the-source).
+To try the pack before you publish or install it, pass its folder as the source: `archon validate workflows --workflow-source <plugin root>`, `archon workflow run <workflow> --workflow-source <plugin root>` or `archon pack graph <name> --workflow-source <plugin root>`. Archon reads it as the project pack `<name>`; see [A pack folder as the source](/reference/cli/#a-pack-folder-as-the-source).
 
 ## Tags and executable release assets
 
@@ -123,10 +126,14 @@ through `_archon/tool_call`. Calls after settlement or cancellation are rejected
 sink with `{ level, msg, bindings }` to send metadata through `_archon/log`.
 The host logs `provider.plugin.log` at the supplied severity through `provider.<id>`,
 using its own descriptor id. Set `bindings.failureClass` to one of the contract's failure
-classes, or `bindings.lifecycle` to one of its lifecycle events
-(`providerLifecycleEventSchema`), on any record the operator should see. With a lifecycle
-event, a non-negative integer `bindings.waitedMs` is forwarded too. The host forwards
-those values and nothing else, and drops a record with neither enum value. `msg`, plugin module identity, and all
+classes, `bindings.lifecycle` to one of its lifecycle events
+(`providerLifecycleEventSchema`), or `bindings.credentialInput` to one of its credential
+inputs (`providerCredentialInputSchema`, explained in
+[troubleshooting](/reference/troubleshooting/#claude-signs-in-with-the-wrong-account-or-reports-not-logged-in)), on any record the operator should see. With a
+lifecycle event, a non-negative integer `bindings.waitedMs` is forwarded too. With a
+credential input, the names in `bindings.credentialKeys` that are in the contract's
+closed list (`providerCredentialKeySchema`) are forwarded too. The host forwards those values
+and nothing else, and drops a record with no enum value. `msg`, plugin module identity, and all
 other bindings remain withheld. Never put credentials, tokens, or message text in log
 records. Keep stdout exclusively for RPC; configure other logging to stderr before
 it writes. Stderr remains withheld.

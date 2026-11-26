@@ -5,7 +5,14 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { testTimeout, trackTempRoots } from '@archon/paths/test-utils';
@@ -62,9 +69,11 @@ describe('workflow types', () => {
       const missing = run('alpha', '--check');
       expect(missing.status).toBe(1);
       expect(missing.stderr).toContain(`${generated} is missing or stale`);
+      expect(existsSync(join(root, 'home', 'config.yaml'))).toBe(false);
 
       const written = run('alpha');
       expect(written.status).toBe(0);
+      expect(existsSync(join(root, 'home', 'config.yaml'))).toBe(true);
       expect(written.stdout).toContain(`Wrote ${generated} (1 node output(s) in 1 workflow(s))`);
       expect(readFileSync(generated, 'utf8')).toContain("readonly level: 'low' | 'high';");
       expect(run('.archon/workflows/alpha', '--check').status).toBe(0);

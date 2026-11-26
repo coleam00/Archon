@@ -314,6 +314,13 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'end',
+      spec: 'workflow end --item <key> -- <reason>',
+      description:
+        'End an item of this project: nothing more will happen on it. Its stop leaves attention and\nreads show who ended it and why; a newer run or start opens it again. Refused while anything\non the item is active or waiting, naming it',
+    },
+    {
+      command: 'workflow',
       subcommand: 'link',
       spec: 'workflow link --item <key> --kind <kind> --to <key>',
       description:

@@ -143,6 +143,7 @@ for (const [refusal, attached] of [
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         requests.push({ url, body: init?.body });
+        if (init?.method === 'DELETE') return Response.json({ success: true });
         if (url === '/api/conversations' && !conversationRefused)
           return Response.json({ conversationId: 'web-test' });
         if (detailed) return Response.json({ error: message, detail }, { status: 400 });
@@ -179,7 +180,17 @@ for (const [refusal, attached] of [
         refusal === 'empty conversation' ? '/api/conversations' : '/api/workflows/review-block/run'
       );
     }
-    expect(requests).toHaveLength(conversationRefused ? 1 : 2);
+    // A 4xx refusal discards the conversation the start created; a 502 keeps it.
+    const discarded = refusal === 'long' || refusal === 'detailed launch';
+    expect(requests.map(r => r.url)).toEqual(
+      conversationRefused
+        ? ['/api/conversations']
+        : [
+            '/api/conversations',
+            '/api/workflows/review-block/run',
+            ...(discarded ? ['/api/conversations/web-test'] : []),
+          ]
+    );
     if (!conversationRefused) expect(requests[1]?.body instanceof FormData).toBe(attached);
   });
 }
@@ -200,7 +211,7 @@ test('a required input does not block Start run, and the engine refusal is shown
   globalThis.fetch = Object.assign(
     async (input: RequestInfo | URL) => {
       urls.push(String(input));
-      return String(input) === '/api/conversations'
+      return String(input).startsWith('/api/conversations')
         ? Response.json({ conversationId: 'web-test' })
         : Response.json({ error: refusal }, { status: 400 });
     },
@@ -211,6 +222,10 @@ test('a required input does not block Start run, and the engine refusal is shown
   // `button` fails on a disabled control: nothing is filled, and the card still sends the start.
   card.button('Start run')();
   await new Promise(resolve => setTimeout(resolve, 0));
-  expect(urls).toEqual(['/api/conversations', '/api/workflows/review-block/run']);
+  expect(urls).toEqual([
+    '/api/conversations',
+    '/api/workflows/review-block/run',
+    '/api/conversations/web-test',
+  ]);
   expect(card.render()).toContain(refusal.replaceAll("'", '&#x27;'));
 });

@@ -76,7 +76,16 @@ mock.module('@archon/workflows/executor', () => ({
   }),
 }));
 mock.module('@archon/workflows/run-resume', () => ({
-  hydrateResumableRun: mock(() => Promise.resolve(null)),
+  hydrateResumableRun: mock((_deps: unknown, candidate: { id: string }) =>
+    Promise.resolve({
+      preCreatedRun: { ...candidate, status: 'running' },
+      priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'retry_failed',
+      priorUsage: { costUsd: 0 },
+      priorNodeSessions: [],
+    })
+  ),
 }));
 mock.module('@archon/workflows/run-source', () => ({
   withCapturedSource: mock((body: Parameters<typeof withObservableCapturedSource>[1]) =>

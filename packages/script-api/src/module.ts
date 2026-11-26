@@ -210,24 +210,23 @@ export function forge<Op extends keyof ForgeOperations>(
   const answer = withJsonFile(request, path => archon(command, ['--json', '--data-file', path]));
   const response = answer.value;
   if (!isRecord(response) || typeof response.ok !== 'boolean') throw failed(command, answer);
+  // Exit 2: the host could not record the answer, in the run's audit or on the run's item.
+  // A merge the host could not record on the run's item for want of a forge fact: the merge
+  // happened. Either way the host's own reason, with its fix, is passed on, also before a
+  // refusal is thrown: a pull request found already merged is refused and still recorded.
+  const unrecorded =
+    answer.code === 2 ||
+    (isRecord(response.itemRecord) && response.itemRecord.reason === 'no_merge_time');
+  if (unrecorded)
+    console.error(
+      answer.stderr || `forge ${op} answered, but the host could not record it on the run.`
+    );
   if (!response.ok) throw new ForgeError(op, response as ForgeFailure);
   const result = response.result;
   if (!isRecord(result) || result.op !== op) throw failed(command, answer);
-  // Exit 2 with a result: the operation completed and the host could not record it, in
-  // the run's audit or on the run's item. Reporting a performed write as a failure would
-  // invite a retry, so the result is returned and the host's own reason is passed on.
-  if (answer.code === 2)
-    console.error(
-      answer.stderr ||
-        `forge ${op} completed, but the host could not record it in the run's audit or on its item.`
-    );
-  else if (answer.code !== 0) throw failed(command, answer);
-  // A merge the host could not record on the run's item for want of a forge fact: the
-  // merge happened, so the result is returned, and the host's reason with its fix is passed on.
-  else if (isRecord(response.itemRecord) && response.itemRecord.recorded === false)
-    console.error(
-      answer.stderr || `forge ${op} completed, but was not recorded on the run's item.`
-    );
+  // Exit 2 with a result: the operation completed. Reporting a performed write as a failure
+  // would invite a retry, so the result is returned.
+  if (answer.code !== 0 && answer.code !== 2) throw failed(command, answer);
   return result.value as ForgeOperations[Op]['result'];
 }
 

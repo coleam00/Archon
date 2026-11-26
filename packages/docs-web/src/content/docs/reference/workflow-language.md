@@ -1020,6 +1020,7 @@ Archon puts a failure it detects itself in a bucket by its kind:
 | A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
 | A cancelled node | FATAL | Never |
 | A provider error without a typed class | UNKNOWN | No (unless `on_error: all`) |
+| A failure recorded as `outcome_unknown`: the node may have had a side effect whose outcome Archon cannot know | FATAL | Never. See [A failure whose outcome is unknown](#a-failure-whose-outcome-is-unknown) |
 
 A failure recorded before Archon stored failure kinds counts as UNKNOWN.
 
@@ -1131,6 +1132,32 @@ Plain `archon workflow run` never resumes implicitly.
 **Session context on resume**: Handles required by an explicit `context: { resume: node-id }` selector are restored for completed nodes. The ambient sequential cursor is not reconstructed; a downstream node that relies on implicit inherited context should use an explicit selector or re-read durable artifacts.
 
 **Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip).
+
+### A failure whose outcome is unknown
+
+A node failure can record the kind `outcome_unknown`: the node may have had a side effect (a write, a call that timed out after sending) and Archon cannot know whether it happened. No built-in node records this kind yet; a node that writes through a tool is the intended first use.
+
+The rule: while a run holds a live unknown outcome, nothing continues it by itself. A node's failure is live while its latest stored record is that failure, unless it sits in a composed fan-out whose join, in the same loop round, completed after it (`join: all_done` absorbs a failed instance, as today).
+
+- The node is never retried, whatever its `retry.on_error` says.
+- When a node fails while the run holds a live unknown outcome, the walk it ran in starts nothing more: no queued node of the same layer and no later layer, an `always_run` node or one with `trigger_rule: all_done` included. At the top level Archon fails the run right then with stop reason `outcome_unknown`, and nodes still running beside it are stopped, as at any run end. Inside a `loop_group` body or a composed fan-out instance, the body or instance ends there and its aggregate fails over it.
+- That holds whichever node's outcome is unknown, so it errs toward stopping. A node that fails ordinarily while an instance of a running `join: all_done` fan-out holds such a failure also ends the run with `outcome_unknown`. So does a resumed pass in which another node fails before the uncertain node has run again.
+- A pause that a parallel `wait:` or gate of the same pass published does not survive: the pass fails the run, not leaves it paused.
+- Every claim that would continue the run by itself is refused while the run holds a live unknown outcome anywhere: a timed or event wait coming due, an answered gate or wait, a source release, and a parent continued after the child it waited on. A run whose sibling's source is unreadable is failed instead of released. A node that fails this way after a provider usage limit fails the run before it waits.
+- `archon workflow attention` lists the failed run as `stopped`, naming the nodes whose outcome is unknown, also when it is a child run or has no item, until it is resumed or abandoned. A new run on its item does not close it.
+
+The operator decides what happens next: check what the node did, then resume the run with `archon workflow resume <run-id>`, which runs the failed node again if the pass reaches it (see above), or discard it with `archon workflow abandon <run-id>`. The unknown outcome never refuses a resume by hand; the usual admission checks (the item, the run limit, a busy resource) still apply. Do not rely on a replay after a continuation to be safe for such a node.
+
+What each aggregate does with a node or instance that fails this way:
+
+| Where it fails | What happens |
+|---|---|
+| A composed fan-out instance under `join: all_success` | The fan-out node fails once its instances finish, and the run ends with the reason |
+| A composed fan-out instance under `join: all_done` | A failed instance, as today: the other instances run, the join completes with the `archon_failed` marker in that slot, and the run goes on. A later failure is reported as any failure. Not covered yet: a later pass that recomputes the join (its cached result went stale) runs the instance again, the uncertain node included |
+| A `loop_group` body node | The body starts nothing more, the group fails, and the run ends with the reason. A loop group that completes over the failure still holds it |
+| A child run of a `workflow:` node or fan-out | The child run ends with the reason, and attention lists the child. The parent treats it as any failed child. A parent's own recovery that drives a failed child again is not covered yet and can run that child again |
+
+This is separate from `retryable: false`, which a `bash:`/`script:` contract failure records and which only stops the immediate retry of that node. A failure with `retryable: false` keeps the later layers, usage-limit wait, source release and stop reason of any other failure.
 
 ### Opting Out of Resume Caching
 
@@ -1849,12 +1876,17 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
 - A run with no item is refused before it does any work, unless every `result_of` input is
   supplied. A `workflow:` child carries no item, so its parent passes the value through
   `with:`.
-- `result_of` with `default:` or `required: true` is contradictory, and the input is dropped at
-  load with a warning. A dry run has no item and previews an unsupplied `result_of` input as
-  `null`.
+- `result_of` with `default:` or `required: true` is contradictory, and the workflow is refused
+  at load, naming the input and both keys. A dry run has no item and previews an unsupplied
+  `result_of` input as `null`.
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
-get a value from it, and `resultCommit`: the commit its result holds at.
+get a value from it, `resultCommit`: the commit its result holds at, and `changeSize`: how
+large the change was when the run completed or failed (`files`, `added`, `removed`) from
+`base`, the commit the item's work was cut from, to `commit`, the clean commit it ended on.
+A run on a checkout another run left (a hand-off, or `--adopt`) keeps that run's base.
+`changeSize` is `null` when the checkout ended on no clean commit or no cut-from is known for
+its work, such as a branch reused with `--branch`, never zeros.
 
 ### The result that holds at this run's commit
 
@@ -1907,8 +1939,8 @@ inputs:
 - The commit is read from this run's starting checkout. A dirty checkout still reads at its
   HEAD commit, because a land merges commits, not worktree changes. A checkout at no commit
   reads `null`.
-- `at:` without `result_of:` is contradictory, and the input is dropped at load with a
-  warning. A dry run previews the input as `null`, as it does any unsupplied `result_of`.
+- `at:` without `result_of:` is contradictory, and the workflow is refused at load. A dry run
+  previews the input as `null`, as it does any unsupplied `result_of`.
 
 A result at a commit is not an approval by itself: it is whatever the stage returned there,
 and the reading node judges it. A land stage runs on the change's own checkout, for example
@@ -1947,7 +1979,8 @@ nodes:
 ```
 
 `item().runs[].resultCommit` and `archon workflow runs --item <key> --json` show the commit
-each run's result holds at, so a node that got `null` can say why.
+each run's result holds at, so a node that got `null` can say why. `changeSize` beside it lets
+a stage see whether the change grew since an earlier run on the item.
 
 ## Reading a project's items over a window
 
@@ -2473,9 +2506,14 @@ nodes:
   [run-ended binding](/guides/workflow-triggers/) starts from that outcome), and it leaves no
   ask and no wait. Nothing follows such a run, so
   [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
-  `stopped` until another run starts on the item, whatever its status. A run on no item, a run
+  `stopped` until another run starts on the item, whatever its status, unless the item's
+  [merge is recorded](/reference/cli/#workflow-merged). A run on no item, a run
   that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
-  workflow that declares no `final` has none, so every unbound outcome stops its item.
+  workflow that declares no `final` has none, so every unbound outcome stops its item. A run
+  whose end does start a binding also stops its item when admission refuses that start at
+  its [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item), or
+  when that start is refused before launch, once the run's own asks and waits are closed; the
+  listing then names the limit or the refusal.
 
 - **`returns.summary`**: a string property of the `returns:` node's output that the attention
   queue shows, as one line, on a `stopped` item: why the stage stopped. The node's
@@ -2538,9 +2576,10 @@ none. An ask holds:
 - `context`: what is at stake and why it came up.
 - `options`: at least two, each with a kebab-case `id`, what it `does` and what it `cost`s.
   The id `other` is reserved: every ask also offers it, answered with text.
-- `recommendation`: `{ option, why }`, where `option` names one of the ask's options, or
-  `null` when the stage has no basis to choose between them. The key is still required, so a
-  `bash:` or `script:` node writes `"recommendation": null` rather than leaving it out.
+- `recommendation`: `{ option, why }`, where `option` names one of the ask's options. When the
+  stage has no basis to choose between them, `option` is `null` and `why` says why it
+  recommends none. A whole `null` recommendation, with no reason, is still accepted. The key is
+  required either way, so a `bash:` or `script:` node writes it rather than leaving it out.
 - `artifacts`: [artifact pointers](#a-small-result-that-points-at-a-large-file) the operator
   should read to decide; empty when there are none.
 
@@ -2580,7 +2619,8 @@ returns:
   ask offers anyway. `options` without `asks` fails to load.
 - The node writes no options. Its ask schema has no `options` field, and
   `recommendation.option` is limited to the declared ids (an `enum`), with each option's
-  `does` and `cost` in its description. The recommendation may still be `null`.
+  `does` and `cost` in its description. The recommendation's `option` may still be `null`,
+  with its `why`, and so may the whole recommendation.
 - Output that carries `options`, or recommends an id outside the set, fails the node's output
   validation like any other schema miss: an agent node is asked again with the errors, and a
   `bash:` or `script:` node fails. Both errors name the declared ids. A wrong recommendation
@@ -2617,8 +2657,12 @@ What the engine does with them:
   them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
   --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
   tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
-- **An ask may carry no recommendation.** One whose `recommendation` is `null` shows as having
-  none in `archon workflow attention`, in the console and in the item's tracker comment.
+- **An ask may carry no recommendation.** One whose `recommendation` is `null`, or names no
+  option, shows as having none in `archon workflow attention`, in the console and in the
+  item's tracker comment. The stage's reason for recommending none (the `why` of a
+  recommendation whose `option` is `null`) shows in the recommendation's place: the stored ask
+  keeps it as `no_recommendation`, with `recommendation` stored as `null`, and the attention
+  item carries it as `noRecommendation`. The engine never writes a reason of its own.
   `workflow answer --ref <ref> --recommended` on it is refused, and the ask stays open: choose
   one of its options. An Archon binary from before this field could be `null` reports such an
   ask as unreadable and leaves it out of its queue; answer it with a binary that knows it.
@@ -2860,7 +2904,7 @@ same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
 `INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
 
 The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
-shape as a workflow's, plus a `type`. The file holds only `inputs:`,
+shape as a workflow's, plus a `type` and the optional `section` and `file` keys. The file holds only `inputs:`,
 [`bindings:`](#pack-bindings) and [`forge:`](#pack-forge-needs):
 
 ```yaml
@@ -2876,11 +2920,39 @@ inputs:
   reviewers:
     type: list            # comma-separated text, no empty items
     description: who to request reviews from
+  review_policy:
+    description: the project's review policy
+    section: Policies     # optional grouping name
+    file: true            # string only: the value is a path to a file
+    default: docs/review-policy.md
 ```
 
 The declaration sits in a dot folder so neither workflow loader reads it as a workflow. Values
 stay text, as every `--input` is. An invalid declaration fails every workflow of the pack at
 load, naming the file and the key.
+
+Two optional keys are for a reader that lists a pack's settings, such as a settings page:
+
+- `section:` names the group a setting belongs to. Settings with the same section belong
+  together, in the order the pack lists them; a setting without one belongs to a default group.
+  How groups are shown is the reader's choice. The engine does not interpret the name.
+- `file: true` says the value is a path to a file, relative to the project or absolute. It is
+  allowed only on a `string` setting. A fresh run of a workflow that reads the setting is
+  refused at start when its value names a path that does not exist or is not a file, and
+  [`archon validate workflows`](/reference/cli/#validate-workflows-name) reports the same
+  value on that workflow. The value is resolved as the run resolves it: supplied, else the
+  project file, else the workflow's input default, else the pack's default. A workflow reads
+  the setting when `$INPUTS.<name>` appears anywhere in it, including its included blocks
+  and command files, or a bash or script body reads `INPUTS_<NAME>` (or `input('<name>')`)
+  by its literal name. A computed lookup is not seen. A setting no node of the workflow reads
+  does not block it, and an empty value is not an error. A start a binding makes is refused
+  before launch and [stops its item](/guides/workflow-triggers/) with reason
+  `file_setting_missing`, except a start in another run's checkout (`checkout: ended-run` or
+  `checkout: asking-run`), whose run checks the file in that checkout when it starts.
+
+An unknown key on a setting is ignored, so a pack can use a key a newer Archon adds, and
+`archon validate workflows` lists each one as a `parse_warning`. Releases before this one
+refuse an unknown key on a setting, so they fail to load a pack that sets `section:` or `file:`.
 
 A project sets the values in `.archon/packs/<pack>.yaml`, under `settings:` only:
 
@@ -2902,8 +2974,8 @@ that is after its worktree was created. A `required` setting must be set there, 
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
 Run [`archon validate workflows`](/reference/cli/#validate-workflows-name) to check project
-pack settings before starting a run. It reports invalid values and undeclared names against
-each discovered workflow's pack declaration. Required values that an invocation can supply
+pack settings before starting a run. It reports invalid values, undeclared names and missing
+files named by `file` settings against each discovered workflow's pack declaration. Required values that an invocation can supply
 are checked only at run start.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
@@ -3011,7 +3083,7 @@ bindings:
     workflow: review-follow-up
     resource: follow-up
     overlap: queue
-    item: { field: number, prefix: pr- }  # a key of the fire's --inputs
+    item: { field: number, prefix: pr- }  # a key of the fire's event inputs
   fix:
     workflow: review-fix
     resource: fix
@@ -3143,9 +3215,9 @@ and its fields are checked against the source plugin when a binding is generated
 an optional fixed `prefix`; see
 [putting a start on its event's item](/guides/workflow-triggers/#put-a-start-on-the-item-its-event-names).
 An event binding's `field` is a source plugin event field, checked when the binding is
-generated; a fire-only binding's is a key of the fire's `--inputs`. A timer binding with
-`item:` is refused at load, since a tick is about no item, and so is a run-ended binding with
-`item:`, since its start is on the ended run's item.
+generated; a fire-only binding's is a key of the fire's event inputs (`--inputs` or
+`--input`). A timer binding with `item:` is refused at load, since a tick is about no
+item, and so is a run-ended binding with `item:`, since its start is on the ended run's item.
 
 ### Pack forge needs
 
@@ -3301,7 +3373,9 @@ when the child declares named `inputs:` or when its `command:` bodies need named
 - **Failure & recovery.** A failed child fails the node and the parent run. Recovery is
   resume-through-parent: `/workflow resume <parentRunId>` re-drives the failed child once.
   `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
-  run).
+  run). When the parent's process died while the child was running, the child is left
+  `running`: resuming the parent pauses it blocked on that child and names
+  `archon workflow resume <childRunId>`, which continues the child and then the parent.
 - **Cancel cascade.** Abandoning the parent attempts to cancel discovered descendants except completed
   and cancelled runs, within the [500-parent expansion bound](#max_parallel-bounds-concurrency-not-count).
   Cancellation is cooperative: their executors abort at the next status check, within ~10s. A running

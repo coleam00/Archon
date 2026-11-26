@@ -131,6 +131,28 @@ describe('workflow-pack manifest', () => {
       expect(pluginManifestSchema.safeParse({ ...pack, entrypoints }).success).toBe(false);
     }
   });
+
+  test('declares an optional skill folder that validate does not call unknown', () => {
+    const skill = { name: 'review-kit', path: 'skills/review-kit' };
+    expect(pluginManifestSchema.parse({ ...pack, skill })).toEqual({ ...pack, skill } as never);
+    expect(unknownManifestKeys({ ...pack, skill })).toEqual([]);
+  });
+
+  test('refuses a skill path outside the pack and the names of Archon skill folders', () => {
+    const failure = (skill: object): string => {
+      const result = pluginManifestSchema.safeParse({ ...pack, skill });
+      return result.success ? 'parsed' : describeIssues(result.error);
+    };
+    for (const path of ['../skill', '/skill', 'skill/', 'a/./b', 'C:skill', 'a\\b']) {
+      expect(failure({ name: 'review-kit', path })).toStartWith('skill.path:');
+    }
+    expect(failure({ name: 'archon-cli', path: 'skill' })).toBe(
+      'skill.name: "archon-cli" is the name of the Archon skill; choose another skill name'
+    );
+    for (const name of ['archon', 'manage-run']) {
+      expect(failure({ name, path: 'skill' })).toStartWith(`skill.name: "${name}" is a retired`);
+    }
+  });
 });
 
 describe('compatibility.archon', () => {

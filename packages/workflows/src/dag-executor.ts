@@ -20,8 +20,14 @@ import { sourceReleaseNotice, spellWorkflowCommand } from './deps';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { resolveRunExecutionMode, type ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunNodeSession } from './schemas';
+import { isTerminalRunStatus } from './schemas';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
-import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from './store';
+import type {
+  DagResumeSnapshot,
+  IWorkflowStore,
+  PersistedNodeOutput,
+  PriorFailedNode,
+} from './store';
 import {
   RUN_BUDGET_REFUSED_EVENT_TYPE,
   RunBudgetRefusedError,
@@ -42,6 +48,8 @@ import { type RunInputs, type RunLayersContext } from './dag/run-context';
 import { assertRunCapabilities } from './dag/capability-preflight';
 import { runLayers } from './dag/run-layers';
 import { OperatorPauseBoundary } from './dag/operator-pause-boundary';
+import { failRunOnUnknownOutcome } from './dag/unknown-outcome';
+import { readLiveUnknownOutcomes } from './unknown-outcome';
 import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
 import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
@@ -390,12 +398,23 @@ export async function executeDagWorkflow(
 
   await persistRunUsage();
   if (sourceUnreadable !== undefined) {
+    // The host that claims a released run runs its failed nodes again, so a run holding a
+    // live unknown outcome (a loop body's writer, say, before its group settled) fails.
+    const unknown = await readLiveUnknownOutcomes(deps.store, workflowRun);
+    if (unknown.length > 0) {
+      await failRunOnUnknownOutcome(runCtx, unknown);
+      return { kind: 'source_release', released: false };
+    }
     return {
       kind: 'source_release',
       released: await releaseRunForUnreadableSource(sourceUnreadable),
     };
   }
   const boundary = runCtx.containerPause;
+  // A run that ended during the pass (a failure whose outcome is unknown ends it at once) is
+  // not suspended for a pause a sibling staged: the tally sees it ended.
+  if (boundary?.publish !== undefined && (await runEnded(deps.store, workflowRun.id)))
+    return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
   if (boundary?.publish !== undefined && execContext.kind === 'container' && containerCtx) {
     // Active Docker execs and required pass writes have settled; publication hands off ownership.
     const outcome = await suspendContainerForPause(containerCtx);
@@ -419,6 +438,14 @@ export async function executeDagWorkflow(
   }
 
   return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
+}
+
+async function runEnded(
+  store: Pick<IWorkflowStore, 'getWorkflowRunStatus'>,
+  runId: string
+): Promise<boolean> {
+  const status = await store.getWorkflowRunStatus(runId);
+  return status !== null && isTerminalRunStatus(status);
 }
 
 /** Refuses a run no node could work in, then announces a container run. */

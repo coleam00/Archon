@@ -105,6 +105,7 @@ function harness(
       getWorkflowRunForAttention: async id => byId.get(id) ?? null,
       getCodebase: async id => [WEB, API].find(codebase => codebase.id === id) ?? null,
       getItem: async () => null,
+      listEventsForRuns: async () => new Map(),
       getItemAsk: async id => asks.find(candidate => candidate.id === id) ?? null,
       answerItemAsk,
       withdrawItemAsk: async () => {

@@ -4,6 +4,7 @@ import { GitFailure } from '@archon/git';
 import type * as Isolation from '@archon/isolation';
 import { cleanupStaleWorktrees, runScheduledCleanup } from '../cleanup-service';
 import { cleanupMergedWorktrees, type CleanupOperationResult } from './merged-sweep';
+import { NO_MERGE_REMOTE_REASON } from './merge-verdict';
 import {
   NO_PR,
   daysAgo,
@@ -16,6 +17,7 @@ import {
   mockHasUncommittedChanges,
   mockWorktreeExists,
   mockGetDefaultBranch,
+  mockGetDefaultRemote,
   mockIsBranchMerged,
   mockIsPatchEquivalent,
   mockLocalBranchExists,
@@ -31,6 +33,8 @@ import {
   mockLogger,
   mergedSweepFinds,
   resetCleanupMocks,
+  sweepMerged,
+  mockCheckoutExists,
 } from './test-harness';
 
 beforeEach(resetCleanupMocks);
@@ -44,7 +48,7 @@ describe('cleanupMergedWorktrees', () => {
       .mockResolvedValueOnce({ id: 'failed-run', status: 'failed' })
       .mockRejectedValueOnce(new Error('settled owner query failed'));
 
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(result.removed).toEqual(['before', 'after']);
     expect(result.errors).toEqual([{ branchName: 'broken', error: 'settled owner query failed' }]);
@@ -76,7 +80,7 @@ describe('cleanupMergedWorktrees', () => {
         warnings: [],
         [failure]: false,
       });
-    const cleanup = sweep === 'merged' ? cleanupMergedWorktrees : cleanupStaleWorktrees;
+    const cleanup = sweep === 'merged' ? sweepMerged : cleanupStaleWorktrees;
     const result = await cleanup('codebase-1', '/workspace/repo');
     expect(result.removed).toEqual(['later']);
     expect(result.skipped).toEqual([]);
@@ -99,7 +103,7 @@ describe('cleanupMergedWorktrees', () => {
       mockIsBranchMerged.mockResolvedValue(evidence === 'ancestry');
       mockIsPatchEquivalent.mockResolvedValue(evidence !== 'closed');
       mockGetPrState.mockResolvedValue(evidence === 'closed' ? prAt('CLOSED') : NO_PR);
-      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo', {
+      const result = await sweepMerged('codebase-1', '/workspace/repo', {
         includeClosed: true,
       });
       expect(result.removed).toEqual(['unproven']);
@@ -115,7 +119,7 @@ describe('cleanupMergedWorktrees', () => {
       mockWorktreeExists.mockResolvedValue(true);
       mockIsBranchMerged.mockResolvedValue(evidence === 'ancestry');
       mockIsPatchEquivalent.mockImplementation(async (_path, rev) => rev !== 'HEAD');
-      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+      const result = await sweepMerged('codebase-1', '/workspace/repo');
       expect(result.removed).toEqual([]);
       expect(mockDestroy).not.toHaveBeenCalled();
     }
@@ -125,9 +129,7 @@ describe('cleanupMergedWorktrees', () => {
     mergedSweepFinds(worktreeEnv('integrated'));
     mockLoadRepoConfig.mockResolvedValue({ worktree: { baseBranch: 'dev', remote: 'upstream' } });
     mockIsBranchMerged.mockResolvedValue(true);
-    expect((await cleanupMergedWorktrees('codebase-1', '/workspace/repo')).removed).toEqual([
-      'integrated',
-    ]);
+    expect((await sweepMerged('codebase-1', '/workspace/repo')).removed).toEqual(['integrated']);
     expect(mockIsBranchMerged).toHaveBeenCalledWith(
       '/workspace/repo',
       'integrated',
@@ -140,7 +142,7 @@ describe('cleanupMergedWorktrees', () => {
   test('reports an unresolved base inspection failure without leaking diagnostics', async () => {
     mergedSweepFinds(worktreeEnv('unresolved'));
     mockGetDefaultBranch.mockRejectedValue(new Error('https://user:secret@example.com'));
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
     expect(result.errors).toEqual([
       { branchName: 'unresolved', error: 'merge check failed: Git integration check failed' },
     ]);
@@ -153,7 +155,7 @@ describe('cleanupMergedWorktrees', () => {
     mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockWorktreeExists.mockResolvedValue(true);
 
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(result.removed).toContain('merged-branch');
     expect(result.skipped).toHaveLength(0);
@@ -171,7 +173,7 @@ describe('cleanupMergedWorktrees', () => {
     mockLoadRepoConfig.mockResolvedValue({ worktree: { remote: 'upstream' } });
     mergedSweepFinds(worktreeEnv('feature-branch'));
 
-    await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo', 'upstream');
     expect(mockGetPrState).toHaveBeenCalledWith(
@@ -189,7 +191,7 @@ describe('cleanupMergedWorktrees', () => {
     mockWorktreeExists.mockResolvedValue(true);
     mockHasUncommittedChanges.mockResolvedValue(true);
 
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(result.removed).toHaveLength(0);
     expect(result.skipped).toContainEqual({
@@ -203,7 +205,7 @@ describe('cleanupMergedWorktrees', () => {
     mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-abc12345-6789', status: 'running' });
 
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(result.removed).toHaveLength(0);
     expect(result.skipped).toContainEqual({
@@ -217,7 +219,7 @@ describe('cleanupMergedWorktrees', () => {
     mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockIsRevCoveredBy.mockResolvedValue(false);
 
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(result.removed).toHaveLength(0);
     // removeEnvironment's first step: the sweep never tried to remove it.
@@ -233,7 +235,7 @@ describe('cleanupMergedWorktrees', () => {
       new Error('Failed to fetch PR head pr-head-sha from origin: not our ref')
     );
 
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(result.removed).toHaveLength(0);
     expect(result.errors).toEqual([
@@ -249,7 +251,7 @@ describe('cleanupMergedWorktrees', () => {
     mergedSweepFinds(worktreeEnv('pr-unavailable'));
     mockGetPrState.mockResolvedValue({ state: 'UNAVAILABLE' });
 
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(result.removed).toHaveLength(0);
     expect(result.skipped).toEqual([
@@ -295,7 +297,7 @@ describe('cleanupMergedWorktrees', () => {
       mockWorktreeExists.mockResolvedValue(true);
       mockGetPrState.mockResolvedValue(pr);
 
-      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo', {
+      const result = await sweepMerged('codebase-1', '/workspace/repo', {
         includeClosed,
       });
 
@@ -312,7 +314,7 @@ describe('cleanupMergedWorktrees', () => {
     mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockWorktreeExists.mockResolvedValue(true);
 
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(result.removed).toContain('ref-gone-branch');
     expect(result.skipped).toHaveLength(0);
@@ -324,7 +326,7 @@ describe('cleanupMergedWorktrees', () => {
     mergedSweepFinds(worktreeEnv('ref-gone-no-pr'));
     mockLocalBranchExists.mockResolvedValue(false);
 
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
 
     expect(result.removed).toHaveLength(0);
     expect(result.skipped).toEqual([
@@ -355,7 +357,7 @@ describe('cleanupMergedWorktrees', () => {
       }
       const result =
         sweep === 'manual'
-          ? await cleanupMergedWorktrees('codebase-1', '/workspace/repo')
+          ? await sweepMerged('codebase-1', '/workspace/repo')
           : await runScheduledCleanup();
       expect(result.removed).toEqual([]);
       expect(result.errors.map(entry => entry.error)).toEqual([
@@ -369,6 +371,46 @@ describe('cleanupMergedWorktrees', () => {
     }
   );
 
+  test.each(
+    (['manual', 'scheduled'] as const).flatMap(sweep =>
+      ([null, 'upstream'] as const).map(detected => ({ sweep, detected }))
+    )
+  )(
+    '$sweep cleanup keeps a worktree without judging it when no origin or worktree.remote exists (detected: $detected)',
+    async ({ sweep, detected }) => {
+      mergedSweepFinds(
+        worktreeEnv('local-only'),
+        worktreeEnv('folder', { id: 'env-folder', provider: 'container' })
+      );
+      scheduledSweepFinds(sweptWorktreeEnv('local-only', { created_at: daysAgo(30) }));
+      mockWorktreeExists.mockResolvedValue(true);
+      mockIsBranchMerged.mockResolvedValue(true);
+      mockGetDefaultRemote.mockResolvedValue(detected);
+      const result =
+        sweep === 'manual'
+          ? await sweepMerged('codebase-1', '/workspace/repo')
+          : await runScheduledCleanup();
+      expect(result.skipped.map(entry => entry.reason)).toEqual([NO_MERGE_REMOTE_REASON]);
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual([]);
+      expect(mockIsBranchMerged).not.toHaveBeenCalled();
+      expect(mockGetPrState).not.toHaveBeenCalled();
+      expect(mockDestroy).not.toHaveBeenCalled();
+    }
+  );
+
+  test('a project with only containers sweeps nothing and asks Git nothing', async () => {
+    mergedSweepFinds(worktreeEnv('folder', { id: 'env-folder', provider: 'container' }));
+    mockGetDefaultRemote.mockRejectedValue(new Error('not a git repository'));
+    expect(await sweepMerged('codebase-1', '/workspace/folder')).toEqual({
+      errors: [],
+      removed: [],
+      warnings: [],
+      skipped: [],
+      releasedFailedRuns: [],
+    });
+  });
+
   test.each(['CLOSED', 'MERGED'] as const)(
     'preserves associated %s evidence when the branch ref is gone',
     async state => {
@@ -380,7 +422,7 @@ describe('cleanupMergedWorktrees', () => {
         state: 'FOUND',
         prs: [{ state, headSha: 'candidate-head' }],
       });
-      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+      const result = await sweepMerged('codebase-1', '/workspace/repo');
       expect(result.removed).toEqual([]);
       expect(result.skipped).toEqual([
         {
@@ -394,6 +436,41 @@ describe('cleanupMergedWorktrees', () => {
     }
   );
 
+  test('reports the worktrees of a gone checkout without checking or removing them', async () => {
+    mergedSweepFinds(
+      worktreeEnv('probe/x'),
+      worktreeEnv('folder', { id: 'env-folder', provider: 'container' }),
+      worktreeEnv('probe/y')
+    );
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
+    mockCheckoutExists.mockResolvedValue(false);
+
+    const outcome = await cleanupMergedWorktrees('codebase-1', '/workspace/gone');
+
+    expect(mockCheckoutExists).toHaveBeenCalledWith('/workspace/gone');
+    expect(outcome).toEqual({
+      kind: 'repository-gone',
+      environments: [
+        { branchName: 'probe/x', workingPath: '/workspace/repo/worktrees/probe/x' },
+        { branchName: 'probe/y', workingPath: '/workspace/repo/worktrees/probe/y' },
+      ],
+    });
+    expect(mockLoadRepoConfig).not.toHaveBeenCalled();
+    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+    expect(mockGetLiveRunOwningEnv).not.toHaveBeenCalled();
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  test('an unreadable checkout fails the sweep', async () => {
+    mergedSweepFinds(worktreeEnv('merged-branch'));
+    mockCheckoutExists.mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+
+    await expect(cleanupMergedWorktrees('codebase-1', '/workspace/locked')).rejects.toThrow(
+      'denied'
+    );
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
   // An unhonourable `assistants.*` value stops the sweep before any worktree
   // is inspected or removed.
   test('surfaces an invalid assistants config instead of sweeping worktrees', async () => {
@@ -405,7 +482,7 @@ describe('cleanupMergedWorktrees', () => {
       )
     );
 
-    await expect(cleanupMergedWorktrees('codebase-1', '/workspace/repo')).rejects.toThrow(
+    await expect(sweepMerged('codebase-1', '/workspace/repo')).rejects.toThrow(
       /assistants\.claude\.settingSources\.0/
     );
     expect(mockIsBranchMerged).not.toHaveBeenCalled();
@@ -424,9 +501,7 @@ describe('commit-associated PR cleanup', () => {
 
   test('an open branch PR does not suppress a covering merged commit PR', async () => {
     mockGetPrState.mockResolvedValue(prAt('OPEN'));
-    expect((await cleanupMergedWorktrees('codebase-1', '/workspace/repo')).removed).toEqual([
-      'local-feature',
-    ]);
+    expect((await sweepMerged('codebase-1', '/workspace/repo')).removed).toEqual(['local-feature']);
   });
 
   test.each(['NONE', 'OPEN', 'uncovered'] as const)(
@@ -449,7 +524,7 @@ describe('commit-associated PR cleanup', () => {
           prs: [{ state: 'MERGED', headSha: 'covering-head' }],
         });
       mockIsRevCoveredBy.mockImplementation(async (_path, _rev, head) => head === 'covering-head');
-      expect((await cleanupMergedWorktrees('codebase-1', '/workspace/repo')).removed).toEqual([
+      expect((await sweepMerged('codebase-1', '/workspace/repo')).removed).toEqual([
         'local-feature',
       ]);
       expect(mockGetPrsForCommit.mock.calls.map(call => call[0])).toEqual([
@@ -486,7 +561,7 @@ describe('commit-associated PR cleanup', () => {
       });
       const result =
         sweep === 'manual'
-          ? await cleanupMergedWorktrees('codebase-1', '/workspace/repo')
+          ? await sweepMerged('codebase-1', '/workspace/repo')
           : await runScheduledCleanup();
       expect(result.removed).toEqual([]);
       expect(result.errors.map(entry => entry.error)).toEqual([
@@ -510,7 +585,7 @@ describe('commit-associated PR cleanup', () => {
           cause: new Error('secret'),
         })
       );
-      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+      const result = await sweepMerged('codebase-1', '/workspace/repo');
       expect(result.removed).toEqual([]);
       expect(result.errors).toEqual([
         { branchName: 'local-feature', error: 'merge check failed: PR coverage check failed' },
@@ -533,7 +608,7 @@ describe('commit-associated PR cleanup', () => {
     const cause = Object.assign(new Error('https://user:secret@github.com/repo'), { code });
     mockIsRevCoveredBy.mockRejectedValue(new GitFailure(kind, 'secret', cause));
     mockLogger.warn.mockClear();
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
     const stage = kind === 'coverage_fetch' ? 'fetch' : 'ancestry inspection';
     expect(result.errors).toEqual([
       {
@@ -558,7 +633,7 @@ describe('commit-associated PR cleanup', () => {
       ],
     });
     mockIsRevCoveredBy.mockImplementation(async (_path, _rev, head) => head === 'covering-head');
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
     expect(result.removed).toEqual(['local-feature']);
     expect(mockGetPrsForCommit).toHaveBeenCalledWith('a'.repeat(40), '/workspace/repo', 'origin');
     expect(mockIsRevCoveredBy).toHaveBeenCalledWith(
@@ -586,13 +661,13 @@ describe('commit-associated PR cleanup', () => {
     mockIsRevCoveredBy.mockImplementation(
       async (_path, rev, head) => (rev === 'HEAD') === (head === 'head-only')
     );
-    expect((await cleanupMergedWorktrees('codebase-1', '/workspace/repo')).removed).toEqual([]);
+    expect((await sweepMerged('codebase-1', '/workspace/repo')).removed).toEqual([]);
     expect(mockDestroy).not.toHaveBeenCalled();
   });
 
   test('branch UNAVAILABLE retains precedence', async () => {
     mockGetPrState.mockResolvedValue({ state: 'UNAVAILABLE' });
-    expect((await cleanupMergedWorktrees('codebase-1', '/workspace/repo')).removed).toEqual([]);
+    expect((await sweepMerged('codebase-1', '/workspace/repo')).removed).toEqual([]);
     expect(mockGetPrsForCommit).not.toHaveBeenCalled();
   });
 
@@ -601,7 +676,7 @@ describe('commit-associated PR cleanup', () => {
     async state => {
       mockGetPrState.mockResolvedValue(state === 'NONE' ? NO_PR : prAt(state));
       mockIsRevCoveredBy.mockImplementation(async (_path, _rev, head) => head === 'covering-head');
-      expect((await cleanupMergedWorktrees('codebase-1', '/workspace/repo')).removed).toEqual([
+      expect((await sweepMerged('codebase-1', '/workspace/repo')).removed).toEqual([
         'local-feature',
       ]);
     }
@@ -610,7 +685,7 @@ describe('commit-associated PR cleanup', () => {
   test.each([true, false])('resolves the existing tip when branch exists=%s', async refExists => {
     mockLocalBranchExists.mockResolvedValue(refExists);
     if (refExists) mockWorktreeExists.mockResolvedValue(false);
-    await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    await sweepMerged('codebase-1', '/workspace/repo');
     expect(mockExecFileAsync).toHaveBeenCalledWith(
       'git',
       [
@@ -626,7 +701,7 @@ describe('commit-associated PR cleanup', () => {
 
   test('queries equal tips only once when no candidate covers them', async () => {
     mockIsRevCoveredBy.mockResolvedValue(false);
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
     expect(result.removed).toEqual([]);
     expect(mockGetPrsForCommit).toHaveBeenCalledTimes(1);
   });
@@ -634,7 +709,7 @@ describe('commit-associated PR cleanup', () => {
   test('does not invent a commit when both tips are gone', async () => {
     mockLocalBranchExists.mockResolvedValue(false);
     mockWorktreeExists.mockResolvedValue(false);
-    await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    await sweepMerged('codebase-1', '/workspace/repo');
     expect(mockGetPrsForCommit).not.toHaveBeenCalled();
   });
 
@@ -643,7 +718,7 @@ describe('commit-associated PR cleanup', () => {
       state: 'FOUND',
       prs: [{ state, headSha: 'covering-head' }],
     });
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo', {
+    const result = await sweepMerged('codebase-1', '/workspace/repo', {
       includeClosed: true,
     });
     expect(result.removed).toEqual(state === 'CLOSED' ? ['local-feature'] : []);
@@ -666,7 +741,7 @@ describe('commit-associated PR cleanup', () => {
           prs: [{ state: 'CLOSED', headSha: 'closed-head' }],
         });
       mockIsRevCoveredBy.mockImplementation(async (_path, rev) => rev === 'HEAD');
-      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo', {
+      const result = await sweepMerged('codebase-1', '/workspace/repo', {
         includeClosed: true,
       });
       expect(result.removed).toEqual([]);
@@ -698,7 +773,7 @@ describe('commit-associated PR cleanup', () => {
         if (other === 'NONE' || other === 'UNAVAILABLE') return { state: other };
         return { state: 'FOUND', prs: [{ state: other, headSha: 'covering-head' }] };
       });
-      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+      const result = await sweepMerged('codebase-1', '/workspace/repo');
       expect(result.errors).toEqual([]);
       expect(result.removed).toEqual(other === 'MERGED' ? ['local-feature'] : []);
       if (other !== 'MERGED') {
@@ -720,7 +795,7 @@ describe('commit-associated PR cleanup', () => {
 
   test('reports unavailable commit lookup', async () => {
     mockGetPrsForCommit.mockResolvedValue({ state: 'UNAVAILABLE' });
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const result = await sweepMerged('codebase-1', '/workspace/repo');
     expect(result.skipped).toEqual([
       { branchName: 'local-feature', reason: 'PR state lookup failed — merge state unverifiable' },
     ]);
@@ -733,7 +808,7 @@ describe('commit-associated PR cleanup', () => {
       if (failure === 'resolution')
         mockExecFileAsync.mockRejectedValue(new Error('cannot inspect'));
       else mockIsRevCoveredBy.mockRejectedValue(new Error('cannot inspect'));
-      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+      const result = await sweepMerged('codebase-1', '/workspace/repo');
       expect(result.errors).toEqual([
         {
           branchName: 'local-feature',

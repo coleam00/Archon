@@ -125,6 +125,7 @@ function source(world: World = {}): ItemWindowSource {
           ? { type: 'degraded', reason: 'merge_unreadable', itemId }
           : null,
       getItemLanding: async () => null,
+      getHoldingItemEnd: async () => null,
       listItemLinks: async itemId =>
         links.filter(link => link.from.id === itemId || link.to.id === itemId),
       listItemAsks: async () => [],
@@ -139,6 +140,7 @@ function source(world: World = {}): ItemWindowSource {
                 hostId: 'host',
                 queuedAt: '2026-11-04T00:00:00.000Z',
                 ahead: 0,
+                blockedBy: null,
               },
             ]
           : [],
@@ -147,6 +149,7 @@ function source(world: World = {}): ItemWindowSource {
       getInstallHold: async () => null,
       getRunLimit: async () => null,
       listHeldItemStarts: async () => [],
+      listAllHeldItemStarts: async () => [],
       getResourceStartRequest: async () => null,
       getStartReceipt: async () => null,
     },

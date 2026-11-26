@@ -2,7 +2,6 @@
 import { setPlatformPolicies } from '../platforms/registry';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type * as IsolationDb from '../db/isolation-environments';
-import type * as MergedSweep from '../services/cleanup/merged-sweep';
 import type * as CleanupRunLock from '../services/cleanup/run-lock';
 
 beforeEach(() => setPlatformPolicies([{ id: 'web', workspaceRetention: 'age-based' }]));
@@ -32,19 +31,10 @@ mock.module('../db/isolation-environments', () => ({
   markWorktreeDestroyed: mockMarkWorktreeDestroyed,
 }));
 
-const mockCleanupMerged = mock<typeof MergedSweep.cleanupMergedWorktrees>(() =>
-  Promise.resolve({
-    removed: [],
-    skipped: [],
-    errors: [],
-    releasedFailedRuns: [],
-    warnings: [],
-  })
-);
 const mockGetUseBlocker = mock<typeof CleanupRunLock.getUseBlocker>(() => Promise.resolve(null));
+// Re-exported by the module under test; listing never sweeps.
 mock.module('../services/cleanup/merged-sweep', () => ({
-  cleanupMergedWorktrees: mockCleanupMerged,
-  cleanupToMakeRoom: mock(),
+  cleanupMergedWorktrees: mock(),
   recordCleanupRemoval: mock(),
 }));
 mock.module('../services/cleanup/run-lock', () => ({
@@ -70,7 +60,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Import AFTER mocks
-const { listEnvironments, cleanupMergedEnvironments } = await import('./isolation-operations');
+const { listEnvironments } = await import('./isolation-operations');
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -230,65 +220,5 @@ describe('listEnvironments', () => {
     expect(result.codebases[0].environments).toHaveLength(1);
     expect(result.totalEnvironments).toBe(1);
     expect(result.ghostsReconciled).toBe(0);
-  });
-});
-
-describe('cleanupMergedEnvironments', () => {
-  beforeEach(() => {
-    mockCleanupMerged.mockClear();
-  });
-
-  test('delegates to cleanupMergedWorktrees', async () => {
-    const sweep = {
-      removed: ['feat-a', 'feat-b'],
-      skipped: [{ branchName: 'branch-a', reason: 'git error' }],
-      errors: [],
-      releasedFailedRuns: [],
-      warnings: [],
-    };
-    mockCleanupMerged.mockResolvedValueOnce(sweep);
-
-    const result = await cleanupMergedEnvironments('cb-1', '/main');
-
-    expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', {});
-    expect(result).toEqual({ kind: 'swept', result: sweep });
-  });
-
-  test('reports the worktrees of a missing checkout without sweeping them', async () => {
-    mockLstat.mockRejectedValueOnce(Object.assign(new Error('missing'), { code: 'ENOENT' }));
-    mockListByCodebase.mockResolvedValueOnce([
-      makeActiveEnv({ branch_name: 'probe/x', working_path: '/worktrees/probe/x' }),
-      makeActiveEnv({ id: 'env-2', provider: 'container', working_path: '/folder' }),
-    ]);
-
-    const result = await cleanupMergedEnvironments('cb-1', '/gone');
-
-    expect(mockLstat).toHaveBeenCalledWith('/gone');
-    expect(mockCleanupMerged).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      kind: 'repository-gone',
-      environments: [{ branchName: 'probe/x', workingPath: '/worktrees/probe/x' }],
-    });
-  });
-
-  test('an unreadable checkout is a failure, not a gone repository', async () => {
-    mockLstat.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }));
-
-    await expect(cleanupMergedEnvironments('cb-1', '/locked')).rejects.toThrow('denied');
-    expect(mockCleanupMerged).not.toHaveBeenCalled();
-  });
-
-  test('forwards includeClosed option to cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({
-      removed: ['feat'],
-      skipped: [],
-      errors: [],
-      releasedFailedRuns: [],
-      warnings: [],
-    });
-
-    await cleanupMergedEnvironments('cb-1', '/main', { includeClosed: true });
-
-    expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', { includeClosed: true });
   });
 });

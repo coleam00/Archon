@@ -13,6 +13,8 @@ import {
 } from '@archon/core/operations/attention-queue';
 import { readItem, readItemOfRun } from '@archon/workflows/item-read';
 import { itemReadLines } from './workflow-item-text';
+import { attentionItemLines } from './workflow-attention-text';
+import { refusedStartItems } from '@archon/workflows/queue-items-without-run';
 import { servedHosts } from '../utils/install-hosts';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
@@ -425,7 +427,7 @@ export async function workflowWaitCommand(
   let result: RunWaitResult;
   let resolvedId: string;
   try {
-    resolvedId = await resolveRunIdArg(host, runId, cwd);
+    resolvedId = await resolveRunIdArg(host, runId, cwd, 'refuse-outside-project');
     result = await waitForRunAttention(host.deps.store, resolvedId, {
       doorbell: host.doorbell,
       // No timeout by default: a wait that ends on its own clock would answer a
@@ -464,7 +466,7 @@ export async function workflowLogsCommand(
 ): Promise<number> {
   let resolvedId = runId;
   try {
-    resolvedId = await resolveRunIdArg(host, runId, cwd);
+    resolvedId = await resolveRunIdArg(host, runId, cwd, 'refuse-outside-project');
     let run = await host.deps.store.getWorkflowRun(resolvedId);
     if (!run) {
       await writeStderr(`Workflow run not found: ${runId}\n`);
@@ -618,11 +620,21 @@ async function readItemCommand(
     item
   );
   if (read === null) {
+    // No start has made the item yet; a refused one may have been for it.
+    const refused = (await refusedStartItems(host.deps.store)).filter(
+      start => start.project?.codebaseId === codebase.id && start.start.itemKey === item
+    );
     if (opts.json) {
-      await writeJsonLine({ ok: false, error: 'not_found', item });
+      await writeJsonLine({ ok: false, error: 'not_found', item, refused });
       return 1;
     }
-    await writeStderr(`No item '${item}' in project ${project.name}.\n`);
+    await writeStderr(
+      refused.length === 0
+        ? `No item '${item}' in project ${project.name}.\n`
+        : `No item '${item}' in project ${project.name}: no start has made it yet. Refused starts for it:\n${refused
+            .map(start => attentionItemLines(start, 'brief').join('\n'))
+            .join('\n')}\n`
+    );
     return 1;
   }
   if (opts.json) {

@@ -3,24 +3,33 @@
  * done: its parts, the items an active `part_of` link joins to it, and what it depends on, the
  * items its own active `depends_on` links point at.
  */
+import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import type { ItemLinkRead } from './schemas/item-link';
 import type { WorkflowItem } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 
 /**
  * A linked item is done when its change merged, else when `placedDone` says it stands `done`;
+ * a part is also done when an operator's end holds on it, as a work order counts its members
+ * (`work-order.ts`). An ended item that is depended on is not done: what depends on it
+ * still waits, because the end says nothing more happens there, not that it delivered.
  * `inside` is `visiting` with the item, for the linked item's own links. An item met again
  * inside its own links is not done, so a cycle of links ends. An unreadable link joins
  * nothing; the item read reports it.
  */
 export async function readLinked(
-  store: Pick<IWorkflowStore, 'getItemMerge'>,
+  store: ItemEndStore & Pick<IWorkflowStore, 'getItemMerge'>,
   item: WorkflowItem,
   links: readonly ItemLinkRead[],
   visiting: ReadonlySet<string>,
   placedDone: (other: WorkflowItem, inside: ReadonlySet<string>) => Promise<boolean>
 ): Promise<{ parts: { done: boolean }[]; dependsOn: { done: boolean }[] }> {
   const inside = new Set([...visiting, item.id]);
+  // An end row that does not read does not hold.
+  const holdsEnd = async (id: string): Promise<boolean> => {
+    const end = await readHoldingItemEnd(store, id);
+    return end !== null && !('type' in end);
+  };
   const done = async (other: WorkflowItem): Promise<boolean> =>
     // A merge row that does not read still says the change merged.
     (await store.getItemMerge(other.id)) !== null ||
@@ -32,7 +41,7 @@ export async function readLinked(
   for (const link of links) {
     if ('type' in link || link.ended !== null) continue;
     if (link.kind === 'part_of' && link.to.id === item.id)
-      parts.push({ done: await done(link.from) });
+      parts.push({ done: (await holdsEnd(link.from.id)) || (await done(link.from)) });
     else if (link.kind === 'depends_on' && link.from.id === item.id)
       dependsOn.push({ done: await done(link.to) });
   }

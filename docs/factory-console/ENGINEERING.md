@@ -12,6 +12,13 @@ reference for anything v1 showed is `main`'s history (tag `console-v1-full`) and
 `fc-runtime/baseline-v1/`; port code from `origin/main` rather than rewriting it. Rasmus's
 `title` migration is part of the base; add no new migration.
 
+`combined` also carries Archon `dev` (https://github.com/coleam00/Archon, merged at f9543df48,
+#238), so it reads the pack's current main and can go upstream. `dev` is brought in as a merge
+commit whose second parent is `dev`; landed as a squash or a rebase, that change drops `dev` as
+a parent, and the next merge of `dev` conflicts in the same files again.
+`dev`'s own engine reads arrive with it and stay (item ends, `work-order.ts`, `item-end.ts`);
+the rules below bind what this repository adds, not what `dev` ships.
+
 ## The live factory shares this machine
 
 The factory building this repository runs Archon from another checkout, on the home

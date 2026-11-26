@@ -48,6 +48,7 @@ const run = (id: string, startedAt: string): ItemRead['runs'][number] => ({
   operatorPause: null,
   hasResult: false,
   resultCommit: null,
+  changeSize: null,
 });
 
 function item(key: string, runs: ItemRead['runs']): ItemRead {
@@ -81,6 +82,8 @@ function item(key: string, runs: ItemRead['runs']): ItemRead {
             fromRun: null,
           },
     landing: null,
+    ended: null,
+    workOrder: null,
     degraded: [],
   } as ItemRead;
 }

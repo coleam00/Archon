@@ -149,7 +149,9 @@ test('admission preserves FIFO, skips overlap, deduplicates receipts and fences 
   expect(await store.drainResourceStarts({ hostId: 'host', resource: 'one' })).toEqual([
     { status: 'admitted', requestId: second.run.id, runId: second.run.id },
   ]);
-  expect((await store.withdrawQueuedResourceStart(third.run.id))?.run.id).toBe(third.run.id);
+  expect((await store.withdrawQueuedResourceStart(third.run.id))?.launch?.run.id).toBe(
+    third.run.id
+  );
   expect(await store.withdrawQueuedResourceStart(third.run.id)).toBeNull();
   expect(await store.withdrawQueuedResourceStart(second.run.id)).toBeNull();
   const binding: ResourceStartBindingIntent = {
@@ -1784,7 +1786,6 @@ test('a triggered run pauses at a gate and an attention wait and continues after
         cwd: project,
         userMessage: '',
       });
-      if (!admission.accepted) throw new Error('The answered run was not resumed');
       await admission.settled;
     };
 

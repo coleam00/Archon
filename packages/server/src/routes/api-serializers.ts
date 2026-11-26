@@ -6,6 +6,7 @@ import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { operatorPause } from '@archon/workflows/schemas/operator-pause';
 import {
   isApprovalContext,
+  readSuppliedRunInputs,
   runAttention,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -104,6 +105,7 @@ export function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
   return {
     ...row,
     metadata: toApiRunMetadata(row.metadata),
+    supplied_inputs: readSuppliedRunInputs(row.metadata),
     attention: toApiRunAttention(row),
     operator_pause: operatorPause(row),
     started_at: toISOString(row.started_at),
@@ -121,6 +123,7 @@ export function toApiDashboardWorkflowRun(
     ...row,
     owner_observation: ownerObservation,
     metadata: toApiRunMetadata(row.metadata),
+    supplied_inputs: readSuppliedRunInputs(row.metadata),
     attention: toApiRunAttention(row),
     operator_pause: operatorPause(row),
     started_at: toISOString(row.started_at),

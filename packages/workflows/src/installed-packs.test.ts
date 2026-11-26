@@ -342,6 +342,42 @@ nodes:
     ).toEqual({ success: true, content: 'Scope the change (v1).\n' });
   });
 
+  test('a capture holds no .env file from any scope, and its source still resolves', async () => {
+    await install(reviewKit());
+    const installedTree = packTreePath(join(home, 'plugins'), ID, COMMIT_A);
+    await writeFile(join(installedTree, 'review', '.env'), 'SECRET=1\n');
+    await mkdir(join(project, '.archon', 'scripts'), { recursive: true });
+    await writeFile(join(project, '.archon', 'scripts', '.env'), 'SECRET=1\n');
+    await writeFile(join(project, '.archon', 'scripts', 'local.ts'), 'console.log("ok");\n');
+    await mkdir(join(home, 'scripts'), { recursive: true });
+    await writeFile(join(home, 'scripts', '.env.local'), 'SECRET=1\n');
+    await writeFile(join(home, 'scripts', 'global.ts'), 'console.log("ok");\n');
+
+    const capture = await captureWorkflowSource({
+      sourceRoot: project,
+      captureRoot: join(home, 'runs', 'run-1'),
+    });
+    const frozen = capture.anchor.root;
+    for (const left of [
+      'project/.archon/scripts/.env',
+      'global/scripts/.env.local',
+      'installed/acme.review-kit/review/.env',
+    ]) {
+      await expect(access(join(frozen, left))).rejects.toThrow();
+    }
+    for (const kept of [
+      'project/.archon/scripts/local.ts',
+      'global/scripts/global.ts',
+      'installed/acme.review-kit/review/scripts/check.ts',
+    ]) {
+      await access(join(frozen, kept));
+    }
+
+    await uninstall(ID, COMMIT_A);
+    const resumed = await resolveContinuationWorkflow(deps, runWith(capture, REVIEW), project);
+    expect(resumed?.workflow.name).toBe(REVIEW);
+  });
+
   test('a run resumes on the bytes it captured after the plugin is updated', async () => {
     await install(reviewKit(COMMIT_A, 'v1'));
     const capture = await captureWorkflowSource({

@@ -9,6 +9,7 @@ function attachmentHelp(command: keyof typeof attachmentCommands, scopedOnly = f
       subcommand,
       spec: `${command} ${subcommand} ${entry.args}`.trimEnd(),
       description: entry.description,
+      ...('scopedFlags' in entry ? { scopedFlags: [...entry.scopedFlags] } : {}),
     }));
 }
 

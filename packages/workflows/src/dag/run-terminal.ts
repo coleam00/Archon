@@ -10,15 +10,17 @@ import type {
   WorkflowRun,
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
-import { SUBRUN_METADATA_KEYS } from '../schemas';
+import { SUBRUN_METADATA_KEYS, subrunSummaryMetadata } from '../schemas';
 import { itemEnding, keptAsksResult } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
+import { CHANGE_SIZE_METADATA_KEY, type ChangeSize } from '../schemas/change-size';
 import {
   RESULT_COMMIT_METADATA_KEY,
   WORKTREE_DISPOSITION_METADATA_KEY,
   type WorktreeDisposition,
 } from '../schemas/terminal-record';
 import { readCompletingResult, sampleResultCommit } from '../run-result';
+import { measureChangeSize, measureFailedChangeSize } from '../change-size';
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
@@ -359,6 +361,12 @@ async function failOnNodeOutcome(
   await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
     workflowId: workflowRun.id,
   });
+  const changeSize = await measureFailedChangeSize(
+    deps.store,
+    workflowRun,
+    ctx.cwd,
+    ctx.execContext
+  );
   await failRun(
     deps,
     workflowRun,
@@ -366,7 +374,8 @@ async function failOnNodeOutcome(
     failMsg,
     // A first-node failure completes nothing, but it is still a node failure.
     noneCompleted && !anyFailed ? 'no_nodes_completed' : 'node_error',
-    noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail'
+    noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail',
+    { changeSize }
   );
 }
 
@@ -479,7 +488,8 @@ async function completeRun(
     result,
     asksCheckout
   );
-  const resultCommit = await sampleResultCommit(ctx, workflowRun.id);
+  const { resultCommit, endCommit } = await sampleResultCommit(ctx, workflowRun.id);
+  const changeSize = await measureChangeSize(deps.store, workflowRun, ctx.cwd, endCommit);
 
   let written: Awaited<ReturnType<WorkflowDeps['store']['completeWorkflowRun']>>;
   try {
@@ -496,12 +506,13 @@ async function completeRun(
           // `$<node>.output` on re-entry. Gated on parent_run_id to bound metadata
           // growth to child runs only (top-level runs return the summary directly).
           // `summary_value` is the additive logical sibling (#2637): old binaries keep
-          // reading `summary`, new parents prefer the typed value when present.
+          // reading `summary`, new parents prefer the typed value when present. A null
+          // value is written as a marker instead, because the merge drops a null key.
           ...(workflowRun.parent_run_id && terminal.output ? { summary: terminal.output } : {}),
           ...(workflowRun.parent_run_id &&
           terminal.output &&
           terminal.structuredOutput !== undefined
-            ? { [SUBRUN_METADATA_KEYS.summaryValue]: terminal.structuredOutput }
+            ? subrunSummaryMetadata(terminal.structuredOutput)
             : {}),
           // The callee-owned field contract (#2453). Gated on the same terminal output as
           // the two keys above, so a blank/incomplete `returns:` node stamps no contract
@@ -521,6 +532,8 @@ async function completeRun(
             ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
             : {}),
           [RESULT_COMMIT_METADATA_KEY]: resultCommit,
+          // Written even when absent, so a size an earlier failed pass left does not stay.
+          [CHANGE_SIZE_METADATA_KEY]: changeSize,
           // An asks-settled binding reads the result when the asks settle, by then from
           // the row alone. Gated on the asks a top-level run declares, like the asks.
           ...keptAsksResult(result, returnedValue),
@@ -698,11 +711,9 @@ async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
 }
 
 /**
- * The engine's terminal failure write. The live `workflow_failed` event is published only
- * when this call committed the failure: a run another writer already finished (a
- * cancellation during the failure notification, or a competing failure) keeps that
- * writer's outcome and announcement. A rejected write throws the typed marker, which the
- * outer executor catch rethrows without emitting.
+ * The engine's terminal failure write: it publishes `workflow_failed` only when this call
+ * committed the failure; a run another writer finished first keeps that writer's outcome.
+ * `ownClaim` fails only under the pass's own claim, also a row its own wait or gate paused.
  */
 export async function failRun(
   deps: WorkflowDeps,
@@ -710,12 +721,17 @@ export async function failRun(
   workflowName: string,
   failMsg: string,
   exitReason: RunExitReason,
-  site: string
+  site: string,
+  { changeSize, ownClaim }: { changeSize?: ChangeSize | null; ownClaim?: string | null } = {}
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
     const { failed, failureKind } = await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, failMsg, { exitReason }),
+      deps.store.failWorkflowRun(workflowRun.id, failMsg, {
+        exitReason,
+        ...(changeSize && { changeSize }),
+        ...(ownClaim !== undefined && { expectedExecutionClaim: ownClaim, pausedUnderClaim: true }),
+      }),
       { workflowRunId: workflowRun.id, site }
     );
     if (failed) {
