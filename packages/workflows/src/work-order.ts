@@ -5,7 +5,8 @@
  * or is itself a work order that is done. A work order's own merge or end does not close it:
  * only its members do. The state is derived on every read from the
  * links, merges and ends the store already holds, so it cannot drift from its members:
- * nothing is written, no timer decides, and no stage ends a work order.
+ * nothing is written, no timer decides, and no stage ends a work order. An item another
+ * depends on is closed by its own merge or end first (`readItemState`).
  */
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import type { ItemLink, ItemLinkRead } from './schemas/item-link';
@@ -17,7 +18,7 @@ import type {
 import type { WorkflowItem } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 
-type WorkOrderStore = ItemEndStore & Pick<IWorkflowStore, 'listItemLinks' | 'getItemMerge'>;
+export type WorkOrderStore = ItemEndStore & Pick<IWorkflowStore, 'listItemLinks' | 'getItemMerge'>;
 
 /**
  * The walk's shared state. Links are operator data and may form a cycle. A member's state
@@ -117,4 +118,34 @@ export async function readWorkOrder(
   const walk: Walk = { store, walking: new Set(), degraded: new Map() };
   const workOrder = await walkWorkOrder(walk, item, links);
   return { workOrder, degraded: [...walk.degraded.values()] };
+}
+
+/**
+ * Whether item `itemId` closed itself: its merge is recorded (`merged`) or its end holds
+ * (`ended`); null otherwise. An unreadable row reads as not closed.
+ */
+export async function readOwnClose(
+  store: WorkOrderStore,
+  itemId: string
+): Promise<'merged' | 'ended' | null> {
+  const merge = await store.getItemMerge(itemId);
+  if (merge !== null && !('type' in merge)) return 'merged';
+  const end = await readHoldingItemEnd(store, itemId);
+  return end !== null && !('type' in end) ? 'ended' : null;
+}
+
+/**
+ * The state of `item` as an item another one depends on: its own merge or end closes it,
+ * even when it is a work order with an open member; otherwise the member rule decides. What
+ * could not be read is not reported here: `unknown` is the report, and the item's own read
+ * names its unreadable rows.
+ */
+export async function readItemState(
+  store: WorkOrderStore,
+  item: WorkflowItem
+): Promise<WorkOrderMemberState> {
+  return (
+    (await readOwnClose(store, item.id)) ??
+    memberState({ store, walking: new Set(), degraded: new Map() }, item)
+  );
 }
