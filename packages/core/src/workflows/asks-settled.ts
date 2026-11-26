@@ -42,7 +42,6 @@ import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definit
 import {
   bindingProjectKey,
   bindingReceipt,
-  declaredInputNames,
   mappedInputs,
   readAsksSettledBindings,
   rebuiltStart,
@@ -51,8 +50,8 @@ import {
   type RebuildReads,
   type RebuiltStart,
   type RunEndedStartsDependencies,
-  undeclaredInputReads,
 } from './run-ended';
+import { declaredInputNames, undeclaredInputReads } from './declared-inputs';
 import {
   selectStartedWorkflow,
   startedWorkflowInputProblems,

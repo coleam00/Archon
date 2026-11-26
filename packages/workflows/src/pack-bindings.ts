@@ -125,25 +125,36 @@ function inputProblem(
   const wakes = kind === 'event' && 'wake' in binding && binding.wake !== undefined;
   if ('wait' in input)
     return wakes ? undefined : 'reads the met wait, but only an event binding with wake has one';
-  return runSourceProblem(binding, kind, input, wakes);
+  return wakes ? wakeSourceProblem(binding, kind, input) : runSourceProblem(binding, kind, input);
 }
 
 /**
- * An input read from the run that ended, left the asks or left the met wait, or from the
- * item it is on. A wake start reads the waiting run's own inputs, not its result, which is
- * not kept for a later start.
+ * An input a wake binding reads besides the event and the met wait: the inputs of the run
+ * that left the met wait and the item's answers. Not its result, which a wake start does not
+ * read; any other run source is refused as for an event binding.
  */
+function wakeSourceProblem(
+  binding: PackBinding,
+  kind: PackBindingKind,
+  input: Exclude<PackBindingInput, string>
+): string | undefined {
+  if ('input' in input || readsItemAnswers(input)) return undefined;
+  if ('result' in input)
+    return "reads a result, but a wake start reads the waiting run's inputs, not its result";
+  return runSourceProblem(binding, kind, input);
+}
+
+/** An input read from the run that ended or left the asks, or from the item it is on. */
 function runSourceProblem(
   binding: PackBinding,
   kind: PackBindingKind,
-  input: Exclude<PackBindingInput, string>,
-  wakes: boolean
+  input: Exclude<PackBindingInput, string>
 ): string | undefined {
   if ('answers' in input)
     return kind === 'asks_settled'
       ? undefined
       : 'reads the settled answers, but only an asks-settled binding has them';
-  if (readsItemAnswers(input)) return wakes ? undefined : itemAnswersProblem(binding, kind);
+  if (readsItemAnswers(input)) return itemAnswersProblem(binding, kind);
   if (readsLinkedEntry(input))
     return 'run_ended' in binding && binding.run_ended.linked?.items !== undefined
       ? undefined
@@ -152,10 +163,6 @@ function runSourceProblem(
     return kind === 'run_ended'
       ? undefined
       : "reads the ended run's item key, but only a run-ended binding has one";
-  if (wakes)
-    return 'input' in input
-      ? undefined
-      : "reads a result, but a wake start reads the waiting run's inputs, not its result";
   return kind === 'run_ended' || kind === 'asks_settled'
     ? undefined
     : 'reads the ended run, but only a run-ended or asks-settled binding has a run to read';

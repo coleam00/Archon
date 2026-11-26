@@ -282,6 +282,53 @@ function waitScope(
 }
 
 /**
+ * What a wake carries from the run that left the matched wait `row`, never the latest run on
+ * the item: the inputs and checkout `wakeStart` maps, nothing for a wake that carries neither,
+ * or why the start is refused. A refusal is recorded on the waiting run, so attention lists it
+ * beside the open wait; the caller leaves the set open.
+ */
+async function carriedFromWaitingRun(
+  query: TransactionQuery,
+  receiptId: string,
+  binding: ResourceStartBindingIntent & { wake: BindingWake },
+  row: WaitRow,
+  inputProblems: PreparedWake['inputProblems'],
+  wakeStart: WakeStart | undefined
+): Promise<ReturnType<WakeStart>> {
+  const { wake } = binding;
+  if (wake.inputs === undefined && wake.checkout === undefined) return { inputs: {} };
+  if (wakeStart === undefined)
+    throw new Error(
+      `Binding '${binding.bindingId}' wakes with inputs or a checkout, which this store cannot map`
+    );
+  const undeclared = inputProblems.get(row.run_id) ?? [];
+  const mapped =
+    undeclared.length > 0
+      ? {
+          refused: {
+            detail: `binding '${binding.bindingId}': ${undeclared.join('; ')}`,
+            reason: 'inputs_unmapped' as const,
+          },
+        }
+      : wakeStart(wake, {
+          runId: row.run_id,
+          run: await readRunMetadataIn(query, row.run_id),
+          itemAsks: await readItemAsksIn(query, row.item_id),
+        });
+  if ('refused' in mapped)
+    await recordRunRefusedStart(query, row.run_id, {
+      refused: {
+        receiptId,
+        bindingId: binding.bindingId,
+        workflow: binding.launch.workflowName,
+        reason: mapped.refused.reason,
+        refusedAt: new Date().toISOString(),
+      },
+    });
+  return mapped;
+}
+
+/**
  * The binding a wake makes once resolved against the open waits, or why it starts nothing.
  * A match is an open wait of the binding's workflow and name whose `about` is exactly the
  * event's, on an item of the binding's project, within `waitScope`. A wait about any other
@@ -337,47 +384,21 @@ async function resolveWake(
       'rejected',
       `an open ${named} is on more than one item (${items.join(', ')}), so which one it is for cannot be known; nothing was started`
     );
-  // Read from the run that left this wait, never the latest run on the item, and before the
-  // set closes, so a start that cannot be mapped leaves the wait open for a later event.
-  let carried: { inputs: Record<string, JsonValue>; handoff?: CheckoutHandoff } = { inputs: {} };
-  if (wake.inputs !== undefined || wake.checkout !== undefined) {
-    if (wakeStart === undefined)
-      throw new Error(
-        `Binding '${binding.bindingId}' wakes with inputs or a checkout, which this store cannot map`
-      );
-    const undeclared = inputProblems.get(row.run_id) ?? [];
-    const mapped =
-      undeclared.length > 0
-        ? {
-            refused: {
-              detail: `binding '${binding.bindingId}': ${undeclared.join('; ')}`,
-              reason: 'inputs_unmapped' as const,
-            },
-          }
-        : wakeStart(wake, {
-            runId: row.run_id,
-            run: await readRunMetadataIn(query, row.run_id),
-            itemAsks: await readItemAsksIn(query, row.item_id),
-          });
-    if ('refused' in mapped) {
-      const refused = { workflow: binding.launch.workflowName, reason: mapped.refused.reason };
-      // On the waiting run, so attention lists the refusal beside the open wait.
-      await recordRunRefusedStart(query, row.run_id, {
-        refused: {
-          receiptId,
-          bindingId: binding.bindingId,
-          ...refused,
-          refusedAt: new Date().toISOString(),
-        },
-      });
-      return notStarted(
-        'rejected',
-        `${named} on item '${row.item_key}': ${mapped.refused.detail}; '${binding.launch.workflowName}' was not started and the wait stays open`,
-        refused
-      );
-    }
-    carried = mapped;
-  }
+  // Read before the set closes, so a start that cannot be mapped leaves the wait open.
+  const carried = await carriedFromWaitingRun(
+    query,
+    receiptId,
+    binding,
+    row,
+    inputProblems,
+    wakeStart
+  );
+  if ('refused' in carried)
+    return notStarted(
+      'rejected',
+      `${named} on item '${row.item_key}': ${carried.refused.detail}; '${binding.launch.workflowName}' was not started and the wait stays open`,
+      { workflow: binding.launch.workflowName, reason: carried.refused.reason }
+    );
   const met = await query(
     `UPDATE remote_agent_item_waits
      SET closed_as = 'met', closed_at = $2, met_by_receipt_id = $3, met_by_binding_id = $4

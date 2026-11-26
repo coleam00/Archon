@@ -241,9 +241,9 @@ async function reportUnstartedStages(
 /**
  * What this end hands on, read before the write that ends the run so it commits with it:
  * the run's result, the starts its outcome causes, and the checkout its asks hand an
- * asks-settled binding with `checkout`, or its waits a wake binding its pack declares with
- * `checkout` (read now, so a start gets the commit this run ended on). Undefined when the result or a
- * trigger could not be read and the run was failed naming why.
+ * asks-settled binding with `checkout`, or its waits a wake binding with `checkout` (read now,
+ * so a start gets the commit this run ended on). Undefined when the result or a trigger could
+ * not be read and the run was failed naming why.
  */
 async function readHandOffs(
   ctx: RunTerminalContext,
@@ -268,8 +268,7 @@ async function readHandOffs(
       outcome === undefined || !deps.runEndedStarts
         ? { receipts: [], linked: [] }
         : await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, outcome, result));
-    // Waits hand on the checkout only when the pack declares a wake that takes it for one of
-    // them, so a run whose waits only event-field wakes follow releases its worktree as before.
+    // Only for a wake its pack declares that takes the checkout for one of these waits.
     const waitsHandOn = packWakeTakesCheckout(
       workflow,
       (waits ?? []).map(wait => wait.event)

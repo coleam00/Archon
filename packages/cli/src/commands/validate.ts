@@ -32,7 +32,7 @@ import type {
   CommandValidationResult,
 } from '@archon/workflows/validator';
 import { loadConfig, loadRepoConfig } from '@archon/core';
-import { declaredInputNames, undeclaredInputReads } from '@archon/core/workflows/run-ended';
+import { packWakeInputProblems } from '@archon/core/workflows/declared-inputs';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
 import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
@@ -277,24 +277,17 @@ function wakeInputIssues(entries: readonly WorkflowWithSource[]): Map<string, Va
   const issues = new Map<string, ValidationIssue[]>();
   for (const workflows of packGroups(entries).values()) {
     const stages = workflows.map(entry => entry.workflow);
-    const names = stages.map(stage => stage.name);
     for (const [id, binding] of Object.entries(nearestPackBindings(workflows) ?? {})) {
-      if (!('event' in binding) || binding.wake === undefined) continue;
-      const name = packWorkflowName(names, binding.wake.workflow);
-      const waiting = stages.find(stage => stage.name === name);
-      if (waiting === undefined) continue;
-      for (const problem of undeclaredInputReads(
-        binding.inputs,
-        binding.wake.workflow,
-        declaredInputNames(waiting)
-      ))
-        issues.set(waiting.name, [
-          ...(issues.get(waiting.name) ?? []),
+      const found = packWakeInputProblems(binding, stages);
+      if (found === undefined) continue;
+      for (const problem of found.problems)
+        issues.set(found.waiting, [
+          ...(issues.get(found.waiting) ?? []),
           {
             level: 'error',
             field: 'pack_bindings',
             message: `binding '${id}' in ${PACK_DECLARATION_PATH}: ${problem}`,
-            hint: `Declare the input in '${binding.wake.workflow}', or map it from somewhere else; a wake start reads the inputs of the run that left the wait.`,
+            hint: 'Declare the input in the waiting workflow, or map it from somewhere else; a wake start reads the inputs of the run that left the wait.',
           },
         ]);
     }

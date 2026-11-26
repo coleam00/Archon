@@ -43,7 +43,6 @@ import {
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
-import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import type { StartReceiptInspection } from '@archon/workflows/resource-start-store';
@@ -62,6 +61,7 @@ import {
 } from '@archon/workflows/schemas/binding-input-source';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import { selectStartedWorkflow, startedWorkflowInputProblems } from './binding-workflow';
+import { declaredInputNames, undeclaredInputReads } from './declared-inputs';
 import { itemAnswers, type ItemAnswers } from './item-answers';
 
 /** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
@@ -287,28 +287,6 @@ export function runEndedBindingProblems(
     ...undeclaredInputReads(runEnded.inputs, runEnded.workflowName, ended.declaredInputs)
   );
   return problems;
-}
-
-/**
- * Each input of a binding that reads, as `{ input }`, a name the run it reads from does not
- * declare: `workflowName`, the workflow whose run ended, left the asks or left the met wait.
- * Such a read would map nothing on every start, so each is refused where the binding is
- * checked; the caller names the binding.
- */
-export function undeclaredInputReads(
-  inputs: Readonly<Record<string, unknown>> | undefined,
-  workflowName: string,
-  declaredInputs: readonly string[]
-): string[] {
-  return Object.entries(inputs ?? {}).flatMap(([target, source]) =>
-    typeof source === 'object' &&
-    source !== null &&
-    'input' in source &&
-    typeof source.input === 'string' &&
-    !declaredInputs.includes(source.input)
-      ? [`input '${target}' reads '${source.input}', which '${workflowName}' does not declare`]
-      : []
-  );
 }
 
 /**
@@ -878,11 +856,6 @@ export function startRevision(candidate: OnBinding): string {
         ? { runEnded: candidate.runEnded }
         : { asksSettled: candidate.asksSettled },
   });
-}
-
-/** The input names a workflow declares: its own `inputs:` and its pack's settings. */
-export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | 'pack'>): string[] {
-  return [...Object.keys(workflow.inputs ?? {}), ...Object.keys(workflow.pack?.settings ?? {})];
 }
 
 /**

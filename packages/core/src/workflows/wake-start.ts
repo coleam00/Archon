@@ -19,7 +19,8 @@ import type { BindingDefinitionsDeps } from './definition-source';
 import { readSubrunMetadata } from '@archon/workflows/schemas/run-metadata';
 import { recordedCheckout } from './asks-settled';
 import { itemAnswers } from './item-answers';
-import { declaredInputNames, mappedInputs, undeclaredInputReads } from './run-ended';
+import { declaredInputNames, undeclaredInputReads } from './declared-inputs';
+import { mappedInputs } from './run-ended';
 
 export const wakeStart: WakeStart = (wake, { runId, run, itemAsks }) => {
   const answers = itemAnswers(itemAsks);

@@ -34,14 +34,13 @@ import { readPackGraph } from '@archon/core/workflows/pack-graph';
 import { asksSettledTriggerCheck } from '@archon/core/workflows/asks-settled';
 import {
   type AsksSettledBinding,
-  declaredInputNames,
   getTriggersPath,
   launchProjectKey,
   type OnBinding,
   type RunEndedBinding,
   runEndedTriggerCheck,
-  undeclaredInputReads,
 } from '@archon/core/workflows/run-ended';
+import { packWakeInputProblems } from '@archon/core/workflows/declared-inputs';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { providerRegistry } from '@archon/providers';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
@@ -672,15 +671,7 @@ async function assertNothingOverwritten(generated: readonly Generated[]): Promis
  * does not declare would map nothing on every start: refused here, before an event arrives.
  */
 function assertWakeInputs(id: string, binding: PackBinding, pack: DeclaredPack): void {
-  if (!('event' in binding) || binding.wake === undefined) return;
-  const name = workflowNameFor(pack, id, binding.wake.workflow);
-  const waiting = pack.workflows.find(workflow => workflow.name === name);
-  if (waiting === undefined) return;
-  const problems = undeclaredInputReads(
-    binding.inputs,
-    binding.wake.workflow,
-    declaredInputNames(waiting)
-  );
+  const problems = packWakeInputProblems(binding, pack.workflows)?.problems ?? [];
   if (problems.length > 0)
     throw new Error(
       [
