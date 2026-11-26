@@ -472,8 +472,8 @@ The engine-written records read this way:
 
 - the prepared launch in `remote_agent_resource_start_requests.launch`, including its
   `run`, `run.origin`, `execution` and lane. A version 2 launch is kept on write-back. A
-  version 1 launch is converted to version 2 when it is read, and the conversion drops
-  its unknown keys;
+  version 1 launch is converted to version 2 when it is read: the conversion drops unknown
+  keys at the top level and in `run`, and keeps those in `execution` and its lane;
 - the run's `origin`;
 - the `checkout_handoff`, `asks_checkout`, `resource_start` and `owned_worktree` keys of
   run `metadata`, and the hand-off in `remote_agent_start_receipt_bindings.checkout_from`;
@@ -520,9 +520,9 @@ absent, goes one of two other ways. Each has a limit:
   read on every admission on its resource, so one the older binary cannot read blocks that
   resource until the run ends.
 
-Binaries released before this rule still refuse unknown keys in the launch, the origin
-and the other records above. A new field in them is safe only once every binary that
-opens the database reads them this way.
+Binaries released before this rule refuse unknown keys in every record above except the
+top-level keys of `metadata.wait`, which they already ignored. A new field in the other
+records is safe only once every binary that opens the database reads them this way.
 
 These records stay strict, each for the invariant it protects:
 
@@ -535,6 +535,7 @@ These records stay strict, each for the invariant it protects:
 | The options and recommendation in `metadata.wait` | They share their schema with workflow YAML, where a misspelled key must fail. |
 | `remote_agent_state_revisions.operation` and the file store's state revisions | The patch operations are the script API's input contract. A new operation is a new `op`, which an older reader cannot apply in any case. |
 | A file-store state revision's `writer` and `lease`, and its name record's `scope` | The SQL store keeps these in columns, so only the file store holds them as JSON. The scope decides which document a revision belongs to, and the lease decides which run may write it: an older reader must not ignore a field of either. The writer is part of the script API's `StateRevision` output, so its shape changes with that contract, not silently. |
+| The `asks` and `waits` a returns node outputs (`returns.asks`, `returns.waits`), stored with the node's completion and read again when a resumed run completes | They are the workflow's authored output, checked against the ask and wait shapes the language defines, where a misspelled key must fail the run rather than open an ask or wait without it. A resumed run checks the stored output again at completion, so a field the resuming binary does not know fails the run there and opens none of its asks or waits. A new ask or wait field needs every binary that may resume such a run to know it. |
 | `metadata.run_config` and `metadata.ai_configuration` | An older binary that silently dropped a provider option would change what the run may do. |
 
 ## Store event feed
