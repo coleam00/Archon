@@ -6,9 +6,21 @@ import {
 import { bashInvocation } from '../bash-invocation';
 import { loopPrevRefToken, type LoopBodyScope } from '../dag/loop-scope';
 import { inputEnvVars, nodeOutputRefToken } from '../dag/references';
-import { substituteTemplate, templateToken, type TemplateToken } from '../output-ref';
+import { readComposedMeta } from '../compiled-command';
+import {
+  parseWholeOutputRef,
+  substituteTemplate,
+  templateToken,
+  type JsonValue,
+  type TemplateToken,
+} from '../output-ref';
 import { formatHostSpawnFailure, formatSubprocessFailure } from '../executor-shared';
-import type { LoopNode, LoopGroupNode, NodeOutput } from '../schemas';
+import {
+  isBindingDirectiveShape,
+  type LoopNode,
+  type LoopGroupNode,
+  type NodeOutput,
+} from '../schemas';
 import {
   hostSpawnFailure,
   execOwnedProcessGroup,
@@ -54,12 +66,17 @@ export async function evaluateLoopCompletion(
     ctx.protectedCredentialValues
   );
   try {
-    assertProbeOutputs(control.until_bash, outputs, loopBodyScopes, previous, ctx);
+    const inputEnv = inputEnvVars(
+      node,
+      { ...bindingShellContext(ctx, outputs), loopBodyScopes },
+      ctx.inputs
+    );
+    assertProbeOutputs(node, control.until_bash, outputs, loopBodyScopes, previous, ctx);
     const previousText = previous?.output ?? '';
     const listings = await writeDryRunInvocationListings(ctx);
     const { env, credentialValues: preparedCredentials } = await prepareCodeExecution(
       ctx,
-      inputEnvVars(node, { ...bindingShellContext(ctx, outputs), loopBodyScopes }, ctx.inputs),
+      inputEnv,
       undefined,
       { ...listings, loopPrevOutput: previousText }
     );
@@ -91,6 +108,7 @@ export async function evaluateLoopCompletion(
 }
 
 function assertProbeOutputs(
+  node: LoopNode | LoopGroupNode,
   code: string,
   outputs: Map<string, NodeOutput>,
   scopes: readonly LoopBodyScope[],
@@ -114,9 +132,20 @@ function assertProbeOutputs(
       return resolved;
     },
   });
+  const priorReferences = scopes.map(scope =>
+    guarded(loopPrevRefToken(scope, false), scope.loopPrevOutputs)
+  );
+  const references = [...priorReferences, guarded(nodeOutputRefToken(outputs, false), outputs)];
+  for (const value of Object.values(readComposedMeta(node)?.inputs ?? {})) {
+    const reference = probeInputReference(value, outputs);
+    if (reference !== undefined)
+      substituteTemplate(
+        reference.text,
+        reference.kind === 'fallback' ? priorReferences : references
+      );
+  }
   substituteTemplate(code, [
-    ...scopes.map(scope => guarded(loopPrevRefToken(scope, false), scope.loopPrevOutputs)),
-    guarded(nodeOutputRefToken(outputs, false), outputs),
+    ...references,
     templateToken(String.raw`\$(?:LOOP_PREV_OUTPUT\b|\{LOOP_PREV_OUTPUT\})`, () => {
       requireAuthored(previous);
       return '';
@@ -129,6 +158,21 @@ function assertProbeOutputs(
       }
     ),
   ]);
+}
+
+function probeInputReference(
+  value: JsonValue,
+  outputs: Map<string, NodeOutput>
+): { kind: 'template' | 'fallback'; text: string } | undefined {
+  if (typeof value === 'string') return { kind: 'template', text: value };
+  if (!isBindingDirectiveShape(value)) return undefined;
+  const ref = parseWholeOutputRef(value.from);
+  const producer = ref === undefined ? undefined : outputs.get(ref.nodeId);
+  if (producer !== undefined && producer.state !== 'skipped' && producer.state !== 'pending')
+    return { kind: 'template', text: value.from };
+  return typeof value.if_skipped === 'string'
+    ? { kind: 'fallback', text: value.if_skipped }
+    : undefined;
 }
 
 async function executeProbe(

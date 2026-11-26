@@ -4,7 +4,7 @@ import { describe, expect, test, spyOn } from 'bun:test';
 import * as git from '@archon/git';
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { makeTestWorkflow } from './test-utils';
+import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import { dryRunWorkflow, useDryRunFiles } from './dry-run-test-utils';
 import { nodeOutcomesListingSchema } from './schemas/node-outcomes';
 import { nodeArtifactsListingSchema } from './schemas/node-artifact';
@@ -19,6 +19,152 @@ const verdictSchema = {
 };
 
 describe('dry-run until_bash', () => {
+  test.each(
+    (['loop', 'loop_group'] as const).flatMap(kind =>
+      [false, true].flatMap(defaultStubs =>
+        [
+          '$verdict.output',
+          '$verdict.output.done',
+          { from: '$verdict.output' },
+          { from: '$verdict.output.done' },
+        ].map(binding => ({ kind, defaultStubs, binding }))
+      )
+    )
+  )('composed probe inputs require an authored verdict: %j', async options => {
+    const cwd = temporaryDirectory();
+    const until_bash = 'printf probe >> invoked; test -n $INPUTS.verdict';
+    const block = makeTestWorkflow({
+      name: 'check',
+      inputs: { verdict: { required: true } },
+      nodes: [
+        options.kind === 'loop'
+          ? { id: 'probe', loop: { prompt: 'review', max_iterations: 1, until_bash } }
+          : {
+              id: 'probe',
+              loop_group: {
+                max_iterations: 1,
+                until_bash,
+                nodes: [{ id: 'body', prompt: 'review' }],
+              },
+            },
+      ],
+    });
+    const parent = makeTestWorkflow({
+      name: 'parent',
+      nodes: [
+        {
+          id: 'verdict',
+          prompt: 'review',
+          trigger_rule: 'all_done',
+          output_format: verdictSchema,
+        },
+        {
+          id: 'check',
+          include: 'check',
+          depends_on: ['verdict'],
+          with: { verdict: options.binding },
+        },
+      ],
+    });
+    const workflow = makeTestComposedWorkflow([block, parent], 'parent');
+    const stubs = { check__probe: 'continue', body: 'continue' };
+    const missing = await dryRunWorkflow({
+      cwd,
+      workflow,
+      execCode: true,
+      defaultStubs: options.defaultStubs,
+      stubs,
+    });
+    expect(missing.outcome).toBe('failed');
+    expect(existsSync(join(cwd, 'invoked'))).toBe(false);
+    const authored = await dryRunWorkflow({
+      cwd,
+      workflow,
+      execCode: true,
+      stubs: { ...stubs, verdict: { done: true, note: 'accepted' } },
+    });
+    expect(authored.outcome).toBe('completed');
+    expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe('probe');
+  });
+
+  test.each(
+    (['loop', 'loop_group'] as const).flatMap(kind =>
+      (
+        [
+          { sourceRuns: false, fallback: '$LOOP_PREV.seed.output.done', outcome: 'failed' },
+          { sourceRuns: false, fallback: '$seed.output.done', outcome: 'completed' },
+          { sourceRuns: false, fallback: true, outcome: 'completed' },
+          { sourceRuns: true, fallback: '$LOOP_PREV.seed.output.done', outcome: 'completed' },
+        ] as const
+      ).map(row => ({ kind, ...row }))
+    )
+  )('composed probe inputs validate only the selected fallback: %j', async options => {
+    const cwd = temporaryDirectory();
+    const control = {
+      max_iterations: 1,
+      on_exhausted: 'complete',
+      until_bash: 'printf probe >> invoked; value=$INPUTS.verdict; exit 7',
+    };
+    const block = makeTestWorkflow({
+      name: 'check',
+      inputs: { verdict: { required: true } },
+      nodes: [
+        options.kind === 'loop'
+          ? { id: 'probe', loop: { ...control, prompt: 'review' } }
+          : { id: 'probe', loop_group: { ...control, nodes: [{ id: 'body', prompt: 'review' }] } },
+      ],
+    });
+    const parent = makeTestWorkflow({
+      name: 'parent',
+      inputs: { take: { default: options.sourceRuns } },
+      nodes: [
+        {
+          id: 'outer',
+          loop_group: {
+            max_iterations: 2,
+            on_exhausted: 'complete',
+            until_bash: 'exit 7',
+            nodes: [
+              {
+                id: 'seed',
+                prompt: 'review',
+                trigger_rule: 'all_done',
+                output_format: verdictSchema,
+              },
+              {
+                id: 'source',
+                prompt: 'review',
+                when: '$INPUTS.take == true',
+                output_format: verdictSchema,
+              },
+              {
+                id: 'check',
+                include: 'check',
+                depends_on: ['seed', 'source'],
+                trigger_rule: 'all_done',
+                with: { verdict: { from: '$source.output.done', if_skipped: options.fallback } },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      cwd,
+      workflow: makeTestComposedWorkflow([block, parent], 'parent'),
+      execCode: true,
+      stubs: {
+        source: { done: true, note: 'accepted' },
+        check__probe: 'continue',
+        body: 'continue',
+      },
+    });
+    expect(result.outcome).toBe(options.outcome);
+    expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe(
+      options.outcome === 'failed' ? 'probe' : 'probeprobe'
+    );
+  });
+
   test.each(process.platform === 'win32' ? [] : [0, 7])(
     'a deadline remains fatal when a TERM trap exits %s',
     async exit => {
