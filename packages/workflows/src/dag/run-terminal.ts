@@ -32,6 +32,7 @@ import {
   type SourceReceiptAcceptance,
 } from '../schemas/resource-start';
 import { keepHandedOff } from './handed-off-worktree';
+import { packWakeTakesCheckout } from '../pack-graph';
 import { resolveRunInputs } from './references';
 import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../logger';
 import { isProviderLimit, rootFailures, type ProviderLimitFailure } from '../executor-shared';
@@ -240,13 +241,13 @@ async function reportUnstartedStages(
 /**
  * What this end hands on, read before the write that ends the run so it commits with it:
  * the run's result, the starts its outcome causes, and the checkout its asks hand an
- * asks-settled binding with `checkout` (read now, so a start gets the commit this run
- * ended on). Undefined when the result or a trigger could not be read and the run was
- * failed naming why.
+ * asks-settled binding with `checkout`, or its waits a wake binding with `checkout` (read now,
+ * so a start gets the commit this run ended on). Undefined when the result or a trigger could
+ * not be read and the run was failed naming why.
  */
 async function readHandOffs(
   ctx: RunTerminalContext,
-  { outcome, asks }: ReturnedResult,
+  { outcome, asks, waits }: ReturnedResult,
   runTranscriptUsage: WorkflowUsage
 ): Promise<
   | {
@@ -267,7 +268,15 @@ async function readHandOffs(
       outcome === undefined || !deps.runEndedStarts
         ? { receipts: [], linked: [] }
         : await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, outcome, result));
-    const asksCheckout = asks?.length ? await deps.asksCheckout?.(workflowRun) : undefined;
+    // Only for a wake its pack declares that takes the checkout for one of these waits.
+    const waitsHandOn = packWakeTakesCheckout(
+      workflow,
+      (waits ?? []).map(wait => wait.event)
+    );
+    const asksCheckout =
+      asks?.length || waitsHandOn
+        ? await deps.asksCheckout?.(workflowRun, { waits: waitsHandOn })
+        : undefined;
     return { starts, asksCheckout, result };
   } catch (error) {
     await failAtCompletion(

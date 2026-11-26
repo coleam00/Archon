@@ -7,20 +7,41 @@
  */
 import { expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
 import type { ItemWait, ItemWaitSubject } from '@archon/workflows/schemas/item-wait';
-import type {
-  ResourceStartBindingIntent,
-  SourceReceiptAcceptance,
+import {
+  asksCheckoutMetadata,
+  type ResourceStartBindingIntent,
+  type SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
+import { readItemStopped, runInputsMetadata } from '@archon/workflows/schemas/run-metadata';
 import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
-import { withdrawAttentionItem } from '../operations/attention-items';
+import { answerAttentionItem, withdrawAttentionItem } from '../operations/attention-items';
 import { createItemWaitObserver, loadWebhookSourcePlugins } from '../workflows/source-plugins';
-import { itemDeps, operator, type Harness } from './item-asks.conformance';
+import { wakeStart } from '../workflows/wake-start';
+import {
+  ask,
+  completeWithAsks,
+  itemDeps,
+  openRefs,
+  operator,
+  type Harness,
+} from './item-asks.conformance';
+
+// The waiting workflows here are not on disk; the input check is the production store's.
+// `checked` records which bindings it was asked about.
+const checked: string[] = [];
+const wakes = {
+  start: wakeStart,
+  inputProblems: async ({ bindingId }: { bindingId: string }) => {
+    checked.push(bindingId);
+    return [];
+  },
+};
 
 export const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
@@ -123,7 +144,58 @@ export async function accept(
   project: string | null
 ): Promise<string> {
   const { acceptStartReceipt } = await import('./start-receipt-writes');
-  return (await acceptStartReceipt(receipt, async () => project)).receiptId;
+  return (await acceptStartReceipt(receipt, async () => project, wakes)).receiptId;
+}
+
+/**
+ * The host stage a run-ended binding started on pr-7 with the item, the base and the
+ * builder's checkout, as its completion records them, ending with a `checks` wait at HEAD.
+ */
+async function completeWaitingHost(harness: Harness, worktree: string): Promise<string> {
+  const run = await harness.store.createWorkflowRun({
+    workflow_name: 'host',
+    user_message: '',
+    codebase_id: CONFORMANCE_CODEBASE_ID,
+    item_key: 'pr-7',
+    metadata: runInputsMetadata({ item: 'pr-7', land_on: 'dev' }),
+  });
+  await harness.store.claimPendingWorkflowRun(run.id);
+  await harness.store.completeWorkflowRun(
+    run.id,
+    { duration_ms: 1 },
+    asksCheckoutMetadata({
+      handoff: { runId: 'builder-run', branch: 'archon/pr-7', commit: HEAD },
+      worktree,
+    }),
+    { waits: [checks(HEAD)] }
+  );
+  return run.id;
+}
+
+/** A wake of `host` that carries its inputs, the item's answers and its checkout. */
+function carryingWake(): SourceReceiptAcceptance {
+  const receipt = wakeReceipt(HEAD);
+  const [binding] = receipt.bindings;
+  if (receipt.outcome !== 'matched' || binding?.wake === undefined)
+    throw new Error('wakeReceipt makes one wake binding');
+  return {
+    ...receipt,
+    bindings: [
+      {
+        ...binding,
+        launch: { ...binding.launch, workflowName: 'host' },
+        wake: {
+          ...binding.wake,
+          inputs: {
+            item: { input: 'item' },
+            land_on: { input: 'land_on' },
+            answers: { item: 'answers' },
+          },
+          checkout: 'waiting-run',
+        },
+      },
+    ],
+  };
 }
 
 export async function readReceipt(harness: Harness, id: string) {
@@ -184,6 +256,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
       // The waiting run has ended: nothing holds a session, a checkout or a slot.
       expect((await harness.store.getWorkflowRun(waiting))?.status).toBe('completed');
       const project = await projectKey(harness);
+      checked.length = 0;
       const delivery = wakeReceipt(HEAD, { deliveryId: 'delivery-1' });
       const id = await accept(delivery, project);
       expect(await readReceipt(harness, id)).toEqual({
@@ -206,6 +279,12 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
           },
         ],
       });
+      // A wake that maps event fields only keeps them, takes no checkout, and is not
+      // checked against any workflow's inputs.
+      expect(checked).toEqual([]);
+      const [started] = (await harness.store.getStartReceipt(id))?.bindings ?? [];
+      expect(started?.intent?.eventInputs?.revision).toBe(HEAD);
+      expect(started?.intent?.checkoutFrom).toBeUndefined();
       // The set closed whole: its other wait is no longer open either.
       expect(await harness.store.listOpenItemWaits()).toEqual([]);
 
@@ -327,6 +406,80 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
       expect(await harness.store.listOpenItemWaits()).toHaveLength(1);
     } finally {
       await removeTempTree(root);
+      await harness.close();
+    }
+  });
+
+  test("a wake starts the waiting run's stage again with its inputs, the item's answers and its checkout", async () => {
+    const harness = await makeHarness();
+    const worktree = await mkdtemp(join(tmpdir(), 'archon-waiting-worktree-'));
+    try {
+      await completeWithAsks(harness, [ask('Keep the flag?')], { item: 'pr-7' });
+      const [ref] = await openRefs(harness);
+      await answerAttentionItem(
+        itemDeps(harness),
+        ref ?? '',
+        { choose: ['keep'] },
+        operator,
+        'cli'
+      );
+      const waiting = await completeWaitingHost(harness, worktree);
+      // A later run of another workflow on the item is not the run that left the wait.
+      const later = await harness.store.createWorkflowRun({
+        workflow_name: 'build',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        item_key: 'pr-7',
+        metadata: runInputsMetadata({ item: 'pr-99', land_on: 'main' }),
+      });
+      await harness.store.claimPendingWorkflowRun(later.id);
+      await harness.store.completeWorkflowRun(later.id, { duration_ms: 1 }, undefined);
+
+      const id = await accept(carryingWake(), await projectKey(harness));
+      const receipt = await harness.store.getStartReceipt(id);
+      const intent = receipt?.bindings[0]?.intent;
+      expect(receipt?.outcome).toBe('matched');
+      expect(intent?.itemKey).toBe('pr-7');
+      expect(intent?.eventInputs).toMatchObject({
+        item: 'pr-7',
+        land_on: 'dev',
+        answers: [{ question: 'Keep the flag?', closedAs: 'answered', workflowName: 'plan' }],
+        waited: { runId: waiting },
+      });
+      expect(intent?.checkoutFrom).toEqual({
+        runId: 'builder-run',
+        branch: 'archon/pr-7',
+        commit: HEAD,
+      });
+      expect(await harness.store.listOpenItemWaits()).toEqual([]);
+    } finally {
+      await removeTempTree(worktree);
+      await harness.close();
+    }
+  });
+
+  test('a wake whose checkout is gone leaves the wait open and records the refusal on the waiting run', async () => {
+    const harness = await makeHarness();
+    const worktree = await mkdtemp(join(tmpdir(), 'archon-waiting-worktree-'));
+    try {
+      const waiting = await completeWaitingHost(harness, worktree);
+      await rm(worktree, { recursive: true });
+      const id = await accept(carryingWake(), await projectKey(harness));
+      const receipt = await harness.store.getStartReceipt(id);
+      expect(receipt?.outcome).toBe('unmatched');
+      expect(receipt?.bindings).toMatchObject([{ status: 'rejected' }]);
+      expect(receipt?.reason).toContain(`the worktree at '${worktree}'`);
+      expect((await harness.store.listOpenItemWaits()).map(wait => wait.runId)).toEqual([waiting]);
+      const run = await harness.store.getWorkflowRun(waiting);
+      expect(readItemStopped(run?.metadata ?? {})?.refused).toMatchObject([
+        { receiptId: id, workflow: 'host', reason: 'checkout_refused' },
+      ]);
+      // Listed beside its open wait, so the refusal shows now.
+      expect(
+        (await harness.store.listStoppedItemRuns()).map(stopped => 'id' in stopped && stopped.id)
+      ).toEqual([waiting]);
+    } finally {
+      await removeTempTree(worktree);
       await harness.close();
     }
   });

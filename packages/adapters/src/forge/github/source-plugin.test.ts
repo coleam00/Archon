@@ -402,6 +402,8 @@ describe('GitHub source plugin', () => {
             wait: 'review',
             about: { field: 'review.commit' },
             input: 'waited',
+            inputs: { item: { input: 'item' }, answers: { item: 'answers' } },
+            checkout: 'waiting-run',
           },
         }),
       ]),
@@ -431,7 +433,15 @@ describe('GitHub source plugin', () => {
           bindingId: 'reviewed',
           eventInputs: { state: 'approved' },
           itemKey: 'pr-7',
-          wake: { workflowName: 'host', wait: 'review', about: 'c0ffee', input: 'waited' },
+          // What the waiting run carries is the engine's to read; the plugin passes it on.
+          wake: {
+            workflowName: 'host',
+            wait: 'review',
+            about: 'c0ffee',
+            input: 'waited',
+            inputs: { item: { input: 'item' }, answers: { item: 'answers' } },
+            checkout: 'waiting-run',
+          },
         },
       ],
     });
@@ -463,6 +473,26 @@ describe('GitHub source plugin', () => {
       }).success
     ).toBe(false);
     expect(config([binding({ wake })]).bindings[0]?.wake).toEqual(wake);
+    const refused = (overrides: Record<string, unknown>) =>
+      githubWebhookSourceConfigSchema
+        .safeParse({
+          version: 1,
+          webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET',
+          host: 'github.com',
+          bindings: [binding(overrides)],
+        })
+        .error?.issues.map(issue => issue.message);
+    // An input is mapped once: from the event, the met wait, or the waiting run.
+    expect(refused({ wake: { ...wake, inputs: { revision: { input: 'revision' } } } })).toEqual([
+      "input 'revision' is also mapped from the event or the met wait; map it once",
+    ]);
+    // The engine picks the lane of a start on the waiting run's checkout.
+    expect(
+      refused({
+        wake: { ...wake, checkout: 'waiting-run' },
+        launch: { ...binding().launch, isolation: { kind: 'in-place' } },
+      })
+    ).toEqual(["with checkout, isolation must be left out: the engine picks the start's lane"]);
   });
 });
 
