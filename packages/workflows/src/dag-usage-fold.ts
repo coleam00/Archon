@@ -403,21 +403,20 @@ function foldNodeUsage(
     : undefined;
   // Other aggregate rows merely restate usage already carried by their leaves.
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
-  if (row.event_type !== 'node_skipped_prior_success') {
-    const metadata = record.metadata;
-    if (metadata?.node.kind === 'loop') {
-      replaceLoopBaseline(fold, row.step_name, metadata.invocation.id);
-      const contribution = readUsage(fold, row.step_name, record.rawUsage, metadata, evidence);
-      if (metadata.lifecycle.status === 'failed' && metadata.lifecycle.failureKind === 'config') {
-        contribution.loopBaseline = metadata;
-      }
-      fold.usageContributions.push(contribution);
-    } else {
-      const contribution = addUsage(fold, record.path, record.rawUsage, metadata, evidence);
-      if (contribution !== undefined && coveredContributions !== undefined) {
-        contribution.coveredContributions = coveredContributions;
-      }
+  if (row.event_type === 'node_skipped_prior_success') return;
+  const metadata = record.metadata;
+  if (metadata?.node.kind === 'loop') {
+    replaceLoopBaseline(fold, row.step_name, metadata.invocation.id);
+    const contribution = readUsage(fold, row.step_name, record.rawUsage, metadata, evidence);
+    if (metadata.lifecycle.status === 'failed' && metadata.lifecycle.failureKind === 'config') {
+      contribution.loopBaseline = metadata;
     }
+    fold.usageContributions.push(contribution);
+    return;
+  }
+  const contribution = addUsage(fold, record.path, record.rawUsage, metadata, evidence);
+  if (contribution !== undefined && coveredContributions !== undefined) {
+    contribution.coveredContributions = coveredContributions;
   }
 }
 
