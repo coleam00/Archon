@@ -19,23 +19,15 @@ http://127.0.0.1:3195/console). Rules:
   Overview tab stay; build on them, do not replace them with a second copy. His
   `itemStanding` is the one placement on the server; extend and correct it, do not add a
   parallel one.
-- **The curated view JSON ships with the pack and draws the core map (non-negotiable).** A
-  hand-curated presentation file travels in the pack (for now `<pack>/.shared/<name>.json`, read
-  through `packages/workflows/src/pack-declarations.ts`). It carries presentation only: group
-  words, stage labels and blurbs, layout positions, lanes, captions, edge labels, drill-down
-  cards and story wording (how each outcome reads; words for rounds, returns, parked, work
-  orders). Structure (stages, steps, outcomes, arrows) comes from the pack graph. The file is
-  validated against the graph: unknown stage, workflow, step or outcome names fail; graph stages
-  it leaves unplaced warn.
-- **ONE check where the map is drawn.** If the pack ships the curated JSON, draw the curated map
-  (the project Overview's map and the sidebar How it works, with their drill-down views and the
-  stage modal). If not, draw the map derived from the pack graph and its document groups. No
-  merging of the two and no per-stage mixing. The derived map is also offered as a secondary
-  "Full workflow" view.
+- **The Overview map is drawn from the pack graph; the view file carries words and meaning only (owner, 11/26, after the JSON spike #226-#233).** The map's cards, their stages and their edges come from the graph (`GET /api/packs/{pack}/graph`): one card per group, stages in flow order, forward edges from `arrows`, a send-back lane for every arrow that goes backward in flow order. The pack-shipped view file (`<pack>/.shared/factory-view.json`, read through `packages/workflows/src/pack-declarations.ts`) has no `map` and no hand positions. It carries words (stage, step and outcome words, answers, group words, summary), meaning (`retired`, `rounds`, `returns`, `approves`, `change`), the **groups** (the file declares the groups and their stages itself, because the pack's own document groups are gone on the pack's main; when the pack graph has groups, the file's groups win), and the How it works explainer.
+- **A stale entry drops only itself, and says so (owner, 11/26).** A view-file entry naming a stage, step, outcome or group the graph lacks is dropped on its own; the rest of the file still draws. Meaning entries (`rounds`, `returns`, `approves`, `change`) that name a workflow the graph lacks are KEPT, treated as retired (old runs carry the old name, and board cards read their rounds from them). Every dropped entry, and every in-flow stage, step or outcome the file gives no words, is (a) shown as a visible warning on the project Overview and the factory's How it works page, and (b) an ERROR from `check:factory-view` so CI fails. The console never refuses the whole file for one entry; a file that does not parse at all falls back to the graph-drawn map with plain names and a visible warning.
+- **Speed is a requirement (owner, 11/26).** The board's columns, cards, titles and round progress, the Overview and the Needs you tab must be complete within 3 s on a warm server and 10 s on a freshly started server, measured in the browser at 1440x900 on a live-DB copy. No page waits on another page's read; the pack graph is read once per pack copy and cached; the view file is not re-read through a second graph read.
+- **Board (owner, 11/26):** all pipeline columns are the same width. There is no "Not on a stage" column: every item stands at a stage (deliver-era and retired-workflow items map to their stage through `retired`), and an item that truly has no stage goes to Set aside. The pack's Setup and Settings links are not on the board. A card's actions are buttons at the bottom of the card, beside the PR link (which is a button too): "Needs you · N" is a clearly clickable button there; the top-right chip is a status LABEL only (Running, Merged, Stopped), styled so it does not look clickable.
+- **Needs you tab (owner, 11/26):** the console's accent (Archon's pink/purple) is used for the suggested answer and the active filter, never success-green and never all-white. Rows show a pointer cursor and hover state. Opening a row shows the ask section as that row's CHILD (indented or attached under it, with an expand/collapse chevron on the row), so it is obvious which row it belongs to. A filter (`?item=`) is a prominent filter bar at the top of the tab (the item's number and title, a clear "Show all" control), not a tiny chip.
 - **No item page.** A board card opens the item's run log (Rasmus's behaviour). The CARD carries
   the item's iteration detail as v1's cards did: title, running step, check-round dots and
   "N of M check rounds", returned / "sent back Nx", PR link. An item with open asks shows one
-  "Needs you · N" control (N, its open asks) in the chip's place at the card's top right, a link
+  "Needs you · N" button (N, its open asks) at the bottom of the card beside the PR button (owner, 11/26; the top-right chip is a status label only), a link
   to the project's Needs you tab filtered to the item (`?item=<key>`, below); the Table row shows
   the same link in its State cell (owner, 11/25, #217). The card shows no ask question,
   recommendation or ask count anywhere else, and opens no ask popover: answering happens on the
