@@ -3278,22 +3278,12 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
   );
   mkdirSync(join(home, 'workflows', 'factory', 'outside'), { recursive: true });
   writeFileSync(join(home, 'workflows', 'factory', 'outside', 'outside.yaml'), flow('outside'));
-  // A provider plugin kept inside the pack has its own manifest checked as well.
-  mkdirSync(join(pack, 'plan', 'provider'), { recursive: true });
-  writeFileSync(
-    join(pack, 'plan', 'provider', 'archon-plugin.json'),
-    JSON.stringify({
-      schemaVersion: 1,
-      kind: 'provider',
-      name: 'probe',
-      description: 'd',
-      executable: 'archon-provider-probe',
-      typo: true,
-    })
-  );
   // A pack none of whose workflow files exist still has its bindings checked.
   const empty = join(root, 'empty');
   packFolder(empty, 'empty', 'one', [], 'one');
+  // The project around the nested pack has its own broken workflow, still reported from it.
+  mkdirSync(join(project, '.archon', 'workflows'), { recursive: true });
+  writeFileSync(join(project, '.archon', 'workflows', 'bad.yaml'), 'name: bad\n');
   const kit = join(project, 'plugins', 'kit');
   packFolder(kit, 'kit', 'one', ['one', 'two'], 'two');
   // Its only listed file is missing; the unlisted one loads.
@@ -3315,14 +3305,9 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
       [pack, ['helper'], [refusal('helper', 'factory')]],
       [join(pack, 'plan'), [], [refusal('helper', 'factory')]],
       [pack, ['plan'], [refusal('helper', 'factory')]],
-      [
-        join(pack, 'plan', 'provider'),
-        [],
-        [refusal('helper', 'factory'), "unknown key 'typo' is ignored"],
-      ],
       // The explicit source wins over the pack the command runs in.
       [kit, ['--workflow-source', pack], [refusal('helper', 'factory')], [refusal('two', 'kit')]],
-      [kit, [], [refusal('two', 'kit')]],
+      [kit, [], [refusal('two', 'kit'), "Missing required field 'description'"]],
       [kit, ['one'], [refusal('two', 'kit')]],
       [join(kit, 'one', 'scripts'), [], [refusal('two', 'kit')]],
       [

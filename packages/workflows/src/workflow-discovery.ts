@@ -152,17 +152,14 @@ async function finishDiscovery(
   const sourcePack = context.sourcePack;
   const ofSourcePack = ({ workflow, source }: WorkflowWithSource): boolean =>
     source === 'project' && sourcePack !== undefined && workflow.pack?.key === sourcePack.key;
-  const supportOfSource = new Set(
-    [...legacy.byFile]
-      .filter(([filename, entry]) => ofSourcePack(entry) && !sourcePack?.entrypoints.has(filename))
-      .map(([, entry]) => entry)
-  );
-  const isSourceSupport = (entry: WorkflowWithSource): boolean => supportOfSource.has(entry);
-  const support = [...legacy.workflows.filter(isSourceSupport), ...installed.support];
-  const workflows = [
-    ...legacy.workflows.filter(entry => !isSourceSupport(entry)),
-    ...installed.workflows,
-  ];
+  const workflows: WorkflowWithSource[] = [];
+  const support: WorkflowWithSource[] = [];
+  for (const [filename, entry] of legacy.workflows) {
+    const isSupport = ofSourcePack(entry) && !sourcePack?.entrypoints.has(filename);
+    (isSupport ? support : workflows).push(entry);
+  }
+  workflows.push(...installed.workflows);
+  support.push(...installed.support);
   if (context.roots.kind === 'captured') {
     const failure = allErrors.find(
       error => error.errorType === 'read_error' && isSourceReadFailure(error.cause, verifiedFiles)

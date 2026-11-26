@@ -71,7 +71,7 @@ export async function discoverInstalled(context: DiscoveryContext): Promise<Inst
     const files = installedScopeFiles(context, loaded, qualifiedByName, catalogEntrypoints);
     const expandedScope = await expandScope(context, files);
     context.allErrors.push(...expandedScope.errors);
-    for (const expanded of expandedScope.workflows) {
+    for (const expanded of expandedScope.workflows.values()) {
       (entrypoints.has(expanded.workflow.name) ? workflows : support).push(expanded);
     }
   }

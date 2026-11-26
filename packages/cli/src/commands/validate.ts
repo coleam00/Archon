@@ -113,11 +113,10 @@ function formatWorkflowResult(result: WorkflowValidationResult): string {
  * Validate all workflows or a specific workflow.
  * Returns exit code: 0 = all valid, 1 = errors found.
  *
- * `pluginRoot` is the directory the operator ran from, before `cwd` was resolved to the
- * project root. The pack folder it is in (`invokedPackDir`) supplies the `archon-plugin.json`
- * checked; one below the project root, a plugin kept in a repository subdirectory, is also
- * validated as its source, as if it were given as `--workflow-source`. A directory in no pack
- * folder has its own manifest checked, such as a provider plugin's.
+ * `pluginRoot` is the directory whose `archon-plugin.json` is checked: the directory
+ * the operator ran from, before `cwd` was resolved to the project root, so a plugin in
+ * a repository subdirectory is checked too. A pack folder it is in below the project root
+ * (`invokedPackDir`) is also validated, as its own source.
  *
  * `source` is an explicit `--workflow-source`. It is read live, as a fresh
  * `workflow run --workflow-source` discovers it: workflows, commands, scripts, the manifest
@@ -135,17 +134,23 @@ export async function validateWorkflowsCommand(
   source?: string
 ): Promise<number> {
   const packDir = source === undefined ? await invokedPackDir(cwd, pluginRoot) : undefined;
-  const read: ReadSource | undefined =
-    source !== undefined
-      ? { dir: source, label: `--workflow-source ${source}` }
-      : packDir !== undefined && packDir !== (await canonicalizeProjectPath(cwd))
-        ? { dir: packDir, label: `pack folder ${packDir}` }
-        : undefined;
-  const config = await buildValidationConfig(read?.dir ?? cwd);
-  const { results, packs } = await collectWorkflowResults(cwd, read?.dir, config, forgeTrustedEnv);
-  if (read !== undefined && results.length === 0 && packs.length === 0) {
-    const message = `Error: no workflows found in ${read.label}`;
-    if (json) await writeStdout(`${JSON.stringify({ error: message, source: read.dir })}\n`);
+  const config = await buildValidationConfig(source ?? cwd);
+  const { results, packs } = await collectWorkflowResults(cwd, source, config, forgeTrustedEnv);
+  // A pack folder below the project root is also validated as its own source; the project
+  // stays checked, so its workflows and its own pack's bindings are still reported.
+  if (packDir !== undefined && packDir !== (await canonicalizeProjectPath(cwd))) {
+    const nested = await collectWorkflowResults(
+      cwd,
+      packDir,
+      await buildValidationConfig(packDir),
+      forgeTrustedEnv
+    );
+    results.push(...nested.results);
+    packs.push(...nested.packs);
+  }
+  if (source !== undefined && results.length === 0) {
+    const message = `Error: no workflows found in --workflow-source ${source}`;
+    if (json) await writeStdout(`${JSON.stringify({ error: message, source })}\n`);
     else console.error(message);
     return 1;
   }
@@ -155,21 +160,13 @@ export async function validateWorkflowsCommand(
     filteredResults = results.filter(r => r.workflowName === name);
 
     if (filteredResults.length === 0) {
-      await reportMissingWorkflow(name, results, json, read);
+      await reportMissingWorkflow(name, results, json, source);
       return 1;
     }
   }
   // The pack's bindings and the manifest are not workflows, so the name filter does not
   // apply to them.
-  filteredResults.push(...packs);
-  filteredResults.push(...(await manifestResults(source ?? packDir ?? pluginRoot)));
-  // A plugin kept inside the pack folder (a provider plugin, say) has its own manifest too,
-  // named by its path from the pack.
-  const here = await canonicalizeProjectPath(pluginRoot);
-  if (source === undefined && packDir !== undefined && here !== packDir)
-    filteredResults.push(
-      ...(await manifestResults(here, join(relative(packDir, here), PLUGIN_MANIFEST_FILE)))
-    );
+  filteredResults.push(...packs, ...(await manifestResults(source ?? pluginRoot)));
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -179,7 +176,7 @@ export async function validateWorkflowsCommand(
   });
 
   const totalErrors = filteredResults.filter(r => !r.valid).length;
-  await writeWorkflowResults(cwd, read, filteredResults, totalErrors, json);
+  await writeWorkflowResults(cwd, source, filteredResults, totalErrors, json);
 
   return totalErrors > 0 ? 1 : 0;
 }
@@ -293,18 +290,10 @@ async function collectWorkflowResults(
   return { results, packs: packBindingResults(sourcePack) };
 }
 
-/** Where the workflows reported come from when not the project root: the dir, and how to name it. */
-interface ReadSource {
-  dir: string;
-  label: string;
-}
-
 /**
- * The pack folder `from` is in: the nearest directory at or above it, up to the project
- * root, that `sourcePackFolder` reads as one, or one whose manifest fails to read, which is
- * an invalid pack. Only `from` itself is asked when it lies outside the project. Undefined
- * when there is none. Paths are canonicalized: the root comes from git resolution, the
- * invocation directory may not (`/tmp` against `/private/tmp`).
+ * The pack folder `from` is in, up to the project root: the nearest directory
+ * `sourcePackFolder` reads as one or fails to read. Paths are canonicalized: the root comes
+ * from git resolution, the invocation directory may not (`/tmp` against `/private/tmp`).
  */
 async function invokedPackDir(projectRoot: string, from: string): Promise<string | undefined> {
   const root = await canonicalizeProjectPath(projectRoot);
@@ -387,10 +376,7 @@ function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, Validat
  * skill folder without a `SKILL.md` is an error, because install refuses it. Schema
  * failures are discovery load errors and are not repeated here.
  */
-async function manifestResults(
-  cwd: string,
-  label: string = PLUGIN_MANIFEST_FILE
-): Promise<WorkflowValidationResult[]> {
+async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]> {
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(join(cwd, PLUGIN_MANIFEST_FILE), 'utf-8'));
@@ -424,7 +410,9 @@ async function manifestResults(
       });
     }
   }
-  return issues.length > 0 ? [makeWorkflowResult(label, issues, label)] : [];
+  return issues.length > 0
+    ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
+    : [];
 }
 
 /**
@@ -471,7 +459,7 @@ async function reportMissingWorkflow(
   name: string,
   results: WorkflowValidationResult[],
   json: boolean | undefined,
-  read: ReadSource | undefined
+  source: string | undefined
 ): Promise<void> {
   const allNames = results.map(r => r.workflowName);
   const similar = suggestWorkflowNames(
@@ -481,13 +469,15 @@ async function reportMissingWorkflow(
   if (json) {
     await writeStdout(
       `${JSON.stringify({
-        error: `Workflow '${name}' not found${read === undefined ? '' : ` in ${read.label}`}`,
+        error: `Workflow '${name}' not found${source === undefined ? '' : ` in --workflow-source ${source}`}`,
         suggestions: similar,
         available: allNames,
       })}\n`
     );
   } else {
-    console.error(`Workflow '${name}' not found${read === undefined ? '' : ` in ${read.label}`}.`);
+    console.error(
+      `Workflow '${name}' not found${source === undefined ? '' : ` in --workflow-source ${source}`}.`
+    );
     if (similar.length > 0) {
       console.error(`Did you mean: ${similar.map(s => `'${s}'`).join(', ')}?`);
     }
@@ -497,7 +487,7 @@ async function reportMissingWorkflow(
 
 async function writeWorkflowResults(
   cwd: string,
-  read: ReadSource | undefined,
+  source: string | undefined,
   results: WorkflowValidationResult[],
   totalErrors: number,
   json: boolean | undefined
@@ -507,7 +497,7 @@ async function writeWorkflowResults(
   if (json) {
     await writeStdout(
       `${JSON.stringify({
-        ...(read === undefined ? {} : { source: read.dir }),
+        ...(source === undefined ? {} : { source }),
         results,
         summary: {
           total: results.length,
@@ -519,9 +509,9 @@ async function writeWorkflowResults(
     );
   } else {
     console.log(
-      read === undefined
+      source === undefined
         ? `\nValidating workflows in ${cwd}\n`
-        : `\nValidating workflows from ${read.label} (project ${cwd})\n`
+        : `\nValidating workflows from --workflow-source ${source} (project ${cwd})\n`
     );
     for (const result of results) {
       console.log(formatWorkflowResult(result));
