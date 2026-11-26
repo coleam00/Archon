@@ -212,7 +212,7 @@ describe.each(commands)('%s home spelling', (_name, idPrefix, command, legacyId)
     await symlink(loop, loop);
     process.env.ARCHON_HOME = loop;
 
-    for (const operation of ['status', 'remove'] as const) {
+    for (const operation of ['install', 'status', 'remove'] as const) {
       const { exitCode, result } = await invokeResult(command, operation, schedules);
       expect(exitCode).toBe(1);
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining('ELOOP') });

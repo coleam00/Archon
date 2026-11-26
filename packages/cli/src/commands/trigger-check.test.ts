@@ -6,6 +6,7 @@
  * `trigger schedule` finds the timer it installed by the same reading of `ARCHON_HOME`.
  */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, sep } from 'node:path';
@@ -21,7 +22,11 @@ import {
   createInMemoryWorkflowHostStore,
   createInMemoryWorkflowStore,
 } from '../test-support/workflow-store';
-import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
+import {
+  installNativeSchedule,
+  scheduleLabel,
+  type NativeScheduleOptions,
+} from '../triggers/native-schedule';
 import { triggerCommand } from './trigger';
 import {
   wakeLastPassPath,
@@ -486,4 +491,25 @@ describe('schedule finds the binding timer however ARCHON_HOME is spelled', () =
     const { schedule } = await scheduleFixture();
     expect(await schedule('remove')).toMatchObject({ removed: false });
   });
+
+  test.skipIf(process.platform === 'win32')(
+    'remove reaches an unreadable current timer beside a readable alternate',
+    async () => {
+      const { archonHome, schedules, schedule, timerFiles } = await scheduleFixture();
+      process.env.ARCHON_HOME = `${archonHome}${sep}`;
+      await schedule('install');
+      const currentId = createHash('sha256')
+        .update(JSON.stringify([archonHome, 'timer', 'timer']))
+        .digest('hex');
+      await writeFile(
+        join(schedules.launchAgentsDirectory!, `${scheduleLabel(currentId)}.plist`),
+        '<plist/>'
+      );
+      expect(await timerFiles()).toHaveLength(2);
+
+      process.env.ARCHON_HOME = archonHome;
+      expect(await schedule('remove')).toMatchObject({ removed: true });
+      expect(await timerFiles()).toEqual([]);
+    }
+  );
 });
