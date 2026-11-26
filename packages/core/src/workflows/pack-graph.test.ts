@@ -108,6 +108,32 @@ describe('readPackGraph', () => {
     expect(graph.arrows.map(arrow => arrow.installed?.sourceInstanceId)).toEqual(['here']);
   });
 
+  test('a setting naming a missing file is a settings problem, and the other values still show', async () => {
+    const { project, pack, deps } = await fixture('project');
+    await writeFile(
+      join(pack, '.pack', 'pack.yaml'),
+      'inputs:\n  policy:\n    file: true\n  label: {}\n'
+    );
+    // A file setting is checked only where a stage reads it.
+    await writeFile(
+      join(pack, 'chain-a', 'chain-a.yaml'),
+      stage('chain-a').replace("bash: echo '", "bash: cat $INPUTS.policy; echo '")
+    );
+    await mkdir(join(project, '.archon', 'packs'), { recursive: true });
+    await writeFile(
+      join(project, '.archon', 'packs', 'chain.yaml'),
+      'settings:\n  policy: docs/missing.md\n  label: hello\n'
+    );
+
+    const graph = await readPackGraph(project, 'chain', deps);
+
+    expect(graph.settingsFile.problems).toEqual([expect.stringContaining('policy')]);
+    expect(graph.settings.map(setting => [setting.name, setting.value])).toEqual([
+      ['policy', 'docs/missing.md'],
+      ['label', 'hello'],
+    ]);
+  });
+
   test('a pack in a separate workflow source is read from there, with the project arrows', async () => {
     const { project, source, write, deps } = await fixture('source');
     await write('here', trigger('here', project, { discoveryCwd: source }));

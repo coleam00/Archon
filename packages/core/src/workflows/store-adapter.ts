@@ -155,14 +155,17 @@ const launchProjectKeyOf = launchProjectKey(cwd => registeredProjectKeyForPath(c
 const launchProjectOf = (cwd: string) => registeredProjectForPath(cwd, codebaseDb);
 
 /**
- * The held binding starts that name an item, across the install, each with that item, so a
- * read of many items lists them once. A binding is resolved to a project only when it is
- * prepared, so its checkout decides the project here the way it will then.
+ * The held binding starts whose item key `keyMatches`, each with the item it names. A binding
+ * is resolved to a project only when it is prepared, so its checkout decides the project here
+ * the way it will then; only a start whose key matches is resolved.
  */
-async function listAllHeldItemStarts(): ReturnType<IWorkflowStore['listAllHeldItemStarts']> {
+async function heldItemStartsNaming(
+  keyMatches: (itemKey: string) => boolean
+): ReturnType<IWorkflowStore['listAllHeldItemStarts']> {
   const held: Awaited<ReturnType<IWorkflowStore['listAllHeldItemStarts']>> = [];
   for (const start of await installHold.listHeldStarts()) {
     if (start.kind !== 'trigger' || start.itemKey === null || start.cwd === null) continue;
+    if (!keyMatches(start.itemKey)) continue;
     const { receiptId, bindingId, hostId, workflow, receivedAt, itemKey } = start;
     const projectKey = await launchProjectKeyOf(start.cwd);
     if (projectKey !== null)
@@ -171,12 +174,17 @@ async function listAllHeldItemStarts(): ReturnType<IWorkflowStore['listAllHeldIt
   return held;
 }
 
-/** The held binding starts on item `itemId`: those of the install's that name its key in its project. */
+/** The held binding starts that name an item, across the install, so a read of many items lists them once. */
+function listAllHeldItemStarts(): ReturnType<IWorkflowStore['listAllHeldItemStarts']> {
+  return heldItemStartsNaming(() => true);
+}
+
+/** The held binding starts on item `itemId`: those naming its key whose checkout is in its project. */
 async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
   const item = await itemsDb.getItem(itemId);
   if (!item) return [];
-  return (await listAllHeldItemStarts())
-    .filter(start => start.projectKey === item.projectKey && start.itemKey === item.key)
+  return (await heldItemStartsNaming(key => key === item.key))
+    .filter(start => start.projectKey === item.projectKey)
     .map(({ projectKey: _project, itemKey: _key, ...start }) => start);
 }
 
