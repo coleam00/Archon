@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The forge can assign one user to an issue and unassign one with `workitem.assignee.add` and `workitem.assignee.remove`, keeping the issue's other assignees. A user GitHub would not assign on that issue is refused with what to check, and a change GitHub answers but leaves undone is refused with what it showed; nothing is written in either case. `actor.self` says which account the forge plugin acts as for a repository, so a caller can assign that account without typing its login. The installed GitHub plugin answers them after `archon plugin update coleam00/Archon/plugins/forge-github` installs a release that includes them.
+
 ## [0.16.0] - 2026-11-26
 
 An item records when it is done, a failure whose outcome is unknown stops its run instead of repeating it, and a stage can wait for a review on a pull request.
