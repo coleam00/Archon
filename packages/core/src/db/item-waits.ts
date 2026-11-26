@@ -29,6 +29,8 @@ interface WaitRow {
   position: number | string;
   event: string;
   about: string;
+  subject_kind: string | null;
+  subject_number: number | string | null;
   created_at: string | Date;
   deadline_at: string | Date;
   closed_as: string | null;
@@ -57,6 +59,13 @@ function closure(row: WaitRow): StoredItemWait['closed'] {
   return { as: 'withdrawn', at };
 }
 
+/** A subject this binary does not know (a later one wrote it) reads as none. */
+function subjectOf(row: WaitRow): StoredItemWait['subject'] {
+  const { subject_kind: kind, subject_number: number } = row;
+  if ((kind !== 'pr' && kind !== 'issue') || number === null) return null;
+  return { kind, number: Number(number) };
+}
+
 function readWait(row: WaitRow): StoredItemWait {
   return {
     id: row.id,
@@ -66,6 +75,7 @@ function readWait(row: WaitRow): StoredItemWait {
     position: Number(row.position),
     event: row.event,
     about: row.about,
+    subject: subjectOf(row),
     openedAt: isoTime(row.created_at),
     deadlineAt: isoTime(row.deadline_at),
     closed: closure(row),
@@ -110,8 +120,9 @@ export async function openItemWaitsForCompletedRun(
   for (const [position, wait] of waits.entries())
     await query(
       `INSERT INTO remote_agent_item_waits
-       (item_id, run_id, workflow_name, position, event, about, created_at, deadline_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (item_id, run_id, workflow_name, position, event, about, subject_kind, subject_number,
+        created_at, deadline_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         run.item_id,
         runId,
@@ -119,6 +130,8 @@ export async function openItemWaitsForCompletedRun(
         position,
         wait.event,
         wait.about,
+        wait.subject?.kind ?? null,
+        wait.subject?.number ?? null,
         now,
         new Date(opened.getTime() + wait.within_minutes * 60_000).toISOString(),
       ]
@@ -165,10 +178,12 @@ type Evaluated = NonNullable<SourceReceiptAcceptance['evaluatedBindings']>[numbe
 /**
  * The binding a wake makes once resolved against the open waits, or why it starts nothing.
  * A match is an open wait of the binding's workflow and name whose `about` is exactly the
- * event's, on an item of the binding's project, and on the item the event names when it
- * names one: a wait about any other value (the commit the change has moved past), or on
- * another subject at the same commit, is not one. The match closes its whole set as met, guarded on
- * the set still being open, so of two deliveries for one wait only the first starts.
+ * event's, on an item of the binding's project. When the binding maps the event to an item,
+ * the wait is on that item; when it maps none and the event names its subject, the wait
+ * names that subject, on whichever item it is. A wait about any other value (the commit the
+ * change has moved past), or on another subject at the same commit, is not one. The match
+ * closes its whole set as met, guarded on the set still being open, so of two deliveries for
+ * one wait only the first starts.
  */
 async function resolveWake(
   query: TransactionQuery,
@@ -185,8 +200,23 @@ async function resolveWake(
       reason,
     },
   });
-  const onItem = binding.itemKey === undefined ? '' : ` on item '${binding.itemKey}'`;
-  const named = `wait '${wake.wait}' about '${wake.about}' from '${wake.workflowName}'${onItem}`;
+  // What else the wait must match besides `about`: the event's item, else its subject.
+  const { subject } = wake;
+  const scope =
+    binding.itemKey !== undefined
+      ? {
+          sql: ' AND i.key = $5',
+          params: [binding.itemKey],
+          named: ` on item '${binding.itemKey}'`,
+        }
+      : subject !== undefined
+        ? {
+            sql: ' AND w.subject_kind = $5 AND w.subject_number = $6',
+            params: [subject.kind, subject.number],
+            named: ` on ${subject.kind} ${String(subject.number)}`,
+          }
+        : { sql: '', params: [], named: '' };
+  const named = `wait '${wake.wait}' about '${wake.about}' from '${wake.workflowName}'${scope.named}`;
   if (projectKey === null)
     return notStarted(
       'rejected',
@@ -197,15 +227,9 @@ async function resolveWake(
     `SELECT w.*, i.key AS item_key FROM remote_agent_item_waits w
      JOIN remote_agent_items i ON i.id = w.item_id
      WHERE i.project_key = $1 AND w.workflow_name = $2 AND w.event = $3 AND w.about = $4
-       AND w.closed_as IS NULL${binding.itemKey === undefined ? '' : ' AND i.key = $5'}
+       AND w.closed_as IS NULL${scope.sql}
      ORDER BY w.created_at, w.run_id${lock}`,
-    [
-      projectKey,
-      wake.workflowName,
-      wake.wait,
-      wake.about,
-      ...(binding.itemKey === undefined ? [] : [binding.itemKey]),
-    ]
+    [projectKey, wake.workflowName, wake.wait, wake.about, ...scope.params]
   );
   const items = [...new Set(found.rows.map(row => row.item_key))];
   const row = found.rows[0];
@@ -226,6 +250,7 @@ async function resolveWake(
   const input: MetWaitInput = {
     event: row.event,
     about: row.about,
+    subject: subjectOf(row),
     workflow: row.workflow_name,
     runId: row.run_id,
     waitingSince: isoTime(row.created_at),

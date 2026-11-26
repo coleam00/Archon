@@ -1967,7 +1967,7 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
   });
 
   it('completes with the waits the run leaves, and fails naming the field when two name one event', async () => {
-    const waits = [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 30 }];
+    const waits = [{ event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 30 }];
     mockStructuredResult({ summary: 'done', waits });
     const store = createMockStore();
     await executeDagWorkflow(
@@ -2253,7 +2253,7 @@ describe('executeDagWorkflow -- what a run on an item records about it as it com
       {
         stage: 'replan',
         why: 'x',
-        waits: [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 60 }],
+        waits: [{ event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 60 }],
       },
       { waits: true },
     ],

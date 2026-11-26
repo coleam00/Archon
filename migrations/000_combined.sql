@@ -993,6 +993,11 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_waits (
   met_by_binding_id TEXT,
   replaced_by_run_id TEXT
 );
+-- The issue or pull request a wait names (kind 'pr' or 'issue', and its number), so a
+-- binding that maps no item finds it by the event's subject. NULL when the wait names
+-- none, as a check wait does, and on rows written before the columns existed.
+ALTER TABLE remote_agent_item_waits ADD COLUMN IF NOT EXISTS subject_kind TEXT;
+ALTER TABLE remote_agent_item_waits ADD COLUMN IF NOT EXISTS subject_number INTEGER;
 
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.

@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
-import type { ItemWait } from '@archon/workflows/schemas/item-wait';
+import type { ItemWait, ItemWaitSubject } from '@archon/workflows/schemas/item-wait';
 import type {
   ResourceStartBindingIntent,
   SourceReceiptAcceptance,
@@ -26,7 +26,7 @@ export const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
 
 export function checks(about: string, withinMinutes = 60): ItemWait {
-  return { event: 'checks', about, within_minutes: withinMinutes };
+  return { event: 'checks', about, subject: null, within_minutes: withinMinutes };
 }
 
 /** Complete a run of `workflow` on `item` that leaves `waits`. */
@@ -70,6 +70,7 @@ export function wakeReceipt(
     bindingId?: string;
     wait?: string;
     item?: string;
+    subject?: ItemWaitSubject;
   } = {}
 ): SourceReceiptAcceptance {
   const binding: ResourceStartBindingIntent = {
@@ -91,6 +92,7 @@ export function wakeReceipt(
       workflowName: options.workflow ?? 'host',
       wait: options.wait ?? 'checks',
       about,
+      ...(options.subject === undefined ? {} : { subject: options.subject }),
       input: 'waited',
     },
   };
@@ -193,6 +195,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
             waited: {
               event: 'checks',
               about: HEAD,
+              subject: null,
               workflow: 'host',
               runId: waiting,
               waitingSince: expect.any(String),
@@ -396,7 +399,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
   test('an event that names its item wakes only that item, even when another waits at the commit', async () => {
     const harness = await makeHarness();
     try {
-      const review = { event: 'review', about: HEAD, within_minutes: 60 };
+      const review = { event: 'review', about: HEAD, subject: null, within_minutes: 60 };
       await completeWithWaits(harness, [review], { item: 'pr-7' });
       const project = await projectKey(harness);
       // A review of pr-8 at the same commit: pr-7's wait is not about it.
@@ -414,6 +417,119 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
       }
       expect(await harness.store.listOpenItemWaits()).toEqual([]);
     } finally {
+      await harness.close();
+    }
+  });
+
+  test('a review on the pull request a wait names wakes the issue the wait is on, and no other pull request does', async () => {
+    const harness = await makeHarness();
+    try {
+      const pr34 = { kind: 'pr', number: 34 } as const;
+      const waiting = await completeWithWaits(
+        harness,
+        [{ event: 'review', about: HEAD, subject: pr34, within_minutes: 60 }],
+        { item: 'issue-12' }
+      );
+      const project = await projectKey(harness);
+      // A binding that maps no item finds the wait by the event's subject.
+      const other = await accept(
+        wakeReceipt(HEAD, { wait: 'review', subject: { kind: 'pr', number: 35 } }),
+        project
+      );
+      expect((await readReceipt(harness, other)).outcome).toBe('unmatched');
+      const id = await accept(wakeReceipt(HEAD, { wait: 'review', subject: pr34 }), project);
+      expect(await readReceipt(harness, id)).toMatchObject({
+        outcome: 'matched',
+        bindings: [{ itemKey: 'issue-12', waited: { runId: waiting, subject: pr34 } }],
+      });
+      expect(await harness.store.listOpenItemWaits()).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('an observed review of the pull request a wait names wakes the issue the wait is on', async () => {
+    const harness = await makeHarness();
+    const root = await mkdtemp(join(tmpdir(), 'archon-observed-review-'));
+    try {
+      const remote = 'https://github.com/acme/widgets.git';
+      await harness.db.query(
+        'UPDATE remote_agent_codebases SET repository_url = $1 WHERE id = $2',
+        [remote, CONFORMANCE_CODEBASE_ID]
+      );
+      const pr34 = { kind: 'pr', number: 34 } as const;
+      const waiting = await completeWithWaits(
+        harness,
+        [{ event: 'review', about: HEAD, subject: pr34, within_minutes: 60 }],
+        { item: 'issue-12' }
+      );
+      const project = await projectKey(harness);
+      // A source that, like the GitHub plugin, reads the reviews of the wait's subject.
+      const modulePath = join(root, 'source.ts');
+      const configPath = join(root, 'sources.json');
+      await writeFile(
+        modulePath,
+        `export default ({ config }) => ({
+  receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
+  observe: async ({ waits, forge }) => {
+    for (const wait of waits) await forge.prReviews({ remote: wait.remote, number: wait.subject.number });
+    return { acceptances: [{ ...config, receipt: { ...config.receipt, id: crypto.randomUUID() } }], unserved: [], failed: [] };
+  },
+});\n`
+      );
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          version: 1,
+          sources: [
+            {
+              sourceInstanceId: 'github',
+              module: modulePath,
+              config: wakeReceipt(HEAD, {
+                deliveryId: 'observe:review:300:submitted:next-stage:issue-12',
+                wait: 'review',
+                item: 'issue-12',
+                subject: pr34,
+              }),
+              observe: { everySeconds: 15 },
+            },
+          ],
+        })
+      );
+      const sources = await loadWebhookSourcePlugins(configPath, {
+        acceptReceipt: input => acceptStartReceiptFor(input, project),
+        isKnownUser: async () => true,
+        hasDeliveryReceipt: (source, delivery) =>
+          harness.store.hasStartReceiptForDelivery(source, delivery),
+        getReceipt: id => harness.store.getStartReceipt(id),
+      });
+      const reads: string[] = [];
+      const unexpected = async (): Promise<never> => {
+        throw new Error('Only reviews are read for a review wait');
+      };
+      const observer = createItemWaitObserver({
+        sources,
+        store: harness.store,
+        forge: {
+          commitChecks: unexpected,
+          prReviews: async request => {
+            reads.push(`${request.remote}#${String(request.number)}`);
+            return {} as never;
+          },
+          issuesWithLabel: unexpected,
+          labelAdded: unexpected,
+          issuesOpened: unexpected,
+        },
+      });
+      const [first] = (await observer?.pass(new Date('2026-01-01T00:00:00Z'))) ?? [];
+      // The engine's guard let the read through: the wait names pull request 34.
+      expect(reads).toEqual([`${remote}#34`]);
+      expect(await readReceipt(harness, first?.receipts[0] ?? '')).toMatchObject({
+        outcome: 'matched',
+        bindings: [{ status: 'pending', itemKey: 'issue-12', waited: { runId: waiting } }],
+      });
+    } finally {
+      await removeTempTree(root);
       await harness.close();
     }
   });

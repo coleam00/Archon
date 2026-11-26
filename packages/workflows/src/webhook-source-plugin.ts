@@ -7,6 +7,7 @@ import type {
   WorkItemList,
   WorkItemOpened,
 } from '@archon/forge';
+import type { ItemWaitSubject } from './schemas/item-wait';
 import { sourceReceiptAcceptanceSchema } from './schemas/resource-start';
 
 export interface WebhookSourceRequest {
@@ -26,6 +27,8 @@ export interface ObservedItemWait {
   workflowName: string;
   event: string;
   about: string;
+  /** The issue or pull request the wait names, or null when it names none. */
+  subject: ItemWaitSubject | null;
   /** The key of the item the wait is on. */
   itemKey: string;
   /** The repository URL of the project of the run that left the wait, when it has one. */

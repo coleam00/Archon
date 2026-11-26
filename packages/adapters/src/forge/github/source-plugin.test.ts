@@ -11,6 +11,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import createGitHubWebhookSource from './source-plugin';
 import { githubWebhookSourceConfigSchema } from './source-config';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
+import type { ObservedItemWait } from '@archon/workflows/webhook-source-plugin';
 import type { z } from '@hono/zod-openapi';
 
 type GitHubTriggerConfig = z.infer<typeof githubWebhookSourceConfigSchema>;
@@ -448,31 +449,8 @@ describe('GitHub source plugin', () => {
     });
   });
 
-  test('a binding with wake maps the item its event names and reads a field its event has', () => {
+  test('a binding with wake reads a field its event has', () => {
     const wake = { workflow: 'host', wait: 'checks', about: { field: 'check.revision' as const } };
-    // A review names its pull request: without the item, a review of another pull request at
-    // the same commit could wake this one.
-    const review = {
-      selector: {
-        kind: 'review.changed',
-        actions: ['submitted'],
-        repository: { host: 'github.com', path: 'owner/repo' },
-      },
-      inputMapping: {},
-      wake: { workflow: 'host', wait: 'review', about: { field: 'review.commit' } },
-    };
-    expect(
-      githubWebhookSourceConfigSchema.safeParse({
-        version: 1,
-        webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET',
-        host: 'github.com',
-        bindings: [binding(review)],
-      }).success
-    ).toBe(false);
-    expect(
-      config([binding({ ...review, item: { field: 'subject.number', prefix: 'pr-' } })]).bindings[0]
-        ?.item
-    ).toEqual({ field: 'subject.number', prefix: 'pr-' });
     expect(
       githubWebhookSourceConfigSchema.safeParse({
         version: 1,
@@ -488,7 +466,14 @@ describe('GitHub source plugin', () => {
 describe('GitHub source plugin observing open waits', () => {
   const revision = 'opaque-revision-id';
   const remote = 'https://github.com/owner/repo.git';
-  const wait = { workflowName: 'host', event: 'checks', about: revision, itemKey: 'pr-7', remote };
+  const wait: ObservedItemWait = {
+    workflowName: 'host',
+    event: 'checks',
+    about: revision,
+    subject: null,
+    itemKey: 'pr-7',
+    remote,
+  };
   const reviewWait = { ...wait, event: 'review' };
   const checksWake = binding({
     bindingId: 'checks-done',
@@ -687,6 +672,46 @@ describe('GitHub source plugin observing open waits', () => {
     expect(JSON.stringify(observed.acceptances)).not.toContain('looks good');
   });
 
+  test('a review wait on an issue item reads the pull request its subject names, by webhook and by observing', async () => {
+    const bySubject = binding({
+      bindingId: 'reviewed-by-subject',
+      selector: { kind: 'review.changed', actions: ['submitted'] },
+      inputMapping: {},
+      wake: { workflow: 'host', wait: 'review', about: { field: 'review.commit' } },
+    });
+    const { observe } = await observer([bySubject], true);
+    const { forge, reads } = reader([], [review('300', 'APPROVED', revision)]);
+    const observed = await observe({
+      labels: [],
+      waits: [{ ...reviewWait, itemKey: 'issue-12', subject: { kind: 'pr', number: 34 } }],
+      forge,
+    });
+    expect(reads).toEqual([{ remote, number: 34 }]);
+    expect(observed.acceptances.map(a => a.bindings[0]?.itemKey)).toEqual(['issue-12']);
+
+    // The webhook maps no item: it hands the engine the pull request as the wake's subject.
+    const recorded = recorder();
+    const github = await adapter(config([bySubject]), recorded.intake);
+    const payload = JSON.stringify({
+      action: 'submitted',
+      repository: { full_name: 'owner/repo' },
+      sender: { id: 5, login: 'reviewer' },
+      pull_request: { number: 34, head: { sha: revision } },
+      review: {
+        id: 300,
+        user: { id: 5, login: 'reviewer' },
+        state: 'approved',
+        commit_id: revision,
+        body: '',
+        submitted_at: '2026-09-22T10:00:00Z',
+      },
+    });
+    await github.receiveWebhook(payload, sign(payload), 'delivery-34', 'pull_request_review');
+    const [delivered] = recorded.calls[0]?.bindings ?? [];
+    expect(delivered?.itemKey).toBeUndefined();
+    expect(delivered?.wake?.subject).toEqual({ kind: 'pr', number: 34 });
+  });
+
   test('a binding that cannot start on the waited event says why', async () => {
     const mapsAuthor = binding({
       ...reviewWake,
@@ -866,7 +891,8 @@ describe('GitHub source plugin observing open waits', () => {
       unserved: [
         {
           wait: { workflowName: 'host', event: 'review', about: revision, itemKey: 'issue-3' },
-          reason: "item 'issue-3' names no pull request under the binding's item mapping",
+          reason:
+            "the wait names no subject, and item 'issue-3' names no pull request under the binding's item mapping",
         },
         {
           wait: { workflowName: 'host', event: 'checks', about: revision, itemKey: 'pr-7' },

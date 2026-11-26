@@ -36,20 +36,26 @@ type EvaluatedBinding = NonNullable<
 >[number];
 
 /**
- * The wake a binding hands the engine: the value of its `about` field, which the engine
- * matches against the open waits. The plugin reads the value and compares nothing.
+ * The wake a binding hands the engine: the value of its `about` field and the issue or pull
+ * request the event names, which the engine matches against the open waits. The plugin
+ * reads the values and compares nothing.
  */
 function wakeOf(
   wake: NonNullable<z.infer<typeof githubSourceBindingSchema>['wake']>,
   event: ForgeEvent
 ): { wake: BindingWake } | { reason: string } {
   const about = readForgeEventField(event, wake.about.field);
+  const kind = readForgeEventField(event, 'subject.kind');
+  const number = readForgeEventField(event, 'subject.number');
   if (typeof about === 'string' && about !== '')
     return {
       wake: {
         workflowName: wake.workflow,
         wait: wake.wait,
         about,
+        ...((kind === 'pr' || kind === 'issue') && typeof number === 'number'
+          ? { subject: { kind, number } }
+          : {}),
         ...(wake.input === undefined ? {} : { input: wake.input }),
       },
     };
@@ -131,6 +137,10 @@ function prNumberOf(binding: GitHubSourceBinding, itemKey: string): number | und
   return Number.isSafeInteger(number) ? number : undefined;
 }
 
+function subjectPr(subject: NonNullable<ObservedWait['subject']>): number | undefined {
+  return subject.kind === 'pr' ? subject.number : undefined;
+}
+
 /** What `binding` reads to observe `wait`, or why it cannot. */
 function targetOf(
   binding: GitHubSourceBinding,
@@ -140,9 +150,15 @@ function targetOf(
   if (binding.selector.kind === 'check.changed' && field === 'check.revision')
     return { kind: 'commit', remote: wait.remote, revision: wait.about };
   if (binding.selector.kind === 'review.changed' && field === 'review.commit') {
-    const number = prNumberOf(binding, wait.itemKey);
+    const number =
+      wait.subject === null ? prNumberOf(binding, wait.itemKey) : subjectPr(wait.subject);
     return number === undefined
-      ? { reason: `item '${wait.itemKey}' names no pull request under the binding's item mapping` }
+      ? {
+          reason:
+            wait.subject === null
+              ? `the wait names no subject, and item '${wait.itemKey}' names no pull request under the binding's item mapping`
+              : `the wait's subject is issue ${String(wait.subject.number)}, which has no reviews`,
+        }
       : { kind: 'pr', remote: wait.remote, number };
   }
   return { reason: `${binding.selector.kind} wakes about ${String(field)} are not observed` };

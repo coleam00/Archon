@@ -8,6 +8,7 @@ import {
   runEndedInputSourceSchema,
 } from './binding-input-source';
 import { itemLinkKindSchema } from './item-link';
+import { itemWaitSubjectSchema } from './item-wait';
 import { handoffRefusalSchema } from './run-metadata';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
@@ -447,6 +448,7 @@ export const bindingWakeSchema = z
     workflowName: z.string().min(1),
     wait: z.string().min(1),
     about: z.string().min(1),
+    subject: itemWaitSubjectSchema.optional(),
     input: z.string().min(1).optional(),
   })
   .strict();
@@ -529,8 +531,9 @@ export const resourceStartBindingIntentSchema = z
      * A source plugin's binding that wakes waiting work: the open wait `wait` a run of
      * `workflowName` left, on an item of the project this binding launches in, whose `about`
      * is exactly this `about`. With `itemKey`, the item the event names, only a wait on that
-     * item matches; an event that names its subject (a review names its pull request) must
-     * set it, so another subject at the same commit wakes nothing here. The store resolves
+     * item matches. Without it, an event that names its subject (a review names its pull
+     * request) carries it as `subject`, and only a wait that names the same subject matches,
+     * so another subject at the same commit wakes nothing here. The store resolves
      * the wake when it accepts the receipt, in the same transaction: a match closes the set
      * as met and the binding starts on the wait's item, with the met wait as event input
      * `input` when set; anything else is recorded as not started, with why. It never
