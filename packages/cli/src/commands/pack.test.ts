@@ -705,10 +705,10 @@ describe('archon pack: a pack folder as the workflow source', () => {
       join(source, '.pack', 'pack.yaml'),
       `bindings:\n${bind('by-key', 'sweep')}${bind('by-name', 'fixture-sweep')}${bind('helper', 'fixture-helper')}`
     );
-    const refusals = (key: string) => [
-      `Binding 'by-name' names workflow 'fixture-sweep', which pack '${key}' does not provide.`,
-      `Binding 'helper' names workflow 'fixture-helper', which pack '${key}' does not provide.`,
-    ];
+    const refusals = (key: string) => ({
+      'by-name': `Binding 'by-name' names workflow 'fixture-sweep', which pack '${key}' does not provide.`,
+      helper: `Binding 'helper' names workflow 'fixture-helper', which pack '${key}' does not provide.`,
+    });
     await mkdir(join(cwd, '.archon'), { recursive: true });
     await writeFile(
       join(cwd, '.archon', 'config.yaml'),
@@ -723,9 +723,15 @@ describe('archon pack: a pack folder as the workflow source', () => {
       throw new Error('expected a refusal');
     };
 
-    expect(
-      await refusedWith(packCommand('bindings', ['fixture'], options({ workflowSource: source })))
-    ).toBe(refusals('fixture').join('\n'));
+    /** Each binding is refused with its message, and the one naming the key generates. */
+    const expectRefusals = async (key: string, extra: Partial<PackBindingsOptions>) => {
+      for (const [id, message] of Object.entries(refusals(key)))
+        expect(
+          await refusedWith(packCommand('bindings', [key], options({ ...extra, only: id })))
+        ).toBe(message);
+      await packCommand('bindings', [key], options({ ...extra, only: 'by-key' }));
+    };
+    await expectRefusals('fixture', { workflowSource: source });
 
     // The same pack installed as acme/fixture, the way `archon plugin add` leaves it.
     const pluginsDir = join(root, 'home', 'plugins');
@@ -746,10 +752,10 @@ describe('archon pack: a pack folder as the workflow source', () => {
         installedAt: new Date(0).toISOString(),
       })
     );
-    expect(await refusedWith(packCommand('bindings', ['acme.fixture'], options()))).toBe(
-      refusals('acme.fixture').join('\n')
-    );
-    expect(existsSync(out)).toBe(false);
+    await expectRefusals('acme.fixture', {});
+    // Only the two bindings naming the key were written, one per copy.
+    expect((await readdir(out)).filter(name => name.includes('-by-key-'))).toHaveLength(2);
+    expect(await readdir(out)).toHaveLength(2);
   });
 
   it('with an installed copy too, the hint to use it drops --workflow-source, and following it works', async () => {

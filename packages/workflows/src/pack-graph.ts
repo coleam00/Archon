@@ -317,42 +317,25 @@ export function packWorkflows(
 export function nearestPackBindings(
   workflows: readonly WorkflowWithSource[]
 ): Readonly<Record<string, PackBinding>> | undefined {
-  return nearestPackDeclaration(workflows)?.bindings;
-}
-
-/** The nearest declaration's bindings with the scope of the copy that declares them. */
-function nearestPackDeclaration(
-  workflows: readonly WorkflowWithSource[]
-): { source: WorkflowSource; bindings: Readonly<Record<string, PackBinding>> } | undefined {
-  const [pack] = workflows
+  return workflows
     .flatMap(({ workflow: { pack } }) => (pack?.bindings !== undefined ? [pack] : []))
-    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source]);
-  return pack?.bindings === undefined
-    ? undefined
-    : { source: pack.source, bindings: pack.bindings };
+    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0]?.bindings;
 }
 
 /**
- * The copy of pack `packKey` whose declaration binds its stages: the bindings, and the
- * names that copy dispatches, which are all a binding may name. `workflows` is a dispatch
- * catalog; `support` lets a declaration be read when only a support workflow loaded. Only
- * the declaring copy's own workflows count: a same-named pack in another scope merges by key
- * at run time but is not the pack these bindings were written for.
+ * Pack `packKey`'s nearest declaration and the names the pack dispatches in `workflows`, a
+ * dispatch catalog, which are all a binding may name. `support` lets the declaration be read
+ * when no dispatchable workflow of the pack loaded, so its bindings are still checked.
  */
 export function declaredPackCopy(
   packKey: string,
   workflows: readonly WorkflowWithSource[],
   support: readonly WorkflowWithSource[] = []
-):
-  | { source: WorkflowSource; bindings: Readonly<Record<string, PackBinding>>; names: string[] }
-  | undefined {
+): { bindings: Readonly<Record<string, PackBinding>>; names: string[] } | undefined {
   const ofPack = (entry: WorkflowWithSource): boolean => entry.workflow.pack?.key === packKey;
-  const declaration = nearestPackDeclaration([...workflows, ...support].filter(ofPack));
-  if (declaration === undefined) return undefined;
-  const names = workflows
-    .filter(entry => ofPack(entry) && entry.workflow.pack?.source === declaration.source)
-    .map(entry => entry.workflow.name);
-  return { ...declaration, names };
+  const bindings = nearestPackBindings([...workflows, ...support].filter(ofPack));
+  if (bindings === undefined) return undefined;
+  return { bindings, names: workflows.filter(ofPack).map(entry => entry.workflow.name) };
 }
 
 /**

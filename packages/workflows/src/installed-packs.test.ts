@@ -750,6 +750,8 @@ describe('a pack folder given as the source', () => {
         review: 'review/code-review.yaml',
         launch: 'launch/launch.yaml',
         gone: 'gone/gone.yaml',
+        // Its filename exists, but in another folder: the path decides, not the filename.
+        elsewhere: 'elsewhere/helper.yaml',
       },
     });
     await mkdir(join(folder, 'launch'), { recursive: true });
@@ -759,6 +761,8 @@ describe('a pack folder given as the source', () => {
     );
     const live = await discoverFrom(folder);
     expect(names(live.workflows)).not.toContain('launch');
+    expect(names(live.workflows)).not.toContain('helper');
+    expect(names(live.workflows)).not.toContain('elsewhere');
     const messages = live.errors.map(error => error.error);
     expect(messages).toContainEqual(
       expect.stringContaining("'workflow:' launches support workflow 'helper'")
@@ -766,6 +770,20 @@ describe('a pack folder given as the source', () => {
     expect(messages).toContainEqual(
       "Entrypoint 'gone' of pack folder review-kit did not load from gone/gone.yaml."
     );
+  });
+
+  test('its entrypoint key takes precedence over a home workflow of that name', async () => {
+    const folder = await packFolder('local');
+    await mkdir(join(home, 'workflows'), { recursive: true });
+    await writeFile(
+      join(home, 'workflows', 'home-review.yaml'),
+      'name: review\ndescription: home\nnodes:\n  - id: a\n    bash: echo home\n'
+    );
+    const live = await discoverFrom(folder);
+    expect(live.workflows.filter(entry => entry.workflow.name === 'review')).toMatchObject([
+      { source: 'project', workflow: { description: 'Review a change (local)' } },
+    ]);
+    expect(live.errors.map(error => error.error).join('\n')).not.toContain('Duplicate');
   });
 
   test('a run of a workflow that is now support continues from its capture', async () => {

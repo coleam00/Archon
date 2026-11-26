@@ -561,6 +561,30 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test("checks a pack folder's support workflows, which its workflows compose", async () => {
+    const helper = (source: 'project' | 'installed', name: string) =>
+      makeTestWorkflowWithSource(
+        { name, nodes: [{ id: 'step', command: 'absent-command' }] },
+        source
+      );
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [],
+      support: [helper('project', 'helper'), helper('installed', 'acme/kit:helper')],
+      errors: [],
+    });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(1);
+      const { results } = JSON.parse(String(write.mock.calls[0]?.[0])) as {
+        results: validator.WorkflowValidationResult[];
+      };
+      // An installed pack's support was never checked here and still is not.
+      expect(results.map(r => r.workflowName)).toEqual(['helper']);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('loose output schema warns and exits successfully', async () => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [

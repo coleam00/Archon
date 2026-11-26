@@ -297,6 +297,19 @@ export async function loadProjectScope(
     files.set(filename, { ...parsed, source: 'project' });
   }
 
+  // A source pack folder's entrypoint is named by its manifest key, which an installed copy
+  // holds in a scope of its own. A bundled or home workflow of that name gives way to it, as
+  // a lower-scope file gives way to a project file, rather than both failing as duplicates.
+  const entrypoints = context.sourcePack?.entrypoints;
+  for (const [filename, { workflow, source }] of files) {
+    if (source === 'project' || !entrypoints?.has(workflow.name)) continue;
+    getLog().debug(
+      { filename, name: workflow.name, overriddenSource: source },
+      'source_pack_entrypoint_overrides_lower_scope'
+    );
+    files.delete(filename);
+  }
+
   // Surface repo workflow errors to users (these are actionable)
   context.allErrors.push(...repoResult.errors);
   await warnDeprecatedRepoDefaults(join(workflowPath, 'defaults'));
@@ -392,9 +405,10 @@ async function addSourcePack(
         errorType: 'validation_error',
       });
   }
-  context.sourcePackSupport = {
+  context.sourcePack = {
     key: pack.name,
-    names: new Set([...names].filter(name => !entrypoints.has(name))),
+    entrypoints,
+    support: new Set([...names].filter(name => !entrypoints.has(name))),
   };
   const packaged: DirLoadResult = { workflows: new Map(), errors: [] };
   mergePackFiles(packaged, new Set(), { files, errors });

@@ -242,7 +242,13 @@ async function collectWorkflowResults(
   }
 
   const stops = stopIssues(workflowEntries);
-  for (const { workflow, source, parseWarnings } of workflowEntries) {
+  // A pack folder's support workflows are not dispatched, but its workflows compose them, so
+  // they are checked as before. Installed support stays out, as it always has.
+  const checked = [
+    ...workflowEntries,
+    ...supportEntries.filter(entry => entry.source === 'project'),
+  ];
+  for (const { workflow, source, parseWarnings } of checked) {
     const issues = await validateWorkflowResources(
       workflow,
       cwd,

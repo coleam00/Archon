@@ -56,12 +56,12 @@ import {
   packCopies,
   type PackGraph,
   type PackGraphLink,
-  packBindingRefusals,
   packWorkflowName,
   packWorkflows,
   unprovidedWorkflowRefusal,
 } from '@archon/workflows/pack-graph';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
+import type { WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import { writeJsonLine } from '../utils/stdout';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import type {
@@ -415,19 +415,25 @@ async function findPack(
   explicitSource: boolean
 ): Promise<DeclaredPack> {
   const discovered = await loadWorkflows(cwd);
-  const workflows = packWorkflows(discovered, packKey, cwd);
+  // A binding from an explicit source records it as `launch.discoveryCwd`, and a start then
+  // admits only a workflow of the source's own project scope (`selectStartedWorkflow`).
+  const admitted = (entries: readonly WorkflowWithSource[] = []): WorkflowWithSource[] =>
+    explicitSource ? entries.filter(entry => entry.source === 'project') : [...entries];
+  const declared = declaredPackCopy(
+    packKey,
+    admitted(discovered.workflows),
+    admitted(discovered.support)
+  );
   const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
-  const declared = declaredPackCopy(packKey, workflows, discovered.support);
-  if (declared === undefined)
+  if (declared === undefined) {
+    packWorkflows(discovered, packKey, cwd); // throws, naming what is in reach, when no copy is
     throw new Error(
       [
         `Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`,
         ...copyLines(packKey, copies, cwd, explicitSource),
       ].join('\n')
     );
-  // Every binding of the pack is checked before any is generated, so all are named at once.
-  const refusals = packBindingRefusals(packKey, declared);
-  if (refusals.length > 0) throw new Error(refusals.join('\n'));
+  }
   return { key: packKey, copies, bindings: declared.bindings, workflowNames: declared.names };
 }
 

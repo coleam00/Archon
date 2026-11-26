@@ -3289,6 +3289,7 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
       [pack, [], [refusal('helper', 'factory')]],
       [join(pack, 'plan'), [], [refusal('helper', 'factory')]],
       [pack, ['plan'], [refusal('helper', 'factory')]],
+      [project, ['--workflow-source', pack], [refusal('helper', 'factory')]],
       [kit, [], [refusal('two', 'kit')]],
       [kit, ['one'], [refusal('two', 'kit')]],
       [join(kit, 'one'), [], [refusal('two', 'kit')]],
@@ -3311,24 +3312,30 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
       for (const message of expected) expect(messages).toContain(message);
     }
 
+    // Also when the pack's only listed entrypoint is missing: its declaration is still read.
     const out = join(root, 'out');
-    const bindings = cli(project, [
-      'pack',
-      'bindings',
-      'factory',
-      '--workflow-source',
-      pack,
-      '--repo',
-      'github.com/acme/widgets',
-      '--host',
-      'host-1',
-      '--run-as',
-      'user-1',
-      '--out',
-      out,
-    ]);
-    expect(bindings.status, bindings.stdout + bindings.stderr).toBe(1);
-    expect(bindings.stderr).toContain(refusal('helper', 'factory'));
+    for (const [source, key, workflow] of [
+      [pack, 'factory', 'helper'],
+      [broken, 'broken', 'two'],
+    ] as const) {
+      const bindings = cli(project, [
+        'pack',
+        'bindings',
+        key,
+        '--workflow-source',
+        source,
+        '--repo',
+        'github.com/acme/widgets',
+        '--host',
+        'host-1',
+        '--run-as',
+        'user-1',
+        '--out',
+        out,
+      ]);
+      expect(bindings.status, bindings.stdout + bindings.stderr).toBe(1);
+      expect(bindings.stderr).toContain(refusal(workflow, key));
+    }
     expect(existsSync(out)).toBe(false);
   } finally {
     await removeTempTree(root);
