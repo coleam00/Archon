@@ -13,7 +13,7 @@ const { mount: mountTree, settle } = await installDom();
 const { FactoryHome, HowItWorksPage } = await import('./HowItWorksPage');
 
 const PACK = 'Wirasm.archon-software-factory';
-const PATH = '/packs/Wirasm/archon-software-factory/c1104737/.shared/factory-view.json';
+const PATH = '/packs/Wirasm/archon-software-factory/af6d0b4a/.shared/factory-view.json';
 
 const project = (id: string, itemPacks: string[]): Project => ({
   id,

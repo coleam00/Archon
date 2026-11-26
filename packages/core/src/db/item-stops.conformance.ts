@@ -6,21 +6,33 @@
  * merge recorded on the item. The runs follow each other at once, as fast stages do, so on
  * SQLite they share one second.
  */
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { listAttentionQueue, readAttentionQueueItemByRef } from '@archon/workflows/attention-queue';
 import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
-import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
+import { RUN_ENDED_SOURCE_ACTOR, RUN_SOURCE_ACTOR } from '@archon/workflows/schemas/resource-start';
+import {
+  CONFORMANCE_CODEBASE_ID,
+  CONFORMANCE_CONVERSATION_ID,
+  resourceStartFixtures,
+} from '@archon/workflows/store-conformance';
 import { answerAttentionItem } from '../operations/attention-items';
 import { itemDeps, operator, type Harness } from './item-asks.conformance';
 
-/** Create a run of `workflow` on item `key`. */
-async function createOnItem(harness: Harness, workflow: string, key = 'pr-7'): Promise<string> {
+/** Create a run of `workflow` on item `key`, as a step of it unless it `observes` it. */
+async function createOnItem(
+  harness: Harness,
+  workflow: string,
+  key = 'pr-7',
+  observes = false
+): Promise<string> {
   const run = await harness.store.createWorkflowRun({
     workflow_name: workflow,
     user_message: '',
     codebase_id: CONFORMANCE_CODEBASE_ID,
     item_key: key,
+    metadata: observesItemMetadata({ observes }),
   });
   return run.id;
 }
@@ -116,6 +128,138 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
       expect(await stopped()).toEqual([]);
       // Nothing about the stop was erased: its run still records it.
       expect((await harness.store.getWorkflowRun(stop))?.metadata).toHaveProperty('item_stopped');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a stop is held back while a start the run caused on its item is queued, unless it observes', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const stopped = async () =>
+        (await listAttentionQueue(itemDeps(harness).queue)).flatMap(item =>
+          'kind' in item && item.kind === 'stopped' ? [item.ref] : []
+        );
+      const { launch } = resourceStartFixtures(
+        CONFORMANCE_CODEBASE_ID,
+        CONFORMANCE_CONVERSATION_ID
+      );
+      const binding = (bindingId: string) => ({
+        bindingId,
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        // One resource for every start, held below, so each start stays queued.
+        resource: 'busy',
+        overlap: 'queue' as const,
+        launch: {
+          cwd: '/c',
+          workflowName: bindingId,
+          inputs: {},
+          isolation: { kind: 'in-place' as const },
+        },
+      });
+      // A prepared start on `itemKey` whose receipt names `sourceActor` and `deliveryId`.
+      const queue = async (
+        bindingId: string,
+        receipt: { deliveryId: string | null; sourceActor: unknown; itemKey: string },
+        observes = false
+      ) => {
+        const receiptId = crypto.randomUUID();
+        await store.acceptStartReceipt({
+          receipt: {
+            id: receiptId,
+            sourceInstanceId: bindingId,
+            contentDigest: receiptId,
+            receivedAt: new Date().toISOString(),
+            occurredAt: null,
+            ...receipt,
+          } as Parameters<typeof store.acceptStartReceipt>[0]['receipt'],
+          outcome: 'matched',
+          bindings: [binding(bindingId)],
+        });
+        const identity = { receiptId, bindingId, ownerId: 'owner' };
+        await store.claimStartBindingPreparation(identity);
+        const base = launch();
+        return store.completeStartBindingPreparation({
+          ...identity,
+          launch: {
+            ...base,
+            run: { ...base.run, metadata: observesItemMetadata({ observes }) },
+          },
+        });
+      };
+      const holder = await queue('holder', {
+        deliveryId: null,
+        sourceActor: null,
+        itemKey: 'pr-9',
+      });
+      expect(holder?.status).toBe('admitted');
+
+      const planned = await completeOnItem(harness, 'plan', 'planned', 'Planned.');
+      const endedBy = { source: RUN_ENDED_SOURCE_ACTOR, id: planned, display: 'planned' };
+      // A start that only reuses the run's id as its delivery id, one the run caused on
+      // another item (a linked start), and an observer it caused on its own item hold
+      // nothing back.
+      await queue('fired', { deliveryId: planned, sourceActor: null, itemKey: 'pr-7' });
+      await queue('linked', { deliveryId: 'x', sourceActor: endedBy, itemKey: 'pr-8' });
+      const shadow = await queue(
+        'shadow',
+        { deliveryId: planned, sourceActor: endedBy, itemKey: 'pr-7' },
+        true
+      );
+      expect(shadow?.status).toBe('queued');
+      expect(await stopped()).toEqual([`stopped:${planned}`]);
+
+      // A step its end started on the item holds the stop back while it waits in the queue.
+      await queue('build', { deliveryId: 'y', sourceActor: endedBy, itemKey: 'pr-7' });
+      expect(await stopped()).toEqual([]);
+
+      // So does a step one of its nodes fired onto the item.
+      const again = await completeOnItem(harness, 'review', 'not_ready', 'Not ready.');
+      expect(await stopped()).toEqual([`stopped:${again}`]);
+      await queue('fix', {
+        deliveryId: 'z',
+        sourceActor: { source: RUN_SOURCE_ACTOR, id: again, display: 'fire' },
+        itemKey: 'pr-7',
+      });
+      expect(await stopped()).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a run that observes its item neither closes its stop nor is listed when it fails', async () => {
+    const harness = await makeHarness();
+    try {
+      const deps = itemDeps(harness);
+      const stopped = async () =>
+        (await listAttentionQueue(deps.queue)).flatMap(item =>
+          'kind' in item && item.kind === 'stopped' ? [item.ref] : []
+        );
+      // A failed observing run alone is no stop.
+      const failedShadow = await createOnItem(harness, 'shadow', 'pr-7', true);
+      await harness.store.claimPendingWorkflowRun(failedShadow);
+      await harness.store.failWorkflowRun(failedShadow, 'boom');
+      expect(await stopped()).toEqual([]);
+
+      const stop = await completeOnItem(harness, 'review', 'not_ready', 'Tests are missing.');
+      const live = await createOnItem(harness, 'shadow', 'pr-7', true);
+      expect(await stopped()).toEqual([`stopped:${stop}`]);
+      await harness.store.claimPendingWorkflowRun(live);
+      await harness.store.completeWorkflowRun(live, { duration_ms: 1 }, undefined, {
+        outcome: { kind: 'enum', value: 'agree' },
+      });
+      const failed = await createOnItem(harness, 'advice', 'pr-7', true);
+      await harness.store.claimPendingWorkflowRun(failed);
+      await harness.store.failWorkflowRun(failed, 'boom');
+      expect(await stopped()).toEqual([`stopped:${stop}`]);
+
+      // Deleting an observing run moved nothing on, so the stop stays listed.
+      const { deleteWorkflowRun } = await import('./workflow-run-writes');
+      await deleteWorkflowRun(live);
+      expect(await stopped()).toEqual([`stopped:${stop}`]);
     } finally {
       await harness.close();
     }

@@ -8,8 +8,7 @@ import { ParentStatusReadError } from '../parent-status-read';
 import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { peerAdmissions } from '../interaction-admission';
 import { findFanOutChildRuns } from './nodes/workflow/fan-out-children';
-import { nodeInvocationKey } from '../node-record-reader';
-import { finishNodeExecution, newNodeInvocation, describeExecutionNode } from '../node-execution';
+import { finishNodeExecution, describeExecutionNode } from '../node-execution';
 import { NodeEventWriteError, recordNodeState } from '../node-event-write';
 import type { DagNode, SessionCursor, SkipCause } from '../schemas';
 import {
@@ -36,6 +35,7 @@ import {
   ownsBodySessionCursor,
   type LayerNodeResult,
   type RunLayersContext,
+  walkInvocation,
 } from './run-context';
 import { resolveRunInputs } from './references';
 import { formatPersistedNodeOutput, persistedExecutionOutput } from './node-output';
@@ -143,10 +143,7 @@ async function runLayerPhase(
   const nodeThunks = layer.map(
     (node, index): (() => Promise<LayerNodeResult>) =>
       async (): Promise<LayerNodeResult> => {
-        const invocation =
-          ctx.unfinishedInvocations?.get(
-            nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
-          )?.invocation ?? newNodeInvocation(ctx.loopGroupPath);
+        const invocation = walkInvocation(ctx, node.id);
         const nodeCtx: RunLayersContext = {
           ...ctx,
           currentExecution: undefined,
@@ -189,7 +186,7 @@ async function runLayerPhase(
           peers?.[index].finished();
         }
         // Outside the handler: never over the node's record. Only true assigns: no peer clears it.
-        if (await reachedUnknownOutcome(ctx, settled)) stopped = true;
+        if (await reachedUnknownOutcome(ctx, node, settled)) stopped = true;
         return settled;
       }
   );

@@ -778,7 +778,8 @@
       "short": "The change is merged",
       "blurb": "The change is merged.",
       "steps": {
-        "landed": "Checks the branch after the merge"
+        "landed": "Checks the branch after the merge",
+        "verdict": "Asks you when the branch needs a decision"
       },
       "drilldown": {
         "phases": [
@@ -787,11 +788,12 @@
             "cards": [
               {
                 "title": "Is the branch still sound",
-                "text": "Reads the branch after the merge, and orders a fix when it broke",
+                "text": "Reads the branch after the merge, orders a fix when the change broke it, and asks you when it cannot tell",
                 "icon": "shield-check",
                 "kind": "agent",
                 "covers": [
-                  "landed"
+                  "landed",
+                  "verdict"
                 ]
               }
             ]
@@ -1090,6 +1092,9 @@
     }
   },
   "answers": {
+    "landed:fix": {
+      "label": "fix ordered"
+    },
     "triage:build": {
       "label": "build"
     },

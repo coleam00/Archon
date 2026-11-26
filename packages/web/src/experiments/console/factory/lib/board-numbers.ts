@@ -57,8 +57,9 @@ export interface SetAside {
 
 /**
  * Whether the item is set aside: nothing moves it and nothing waits on a decision, and it did
- * not merge. It ended with a final outcome (standing `done` with no merge), or it is at rest
- * (its last run was cancelled or declared no outcome). A work order is never set aside: its
+ * not merge. An outcome finished it (standing `done` with no merge: the engine's end, or an
+ * older run's final outcome), or it is at rest (its last run was cancelled or declared no
+ * outcome, or an operator ended it). A work order is never set aside: its
  * parts carry its work.
  */
 export function setAsideOf(read: ItemRead): SetAside | null {

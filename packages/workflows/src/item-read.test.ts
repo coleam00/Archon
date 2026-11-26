@@ -211,6 +211,7 @@ const source: ItemReadSource = {
     getRunLimit: async () => null,
     listHeldItemStarts: async () => [],
     listAllHeldItemStarts: async () => [],
+    listItemStarts: async () => [],
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
         ? {
@@ -478,6 +479,34 @@ describe('reading an item', () => {
     expect(read?.ended).toEqual(end);
   });
 
+  test('an item whose outcome finished it stands done and reads the engine end', async () => {
+    const closed = run('closed', {
+      status: 'completed',
+      started_at: new Date('2026-11-01T11:00:00.000Z'),
+    });
+    const end: ItemEnd = {
+      kind: 'ended',
+      id: 'end-1',
+      reason: "Workflow 'close' ended the item with outcome 'dropped'",
+      at: '2026-11-01T12:00:00.000Z',
+      via: 'engine',
+      by: null,
+      fromRun: { runId: 'closed', nodePath: 'close' },
+    };
+    const engineEnded: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [closed], descendantIds: [] }),
+        getItemMerge: async () => null,
+        getHoldingItemEnd: async () => end,
+      },
+    };
+    const read = await readItem(engineEnded, item.projectKey, item.key);
+    expect(read?.standing).toEqual({ runId: 'closed', state: 'done', pack: null });
+    expect(read?.ended).toEqual(end);
+  });
+
   test('an end the store holds reads as ended until a held trigger start waits on the item', async () => {
     const end: ItemEnd = {
       kind: 'ended',
@@ -493,25 +522,18 @@ describe('reading an item', () => {
       store: { ...source.store, getHoldingItemEnd: async id => (id === item.id ? end : null) },
     };
     expect((await readItem(ended, item.projectKey, item.key))?.ended).toEqual(end);
-    const start = {
-      receiptId: 'receipt-1',
-      bindingId: 'binding',
-      hostId: 'host',
-      workflow: 'review',
-      receivedAt: '2026-11-01T11:00:00.000Z',
-    };
-    // The read of one item lists the install's held starts once, as a read of many does.
-    const held: ItemReadSource = {
+    // A start waiting on the item opens the end when it will run a step, not an observer.
+    const waiting = (role: 'step' | 'observer'): ItemReadSource => ({
       ...ended,
       store: {
         ...ended.store,
-        listHeldItemStarts: async () => [start],
-        listAllHeldItemStarts: async () => [
-          { ...start, projectKey: item.projectKey, itemKey: item.key },
+        listItemStarts: async () => [
+          { phase: 'queued', requestId: 'request-1', cause: null, role },
         ],
       },
-    };
-    expect((await readItem(held, item.projectKey, item.key))?.ended).toBeNull();
+    });
+    expect((await readItem(waiting('observer'), item.projectKey, item.key))?.ended).toEqual(end);
+    expect((await readItem(waiting('step'), item.projectKey, item.key))?.ended).toBeNull();
   });
 
   test('a landing that cannot be resolved is reported, and the rest of the item still reads', async () => {
@@ -947,18 +969,12 @@ describe('reading a work order', () => {
   });
 
   test('an ended member whose end no longer holds makes the order open again', async () => {
-    // A start waiting on the member reopens it; the store's newer-run rule is `getHoldingItemEnd`'s.
-    const held = {
-      receiptId: 'receipt-a',
-      bindingId: 'binding',
-      hostId: 'host',
-      workflow: 'build',
-      receivedAt: '2026-11-01T11:00:00.000Z',
-    };
+    // A step queued on the member reopens it; the store's newer-run rule is `getHoldingItemEnd`'s.
+    const queued = { phase: 'queued', requestId: 'request-a', cause: null, role: 'step' } as const;
     const read = await readOrder({
       links: [partOf(a, order)],
       ended: [a.id],
-      store: { listHeldItemStarts: async id => (id === a.id ? [held] : []) },
+      store: { listItemStarts: async id => (id === a.id ? [queued] : []) },
     });
     expect(read.workOrder?.state).toBe('open');
   });

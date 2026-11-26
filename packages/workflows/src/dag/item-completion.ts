@@ -1,15 +1,11 @@
 /**
  * What the write that completes a top-level run records about its item beside the status:
- * the result its asks-settled bindings will read, and the stop when nothing follows the run.
+ * the result its asks-settled bindings will read, and the stop or end its ending causes.
  */
-import type { RunEndedStarts, WorkflowDeps } from '../deps';
-import { isFinalOutcome } from '../completed-outcome';
+import type { WorkflowDeps } from '../deps';
+import { itemFate } from '../completed-outcome';
 import type { JsonValue } from '../output-ref';
-import {
-  asksResultMetadata,
-  itemFinalMetadata,
-  itemStoppedMetadata,
-} from '../schemas/run-metadata';
+import { asksResultMetadata, itemStoppedMetadata } from '../schemas/run-metadata';
 import type { ReturnedResult, RunTerminalContext } from './run-terminal';
 
 /** The asking run's result, kept on its row for the bindings its settled asks start. */
@@ -20,29 +16,40 @@ export function keptAsksResult(
   return completion?.asks === undefined || value === undefined ? {} : asksResultMetadata(value);
 }
 
+/** What the completing write records about the run's item: a stop, an end, or nothing. */
+export type ItemCompletion =
+  | { readonly stop: Record<string, unknown> }
+  | { readonly end: { readonly reason: string; readonly node: string } };
+
 /**
- * What this completion records about where it leaves its item: that the outcome was final,
- * or the stop, or nothing when the item keeps moving or the run is on none. An item stops when a top-level run on it completes with a declared outcome
- * that is not final, its end started nothing, and it left no ask or wait: nothing follows,
- * so the attention queue lists the item until a newer run starts on it. Without a reader of
- * run-ended bindings the engine cannot know that nothing started, so it records nothing.
- * A declared `returns.summary` is read from the result, which is read for it.
+ * What this completion records about its item, by `itemFate`: the stop when the run left no
+ * ask or wait and its outcome does not end the item, so the attention queue lists the item
+ * until a newer step starts on it (a stage its end started is such a step once its run
+ * exists); the end when its outcome finishes the item (`returns.ends`); undefined when the
+ * run left an ask or a wait, observes the item, or is not a top-level run on an item. A
+ * declared `returns.summary` is read from the result, which is read for it.
  */
-export function itemEnding(
-  { deps, workflow, workflowRun }: Pick<RunTerminalContext, 'deps' | 'workflow' | 'workflowRun'>,
+export function itemCompletion(
+  { workflow, workflowRun }: Pick<RunTerminalContext, 'workflow' | 'workflowRun'>,
   { outcome, asks, waits }: ReturnedResult,
-  starts: RunEndedStarts,
   result: JsonValue | undefined
-): Record<string, unknown> | undefined {
+): ItemCompletion | undefined {
   if (workflowRun.parent_run_id !== null || workflowRun.item_id === null) return undefined;
-  if (outcome === undefined || deps.runEndedStarts === undefined) return undefined;
-  if (isFinalOutcome(workflow, outcome.value)) return itemFinalMetadata();
-  if ((asks?.length ?? 0) > 0 || (waits?.length ?? 0) > 0) return undefined;
-  if (starts.receipts.length > 0 || starts.linked.length > 0) return undefined;
+  const fate = itemFate(workflow, outcome?.value, {
+    asks: (asks?.length ?? 0) > 0,
+    waits: (waits?.length ?? 0) > 0,
+  });
   const field = workflow.result?.summary;
   const value =
     field !== undefined && result !== null && typeof result === 'object' && !Array.isArray(result)
       ? result[field]
       : undefined;
-  return itemStoppedMetadata(typeof value === 'string' ? value : null);
+  const summary = typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+  if (fate === 'stops') return { stop: itemStoppedMetadata(summary) };
+  // An outcome is read only from a completed returns node, so both are set for an end.
+  if (fate !== 'ends' || outcome === undefined || workflow.returns === undefined) return undefined;
+  const reason = `Workflow '${workflow.name}' ended the item with outcome '${outcome.value}'`;
+  return {
+    end: { reason: summary === null ? reason : `${reason}: ${summary}`, node: workflow.returns },
+  };
 }

@@ -1,4 +1,5 @@
 import { requestingRun } from './schemas/resource-start';
+import type { ItemStart } from './schemas/item-role';
 import { workflowNoticeDataSchema, WORKFLOW_NOTICE_LIMITS } from './workflow-notice';
 import { createLogger } from '@archon/paths';
 import {
@@ -664,6 +665,8 @@ export interface IResourceStartStore {
    * names, so a read of many items reads them once. A store without items returns none.
    */
   listAllHeldItemStarts(): Promise<(HeldItemStart & { projectKey: string; itemKey: string })[]>;
+  /** Every start on item `itemId` with no run yet (`ItemStart`). Itemless stores: none. */
+  listItemStarts(itemId: string): Promise<ItemStart[]>;
   /** Every binding a process is preparing now. A store that records no preparer returns none. */
   listPreparingStarts(): Promise<PreparingStart[]>;
   /**

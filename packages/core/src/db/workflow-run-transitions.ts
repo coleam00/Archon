@@ -67,9 +67,8 @@ import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertStartReceipt } from './start-receipt-writes';
 import { recordStartLimitReset } from './start-limits';
 import { insertLinkedStarts } from './linked-starts';
-import { openItemAsksForCompletedRun } from './item-asks';
+import { recordCompletedItemFacts } from './completed-item-facts';
 import { recordRefusedHandoffStops } from './item-stops';
-import { openItemWaitsForCompletedRun } from './item-waits';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -470,11 +469,8 @@ export async function completeWorkflowRun(
         for (const receipt of result?.startReceipts ?? [])
           if (!(await insertStartReceipt(query, receipt)).replay) started.push(receipt);
         started.push(...(await insertLinkedStarts(query, result?.linkedStarts ?? [])));
-        // The asks it leaves open with it too, replacing its workflow's open set on the item.
-        if (result?.asks !== undefined) await openItemAsksForCompletedRun(query, id, result.asks);
-        // And the waits, replacing its workflow's open set of waits on the item.
-        if (result?.waits !== undefined)
-          await openItemWaitsForCompletedRun(query, id, result.waits);
+        // The asks, waits and end it leaves on its item, with it too.
+        await recordCompletedItemFacts(query, id, result);
         // A start refused at the hand-off is recorded on this run, as the stop it causes.
         await recordRefusedHandoffStops(query, started);
       }

@@ -180,7 +180,7 @@ describe('the shipped map', () => {
 
   test('one lane under the row: one pill per target stage, the self hand-offs on it too', () => {
     expect(layout.feedback.pills.map(pill => [pill.stage, pill.text])).toEqual([
-      ['order', 'Ordered as a work order, Split into pieces, broke the branch'],
+      ['order', 'Ordered as a work order, Split into pieces, broke the branch, fix ordered'],
       ['link', 'asked'],
       ['split', 'answered'],
       ['plan', 'answered, plan again'],

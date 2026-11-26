@@ -135,6 +135,7 @@ async function installedArrows(
     if (!existsSync(file.binding.launch.cwd)) {
       installed.push({
         ...entry,
+        startsStep: true,
         problems: [
           `binding.launch.cwd '${file.binding.launch.cwd}' does not exist, so this binding never starts; fix the path or remove the file`,
         ],
@@ -143,12 +144,13 @@ async function installedArrows(
     }
     const launches = (await bindingProjectKey(file, deps)) ?? file.binding.launch.cwd;
     if (launches !== project) continue;
-    // The preflight check: a binding it refuses fails every item run of its source stage.
-    const problems =
+    // The preflight check: a binding it refuses fails every item run of its source stage. An
+    // asks arrow starts on answers, so the role of what it starts is never read.
+    const reading =
       'runEnded' in file
         ? await runEndedBindingCheck(file, deps)
-        : await asksSettledBindingCheck(file, deps);
-    installed.push({ ...entry, problems });
+        : { problems: await asksSettledBindingCheck(file, deps), startsStep: true };
+    installed.push({ ...entry, ...reading });
   }
   return installed;
 }

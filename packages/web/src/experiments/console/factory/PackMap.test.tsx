@@ -19,7 +19,7 @@ const PACK = 'Wirasm.archon-software-factory';
 const MERGED_RECENT = [itemOn('m1', 'landed', 'done'), itemOn('m2', null, 'done')];
 /** One merged before those days: the Table lists it, the Merged column and the map do not. */
 const MERGED_EARLIER = [itemOn('m3', 'landed', 'done')];
-const PATH = '/packs/Wirasm/archon-software-factory/c1104737/.shared/factory-view.json';
+const PATH = '/packs/Wirasm/archon-software-factory/af6d0b4a/.shared/factory-view.json';
 
 let unmount: (() => Promise<void>) | undefined;
 afterEach(async () => {

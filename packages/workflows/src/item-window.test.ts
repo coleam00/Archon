@@ -150,6 +150,7 @@ function source(world: World = {}): ItemWindowSource {
       getRunLimit: async () => null,
       listHeldItemStarts: async () => [],
       listAllHeldItemStarts: async () => [],
+      listItemStarts: async () => [],
       getResourceStartRequest: async () => null,
       getStartReceipt: async () => null,
     },

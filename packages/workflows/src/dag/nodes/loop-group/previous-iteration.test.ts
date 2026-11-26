@@ -308,6 +308,7 @@ test('resumed completion preserves enclosing previous-output scopes', async () =
         totalTokens: undefined,
         stepNamePrefix: 'outer.',
         loopGroupPath: outer,
+        fanOutPath: [],
         loopBodyScopes: [
           {
             knownBodyIds: new Set(['outerWork', 'grp', 'work', 'check']),

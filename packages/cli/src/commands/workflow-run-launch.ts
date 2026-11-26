@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { recordWorktreeAdoption } from '@archon/isolation';
 import type {
@@ -734,6 +735,7 @@ function createSetupRun(
       ...(admission.resolvedInputs && { [SUBRUN_METADATA_KEYS.inputs]: admission.resolvedInputs }),
       ...(declaration ? { [CONTINUATION_METADATA_KEY]: declaration.stamp } : {}),
       ...(handoff && { [CHECKOUT_HANDOFF_METADATA_KEY]: handoff }),
+      ...observesItemMetadata(admission.workflow),
     },
     ...(declaration ? { adopted_from_run_id: declaration.runId } : {}),
     ...(request.options.item === undefined ? {} : { item_key: request.options.item }),

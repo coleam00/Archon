@@ -222,10 +222,10 @@ export function readAsksResult(metadata: Record<string, unknown>): JsonValue | u
 }
 
 /**
- * Set by the completing write of a top-level run on an item that stopped the item: it
- * completed with a declared outcome that is not final (`returns.final`), its end started
- * nothing, and it left no ask or wait. The attention queue lists the item as `stopped`
- * while this run is the newest on it. `summary` is the declared `returns.summary` value,
+ * Set by the completing write of a top-level run on an item that stopped the item: its
+ * ending left no ask or wait and ended nothing (`itemFate` is `stops`), whatever it started.
+ * The attention queue lists it while this run is the newest step on its item and no start
+ * the run caused is still unprepared or queued. `summary` is the declared `returns.summary` value,
  * or null. Older binaries read metadata as an open record and ignore the key.
  *
  * Admission also sets it, with `limit`, on the completed run whose end or settled asks
@@ -333,18 +333,14 @@ export function readItemStopped(metadata: Record<string, unknown>): ItemStopped 
 }
 
 /**
- * Set by the completing write of a top-level run on an item that completed with an outcome
- * its workflow declares final (`returns.final`): the item needs nothing more. A run that
- * completed before this key existed carries neither it nor a stop, so a reader cannot tell
- * that its outcome was final. Older binaries ignore the key.
+ * Written by `combined` before it carried Archon dev's item ends: the completing write of a
+ * top-level run on an item whose outcome its workflow declared final (`returns.final`, gone
+ * since). Nothing writes it now; an outcome that finishes an item records an item end (`via:
+ * 'engine'`) instead. Runs written then still carry it, so standing keeps reading it.
  */
 export const ITEM_FINAL_METADATA_KEY = 'item_final';
 
-export function itemFinalMetadata(): Record<string, unknown> {
-  return { [ITEM_FINAL_METADATA_KEY]: true };
-}
-
-/** True when the completed run recorded that its outcome was final. */
+/** True when an older completed run recorded that its outcome was final. */
 export function readItemFinal(metadata: Record<string, unknown>): boolean {
   return metadata[ITEM_FINAL_METADATA_KEY] === true;
 }

@@ -124,7 +124,7 @@ export function decisionReason(read: ItemRead): string {
 export const runPath = (projectId: string, runId: string): string =>
   `/console/p/${encodeURIComponent(projectId)}/r/${encodeURIComponent(runId)}`;
 
-/** How a done item ended, in the engine's facts: its change merged, or its run's final outcome. */
+/** How a done item ended, in the engine's facts: its change merged, or the outcome that finished it. */
 export function howItEnded(read: ItemRead): string {
   if (read.merged !== null) return 'Merged';
   return standingRun(read)?.outcome ?? CHIP.done.label;
