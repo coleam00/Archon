@@ -861,7 +861,11 @@ test('issue comments and closes pass conformance for applied and verification fa
       ).toEqual([]);
 });
 
-function assigneeForge(options: { kind?: 'issue' | 'pr'; lose?: boolean } = {}) {
+/**
+ * `ignore` answers an assignee write with the issue unchanged, as GitHub does for a caller
+ * without push access. `lose` answers as if the write landed while the issue stays as it was.
+ */
+function assigneeForge(options: { kind?: 'issue' | 'pr'; mode?: 'ignore' | 'lose' } = {}) {
   const item = {
     number: 1,
     repository_url: root,
@@ -873,30 +877,37 @@ function assigneeForge(options: { kind?: 'issue' | 'pr'; lose?: boolean } = {}) 
     assignees: [{ login: 'Other' }],
     ...(options.kind === 'pr' ? { pull_request: {} } : {}),
   };
-  // Who GitHub would assign; anyone else it accepts in the POST and drops.
-  const collaborators = new Set(['other', 'octo']);
+  // Who GitHub would assign on this issue; a commenter is assignable here but has no
+  // repository access, so the repository-wide check refuses them.
+  const assignable = new Set(['other', 'octo', 'commenter']);
   const calls: string[] = [];
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     const path = url.origin + url.pathname;
     const method = init?.method ?? 'GET';
     calls.push(`${method} ${path}`);
+    const login = decodeURIComponent(url.pathname.split('/').pop() ?? '').toLowerCase();
     if (path === `${root}/issues/1`) return Response.json(structuredClone(item));
-    if (path.startsWith(`${root}/assignees/`)) {
-      const login = decodeURIComponent(url.pathname.split('/').pop() ?? '').toLowerCase();
-      return collaborators.has(login)
+    if (path.startsWith(`${root}/issues/1/assignees/`))
+      return assignable.has(login)
         ? new Response(null, { status: 204 })
         : Response.json({ message: 'Not Found' }, { status: 404 });
-    }
+    if (path.startsWith(`${root}/assignees/`))
+      return login === 'commenter' || !assignable.has(login)
+        ? Response.json({ message: 'Not Found' }, { status: 404 })
+        : new Response(null, { status: 204 });
     if (path === `${root}/issues/1/assignees`) {
       const { assignees } = JSON.parse(String(init?.body)) as { assignees: string[] };
-      const named = new Set(assignees.map(login => login.toLowerCase()));
-      if (!options.lose && method === 'POST')
-        for (const login of assignees)
-          if (collaborators.has(login.toLowerCase())) item.assignees.push({ login });
-      if (!options.lose && method === 'DELETE')
-        item.assignees = item.assignees.filter(row => !named.has(row.login.toLowerCase()));
-      return Response.json(item, { status: method === 'POST' ? 201 : 200 });
+      const named = new Set(assignees.map(name => name.toLowerCase()));
+      const next =
+        method === 'POST'
+          ? [...item.assignees, ...assignees.map(name => ({ login: name }))]
+          : item.assignees.filter(row => !named.has(row.login.toLowerCase()));
+      const status = method === 'POST' ? 201 : 200;
+      if (options.mode === 'ignore') return Response.json(item, { status });
+      if (options.mode === 'lose') return Response.json({ ...item, assignees: next }, { status });
+      item.assignees = next;
+      return Response.json(item, { status });
     }
     throw new Error(`unexpected ${method} ${path}`);
   };
@@ -940,6 +951,14 @@ test('assigning a user keeps the existing assignees, and an assigned login in an
   expect(fake.writes()).toBe(1);
 });
 
+test('a user assignable on the issue but not across the repository is assigned', async () => {
+  const fake = assigneeForge();
+  expect(await runOn(assign('commenter'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied', assignees: ['Other', 'commenter'] } },
+  });
+});
+
 test('a user GitHub would not assign is refused with the reason and nothing is written', async () => {
   const fake = assigneeForge();
   const response = await runOn(assign('stranger'), fake);
@@ -949,8 +968,21 @@ test('a user GitHub would not assign is refused with the reason and nothing is w
     mutation: { outcome: 'refused' },
   });
   expect(!response.ok && response.error.message).toContain('stranger cannot be assigned');
-  expect(!response.ok && response.error.message).toContain('access to the repository');
   expect(fake.writes()).toBe(0);
+  expect(fake.assigned()).toEqual(['Other']);
+});
+
+test('an assignee write GitHub answers with the issue unchanged is refused with the reason', async () => {
+  const fake = assigneeForge({ mode: 'ignore' });
+  for (const request of [assign('octo'), unassign('other')]) {
+    const response = await runOn(request, fake);
+    expect(response).toMatchObject({
+      ok: false,
+      error: { kind: 'authorization' },
+      mutation: { outcome: 'refused' },
+    });
+    expect(!response.ok && response.error.message).toContain('push access');
+  }
   expect(fake.assigned()).toEqual(['Other']);
 });
 
@@ -979,33 +1011,41 @@ test('assignee writes refuse a pull request before writing', async () => {
   expect(fake.writes()).toBe(0);
 });
 
-test('assignee writes pass conformance for applied and verification failure', async () => {
+test('the read-back after an assignee write decides the outcome, not the write response', async () => {
   for (const request of [assign('octo'), unassign('other')])
-    for (const [lose, expectedOutcome] of [
-      [false, 'applied'],
-      [true, 'verification_failed'],
+    for (const [mode, expectedOutcome] of [
+      [undefined, 'applied'],
+      ['lose', 'verification_failed'],
     ] as const)
       expect(
         await runForgeMutationConformance(
-          req => runOn(req, assigneeForge({ lose })),
+          req => runOn(req, assigneeForge({ mode })),
           githubPluginMetadata,
           [{ name: `${request.op}:${expectedOutcome}`, request, expectedOutcome }]
         )
       ).toEqual([]);
 });
 
-test('the acting account is the token user, projected as a forge actor', async () => {
-  const fetch = async (input: string | URL | Request): Promise<Response> => {
-    if (String(input) === 'https://api.github.com/user')
-      return Response.json({ id: 7, login: 'octo', type: 'User' });
-    throw new Error(`unexpected ${String(input)}`);
+test('the acting account is read with the credential and can be assigned by its login', async () => {
+  const fake = assigneeForge();
+  const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    if (String(input) !== 'https://api.github.com/user') return fake.fetch(input, init);
+    return new Headers(init?.headers).get('authorization') === 'Bearer secret'
+      ? Response.json({ id: 7, login: 'octo', type: 'User' })
+      : Response.json({ message: 'Requires authentication' }, { status: 401 });
   };
-  expect(await runOn({ operationId: 'self', op: 'actor.self', repo }, { fetch })).toEqual({
+  const self = await runOn({ operationId: 'self', op: 'actor.self', repo }, { fetch });
+  expect(self).toEqual({
     operationId: 'self',
     ok: true,
     result: {
       op: 'actor.self',
       value: { repo, actor: { host: 'github.com', id: '7', login: 'octo', type: 'user' } },
     },
+  });
+  if (!self.ok || self.result.op !== 'actor.self') throw new Error('actor.self failed');
+  expect(await runOn(assign(self.result.value.actor.login), { fetch })).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied', assignees: ['Other', 'octo'] } },
   });
 });

@@ -3,6 +3,7 @@ import { matchesForgeOperationResponse } from './response-match';
 import {
   contentDigest,
   forgeAuditResponse,
+  forgeOperationAuditSchema,
   forgeRequestSchema,
   forgeResponseSchema,
   type ForgeRequest,
@@ -476,6 +477,30 @@ test('the acting account answers on the requested repository and host', () => {
 
 const read = (op: string, value: object): ForgeResponse =>
   forgeResponseSchema.parse({ operationId: 'read', ok: true, result: { op, value } });
+
+test('assignee and acting-account audits record identity, never an issue title', () => {
+  const audit = (operation: string, result: ForgeResponse) =>
+    forgeOperationAuditSchema.parse({
+      operationId: 'audit',
+      operation,
+      target: repo,
+      plugin: null,
+      result: forgeAuditResponse(result),
+      retries: 0,
+      durationMs: 1,
+    });
+  const self = { host: repo.host, id: '7', login: 'octo', type: 'user' };
+  expect(audit('actor.self', read('actor.self', { repo, actor: self })).result).toMatchObject({
+    ok: true,
+    result: { value: { repo, actor: self } },
+  });
+  const assigned = response('workitem.assignee.add', ref, {
+    workitem: { ...item, title: 'sentinel title' },
+    assignees: ['octo'],
+    title: 'sentinel title',
+  });
+  expect(JSON.stringify(audit('workitem.assignee.add', assigned))).not.toContain('sentinel');
+});
 
 test('a search answers its repository, words, kind, state and limit', () => {
   const request = {

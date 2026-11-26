@@ -457,6 +457,25 @@ function assignedRecord(ref: PrRef, item: AssignedIssue): ForgeWorkItemRecord {
   return { ...subjectRecord({ kind: 'issue', ref }, item), kind: 'issue' };
 }
 
+/**
+ * GitHub answers an assignee write with success even when it changed nothing: it ignores
+ * the change from an account without push access. The write's own response shows the
+ * issue as it left it, so an unchanged set is a refusal with that reason, not a write
+ * whose fate is unknown.
+ */
+function ignoredAssignee(
+  request: Extract<
+    ForgeMutationRequest,
+    { op: 'workitem.assignee.add' | 'workitem.assignee.remove' }
+  >
+): ForgeResponse {
+  const change = request.op === 'workitem.assignee.add' ? 'assign' : 'unassign';
+  return refused(request, {
+    kind: 'authorization',
+    message: `GitHub did not ${change} ${request.login} on issue ${String(request.ref.number)}: it ignores assignee changes from an account without push access to ${request.ref.repo.path}`,
+  });
+}
+
 export async function addAssignee(
   request: Extract<ForgeMutationRequest, { op: 'workitem.assignee.add' }>,
   fetchImpl: Fetch,
@@ -469,13 +488,15 @@ export async function addAssignee(
   if (isAssigned(before, login))
     return applied(request, { changed: false, workitem, assignees: assigneeLogins(before) });
   const { root, path } = location(ref.repo);
-  // GitHub accepts an assignee without access to the repository and silently drops
-  // them, so whether the user can be assigned is asked first: 204 yes, 404 no.
+  const issue = `${root}/repos/${path}/issues/${String(ref.number)}`;
+  // GitHub accepts an assignee it would not assign and silently drops them, so whether
+  // the user can be assigned on this issue is asked first: 204 yes, 404 no. The issue's
+  // own check also admits users the repository's does not, such as a commenter.
   try {
     await githubRequest(
       fetchImpl,
       token,
-      `${root}/repos/${path}/assignees/${encodeURIComponent(login)}`,
+      `${issue}/assignees/${encodeURIComponent(login)}`,
       {},
       undefined,
       'empty'
@@ -484,19 +505,22 @@ export async function addAssignee(
     if (!(cause instanceof GitHubError && cause.detail.status === 404)) throw cause;
     return refused(request, {
       kind: 'not_found',
-      message: `${login} cannot be assigned in ${ref.repo.path}: GitHub assigns only users with access to the repository`,
+      message: `${login} cannot be assigned to issue ${String(ref.number)} in ${ref.repo.path}: GitHub assigns only users who can be assigned on that issue`,
     });
   }
   submit('submitted');
-  await githubRequest(
-    fetchImpl,
-    token,
-    `${root}/repos/${path}/issues/${String(ref.number)}/assignees`,
-    { method: 'POST', body: JSON.stringify({ assignees: [login] }) },
-    () => {
-      submit('acknowledged');
-    }
+  const written = assignedIssueSchema.parse(
+    await githubRequest(
+      fetchImpl,
+      token,
+      `${issue}/assignees`,
+      { method: 'POST', body: JSON.stringify({ assignees: [login] }) },
+      () => {
+        submit('acknowledged');
+      }
+    )
   );
+  if (!isAssigned(written, login)) return ignoredAssignee(request);
   const after = await readAssigned(fetchImpl, token, ref);
   const observed = assignedRecord(ref, after);
   return isAssigned(after, login)
@@ -522,15 +546,18 @@ export async function removeAssignee(
   const { root, path } = location(ref.repo);
   submit('submitted');
   // GitHub removes only the named logins and keeps the issue's other assignees.
-  await githubRequest(
-    fetchImpl,
-    token,
-    `${root}/repos/${path}/issues/${String(ref.number)}/assignees`,
-    { method: 'DELETE', body: JSON.stringify({ assignees: [login] }) },
-    () => {
-      submit('acknowledged');
-    }
+  const written = assignedIssueSchema.parse(
+    await githubRequest(
+      fetchImpl,
+      token,
+      `${root}/repos/${path}/issues/${String(ref.number)}/assignees`,
+      { method: 'DELETE', body: JSON.stringify({ assignees: [login] }) },
+      () => {
+        submit('acknowledged');
+      }
+    )
   );
+  if (isAssigned(written, login)) return ignoredAssignee(request);
   const after = await readAssigned(fetchImpl, token, ref);
   const observed = assignedRecord(ref, after);
   return isAssigned(after, login)
