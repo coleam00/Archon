@@ -150,11 +150,10 @@ async function finishDiscovery(
   await assertCapturedFilesPresent(verifiedFiles);
   // A source pack folder's support workflows were in the scope for include expansion only.
   const sourcePack = context.sourcePack;
-  const isSourceSupport = ({ workflow, source }: WorkflowWithSource): boolean =>
-    sourcePack !== undefined &&
-    source === 'project' &&
-    workflow.pack?.key === sourcePack.key &&
-    sourcePack.support.has(workflow.name);
+  const ofSourcePack = ({ workflow, source }: WorkflowWithSource): boolean =>
+    source === 'project' && sourcePack !== undefined && workflow.pack?.key === sourcePack.key;
+  const isSourceSupport = (entry: WorkflowWithSource): boolean =>
+    ofSourcePack(entry) && sourcePack?.support.has(entry.workflow.name) === true;
   const support = [...legacy.workflows.filter(isSourceSupport), ...installed.support];
   const workflows = [
     ...legacy.workflows.filter(entry => !isSourceSupport(entry)),
@@ -178,7 +177,18 @@ async function finishDiscovery(
     },
     'workflows_discovery_completed'
   );
-  return { workflows, support, errors: allErrors };
+  return {
+    workflows,
+    support,
+    errors: allErrors,
+    ...(sourcePack && {
+      sourcePack: {
+        key: sourcePack.key,
+        bindings: sourcePack.bindings,
+        workflows: workflows.filter(ofSourcePack).map(entry => entry.workflow.name),
+      },
+    }),
+  };
 }
 
 /**

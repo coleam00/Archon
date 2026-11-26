@@ -222,12 +222,13 @@ async function loadDirEntry(
  *
  * The pack's settings declaration is read once. An invalid one fails every workflow of
  * the pack, each under its own file: a workflow whose settings cannot be known must not
- * run with a guess at them.
+ * run with a guess at them. A valid one is returned as `pack` too, even when no workflow
+ * file loads, so its bindings can still be checked.
  */
 export async function loadPackWorkflows(
   pack: PackLoad,
   packPath: string
-): Promise<{ files: PackWorkflowFile[]; errors: WorkflowLoadError[] }> {
+): Promise<{ files: PackWorkflowFile[]; errors: WorkflowLoadError[]; pack?: WorkflowPack }> {
   const files: PackWorkflowFile[] = [];
   const errors: WorkflowLoadError[] = [];
   const listing = await readPackWorkflowFolders(packPath, pack.label);
@@ -254,7 +255,9 @@ export async function loadPackWorkflows(
     else errors.push(loaded);
   }
 
-  return { files, errors };
+  return workflowPack instanceof PackSettingsError
+    ? { files, errors }
+    : { files, errors, pack: workflowPack };
 }
 
 /** The one workflow file of a pack's `<workflow>/` folder: its workflow or its load error. */

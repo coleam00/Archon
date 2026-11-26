@@ -19,6 +19,7 @@ import { workflowResourceSchema } from './resource-name';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
 import { modelRefSchema, type WorkflowModelRef } from './model-binding';
 import type { WorkflowPackMember } from './pack-settings';
+import type { PackBinding } from './pack-bindings';
 import { declaredAskOptionsSchema } from './ask-option';
 
 // ---------------------------------------------------------------------------
@@ -597,5 +598,15 @@ export interface WorkflowLoadResult {
    * Discovery always sets it; a result built by hand without installed packs may omit it.
    */
   readonly support?: readonly WorkflowWithSource[];
+  /**
+   * The pack folder the project source is, when it is one: its key, its declared bindings
+   * (set even when no workflow file loaded), and the names it dispatches, its own and no
+   * same-named pack's of another scope. A binding of the folder may name only these.
+   */
+  readonly sourcePack?: {
+    readonly key: string;
+    readonly bindings?: Readonly<Record<string, PackBinding>>;
+    readonly workflows: readonly string[];
+  };
   readonly errors: readonly WorkflowLoadError[];
 }

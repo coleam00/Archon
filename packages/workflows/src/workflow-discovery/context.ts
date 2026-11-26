@@ -1,4 +1,5 @@
 import type { WorkflowLoadError } from '../schemas';
+import type { WorkflowPack } from '../schemas/pack-settings';
 import type { loadWorkflowSource, WorkflowSourceRoots } from '../workflow-source';
 import type { CommandScanConfig } from './command-scan';
 import type { WorkflowParseContext } from './load-dir';
@@ -16,9 +17,13 @@ export interface DiscoveryContext extends WorkflowParseContext {
    */
   allErrors: WorkflowLoadError[];
   /**
-   * The pack folder the project source is, when it is one: its entrypoints by manifest key,
+   * The pack folder the project source is, when it is one: its key, its declared bindings,
    * and its support workflows, which stay in the project scope so includes expand, then
    * leave the dispatch catalog.
    */
-  sourcePack?: { key: string; entrypoints: ReadonlySet<string>; support: ReadonlySet<string> };
+  sourcePack?: {
+    key: string;
+    bindings: WorkflowPack['bindings'];
+    support: ReadonlySet<string>;
+  };
 }

@@ -651,6 +651,35 @@ describe('archon pack: a pack folder as the workflow source', () => {
     return dir;
   }
 
+  /** The folder installed as acme/fixture, as `archon plugin add` leaves it, and a checkout. */
+  async function installCopy(source: string): Promise<void> {
+    const pluginsDir = join(root, 'home', 'plugins');
+    const id = 'acme/fixture';
+    const commit = 'a'.repeat(40);
+    await cp(source, packTreePath(pluginsDir, id, commit), {
+      recursive: true,
+      filter: path => !path.includes(`${source}/.archon`),
+    });
+    const manifest = JSON.parse(await readFile(join(source, 'archon-plugin.json'), 'utf8'));
+    const receipt = receiptPath(pluginsDir, id);
+    await mkdir(dirname(receipt), { recursive: true });
+    await writeFile(
+      receipt,
+      JSON.stringify({
+        schemaVersion: 1,
+        id,
+        manifest,
+        commit,
+        installedAt: new Date(0).toISOString(),
+      })
+    );
+    await mkdir(join(cwd, '.archon'), { recursive: true });
+    await writeFile(
+      join(cwd, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
+    );
+  }
+
   it('graph and bindings read the folder and say which copy they loaded', async () => {
     const source = await writePackFolder();
     await mkdir(cwd, { recursive: true });
@@ -686,106 +715,60 @@ describe('archon pack: a pack folder as the workflow source', () => {
   });
 
   it('a folder and its installed copy refuse the same bindings with the same message', async () => {
-    // The entrypoint key differs from the workflow's YAML name, and `fixture-helper` is only
-    // in a same-named home pack, which discovery merges by key but the folder does not hold.
+    // `fixture-support` is in the folder but unlisted; `fixture-helper` is only in a
+    // same-named home pack, which discovery merges by key but the folder does not hold.
     const source = await writePackFolder();
-    const manifest = {
-      schemaVersion: 1,
-      kind: 'workflow-pack',
-      name: 'fixture',
-      description: 'd',
-      entrypoints: { sweep: 'fixture-sweep/fixture-sweep.yaml' },
-    };
-    await writeFile(join(source, 'archon-plugin.json'), JSON.stringify(manifest));
-    const helper = 'name: fixture-helper\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n';
-    await writeWorkflow(join(root, 'home', 'workflows', 'fixture'), 'fixture-helper', helper);
+    const flow = (name: string) =>
+      `name: ${name}\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n`;
+    await writeWorkflow(source, 'fixture-support', flow('fixture-support'));
+    await writeWorkflow(
+      join(root, 'home', 'workflows', 'fixture'),
+      'fixture-helper',
+      flow('fixture-helper')
+    );
     const bind = (id: string, workflow: string) =>
       `  ${id}:\n    workflow: ${workflow}\n    resource: ${id}\n    overlap: queue\n    schedule: { interval_seconds: 60 }\n`;
     await writeFile(
       join(source, '.pack', 'pack.yaml'),
-      `bindings:\n${bind('by-key', 'sweep')}${bind('by-name', 'fixture-sweep')}${bind('helper', 'fixture-helper')}`
+      `bindings:\n${bind('listed', 'fixture-sweep')}${bind('support', 'fixture-support')}${bind('home', 'fixture-helper')}`
     );
     const refusals = (key: string) => ({
-      'by-name': `Binding 'by-name' names workflow 'fixture-sweep', which pack '${key}' does not provide.`,
-      helper: `Binding 'helper' names workflow 'fixture-helper', which pack '${key}' does not provide.`,
+      support: `Binding 'support' names workflow 'fixture-support', which pack '${key}' does not provide.`,
+      home: `Binding 'home' names workflow 'fixture-helper', which pack '${key}' does not provide.`,
     });
-    await mkdir(join(cwd, '.archon'), { recursive: true });
-    await writeFile(
-      join(cwd, '.archon', 'config.yaml'),
-      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
-    );
-    const refusedWith = async (run: Promise<void>): Promise<string> => {
-      try {
-        await run;
-      } catch (error) {
-        return (error as Error).message;
-      }
-      throw new Error('expected a refusal');
-    };
-
-    /** Each binding is refused with its message, and the one naming the key generates. */
+    /** Each binding is refused with its message, and the one naming the entrypoint generates. */
     const expectRefusals = async (key: string, extra: Partial<PackBindingsOptions>) => {
       for (const [id, message] of Object.entries(refusals(key)))
-        expect(
-          await refusedWith(packCommand('bindings', [key], options({ ...extra, only: id })))
-        ).toBe(message);
-      await packCommand('bindings', [key], options({ ...extra, only: 'by-key' }));
+        await expect(
+          packCommand('bindings', [key], options({ ...extra, only: id }))
+        ).rejects.toThrow(message);
+      await packCommand('bindings', [key], options({ ...extra, only: 'listed' }));
     };
     await expectRefusals('fixture', { workflowSource: source });
-
-    // The same pack installed as acme/fixture, the way `archon plugin add` leaves it.
-    const pluginsDir = join(root, 'home', 'plugins');
-    const commit = 'a'.repeat(40);
-    await cp(source, packTreePath(pluginsDir, 'acme/fixture', commit), {
-      recursive: true,
-      filter: path => !path.includes(`${source}/.archon`),
-    });
-    const receipt = receiptPath(pluginsDir, 'acme/fixture');
-    await mkdir(dirname(receipt), { recursive: true });
-    await writeFile(
-      receipt,
-      JSON.stringify({
-        schemaVersion: 1,
-        id: 'acme/fixture',
-        manifest,
-        commit,
-        installedAt: new Date(0).toISOString(),
-      })
-    );
+    await installCopy(source);
     await expectRefusals('acme.fixture', {});
-    // Only the two bindings naming the key were written, one per copy.
-    expect((await readdir(out)).filter(name => name.includes('-by-key-'))).toHaveLength(2);
+    // Only the binding naming the entrypoint was written, once per copy.
+    expect((await readdir(out)).filter(name => name.includes('-listed-'))).toHaveLength(2);
     expect(await readdir(out)).toHaveLength(2);
+  });
+
+  it('a manifestless pack still binds a stage only a same-named home pack holds', async () => {
+    // The project's copy declares the binding; the stage it starts comes from the home copy.
+    await writePack(
+      'bindings:\n  home-stage:\n    workflow: fixture-home\n    resource: home\n    overlap: queue\n    schedule: { interval_seconds: 60 }\n'
+    );
+    await writeWorkflow(
+      join(root, 'home', 'workflows', 'fixture'),
+      'fixture-home',
+      'name: fixture-home\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    await packCommand('bindings', ['fixture'], options());
+    expect(await readdir(out)).toHaveLength(1);
   });
 
   it('with an installed copy too, the hint to use it drops --workflow-source, and following it works', async () => {
     const source = await writePackFolder();
-    // The same pack installed as acme/fixture, the way `archon plugin add` leaves it.
-    const pluginsDir = join(root, 'home', 'plugins');
-    const id = 'acme/fixture';
-    const commit = 'a'.repeat(40);
-    await cp(source, packTreePath(pluginsDir, id, commit), {
-      recursive: true,
-      filter: path => !path.includes(`${source}/.archon`),
-    });
-    const manifest = JSON.parse(await readFile(join(source, 'archon-plugin.json'), 'utf8'));
-    const receipt = receiptPath(pluginsDir, id);
-    await mkdir(dirname(receipt), { recursive: true });
-    await writeFile(
-      receipt,
-      JSON.stringify({
-        schemaVersion: 1,
-        id,
-        manifest,
-        commit,
-        installedAt: new Date(0).toISOString(),
-      })
-    );
-    await mkdir(join(cwd, '.archon'), { recursive: true });
-    await writeFile(
-      join(cwd, '.archon', 'config.yaml'),
-      'defaults:\n  loadDefaultWorkflows: false\n  loadDefaultCommands: false\n'
-    );
+    await installCopy(source);
 
     await packCommand('graph', ['fixture'], options({ workflowSource: source }));
     const printed = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');

@@ -22,7 +22,6 @@ import {
   loadWorkflowsFromDir,
   mergePackFiles,
   mergeScopeResults,
-  type PackWorkflowFile,
   type DirLoadResult,
   type ParsedWorkflowFile,
   type ScopeFile,
@@ -37,12 +36,12 @@ import {
 import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import { getLog } from './log';
 import {
-  packFileName,
-  packNaming,
+  type LoadedManifestPack,
   packReferenceRefusal,
+  qualifiedPackName,
   qualifyPackNames,
   unloadedEntrypoints,
-} from './pack-entrypoints';
+} from './installed';
 
 /** Workflows by filename; a higher scope's file replaces a lower scope's of the same name. */
 export type ScopeFiles = Map<string, ScopeFile>;
@@ -297,19 +296,6 @@ export async function loadProjectScope(
     files.set(filename, { ...parsed, source: 'project' });
   }
 
-  // A source pack folder's entrypoint is named by its manifest key, which an installed copy
-  // holds in a scope of its own. A bundled or home workflow of that name gives way to it, as
-  // a lower-scope file gives way to a project file, rather than both failing as duplicates.
-  const entrypoints = context.sourcePack?.entrypoints;
-  for (const [filename, { workflow, source }] of files) {
-    if (source === 'project' || !entrypoints?.has(workflow.name)) continue;
-    getLog().debug(
-      { filename, name: workflow.name, overriddenSource: source },
-      'source_pack_entrypoint_overrides_lower_scope'
-    );
-    files.delete(filename);
-  }
-
   // Surface repo workflow errors to users (these are actionable)
   context.allErrors.push(...repoResult.errors);
   await warnDeprecatedRepoDefaults(join(workflowPath, 'defaults'));
@@ -365,15 +351,18 @@ async function addSourcePack(
     { ...context, pack: pack.name, source: 'project', label: pack.name },
     pack.dir
   );
-  // Named and referenced as an installed copy is, before the files join the project scope:
-  // an entrypoint by its manifest key, the rest as support by their authored name.
-  const naming = packNaming(pack.entrypoints, name => name);
-  const { qualifiedByName, entrypoints } = qualifyPackNames(naming, loaded.files);
+  // Sorted as an installed copy is: the files the manifest lists, by path, dispatch; the rest
+  // are support. Every file keeps its authored name.
+  const naming: LoadedManifestPack = {
+    label: pack.name,
+    files: loaded.files,
+    entrypointByPath: new Map(Object.entries(pack.entrypoints).map(([key, path]) => [path, key])),
+    nameFor: name => name,
+  };
+  const { qualifiedByName, entrypoints } = qualifyPackNames(naming);
   const names = new Set([...qualifiedByName.values()].flat());
   const errors = [...loaded.errors];
-  const files: PackWorkflowFile[] = [];
-  for (const file of loaded.files) {
-    const name = packFileName(naming, file);
+  const files = loaded.files.filter(file => {
     const refusal = packReferenceRefusal(
       `pack folder ${pack.name}`,
       file,
@@ -382,14 +371,14 @@ async function addSourcePack(
       names
     );
     if (refusal !== undefined)
-      errors.push({ filename: file.filename, workflowName: name, ...refusal });
-    else
-      files.push({
-        ...file,
-        parsed: { ...file.parsed, workflow: { ...file.parsed.workflow, name } },
+      errors.push({
+        filename: file.filename,
+        workflowName: qualifiedPackName(naming, file),
+        ...refusal,
       });
-  }
-  for (const [entry, path] of unloadedEntrypoints(naming, loaded.files)) {
+    return refusal === undefined;
+  });
+  for (const [entry, path] of unloadedEntrypoints(naming)) {
     // A load error of the file explains it: keyed by its bare filename (a parse error, which
     // resume matches), or by the pack, its folder or the file under the pack's label.
     const labelled = `${pack.name}/${path}`;
@@ -407,7 +396,7 @@ async function addSourcePack(
   }
   context.sourcePack = {
     key: pack.name,
-    entrypoints,
+    bindings: loaded.pack?.bindings,
     support: new Set([...names].filter(name => !entrypoints.has(name))),
   };
   const packaged: DirLoadResult = { workflows: new Map(), errors: [] };

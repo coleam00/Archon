@@ -508,35 +508,36 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
-  test('refuses a binding to a workflow its pack does not dispatch, with or without a name', async () => {
+  test('refuses a binding to a workflow its pack does not dispatch, whatever name is given', async () => {
     const stage = (name: string) => {
-      const entry = makeTestWorkflowWithSource({ name, nodes: [{ id: 'run', bash: 'true' }] });
+      const entry = makeTestWorkflowWithSource(
+        { name, nodes: [{ id: 'run', bash: 'true' }] },
+        'project'
+      );
       entry.workflow.pack = { key: 'factory', workflow: name, source: 'project' };
       return entry;
     };
-    // `triage` loaded, but as support: the pack does not dispatch it.
-    const plan = stage('plan');
-    plan.workflow.pack = {
-      key: 'factory',
-      workflow: 'plan',
-      source: 'project',
-      bindings: {
-        'plan-after-triage': packRunEndedBindingSchema.parse({
-          workflow: 'plan',
-          resource: 'plan',
-          overlap: 'queue',
-          run_ended: { workflow: 'triage', outcome: 'done' },
-        }),
-      },
-    };
+    // Discovery reports the pack folder: it dispatches `plan`; `triage` loaded as support.
     mockDiscoverWorkflowsWithConfig.mockResolvedValue({
-      workflows: [plan],
+      workflows: [stage('plan')],
       support: [stage('triage')],
       errors: [],
+      sourcePack: {
+        key: 'factory',
+        bindings: {
+          'plan-after-triage': packRunEndedBindingSchema.parse({
+            workflow: 'plan',
+            resource: 'plan',
+            overlap: 'queue',
+            run_ended: { workflow: 'triage', outcome: 'done' },
+          }),
+        },
+        workflows: ['plan'],
+      },
     });
     const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
     try {
-      for (const name of [undefined, 'plan']) {
+      for (const name of [undefined, 'plan', 'triage']) {
         write.mockClear();
         expect(await validateWorkflowsCommand(validationCwd, name, true)).toBe(1);
         const { results } = JSON.parse(String(write.mock.calls[0]?.[0])) as {

@@ -226,17 +226,13 @@ export async function resolveContinuationWorkflow(
   if (!capture) return undefined; // predates capture — the caller keeps live behavior
   const roots = capturedSourceRoots(capture.anchor);
 
-  const { workflows, support, errors } = await discoverWorkflowsWithConfig(
+  const { workflows, errors } = await discoverWorkflowsWithConfig(
     cwd,
     deps.loadConfig,
     deps.providers,
     roots
   );
-  // A run started before its workflow became support (a pack folder's unlisted workflow)
-  // continues on the bytes it captured; only new runs are refused support workflows.
-  const workflow = [...workflows, ...(support ?? [])].find(
-    entry => entry.workflow.name === run.workflow_name
-  )?.workflow;
+  const workflow = workflows.find(entry => entry.workflow.name === run.workflow_name)?.workflow;
   if (!workflow) {
     const readErrors = errors.filter(error => error.errorType === 'read_error');
     // Incomplete discovery cannot prove that the verified capture lacks the workflow.

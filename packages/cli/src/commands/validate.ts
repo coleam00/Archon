@@ -16,10 +16,10 @@ import { suggestWorkflowNames } from '@archon/workflows/router';
 import {
   workflowLoadErrorName,
   type WorkflowLoadError,
+  type WorkflowLoadResult,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import {
-  declaredPackCopy,
   declaredStops,
   nearestPackBindings,
   packBindingRefusals,
@@ -158,10 +158,9 @@ export async function validateWorkflowsCommand(
       return 1;
     }
   }
-  // A pack's bindings and the manifest are not workflows: a name keeps its pack's bindings.
-  filteredResults.push(
-    ...packs.filter(pack => !name || pack.members.includes(name)).map(pack => pack.result)
-  );
+  // The pack's bindings and the manifest are not workflows, so the name filter does not
+  // apply to them.
+  filteredResults.push(...packs);
   filteredResults.push(...(await manifestResults(source ?? packDir ?? pluginRoot)));
 
   filteredResults.sort((a, b) => {
@@ -188,19 +187,22 @@ async function discoverForValidation(
   workflowSource: string | undefined
 ): Promise<{
   workflowEntries: readonly WorkflowWithSource[];
+  /** The source pack folder's support workflows; never an installed pack's. */
   supportEntries: readonly WorkflowWithSource[];
   loadErrors: readonly WorkflowLoadError[];
+  sourcePack: WorkflowLoadResult['sourcePack'];
 }> {
   if (workflowSource === undefined) {
-    const { workflows, support, errors } = await discoverWorkflowsWithConfig(
+    const { workflows, support, errors, sourcePack } = await discoverWorkflowsWithConfig(
       cwd,
       loadConfig,
       providerRegistry
     );
-    return { workflowEntries: workflows, supportEntries: support ?? [], loadErrors: errors };
+    const supportEntries = (support ?? []).filter(e => e.source === 'project');
+    return { workflowEntries: workflows, supportEntries, loadErrors: errors, sourcePack };
   }
   const sourceConfig = workflowSourceConfigFrom(await loadConfig(workflowSource));
-  const { workflows, support, errors } = await discoverWorkflowsWithConfig(
+  const { workflows, support, errors, sourcePack } = await discoverWorkflowsWithConfig(
     cwd,
     loadConfig,
     providerRegistry,
@@ -211,6 +213,7 @@ async function discoverForValidation(
     workflowEntries: workflows.filter(own),
     supportEntries: (support ?? []).filter(own),
     loadErrors: errors,
+    sourcePack,
   };
 }
 
@@ -219,10 +222,10 @@ async function collectWorkflowResults(
   workflowSource: string | undefined,
   config: ValidationConfig,
   forgeTrustedEnv: NodeJS.ProcessEnv
-): Promise<{ results: WorkflowValidationResult[]; packs: PackBindingResult[] }> {
+): Promise<{ results: WorkflowValidationResult[]; packs: WorkflowValidationResult[] }> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
-  const { workflowEntries, supportEntries, loadErrors } = await discoverForValidation(
+  const { workflowEntries, supportEntries, loadErrors, sourcePack } = await discoverForValidation(
     cwd,
     workflowSource
   );
@@ -243,12 +246,8 @@ async function collectWorkflowResults(
 
   const stops = stopIssues(workflowEntries);
   // A pack folder's support workflows are not dispatched, but its workflows compose them, so
-  // they are checked as before. Installed support stays out, as it always has.
-  const checked = [
-    ...workflowEntries,
-    ...supportEntries.filter(entry => entry.source === 'project'),
-  ];
-  for (const { workflow, source, parseWarnings } of checked) {
+  // they are checked as before. Installed support was never checked here.
+  for (const { workflow, source, parseWarnings } of [...workflowEntries, ...supportEntries]) {
     const issues = await validateWorkflowResources(
       workflow,
       cwd,
@@ -283,7 +282,7 @@ async function collectWorkflowResults(
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
-  return { results, packs: packBindingResults(workflowEntries, supportEntries) };
+  return { results, packs: packBindingResults(sourcePack) };
 }
 
 /** Where the workflows reported come from when not the project root: the dir, and how to name it. */
@@ -312,40 +311,25 @@ async function invokedPackDir(projectRoot: string, from: string): Promise<string
   }
 }
 
-/** One pack's binding refusals, and the workflows whose name keeps it under a name filter. */
-interface PackBindingResult {
-  members: readonly string[];
-  result: WorkflowValidationResult;
-}
-
 /**
- * Each reported pack whose bindings name a workflow the declaring copy does not dispatch,
- * with the refusal `archon pack bindings` gives (`packBindingRefusals`).
+ * The refusal of each binding of the pack folder read as the source that names a workflow
+ * it does not dispatch, as discovery reports both: the check `archon pack bindings` makes.
+ * Manifestless and installed packs are not checked here.
  */
 function packBindingResults(
-  workflows: readonly WorkflowWithSource[],
-  support: readonly WorkflowWithSource[]
-): PackBindingResult[] {
-  const keys = new Set(
-    [...workflows, ...support].flatMap(({ workflow }) => (workflow.pack ? [workflow.pack.key] : []))
+  sourcePack: WorkflowLoadResult['sourcePack']
+): WorkflowValidationResult[] {
+  if (sourcePack?.bindings === undefined) return [];
+  const issues = packBindingRefusals(sourcePack.key, sourcePack.bindings, sourcePack.workflows).map(
+    (message): ValidationIssue => ({
+      level: 'error',
+      field: 'pack_bindings',
+      message,
+      hint: `List it under entrypoints in ${PLUGIN_MANIFEST_FILE}, or bind one the pack dispatches: ${sourcePack.workflows.join(', ')}.`,
+    })
   );
-  return [...keys].flatMap(key => {
-    const copy = declaredPackCopy(key, workflows, support);
-    const refusals = copy === undefined ? [] : packBindingRefusals(key, copy);
-    if (copy === undefined || refusals.length === 0) return [];
-    const issues = refusals.map(
-      (message): ValidationIssue => ({
-        level: 'error',
-        field: 'pack_bindings',
-        message,
-        hint: `List it under entrypoints in ${PLUGIN_MANIFEST_FILE}, or bind one the pack dispatches: ${copy.names.join(', ')}.`,
-      })
-    );
-    const members = workflows
-      .filter(entry => entry.workflow.pack?.key === key)
-      .map(entry => entry.workflow.name);
-    return [{ members, result: makeWorkflowResult(`${key}/${PACK_DECLARATION_PATH}`, issues) }];
-  });
+  const name = `${sourcePack.key}/${PACK_DECLARATION_PATH}`;
+  return issues.length > 0 ? [makeWorkflowResult(name, issues)] : [];
 }
 
 /** What a run leaves, named in the singular, for a stop that holds only without it. */

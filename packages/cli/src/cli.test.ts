@@ -24,6 +24,7 @@ import {
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
 import {
+  appendFileSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -3270,6 +3271,16 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
     );
   }
   packFolder(pack, 'factory', 'plan', ['plan', 'helper'], 'helper');
+  // A second binding names a workflow only a same-named home pack holds.
+  appendFileSync(
+    join(pack, '.pack', 'pack.yaml'),
+    '  home:\n    workflow: outside\n    resource: home\n    overlap: queue\n'
+  );
+  mkdirSync(join(home, 'workflows', 'factory', 'outside'), { recursive: true });
+  writeFileSync(join(home, 'workflows', 'factory', 'outside', 'outside.yaml'), flow('outside'));
+  // A pack none of whose workflow files exist still has its bindings checked.
+  const empty = join(root, 'empty');
+  packFolder(empty, 'empty', 'one', [], 'one');
   const kit = join(project, 'plugins', 'kit');
   packFolder(kit, 'kit', 'one', ['one', 'two'], 'two');
   // Its only listed file is missing; the unlisted one loads.
@@ -3282,11 +3293,12 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
       timeout: 30_000,
       env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1' },
     });
-  const refusal = (workflow: string, key: string) =>
-    `Binding 'sweep' names workflow '${workflow}', which pack '${key}' does not provide.`;
+  const refusal = (workflow: string, key: string, id = 'sweep') =>
+    `Binding '${id}' names workflow '${workflow}', which pack '${key}' does not provide.`;
   try {
     const cases: [string, string[], string[]][] = [
-      [pack, [], [refusal('helper', 'factory')]],
+      [pack, [], [refusal('helper', 'factory'), refusal('outside', 'factory', 'home')]],
+      [pack, ['helper'], [refusal('helper', 'factory')]],
       [join(pack, 'plan'), [], [refusal('helper', 'factory')]],
       [pack, ['plan'], [refusal('helper', 'factory')]],
       [project, ['--workflow-source', pack], [refusal('helper', 'factory')]],
@@ -3314,14 +3326,18 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
 
     // Also when the pack's only listed entrypoint is missing: its declaration is still read.
     const out = join(root, 'out');
-    for (const [source, key, workflow] of [
-      [pack, 'factory', 'helper'],
-      [broken, 'broken', 'two'],
+    for (const [source, key, workflow, id] of [
+      [pack, 'factory', 'helper', 'sweep'],
+      [pack, 'factory', 'outside', 'home'],
+      [broken, 'broken', 'two', 'sweep'],
+      [empty, 'empty', 'one', 'sweep'],
     ] as const) {
       const bindings = cli(project, [
         'pack',
         'bindings',
         key,
+        '--only',
+        id,
         '--workflow-source',
         source,
         '--repo',
@@ -3334,7 +3350,7 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
         out,
       ]);
       expect(bindings.status, bindings.stdout + bindings.stderr).toBe(1);
-      expect(bindings.stderr).toContain(refusal(workflow, key));
+      expect(bindings.stderr).toContain(refusal(workflow, key, id));
     }
     expect(existsSync(out)).toBe(false);
   } finally {

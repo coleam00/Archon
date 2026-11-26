@@ -51,7 +51,7 @@ import {
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import {
-  declaredPackCopy,
+  nearestPackBindings,
   type PackCopy,
   packCopies,
   type PackGraph,
@@ -61,7 +61,6 @@ import {
   unprovidedWorkflowRefusal,
 } from '@archon/workflows/pack-graph';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
-import type { WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import { writeJsonLine } from '../utils/stdout';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import type {
@@ -415,26 +414,29 @@ async function findPack(
   explicitSource: boolean
 ): Promise<DeclaredPack> {
   const discovered = await loadWorkflows(cwd);
-  // A binding from an explicit source records it as `launch.discoveryCwd`, and a start then
-  // admits only a workflow of the source's own project scope (`selectStartedWorkflow`).
-  const admitted = (entries: readonly WorkflowWithSource[] = []): WorkflowWithSource[] =>
-    explicitSource ? entries.filter(entry => entry.source === 'project') : [...entries];
-  const declared = declaredPackCopy(
-    packKey,
-    admitted(discovered.workflows),
-    admitted(discovered.support)
-  );
+  // A pack folder read as the source binds only what it dispatches itself, as discovery
+  // reports it, also when none of its workflow files loaded.
+  const folder = discovered.sourcePack;
+  if (folder?.key === packKey && folder.bindings !== undefined) {
+    const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
+    return { key: packKey, copies, bindings: folder.bindings, workflowNames: folder.workflows };
+  }
+  const workflows = packWorkflows(discovered, packKey, cwd);
   const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
-  if (declared === undefined) {
-    packWorkflows(discovered, packKey, cwd); // throws, naming what is in reach, when no copy is
+  const bindings = nearestPackBindings(workflows);
+  if (bindings === undefined)
     throw new Error(
       [
         `Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`,
         ...copyLines(packKey, copies, cwd, explicitSource),
       ].join('\n')
     );
-  }
-  return { key: packKey, copies, bindings: declared.bindings, workflowNames: declared.names };
+  return {
+    key: packKey,
+    copies,
+    bindings,
+    workflowNames: workflows.map(entry => entry.workflow.name),
+  };
 }
 
 function selectIds(pack: DeclaredPack, only: string | undefined): string[] {

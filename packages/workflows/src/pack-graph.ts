@@ -323,22 +323,6 @@ export function nearestPackBindings(
 }
 
 /**
- * Pack `packKey`'s nearest declaration and the names the pack dispatches in `workflows`, a
- * dispatch catalog, which are all a binding may name. `support` lets the declaration be read
- * when no dispatchable workflow of the pack loaded, so its bindings are still checked.
- */
-export function declaredPackCopy(
-  packKey: string,
-  workflows: readonly WorkflowWithSource[],
-  support: readonly WorkflowWithSource[] = []
-): { bindings: Readonly<Record<string, PackBinding>>; names: string[] } | undefined {
-  const ofPack = (entry: WorkflowWithSource): boolean => entry.workflow.pack?.key === packKey;
-  const bindings = nearestPackBindings([...workflows, ...support].filter(ofPack));
-  if (bindings === undefined) return undefined;
-  return { bindings, names: workflows.filter(ofPack).map(entry => entry.workflow.name) };
-}
-
-/**
  * The refusal of a binding that names a workflow its pack does not dispatch, keyed as the
  * operator named the pack (`factory` from its folder, `acme.factory` installed).
  */
@@ -346,14 +330,19 @@ export function unprovidedWorkflowRefusal(id: string, declared: string, packKey:
   return `Binding '${id}' names workflow '${declared}', which pack '${packKey}' does not provide.`;
 }
 
-/** The refusal of each workflow name the bindings declare that `names` does not provide. */
+/**
+ * The refusal of each workflow name `bindings` declare that `names`, the pack's dispatchable
+ * workflows, does not provide: what `archon pack bindings` throws for one binding, for a
+ * reader that reports them all.
+ */
 export function packBindingRefusals(
   packKey: string,
-  copy: { bindings: Readonly<Record<string, PackBinding>>; names: readonly string[] }
+  bindings: Readonly<Record<string, PackBinding>>,
+  names: readonly string[]
 ): string[] {
-  return Object.entries(copy.bindings).flatMap(([id, binding]) =>
+  return Object.entries(bindings).flatMap(([id, binding]) =>
     bindingWorkflowNames(binding)
-      .filter(name => packWorkflowName(copy.names, name) === undefined)
+      .filter(name => packWorkflowName(names, name) === undefined)
       .map(name => unprovidedWorkflowRefusal(id, name, packKey))
   );
 }
