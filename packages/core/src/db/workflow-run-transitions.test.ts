@@ -31,6 +31,8 @@ import {
   cancelFanOutRun,
 } from './workflow-run-transitions';
 
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 describe('workflow run transitions', () => {
   beforeEach(() => {
     mockQuery.mockReset();
@@ -77,6 +79,9 @@ describe('workflow run transitions', () => {
           null, // adopted_from_run_id (#2747)
           JSON.stringify({ conversationId: 'conv-456' }),
           null,
+          // No caller reserved a run id, so the store generates one: the table's own
+          // legacy hex default would produce an id resource admission refuses.
+          expect.stringMatching(UUID_SHAPE),
         ]
       );
     });
@@ -112,6 +117,9 @@ describe('workflow run transitions', () => {
           null, // adopted_from_run_id (#2747)
           JSON.stringify({ conversationId: 'conv-456' }),
           null,
+          // No caller reserved a run id, so the store generates one: the table's own
+          // legacy hex default would produce an id resource admission refuses.
+          expect.stringMatching(UUID_SHAPE),
         ]
       );
     });
@@ -142,6 +150,9 @@ describe('workflow run transitions', () => {
           null, // adopted_from_run_id (#2747)
           JSON.stringify({ conversationId: 'conv-456' }),
           null,
+          // No caller reserved a run id, so the store generates one: the table's own
+          // legacy hex default would produce an id resource admission refuses.
+          expect.stringMatching(UUID_SHAPE),
         ]
       );
     });
