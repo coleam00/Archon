@@ -38,22 +38,39 @@ import type { WorkflowRun } from './workflow-run';
 
 export const TOOL_CALL_ATTENTION_METADATA_KEY = 'tool_call_attention';
 
-export const toolCallAttentionSchema = z
-  .object({
-    streamId: z.string().min(1),
-    nodeId: z.string().min(1),
-    provider: z.string().min(1),
-    toolCallId: z.string().min(1),
-    name: z.string().min(1).max(1024),
-    title: z.string().max(1024).optional(),
-    startedAt: z.iso.datetime(),
-    lastProgressAt: z.iso.datetime(),
-    raisedAt: z.iso.datetime(),
-    thresholdMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  })
-  .strict();
+export const toolCallAttentionSchema = z.object({
+  streamId: z.string().min(1),
+  nodeId: z.string().min(1),
+  provider: z.string().min(1),
+  toolCallId: z.string().min(1),
+  name: z.string().min(1).max(1024),
+  title: z.string().max(1024).optional(),
+  startedAt: z.iso.datetime(),
+  lastProgressAt: z.iso.datetime(),
+  raisedAt: z.iso.datetime(),
+  thresholdMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
 export const toolCallAttentionArraySchema = z.array(toolCallAttentionSchema);
 export type ToolCallAttention = z.infer<typeof toolCallAttentionSchema>;
+
+/**
+ * The stored attention of a run with stream `streamId`'s calls replaced by `snapshot`, or
+ * undefined when they already match. The other streams' entries are kept as stored, not as
+ * parsed, so a key a newer writer added survives this write.
+ */
+export function replaceStreamToolCallAttention(
+  stored: unknown,
+  streamId: string,
+  snapshot: readonly ToolCallAttention[]
+): unknown[] | undefined {
+  const previous = toolCallAttentionArraySchema.parse(stored ?? []);
+  const own = previous.filter(call => call.streamId === streamId);
+  if (JSON.stringify(own) === JSON.stringify(snapshot)) return undefined;
+  const others = ((stored ?? []) as unknown[]).filter(
+    (_, index) => previous[index]?.streamId !== streamId
+  );
+  return [...others, ...snapshot];
+}
 
 /** Where a gate's response must be recorded — this run, or the child blocking it. */
 export const gateAddressSchema = z.object({ runId: z.string(), nodeId: z.string() });

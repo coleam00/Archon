@@ -328,7 +328,7 @@ describe('tool call attention', () => {
     expect(title).not.toContain('secret');
   });
 
-  test('running projection rejects malformed descriptors, clamps time, and terminal state wins', async () => {
+  test('running projection rejects malformed descriptors, ignores unknown keys, clamps time, and terminal state wins', async () => {
     const h = harness();
     await h.tracker.observe(start);
     h.advance(100);
@@ -340,13 +340,14 @@ describe('tool call attention', () => {
     expect(runAttention({ id: 'run', status: 'completed', metadata })).toMatchObject({
       kind: 'terminal',
     });
-    expect(
-      runAttention({
-        id: 'run',
-        status: 'running',
-        metadata: { tool_call_attention: [{ ...h.snapshots[0][0], rawInput: 'private' }] },
-      })
-    ).toMatchObject({ kind: 'unreadable', reason: 'malformed_tool_call_attention' });
+    // A key this binary does not know, such as one a newer writer added, is dropped, not shown.
+    const newer = runAttention({
+      id: 'run',
+      status: 'running',
+      metadata: { tool_call_attention: [{ ...h.snapshots[0][0], rawInput: 'private' }] },
+    });
+    expect(newer).toMatchObject({ kind: 'stalled_tool_calls' });
+    expect(JSON.stringify(newer)).not.toContain('private');
     for (const malformed of [null, 'invalid', {}])
       expect(
         runAttention({ id: 'run', status: 'running', metadata: { tool_call_attention: malformed } })
