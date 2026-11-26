@@ -32,6 +32,7 @@ import type {
   CommandValidationResult,
 } from '@archon/workflows/validator';
 import { loadConfig, loadRepoConfig } from '@archon/core';
+import { declaredInputNames, undeclaredInputReads } from '@archon/core/workflows/run-ended';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
 import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
@@ -217,6 +218,7 @@ async function collectWorkflowResults(
   }
 
   const stops = stopIssues(workflowEntries);
+  const wakeInputs = wakeInputIssues(workflowEntries);
   for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(
       workflow,
@@ -248,11 +250,56 @@ async function collectWorkflowResults(
       }
     }
 
-    issues.push(...(stops.get(workflow.name) ?? []));
+    issues.push(...(stops.get(workflow.name) ?? []), ...(wakeInputs.get(workflow.name) ?? []));
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
   return results;
+}
+
+/** The workflows by pack key; a workflow outside a pack is a group of its own. */
+function packGroups(entries: readonly WorkflowWithSource[]): Map<string, WorkflowWithSource[]> {
+  const groups = new Map<string, WorkflowWithSource[]>();
+  for (const entry of entries) {
+    const key = entry.workflow.pack?.key ?? `\0${entry.workflow.name}`;
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+  return groups;
+}
+
+/**
+ * Each input a pack's wake binding reads, as `{ input }`, that its `wake.workflow` does not
+ * declare, by that workflow's name: the run that left the wait has no such input, so the
+ * read maps nothing on every start. An error, as `archon pack bindings` refuses it. A
+ * `wake.workflow` that is not a stage of the pack is the entrypoint check's.
+ */
+function wakeInputIssues(entries: readonly WorkflowWithSource[]): Map<string, ValidationIssue[]> {
+  const issues = new Map<string, ValidationIssue[]>();
+  for (const workflows of packGroups(entries).values()) {
+    const stages = workflows.map(entry => entry.workflow);
+    const names = stages.map(stage => stage.name);
+    for (const [id, binding] of Object.entries(nearestPackBindings(workflows) ?? {})) {
+      if (!('event' in binding) || binding.wake === undefined) continue;
+      const name = packWorkflowName(names, binding.wake.workflow);
+      const waiting = stages.find(stage => stage.name === name);
+      if (waiting === undefined) continue;
+      for (const problem of undeclaredInputReads(
+        binding.inputs,
+        binding.wake.workflow,
+        declaredInputNames(waiting)
+      ))
+        issues.set(waiting.name, [
+          ...(issues.get(waiting.name) ?? []),
+          {
+            level: 'error',
+            field: 'pack_bindings',
+            message: `binding '${id}' in ${PACK_DECLARATION_PATH}: ${problem}`,
+            hint: `Declare the input in '${binding.wake.workflow}', or map it from somewhere else; a wake start reads the inputs of the run that left the wait.`,
+          },
+        ]);
+    }
+  }
+  return issues;
 }
 
 /** What a run leaves, named in the singular, for a stop that holds only without it. */
@@ -266,14 +313,8 @@ const LEFT = { asks: 'ask', waits: 'wait' } as const;
  * it happens.
  */
 function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, ValidationIssue[]> {
-  const groups = new Map<string, WorkflowWithSource[]>();
-  for (const entry of entries) {
-    // A workflow outside a pack is a group of its own.
-    const key = entry.workflow.pack?.key ?? `\0${entry.workflow.name}`;
-    groups.set(key, [...(groups.get(key) ?? []), entry]);
-  }
   const issues = new Map<string, ValidationIssue[]>();
-  for (const [key, workflows] of groups) {
+  for (const [key, workflows] of packGroups(entries)) {
     const stages = workflows.map(entry => entry.workflow);
     for (const { stage, outcome, unless } of declaredStops(
       key,

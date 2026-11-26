@@ -3110,9 +3110,10 @@ bindings:
     event:
       kind: check.changed
       actions: [changed]
-    wake: { workflow: review-host, wait: checks, about: check.revision }  # meets an open wait
+    wake: { workflow: review-host, wait: checks, about: check.revision, checkout: waiting-run }  # meets an open wait
     inputs:
       waited: { wait: true }          # the met wait; event bindings with wake only
+      change: { input: change }       # an input of the run that left the wait; wake bindings too
   follow-up:                          # no schedule, event, run_ended or asks_settled: fire-only
     workflow: review-follow-up
     resource: follow-up
@@ -3219,7 +3220,11 @@ with a `limit`. A binding without `limit` starts as often as it matches.
 An event binding with `wake:` starts its workflow on the item of an open
 [wait](#waits-what-an-item-waits-for-outside-archon): the wait `wake.wait` that a run of
 `wake.workflow`, a workflow of this pack, left, whose `about` is exactly the value of the event
-field `wake.about`. `{ wait: true }` passes the met wait. When the event names its subject (a
+field `wake.about`. `{ wait: true }` passes the met wait. `{ input: <name> }` reads an input of
+the run that left the met wait, which `wake.workflow` must declare, and `{ item: answers }` the
+item's answers; `{ result }` is not available, because a waiting run's result is not kept.
+`wake.checkout: waiting-run` starts the stage in the checkout that run recorded when it
+completed, and takes no `isolation`. When the event names its subject (a
 review, a pull request or issue event), the binding also maps `item:`, and only a wait on that
 item matches; the GitHub source plugin refuses the binding without it. A check names no single
 subject and maps no `item:`. See
@@ -3240,9 +3245,10 @@ The declaration is validated when the pack loads, and an invalid one fails every
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
 input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an
 event binding, a `{ wait: true }` input to an event binding with `wake:` and at most once, an
-`{ input: <name> }` or `{ result: <pointer> }` input to a run-ended or asks-settled binding, and
-an `{ answers: true }` input to an asks-settled binding, and an `{ item: answers }` input to an
-asks-settled or a run-ended binding without `linked`. Bindings sharing a resource need not agree on its capacity. An `event:` selector
+`{ input: <name> }` input to a run-ended, asks-settled or wake binding, a `{ result: <pointer> }`
+input to a run-ended or asks-settled binding, an `{ answers: true }` input to an asks-settled
+binding, and an `{ item: answers }` input to an asks-settled or wake binding or a run-ended
+binding without `linked`. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 `item:` names the [item](/reference/cli/#items) a start is on, from one field of its event and

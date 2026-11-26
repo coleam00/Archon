@@ -5,7 +5,10 @@ import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import { packRunEndedBindingSchema } from '@archon/workflows/schemas/pack-bindings';
+import {
+  packEventBindingSchema,
+  packRunEndedBindingSchema,
+} from '@archon/workflows/schemas/pack-bindings';
 
 const mockDiscoverWorkflowsWithConfig = mock<typeof discoverWorkflowsWithConfig>(() =>
   Promise.resolve({ workflows: [], errors: [] })
@@ -277,6 +280,45 @@ describe('validateWorkflowsCommand', () => {
           })
         )
       );
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test('refuses a wake binding that reads an input the waiting workflow does not declare', async () => {
+    const host = makeTestWorkflowWithSource({
+      name: 'host',
+      inputs: { item: { required: true } },
+      nodes: [{ id: 'run', bash: 'true' }],
+    });
+    host.workflow.pack = {
+      key: 'example',
+      workflow: 'host',
+      source: 'project',
+      bindings: {
+        'checks-done': packEventBindingSchema.parse({
+          workflow: 'host',
+          resource: 'host',
+          overlap: 'queue',
+          event: { kind: 'check.changed', actions: ['changed'] },
+          wake: { workflow: 'host', wait: 'checks', about: 'check.revision' },
+          inputs: { item: { input: 'item' }, land_on: { input: 'land_on' } },
+        }),
+      },
+    };
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [host], errors: [] });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, 'host', true)).toBe(1);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0]));
+      expect(output.results[0].issues).toEqual([
+        expect.objectContaining({
+          level: 'error',
+          field: 'pack_bindings',
+          message:
+            "binding 'checks-done' in .pack/pack.yaml: input 'land_on' reads 'land_on', which 'host' does not declare",
+        }),
+      ]);
     } finally {
       write.mockRestore();
     }

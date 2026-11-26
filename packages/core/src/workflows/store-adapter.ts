@@ -39,6 +39,7 @@ import * as workflowDb from '../db/workflows';
 import { listUnfinishedRuns } from '../db/unfinished-runs';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
+import { wakeStart } from './wake-start';
 import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
 import * as installHold from '../db/install-hold';
 import { queuedItemStarts } from '../db/item-step';
@@ -309,7 +310,7 @@ export function createWorkflowStore(): IWorkflowStore {
     admitPendingRun: resourceStarts.admitPendingRun,
     drainResourceStarts: resourceStarts.drainResourceStarts,
     hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
-    acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf),
+    acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf, wakeStart),
     getStartReceipt: resourceStarts.getStartReceipt,
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,

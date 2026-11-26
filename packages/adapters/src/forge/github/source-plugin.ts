@@ -37,24 +37,20 @@ type EvaluatedBinding = NonNullable<
 
 /**
  * The wake a binding hands the engine: the value of its `about` field, which the engine
- * matches against the open waits. The plugin reads the value and compares nothing.
+ * matches against the open waits, and the rest as configured. The plugin reads the value
+ * and compares nothing; what `inputs` and `checkout` read from the waiting run is the
+ * engine's to resolve.
  */
 function wakeOf(
   wake: NonNullable<z.infer<typeof githubSourceBindingSchema>['wake']>,
   event: ForgeEvent
 ): { wake: BindingWake } | { reason: string } {
-  const about = readForgeEventField(event, wake.about.field);
+  const { workflow, about: aboutField, ...carried } = wake;
+  const about = readForgeEventField(event, aboutField.field);
   if (typeof about === 'string' && about !== '')
-    return {
-      wake: {
-        workflowName: wake.workflow,
-        wait: wake.wait,
-        about,
-        ...(wake.input === undefined ? {} : { input: wake.input }),
-      },
-    };
+    return { wake: { ...carried, workflowName: workflow, about } };
   const state = about === undefined || about === null || about === '' ? 'missing' : 'not text';
-  return { reason: `Wake: field '${wake.about.field}' is ${state}` };
+  return { reason: `Wake: field '${aboutField.field}' is ${state}` };
 }
 
 /** The start one configured binding makes of `event`, or why it makes none. */

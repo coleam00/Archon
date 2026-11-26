@@ -335,6 +335,49 @@ describe('archon pack bindings', () => {
     );
   });
 
+  it("writes a wake binding that carries the waiting run's inputs, the item's answers and its checkout", async () => {
+    const WAKE = `bindings:
+  checks-done:
+    workflow: fixture-plan
+    resource: plan
+    overlap: queue
+    event:
+      kind: check.changed
+      actions: [changed]
+    wake: { workflow: fixture-plan, wait: checks, about: check.revision, checkout: waiting-run }
+    inputs:
+      issue: { input: issue }
+      answers: { item: answers }
+`;
+    await writePack(WAKE);
+    await packCommand('bindings', ['fixture'], options({ repo: 'github.com/acme/widgets' }));
+    const [binding] = githubWebhookSourceConfigSchema.parse({
+      version: 1,
+      webhookSecretEnv: 'WEBHOOK_SECRET',
+      host: 'github.com',
+      bindings: [await readJson(await fileFor('checks-done'))],
+    }).bindings;
+    expect(binding?.wake).toEqual({
+      workflow: 'fixture-plan',
+      wait: 'checks',
+      about: { field: 'check.revision' },
+      inputs: { issue: { input: 'issue' }, answers: { item: 'answers' } },
+      checkout: 'waiting-run',
+    });
+    expect(binding?.inputMapping).toEqual({});
+
+    // The waiting run has only the inputs its workflow declares.
+    await writePack(WAKE.replace('{ input: issue }', '{ input: ticket }'));
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
+      "Binding 'checks-done': input 'issue' reads 'ticket', which 'fixture-plan' does not declare"
+    );
+    // A waiting run's result is not kept for the start a wake makes.
+    await writePack(WAKE.replace('{ input: issue }', '{ result: /plan }'));
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
+      "input 'issue' reads a result, but a wake start reads the waiting run's inputs, not its result"
+    );
+  });
+
   it('refuses an event binding for a host the source plugin does not read, writing nothing', async () => {
     await writePack(DECLARATION);
     await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(

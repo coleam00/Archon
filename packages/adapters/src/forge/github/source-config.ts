@@ -14,6 +14,7 @@ import {
 } from '@archon/forge';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
+  bindingWakeSchema,
   itemMappingSchema,
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
@@ -38,14 +39,19 @@ export const githubSourceBindingSchema = resourceStartBindingIntentSchema
      * engine matches it when it accepts the receipt. The met wait is passed as input `input`
      * when set. An event that names its subject (an issue or pull request) must map `item`
      * as well, and only a wait on that item matches: a commit does not name a pull request.
-     * A check event names no single subject, so it matches on `about` alone.
+     * A check event names no single subject, so it matches on `about` alone. `inputs`
+     * maps inputs from the run that left the met wait (`{ input }`) and the item's answers
+     * (`{ item: answers }`), and `checkout: waiting-run` starts the stage in the checkout
+     * that run recorded; the engine reads both when it matches the wait.
      */
     wake: z
       .object({
         workflow: z.string().min(1),
         wait: z.string().min(1),
         about: z.object({ field: forgeEventFieldSchema }).strict(),
-        input: z.string().min(1).optional(),
+        input: bindingWakeSchema.shape.input,
+        inputs: bindingWakeSchema.shape.inputs,
+        checkout: bindingWakeSchema.shape.checkout,
       })
       .strict()
       .optional(),
@@ -72,6 +78,17 @@ function wakeProblems(
     problems.push({
       path: ['wake', 'input'],
       message: `input '${wake.input}' is also mapped from the event; name the met wait's input once`,
+    });
+  for (const name of Object.keys(wake.inputs ?? {}))
+    if (Object.hasOwn(binding.inputMapping, name) || name === wake.input)
+      problems.push({
+        path: ['wake', 'inputs', name],
+        message: `input '${name}' is also mapped from the event or the met wait; map it once`,
+      });
+  if (wake.checkout !== undefined && binding.launch.isolation.kind !== 'default')
+    problems.push({
+      path: ['launch', 'isolation'],
+      message: "with checkout, isolation must be left out: the engine picks the start's lane",
     });
   return problems;
 }

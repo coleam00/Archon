@@ -12,12 +12,20 @@ import type {
   MetWaitInput,
   StoredItemWait,
 } from '@archon/workflows/schemas/item-wait';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
+import type { JsonValue } from '@archon/workflows/output-ref';
 import {
   sourceReceiptAcceptanceSchema,
+  type BindingWake,
+  type CheckoutHandoff,
   type ResourceStartBindingIntent,
   type SourceReceiptAcceptance,
+  withCheckoutFrom,
 } from '@archon/workflows/schemas/resource-start';
 import { getDatabaseType, getDatabase, pool } from './connection';
+import { readItemAsksIn, readRunMetadataIn } from './item-asks';
+import { recordRunRefusedStart } from './item-stops';
 import type { TransactionQuery } from './resource-slots';
 import { toHydratedTimestamp } from './timestamps';
 
@@ -163,26 +171,52 @@ export async function withdrawItemWaits(runId: string): Promise<ItemWaitsWithdra
 type Evaluated = NonNullable<SourceReceiptAcceptance['evaluatedBindings']>[number];
 
 /**
+ * What a wake binding with `inputs` or `checkout` maps from the run that left the met wait
+ * (`runId`; `run` is null when it was deleted) and the asks on the wait's item: the event
+ * inputs and the checkout hand-off, or why the start is refused. Synchronous, as it runs
+ * while the wait is locked. Supplied by core's workflows, which own the mapping, so this
+ * module reads rows and maps nothing itself (as `StartsOnSettle` is for asks).
+ */
+export type WakeStart = (
+  wake: BindingWake,
+  waiting: {
+    runId: string;
+    run: { metadata: Record<string, unknown> } | null;
+    itemAsks: readonly AttentionRead<StoredItemAsk>[];
+  }
+) =>
+  | { inputs: Record<string, JsonValue>; handoff?: CheckoutHandoff }
+  | { refused: { detail: string; reason: 'inputs_unmapped' | 'checkout_refused' } };
+
+/**
  * The binding a wake makes once resolved against the open waits, or why it starts nothing.
  * A match is an open wait of the binding's workflow and name whose `about` is exactly the
  * event's, on an item of the binding's project, and on the item the event names when it
  * names one: a wait about any other value (the commit the change has moved past), or on
  * another subject at the same commit, is not one. The match closes its whole set as met, guarded on
- * the set still being open, so of two deliveries for one wait only the first starts.
+ * the set still being open, so of two deliveries for one wait only the first starts. A wake
+ * with `inputs` or `checkout` is mapped from the run that left the matched wait first
+ * (`wakeStart`); a refusal leaves the set open and is recorded on that run.
  */
 async function resolveWake(
   query: TransactionQuery,
   receiptId: string,
   binding: ResourceStartBindingIntent & { wake: NonNullable<ResourceStartBindingIntent['wake']> },
-  projectKey: string | null
+  projectKey: string | null,
+  wakeStart: WakeStart | undefined
 ): Promise<{ binding: ResourceStartBindingIntent } | { evaluated: Evaluated }> {
   const { wake, ...rest } = binding;
-  const notStarted = (status: Evaluated['status'], reason: string) => ({
+  const notStarted = (
+    status: Evaluated['status'],
+    reason: string,
+    refused?: NonNullable<Evaluated['refused']>
+  ) => ({
     evaluated: {
       bindingId: binding.bindingId,
       bindingRevision: binding.bindingRevision,
       status,
       reason,
+      ...(refused === undefined ? {} : { refused }),
     },
   });
   const onItem = binding.itemKey === undefined ? '' : ` on item '${binding.itemKey}'`;
@@ -215,6 +249,38 @@ async function resolveWake(
       'rejected',
       `an open ${named} is on more than one item (${items.join(', ')}), so which one it is for cannot be known; nothing was started`
     );
+  // Read from the run that left this wait, never the latest run on the item, and before the
+  // set closes, so a start that cannot be mapped leaves the wait open for a later event.
+  let carried: { inputs: Record<string, JsonValue>; handoff?: CheckoutHandoff } = { inputs: {} };
+  if (wake.inputs !== undefined || wake.checkout !== undefined) {
+    if (wakeStart === undefined)
+      throw new Error(
+        `Binding '${binding.bindingId}' wakes with inputs or a checkout, which this store cannot map`
+      );
+    const mapped = wakeStart(wake, {
+      runId: row.run_id,
+      run: await readRunMetadataIn(query, row.run_id),
+      itemAsks: await readItemAsksIn(query, row.item_id),
+    });
+    if ('refused' in mapped) {
+      const refused = { workflow: binding.launch.workflowName, reason: mapped.refused.reason };
+      // On the waiting run, so attention lists the refusal beside the open wait.
+      await recordRunRefusedStart(query, row.run_id, {
+        refused: {
+          receiptId,
+          bindingId: binding.bindingId,
+          ...refused,
+          refusedAt: new Date().toISOString(),
+        },
+      });
+      return notStarted(
+        'rejected',
+        `${named} on item '${row.item_key}': ${mapped.refused.detail}; '${binding.launch.workflowName}' was not started and the wait stays open`,
+        refused
+      );
+    }
+    carried = mapped;
+  }
   const met = await query(
     `UPDATE remote_agent_item_waits
      SET closed_as = 'met', closed_at = $2, met_by_receipt_id = $3, met_by_binding_id = $4
@@ -233,11 +299,12 @@ async function resolveWake(
   };
   const eventInputs = {
     ...rest.eventInputs,
+    ...carried.inputs,
     ...(wake.input === undefined ? {} : { [wake.input]: { ...input } }),
   };
   return {
     binding: {
-      ...rest,
+      ...withCheckoutFrom(rest, carried.handoff),
       itemKey: row.item_key,
       ...(Object.keys(eventInputs).length > 0 ? { eventInputs } : {}),
     },
@@ -253,7 +320,8 @@ async function resolveWake(
 export async function resolveWakes(
   query: TransactionQuery,
   acceptance: SourceReceiptAcceptance,
-  projectKeys: ReadonlyMap<string, string | null>
+  projectKeys: ReadonlyMap<string, string | null>,
+  wakeStart?: WakeStart
 ): Promise<SourceReceiptAcceptance> {
   if (!acceptance.bindings.some(binding => binding.wake !== undefined)) return acceptance;
   const bindings: ResourceStartBindingIntent[] = [];
@@ -269,7 +337,8 @@ export async function resolveWakes(
       query,
       acceptance.receipt.id,
       { ...binding, wake },
-      projectKeys.get(binding.bindingId) ?? null
+      projectKeys.get(binding.bindingId) ?? null,
+      wakeStart
     );
     if ('binding' in resolved) bindings.push(resolved.binding);
     else {

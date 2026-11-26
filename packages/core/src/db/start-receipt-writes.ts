@@ -5,7 +5,7 @@ import type {
   SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import { getDatabase } from './connection';
-import { resolveWakes } from './item-waits';
+import { resolveWakes, type WakeStart } from './item-waits';
 import type { TransactionQuery as Query } from './resource-slots';
 
 /**
@@ -18,7 +18,9 @@ import type { TransactionQuery as Query } from './resource-slots';
  */
 export async function acceptStartReceipt(
   input: SourceReceiptAcceptance,
-  projectKeyOf: (cwd: string) => Promise<string | null> = async () => null
+  projectKeyOf: (cwd: string) => Promise<string | null> = async () => null,
+  /** Maps what a wake binding carries from the waiting run; see `WakeStart`. */
+  wakeStart?: WakeStart
 ): Promise<{ receiptId: string; replay: boolean }> {
   const projectKeys = new Map<string, string | null>();
   for (const binding of input.bindings)
@@ -28,7 +30,9 @@ export async function acceptStartReceipt(
     insertStartReceipt(
       query,
       input,
-      projectKeys.size === 0 ? undefined : claimed => resolveWakes(query, claimed, projectKeys)
+      projectKeys.size === 0
+        ? undefined
+        : claimed => resolveWakes(query, claimed, projectKeys, wakeStart)
     )
   );
 }

@@ -1970,9 +1970,18 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     const waits = [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 30 }];
     mockStructuredResult({ summary: 'done', waits });
     const store = createMockStore();
+    const handoff = { runId: 'waits-run', branch: 'archon/host', commit: 'b'.repeat(40) };
+    const read: unknown[] = [];
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(store),
+        // A wake binding may take the checkout once a wait is met, so it is recorded.
+        deps: {
+          ...createMockDeps(store),
+          asksCheckout: async (_run, left) => {
+            read.push(left);
+            return { handoff, worktree: '/worktrees/host' };
+          },
+        },
         conversationId: 'conv-waits',
         cwd: testDir,
         workflow: {
@@ -1985,6 +1994,13 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
       })
     );
     expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ waits });
+    expect(read).toEqual([{ waits: true }]);
+    expect(
+      (store.completeWorkflowRun.mock.calls[0]?.[2] as Record<string, unknown>).asks_checkout
+    ).toEqual({
+      handoff,
+      worktree: '/worktrees/host',
+    });
 
     // The schema cannot hold "each event once"; the engine's check does.
     mockStructuredResult({ summary: 'done', waits: [...waits, ...waits] });

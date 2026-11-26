@@ -1044,6 +1044,9 @@ A host stage that reads a change's checks and reviews, and ends waiting when the
 name: host
 description: Read the change's checks and reviews; wait for the ones still coming
 inputs:
+  item: { required: true }
+  land_on: { required: true }
+  answers: {}
   head: {}
   waited: {}
 returns: { node: read, outcome: verdict, waits: waits }
@@ -1071,10 +1074,20 @@ The engine adds `waits` to the node's output schema. A run that ends with checks
 }
 ```
 
-Two bindings in the pack wake it, one for a check and one for a review, each naming the field of the event that must equal the wait's `about`:
+A [run-ended binding](#start-a-stage-when-a-run-on-an-item-ends) starts `host` the first time, when the build ends, in the checkout the build left. Two more bindings in the pack wake it, one for a check and one for a review, each naming the field of the event that must equal the wait's `about`. They carry what the first start gave `host` from the run that left the wait:
 
 ```yaml
 bindings:
+  host-after-build:
+    workflow: host
+    resource: host
+    overlap: queue
+    run_ended: { workflow: build, outcome: ready, checkout: ended-run }
+    inputs:
+      item: { input: item }
+      land_on: { input: land_on }
+      answers: { item: answers }
+      head: { result: /head }
   checks-done:
     workflow: host
     resource: host
@@ -1083,8 +1096,11 @@ bindings:
       kind: check.changed
       actions: [changed]
       predicates: [{ field: check.phase, equals: completed }]
-    wake: { workflow: host, wait: checks, about: check.revision }
+    wake: { workflow: host, wait: checks, about: check.revision, checkout: waiting-run }
     inputs:
+      item: { input: item }
+      land_on: { input: land_on }
+      answers: { item: answers }
       head: { event: check.revision }
       waited: { wait: true }
   reviewed:
@@ -1095,13 +1111,24 @@ bindings:
       kind: review.changed
       actions: [submitted, dismissed]
     item: { field: subject.number, prefix: pr- }
-    wake: { workflow: host, wait: review, about: review.commit }
+    wake: { workflow: host, wait: review, about: review.commit, checkout: waiting-run }
     inputs:
+      item: { input: item }
+      land_on: { input: land_on }
+      answers: { item: answers }
       head: { event: review.commit }
       waited: { wait: true }
 ```
 
-Here the next stage is `host` again: it reads the change once more, and either ends with a verdict or waits again. A stage can as well start another workflow. `{ wait: true }` carries the met wait, and its `runId` names the run that left it: `archon workflow get <runId> --json` shows what that run returned, at `terminal_record.returns.value`. A [`result_of: host`](/reference/workflow-language/#reading-an-earlier-runs-result) input is not the same read: it takes the latest completed `host` run on the item when the stage starts, which is a newer run than the waiting one when `host` completed again while the start waited for its slot. [`archon pack bindings`](/reference/cli/#pack-bindings) writes each as a binding for the GitHub source plugin's `bindings` array, with `wake` as `{ "workflow", "wait", "about": { "field" }, "input" }`. The start is on the item of the wait it meets. A review names its pull request, so its binding also maps that `item` (here the items are keyed `pr-<number>`) and only a wait on that item can be woken: another pull request with the same commit wakes nothing here. The GitHub plugin refuses a `wake` binding without `item` for any event kind that names its subject. A check names no single pull request, so `checks-done` maps no item and matches on the commit alone, which also lets a pull request's checks wake an item keyed by its issue. `{ wait: true }` passes the met wait to the stage as `{ event, about, workflow, runId, waitingSince, deadline }`; the started workflow declares that input.
+A wake binding reads, besides the event's fields and the met wait:
+
+- `{ input: <name> }`: an input of the run that left the met wait (the wait's `runId`), not of the latest run on the item. `wake.workflow` must declare `<name>`: `archon pack bindings` and `archon validate workflows` refuse a binding that reads an input it does not declare, naming the binding and the input. The read is the run's own value, so `host` started again gets the `item` and `land_on` the first start gave it. `{ result }` is not available to a wake binding: a waiting run's result is not kept for a later start, so give the stage what it needs as an input instead.
+- `{ item: answers }`: every answer on the item, as a run-ended binding reads it, read when the event arrives.
+- `wake.checkout: waiting-run`: the start works in the checkout the waiting run recorded when it completed, as [`checkout: ended-run`](#work-in-the-checkout-the-ended-run-left) does for an ended run. Leave `isolation` out; the engine picks the lane. A run that worked on a copy of another run's checkout, as a read-only `host` does, recorded the checkout it was given, so the woken `host` works on the build's branch at the commit the waiting run ended on. Every run that leaves waits records its checkout and keeps its own worktree from release while it waits, since whether a wake binding takes it is known only when an event meets the wait.
+
+When one of these cannot be read, because the waiting run was deleted, its worktree is gone or it recorded no checkout, the binding is recorded `rejected` with why, nothing starts and the wait stays open, so a later event can still meet it. The refused start is recorded on the waiting run, and `archon workflow attention` lists it beside the open wait, so the item does not stop unseen.
+
+Here the next stage is `host` again: it reads the change once more, and either ends with a verdict or waits again. A stage can as well start another workflow. `{ wait: true }` carries the met wait, and its `runId` names the run that left it: `archon workflow get <runId> --json` shows what that run returned, at `terminal_record.returns.value`. A [`result_of: host`](/reference/workflow-language/#reading-an-earlier-runs-result) input is not the same read: it takes the latest completed `host` run on the item when the stage starts, which is a newer run than the waiting one when `host` completed again while the start waited for its slot. [`archon pack bindings`](/reference/cli/#pack-bindings) writes each wake binding as a binding for the GitHub source plugin's `bindings` array, with `wake` as `{ "workflow", "wait", "about": { "field" }, "input", "inputs", "checkout" }`: `input` names the input that gets the met wait, and `inputs` holds the reads from the waiting run and its item. The start is on the item of the wait it meets. A review names its pull request, so its binding also maps that `item` (here the items are keyed `pr-<number>`) and only a wait on that item can be woken: another pull request with the same commit wakes nothing here. The GitHub plugin refuses a `wake` binding without `item` for any event kind that names its subject. A check names no single pull request, so `checks-done` maps no item and matches on the commit alone, which also lets a pull request's checks wake an item keyed by its issue. `{ wait: true }` passes the met wait to the stage as `{ event, about, workflow, runId, waitingSince, deadline }`; the started workflow declares that input.
 
 What the engine holds to when the event arrives:
 

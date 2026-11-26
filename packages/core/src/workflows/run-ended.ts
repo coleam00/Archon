@@ -34,6 +34,7 @@ import {
   type SourceReceiptAcceptance,
   type SourceReceiptInput,
   type TriggerConfig,
+  withCheckoutFrom,
 } from '@archon/workflows/schemas/resource-start';
 import {
   ITEM_KEY_MAX_LENGTH,
@@ -282,12 +283,32 @@ export function runEndedBindingProblems(
     problems.push(
       `outcome '${runEnded.outcome}' is not one '${runEnded.workflowName}' completes with (${values.map(value => `'${value}'`).join(', ')})`
     );
-  for (const [target, source] of Object.entries(runEnded.inputs ?? {}))
-    if ('input' in source && !ended.declaredInputs.includes(source.input))
-      problems.push(
-        `input '${target}' reads '${source.input}', which '${runEnded.workflowName}' does not declare`
-      );
+  problems.push(
+    ...undeclaredInputReads(runEnded.inputs, runEnded.workflowName, ended.declaredInputs)
+  );
   return problems;
+}
+
+/**
+ * Each input of a binding that reads, as `{ input }`, a name the run it reads from does not
+ * declare: `workflowName`, the workflow whose run ended, left the asks or left the met wait.
+ * Such a read would map nothing on every start, so each is refused where the binding is
+ * checked; the caller names the binding.
+ */
+export function undeclaredInputReads(
+  inputs: Readonly<Record<string, unknown>> | undefined,
+  workflowName: string,
+  declaredInputs: readonly string[]
+): string[] {
+  return Object.entries(inputs ?? {}).flatMap(([target, source]) =>
+    typeof source === 'object' &&
+    source !== null &&
+    'input' in source &&
+    typeof source.input === 'string' &&
+    !declaredInputs.includes(source.input)
+      ? [`input '${target}' reads '${source.input}', which '${workflowName}' does not declare`]
+      : []
+  );
 }
 
 /**
@@ -825,22 +846,14 @@ export function bindingReceipt(
         },
       ],
     });
-  const binding: ResourceStartBindingIntent = {
-    ...candidate.binding,
-    bindingRevision,
-    ...(Object.keys(inputs).length > 0 ? { eventInputs: inputs } : {}),
-    // `launch.isolation` names the branch for an older binary, which reads no hand-off: it
-    // runs the stage on that branch or fails to check it out, never on the base branch.
-    ...(handoff
-      ? {
-          launch: {
-            ...candidate.binding.launch,
-            isolation: { kind: 'worktree' as const, branch: handoff.branch },
-          },
-          checkoutFrom: handoff,
-        }
-      : {}),
-  };
+  const binding: ResourceStartBindingIntent = withCheckoutFrom(
+    {
+      ...candidate.binding,
+      bindingRevision,
+      ...(Object.keys(inputs).length > 0 ? { eventInputs: inputs } : {}),
+    },
+    handoff
+  );
   return sourceReceiptAcceptanceSchema.parse({ receipt, outcome: 'matched', bindings: [binding] });
 }
 
