@@ -6,7 +6,9 @@ outcomes, its groups (each with the `kind` that gives its card and board column 
 kind label), the stage items leave the map by (`merged`), the How it works picture, the
 drill-down cards and the story wording the console draws the factory with. Its shape is
 `packages/workflows/src/schemas/factory-view.ts`. The Overview map lays itself out from the pack
-graph: the file places no card and draws no arrow. An arrow reads as its outcome's `label`.
+graph: the file places no card and draws no arrow. An arrow reads as its outcome's `label`, or,
+for an answer to an ask, as its option's `label` in `answers` (`stage:option`): the graph and
+the ask's declared options carry only the option's id.
 
 A pack ships this file as `<pack>/.shared/factory-view.json`. This copy is the source: copy it into
 `<installed pack>/.shared/` for the demo until the owner's own copy of the pack ships it. A demo
@@ -26,7 +28,8 @@ bun run check:factory-view <pack dir> --view docs/factory-console/pack-view/fact
 The console reads the file entry by entry and drops only what is wrong: an entry naming a stage,
 step, outcome, option or group the graph lacks, an entry that fails its schema, or a key the
 schema does not know. Every in-flow stage, step and outcome value needs words (an outcome needs
-a `label`, its own or its stage's `stage:*`), and when the file declares groups every in-flow
+a `label`, its own or its stage's `stage:*`), as does every option an asks-settled hand-off of
+an in-flow stage leaves on (its exact `stage:option` entry's `label`), and when the file declares groups every in-flow
 stage but the `merged` one is in one. Each of these is listed on the Overview and How it works and
 is an error for the check, which exits 1 on any. `scripts/check-factory-view.test.ts` checks this
 copy against the c1104737 graph in CI

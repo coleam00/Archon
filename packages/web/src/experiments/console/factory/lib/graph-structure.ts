@@ -1,8 +1,8 @@
 /**
  * The factory's structure, read from the pack graph (`GET /api/packs/{pack}/graph`): the steps
  * of a stage and the arrows between stages, each worded by the outcome or answer it carries:
- * the view file's label for the outcome where it gives one (DESIGN.md, COMBINED direction),
- * else the raw value.
+ * the view file's label for the outcome or ask option where it gives one (DESIGN.md, COMBINED
+ * direction), else the raw value, which `check:factory-view` reports as unworded.
  *
  * Pure.
  */
@@ -17,6 +17,8 @@ export interface StructureView {
   runNames: Readonly<Record<string, string>>;
   /** The file's label of each `workflow:outcome` or `workflow:*` that has one. */
   outcomeLabels: Readonly<Record<string, string>>;
+  /** The file's label of each `workflow:option` that has one. */
+  answerLabels: Readonly<Record<string, string>>;
 }
 
 /** One arrow the map draws, between two stages, labelled with what it carries. */
@@ -36,15 +38,20 @@ export function wordsOf(from: PackGraph['arrows'][number]['from']): string {
 
 /**
  * What an arrow says on the map: its outcome's label (the exact `workflow:outcome` entry, then
- * the stage's `workflow:*`), else `wordsOf`. An ask's option is not worded by the file.
+ * the stage's `workflow:*`) or its ask option's (the exact `workflow:option` entry only, so a
+ * new option is never hidden under another's words), else `wordsOf`.
  */
 function arrowWords(
   view: StructureView,
   workflowOf: ReadonlyMap<string, string>,
   from: PackGraph['arrows'][number]['from']
 ): string {
-  if (!('outcome' in from)) return wordsOf(from);
   const workflow = workflowOf.get(from.stage) ?? '';
+  if (!('outcome' in from))
+    return (
+      (from.option === undefined ? undefined : view.answerLabels[`${workflow}:${from.option}`]) ??
+      wordsOf(from)
+    );
   return (
     view.outcomeLabels[`${workflow}:${from.outcome}`] ??
     view.outcomeLabels[`${workflow}:*`] ??

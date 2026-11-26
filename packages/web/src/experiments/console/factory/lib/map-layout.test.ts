@@ -137,8 +137,8 @@ describe('the shipped map', () => {
         'placed +6',
         [
           'placed',
-          'drop → Landing',
-          'reshape → Landing',
+          'dropped by you → Landing',
+          'needs shaping → Landing',
           'kept whole',
           'waiting on what it needs',
           'Folded into another item',
@@ -156,17 +156,17 @@ describe('the shipped map', () => {
         [
           'built',
           'fixed for CI',
-          'take-as-is',
+          'taken as it is',
           'brought up to date',
-          'drop → Landing',
-          'reshape → Landing',
+          'dropped by you → Landing',
+          'needs shaping → Landing',
         ],
       ],
       [
         'checks',
         'landing',
         'ready +4',
-        ['ready', 'take-as-is', 'unchanged and green', 'drop', 'reshape'],
+        ['ready', 'taken as it is', 'unchanged and green', 'dropped by you', 'needs shaping'],
       ],
       ['landing', 'landed', 'merged', ['merged']],
     ]);
@@ -183,11 +183,11 @@ describe('the shipped map', () => {
       ['order', 'Ordered as a work order, Split into pieces, broke the branch'],
       ['link', 'asked'],
       ['split', 'answered'],
-      ['plan', 'answered, replan'],
+      ['plan', 'answered, plan again'],
       ['attend', 'asked you'],
-      ['stage-build', 'returned, send-back, one-more-round, other, behind its branch'],
+      ['stage-build', 'returned, sent back, one more round, something else, behind its branch'],
       ['stage-host', 'changed'],
-      ['land', 'land'],
+      ['land', 'merge it'],
     ]);
     // Checks holds stage-check and stage-host, which both send back to stage-build and to plan:
     // one route each, not two drawn on top of each other.
@@ -195,7 +195,7 @@ describe('the shipped map', () => {
     expect(routes).toEqual([...new Set(routes)]);
     expect(
       layout.feedback.paths.find(p => p.from === 'landing' && p.to === 'stage-build')?.label
-    ).toBe('send-back, other, returned, behind its branch');
+    ).toBe('sent back, something else, returned, behind its branch');
     const bottom = Math.max(...layout.cards.map(card => card.box.y + card.box.h));
     for (const path of layout.feedback.paths)
       expect(Math.max(...segments(path.d).map(seg => seg.y2))).toBeGreaterThan(bottom);

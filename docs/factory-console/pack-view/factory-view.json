@@ -916,7 +916,7 @@
       "story": "The merge gate asked you"
     },
     "landgate:land": {
-      "label": "land",
+      "label": "merge it",
       "story": "The merge gate said land"
     },
     "link:dropped": {
@@ -998,7 +998,7 @@
       "story": "Build brought the change up to date with its landing branch"
     },
     "stage-build:replan": {
-      "label": "replan",
+      "label": "plan again",
       "story": "Build sent it back to planning"
     },
     "stage-check:approve": {
@@ -1010,7 +1010,7 @@
       "story": "The checks asked you"
     },
     "stage-check:replan": {
-      "label": "replan",
+      "label": "plan again",
       "story": "The checks sent it back to planning"
     },
     "stage-check:return": {
@@ -1090,34 +1090,116 @@
     }
   },
   "answers": {
+    "triage:build": {
+      "label": "build"
+    },
+    "triage:split": {
+      "label": "split"
+    },
+    "triage:drop": {
+      "label": "dropped by you"
+    },
+    "triage:reshape": {
+      "label": "needs shaping"
+    },
+    "stage-build:send-back": {
+      "label": "sent back"
+    },
+    "stage-build:other": {
+      "label": "something else"
+    },
+    "stage-build:take-as-is": {
+      "label": "taken as it is"
+    },
+    "stage-build:replan": {
+      "label": "plan again"
+    },
     "stage-build:drop": {
+      "label": "dropped by you",
       "starts": "Closes the PR without merging"
     },
     "stage-build:reshape": {
+      "label": "needs shaping",
       "starts": "Leaves the PR as a draft until the item is shaped"
     },
+    "stage-check:send-back": {
+      "label": "sent back"
+    },
+    "stage-check:one-more-round": {
+      "label": "one more round"
+    },
+    "stage-check:other": {
+      "label": "something else"
+    },
+    "stage-check:take-as-is": {
+      "label": "taken as it is"
+    },
+    "stage-check:replan": {
+      "label": "plan again"
+    },
     "stage-check:drop": {
+      "label": "dropped by you",
       "starts": "Closes the PR without merging"
     },
     "stage-check:reshape": {
+      "label": "needs shaping",
       "starts": "Leaves the PR as a draft until the item is shaped"
     },
+    "stage-host:send-back": {
+      "label": "sent back"
+    },
+    "stage-host:other": {
+      "label": "something else"
+    },
+    "stage-host:one-more-round": {
+      "label": "one more round"
+    },
+    "stage-host:take-as-is": {
+      "label": "taken as it is"
+    },
+    "stage-host:replan": {
+      "label": "plan again"
+    },
     "stage-host:drop": {
+      "label": "dropped by you",
       "starts": "Closes the PR without merging"
     },
     "stage-host:reshape": {
+      "label": "needs shaping",
       "starts": "Leaves the PR as a draft until the item is shaped"
     },
+    "landgate:land": {
+      "label": "merge it"
+    },
+    "landgate:send-back": {
+      "label": "sent back"
+    },
+    "landgate:other": {
+      "label": "something else"
+    },
     "landgate:drop": {
+      "label": "dropped by you",
       "starts": "Closes the PR without merging"
     },
     "landgate:reshape": {
+      "label": "needs shaping",
       "starts": "Leaves the PR as a draft until the item is shaped"
     },
+    "land:land": {
+      "label": "merge it"
+    },
+    "land:send-back": {
+      "label": "sent back"
+    },
+    "land:other": {
+      "label": "something else"
+    },
     "land:drop": {
+      "label": "dropped by you",
       "starts": "Closes the PR without merging"
     },
     "land:reshape": {
+      "label": "needs shaping",
       "starts": "Leaves the PR as a draft until the item is shaped"
     }
   },

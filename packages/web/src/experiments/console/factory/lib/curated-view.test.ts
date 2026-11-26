@@ -117,11 +117,13 @@ describe("the map's arrows over the c1104737 graph", () => {
   const label = (from: string, to: string) =>
     shippedArrows.find(arrow => arrow.from === from && arrow.to === to)?.label;
 
-  test("each pair is labelled with the file's outcome labels, and an ask's answers as the graph names them", () => {
+  test("each pair is labelled with the file's outcome and answer labels, never an option id", () => {
     expect(label('triage', 'link')).toBe('build, narrow');
     expect(label('link', 'plan')).toBe('placed');
-    expect(label('stage-build', 'close')).toBe('drop, reshape');
-    expect(label('stage-check', 'stage-build')).toBe('returned, send-back, one-more-round, other');
+    expect(label('stage-build', 'close')).toBe('dropped by you, needs shaping');
+    expect(label('stage-check', 'stage-build')).toBe(
+      'returned, sent back, one more round, something else'
+    );
     expect(label('land', 'landed')).toBe('merged');
     expect(label('plan', 'plan')).toBe('answered');
     expect(label('link', 'link')).toBe('asked');
