@@ -199,7 +199,8 @@ function newRoundRunning(view: FactoryView, runs: readonly ReadRun[]): boolean {
 
 /**
  * The round line, read as v1 read it (`origin/main` factory/lib/board.ts `roundField`): "N of M
- * check rounds" for the rounds recorded, "first check round running" when a stage-form round
+ * check rounds" for the rounds recorded ("N check rounds" once N passes M, or when the run names
+ * no allowance), "first check round running" when a stage-form round
  * runs before any is recorded, and ", next one running" after the recorded ones. The running
  * round is never numbered: after a replan it is the first of a new count, not N+1, and a round
  * past the allowance is not one the card can name.
@@ -217,8 +218,11 @@ function roundField(
   const dots = [...rounds.rounds];
   const last = dots.at(-1)?.iteration ?? 0;
   const words = view.words?.rounds ?? 'rounds';
+  // The pack counts a round that came back after check approved (the landing gate, the host
+  // round) against the same allowance, so a recorded round can pass it. Past it the round is a
+  // plain count: "4 of 3" would read as a broken limit.
   const counted =
-    rounds.max === null
+    rounds.max === null || last > rounds.max
       ? `${String(last)} ${words}`
       : `${String(last)} of ${String(rounds.max)} ${words}`;
   if (!next) return { dots, text: counted };

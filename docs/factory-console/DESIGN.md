@@ -26,7 +26,8 @@ http://127.0.0.1:3195/console). Rules:
 - **Needs you tab (owner, 11/26):** the console's accent (Archon's pink/purple) is used for the suggested answer and the active filter, never success-green and never all-white. Rows show a pointer cursor and hover state. Opening a row shows the ask section as that row's CHILD (indented or attached under it, with an expand/collapse chevron on the row), so it is obvious which row it belongs to. A filter (`?item=`) is a prominent filter bar at the top of the tab (the item's number and title, a clear "Show all" control), not a tiny chip.
 - **No item page.** A board card opens the item's run log (Rasmus's behaviour). The CARD carries
   the item's iteration detail as v1's cards did: title, running step, check-round dots and
-  "N of M check rounds", returned / "sent back Nx", PR link. An item with open asks shows one
+  "N of M check rounds" ("N check rounds" once a round passes the allowance it ran at),
+  returned / "sent back Nx", PR link. An item with open asks shows one
   "Needs you · N" button (N, its open asks) at the bottom of the card beside the PR button (owner, 11/26; the top-right chip is a status label only), a link
   to the project's Needs you tab filtered to the item (`?item=<key>`, below); the Table row shows
   the same link in its State cell (owner, 11/25, #217). The card shows no ask question,

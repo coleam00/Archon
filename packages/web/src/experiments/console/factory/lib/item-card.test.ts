@@ -107,6 +107,21 @@ describe('rounds and returns from run records', () => {
     expect(card.pr?.url).toBe('https://github.com/coleam00/archon-factory-console/pull/128');
   });
 
+  test('a round past the allowance is a plain count, never "4 of 3"', () => {
+    // #227's shape: the change came back after check approved, and round 4 ran at allowance 3.
+    const atThree = records.map(record => {
+      const returns = record.returns;
+      if (returns?.availability !== 'available') return record;
+      const value = returns.value as { allowance?: number };
+      return value.allowance === 4
+        ? { ...record, returns: { ...returns, value: { ...value, allowance: 3 } } }
+        : record;
+    });
+    const card = cardProgress(byKey('125'), PACK, allRead(atThree), []);
+    expect(card.round?.dots).toHaveLength(4);
+    expect(card.round?.text).toBe('4 check rounds');
+  });
+
   test('a view that declares no rounds source shows no rounds', () => {
     const view = { ...VIEW, rounds: undefined } as FactoryView;
     expect(cardProgress(byKey('111'), { stages: STAGES, view }, allRead(), []).round).toBeNull();
