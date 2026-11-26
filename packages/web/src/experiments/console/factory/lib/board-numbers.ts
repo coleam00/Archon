@@ -13,6 +13,7 @@ import {
   needsDecision,
   stageAt,
   standingRun,
+  type OutcomeWords,
 } from '../../routes/board/standing';
 import type { FactoryView } from '../api';
 import { retiredOf, type PackGraphStage } from './item-card';
@@ -49,7 +50,7 @@ export const isOrder = (read: ItemRead): boolean =>
 
 export interface SetAside {
   read: ItemRead;
-  /** Why it is off the board, in the engine's facts. */
+  /** Why it is off the board, in the engine's facts and the view's words. */
   why: string;
   /** When its last run ended; null when that is not recorded. */
   since: string | null;
@@ -62,12 +63,13 @@ export interface SetAside {
  * outcome, or an operator ended it). A work order is never set aside: its
  * parts carry its work.
  */
-export function setAsideOf(read: ItemRead): SetAside | null {
+export function setAsideOf(read: ItemRead, outcomeOf: OutcomeWords): SetAside | null {
   if (isOrder(read)) return null;
   const { state } = read.standing;
   const run = standingRun(read);
   const since = run?.completedAt ?? null;
-  if (state === 'done' && read.merged === null) return { read, why: howItEnded(read), since };
+  if (state === 'done' && read.merged === null)
+    return { read, why: howItEnded(read, outcomeOf), since };
   if (state !== 'resting') return null;
   return { read, why: run?.status === 'cancelled' ? 'Cancelled' : 'Ended with no outcome', since };
 }
@@ -80,15 +82,16 @@ export const ON_NO_PACK = "On no pack's stage";
 /**
  * Every item set aside in the project, the most recently ended first: the ones `setAsideOf`
  * names, and the moving items no stage places (`unplaced`, from each `packBoard`), since their
- * run started.
+ * run started. `wordsFor` words each item's outcome (`outcomeWordsFor`).
  */
 export function projectSetAside(
   items: readonly ItemRead[],
+  wordsFor: (read: ItemRead) => OutcomeWords,
   unplaced: readonly { read: ItemRead; why: string }[] = []
 ): SetAside[] {
   const at = (entry: SetAside): number => (entry.since === null ? 0 : ms(entry.since));
   return [
-    ...items.flatMap(read => setAsideOf(read) ?? []),
+    ...items.flatMap(read => setAsideOf(read, wordsFor(read)) ?? []),
     ...unplaced.map(({ read, why }) => ({
       read,
       why,

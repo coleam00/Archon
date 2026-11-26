@@ -299,8 +299,8 @@ function boundsOf(cards: readonly FullCard[], arrows: readonly FullArrow[], bott
 }
 
 /**
- * `labels` are the view file's words (`arrowLabels`); with none every pill reads its raw value,
- * as the curated map would.
+ * `labels` are the view file's words (`arrowLabels`); with none an outcome's pill reads its value
+ * in words (`outcomeWords`) and an ask's its raw option, as the curated map would.
  */
 export function fullWorkflowLayout(
   graph: PackGraph,

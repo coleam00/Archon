@@ -287,6 +287,120 @@ test("a failed card's reason names its stage by the view file's label, not its w
   }
 });
 
+/** Pack `flow` whose view words `check` and, when given, its outcomes. */
+const worded = (outcomes: Record<string, { label: string }> = {}): Map<string, CardPack> =>
+  new Map([
+    [
+      'flow',
+      {
+        stages: [{ name: 'acme/flow:check', workflow: 'check', inFlow: true }],
+        view: { stages: { check: { label: 'Checks' } }, outcomes } as unknown as FactoryView,
+      },
+    ],
+  ]);
+
+/** READS[0] as item `key`, standing `state`, its runs ending `outcome`, with `questions`. */
+function ended(
+  key: string,
+  state: ItemRead['standing']['state'],
+  outcome: string,
+  questions: ItemRead['questions'] = []
+): ItemRead {
+  const base = READS[0]!;
+  return {
+    ...base,
+    item: { ...base.item, id: `id-${key}`, key },
+    standing: { ...base.standing, state },
+    runs: base.runs.map(entry => ({ ...entry, outcome })),
+    questions,
+    merged: null,
+  };
+}
+
+/** A stop question naming the older run, ended `outcome`. */
+const stoppedIn = (outcome: string): ItemRead['questions'] =>
+  [
+    {
+      kind: 'stopped',
+      stoppedIn: { runId: 'run-old', workflow: 'acme/flow:check', outcome },
+      summary: 'It asked and nobody answered',
+    },
+  ] as unknown as ItemRead['questions'];
+
+const cardOf =
+  (container: Element) =>
+  (key: string): Element | null =>
+    container.querySelector(`[data-item="${key}"]`);
+
+test("a card words its run's outcome by the view file's label in its meta, Done chip and reason (#270)", async () => {
+  const reads = [
+    ended('issue-10', 'done', 'ask'),
+    ended('issue-11', 'stopped', 'ask'),
+    ended('issue-12', 'stopped', 'ask', stoppedIn('ask')),
+    // Merged with a worded outcome: the merge wins over the outcome's words.
+    { ...ended('issue-13', 'done', 'ask'), merged: READS[0]!.merged },
+  ];
+  const view = await mount(reads, worded({ 'check:ask': { label: 'asked you' } }));
+  try {
+    const card = cardOf(view.container);
+    for (const key of ['issue-10', 'issue-11', 'issue-12']) {
+      const meta = card(key)?.querySelector('[data-card-meta]')?.textContent ?? '';
+      expect(meta).toContain('asked you');
+      expect(meta).not.toContain('ended');
+      expect(meta).not.toMatch(/\bask\b/);
+    }
+    const chip = card('issue-10')?.querySelector('[data-chip]');
+    expect(chip?.textContent).toBe('asked you');
+    expect(chip?.getAttribute('data-chip')).toBe('done');
+    expect(card('issue-13')?.querySelector('[data-chip]')?.textContent).toBe('Merged');
+    expect(card('issue-11')?.querySelector('[data-item-reason]')?.textContent).toBe(
+      'Checks ended (asked you) and nothing followed'
+    );
+    expect(card('issue-11')?.querySelector('[data-chip]')?.getAttribute('data-chip')).toBe(
+      'stopped'
+    );
+    expect(card('issue-12')?.querySelector('[data-item-reason]')?.textContent).toBe(
+      'Checks ended (asked you) and nothing followed: It asked and nobody answered'
+    );
+  } finally {
+    await view.unmount();
+  }
+});
+
+test("an outcome the view does not word, and an unplaced run's workflow, read as words (#270)", async () => {
+  const base = READS[0]!;
+  const unplaced: ItemRead = {
+    ...base,
+    item: { ...base.item, id: 'id-issue-21', key: 'issue-21' },
+    standing: { ...base.standing, state: 'failed', pack: null },
+    runs: base.runs.map(entry => ({ ...entry, workflow: 'archon-assist', pack: null })),
+    merged: null,
+  };
+  const reads = [
+    ended('issue-20', 'done', 'send-back'),
+    ended('issue-22', 'stopped', 'send-back', stoppedIn('send-back')),
+    unplaced,
+  ];
+  const view = await mount(reads, worded());
+  try {
+    const card = cardOf(view.container);
+    expect(card('issue-20')?.querySelector('[data-chip]')?.textContent).toBe('Send back');
+    for (const key of ['issue-20', 'issue-22']) {
+      expect(card(key)?.querySelector('[data-card-meta]')?.textContent).toContain('Send back');
+      expect(card(key)?.textContent).not.toContain('send-back');
+    }
+    expect(card('issue-22')?.querySelector('[data-item-reason]')?.textContent).toBe(
+      'Checks ended (Send back) and nothing followed: It asked and nobody answered'
+    );
+    expect(card('issue-21')?.querySelector('[data-item-reason]')?.textContent).toBe(
+      'Archon assist failed'
+    );
+    expect(card('issue-21')?.textContent).not.toContain('archon-assist');
+  } finally {
+    await view.unmount();
+  }
+});
+
 test("a card's Needs you N is the open-ask count of the tab its link opens, twins too (#225)", () => {
   const on = (ref: string, key: string): ItemAsk => ({
     ...ask,

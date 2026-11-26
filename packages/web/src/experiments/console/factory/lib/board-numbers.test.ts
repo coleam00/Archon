@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import type { OutcomeWords } from '../../routes/board/standing';
 import type { ItemRead } from '../../skills/items';
 import { packBoard, projectSetAside } from './board-numbers';
 
@@ -8,7 +9,13 @@ type Link = ItemRead['links'][number];
 function item(
   key: string,
   state: ItemRead['standing']['state'],
-  rest: { starts?: string[]; mergedAt?: string; links?: Link[]; status?: string } = {}
+  rest: {
+    starts?: string[];
+    mergedAt?: string;
+    links?: Link[];
+    status?: string;
+    outcome?: string;
+  } = {}
 ): ItemRead {
   const starts = rest.starts ?? ['2026-11-20 10:00:00'];
   return {
@@ -19,13 +26,16 @@ function item(
       startedAt,
       completedAt: startedAt,
       status: rest.status ?? 'completed',
-      outcome: null,
+      outcome: rest.outcome ?? null,
     })),
     questions: [],
     links: rest.links ?? [],
     merged: rest.mergedAt === undefined ? null : { at: rest.mergedAt },
   } as unknown as ItemRead;
 }
+
+/** Words every outcome by a marker, so a test sees `howItEnded` used them. */
+const words = (): OutcomeWords => (_run, outcome) => `words for ${outcome}`;
 
 const hasPart: Link = {
   kind: 'part_of',
@@ -114,16 +124,21 @@ test('a work order counts only on a stage or by its own merge; set-aside items a
 });
 
 test('an item ended without merging or at rest is set aside, with why; a failed one or an order is not', () => {
-  const aside = projectSetAside([
-    item('order', 'resting', { links: [hasPart] }),
-    item('failed', 'failed'),
-    item('cancelled', 'resting', { status: 'cancelled', starts: ['2026-11-21 10:00:00'] }),
-    item('no-outcome', 'resting'),
-    item('dropped', 'done', { starts: ['2026-11-22 10:00:00'] }),
-  ]);
+  const aside = projectSetAside(
+    [
+      item('order', 'resting', { links: [hasPart] }),
+      item('failed', 'failed'),
+      item('cancelled', 'resting', { status: 'cancelled', starts: ['2026-11-21 10:00:00'] }),
+      item('no-outcome', 'resting'),
+      item('no-outcome-done', 'done', { starts: ['2026-11-22 10:00:00'] }),
+      item('dropped', 'done', { starts: ['2026-11-23 10:00:00'], outcome: 'drop' }),
+    ],
+    words
+  );
   expect(aside.map(entry => [entry.read.item.key, entry.why])).toEqual([
-    // `howItEnded`: the run's outcome, else Done.
-    ['dropped', 'Done'],
+    // `howItEnded`: the run's outcome in the words given, else Done.
+    ['dropped', 'words for drop'],
+    ['no-outcome-done', 'Done'],
     ['cancelled', 'Cancelled'],
     ['no-outcome', 'Ended with no outcome'],
   ]);
@@ -143,7 +158,7 @@ test('with a placement, a moving item at no stage is set aside and on no count',
   // Until the pack is read there is no placement, and every moving item counts.
   expect(packBoard([placed, lost], 'flow', NOW).moving.length).toBe(2);
   // Set aside says why, since its run started.
-  expect(projectSetAside([placed, lost], [{ read: lost, why: 'On no stage' }])).toEqual([
+  expect(projectSetAside([placed, lost], words, [{ read: lost, why: 'On no stage' }])).toEqual([
     { read: lost, why: 'On no stage', since: '2026-11-20 10:00:00' },
   ]);
 });

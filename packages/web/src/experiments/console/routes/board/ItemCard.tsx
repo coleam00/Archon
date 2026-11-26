@@ -12,7 +12,12 @@ import { Link } from 'react-router';
 import { BoardCardProgress, CARD_BUTTON, CardPrButton } from '../../factory/BoardCardProgress';
 import { useCardList } from '../../factory/FactoryCards';
 import { useFactoryCards } from '../../factory/cards-context';
-import { packOf, runStageName, type CardProgress } from '../../factory/lib/item-card';
+import {
+  outcomeWordsFor,
+  packOf,
+  runStageName,
+  type CardProgress,
+} from '../../factory/lib/item-card';
 import { NeedsYouLink } from '../../factory/NeedsYouLink';
 import { relativeTime } from '../../lib/format';
 import type { ItemRead } from '../../skills/items';
@@ -61,14 +66,19 @@ export function ItemCard({
   const open = runToOpen(read);
   const shade = litShade(lit, read.item.id);
   const packs = useFactoryCards()?.packs ?? null;
+  const words = outcomeWordsFor(packs, read);
   const reason = needsDecision(read)
-    ? decisionReason(read, at => runStageName(packs === null ? null : packOf(packs, read), at))
+    ? decisionReason(
+        read,
+        at => runStageName(packs === null ? null : packOf(packs, read), at),
+        words
+      )
     : undefined;
   const meta = [
     stage,
     run === undefined
       ? undefined
-      : `${run.outcome === null ? run.status : `ended ${run.outcome}`} · ${relativeTime(run.completedAt ?? run.startedAt)}`,
+      : `${run.outcome === null ? run.status : words(run, run.outcome)} · ${relativeTime(run.completedAt ?? run.startedAt)}`,
     read.merged === null ? undefined : 'merged',
   ].filter(part => part !== undefined);
   return (
@@ -163,12 +173,13 @@ function CardActions({
  */
 export function StateLabel({ read }: { read: ItemRead }): ReactElement {
   const { state } = read.standing;
+  const packs = useFactoryCards()?.packs ?? null;
   return (
     <span
       data-chip={state}
       className={`shrink-0 select-none whitespace-nowrap rounded px-1.5 py-0.5 text-console-12 font-medium ${CHIP[state].tone}`}
     >
-      {state === 'done' ? howItEnded(read) : CHIP[state].label}
+      {state === 'done' ? howItEnded(read, outcomeWordsFor(packs, read)) : CHIP[state].label}
     </span>
   );
 }

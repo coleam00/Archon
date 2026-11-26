@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import type { PackGraph } from '../../skills/items';
-import { mapArrows, stageHandOffs, stageSteps, type StructureView } from './graph-structure';
+import {
+  mapArrows,
+  outcomeLabel,
+  outcomeWords,
+  stageHandOffs,
+  stageSteps,
+  type StructureView,
+} from './graph-structure';
 
 type Arrow = PackGraph['arrows'][number];
 type Stage = PackGraph['stages'][number];
@@ -93,19 +100,19 @@ describe('the structure the pack graph gives', () => {
     ]);
   });
 
-  test("the map's arrows: the graph's between stages in its order, each pair labelled with its values once, wake-ups and drains left out", () => {
+  test("the map's arrows: the graph's between stages in its order, each pair labelled with its values in words once, wake-ups and drains left out", () => {
     expect(mapArrows(view, graph)).toEqual([
-      { from: 'intake', to: 'plan', label: 'whole, small' },
-      { from: 'intake', to: 'link', label: 'done' },
-      { from: 'link', to: 'plan', label: 'placed' },
-      { from: 'link', to: 'link', label: 'done' },
+      { from: 'intake', to: 'plan', label: 'Whole, Small' },
+      { from: 'intake', to: 'link', label: 'Done' },
+      { from: 'link', to: 'plan', label: 'Placed' },
+      { from: 'link', to: 'link', label: 'Done' },
     ]);
   });
 
   test("an outcome reads as the file's label where it gives one, exact before the stage's catch-all", () => {
     expect(mapArrows(worded, graph)).toEqual([
-      { from: 'intake', to: 'plan', label: 'kept whole, small' },
-      { from: 'intake', to: 'link', label: 'done' },
+      { from: 'intake', to: 'plan', label: 'kept whole, Small' },
+      { from: 'intake', to: 'link', label: 'Done' },
       { from: 'link', to: 'plan', label: 'linked' },
       { from: 'link', to: 'link', label: 'linked' },
     ]);
@@ -124,11 +131,11 @@ describe('the structure the pack graph gives', () => {
 
   test('where items go from a stage: its arrows into other stages, in the same words', () => {
     expect(stageHandOffs(view, mapArrows(view, graph), 'link')).toEqual([
-      { label: 'placed', to: 'plan', toLabel: 'Plan' },
+      { label: 'Placed', to: 'plan', toLabel: 'Plan' },
     ]);
     expect(stageHandOffs(worded, mapArrows(worded, graph), 'intake')).toEqual([
-      { label: 'kept whole, small', to: 'plan', toLabel: 'Plan' },
-      { label: 'done', to: 'link', toLabel: 'Link' },
+      { label: 'kept whole, Small', to: 'plan', toLabel: 'Plan' },
+      { label: 'Done', to: 'link', toLabel: 'Link' },
     ]);
   });
 
@@ -139,5 +146,25 @@ describe('the structure the pack graph gives', () => {
     expect(stageHandOffs({ stages: [] }, arrows, 'plan')).toEqual([
       { label: 'done', to: 'stage-host', toLabel: 'Stage host' },
     ]);
+  });
+});
+
+describe('an outcome reads its label, else its value in words (#270)', () => {
+  const labels = {
+    outcomeLabels: { 'build:ask': 'asked you', 'build:*': 'Build ended' },
+  };
+
+  test('an exact workflow:outcome label wins over workflow:*', () => {
+    expect(outcomeWords(labels, 'build', 'ask')).toBe('asked you');
+  });
+
+  test('workflow:* words an outcome the file does not list', () => {
+    expect(outcomeWords(labels, 'build', 'drop')).toBe('Build ended');
+    expect(outcomeLabel(labels, 'build', null)).toBe('Build ended');
+  });
+
+  test('an outcome the file does not word reads as its value in words', () => {
+    expect(outcomeWords(labels, 'check', 'send-back')).toBe('Send back');
+    expect(outcomeLabel(labels, 'check', 'pass')).toBeUndefined();
   });
 });
