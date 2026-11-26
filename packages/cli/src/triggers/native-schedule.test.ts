@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { removeTempTree } from '@archon/paths/test-utils';
 import {
+  findNativeScheduleTargets,
   inspectNativeSchedule,
   installNativeSchedule,
   listNativeSchedules,
@@ -641,6 +642,21 @@ describe('reading installed jobs back', () => {
         launchAgentsDirectory: directory,
       })
     ).toEqual([expect.objectContaining({ label: LABEL, unreadable: expect.any(String) })]);
+  });
+
+  itOnPosixHost('falls back to the requested target when the job file is unreadable', async () => {
+    const directory = await scratchDirectory();
+    const archonHome = join(directory, 'home');
+    const scheduler = {
+      platform: 'darwin' as const,
+      uid: 501,
+      launchAgentsDirectory: directory,
+    };
+    await writeFile(join(directory, `${LABEL}.plist`), '<plist/>');
+
+    expect(await findNativeScheduleTargets(archonHome, () => 'source-refresh', scheduler)).toEqual([
+      { id: 'source-refresh', archonHome },
+    ]);
   });
 });
 

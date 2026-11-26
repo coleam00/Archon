@@ -18,10 +18,12 @@ import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import {
+  findNativeScheduleTargets,
   inspectNativeSchedule,
   installNativeSchedule,
   removeNativeSchedule,
   type NativeScheduleConfig,
+  type NativeScheduleOptions,
   type NativeScheduleTarget,
 } from '../triggers/native-schedule';
 
@@ -33,12 +35,22 @@ export function defaultWakeIntervalSeconds(platform: NodeJS.Platform = process.p
 }
 
 /** One job per install: the id is keyed on the Archon home. */
-export function workflowWakeScheduleTarget(): NativeScheduleTarget {
-  const archonHome = getArchonHome();
+export function workflowWakeScheduleTarget(archonHome = getArchonHome()): NativeScheduleTarget {
   return {
     id: `workflow-wake-${createHash('sha256').update(archonHome).digest('hex')}`,
     archonHome,
   };
+}
+
+export async function workflowWakeScheduleTargets(
+  schedules: NativeScheduleOptions = {}
+): Promise<[NativeScheduleTarget, ...NativeScheduleTarget[]]> {
+  const archonHome = getArchonHome();
+  return findNativeScheduleTargets(
+    archonHome,
+    home => workflowWakeScheduleTarget(home).id,
+    schedules
+  );
 }
 
 /**
@@ -57,9 +69,10 @@ function homeEnvNamesSources(archonHome: string): boolean {
 }
 
 export function workflowWakeScheduleConfig(
-  intervalSeconds = defaultWakeIntervalSeconds()
+  intervalSeconds = defaultWakeIntervalSeconds(),
+  target = workflowWakeScheduleTarget()
 ): NativeScheduleConfig {
-  const { id, archonHome } = workflowWakeScheduleTarget();
+  const { id, archonHome } = target;
   const [executable, ...prefix] = cliProgramArguments();
   // The job sets only ARCHON_HOME and PATH, so a sources file only this shell names travels
   // as an argument. Otherwise the job could read it only from ARCHON_HOME/.env, which every
@@ -165,8 +178,11 @@ interface Outcome {
   text: string;
 }
 
-async function install(config: NativeScheduleConfig): Promise<Outcome> {
-  const { path } = await installNativeSchedule(config);
+async function install(
+  config: NativeScheduleConfig,
+  schedules: NativeScheduleOptions
+): Promise<Outcome> {
+  const { path } = await installNativeSchedule(config, schedules);
   const every = String(config.schedule.intervalSeconds);
   return {
     result: { path },
@@ -174,42 +190,49 @@ async function install(config: NativeScheduleConfig): Promise<Outcome> {
   };
 }
 
-async function remove(config: NativeScheduleConfig): Promise<Outcome> {
-  const removed = await removeNativeSchedule(config);
-  await unlink(wakeLastPassPath(config)).catch(() => undefined);
+async function remove(
+  targets: readonly NativeScheduleTarget[],
+  schedules: NativeScheduleOptions
+): Promise<Outcome> {
+  let removed = false;
+  for (const target of targets) {
+    if (await removeNativeSchedule(target, schedules)) removed = true;
+    await unlink(wakeLastPassPath(target)).catch(() => undefined);
+  }
   return {
     result: { removed },
     text: removed ? 'Removed the wake watcher job.' : NOT_INSTALLED,
   };
 }
 
-async function status(config: NativeScheduleConfig): Promise<Outcome> {
-  const installed = await inspectNativeSchedule(config);
-  if (!installed) return { result: { installed: false }, text: NOT_INSTALLED };
-  const lastPass = await readWakeLastPass(wakeLastPassPath(config));
-  const result = {
-    installed: true,
-    path: installed.path,
-    registered: installed.registered,
-    ...(lastPass ? { lastPass } : {}),
-  };
-  if (!installed.registered)
-    return {
-      result,
-      text:
-        `The wake watcher job is installed, but the scheduler has not loaded it: ${installed.path}. ` +
-        'Install it again with the same --interval to load it, or remove it.',
+async function status(
+  targets: readonly NativeScheduleTarget[],
+  schedules: NativeScheduleOptions
+): Promise<Outcome> {
+  for (const target of targets) {
+    const installed = await inspectNativeSchedule(target, schedules);
+    if (!installed) continue;
+    const lastPass = await readWakeLastPass(wakeLastPassPath(target));
+    const result = {
+      installed: true,
+      path: installed.path,
+      registered: installed.registered,
+      ...(lastPass ? { lastPass } : {}),
     };
-  const last = lastPass
-    ? ` ${describeWakeLastPass(lastPass)}`
-    : ' No watcher has recorded a pass yet.';
-  return { result, text: `The wake watcher job is installed: ${installed.path}.${last}` };
+    if (!installed.registered)
+      return {
+        result,
+        text:
+          `The wake watcher job is installed, but the scheduler has not loaded it: ${installed.path}. ` +
+          'Install it again with the same --interval to load it, or remove it.',
+      };
+    const last = lastPass
+      ? ` ${describeWakeLastPass(lastPass)}`
+      : ' No watcher has recorded a pass yet.';
+    return { result, text: `The wake watcher job is installed: ${installed.path}.${last}` };
+  }
+  return { result: { installed: false }, text: NOT_INSTALLED };
 }
-
-const OPERATIONS = { install, remove, status } satisfies Record<
-  Operation,
-  (config: NativeScheduleConfig) => Promise<Outcome>
->;
 
 function parseOperation(args: string[]): Operation {
   const operation = args[1];
@@ -222,15 +245,23 @@ function parseOperation(args: string[]): Operation {
 }
 
 /** `args` starts at `schedule`. */
-export async function workflowWakeScheduleCommand(args: string[], values: Values): Promise<number> {
+export async function workflowWakeScheduleCommand(
+  args: string[],
+  values: Values,
+  schedules: NativeScheduleOptions = {}
+): Promise<number> {
   const json = values.json === true;
   try {
     const operation = parseOperation(args);
     validateFlags(values, operation === 'install' ? ['interval'] : []);
-    const config = workflowWakeScheduleConfig(
-      parseIntervalSeconds(values, defaultWakeIntervalSeconds())
-    );
-    const { result, text } = await OPERATIONS[operation](config);
+    const interval = parseIntervalSeconds(values, defaultWakeIntervalSeconds());
+    const targets = await workflowWakeScheduleTargets(schedules);
+    const { result, text } =
+      operation === 'install'
+        ? await install(workflowWakeScheduleConfig(interval, targets[0]), schedules)
+        : operation === 'remove'
+          ? await remove(targets, schedules)
+          : await status(targets, schedules);
     await writeStdout(
       json
         ? `${JSON.stringify({ ok: true, action: `wake schedule ${operation}`, ...result })}\n`

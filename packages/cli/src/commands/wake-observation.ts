@@ -12,13 +12,14 @@ import {
   inspectNativeSchedule,
   NativeScheduleUnsupportedError,
   type NativeScheduleOptions,
+  type NativeScheduleTarget,
 } from '../triggers/native-schedule';
 import {
   describeWakeLastPass,
   readWakeLastPass,
   WAKE_SCHEDULE_INSTALL_COMMAND,
   wakeLastPassPath,
-  workflowWakeScheduleTarget,
+  workflowWakeScheduleTargets,
 } from './wake-schedule';
 import type { WakeObservation } from './workflow-continuations';
 
@@ -52,9 +53,13 @@ async function loadObservingSources(
  * Without ARCHON_WEBHOOK_SOURCES here, the file the installed job's watcher last loaded is
  * read: install passes the installing shell's file to the job with `--sources`.
  */
-async function observingSources(host: WorkflowHost): Promise<readonly ObservingSource[]> {
+async function observingSources(
+  host: WorkflowHost,
+  target: NativeScheduleTarget
+): Promise<readonly ObservingSource[]> {
   const configPath =
-    process.env.ARCHON_WEBHOOK_SOURCES || (await readWakeLastPass(wakeLastPassPath()))?.sources;
+    process.env.ARCHON_WEBHOOK_SOURCES ||
+    (await readWakeLastPass(wakeLastPassPath(target)))?.sources;
   return (await loadObservingSources(host, configPath))?.observing ?? [];
 }
 
@@ -65,7 +70,8 @@ async function observingSources(host: WorkflowHost): Promise<readonly ObservingS
  * check cannot tell whether one runs for this install.
  */
 export async function observingReport(host: WorkflowHost, schedules: NativeScheduleOptions) {
-  const sources = (await observingSources(host)).map(source => ({
+  const [target] = await workflowWakeScheduleTargets(schedules);
+  const sources = (await observingSources(host, target)).map(source => ({
     source: source.sourceInstanceId,
     everySeconds: source.everySeconds,
     labels: source.labels,
@@ -75,7 +81,6 @@ export async function observingReport(host: WorkflowHost, schedules: NativeSched
   if (sources.length === 0) return undefined;
   const server = `an Archon server started with ARCHON_WEBHOOK_SOURCES runs for this install`;
   try {
-    const target = workflowWakeScheduleTarget();
     const job = await inspectNativeSchedule(target, schedules);
     const watcher = { installed: job !== undefined, registered: job?.registered ?? false };
     if (watcher.registered) {

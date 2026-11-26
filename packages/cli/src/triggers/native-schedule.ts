@@ -449,3 +449,23 @@ export async function listNativeSchedules(
       installed.push(entry);
   return installed;
 }
+
+/**
+ * The targets for one logical job in `archonHome`, however that directory was spelled when
+ * the job was installed. The id always comes from the home the job file recorded. With no
+ * readable match, the current spelling's target still reaches a job file that cannot be read.
+ */
+export async function findNativeScheduleTargets(
+  archonHome: string,
+  idForHome: (archonHome: string) => string,
+  options: NativeScheduleOptions = {}
+): Promise<[NativeScheduleTarget, ...NativeScheduleTarget[]]> {
+  const found: NativeScheduleTarget[] = [];
+  for (const job of await listNativeSchedules(archonHome, options)) {
+    if (!('archonHome' in job)) continue;
+    const id = idForHome(job.archonHome);
+    if (job.label === scheduleLabel(id)) found.push({ id, archonHome: job.archonHome });
+  }
+  const [first, ...rest] = found;
+  return first ? [first, ...rest] : [{ id: idForHome(archonHome), archonHome }];
+}

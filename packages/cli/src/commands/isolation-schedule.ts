@@ -9,10 +9,13 @@ import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import {
+  findNativeScheduleTargets,
   inspectNativeSchedule,
   installNativeSchedule,
   removeNativeSchedule,
   type NativeScheduleConfig,
+  type NativeScheduleOptions,
+  type NativeScheduleTarget,
 } from '../triggers/native-schedule';
 
 /** Six hours. */
@@ -24,11 +27,12 @@ export const ISOLATION_CLEANUP_INTERVAL_SECONDS = 21600;
  */
 export function isolationCleanupScheduleConfig(
   intervalSeconds = ISOLATION_CLEANUP_INTERVAL_SECONDS,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  target = isolationCleanupScheduleTarget(env)
 ): NativeScheduleConfig {
-  const archonHome = getArchonHome(env);
+  const { id, archonHome } = target;
   return {
-    id: `isolation-cleanup-${createHash('sha256').update(archonHome).digest('hex')}`,
+    id,
     programArguments: [...cliProgramArguments(), 'isolation', 'cleanup', '--merged'],
     workingDirectory: archonHome,
     archonHome,
@@ -37,6 +41,18 @@ export function isolationCleanupScheduleConfig(
     output: 'log',
     removeCommand: 'archon isolation cleanup schedule remove',
   };
+}
+
+function isolationCleanupScheduleTarget(env: NodeJS.ProcessEnv): NativeScheduleTarget {
+  const archonHome = getArchonHome(env);
+  return {
+    id: isolationCleanupScheduleId(archonHome),
+    archonHome,
+  };
+}
+
+function isolationCleanupScheduleId(archonHome: string): string {
+  return `isolation-cleanup-${createHash('sha256').update(archonHome).digest('hex')}`;
 }
 
 type Values = Record<string, unknown>;
@@ -67,8 +83,11 @@ interface Outcome {
 
 const NOT_INSTALLED = 'No merged cleanup timer is installed.';
 
-async function install(config: NativeScheduleConfig): Promise<Outcome> {
-  const { path, log } = await installNativeSchedule(config);
+async function install(
+  config: NativeScheduleConfig,
+  schedules: NativeScheduleOptions
+): Promise<Outcome> {
+  const { path, log } = await installNativeSchedule(config, schedules);
   const every = String(config.schedule.intervalSeconds);
   return {
     result: { path, log },
@@ -76,53 +95,74 @@ async function install(config: NativeScheduleConfig): Promise<Outcome> {
   };
 }
 
-async function remove(config: NativeScheduleConfig): Promise<Outcome> {
-  const removed = await removeNativeSchedule(config);
+async function remove(
+  targets: readonly NativeScheduleTarget[],
+  schedules: NativeScheduleOptions
+): Promise<Outcome> {
+  let removed = false;
+  for (const target of targets) if (await removeNativeSchedule(target, schedules)) removed = true;
   return {
     result: { removed },
     text: removed ? 'Removed the merged cleanup timer.' : NOT_INSTALLED,
   };
 }
 
-async function status(config: NativeScheduleConfig): Promise<Outcome> {
-  const installed = await inspectNativeSchedule(config);
-  if (!installed) return { result: { installed: false }, text: NOT_INSTALLED };
-  const result = { installed: true, ...installed };
-  if (!installed.registered)
+async function status(
+  targets: readonly NativeScheduleTarget[],
+  schedules: NativeScheduleOptions
+): Promise<Outcome> {
+  for (const target of targets) {
+    const installed = await inspectNativeSchedule(target, schedules);
+    if (!installed) continue;
+    const result = { installed: true, ...installed };
+    if (!installed.registered)
+      return {
+        result,
+        text:
+          `The merged cleanup timer is installed, but the scheduler has not loaded it: ${installed.path}. ` +
+          'Install it again with the same --interval to load it, or remove it.',
+      };
+    const ran = installed.lastRunAt ? `Last ran ${installed.lastRunAt}` : 'It has not run yet';
     return {
       result,
-      text:
-        `The merged cleanup timer is installed, but the scheduler has not loaded it: ${installed.path}. ` +
-        'Install it again with the same --interval to load it, or remove it.',
+      text: `The merged cleanup timer is installed: ${installed.path}. ${ran} (output: ${installed.log}).`,
     };
-  const ran = installed.lastRunAt ? `Last ran ${installed.lastRunAt}` : 'It has not run yet';
-  return {
-    result,
-    text: `The merged cleanup timer is installed: ${installed.path}. ${ran} (output: ${installed.log}).`,
-  };
+  }
+  return { result: { installed: false }, text: NOT_INSTALLED };
 }
 
-const OPERATIONS = { install, remove, status } satisfies Record<
-  Operation,
-  (config: NativeScheduleConfig) => Promise<Outcome>
->;
-
-async function runOperation(operation: Operation, values: Values): Promise<string> {
+async function runOperation(
+  operation: Operation,
+  values: Values,
+  schedules: NativeScheduleOptions
+): Promise<string> {
   validateFlags(values, operation === 'install' ? ['interval'] : []);
   const interval = parseIntervalSeconds(values, ISOLATION_CLEANUP_INTERVAL_SECONDS);
-  const { result, text } = await OPERATIONS[operation](isolationCleanupScheduleConfig(interval));
+  const archonHome = getArchonHome();
+  const targets = await findNativeScheduleTargets(
+    archonHome,
+    isolationCleanupScheduleId,
+    schedules
+  );
+  const { result, text } =
+    operation === 'install'
+      ? await install(isolationCleanupScheduleConfig(interval, process.env, targets[0]), schedules)
+      : operation === 'remove'
+        ? await remove(targets, schedules)
+        : await status(targets, schedules);
   if (values.json !== true) return text;
   return JSON.stringify({ ok: true, action: `isolation cleanup schedule ${operation}`, ...result });
 }
 
 export async function isolationCleanupScheduleCommand(
   args: string[],
-  values: Values
+  values: Values,
+  schedules: NativeScheduleOptions = {}
 ): Promise<number> {
   const json = values.json === true;
   const operation = args[0] ?? '';
   try {
-    await writeStdout(`${await runOperation(parseOperation(args), values)}\n`);
+    await writeStdout(`${await runOperation(parseOperation(args), values, schedules)}\n`);
     return 0;
   } catch (error) {
     if (json)

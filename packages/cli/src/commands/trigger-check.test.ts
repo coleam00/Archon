@@ -23,7 +23,12 @@ import {
 } from '../test-support/workflow-store';
 import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
 import { triggerCommand } from './trigger';
-import { wakeLastPassPath, workflowWakeScheduleConfig, writeWakeLastPass } from './wake-schedule';
+import {
+  wakeLastPassPath,
+  workflowWakeScheduleConfig,
+  workflowWakeScheduleTarget,
+  writeWakeLastPass,
+} from './wake-schedule';
 
 const tempRoots = trackTempRoots();
 const previousHome = process.env.ARCHON_HOME;
@@ -305,7 +310,7 @@ test('reports the outcomes after which a stage a fire-only file starts would sto
 });
 
 test('names the observing sources nothing watches with the fix, and the watcher once installed', async () => {
-  const { root, check, schedules } = await fixture();
+  const { root, archonHome, check, schedules } = await fixture();
   const plugin = join(root, 'source.mjs');
   await writeFile(
     plugin,
@@ -359,7 +364,10 @@ test('names the observing sources nothing watches with the fix, and the watcher 
   // A report, not a binding problem: the check still passes.
   expect(unwatched.error).toBeUndefined();
 
+  process.env.ARCHON_HOME = `${archonHome}${sep}`;
+  const installedTarget = workflowWakeScheduleTarget();
   await installNativeSchedule(workflowWakeScheduleConfig(), schedules);
+  process.env.ARCHON_HOME = archonHome;
   const watched = await check();
   expect(watched.observing).toEqual({
     sources: observed,
@@ -369,7 +377,7 @@ test('names the observing sources nothing watches with the fix, and the watcher 
   expect(watched.error).toBeUndefined();
 
   // The job discards the watcher's output; a failed last pass is reported, still not an error.
-  const lastPass = wakeLastPassPath();
+  const lastPass = wakeLastPassPath(installedTarget);
   await mkdir(dirname(lastPass), { recursive: true });
   const failed = {
     at: '2026-11-23T21:30:00.000Z',

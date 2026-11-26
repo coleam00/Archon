@@ -91,6 +91,9 @@ const inspect = mock(
 let wakeJobDefinition: string | undefined;
 mock.module('../triggers/native-schedule', () => ({
   ...realNativeSchedule,
+  findNativeScheduleTargets: async (archonHome: string, idForHome: (home: string) => string) => [
+    { id: idForHome(archonHome), archonHome },
+  ],
   installNativeSchedule: install,
   removeNativeSchedule: remove,
   inspectNativeSchedule: inspect,
