@@ -807,6 +807,22 @@ describe('a stage woken by a wait, on the checkout the waiting run left', () => 
     expect(worktree).toBe(build?.working_path ?? '');
     expect(fixture.git('log', '-1', '--format=%s', handoff.commit)).toBe('built');
 
+    // A hand-edited binding that reads an input `host` does not declare is refused when its
+    // event arrives, naming the binding and the input, and the wait stays open.
+    await acceptWake(fixture, handoff.commit, 'undeclared_base');
+    const listed = JSON.parse((await fixture.cli(['trigger', 'list'])).stdout) as {
+      outcome: string;
+      reason: string | null;
+    }[];
+    const refused = listed.find(receipt => receipt.reason?.includes('undeclared_base'));
+    expect(refused?.outcome).toBe('unmatched');
+    expect(refused?.reason).toContain(
+      "binding 'checks-done': input 'land_on' reads 'undeclared_base', which 'host' does not declare"
+    );
+    expect(
+      fixture.rows<{ closed_as: string | null }>('SELECT closed_as FROM remote_agent_item_waits')
+    ).toEqual([{ closed_as: null }]);
+
     // A completed check at that commit, as the GitHub source plugin hands it to the store.
     await acceptWake(fixture, handoff.commit);
     await fixture.cli(['trigger', 'drain', '--host', 'factory-host']);
@@ -846,9 +862,9 @@ function writeTrigger(fixture: Fixture, name: string, on: Record<string, unknown
 /**
  * Accept a completed check at `commit` through the store every surface shares
  * (`createWorkflowStore().acceptStartReceipt`), with the binding the GitHub source plugin
- * makes of a pack's `checks-done` wake.
+ * makes of a pack's `checks-done` wake; `landOn` is the input its `land_on` reads.
  */
-async function acceptWake(fixture: Fixture, commit: string): Promise<void> {
+async function acceptWake(fixture: Fixture, commit: string, landOn = 'land_on'): Promise<void> {
   const file = JSON.parse(
     readFileSync(join(fixture.home, 'triggers', 'host-after-build.json'), 'utf8')
   ) as { binding: { runAsUserId: string } };
@@ -856,7 +872,7 @@ async function acceptWake(fixture: Fixture, commit: string): Promise<void> {
     receipt: {
       id: crypto.randomUUID(),
       sourceInstanceId: 'github',
-      deliveryId: `check:${commit}`,
+      deliveryId: `check:${commit}:${landOn}`,
       contentDigest: commit,
       receivedAt: new Date().toISOString(),
       occurredAt: null,
@@ -882,7 +898,7 @@ async function acceptWake(fixture: Fixture, commit: string): Promise<void> {
           workflowName: 'host',
           wait: 'checks',
           about: commit,
-          inputs: { land_on: { input: 'land_on' }, answers: { item: 'answers' } },
+          inputs: { land_on: { input: landOn }, answers: { item: 'answers' } },
           checkout: 'waiting-run',
         },
       },
@@ -894,6 +910,12 @@ async function acceptWake(fixture: Fixture, commit: string): Promise<void> {
     waker,
     `const { createWorkflowStore } = await import(${JSON.stringify(join(core, 'workflows', 'store-adapter.ts'))});
 const { closeDatabase } = await import(${JSON.stringify(join(core, 'db', 'connection.ts'))});
+const { setPlatformPolicies } = await import(${JSON.stringify(join(core, 'platforms', 'registry.ts'))});
+const { defaultPlatformPolicies } = await import(${JSON.stringify(join(core, '..', '..', 'adapters', 'src', 'platform-policies.ts'))});
+const { registerHostProviders } = await import(${JSON.stringify(join(core, 'providers', 'register-host-providers.ts'))});
+// As the server does at start: the wake's input check loads config and discovers workflows.
+setPlatformPolicies(defaultPlatformPolicies);
+await registerHostProviders();
 await createWorkflowStore().acceptStartReceipt(JSON.parse(process.argv[2]));
 await closeDatabase();
 `

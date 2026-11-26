@@ -32,6 +32,17 @@ import {
   type Harness,
 } from './item-asks.conformance';
 
+// The waiting workflows here are not on disk; the input check is the production store's.
+// `checked` records which bindings it was asked about.
+const checked: string[] = [];
+const wakes = {
+  start: wakeStart,
+  inputProblems: async ({ bindingId }: { bindingId: string }) => {
+    checked.push(bindingId);
+    return [];
+  },
+};
+
 export const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
 
@@ -129,7 +140,7 @@ export async function accept(
   project: string | null
 ): Promise<string> {
   const { acceptStartReceipt } = await import('./start-receipt-writes');
-  return (await acceptStartReceipt(receipt, async () => project, wakeStart)).receiptId;
+  return (await acceptStartReceipt(receipt, async () => project, wakes)).receiptId;
 }
 
 /**
@@ -241,6 +252,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
       // The waiting run has ended: nothing holds a session, a checkout or a slot.
       expect((await harness.store.getWorkflowRun(waiting))?.status).toBe('completed');
       const project = await projectKey(harness);
+      checked.length = 0;
       const delivery = wakeReceipt(HEAD, { deliveryId: 'delivery-1' });
       const id = await accept(delivery, project);
       expect(await readReceipt(harness, id)).toEqual({
@@ -262,7 +274,9 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
           },
         ],
       });
-      // A wake that maps event fields only keeps them, and takes no checkout.
+      // A wake that maps event fields only keeps them, takes no checkout, and is not
+      // checked against any workflow's inputs.
+      expect(checked).toEqual([]);
       const [started] = (await harness.store.getStartReceipt(id))?.bindings ?? [];
       expect(started?.intent?.eventInputs?.revision).toBe(HEAD);
       expect(started?.intent?.checkoutFrom).toBeUndefined();

@@ -5,34 +5,45 @@ import type {
   SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import { getDatabase } from './connection';
-import { resolveWakes, type WakeStart } from './item-waits';
+import { resolveWakes, type PreparedWake, type WakeMapping } from './item-waits';
 import type { TransactionQuery as Query } from './resource-slots';
 
 /**
  * Record a receipt. A binding that wakes a wait is resolved against the open waits in the
- * same transaction (`resolveWakes`), with its launch's project from `projectKeyOf`, read
- * first. The resolution runs only after this transaction has claimed the delivery by
- * writing the receipt's row: a concurrent delivery with the same identity waits on that row
- * and then replays, so it can never close a wait (one opened since, say) for a receipt
- * that is not recorded.
+ * same transaction (`resolveWakes`), with its launch's project from `projectKeyOf`, and,
+ * for one that carries inputs, the problems `wakes.inputProblems` finds, both read first.
+ * The resolution runs only after this transaction has claimed the delivery by writing the
+ * receipt's row: a concurrent delivery with the same identity waits on that row and then
+ * replays, so it can never close a wait (one opened since, say) for a receipt that is not
+ * recorded.
  */
 export async function acceptStartReceipt(
   input: SourceReceiptAcceptance,
   projectKeyOf: (cwd: string) => Promise<string | null> = async () => null,
-  /** Maps what a wake binding carries from the waiting run; see `WakeStart`. */
-  wakeStart?: WakeStart
+  /** What a wake binding carries from the waiting run; see `WakeMapping`. */
+  wakes?: WakeMapping
 ): Promise<{ receiptId: string; replay: boolean }> {
-  const projectKeys = new Map<string, string | null>();
-  for (const binding of input.bindings)
-    if (binding.wake !== undefined)
-      projectKeys.set(binding.bindingId, await projectKeyOf(binding.launch.cwd));
+  const prepared = new Map<string, PreparedWake>();
+  for (const binding of input.bindings) {
+    const { wake } = binding;
+    if (wake === undefined) continue;
+    prepared.set(binding.bindingId, {
+      projectKey: await projectKeyOf(binding.launch.cwd),
+      // Workflows are discovered only for a wake that carries inputs; one that maps event
+      // fields alone reads nothing more.
+      inputProblems:
+        wake.inputs === undefined || wakes === undefined
+          ? []
+          : await wakes.inputProblems({ ...binding, wake }),
+    });
+  }
   return getDatabase().withTransaction(query =>
     insertStartReceipt(
       query,
       input,
-      projectKeys.size === 0
+      prepared.size === 0
         ? undefined
-        : claimed => resolveWakes(query, claimed, projectKeys, wakeStart)
+        : claimed => resolveWakes(query, claimed, prepared, wakes?.start)
     )
   );
 }

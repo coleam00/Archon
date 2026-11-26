@@ -189,20 +189,41 @@ export type WakeStart = (
   | { refused: { detail: string; reason: 'inputs_unmapped' | 'checkout_refused' } };
 
 /**
+ * What a wake binding needs from core's workflows, injected as `WakeStart` alone would be:
+ * `start` maps it from the waiting run inside the transaction, and `inputProblems` checks,
+ * before the transaction, each `{ input }` it carries against the inputs its `wake.workflow`
+ * declares, so a binding the source plugin accepted with a stale or mistyped name is refused
+ * without meeting a wait.
+ */
+export interface WakeMapping {
+  start: WakeStart;
+  inputProblems: (binding: ResourceStartBindingIntent & { wake: BindingWake }) => Promise<string[]>;
+}
+
+/** What is read per wake binding before the receipt's transaction. */
+export interface PreparedWake {
+  /** The project its launch is in, or null when none is registered there. */
+  projectKey: string | null;
+  /** Each carried `{ input }` its `wake.workflow` does not declare; empty when it carries none. */
+  inputProblems: readonly string[];
+}
+
+/**
  * The binding a wake makes once resolved against the open waits, or why it starts nothing.
  * A match is an open wait of the binding's workflow and name whose `about` is exactly the
  * event's, on an item of the binding's project, and on the item the event names when it
  * names one: a wait about any other value (the commit the change has moved past), or on
  * another subject at the same commit, is not one. The match closes its whole set as met, guarded on
  * the set still being open, so of two deliveries for one wait only the first starts. A wake
- * with `inputs` or `checkout` is mapped from the run that left the matched wait first
- * (`wakeStart`); a refusal leaves the set open and is recorded on that run.
+ * whose carried inputs its `wake.workflow` does not declare is refused before any wait is
+ * read. One with `inputs` or `checkout` is mapped from the run that left the matched wait
+ * first (`wakeStart`); a refusal leaves the set open and is recorded on that run.
  */
 async function resolveWake(
   query: TransactionQuery,
   receiptId: string,
   binding: ResourceStartBindingIntent & { wake: NonNullable<ResourceStartBindingIntent['wake']> },
-  projectKey: string | null,
+  { projectKey, inputProblems }: PreparedWake,
   wakeStart: WakeStart | undefined
 ): Promise<{ binding: ResourceStartBindingIntent } | { evaluated: Evaluated }> {
   const { wake, ...rest } = binding;
@@ -225,6 +246,14 @@ async function resolveWake(
     return notStarted(
       'rejected',
       `launch.cwd '${binding.launch.cwd}' is in no registered project, so no ${named} can be on its items`
+    );
+  // Refused before any wait is read, so the wait stays open for an event a sound binding
+  // makes, and goes overdue in attention if none comes.
+  if (inputProblems.length > 0)
+    return notStarted(
+      'rejected',
+      `binding '${binding.bindingId}': ${inputProblems.join('; ')}; '${binding.launch.workflowName}' was not started and no ${named} was met`,
+      { workflow: binding.launch.workflowName, reason: 'inputs_unmapped' }
     );
   const lock = getDatabaseType() === 'postgresql' ? ' FOR UPDATE OF w' : '';
   const found = await query<WaitRow & { item_key: string }>(
@@ -314,13 +343,13 @@ async function resolveWake(
 /**
  * `acceptance` with every binding that wakes resolved against the open waits, inside the
  * transaction that writes the receipt: a met wait's binding starts on its item, and any other
- * is recorded as not started. `projectKeys` holds, per binding id, the project its launch
- * resolves to, read before the transaction. The caller resolves only a first delivery.
+ * is recorded as not started. `prepared` holds, per binding id, what was read before the
+ * transaction. The caller resolves only a first delivery.
  */
 export async function resolveWakes(
   query: TransactionQuery,
   acceptance: SourceReceiptAcceptance,
-  projectKeys: ReadonlyMap<string, string | null>,
+  prepared: ReadonlyMap<string, PreparedWake>,
   wakeStart?: WakeStart
 ): Promise<SourceReceiptAcceptance> {
   if (!acceptance.bindings.some(binding => binding.wake !== undefined)) return acceptance;
@@ -337,7 +366,7 @@ export async function resolveWakes(
       query,
       acceptance.receipt.id,
       { ...binding, wake },
-      projectKeys.get(binding.bindingId) ?? null,
+      prepared.get(binding.bindingId) ?? { projectKey: null, inputProblems: [] },
       wakeStart
     );
     if ('binding' in resolved) bindings.push(resolved.binding);
