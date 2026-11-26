@@ -707,7 +707,8 @@ The engine lists an item as stopped when a run on it completes, leaves no ask an
 wait, and no step follows. So each workflow declares its endings:
 
 - An outcome after which the item is done goes in `returns.ends`: a merged change, a
-  parked item, an issue with no work owed.
+  parked item, a refuted investigation. Only when the outcome is about the item the run
+  is on: intake's `close` is not one, since a run can claim another issue than its own.
 - A workflow that is no step of the item it runs on declares `observes: true`: a pass
   over many items, a drain, a metrics run. A failed observing run is not listed on the
   item, so a workflow whose failure the item's operator must see stays a step. An
