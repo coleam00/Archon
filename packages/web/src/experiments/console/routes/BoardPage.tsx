@@ -41,7 +41,7 @@ import {
 } from '../factory/lib/board-numbers';
 import type { FactoryView } from '../factory/api';
 import type { TableRow } from '../factory/lib/board-table';
-import { itemMatches } from '../factory/lib/item-card';
+import { itemMatches, outcomeWordsFor } from '../factory/lib/item-card';
 import { workOrders } from '../factory/lib/work-orders';
 import type { Project } from '../primitives/project';
 import * as skill from '../skills';
@@ -521,6 +521,7 @@ function BoardSetAside({
   matches: (read: ItemRead) => boolean;
 }): ReactElement | null {
   const places = usePlaces(packs);
+  const cardPacks = useFactoryCards()?.packs ?? null;
   const now = new Date();
   const items = every ?? [];
   const unplaced = [
@@ -537,7 +538,9 @@ function BoardSetAside({
   return (
     <SetAsideStrip
       projectId={projectId}
-      entries={projectSetAside(items, unplaced).filter(entry => matches(entry.read))}
+      entries={projectSetAside(items, read => outcomeWordsFor(cardPacks, read), unplaced).filter(
+        entry => matches(entry.read)
+      )}
     />
   );
 }

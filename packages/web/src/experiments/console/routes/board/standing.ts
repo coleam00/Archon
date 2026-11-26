@@ -108,12 +108,25 @@ export const needsDecision = (read: ItemRead): boolean =>
   read.standing.state === 'failed' || read.standing.state === 'stopped';
 
 /**
+ * A run's outcome in words (`runOutcomeWords` in `factory/lib/item-card.ts`, by
+ * `outcomeWords` in `factory/lib/graph-structure.ts`). It arrives as a callback, as `stageOf` does, because
+ * `item-card.ts` imports this file.
+ */
+export type OutcomeWords = (
+  run: Pick<ItemRead['runs'][number], 'workflow' | 'pack'>,
+  outcome: string
+) => string;
+
+/**
  * Why the item needs a decision, in the engine's own facts: what failed, or how its run ended.
- * `stageOf` names the run's stage (`runStageName`), so the reason never prints a workflow id.
+ * `stageOf` names the run's stage (`runStageName`, which words even a run no pack places) and
+ * `outcomeOf` its outcome, so the reason prints neither a workflow id nor a raw outcome. A label
+ * is a phrase of its own, so it sits in parentheses mid-sentence.
  */
 export function decisionReason(
   read: ItemRead,
-  stageOf: (run: ItemRead['runs'][number]) => string
+  stageOf: (run: ItemRead['runs'][number]) => string,
+  outcomeOf: OutcomeWords
 ): string {
   const run = standingRun(read);
   const stage = run === undefined ? 'A run' : stageOf(run);
@@ -121,17 +134,30 @@ export function decisionReason(
   const [stop] = read.questions.flatMap(question =>
     question.kind === 'stopped' ? [question] : []
   );
-  if (stop === undefined)
-    return `${stage} ended ${run?.outcome ?? 'with no outcome'} and nothing followed`;
-  const ended = `${stage} ended ${stop.stoppedIn.outcome} and nothing followed`;
+  const how = (
+    of: Parameters<OutcomeWords>[0] | undefined,
+    outcome: string | null | undefined
+  ): string =>
+    of === undefined || outcome == null ? 'with no outcome' : `(${outcomeOf(of, outcome)})`;
+  if (stop === undefined) return `${stage} ended ${how(run, run?.outcome)} and nothing followed`;
+  // The words are keyed on the run that stopped, which the question names.
+  const stopped = read.runs.find(entry => entry.id === stop.stoppedIn.runId) ?? {
+    workflow: stop.stoppedIn.workflow,
+    pack: null,
+  };
+  const ended = `${stage} ended ${how(stopped, stop.stoppedIn.outcome)} and nothing followed`;
   return stop.summary === null ? ended : `${ended}: ${stop.summary}`;
 }
 
 export const runPath = (projectId: string, runId: string): string =>
   `/console/p/${encodeURIComponent(projectId)}/r/${encodeURIComponent(runId)}`;
 
-/** How a done item ended, in the engine's facts: its change merged, or the outcome that finished it. */
-export function howItEnded(read: ItemRead): string {
+/**
+ * How a done item ended: its change merged, or the outcome that finished it in `outcomeOf`'s
+ * words; Done when its run recorded none.
+ */
+export function howItEnded(read: ItemRead, outcomeOf: OutcomeWords): string {
   if (read.merged !== null) return 'Merged';
-  return standingRun(read)?.outcome ?? CHIP.done.label;
+  const run = standingRun(read);
+  return run?.outcome == null ? CHIP.done.label : outcomeOf(run, run.outcome);
 }

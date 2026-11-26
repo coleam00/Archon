@@ -124,7 +124,8 @@ export function DerivedFlow({
   flow: readonly FlowColumn[];
   /**
    * The pack's view, whose labels name its stages (`stageLabel`) and word its pills as the
-   * curated map does (`arrowLabels`); null names stages by id in words and pills by raw value.
+   * curated map does (`arrowLabels`); null names stages and outcomes
+   * by id in words, and an ask's pill by its raw option.
    */
   view?: FactoryView | null;
   live?: FlowLive;

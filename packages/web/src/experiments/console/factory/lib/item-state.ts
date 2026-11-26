@@ -11,6 +11,7 @@
 import { CHIP, standingRun } from '../../routes/board/standing';
 import type { ItemRead } from '../../skills/items';
 import type { CuratedView } from './curated-view';
+import { outcomeLabel } from './graph-structure';
 import { shownChip } from './item-asks';
 import type { CardProgress } from './item-card';
 
@@ -23,14 +24,6 @@ export interface StateLine {
 }
 
 type Words = Pick<CuratedView, 'stageLabels' | 'outcomeLabels'>;
-
-/** The outcome's label, by `stage:outcome` and then `stage:*`, or undefined when the file gives none. */
-function outcomeLabel(view: Words, workflow: string, outcome: string | null): string | undefined {
-  return (
-    (outcome === null ? undefined : view.outcomeLabels[`${workflow}:${outcome}`]) ??
-    view.outcomeLabels[`${workflow}:*`]
-  );
-}
 
 /**
  * The line for `read`. `running` is the board card's running stage and step, null until the

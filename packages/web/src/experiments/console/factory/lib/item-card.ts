@@ -11,8 +11,10 @@ import type { ItemRead } from '../../skills/items';
 import type { ItemAsk } from '../../primitives/run';
 import type { FactoryView, ForgeSubjects, RunRecord } from '../api';
 import { displayItemKey, issueNumber } from '../../lib/item-key';
-import { retiredRun, type Retired } from '../../routes/board/standing';
-import { stageLabel } from './stage-words';
+import { retiredRun, type OutcomeWords, type Retired } from '../../routes/board/standing';
+import { arrowLabels } from './curated-view';
+import { outcomeWords } from './graph-structure';
+import { stageLabel, stageWords } from './stage-words';
 import { listOf, runFacts, type RoundVerdict, type RunFacts, type RunRounds } from './run-facts';
 
 type ReadRun = { run: ItemRun; workflow: string | null; facts: RunFacts };
@@ -79,14 +81,36 @@ export function viewWorkflow(
 
 /**
  * A run's stage as a person reads it: the view workflow it is, by `stageLabel` in its pack's
- * words. A run no pack places is of no stage, so it names its workflow.
+ * words. A run no pack places is of no stage, so it names its workflow in words.
  */
 export function runStageName(
   pack: CardPack | null,
   run: Pick<ItemRun, 'workflow' | 'pack'>
 ): string {
   const workflow = pack === null ? (run.pack?.workflow ?? null) : viewWorkflow(pack, run);
-  return workflow === null ? run.workflow : stageLabel(pack?.view, workflow);
+  return workflow === null ? stageWords(run.workflow) : stageLabel(pack?.view, workflow);
+}
+
+/** A run's outcome as a person reads it: `outcomeWords` for the view workflow the run is. */
+export function runOutcomeWords(
+  pack: CardPack | null,
+  run: Pick<ItemRun, 'workflow' | 'pack'>,
+  outcome: string
+): string {
+  const workflow = pack === null ? (run.pack?.workflow ?? null) : viewWorkflow(pack, run);
+  return outcomeWords(arrowLabels(pack?.view ?? null), workflow, outcome);
+}
+
+/**
+ * The outcome words of `read`'s runs, under the pack the item is read under (`packOf`); `packs`
+ * null while the board has read none. Every board surface that words an outcome binds it here.
+ */
+export function outcomeWordsFor(
+  packs: ReadonlyMap<string, CardPack> | null,
+  read: ItemRead
+): OutcomeWords {
+  const pack = packs === null ? null : packOf(packs, read);
+  return (run, outcome) => runOutcomeWords(pack, run, outcome);
 }
 
 /**

@@ -2,7 +2,8 @@
  * The factory's structure, read from the pack graph (`GET /api/packs/{pack}/graph`): the steps
  * of a stage and the arrows between stages, each worded by the outcome or answer it carries:
  * the view file's label for the outcome or ask option where it gives one (DESIGN.md, COMBINED
- * direction), else the raw value, which `check:factory-view` reports as unworded.
+ * direction). An outcome the file does not word reads as its value in words (`outcomeWords`);
+ * `check:factory-view` reports it.
  *
  * Pure.
  */
@@ -40,15 +41,36 @@ export function wordsOf(from: PackGraph['arrows'][number]['from']): string {
 /** The view's arrow words: what `arrowWords` and `outcomeWords` read. */
 export type ArrowLabels = Pick<StructureView, 'outcomeLabels' | 'answerLabels'>;
 
+type OutcomeLabels = Pick<StructureView, 'outcomeLabels'>;
+
 /**
- * What an outcome of `workflow` says: the file's exact `workflow:outcome` label, then the
- * stage's `workflow:*`, else the raw value, which `check:factory-view` reports as unworded.
+ * The file's label for an outcome of `workflow`: the exact `workflow:outcome` entry, then the
+ * stage's `workflow:*`; undefined when it gives none. The one lookup of outcome labels: the
+ * map's arrows, its stage modal and the board's cards all word an outcome through it.
  */
-export function outcomeWords(labels: ArrowLabels, workflow: string, outcome: string): string {
+export function outcomeLabel(
+  labels: OutcomeLabels,
+  workflow: string,
+  outcome: string | null
+): string | undefined {
   return (
-    labels.outcomeLabels[`${workflow}:${outcome}`] ??
-    labels.outcomeLabels[`${workflow}:*`] ??
-    outcome
+    (outcome === null ? undefined : labels.outcomeLabels[`${workflow}:${outcome}`]) ??
+    labels.outcomeLabels[`${workflow}:*`]
+  );
+}
+
+/**
+ * What an outcome of `workflow` says: its label (`outcomeLabel`), else its value in words
+ * (`send-back` reads "Send back"), as `stageWords` words a stage; `check:factory-view` reports
+ * an in-flow outcome the file does not word. `workflow` null (a run no pack places) has no label.
+ */
+export function outcomeWords(
+  labels: OutcomeLabels,
+  workflow: string | null,
+  outcome: string
+): string {
+  return (
+    (workflow === null ? undefined : outcomeLabel(labels, workflow, outcome)) ?? stageWords(outcome)
   );
 }
 
