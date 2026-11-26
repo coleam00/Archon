@@ -22,7 +22,10 @@ export async function readOpenWorkRuns(
   for (const run of candidates) {
     if (runs.length === options.limit) break;
     const itemId = await readRunItemId(store, run);
-    if (itemId !== null && (await readHoldingItemEnd(store, itemId)) !== null) continue;
+    if (itemId !== null) {
+      const end = await readHoldingItemEnd(store, itemId);
+      if (end !== null && !('type' in end)) continue;
+    }
     runs.push(run);
   }
   return runs;

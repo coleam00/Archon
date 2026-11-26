@@ -83,6 +83,31 @@ async function refusal(promise: Promise<unknown>): Promise<ItemEndRefusedError> 
 }
 
 export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness>): void {
+  test('an unreadable end keeps failed roots and descendants in open work', async () => {
+    const harness = await makeHarness();
+    try {
+      const parent = await startOnItem(harness);
+      const child = await startOnItem(harness, parent);
+      await harness.store.failWorkflowRun(child, 'child failed');
+      await harness.store.failWorkflowRun(parent, 'parent failed');
+      const recorded = await recordItemEnd(harness.store, end, operator, 'cli');
+      expect(await openWorkIds(harness)).toEqual([]);
+
+      await harness.db.query('UPDATE remote_agent_item_ends SET reason = $1 WHERE id = $2', [
+        '',
+        recorded.id,
+      ]);
+      expect(await holding(harness)).toEqual({
+        type: 'degraded',
+        reason: 'end_unreadable',
+        endId: recorded.id,
+      });
+      expect((await openWorkIds(harness)).sort()).toEqual([parent, child].sort());
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('open work excludes a holding end before its limit and returns when a new run opens the item', async () => {
     const harness = await makeHarness();
     try {
