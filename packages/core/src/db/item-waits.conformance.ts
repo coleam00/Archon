@@ -409,7 +409,9 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
       // With pr-8 waiting too, each item's review wakes its own item.
       await completeWithWaits(harness, [review], { item: 'pr-8' });
       for (const item of ['pr-8', 'pr-7']) {
-        const id = await accept(wakeReceipt(HEAD, { wait: 'review', item }), project);
+        // The plugin hands on the review's pull request with the mapped item.
+        const subject = { kind: 'pr', number: Number(item.slice('pr-'.length)) } as const;
+        const id = await accept(wakeReceipt(HEAD, { wait: 'review', item, subject }), project);
         expect(await readReceipt(harness, id)).toMatchObject({
           outcome: 'matched',
           bindings: [{ itemKey: item }],
@@ -431,18 +433,62 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
         { item: 'issue-12' }
       );
       const project = await projectKey(harness);
-      // A binding that maps no item finds the wait by the event's subject.
-      const other = await accept(
-        wakeReceipt(HEAD, { wait: 'review', subject: { kind: 'pr', number: 35 } }),
-        project
-      );
-      expect((await readReceipt(harness, other)).outcome).toBe('unmatched');
+      // A binding that maps no item finds the wait by the event's subject and commit: another
+      // pull request, an issue with the same number, or an older commit finds nothing.
+      for (const [about, subject] of [
+        [HEAD, { kind: 'pr', number: 35 }],
+        [HEAD, { kind: 'issue', number: 34 }],
+        [OLD, pr34],
+      ] as const) {
+        const other = await accept(wakeReceipt(about, { wait: 'review', subject }), project);
+        expect((await readReceipt(harness, other)).outcome).toBe('unmatched');
+      }
+      expect(await harness.store.listOpenItemWaits()).toHaveLength(1);
       const id = await accept(wakeReceipt(HEAD, { wait: 'review', subject: pr34 }), project);
       expect(await readReceipt(harness, id)).toMatchObject({
         outcome: 'matched',
         bindings: [{ itemKey: 'issue-12', waited: { runId: waiting, subject: pr34 } }],
       });
       expect(await harness.store.listOpenItemWaits()).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a wait that names a subject is met by no event about another, and one that names none takes no subject from links', async () => {
+    const harness = await makeHarness();
+    try {
+      const review = { event: 'review', about: HEAD, within_minutes: 60 };
+      // pr-41 waits for a review of pull request 42: its own mapped review does not meet it.
+      await completeWithWaits(harness, [{ ...review, subject: { kind: 'pr', number: 42 } }], {
+        item: 'pr-41',
+      });
+      // issue-12 names no subject, though pr-34 is part of it.
+      await completeWithWaits(harness, [{ ...review, subject: null }], { item: 'issue-12' });
+      const project = await projectKey(harness);
+      await harness.store.recordItemLink({
+        projectKey: project,
+        fromKey: 'pr-34',
+        toKey: 'issue-12',
+        kind: 'part_of',
+        via: 'cli',
+        by: null,
+        fromRun: null,
+      });
+      expect(
+        (await harness.store.listOpenItemWaits()).map(wait => wait.subject?.number ?? null).sort()
+      ).toEqual([42, null]);
+      const mapped = await accept(
+        wakeReceipt(HEAD, { wait: 'review', item: 'pr-41', subject: { kind: 'pr', number: 41 } }),
+        project
+      );
+      const linked = await accept(
+        wakeReceipt(HEAD, { wait: 'review', subject: { kind: 'pr', number: 34 } }),
+        project
+      );
+      for (const id of [mapped, linked])
+        expect((await readReceipt(harness, id)).outcome).toBe('unmatched');
+      expect(await harness.store.listOpenItemWaits()).toHaveLength(2);
     } finally {
       await harness.close();
     }
@@ -458,13 +504,15 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
         [remote, CONFORMANCE_CODEBASE_ID]
       );
       const pr34 = { kind: 'pr', number: 34 } as const;
+      const pr35 = { kind: 'pr', number: 35 } as const;
       const waiting = await completeWithWaits(
         harness,
         [{ event: 'review', about: HEAD, subject: pr34, within_minutes: 60 }],
         { item: 'issue-12' }
       );
       const project = await projectKey(harness);
-      // A source that, like the GitHub plugin, reads the reviews of the wait's subject.
+      // A source that, like the GitHub plugin, reads the reviews of the wait's subject. Each
+      // pass is a new delivery, as a newly submitted review would be.
       const modulePath = join(root, 'source.ts');
       const configPath = join(root, 'sources.json');
       await writeFile(
@@ -473,7 +521,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
   receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
   observe: async ({ waits, forge }) => {
     for (const wait of waits) await forge.prReviews({ remote: wait.remote, number: wait.subject.number });
-    return { acceptances: [{ ...config, receipt: { ...config.receipt, id: crypto.randomUUID() } }], unserved: [], failed: [] };
+    return { acceptances: [{ ...config, receipt: { ...config.receipt, id: crypto.randomUUID(), deliveryId: config.receipt.deliveryId + ':' + crypto.randomUUID() } }], unserved: [], failed: [] };
   },
 });\n`
       );
@@ -485,10 +533,10 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
             {
               sourceInstanceId: 'github',
               module: modulePath,
+              // As the plugin makes it for a binding that maps no item: the subject, no item.
               config: wakeReceipt(HEAD, {
                 deliveryId: 'observe:review:300:submitted:next-stage:issue-12',
                 wait: 'review',
-                item: 'issue-12',
                 subject: pr34,
               }),
               observe: { everySeconds: 15 },
@@ -514,6 +562,14 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
           commitChecks: unexpected,
           prReviews: async request => {
             reads.push(`${request.remote}#${String(request.number)}`);
+            // On the second pass the item moves to pull request 35 at the same commit while
+            // the read of 34 is out.
+            if (reads.length > 1)
+              await completeWithWaits(
+                harness,
+                [{ event: 'review', about: HEAD, subject: pr35, within_minutes: 60 }],
+                { item: 'issue-12' }
+              );
             return {} as never;
           },
           issuesWithLabel: unexpected,
@@ -528,6 +584,16 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
         outcome: 'matched',
         bindings: [{ status: 'pending', itemKey: 'issue-12', waited: { runId: waiting } }],
       });
+
+      // The review of 34 read before the item moved on does not meet the wait for 35.
+      await completeWithWaits(
+        harness,
+        [{ event: 'review', about: HEAD, subject: pr34, within_minutes: 60 }],
+        { item: 'issue-12' }
+      );
+      const [late] = (await observer?.pass(new Date('2026-01-01T00:01:00Z'))) ?? [];
+      expect((await readReceipt(harness, late?.receipts[0] ?? '')).outcome).toBe('unmatched');
+      expect((await harness.store.listOpenItemWaits()).map(wait => wait.subject)).toEqual([pr35]);
     } finally {
       await removeTempTree(root);
       await harness.close();

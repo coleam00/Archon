@@ -687,7 +687,24 @@ describe('GitHub source plugin observing open waits', () => {
       forge,
     });
     expect(reads).toEqual([{ remote, number: 34 }]);
-    expect(observed.acceptances.map(a => a.bindings[0]?.itemKey)).toEqual(['issue-12']);
+    // The start carries the review's subject, which the engine matches against the wait.
+    expect(observed.acceptances.map(a => a.bindings[0]?.wake?.subject)).toEqual([
+      { kind: 'pr', number: 34 },
+    ]);
+    expect(observed.acceptances[0]?.receipt.deliveryId).toEndWith(':reviewed-by-subject:issue-12');
+
+    // A wait that names no subject gives a binding that maps no item no pull request to read.
+    const subjectless = await observe({
+      labels: [],
+      waits: [{ ...reviewWait, itemKey: 'issue-12' }],
+      forge,
+    });
+    expect(subjectless.unserved).toEqual([
+      {
+        wait: { workflowName: 'host', event: 'review', about: revision, itemKey: 'issue-12' },
+        reason: expect.any(String),
+      },
+    ]);
 
     // The webhook maps no item: it hands the engine the pull request as the wake's subject.
     const recorded = recorder();
@@ -710,6 +727,20 @@ describe('GitHub source plugin observing open waits', () => {
     const [delivered] = recorded.calls[0]?.bindings ?? [];
     expect(delivered?.itemKey).toBeUndefined();
     expect(delivered?.wake?.subject).toEqual({ kind: 'pr', number: 34 });
+    expect(observed.acceptances[0]?.bindings).toEqual(recorded.calls[0]?.bindings ?? []);
+  });
+
+  test('an observed review keeps the item the binding maps, as its webhook would', async () => {
+    const { observe } = await observer([reviewWake]);
+    const { forge, reads } = reader([], [review('300', 'APPROVED', revision)]);
+    // pr-7 waits for a review of pull request 8: the review maps to pr-8, not to pr-7.
+    const observed = await observe({
+      labels: [],
+      waits: [{ ...reviewWait, subject: { kind: 'pr', number: 8 } }],
+      forge,
+    });
+    expect(reads).toEqual([{ remote, number: 8 }]);
+    expect(observed.acceptances.map(a => a.bindings[0]?.itemKey)).toEqual(['pr-8']);
   });
 
   test('a binding that cannot start on the waited event says why', async () => {
@@ -891,8 +922,7 @@ describe('GitHub source plugin observing open waits', () => {
       unserved: [
         {
           wait: { workflowName: 'host', event: 'review', about: revision, itemKey: 'issue-3' },
-          reason:
-            "the wait names no subject, and item 'issue-3' names no pull request under the binding's item mapping",
+          reason: "the wait names no pull request, as its subject or as item 'issue-3'",
         },
         {
           wait: { workflowName: 'host', event: 'checks', about: revision, itemKey: 'pr-7' },

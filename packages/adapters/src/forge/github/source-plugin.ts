@@ -137,10 +137,6 @@ function prNumberOf(binding: GitHubSourceBinding, itemKey: string): number | und
   return Number.isSafeInteger(number) ? number : undefined;
 }
 
-function subjectPr(subject: NonNullable<ObservedWait['subject']>): number | undefined {
-  return subject.kind === 'pr' ? subject.number : undefined;
-}
-
 /** What `binding` reads to observe `wait`, or why it cannot. */
 function targetOf(
   binding: GitHubSourceBinding,
@@ -150,16 +146,13 @@ function targetOf(
   if (binding.selector.kind === 'check.changed' && field === 'check.revision')
     return { kind: 'commit', remote: wait.remote, revision: wait.about };
   if (binding.selector.kind === 'review.changed' && field === 'review.commit') {
-    const number =
-      wait.subject === null ? prNumberOf(binding, wait.itemKey) : subjectPr(wait.subject);
-    return number === undefined
-      ? {
-          reason:
-            wait.subject === null
-              ? `the wait names no subject, and item '${wait.itemKey}' names no pull request under the binding's item mapping`
-              : `the wait's subject is issue ${String(wait.subject.number)}, which has no reviews`,
-        }
-      : { kind: 'pr', remote: wait.remote, number };
+    const { subject } = wait;
+    const number = subject === null ? prNumberOf(binding, wait.itemKey) : subject.number;
+    if (subject?.kind === 'issue' || number === undefined)
+      return {
+        reason: `the wait names no pull request, as its subject or as item '${wait.itemKey}'`,
+      };
+    return { kind: 'pr', remote: wait.remote, number };
   }
   return { reason: `${binding.selector.kind} wakes about ${String(field)} are not observed` };
 }
@@ -353,8 +346,13 @@ function waitAcceptances(
         sourceActor: null,
       },
       outcome: 'matched',
-      // The observation knows the wait's item, so the start goes to that item only.
-      bindings: [{ ...evaluated.start, itemKey: wait.itemKey }],
+      // Matched as its webhook's would be, by the mapped item or the event's subject; only an
+      // event that names neither (a check) goes to the wait's item, which the observation knows.
+      bindings: [
+        evaluated.start.itemKey !== undefined || evaluated.start.wake?.subject !== undefined
+          ? evaluated.start
+          : { ...evaluated.start, itemKey: wait.itemKey },
+      ],
     });
   }
   return { acceptances, unserved: [...rejections].map(reason => ({ wait, reason })) };

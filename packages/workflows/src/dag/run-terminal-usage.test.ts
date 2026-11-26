@@ -1967,27 +1967,45 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
   });
 
   it('completes with the waits the run leaves, and fails naming the field when two name one event', async () => {
-    const waits = [{ event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 30 }];
-    mockStructuredResult({ summary: 'done', waits });
-    const store = createMockStore();
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        conversationId: 'conv-waits',
-        cwd: testDir,
-        workflow: {
-          name: 'waits',
-          nodes: [resultNode],
-          returns: 'decide',
-          result: { waits: 'waits' },
-        },
-        workflowRun: makeWorkflowRun('waits-run'),
-      })
-    );
-    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ waits });
+    const checks = { event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 30 };
+    const review = { event: 'review', about: 'a'.repeat(40), within_minutes: 30 };
+    const waits = [checks, { ...review, subject: { kind: 'pr' as const, number: 34 } }];
+    const complete = async (left: readonly unknown[], node: DagNode = resultNode) => {
+      mockStructuredResult({ summary: 'done', waits: left });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-waits',
+          cwd: testDir,
+          workflow: {
+            name: 'waits',
+            nodes: [node],
+            returns: 'decide',
+            result: { waits: 'waits' },
+          },
+          workflowRun: makeWorkflowRun('waits-run'),
+        })
+      );
+      return store.completeWorkflowRun.mock.calls[0]?.[3];
+    };
+    expect(await complete(waits)).toEqual({ waits });
+    // A review wait that names no subject is not refused.
+    expect(await complete([{ ...review, subject: null }])).toEqual({
+      waits: [{ ...review, subject: null }],
+    });
+    // A script written before `subject` existed leaves a wait that names none.
+    const script: DagNode = {
+      id: 'decide',
+      kind: 'exec',
+      runtime: 'sh',
+      script: `printf '%s' '${JSON.stringify({ summary: 'done', waits: [review] })}'`,
+      output_format: asksSchema,
+    };
+    expect(await complete([], script)).toEqual({ waits: [{ ...review, subject: null }] });
 
     // The schema cannot hold "each event once"; the engine's check does.
-    mockStructuredResult({ summary: 'done', waits: [...waits, ...waits] });
+    mockStructuredResult({ summary: 'done', waits: [checks, checks] });
     const twice = createMockStore();
     await executeDagWorkflow(
       dagOptions({

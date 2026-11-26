@@ -2734,7 +2734,8 @@ out of `output_format`. An empty list means the item waits for nothing. A wait h
   or `{ kind: issue, number: 12 }`, or `null` when the event names none, as checks on a commit
   do. A review on pull request 34 has subject `{ kind: pr, number: 34 }` also when the item is
   keyed by its issue. The stage states it; the engine does not default it from the item's
-  links.
+  links. A model is given it as required. A bash or script returns node may leave it out,
+  and an omitted subject reads as `null`.
 - `within_minutes`: how long after the run completes the event is expected.
 
 The property's description, which the model reads with the schema, reads:
@@ -2765,11 +2766,11 @@ What the engine does with them:
   recorded on its receipt as not started, with why. The engine does not read the forge's current
   head, so a push alone replaces no wait. Nothing in the event's own payload stands in for this
   check.
-- **A binding that maps no item finds the wait by its subject.** For an event that names its
-  subject, a binding that maps `item` matches only a wait on that item. A binding that maps no
-  item matches only an open wait whose `subject` is the event's, together with `about`, and
-  starts on the wait's own item. That is how an item keyed by its issue waits for a review on
-  its pull request.
+- **A wait that names a subject is met only by an event about it.** For an event that names
+  its subject, a binding that maps `item` matches only a wait on that item, and of those only
+  one whose `subject` is the event's or names none. A binding that maps no item matches only
+  an open wait whose `subject` is the event's, together with `about`, and starts on the wait's
+  own item. That is how an item keyed by its issue waits for a review on its pull request.
 - **The deadline raises attention and wakes nothing.** An open set past the deadline of any of
   its waits is listed in the attention queue as an `overdue_wait` item with ref `wait:<run-id>`,
   naming each wait's event and `about` and when it opened. It stays open: a late event still
@@ -3231,8 +3232,8 @@ An event binding with `wake:` starts its workflow on the item of an open
 `wake.workflow`, a workflow of this pack, left, whose `about` is exactly the value of the event
 field `wake.about`. `{ wait: true }` passes the met wait. When the event names its subject (a
 review, a pull request or issue event) and the binding maps `item:`, only a wait on that item
-matches. Without `item:`, only a wait whose `subject` is the event's matches, on whichever item
-it is. A check names no single subject and maps no `item:`. See
+matches, and a wait that names a subject only for an event about it. Without `item:`, only a
+wait whose `subject` is the event's matches, on whichever item it is. A check names no single subject and maps no `item:`. See
 [start a stage when what an item waits for happens](/guides/workflow-triggers/#start-a-stage-when-what-an-item-waits-for-happens).
 
 A stage that needs both a clock and a hand-off declares two bindings with the
