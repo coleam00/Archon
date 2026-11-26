@@ -82,14 +82,19 @@ export function getItemPriority(itemId: string): Promise<ItemPriority | null> {
   return readPriority(pool.query, itemId);
 }
 
+/** Give the item its own priority, inside the caller's transaction; already given is no change. */
+export async function giveItemPriority(query: TransactionQuery, itemId: string): Promise<void> {
+  await query(
+    'INSERT INTO remote_agent_item_priorities (item_id) VALUES ($1) ON CONFLICT (item_id) DO NOTHING',
+    [itemId]
+  );
+}
+
 /** A work order is given priority before its members have runs, so the item is written on first use. */
 export async function setItemPriority(input: ItemPriorityTarget): Promise<ItemPriority> {
   return getDatabase().withTransaction(async query => {
     const itemId = await ensureItemInProject(query, input.projectKey, input.key);
-    await query(
-      'INSERT INTO remote_agent_item_priorities (item_id) VALUES ($1) ON CONFLICT (item_id) DO NOTHING',
-      [itemId]
-    );
+    await giveItemPriority(query, itemId);
     const priority = await readPriority(query, itemId);
     if (priority === null)
       throw new Error(`The priority of item '${input.key}' was written but does not read back`);

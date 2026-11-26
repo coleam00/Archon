@@ -507,6 +507,7 @@ Options:
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
   --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow priority': the item to give priority or clear it on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
   --no-item                  For 'trigger fire': start the run on no item instead of inheriting the firing run's item
+  --priority                 For 'trigger fire': give the start's item priority when its start is prepared
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20); for 'workflow items': items a page (default 20, at most 100)
   --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)

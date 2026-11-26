@@ -91,6 +91,8 @@ type TriggerOptions = {
   input?: readonly string[];
   item?: string;
   noItem?: boolean;
+  /** Record that the start's item gets priority when the start is prepared. */
+  priority?: boolean;
 };
 
 /**
@@ -347,6 +349,12 @@ async function triggerFire(
     recorded,
     inherited: () => inheritedItemKey(host, sourceActor, config.binding.launch.cwd),
   });
+  // A recorded delivery replays its first acceptance, priority included, so only a new one
+  // needs an item to give it to.
+  if (options.priority && itemKey === undefined && !recorded)
+    throw new Error(
+      '--priority needs an item: pass --item <key>. Nothing was recorded or started.'
+    );
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
@@ -365,6 +373,7 @@ async function triggerFire(
         occurredAt: null,
         sourceActor,
         ...(itemKey === undefined ? {} : { itemKey }),
+        ...(options.priority ? { priority: true as const } : {}),
       },
       outcome: 'matched',
       bindings: [binding],

@@ -559,6 +559,27 @@ export async function runProject(
   return projectRefForRun(run, await codebaseFor(source, run, codebases));
 }
 
+/**
+ * The item a run works on: its own, else its top-level run's, since a `workflow:` child
+ * records none. Null when no run on the way records one, or a parent row does not read
+ * (its own queue entry reports that).
+ */
+async function runItemId(
+  store: Pick<IWorkflowStore, 'getWorkflowRunForAttention'>,
+  run: WorkflowRun
+): Promise<string | null> {
+  let current = run;
+  const visited = new Set([run.id]);
+  while (current.item_id === null && current.parent_run_id !== null) {
+    if (visited.has(current.parent_run_id)) return null;
+    visited.add(current.parent_run_id);
+    const parent = await store.getWorkflowRunForAttention(current.parent_run_id);
+    if (parent === null || isAttentionDegraded(parent)) return null;
+    current = parent;
+  }
+  return current.item_id;
+}
+
 async function itemFor(
   source: AttentionQueueSource,
   run: WorkflowRun,
@@ -569,7 +590,7 @@ async function itemFor(
     codebase: await codebaseFor(source, run, codebases),
     branch: await source.branchOf(run),
     // Only a run started for an item has one, so most reads skip the store.
-    ...(await queueItemOf(source.store, run.item_id)),
+    ...(await queueItemOf(source.store, await runItemId(source.store, run))),
     // The wait stores no provider, so a binary that reads it strictly still reads it.
     ...(attention.kind === 'usage_limit'
       ? {

@@ -47,8 +47,8 @@ export async function insertStartReceipt(
 ): Promise<{ receiptId: string; replay: boolean }> {
   const inserted = await query(
     `INSERT INTO remote_agent_start_receipts
-     (id, source_instance_id, delivery_id, content_digest, received_at, occurred_at, source_actor, outcome, reason, item_key)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     (id, source_instance_id, delivery_id, content_digest, received_at, occurred_at, source_actor, outcome, reason, item_key, priority)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      ON CONFLICT DO NOTHING`,
     [
       input.receipt.id,
@@ -61,6 +61,7 @@ export async function insertStartReceipt(
       input.outcome,
       input.reason ?? null,
       input.receipt.itemKey ?? null,
+      input.receipt.priority ? 1 : 0,
     ]
   );
   if (inserted.rowCount === 0) {

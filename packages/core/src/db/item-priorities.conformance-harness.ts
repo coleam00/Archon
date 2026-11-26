@@ -28,6 +28,63 @@ async function itemId(store: IWorkflowStore, key: string): Promise<string> {
 const partOf = (store: IWorkflowStore, from: string, to: string) =>
   store.recordItemLink({ projectKey, fromKey: from, toKey: to, kind: 'part_of', ...byCli });
 
+type Launch = ReturnType<typeof resourceStartFixtures>['launch'];
+
+/**
+ * A fire on `item`, prepared as a host's drain prepares it: the item comes from the receipt.
+ * A keyed delivery already recorded replays and prepares nothing.
+ */
+async function fireOn(
+  store: IWorkflowStore,
+  launch: Launch,
+  start: {
+    resource: string;
+    capacity: number;
+    item: string;
+    deliveryId?: string;
+    priority?: true;
+  }
+): Promise<{ replay: boolean; id: string; status: string | undefined }> {
+  const receiptId = crypto.randomUUID();
+  const accepted = await store.acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'priority',
+      deliveryId: start.deliveryId ?? null,
+      contentDigest: start.deliveryId ?? receiptId,
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: null,
+      itemKey: start.item,
+      ...(start.priority ? { priority: start.priority } : {}),
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'stage',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: start.resource,
+        capacity: start.capacity,
+        overlap: 'queue',
+        launch: {
+          cwd: '/conformance',
+          workflowName: 'conformance',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+      },
+    ],
+  });
+  const prepared = launch();
+  if (accepted.replay) return { replay: true, id: prepared.run.id, status: undefined };
+  const identity = { receiptId, bindingId: 'stage', ownerId: 'owner' };
+  expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+  const result = await store.completeStartBindingPreparation({ ...identity, launch: prepared });
+  return { replay: false, id: prepared.run.id, status: result?.status };
+}
+
 export function describeItemPriorityConformance(makeHarness: () => Promise<Harness>): void {
   test('priority is the item’s own or comes through active part_of links, at any depth', async () => {
     const harness = await makeHarness();
@@ -77,48 +134,8 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
         CONFORMANCE_CODEBASE_ID,
         CONFORMANCE_CONVERSATION_ID
       );
-      // A fire on `item`, prepared as a host's drain prepares it: the item comes from the receipt.
-      const fire = async (resource: string, capacity: number, item: string) => {
-        const receiptId = crypto.randomUUID();
-        await store.acceptStartReceipt({
-          receipt: {
-            id: receiptId,
-            sourceInstanceId: 'priority',
-            deliveryId: null,
-            contentDigest: receiptId,
-            receivedAt: new Date().toISOString(),
-            occurredAt: null,
-            sourceActor: null,
-            itemKey: item,
-          },
-          outcome: 'matched',
-          bindings: [
-            {
-              bindingId: 'stage',
-              bindingRevision: null,
-              hostId: 'host',
-              runAsUserId: 'operator',
-              resource,
-              capacity,
-              overlap: 'queue',
-              launch: {
-                cwd: '/conformance',
-                workflowName: 'conformance',
-                inputs: {},
-                isolation: { kind: 'in-place' },
-              },
-            },
-          ],
-        });
-        const identity = { receiptId, bindingId: 'stage', ownerId: 'owner' };
-        expect(await store.claimStartBindingPreparation(identity)).toBe(true);
-        const prepared = launch();
-        const result = await store.completeStartBindingPreparation({
-          ...identity,
-          launch: prepared,
-        });
-        return { id: prepared.run.id, status: result?.status };
-      };
+      const fire = (resource: string, capacity: number, item: string) =>
+        fireOn(store, launch, { resource, capacity, item });
       const setStatus = (id: string, status: string) =>
         db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [status, id]);
       const drain = async (resource: string) =>
@@ -170,6 +187,57 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
       await setStatus(reviewer.id, 'completed');
       expect(await drain('review')).toEqual([next.id]);
       expect((await store.getResourceStartRequest(d.id))?.status).toBe('queued');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a fire that asks for priority gives its item priority once, at preparation, and a replay never again', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store, db } = harness;
+      const { launch } = resourceStartFixtures(
+        CONFORMANCE_CODEBASE_ID,
+        CONFORMANCE_CONVERSATION_ID
+      );
+      const holder = await fireOn(store, launch, { resource: 'ship', capacity: 1, item: 'h' });
+      const ordinary = await fireOn(store, launch, { resource: 'ship', capacity: 1, item: 'o' });
+      const urgent = await fireOn(store, launch, {
+        resource: 'ship',
+        capacity: 1,
+        item: 'urgent',
+        deliveryId: 'urgent-1',
+        priority: true,
+      });
+      expect([holder.status, ordinary.status, urgent.status]).toEqual([
+        'admitted',
+        'queued',
+        'queued',
+      ]);
+      const urgentId = await itemId(store, 'urgent');
+      expect(await store.getItemPriority(urgentId)).toEqual({ own: true, inheritedFrom: [] });
+      expect((await store.listQueuedItemStarts(urgentId))[0]?.ahead).toBe(0);
+
+      // A retry of the same delivery, even naming another item, leaves priority as it is.
+      await store.clearItemPriority({ projectKey, key: 'urgent' });
+      const retried = await fireOn(store, launch, {
+        resource: 'ship',
+        capacity: 1,
+        item: 'other',
+        deliveryId: 'urgent-1',
+        priority: true,
+      });
+      expect(retried.replay).toBe(true);
+      expect(await store.getItemPriority(urgentId)).toBeNull();
+      expect(await store.getItemRuns(projectKey, 'other')).toBeNull();
+      await db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [
+        holder.id,
+      ]);
+      expect(
+        (await store.drainResourceStarts({ resource: 'ship', hostId: 'host' })).map(
+          row => row.requestId
+        )
+      ).toEqual([ordinary.id]);
     } finally {
       await harness.close();
     }

@@ -28,6 +28,8 @@ import { join } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { landingCreateCommand } from '@archon/core/workflows/item-landing';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { heldRunOf } from '@archon/workflows/attention-queue';
+import { type AttentionStreamLine, watchAttentionQueue } from '@archon/workflows/attention-watch';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
 import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
@@ -598,6 +600,74 @@ nodes:
     expect(
       rows<{ key: string }>("SELECT key FROM remote_agent_items WHERE key = 'never-named'")
     ).toEqual([]);
+  }
+);
+
+test.serial(
+  "a workflow: child's pause carries its top-level run's item and priority, and the watch follows a change",
+  async () => {
+    const result = await captureWorkflowCommand(archonHome, async host => {
+      const { store } = host.deps;
+      const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
+      if (!codebase) throw new Error('The seed runs did not register the project');
+      const parent = await store.createWorkflowRun({
+        workflow_name: 'item-proof',
+        user_message: 'go',
+        codebase_id: codebase.id,
+        working_path: projectRoot,
+        item_key: 'item-child',
+      });
+      await store.claimPendingWorkflowRun(parent.id, projectRoot);
+      const child = await store.createWorkflowRun({
+        workflow_name: 'child',
+        user_message: '',
+        parent_run_id: parent.id,
+      });
+      await store.claimPendingWorkflowRun(child.id);
+      await store.pauseWorkflowRunForWait(
+        child.id,
+        {
+          owner: 'node',
+          nodeId: 'gate',
+          kind: 'attention',
+          waitingSince: new Date().toISOString(),
+          message: 'Ship it?',
+          pauseId: `pause-${child.id}`,
+          form: 'approval',
+          labels: {},
+        },
+        { kind: 'started', stepName: 'gate' }
+      );
+      const item = await store.getItem((await store.getWorkflowRun(parent.id))?.item_id ?? '');
+      if (!item) throw new Error('The parent run is on no item');
+      const lines: AttentionStreamLine[] = [];
+      const childItem = () =>
+        [...lines]
+          .reverse()
+          .find(
+            (line): line is Extract<AttentionStreamLine, { type: 'attention' }> =>
+              line.type === 'attention' && heldRunOf(line.item)?.id === child.id
+          )?.item;
+      const watch = await watchAttentionQueue(
+        store,
+        { branchOf: async () => null },
+        line => {
+          lines.push(line);
+        },
+        { scope: { kind: 'all' }, pollIntervalMs: 5 }
+      );
+      try {
+        expect(childItem()).toMatchObject({ item: { key: 'item-child' }, priority: false });
+        // The write commits no run event; the watch still sends the item again.
+        await store.setItemPriority({ projectKey: item.projectKey, key: item.key });
+        for (let waited = 0; waited < 5000 && childItem()?.priority !== true; waited += 5)
+          await Bun.sleep(5);
+        expect(childItem()).toMatchObject({ item: { key: 'item-child' }, priority: true });
+      } finally {
+        await watch.close();
+      }
+    });
+    expect(result.status, result.stderr).toBe(0);
   }
 );
 

@@ -264,6 +264,11 @@ export const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'trigger', subcommand: 'fire' }],
   },
   {
+    spec: '--priority',
+    description: "For 'trigger fire': give the start's item priority when its start is prepared",
+    owners: [{ command: 'trigger', subcommand: 'fire' }],
+  },
+  {
     spec: '--open',
     description:
       "For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded",

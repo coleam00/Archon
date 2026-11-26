@@ -783,6 +783,10 @@ CREATE TABLE IF NOT EXISTS remote_agent_items (
 -- the project, writes the item and points the start request at it; the run takes the
 -- request's item at admission.
 ALTER TABLE remote_agent_start_receipts ADD COLUMN IF NOT EXISTS item_key TEXT;
+-- 1 when the fire asked for its start's item to have priority (`trigger fire --priority`).
+-- Preparation writes the item's remote_agent_item_priorities row when it resolves the item,
+-- in the transaction that admits the start; an older binary ignores the column.
+ALTER TABLE remote_agent_start_receipts ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE remote_agent_resource_start_requests
   ADD COLUMN IF NOT EXISTS item_id UUID REFERENCES remote_agent_items(id);
 ALTER TABLE remote_agent_workflow_runs

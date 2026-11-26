@@ -318,6 +318,8 @@ export const sourceReceiptInputSchema = z
       .nullable(),
     /** The item this start is for. Every run the receipt starts belongs to it. */
     itemKey: itemKeySchema.optional(),
+    /** Give the start's item priority (`trigger fire --priority`) when the start is prepared. */
+    priority: z.literal(true).optional(),
   })
   .strict();
 export type SourceReceiptInput = z.infer<typeof sourceReceiptInputSchema>;
