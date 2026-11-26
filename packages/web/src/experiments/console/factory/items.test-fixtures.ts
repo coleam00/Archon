@@ -56,6 +56,7 @@ export function itemOn(
     landing: null,
     ended: null,
     workOrder: null,
+    dependsOn: [],
     degraded: [],
   };
 }

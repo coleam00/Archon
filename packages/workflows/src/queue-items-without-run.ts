@@ -7,8 +7,9 @@
  * it, or it is withdrawn by its `wait:` ref. A completed step that stopped its item (see
  * `readItemStopped`), or a failed top-level step, is listed while it is the newest step on
  * the item (a run that observes it is no step), the item's end does not hold (`item-end.ts`) and no merge is recorded on it
- * (`getItemMerge`); it takes no answer. Asks and waits on an item whose end holds are left
- * out too: an item at rest asks nothing.
+ * (`getItemMerge`); a completed quiet stop is also left out while the item depends on an open
+ * item (`item-depends-on.ts`). It takes no answer. Asks and waits on an item whose end holds
+ * are left out too: an item at rest asks nothing.
  */
 import { createLogger } from '@archon/paths';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
@@ -36,8 +37,10 @@ import {
   type StoppedQueueItem,
   type UnreadableStartQueueItem,
 } from './attention-queue';
+import { readDependsOn, waitsOn } from './item-depends-on';
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
+import { readOwnClose } from './work-order';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { getTerminalRecord, terminalReason } from './terminal-record';
 import type { TerminalRecord } from './schemas/terminal-record';
@@ -218,7 +221,12 @@ export async function overdueWaitItems(
 /** The store reads a stopped item's queue item needs. */
 export type StoppedItemStore = Pick<
   IWorkflowStore,
-  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase' | 'getItemMerge'
+  | 'listStoppedItemRuns'
+  | 'listEventsForRuns'
+  | 'getItem'
+  | 'getCodebase'
+  | 'getItemMerge'
+  | 'listItemLinks'
 > &
   ItemEndStore;
 
@@ -336,6 +344,7 @@ export async function stoppedItems(
     }
     // A run whose outcome is unknown stays until resumed or abandoned, even past an item end.
     if (!isOutcomeUnknownRun(run) && (await isItemDone(store, run.item_id))) continue;
+    if (await waitsOnOpenItem(store, run)) continue;
     const unknownNodes = isOutcomeUnknownRun(run)
       ? liveUnknownOutcomes(run, unknownEvents.get(run.id) ?? [])
       : [];
@@ -356,11 +365,19 @@ export async function stoppedItems(
  * unreadable end or merge row reads as not done, so it does not hide the stop.
  */
 async function isItemDone(store: StoppedItemStore, itemId: string | null): Promise<boolean> {
-  if (itemId === null) return false;
-  const end = await readHoldingItemEnd(store, itemId);
-  if (end !== null && !('type' in end)) return true;
-  const merge = await store.getItemMerge(itemId);
-  return merge !== null && !('type' in merge);
+  return itemId !== null && (await readOwnClose(store, itemId)) !== null;
+}
+
+/**
+ * Whether `run` is a completed, quiet stop of an item that waits on an open item. A stop
+ * that names a refused start or a limit needs someone whatever the item waits on.
+ */
+async function waitsOnOpenItem(store: StoppedItemStore, run: WorkflowRun): Promise<boolean> {
+  if (run.status !== 'completed' || run.item_id === null) return false;
+  const stopped = readItemStopped(run.metadata);
+  if (stopped?.limit !== undefined || stopped?.refused !== undefined) return false;
+  const links = await store.listItemLinks(run.item_id);
+  return waitsOn(await readDependsOn(store, run.item_id, links)).length > 0;
 }
 
 /** The store reads a lost preparation's queue item needs. */

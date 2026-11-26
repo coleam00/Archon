@@ -14,8 +14,9 @@
  * Directory ownership (`.archon/`) is the security boundary, not the filename.
  *
  * Logging rules:
- *   - Every boot logs `env.cwd_keys_stripped` at debug with the target repo's env files
- *     and key names that stripCwdEnv() removed (names only). Nothing prints on stderr
+ *   - Once both archon-owned files load, `env.cwd_keys_stripped` is logged at debug with
+ *     the target repo's env files and key names that stripCwdEnv() removed (names only),
+ *     when there is at least one. A failed load exits before it. Nothing prints on stderr
  *     for it; `archon doctor` is where an operator reads it.
  *   - Each `[archon] loaded N keys from …` line prints only when N > 0 AND
  *     the operator has opted into verbose boot output via `ARCHON_VERBOSE_BOOT=1`
@@ -123,7 +124,7 @@ export function loadArchonEnv(
   // The logger fixed its level before these files loaded; hand it a LOG_LEVEL they set.
   if (process.env.LOG_LEVEL !== logLevelBefore) applyEnvLogLevel();
 
-  // What stripCwdEnv() removed, on every boot. Logged here, after the level is final,
+  // What stripCwdEnv() removed, on every boot that gets this far. Logged here, after the level is final,
   // because the strip runs before the logger may load (LOG_LEVEL can be a stripped key).
   const { files, keys } = readCwdEnvKeys(cwd);
   if (keys.length > 0) createLogger('env').debug({ cwd, files, keys }, 'env.cwd_keys_stripped');

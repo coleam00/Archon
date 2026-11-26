@@ -1,11 +1,12 @@
 /**
  * A link: an accepted, directed relation from one item to another. The engine stores and
- * reports links; it ranks, holds or starts nothing because of one by itself. A run-ended
+ * reports links; it ranks or starts nothing because of one by itself. A run-ended
  * trigger file can name a kind and start a stage across it (`on.runEnded.linked`), and an
  * active `part_of` carries the landing branch of the item it points at
  * (`resolveItemLanding`) and makes that item a work order whose state the read derives
- * (`readWorkOrder`). A link that stops being true is ended, and the record stays and
- * says so.
+ * (`readWorkOrder`). An active `depends_on` to an open item keeps a completed stop of the
+ * from-item out of attention (`item-depends-on.ts`). A link that stops being true is ended,
+ * and the record stays and says so.
  */
 import { z } from 'zod';
 import { itemActFields } from './item-act';
