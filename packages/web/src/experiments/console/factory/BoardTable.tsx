@@ -2,13 +2,15 @@
  * The board's Table view (v1's `BoardTable.tsx`): one row per item the pack's board shows,
  * with the card's own values as columns; a header click sorts. The rows' values come from the
  * same `useCardList` read the cards use. Merges before the Merged column's window are listed
- * only on request, so the first read stays the size of the board. An item with open asks shows
- * the card's one Needs you control in its State cell (`NeedsYouLink.tsx`).
+ * only on request, so the first read stays the size of the board. The State cell holds the
+ * card's state label and, for an item with open asks, the card's Needs you button after it
+ * (`NeedsYouLink.tsx`).
  */
 import { useState, type ReactElement, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { displayItemKey } from '../lib/item-key';
-import { CHIP, chipOf, howItEnded, runPath, runToOpen } from '../routes/board/standing';
+import { StateLabel } from '../routes/board/ItemCard';
+import { runPath, runToOpen } from '../routes/board/standing';
 import { useCardList } from './FactoryCards';
 import { timeToMerged } from './lib/board-numbers';
 import {
@@ -47,7 +49,8 @@ export function BoardTable({
     setSort(current => ({ by, descending: current.by === by ? !current.descending : false }));
   };
   return (
-    <div data-board-table className="mt-3">
+    // In the board area's fixed height the Table scrolls on its own, as each column does.
+    <div data-board-table className="mt-3 md:min-h-0 md:flex-1 md:overflow-y-auto">
       <div className="overflow-x-auto">
         <table className="w-full text-left text-console-13">
           <thead>
@@ -134,7 +137,6 @@ function BoardRow({
   progress: CardProgress;
 }): ReactElement {
   const { read } = row;
-  const chip = chipOf(read);
   const run = runToOpen(read);
   const order = orderOf(read);
   const toMerge = timeToMerged(read);
@@ -162,16 +164,16 @@ function BoardRow({
       </Cell>
       <Cell className="text-text-secondary">{row.column}</Cell>
       <Cell name="state">
-        {progress.asks !== null ? (
-          <NeedsYouLink projectId={projectId} itemKey={read.item.key} count={progress.asks.count} />
-        ) : (
-          <span
-            data-row-state={chip}
-            className={`whitespace-nowrap rounded-full px-2 py-0.5 text-console-12 font-medium ${CHIP[chip].tone}`}
-          >
-            {chip === 'done' ? howItEnded(read) : CHIP[chip].label}
-          </span>
-        )}
+        <span className="flex flex-wrap items-center gap-2">
+          <StateLabel read={read} />
+          {progress.asks === null ? null : (
+            <NeedsYouLink
+              projectId={projectId}
+              itemKey={read.item.key}
+              count={progress.asks.count}
+            />
+          )}
+        </span>
       </Cell>
       <Cell name="round" className="whitespace-nowrap text-text-secondary">
         {progress.round?.text}

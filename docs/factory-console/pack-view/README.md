@@ -17,7 +17,9 @@ bun run check:factory-view <pack dir> --view docs/factory-console/pack-view/fact
 A name the pack graph lacks is an error; an in-flow stage the map leaves unplaced is a warning.
 
 The file also says where a board card finds an item's progress in its runs' records: `retired`
-(workflows the pack no longer has whose runs still count, here `deliver`), `rounds` (the
+(workflows the pack no longer has whose runs still count, here `deliver`, with the stage an item
+standing on one of their runs is placed at on the board, here `stage-build`; a bare name places
+it at none, and the board sets it aside), `rounds` (the
 `deliver` loop and the `stage-check` result's `/round` and `/allowance`), `returns` and
 `approves` (the steps whose outcome sends an item back or approves its round) and `change`
 (where a run names its pull request). Those names are checked against the graph as well; a

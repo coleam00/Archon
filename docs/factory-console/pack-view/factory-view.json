@@ -821,7 +821,10 @@
     "workOrders": "work orders"
   },
   "retired": [
-    "deliver"
+    {
+      "workflow": "deliver",
+      "stage": "stage-build"
+    }
   ],
   "rounds": [
     {

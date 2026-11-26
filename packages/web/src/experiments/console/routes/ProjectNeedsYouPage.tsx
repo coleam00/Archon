@@ -29,7 +29,7 @@ import { useForgeTitles } from '../factory/FactoryCards';
 import { humaniseId, itemTitle } from '../factory/lib/item-card';
 import { useBoardItems } from '../factory/useBoardItems';
 import { relativeTime } from '../lib/format';
-import { displayItemKey, issueNumber } from '../lib/item-key';
+import { displayItemKey, matchesItemFilter, openAsksOf } from '../lib/item-key';
 import type { ItemAsk } from '../primitives/run';
 import type { Project } from '../primitives/project';
 import * as skill from '../skills';
@@ -88,19 +88,6 @@ export function itemFilter(params: URLSearchParams): string[] {
     .map(value => value.trim())
     .filter(value => value !== '');
   return [...new Set(values)];
-}
-
-/**
- * Whether an ask (or a board read) is of the item `wanted` names: its raw key, or the same issue
- * number (`198` and `issue-198` name one issue). Exact: a parent's number does not take in its
- * split members. Something with no item is of none.
- */
-export function matchesItemFilter(of: { item?: { key: string } }, wanted: string): boolean {
-  const key = of.item?.key;
-  if (key === undefined) return false;
-  if (key === wanted) return true;
-  const number = issueNumber(wanted);
-  return number !== null && number === issueNumber(key);
 }
 
 /** The item's key and title as the board prints them; without its board read, the ask's own. */
@@ -383,6 +370,8 @@ export function ProjectNeedsYouPage(): ReactElement {
     wanted.length === 0 || wanted.some(value => matchesItemFilter(ask, value));
   const asks = itemAsks.asks.filter(shown);
   const rows = rowsOf(asks);
+  // Counted as a board card counts its "Needs you · N", so the link's N is this line's.
+  const open = openAsksOf(itemAsks.asks, itemAsks.answered, wanted).length;
   // Rows whose asks were all answered here stay until dismissed, as they do elsewhere.
   const answeredOnly = itemAsks.answered.filter(
     record =>
@@ -404,7 +393,7 @@ export function ProjectNeedsYouPage(): ReactElement {
             {project?.name ?? 'Project'}
           </h1>
           <p role="status" className="text-xs text-text-tertiary">
-            {statusLine(error, attention !== undefined, asks.length)}
+            {statusLine(error, attention !== undefined, open)}
           </p>
         </div>
         <ProjectViewTabs projectId={projectId} active="needs-you" />

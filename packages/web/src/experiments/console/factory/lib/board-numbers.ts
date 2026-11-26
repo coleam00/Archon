@@ -1,12 +1,21 @@
 /**
  * The board's groups and numbers, as one rendering of the server's placement: each item's
- * `standing`, its `merged` record and its links. Nothing here places an item again. The
- * Board's columns, its Merged column and Table, and the Overview's tiles and flow all read
+ * `standing`, its `merged` record and its links. Which stage a moving item is at is
+ * `stageAt`'s, through `placeFor`; nothing else places an item. The Board's columns, its
+ * Merged column, Set aside strip and Table, and the Overview's tiles and flow all read
  * `packBoard`, so the two pages count the same items the same way.
  */
 import { ensureUtc } from '../../lib/format';
 import type { ItemRead } from '../../skills/items';
-import { howItEnded, isMoving, needsDecision, standingRun } from '../../routes/board/standing';
+import {
+  howItEnded,
+  isMoving,
+  needsDecision,
+  stageAt,
+  standingRun,
+} from '../../routes/board/standing';
+import type { FactoryView } from '../api';
+import { retiredOf, type PackGraphStage } from './item-card';
 
 /** How many local calendar days the Merged column lists, today included. */
 export const MERGED_DAYS = 7;
@@ -62,10 +71,46 @@ export function setAsideOf(read: ItemRead): SetAside | null {
   return { read, why: run?.status === 'cancelled' ? 'Cancelled' : 'Ended with no outcome', since };
 }
 
-/** Every item set aside in the project, the most recently ended first. */
-export function projectSetAside(items: readonly ItemRead[]): SetAside[] {
+/** Why a moving item no stage column holds is set aside. */
+export const ON_NO_STAGE = 'On no stage';
+/** Why a moving item that stands at no pack's run is set aside. */
+export const ON_NO_PACK = "On no pack's stage";
+
+/**
+ * Every item set aside in the project, the most recently ended first: the ones `setAsideOf`
+ * names, and the moving items no stage places (`unplaced`, from each `packBoard`), since their
+ * run started.
+ */
+export function projectSetAside(
+  items: readonly ItemRead[],
+  unplaced: readonly { read: ItemRead; why: string }[] = []
+): SetAside[] {
   const at = (entry: SetAside): number => (entry.since === null ? 0 : ms(entry.since));
-  return items.flatMap(read => setAsideOf(read) ?? []).sort((a, b) => at(b) - at(a));
+  return [
+    ...items.flatMap(read => setAsideOf(read) ?? []),
+    ...unplaced.map(({ read, why }) => ({
+      read,
+      why,
+      since: standingRun(read)?.startedAt ?? null,
+    })),
+  ].sort((a, b) => at(b) - at(a));
+}
+
+/** Where `placeFor` puts a moving item: an in-flow stage's workflow, or none. */
+export type Place = (read: ItemRead) => string | undefined;
+
+/**
+ * The one placement rule the Board and the Overview share: the in-flow stage `stageAt` puts an
+ * item at, given the pack graph's stages and its view's `retired` (a retired workflow's runs
+ * place where the view maps them). Undefined for an item at no stage of the flow.
+ */
+export function placeFor(stages: readonly PackGraphStage[], view: FactoryView | null): Place {
+  const retired = retiredOf(view);
+  const inFlow = new Set(stages.filter(stage => stage.inFlow).map(stage => stage.workflow));
+  return read => {
+    const at = stageAt(read, stages, retired);
+    return at !== undefined && inFlow.has(at) ? at : undefined;
+  };
 }
 
 export interface BoardNumbers {
@@ -85,6 +130,8 @@ export interface BoardNumbers {
 export interface PackBoardGroups {
   /** On a stage: the columns. A work order with a run of its own on a stage is here too. */
   moving: ItemRead[];
+  /** Running, waiting or queued, but at no stage of the flow: set aside, not counted. */
+  unplaced: ItemRead[];
   /** Failed or stopped: the decision strip. */
   decide: ItemRead[];
   /**
@@ -101,10 +148,21 @@ export interface PackBoardGroups {
 const startOfLocalDay = (now: Date, daysBack: number): number =>
   new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysBack).getTime();
 
-/** The groups and numbers of one pack's items, from `items` (every item of the project). */
-export function packBoard(items: readonly ItemRead[], pack: string, now: Date): PackBoardGroups {
+/**
+ * The groups and numbers of one pack's items, from `items` (every item of the project). With
+ * `place` (`placeFor`), a moving item it places at no stage is `unplaced`; without it (the
+ * pack's graph or view not read yet) every moving item counts as moving.
+ */
+export function packBoard(
+  items: readonly ItemRead[],
+  pack: string,
+  now: Date,
+  place?: Place
+): PackBoardGroups {
   const own = items.filter(read => read.standing.pack === pack);
-  const moving = own.filter(isMoving);
+  const placed = (read: ItemRead): boolean => place === undefined || place(read) !== undefined;
+  const moving = own.filter(read => isMoving(read) && placed(read));
+  const unplaced = own.filter(read => isMoving(read) && !placed(read));
   const decide = own.filter(needsDecision);
   const merged = own
     .filter(read => read.standing.state === 'done' && read.merged !== null)
@@ -117,6 +175,7 @@ export function packBoard(items: readonly ItemRead[], pack: string, now: Date): 
   const all = merged.map(entry => entry.read);
   return {
     moving,
+    unplaced,
     decide,
     merged: { recent, earlier },
     onBoard: [...moving, ...decide, ...all],

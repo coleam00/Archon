@@ -37,7 +37,7 @@ const VIEW = {
   ],
 } as unknown as FactoryView;
 const PACK: CardPack = {
-  stages: WORKFLOWS.map(workflow => ({ name: `${PREFIX}${workflow}`, workflow })),
+  stages: WORKFLOWS.map(workflow => ({ name: `${PREFIX}${workflow}`, workflow, inFlow: true })),
   view: VIEW,
 };
 const reads = (fixture.items as unknown as ItemRead[]).map(read => ({
@@ -101,7 +101,7 @@ test('sorting by To merge orders rows by the time from the first run to the merg
   expect(sorted.map(row => row.read.item.key)).toEqual(['fast', 'mid', 'slow']);
 });
 
-test('an item with open asks shows one Needs you link in its State cell, to the filtered tab', () => {
+test('an item with open asks shows its state label and one Needs you link in its State cell, to the filtered tab', () => {
   const [read] = reads;
   if (read === undefined) throw new Error('the fixture has no items');
   const html = renderToStaticMarkup(
@@ -148,11 +148,18 @@ test('an item with open asks shows one Needs you link in its State cell, to the 
   expect(links[0]?.getAttribute('href')).toBe(
     `/console/p/web/needs-you?item=${encodeURIComponent(read.item.key)}`
   );
-  // One Needs you per row: no state pill beside it, and no separate Asks column.
-  expect(row?.querySelector('[data-row-state]')).toBeNull();
+  // The state cell keeps its label, a label and not a link, with the Needs you button after it;
+  // there is no separate Asks column.
+  const label = row?.querySelector('[data-cell="state"] [data-chip]');
+  expect(label?.tagName).toBe('SPAN');
+  expect(label?.closest('a')).toBeNull();
+  // The fixture's first item merged: its label says how it ended.
+  expect(read.merged).not.toBeNull();
+  expect(label?.textContent).toBe('Merged');
+  expect(label?.nextElementSibling).toBe(links[0] ?? null);
   expect(page.querySelector('thead')?.textContent).not.toContain('Asks');
-  // A row with no ask keeps its state pill and has no link.
+  // A row with no ask has its label and no link.
   const other = page.querySelector(`[data-row="${reads[1]?.item.key ?? ''}"]`);
   expect(other?.querySelector('[data-needs-you-link]')).toBeNull();
-  expect(other?.querySelector('[data-row-state]')).not.toBeNull();
+  expect(other?.querySelector('[data-cell="state"] [data-chip]')).not.toBeNull();
 });

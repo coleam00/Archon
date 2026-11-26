@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 import { act, type ReactElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router';
 import { NO_ITEM_ASKS } from '../../components/ItemAsksSection';
 import type { FactoryView, RunRecord } from '../../factory/api';
@@ -10,6 +11,7 @@ import type { ItemAsk } from '../../primitives/run';
 import type { ItemRead } from '../../skills/items';
 import { invalidate, set } from '../../store/cache';
 import { K } from '../../store/keys';
+import { ProjectNeedsYouPage } from '../ProjectNeedsYouPage';
 import { CardList } from './ItemCard';
 
 const dom = new Window({ url: 'http://localhost' });
@@ -172,7 +174,7 @@ const READS = [
   item('issue-48', []),
 ];
 
-test('a card with an open ask has one Needs you control, to the Needs you tab filtered to it', async () => {
+test('a card with an open ask has one Needs you button at its bottom, beside its PR, to the filtered tab', async () => {
   const view = await mount(READS);
   try {
     const card = view.container.querySelector('[data-item="issue-2"]');
@@ -180,8 +182,18 @@ test('a card with an open ask has one Needs you control, to the Needs you tab fi
     expect(links.length).toBe(1);
     expect(links[0]?.textContent).toBe('Needs you · 1');
     expect(links[0]?.getAttribute('href')).toBe('/console/p/web/needs-you?item=issue-2');
-    // It stands in the chip's place: the card has no other chip.
-    expect(card?.querySelectorAll('[data-chip]').length).toBe(1);
+    // The card's actions are its last row: the PR button, then the Needs you button beside it.
+    const actions = card?.querySelector('[data-card-actions]');
+    expect(actions).toBe(card?.lastElementChild ?? null);
+    expect(links[0]?.parentElement === actions).toBe(true);
+    expect(actions?.querySelector('[data-card-pr]')?.nextElementSibling).toBe(links[0] ?? null);
+    // The top-right chip is the state as a label: a span, no link, no Needs you.
+    const chips = card?.querySelectorAll('[data-chip]') ?? [];
+    expect(chips.length).toBe(1);
+    expect(chips[0]?.tagName).toBe('SPAN');
+    expect(chips[0]?.closest('a')).toBeNull();
+    expect(chips[0]?.hasAttribute('data-needs-you-link')).toBe(false);
+    expect(chips[0]?.textContent).toBe('Waiting');
     // The card shows no ask question, recommendation or count beside it.
     expect(card?.textContent).not.toContain('Land it?');
     expect(card?.textContent).not.toContain('Recommended');
@@ -202,7 +214,7 @@ test('a card with no open ask has no Needs you control', async () => {
   }
 });
 
-test('an item that stands needing you with no open ask shows the chip, not a control', async () => {
+test('an item that waits on a question with no open ask shows its state label, not a control', async () => {
   const base = READS[0]!;
   const read: ItemRead = {
     ...base,
@@ -215,9 +227,96 @@ test('an item that stands needing you with no open ask shows the chip, not a con
     expect(card?.querySelector('[data-needs-you-link]')).toBeNull();
     const chip = card?.querySelector('[data-chip]');
     expect(chip?.tagName).toBe('SPAN');
-    expect(chip?.getAttribute('data-chip')).toBe('needs_you');
+    expect(chip?.textContent).toBe('Waiting');
+    expect(card?.querySelector('[data-card-actions] [data-needs-you-link]')).toBeNull();
   } finally {
     await view.unmount();
+  }
+});
+
+test('a failed card keeps its label top right and its PR as a button at its bottom', async () => {
+  const base = READS[0]!;
+  const failed: ItemRead = {
+    ...base,
+    item: { ...base.item, id: 'id-issue-5', key: 'issue-5' },
+    standing: { ...base.standing, state: 'failed' },
+  };
+  const view = await mount([failed]);
+  try {
+    const card = view.container.querySelector('[data-item="issue-5"]');
+    const chip = card?.querySelector('[data-chip]');
+    expect(chip?.textContent).toBe('Failed');
+    expect(chip?.closest('a')).toBeNull();
+    // The reason stays above the actions row, which holds the PR.
+    expect(card?.querySelector('[data-item-reason]')).not.toBeNull();
+    expect(card?.lastElementChild?.hasAttribute('data-card-actions')).toBe(true);
+    expect(card?.querySelector('[data-card-actions] [data-card-pr]')?.textContent).toBe(
+      'Pull request'
+    );
+  } finally {
+    await view.unmount();
+  }
+});
+
+test("a card's Needs you N is the open-ask count of the tab its link opens, twins too (#225)", () => {
+  const on = (ref: string, key: string): ItemAsk => ({
+    ...ask,
+    ref,
+    item: { id: `id-${key}`, projectKey: 'acme/web', key },
+  });
+  // One issue keyed twice (`198` and `issue-198`), an ask on each, and an item of its own.
+  const asks = [on('ask:t1', '198'), on('ask:t2', 'issue-198'), on('ask:t3', 'issue-7')];
+  const reads = ['198', 'issue-198', 'issue-7'].map(key => ({
+    ...item(key, [run(`run-${key}`, '2026-11-20T10:00:00.000Z')]),
+    item: { id: `id-${key}`, projectKey: 'acme/web', key, title: `Title of ${key}` },
+  }));
+  set(K.runsAttention, {
+    runs: [],
+    ownerLost: [],
+    asks,
+    answerRefusals: {},
+    itemIds: new Set(reads.map(read => read.item.id)),
+    degraded: [],
+  });
+  set(K.projects, []);
+  set(K.boardOrders('web'), reads);
+  const markup = (path: string, element: ReactElement): Document => {
+    const page = new Window().document;
+    page.body.innerHTML = renderToStaticMarkup(
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/console/p/:projectId/*" element={element} />
+        </Routes>
+      </MemoryRouter>
+    );
+    return page as unknown as Document;
+  };
+  const cards = markup(
+    '/console/p/web/board',
+    <CardsContext.Provider
+      value={{
+        projectId: 'web',
+        packs: new Map(),
+        packsError: false,
+        itemAsks: { ...NO_ITEM_ASKS, asks },
+      }}
+    >
+      <CardList reads={reads} projectId="web" className="" />
+    </CardsContext.Provider>
+  );
+  try {
+    const counts = reads.map(read => {
+      const link = cards.querySelector(`[data-item="${read.item.key}"] [data-needs-you-link]`);
+      const tab = markup(link?.getAttribute('href') ?? '', <ProjectNeedsYouPage />);
+      return [link?.textContent, tab.querySelector('[role="status"]')?.textContent];
+    });
+    expect(counts).toEqual([
+      ['Needs you · 2', '2 open asks'],
+      ['Needs you · 2', '2 open asks'],
+      ['Needs you · 1', '1 open ask'],
+    ]);
+  } finally {
+    for (const prefix of ['projects', 'board', 'runs', 'forge-titles']) invalidate(prefix);
   }
 });
 
@@ -259,7 +358,7 @@ test('an item with no run is not a link', async () => {
 
 /** Pack `flow`: each `check` run is one check round, numbered in its result; its judge returns. */
 const FLOW: CardPack = {
-  stages: [{ name: 'acme/flow:check', workflow: 'check' }],
+  stages: [{ name: 'acme/flow:check', workflow: 'check', inFlow: true }],
   view: {
     stages: { check: { label: 'Check', blurb: 'x' } },
     words: { rounds: 'check rounds', sentBack: 'sent back' },

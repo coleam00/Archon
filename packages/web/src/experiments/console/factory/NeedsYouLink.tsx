@@ -1,8 +1,10 @@
 /**
  * The one Needs you control a board card and a Table row carry for an item with open asks:
- * "Needs you · N", linking to the project's Needs you tab filtered to the item (owner, 11/25,
- * #217). Answering happens on that tab; the board shows no ask question, recommendation or
- * popover. The tab matches `?item=` against the raw item key, so the link carries that key.
+ * "Needs you · N", a button in the console's accent beside the card's other actions (owner,
+ * 11/26), linking to the project's Needs you tab filtered to the item (#217). Answering happens
+ * on that tab; the board shows no ask question, recommendation or popover. The link carries the
+ * raw item key; the tab matches `?item=` by that key or its issue number (`matchesItemFilter`),
+ * and N counts the asks the same way (`openAsksOf`), so the tab lists N asks.
  */
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
@@ -27,11 +29,10 @@ export function NeedsYouLink({
   const text = `${CHIP.needs_you.label} · ${String(count)}`;
   return (
     <Link
-      data-chip="needs_you"
       data-needs-you-link={itemKey}
       to={needsYouPath(projectId, itemKey)}
       aria-label={`${text}: open its asks on the Needs you tab`}
-      className={`${INNER} shrink-0 cursor-pointer whitespace-nowrap rounded-full px-2 py-0.5 text-console-12 font-medium ${CHIP.needs_you.tone} transition-[filter] hover:brightness-110 hover:ring-2 hover:ring-warning/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+      className={`${INNER} inline-flex shrink-0 cursor-pointer items-center whitespace-nowrap rounded-md bg-accent-bright px-2 py-1 text-console-12 font-semibold text-white/95 shadow-sm transition-[filter,box-shadow] hover:brightness-125 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-bright focus-visible:ring-offset-1`}
     >
       {text}
     </Link>

@@ -35,6 +35,7 @@ afterEach(async () => {
  */
 const BOARD: PackBoardGroups = {
   moving: MOVING_ITEMS,
+  unplaced: [],
   decide: [],
   merged: { recent: MERGED_RECENT, earlier: MERGED_EARLIER },
   onBoard: [...MOVING_ITEMS, ...MERGED_RECENT, ...MERGED_EARLIER],
