@@ -57,19 +57,26 @@ The factory building this repository runs Archon from another checkout, on the h
   (`packages/workflows/src/schemas/factory-view.ts`, its How it works picture in
   `factory-view-how-it-works.ts`), read through the generic `pack-declarations.ts` reader from
   the copy of the pack the graph was read from (`packages/core/src/workflows/pack-view.ts`) and
-  served by `GET /api/packs/{pack}/view`. It is presentation only: words, layout, drill-down
-  cards and story wording, and where a console finds an item's check rounds, returns and change
+  served by `GET /api/packs/{pack}/view`. It is presentation only: words, groups, the stage
+  items leave the map by, How it works, drill-down cards and story wording (no map layout: the
+  Overview map is drawn from the graph), and where a console finds an item's check rounds, returns and change
   in its runs' records (`retired`, `rounds`, `returns`, `approves`, `change`, in
   `factory-view-progress.ts`; operator ruling of 2026-11-25, declare-in-view), and the stage a
   retired workflow's items stand at on the board (a `retired` entry `{ workflow, stage }`; a bare
   name places them at none, so they are set aside). The engine reads none of those; the web
   counts rounds and returns, and places those items, from generic run records with them. It holds no step lists, outcome lists, arrows, ask flags, shadow flags,
-  settings or stage-group enum; it names the graph's stages, steps, outcomes and groups, and
-  `checkFactoryView` (`factory-view-check.ts`) fails a name the graph lacks and warns on an
-  in-flow stage it leaves unplaced, when the file is read and in
-  `bun run check:factory-view <pack dir>`. The progress declarations are checked too: a
-  workflow is a graph stage or one the file lists as `retired`, a retired workflow's `stage` is
-  one of the graph's flow, a step or loop is one the stage has, and a stage's `returns` agree with its outcomes that read `returned`. The Wirasm pack's file is kept at
+  settings or stage-group enum; it names the graph's stages, steps and outcomes, and declares
+  its groups, each with the `kind` its colour comes from (`lib/view-groups.ts` `groupsOf` is the
+  one place the map, Full workflow and the board take their groups from). One path reads it, `servedFactoryView` (`factory-view-read.ts`), when the file is
+  read and in `bun run check:factory-view <pack dir>`: each entry is read alone with its own
+  schema, then `reconcileFactoryView` (`factory-view-check.ts`) drops each entry naming what the
+  graph lacks, keeps a `rounds`, `returns`, `approves` or `change` entry for a missing workflow as
+  retired, and reports every in-flow stage, step and outcome without words. Every problem is a
+  typed error (`kind`): the console shows them all and draws what is left, and the check exits 1
+  on any. The progress declarations are checked too: a workflow is a graph stage or retired, a
+  retired workflow's `stage` is one of the graph's flow (else only that placement is dropped), a
+  step or loop is one the stage has, and a stage's `returns` agree with its outcomes that read
+  `returned`. The Wirasm pack's file is kept at
   `docs/factory-console/pack-view/` until the owner's pack ships it.
 - Factory web code stays under `packages/web/src/experiments/console/factory/` (components, pure
   `lib/`, the page routes). On `combined` it holds the curated map, How it works and the stage
@@ -84,9 +91,10 @@ The factory building this repository runs Archon from another checkout, on the h
   mounted-DOM helper). `ProjectRail.tsx` carries the sidebar Factory entry
   without importing the folder. No lint checks this on `combined` (`scripts/check-factory-imports.ts`
   is not ported); keep the list true when a change adds a mount point. The curated map, How it
-  works and the stage modal are drawn only when the pack ships a view file the server read
-  without an error; `factory/lib/map-source.ts` is the one place that decides, and everything
-  else draws the map derived from the pack graph.
+  works and the stage modal are drawn whenever the pack ships a view file the server could
+  read, with its problems listed above them (`ViewProblems.tsx`); `factory/lib/map-source.ts` is
+  the one place that decides, and a pack with no file, or one that does not read, draws the map
+  derived from the pack graph.
 - Server code is the view-file read (`GET /api/packs/{pack}/view` in `api.packs.ts`, beside the
   graph route; the two share one graph read while it runs, `shareWhileRunning`, and keep nothing
   once it settles), and two generic reads with no pack words that the web cannot get from older routes:

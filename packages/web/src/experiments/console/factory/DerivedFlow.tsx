@@ -1,6 +1,7 @@
 /**
  * The map derived from the pack graph (DESIGN.md, COMBINED direction), drawn as a graph: the
- * pack's document groups left to right, a card per flow stage in each, the hand-offs between
+ * groups left to right (the view file's when it declares them, else the pack document's,
+ * `groupsOf`), a card per flow stage in each, under its group's name, the hand-offs between
  * them as arrows and the send-backs labelled with their outcome. On a project's Overview each
  * card carries the project's counts and opens its board; on How it works, which is the pack's
  * page and names no project (DESIGN.md, owner change 1 of 2026-11-23), the cards are the
@@ -24,13 +25,15 @@ import {
 } from './canvas-lines';
 import { GraphSkeleton } from './GraphSkeleton';
 import { MERGED_DAYS, type BoardNumbers } from './lib/board-numbers';
-import { fullWorkflowLayout, MERGED } from './lib/full-workflow-layout';
-import type { ColumnTone } from './lib/map-columns';
+import type { FactoryView } from './api';
+import { fullWorkflowLayout, MERGED, type FullLayout } from './lib/full-workflow-layout';
+import { toneOfKind, type ColumnTone } from './lib/map-columns';
 import { MapLegend } from './map/MapLegend';
 import { LIVE_FITTING, useMapCamera, type Fitting } from './map/useMapCamera';
 import { usePackGraph } from './map-structure';
 import { ReadFailure } from './ReadFailure';
-import { cardTone, TONES } from './tones';
+import { cardTone, TONES, type Tone } from './tones';
+import { groupsOf } from './lib/view-groups';
 
 /** How many of a pack's items sit in each column, and how many of those wait on the operator. */
 export function flowCounts(
@@ -97,15 +100,14 @@ const CONTROL =
  */
 const FULL_FITTING: Fitting = { ...LIVE_FITTING, minK: 0.4, maxFrameVh: 0.8 };
 const COUNT = 'text-console-13 tabular-nums text-text-primary';
-const STAGE_TONES: readonly ColumnTone[] = ['intake', 'build', 'check', 'land'];
 
 /**
- * The pack's whole workflow as a graph, from its graph and its document's groups: a card per
- * flow stage in a column per group, the hand-offs between them as arrows, and the send-backs
- * (an arrow into the same or an earlier column) in the lanes under, each labelled with its
- * outcome. It pans and zooms like the curated map. With `live` (a project's Overview) each
- * card shows its count and who it waits on and opens that group on the board; without it (How
- * it works) it is the structure alone and links nowhere.
+ * The pack's whole workflow as a graph, from its graph and `flow`'s groups: a card per flow
+ * stage in a column per group, coloured by the group's kind, the hand-offs between them as
+ * arrows, and the send-backs (an arrow into the same or an earlier column) in the lanes under,
+ * each labelled with its outcome. It pans and zooms like the curated map. With `live` (a
+ * project's Overview) each card shows its count and who it waits on and opens that group on the
+ * board; without it (How it works) it is the structure alone and links nowhere.
  */
 export function DerivedFlow({
   flow,
@@ -119,7 +121,7 @@ export function DerivedFlow({
   counts?: ReadonlyMap<string, { count: number; needYou: number }>;
 }): ReactElement {
   const layout = useMemo(
-    () => (graph === undefined ? undefined : fullWorkflowLayout(graph, columnsOf(graph))),
+    () => (graph === undefined ? undefined : fullWorkflowLayout(graph, flow)),
     [graph, flow]
   );
   const camera = useMapCamera(layout?.bounds ?? { x: 0, y: 0, w: 1, h: 1 }, null, FULL_FITTING);
@@ -128,7 +130,7 @@ export function DerivedFlow({
   const { k, x, y } = camera.camera;
   const last = layout.columns.length - 1;
   const toneOf = (column: number): ColumnTone =>
-    column === last ? 'merged' : (STAGE_TONES[column] ?? 'other');
+    column === last ? 'merged' : toneOfKind(flow[column]?.kind);
   const hrefOf = (column: number): string | undefined => {
     if (live === undefined) return undefined;
     if (column === last) return live.board;
@@ -221,102 +223,18 @@ export function DerivedFlow({
               </Link>
             );
           })}
-          {layout.cards.map(card => {
-            const tone = TONES[toneOf(card.column)];
-            const merged = card.id === MERGED;
-            const stage = merged ? undefined : stageOf(card.id);
-            const at = counts?.get(card.id);
-            const column = layout.columns[card.column];
-            const body = (
-              <>
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-x-0 top-0 h-0.75"
-                  style={{ background: tone.color }}
-                />
-                <span className="flex h-4 items-center gap-1.5">
-                  <tone.Icon
-                    aria-hidden="true"
-                    className="size-4 shrink-0"
-                    style={{ color: tone.color }}
-                  />
-                  <span className="truncate text-console-12 font-medium uppercase tracking-console-label text-text-tertiary">
-                    {column?.name ?? tone.kind}
-                  </span>
-                </span>
-                <span className="line-clamp-2 text-console-15 font-semibold leading-5 text-text-primary">
-                  {merged ? 'Merged' : stageWords(card.id)}
-                </span>
-                <span className="mt-auto flex items-center gap-1.5 overflow-hidden text-console-12 text-text-tertiary">
-                  {merged ? (
-                    <span>
-                      {live === undefined
-                        ? 'The change landed'
-                        : `last ${String(MERGED_DAYS)} days${
-                            live.numbers === undefined
-                              ? ''
-                              : ` · ${String(live.numbers.mergedToday)} today`
-                          }`}
-                    </span>
-                  ) : (
-                    <>
-                      <span className="truncate">
-                        {stage === undefined ? '' : `${String(stage.nodes.length)} steps`}
-                        {stage?.asks === true ? ' · asks' : ''}
-                        {stage?.waits === true ? ' · waits' : ''}
-                      </span>
-                      {at === undefined ? null : (
-                        <span
-                          data-stage-count
-                          className="ml-auto inline-flex h-5 shrink-0 items-center rounded-full bg-[color:var(--running-soft)] px-2 tabular-nums text-[color:var(--running)]"
-                        >
-                          {at.count} here
-                        </span>
-                      )}
-                      {at === undefined || at.needYou === 0 ? null : (
-                        <span
-                          data-need-you
-                          className="inline-flex h-5 shrink-0 items-center rounded-full bg-[color:var(--warning-soft)] px-2 tabular-nums text-warning"
-                        >
-                          {at.needYou} need you
-                        </span>
-                      )}
-                    </>
-                  )}
-                </span>
-              </>
-            );
-            const to = hrefOf(card.column);
-            return (
-              <div
-                key={card.id}
-                data-flow-stage={card.id}
-                className="absolute"
-                style={{
-                  left: card.box.x,
-                  top: card.box.y,
-                  width: card.box.w,
-                  height: card.box.h,
-                }}
-              >
-                {to === undefined ? (
-                  <div className={CARD} data-static="" style={cardTone(tone.color)}>
-                    {body}
-                  </div>
-                ) : (
-                  <Link
-                    to={to}
-                    draggable={false}
-                    className={CARD}
-                    data-lit={at === undefined || at.count === 0 ? undefined : ''}
-                    style={cardTone(tone.color)}
-                  >
-                    {body}
-                  </Link>
-                )}
-              </div>
-            );
-          })}
+          {layout.cards.map(card => (
+            <FlowCard
+              key={card.id}
+              card={card}
+              tone={TONES[toneOf(card.column)]}
+              group={layout.columns[card.column]?.name}
+              stage={stageOf(card.id)}
+              at={counts?.get(card.id)}
+              live={live}
+              href={hrefOf(card.column)}
+            />
+          ))}
         </div>
         <div
           onPointerDown={event => event.stopPropagation()}
@@ -338,6 +256,116 @@ export function DerivedFlow({
   );
 }
 
+/** The Merged card's line: what it means, or on an Overview the board's recent merges. */
+function MergedLine({ live }: { live: FlowLive | undefined }): ReactElement {
+  if (live === undefined) return <span>The change landed</span>;
+  const today = live.numbers === undefined ? '' : ` · ${String(live.numbers.mergedToday)} today`;
+  return <span>{`last ${String(MERGED_DAYS)} days${today}`}</span>;
+}
+
+/** A stage card's line: its steps, whether it asks or waits, and the project's counts. */
+function StageLine({
+  stage,
+  at,
+}: {
+  stage: PackGraph['stages'][number] | undefined;
+  at: { count: number; needYou: number } | undefined;
+}): ReactElement {
+  return (
+    <>
+      <span className="truncate">
+        {stage === undefined ? '' : `${String(stage.nodes.length)} steps`}
+        {stage?.asks === true ? ' · asks' : ''}
+        {stage?.waits === true ? ' · waits' : ''}
+      </span>
+      {at === undefined ? null : (
+        <span
+          data-stage-count
+          className="ml-auto inline-flex h-5 shrink-0 items-center rounded-full bg-[color:var(--running-soft)] px-2 tabular-nums text-[color:var(--running)]"
+        >
+          {at.count} here
+        </span>
+      )}
+      {at === undefined || at.needYou === 0 ? null : (
+        <span
+          data-need-you
+          className="inline-flex h-5 shrink-0 items-center rounded-full bg-[color:var(--warning-soft)] px-2 tabular-nums text-warning"
+        >
+          {at.needYou} need you
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * One card of the derived map: a flow stage under its group's name (the tone's kind only for a
+ * card in no group), or the Merged card. With `href` it opens the board there.
+ */
+function FlowCard({
+  card,
+  tone,
+  group,
+  stage,
+  at,
+  live,
+  href,
+}: {
+  card: FullLayout['cards'][number];
+  tone: Tone;
+  group: string | undefined;
+  stage: PackGraph['stages'][number] | undefined;
+  at: { count: number; needYou: number } | undefined;
+  live: FlowLive | undefined;
+  href: string | undefined;
+}): ReactElement {
+  const merged = card.id === MERGED;
+  const body = (
+    <>
+      <span
+        aria-hidden="true"
+        className="absolute inset-x-0 top-0 h-0.75"
+        style={{ background: tone.color }}
+      />
+      <span className="flex h-4 items-center gap-1.5">
+        <tone.Icon aria-hidden="true" className="size-4 shrink-0" style={{ color: tone.color }} />
+        <span className="truncate text-console-12 font-medium uppercase tracking-console-label text-text-tertiary">
+          {group ?? tone.kind}
+        </span>
+      </span>
+      <span className="line-clamp-2 text-console-15 font-semibold leading-5 text-text-primary">
+        {merged ? 'Merged' : stageWords(card.id)}
+      </span>
+      <span className="mt-auto flex items-center gap-1.5 overflow-hidden text-console-12 text-text-tertiary">
+        {merged ? <MergedLine live={live} /> : <StageLine stage={stage} at={at} />}
+      </span>
+    </>
+  );
+  return (
+    <div
+      data-flow-stage={card.id}
+      className="absolute"
+      style={{ left: card.box.x, top: card.box.y, width: card.box.w, height: card.box.h }}
+    >
+      {href === undefined ? (
+        <div className={CARD} data-static="" style={cardTone(tone.color)}>
+          {body}
+        </div>
+      ) : (
+        <Link
+          to={href}
+          draggable={false}
+          className={CARD}
+          data-lit={at === undefined || at.count === 0 ? undefined : ''}
+          style={cardTone(tone.color)}
+        >
+          {body}
+        </Link>
+      )}
+    </div>
+  );
+}
+
 /**
  * The pack's derived map as structure only, from its graph: How it works, the pack's page,
  * draws it with no project's counts or board. The graph is read through the first project that
@@ -346,9 +374,12 @@ export function DerivedFlow({
 export function DerivedStructure({
   projectId,
   pack,
+  view,
 }: {
   projectId: string;
   pack: string;
+  /** The pack's view, when it has one: its groups are the columns, as on the curated map. */
+  view?: FactoryView;
 }): ReactElement {
   const graph = usePackGraph(projectId, pack);
   if (graph.data === undefined)
@@ -359,5 +390,7 @@ export function DerivedStructure({
         The pack's graph could not be read: {graph.error.message}
       </ReadFailure>
     );
-  return <DerivedFlow flow={columnsOf(graph.data)} graph={graph.data} />;
+  return (
+    <DerivedFlow flow={columnsOf(graph.data, groupsOf(view, graph.data))} graph={graph.data} />
+  );
 }

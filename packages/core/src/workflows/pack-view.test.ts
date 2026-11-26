@@ -41,7 +41,7 @@ const view = (stage: string) => ({
   title: 'Chain',
   summary: 'One stage.',
   stages: { [stage]: { label: 'A', blurb: 'Does a.' } },
-  map: { cards: [{ id: 'a', stages: [stage] }] },
+  merged: stage,
   howItWorks: {
     title: 'How it works',
     caption: 'One stage.',
@@ -59,23 +59,25 @@ const view = (stage: string) => ({
 });
 
 describe('readPackView', () => {
-  test('a file that is not JSON, or fails the schema, has its path, no view and errors', async () => {
+  test('a file that is not JSON, or whose envelope does not read, has its path and no view', async () => {
     for (const body of ['{ not json', JSON.stringify({ version: 1, placement: {} })]) {
       const result = await read(await packProject(body));
       expect(result.path).toEndWith(join('.shared', 'factory-view.json'));
       expect(result.view).toBeNull();
       expect(result.problems.length).toBeGreaterThan(0);
-      expect(result.problems.every(problem => problem.severity === 'error')).toBe(true);
+      expect(result.problems.every(problem => problem.kind === 'unreadable')).toBe(true);
     }
   });
 
-  test("a valid file is checked against the pack's graph when it is read", async () => {
+  test("a file is reconciled with the pack's graph when it is read, a stale entry dropped alone", async () => {
     const good = await read(await packProject(JSON.stringify(view('chain-a'))));
     expect([good.view?.title, good.problems]).toEqual(['Chain', []]);
-    const unknown = await read(await packProject(JSON.stringify(view('chain-z'))));
-    expect(unknown.problems.map(problem => [problem.severity, problem.path.join('.')])).toEqual([
-      ['error', 'stages.chain-z'],
-      ['error', 'map.cards.0.stages.0'],
+    const stale = await read(await packProject(JSON.stringify(view('chain-z'))));
+    expect(stale.view?.title).toBe('Chain');
+    expect(stale.view?.stages).toEqual({});
+    expect(stale.problems.map(problem => [problem.kind, problem.path.join('.')])).toEqual([
+      ['dropped', 'stages.chain-z'],
+      ['dropped', 'merged'],
     ]);
   });
 });

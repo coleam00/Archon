@@ -56,7 +56,7 @@ export const decisionPointSchema = z.strictObject({
 });
 
 /** Where a workflow's runs name the change's URL in their result. */
-const changeSourceSchema = z.strictObject({
+export const changeSourceSchema = z.strictObject({
   workflow: workflowNameSchema,
   pointer: jsonPointerSchema,
 });
@@ -88,7 +88,7 @@ function roundsSourceProblem(input: unknown): string {
       );
 }
 
-const roundsSourceSchema = z.union([loopRoundsSchema, stageRoundsSchema], {
+export const roundsSourceSchema = z.union([loopRoundsSchema, stageRoundsSchema], {
   error: issue => roundsSourceProblem(issue.input),
 });
 
@@ -96,7 +96,7 @@ const roundsSourceSchema = z.union([loopRoundsSchema, stageRoundsSchema], {
  * A retired workflow, and the graph stage (by its `workflow` name) an item standing on one of
  * its runs is placed at. A bare name places nowhere: such an item is set aside.
  */
-const retiredSchema = z.union([
+export const retiredSchema = z.union([
   workflowNameSchema,
   z.strictObject({ workflow: workflowNameSchema, stage: workflowNameSchema }),
 ]);

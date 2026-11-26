@@ -1,27 +1,55 @@
 /**
  * The factory's structure, read from the pack graph (`GET /api/packs/{pack}/graph`): the steps
- * of a stage and the arrows between stages. The view file only words them and places them
- * (DESIGN.md, v2 direction); this is the one place that joins the two.
+ * of a stage and the arrows between stages, each worded by the outcome or answer it carries:
+ * the view file's label for the outcome where it gives one (DESIGN.md, COMBINED direction),
+ * else the raw value.
  *
  * Pure.
  */
 import type { PackGraph } from '../../skills/items';
 
 /**
- * What of the view the projection reads: which map stages list which graph stages, the words,
- * and each graph stage's name in the graph's arrows (`owner/name:workflow` when installed).
+ * What of the view the projection reads: the map's stages with the graph stages they stand
+ * for, and each graph stage's name in the graph's arrows (`owner/name:workflow` when installed).
  */
 export interface StructureView {
   stages: readonly { id: string; label: string; workflows: readonly string[] }[];
-  map: { arrows: readonly { from: string; to: string; label: string }[] };
   runNames: Readonly<Record<string, string>>;
+  /** The file's label of each `workflow:outcome` or `workflow:*` that has one. */
+  outcomeLabels: Readonly<Record<string, string>>;
 }
 
-/** One arrow the map draws, between two stages, with the view's words for it when it gives them. */
+/** One arrow the map draws, between two stages, labelled with what it carries. */
 export interface MapArrow {
   from: string;
   to: string;
-  label: string | undefined;
+  /** The outcome and answer values its graph arrows carry, each once, joined with ", ". */
+  label: string;
+}
+
+/** What an arrow of the graph says: its outcome, or what settles the ask it follows. */
+export function wordsOf(from: PackGraph['arrows'][number]['from']): string {
+  if ('outcome' in from) return from.outcome;
+  if (from.option !== undefined) return from.option;
+  return from.settled === 'any' ? 'asked' : from.settled;
+}
+
+/**
+ * What an arrow says on the map: its outcome's label (the exact `workflow:outcome` entry, then
+ * the stage's `workflow:*`), else `wordsOf`. An ask's option is not worded by the file.
+ */
+function arrowWords(
+  view: StructureView,
+  workflowOf: ReadonlyMap<string, string>,
+  from: PackGraph['arrows'][number]['from']
+): string {
+  if (!('outcome' in from)) return wordsOf(from);
+  const workflow = workflowOf.get(from.stage) ?? '';
+  return (
+    view.outcomeLabels[`${workflow}:${from.outcome}`] ??
+    view.outcomeLabels[`${workflow}:*`] ??
+    from.outcome
+  );
 }
 
 /** The map stage of each graph stage the view lists: the first listing it. */
@@ -37,8 +65,9 @@ function stageByGraphName(view: StructureView): Map<string, string> {
 }
 
 /**
- * Every pair of stages the graph connects, once each: the view's labelled pairs in its order,
- * then the rest in the graph's order, since the map lays its pills and lanes out in this order.
+ * Every pair of stages the graph connects, once each, in the graph's order, labelled with the
+ * values its arrows carry in the graph's order (`arrowWords`). The map lays its pills and lanes
+ * out in this order.
  *
  * Every arrow counts, active or not: an install without trigger files still runs the pack's
  * declared hand-offs. Two kinds are left out. An arrow over a `depends_on` link restarts a stage
@@ -47,26 +76,29 @@ function stageByGraphName(view: StructureView): Map<string, string> {
  */
 export function mapArrows(view: StructureView, graph: PackGraph): MapArrow[] {
   const stageOf = stageByGraphName(view);
-  const key = (from: string, to: string): string => JSON.stringify([from, to]);
-  const drawn = new Map<string, MapArrow>();
+  const workflowOf = new Map(
+    Object.entries(view.runNames).map(([workflow, name]) => [name, workflow])
+  );
+  const drawn = new Map<string, { from: string; to: string; words: string[] }>();
   for (const arrow of graph.arrows) {
     if (arrow.linked?.kind === 'depends_on') continue;
     const from = stageOf.get(arrow.from.stage);
     const to = stageOf.get(arrow.to);
-    if (from === undefined || to === undefined || drawn.has(key(from, to))) continue;
-    drawn.set(key(from, to), { from, to, label: undefined });
+    if (from === undefined || to === undefined) continue;
+    const key = JSON.stringify([from, to]);
+    const pair = drawn.get(key) ?? { from, to, words: [] };
+    const word = arrowWords(view, workflowOf, arrow.from);
+    if (!pair.words.includes(word)) pair.words.push(word);
+    drawn.set(key, pair);
   }
-  const ordered: MapArrow[] = [];
-  for (const entry of view.map.arrows) {
-    const arrow = drawn.get(key(entry.from, entry.to));
-    if (arrow === undefined) continue;
-    ordered.push({ ...arrow, label: entry.label });
-    drawn.delete(key(entry.from, entry.to));
-  }
-  return [...ordered, ...drawn.values()];
+  return [...drawn.values()].map(({ from, to, words }) => ({
+    from,
+    to,
+    label: words.join(', '),
+  }));
 }
 
-/** One arrow out of a stage, in the view file's words. */
+/** One arrow out of a stage, labelled with what it carries. */
 export interface HandOff {
   /** The arrow's label; undefined for an unlabelled one. */
   label: string | undefined;

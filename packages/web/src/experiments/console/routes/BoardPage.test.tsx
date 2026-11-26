@@ -491,6 +491,33 @@ async function mountPlaced(reads: ItemRead[], retired: unknown[]) {
   return { ...board, columns, setAside };
 }
 
+test("a pack whose graph has no groups takes its board columns from the view file's groups", async () => {
+  seedBoard([item('issue-1', 'plan', 'running'), item('issue-2', 'check', 'queued')]);
+  set(K.packGraph('web', 'flow'), graph);
+  set(K.packView('web', 'flow'), {
+    path: null,
+    view: {
+      groups: [{ name: 'Make', blurb: 'x', stages: ['plan', 'build'], kind: 'build' }],
+    } as unknown as FactoryView,
+    problems: [],
+  });
+  const board = await mountBoard(nothingFetched);
+  try {
+    expect(graph.groups).toEqual([]);
+    expect(
+      [...board.container.querySelectorAll('[data-pack="flow"] [data-stage]')].map(stage => [
+        stage.getAttribute('data-stage') ?? '',
+        ...keysIn(stage as unknown as ParentNode),
+      ])
+    ).toEqual([
+      ['Make', 'issue-1'],
+      ['check', 'issue-2'],
+    ]);
+  } finally {
+    await board.unmount();
+  }
+});
+
 test('an item on a retired workflow stands at the stage the view maps it to', async () => {
   const board = await mountPlaced(
     [item('issue-1', 'plan', 'running'), delivered('issue-6')],

@@ -1,12 +1,35 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { trackTempRoots } from '../packages/paths/src/test-utils';
+import { servedFactoryView } from '../packages/workflows/src/factory-view-read';
 import type { PackGraph } from '../packages/workflows/src/pack-graph';
-import { factoryViewSchema } from '../packages/workflows/src/schemas/factory-view';
-import { checkView, packIdentity, parseArgs } from './check-factory-view';
+import type { FactoryView } from '../packages/workflows/src/schemas/factory-view';
+import {
+  UNKNOWN_COMMIT,
+  checkView,
+  commitWords,
+  packFolderProblem,
+  graphOfTree,
+  packIdentity,
+  parseArgs,
+} from './check-factory-view';
 
 const docsCopy = resolve(import.meta.dir, '../docs/factory-console/pack-view/factory-view.json');
 const readDocsCopy = (): unknown => JSON.parse(readFileSync(docsCopy, 'utf8'));
+/** The graph of the pack commit the docs copy is written for, b62ec7b, as the graph route served it. */
+const shippedGraph = JSON.parse(
+  readFileSync(
+    resolve(
+      import.meta.dir,
+      '../packages/web/src/experiments/console/factory/__fixtures__/pack-graph-b62ec7b.json'
+    ),
+    'utf8'
+  )
+) as PackGraph;
+
+const track = trackTempRoots();
 
 /** A graph of the one in-flow stage `make`, named by an installed pack's run names. */
 const graph = {
@@ -28,8 +51,8 @@ const view = (stage: string) => ({
   version: 1,
   title: 'Factory',
   summary: 'x',
-  stages: { [stage]: { label: 'Make', blurb: 'x' } },
-  map: { cards: [{ id: 'make', stages: [stage] }] },
+  stages: { [stage]: { label: 'Make', blurb: 'x', steps: { write: 'Writes' } } },
+  merged: stage,
   howItWorks: {
     title: 'x',
     caption: 'x',
@@ -46,48 +69,175 @@ const view = (stage: string) => ({
   },
 });
 
-test('the committed docs copy matches the factory view schema', () => {
-  expect(factoryViewSchema.safeParse(readDocsCopy()).error?.issues ?? []).toEqual([]);
+test('the committed docs copy reads clean against the pack graph it is written for', () => {
+  // CI runs this file: a stale, invalid or unworded entry in the shipped view fails it.
+  expect(checkView(readDocsCopy(), shippedGraph)).toEqual({ code: 0, lines: ['0 problems'] });
+});
+
+test("a renamed stage costs the shipped view only that stage's words, and keeps its round meaning (#232)", () => {
+  const renamed = JSON.parse(
+    JSON.stringify(shippedGraph).replaceAll('stage-check', 'stage-review')
+  ) as PackGraph;
+  const file = readDocsCopy() as FactoryView;
+  const { view, problems } = servedFactoryView(file, renamed);
+  expect(view?.stages['stage-check']).toBeUndefined();
+  expect(Object.keys(view?.stages ?? {})).toHaveLength(Object.keys(file.stages).length - 1);
+  // The board's cards read rounds, returns, approvals and the change from these: all kept.
+  const onCheck = (entries: unknown): unknown[] =>
+    (Array.isArray(entries) ? entries : [entries]).filter(
+      entry => (entry as { workflow?: string }).workflow === 'stage-check'
+    );
+  for (const key of ['rounds', 'returns', 'approves', 'change'] as const)
+    expect(onCheck(view?.[key])).toEqual(onCheck(file[key]));
+  expect(view?.retired).toEqual([...(file.retired ?? []), 'stage-check']);
+  expect(problems.filter(problem => problem.kind === 'retired')).toHaveLength(4);
 });
 
 describe('checkView', () => {
-  test('passes a view naming only what the graph has, with a summary line', () => {
-    expect(checkView(view('make'), graph)).toEqual({ code: 0, lines: ['0 errors, 0 warnings'] });
+  test('passes a view naming and wording only what the graph has, with a summary line', () => {
+    expect(checkView(view('make'), graph)).toEqual({ code: 0, lines: ['0 problems'] });
   });
 
-  test('exits 1 on an unknown stage and still prints the warnings', () => {
+  test('exits 1 on a stale stage: every problem is an error, each printed with its kind', () => {
     const report = checkView(view('deploy'), graph);
     expect(report.code).toBe(1);
-    expect(report.lines.map(entry => entry.split(':')[0])).toEqual([
-      'stages.deploy',
-      'map.cards.0.stages.0',
-      'map.cards',
-      'stages',
-      '2 errors, 2 warnings',
+    expect(report.lines.map(entry => entry.replace(/\] .*$/, ']'))).toEqual([
+      'stages.deploy: [dropped]',
+      'merged: [dropped]',
+      'stages.make: [unworded]',
+      'stages.make.steps.write: [unworded]',
+      '4 problems',
     ]);
   });
 
-  test('exits 1 on a file the schema refuses, before comparing names', () => {
-    expect(checkView({ ...view('make'), placement: {} }, graph).code).toBe(1);
+  /** Each printed problem as `path: [kind]`, without its message. */
+  const kinds = (report: ReturnType<typeof checkView>): string[] =>
+    report.lines.slice(0, -1).map(entry => entry.replace(/\] .*$/, ']'));
+
+  test('exits 1 on a key the schema does not know, though the rest still reads', () => {
+    const report = checkView({ ...view('make'), map: { cards: [] } }, graph);
+    expect(report.code).toBe(1);
+    expect(kinds(report)).toEqual(['map: [unknown]']);
+  });
+
+  test('exits 1 when the only problem is a step without words', () => {
+    const file = view('make');
+    const report = checkView(
+      { ...file, stages: { make: { label: 'Make', blurb: 'x', steps: {} } } },
+      graph
+    );
+    expect(report.code).toBe(1);
+    expect(kinds(report)).toEqual(['stages.make.steps.write: [unworded]']);
+  });
+
+  test('exits 1 on a file whose envelope does not read', () => {
+    expect(checkView({ ...view('make'), version: 2 }, graph).code).toBe(1);
+  });
+});
+
+describe('packFolderProblem', () => {
+  const folder = (manifest: object | null): string => {
+    const dir = track(mkdtempSync(join(tmpdir(), 'factory-view-folder-')));
+    if (manifest !== null) writeFileSync(join(dir, 'archon-plugin.json'), JSON.stringify(manifest));
+    return dir;
+  };
+
+  test("accepts a folder whose manifest name is --repo's name half, under any owner", () => {
+    const dir = folder({ name: 'factory' });
+    expect(packFolderProblem(dir, 'acme/factory')).toBeUndefined();
+    expect(packFolderProblem(dir, 'someone-else/factory')).toBeUndefined();
+  });
+
+  test('refuses, naming the folder and the name that would work, a --repo of another name', () => {
+    const dir = folder({ name: 'gizmo' });
+    const problem = packFolderProblem(dir, 'acme/nope') ?? '';
+    expect(problem).toContain(dir);
+    expect(problem).toContain('--repo <owner>/gizmo');
+  });
+
+  test('refuses a folder that does not exist or holds no manifest', () => {
+    expect(packFolderProblem(join(tmpdir(), 'factory-view-no-such-folder'), 'a/b')).toBeDefined();
+    expect(packFolderProblem(folder(null), 'a/b')).toBeDefined();
   });
 });
 
 describe('packIdentity', () => {
-  const installed = join('home', 'plugins', 'packs', 'acme', 'factory', 'abc123');
+  const commit = 'a'.repeat(40);
+  const installed = join('home', 'plugins', 'packs', 'acme', 'factory', commit);
 
   test('reads owner/name and the commit from an installed tree', () => {
-    expect(packIdentity(installed)).toEqual({ repo: 'acme/factory', commit: 'abc123' });
+    expect(packIdentity(installed)).toEqual({ repo: 'acme/factory', commit, from: 'install' });
+    expect(packIdentity(installed, 'acme/factory')).toEqual({
+      repo: 'acme/factory',
+      commit,
+      from: 'install',
+    });
   });
 
-  test('takes --repo for any other tree, at commit local', () => {
-    expect(packIdentity(join('src', 'factory'), 'acme/factory')).toEqual({
-      repo: 'acme/factory',
-      commit: 'local',
-    });
-    expect(packIdentity(join('src', 'factory'))).toHaveProperty('error');
+  test('takes --repo for any other tree, and says when its commit cannot be known', () => {
+    const tree = track(mkdtempSync(join(tmpdir(), 'factory-view-tree-')));
+    const pack = packIdentity(tree, 'acme/factory');
+    expect(pack).toEqual({ repo: 'acme/factory', commit: UNKNOWN_COMMIT, from: 'unknown' });
+    expect(commitWords(pack as Exclude<typeof pack, { error: string }>)).toContain(
+      'commit unknown'
+    );
+    expect(packIdentity(tree)).toHaveProperty('error');
     expect(packIdentity(installed, 'not-a-repo')).toHaveProperty('error');
   });
+
+  test("takes a checkout's own HEAD, never that of a repository the tree sits inside", () => {
+    const tree = track(mkdtempSync(join(tmpdir(), 'factory-view-checkout-')));
+    writeFileSync(join(tree, 'archon-plugin.json'), '{}');
+    const git = (...args: string[]): string => {
+      const run = Bun.spawnSync(['git', '-C', tree, ...args], {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'test',
+          GIT_AUTHOR_EMAIL: 'test@example.com',
+          GIT_COMMITTER_NAME: 'test',
+          GIT_COMMITTER_EMAIL: 'test@example.com',
+        },
+      });
+      if (run.exitCode !== 0) throw new Error(run.stderr.toString());
+      return run.stdout.toString().trim();
+    };
+    git('init', '-q');
+    git('add', '.');
+    git('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'pack');
+    expect(packIdentity(tree, 'acme/factory')).toEqual({
+      repo: 'acme/factory',
+      commit: git('rev-parse', 'HEAD'),
+      from: 'checkout',
+    });
+    // This file's own checkout: a folder inside it is not a checkout of its own.
+    const inside = packIdentity(resolve(import.meta.dir, '../docs'), 'acme/factory');
+    expect(inside).toMatchObject({ commit: UNKNOWN_COMMIT, from: 'unknown' });
+  });
 });
+
+test('a pack tree that is not installed reads its graph with --repo (#231)', () => {
+  const tree = track(mkdtempSync(join(tmpdir(), 'factory-view-pack-')));
+  writeFileSync(
+    join(tree, 'archon-plugin.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: 'workflow-pack',
+      name: 'factory',
+      description: 'One stage',
+      entrypoints: { make: 'make/make.yaml' },
+    })
+  );
+  mkdirSync(join(tree, 'make'));
+  writeFileSync(
+    join(tree, 'make', 'make.yaml'),
+    'name: make\ndescription: makes it\nnodes:\n  - id: write\n    bash: "true"\n'
+  );
+  const pack = packIdentity(tree, 'acme/factory');
+  if ('error' in pack) throw new Error(pack.error);
+  const read = graphOfTree(tree, pack);
+  if ('error' in read) throw new Error(read.error);
+  expect(read.graph.stages.map(stage => stage.workflow)).toContain('make');
+}, 60_000);
 
 test('parseArgs takes one pack dir and the --view and --repo flags', () => {
   expect(parseArgs(['p', '--view', 'v.json', '--repo', 'a/b'])).toEqual({

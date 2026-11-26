@@ -1,11 +1,12 @@
 /**
  * Where the factory map draws its cards and arrows, in world units (px at zoom 1). The cards
- * are the map's columns (`mapColumns`: the pack's document groups, `curated-view.ts`), each
+ * are the map's columns (`mapColumns`: the groups, `curated-view.ts`), each
  * holding its map stages in the column's order. They sit in one row, left to right, always:
  * where the row does not fit its frame, the map pans (`map-camera.ts`).
  *
- * The arrows are the pack graph's, projected onto the view's stages (`mapArrows`) with the view
- * file's words, drawn between cards:
+ * The arrows are the pack graph's, projected onto the map's stages (`mapArrows`) and labelled
+ * with the outcome and answer values they carry, drawn between cards. With columns and rows both
+ * in flow order, card order is flow order wherever each group is a run of neighbouring stages:
  *
  * - An arrow between two cards takes its direction from card order: into an earlier card, it
  *   is a send-back; into a later one, a forward hand-off. Stages order does not decide it,
@@ -20,6 +21,8 @@
  *   "<outcome> → <target card>", and when there is no such hand-off, one is drawn for it.
  * - Forward hand-offs between one pair of cards are one line, their outcomes joined, each once.
  * - Every send-back is drawn in the one feedback lane under the row (`map-feedback-lane.ts`).
+ *   Send-backs from one card into one stage are one route, their outcomes joined, each once:
+ *   two stages of a card that return to the same stage draw one line, not two on top.
  *
  * Nothing crosses: forward lines run between cards at mid-height, the lane's legs under the
  * cards, and every pill sits in a gap or under the lane, clear of cards, lines and pills.
@@ -108,6 +111,22 @@ interface Forward {
   parts: string[];
 }
 
+/**
+ * Adds a send-back to the lane's, keyed by its card and target stage: a second one from the
+ * same card into the same stage joins the first's label, each outcome once.
+ */
+function addSendBack(sendBacks: Map<string, SendBack>, entry: SendBack): void {
+  const key = JSON.stringify([entry.from, entry.to]);
+  const held = sendBacks.get(key);
+  if (held === undefined) {
+    sendBacks.set(key, entry);
+    return;
+  }
+  const parts = (held.label ?? '').split(', ').filter(part => part !== '');
+  for (const part of entry.label?.split(', ') ?? []) if (!parts.includes(part)) parts.push(part);
+  held.label = parts.join(', ');
+}
+
 /** The arrows sorted into forward hand-offs and send-backs, by the rules above. */
 function sortArrows(
   arrows: readonly MapArrow[],
@@ -118,14 +137,19 @@ function sortArrows(
     card.stages.forEach((stage, row) => seats.set(stage, { card: i, row }));
   });
   const forward = new Map<number, Forward>();
-  const sendBacks: SendBack[] = [];
+  const sendBacks = new Map<string, SendBack>();
   arrows.forEach((arrow, index) => {
     const a = seats.get(arrow.from);
     const b = seats.get(arrow.to);
     if (a === undefined || b === undefined) return;
     const id = `decl:${index.toString()}`;
     if (isSendBack(a, b)) {
-      sendBacks.push({ id, from: cards[a.card]?.id ?? '', to: arrow.to, label: arrow.label });
+      addSendBack(sendBacks, {
+        id,
+        from: cards[a.card]?.id ?? '',
+        to: arrow.to,
+        label: arrow.label,
+      });
       return;
     }
     if (a.card === b.card) return;
@@ -134,7 +158,10 @@ function sortArrows(
     for (const part of parts) if (!into.parts.includes(part)) into.parts.push(part);
     forward.set(a.card, into);
   });
-  return { forward: [...forward.values()].sort((p, q) => p.left - q.left), sendBacks };
+  return {
+    forward: [...forward.values()].sort((p, q) => p.left - q.left),
+    sendBacks: [...sendBacks.values()],
+  };
 }
 
 /**

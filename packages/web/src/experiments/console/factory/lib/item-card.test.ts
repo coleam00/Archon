@@ -51,7 +51,6 @@ const VIEW = {
     workflow,
     pointer: '/change',
   })),
-  map: { cards: [{ id: 'plan', stages: ['plan'] }] },
   howItWorks: { title: 'x', caption: 'x', root: 'top', views: {} },
 } as unknown as FactoryView;
 

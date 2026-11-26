@@ -53,7 +53,8 @@ describe("an item's state line", () => {
   });
 
   test("a done item whose outcome the file does not word takes the board's Done label", () => {
-    const line = itemStateLine(shippedView, ended('land', 'landed'), null);
+    // An outcome value the b62ec7b graph does not declare, so the file cannot word it.
+    const line = itemStateLine(shippedView, ended('land', 'stopped-by-hand'), null);
     expect(line.text).toContain(CHIP.done.label);
   });
 });

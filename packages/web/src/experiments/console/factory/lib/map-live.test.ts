@@ -19,38 +19,39 @@ const older: ItemRead = (() => {
       run === undefined ? [] : [{ ...run, workflow: 'Wirasm/archon-software-factory:stage-check' }],
   };
 })();
-const ITEMS = [...MOVING_ITEMS, older];
+/** An item standing at a stage out of flow, which the map draws no row for. */
+const ITEMS = [...MOVING_ITEMS, older, itemOn('r1', 'review', 'running')];
 
 describe("the map's live chips", () => {
   const live = stageLive(shippedView, ITEMS, MERGED, shippedGraph.stages);
   const at = (stage: string) => live.stages.get(stage);
 
-  test('an item sits on the card listing the graph stage its standing run is of', () => {
-    expect(at('build')?.items.map(read => read.item.key)).toEqual(['b1', 'b2']);
-    expect(at('triage')?.items.map(read => read.item.key)).toEqual(['t1', 's1']);
-    expect(at('ready')?.items.map(read => read.item.key)).toEqual(['g1']);
+  test('an item sits on the row of the graph stage its standing run is of', () => {
+    expect(at('stage-build')?.items.map(read => read.item.key)).toEqual(['b1', 'b2']);
+    expect(at('triage')?.items.map(read => read.item.key)).toEqual(['t1']);
+    expect(at('landgate')?.items.map(read => read.item.key)).toEqual(['g1']);
   });
 
   test("a running item is worked, and one waiting on an ask needs you, as the board's chip says", () => {
-    expect(at('build')?.items).toHaveLength(2);
-    expect(at('build')?.working).toBe(1);
-    expect(at('triage')?.items).toHaveLength(2);
-    expect(at('triage')?.working).toBe(0);
-    expect(at('build')?.needYou.map(read => read.item.key)).toEqual(['b2']);
-    expect(at('ready')?.needYou.map(read => read.item.key)).toEqual(['g1']);
+    expect(at('stage-build')?.items).toHaveLength(2);
+    expect(at('stage-build')?.working).toBe(1);
+    expect(at('split')?.items).toHaveLength(1);
+    expect(at('split')?.working).toBe(0);
+    expect(at('stage-build')?.needYou.map(read => read.item.key)).toEqual(['b2']);
+    expect(at('landgate')?.needYou.map(read => read.item.key)).toEqual(['g1']);
   });
 
   test('a run that recorded no workflow name sits where the board puts it, by the graph stage name', () => {
-    expect(at('checks')?.items.map(read => read.item.key)).toEqual(['c1', 'o1']);
+    expect(at('stage-check')?.items.map(read => read.item.key)).toEqual(['c1', 'o1']);
   });
 
   test("the board's Merged column's items are listed, and so counted, on the landed card", () => {
     expect(at('landed')?.items.map(read => read.item.key)).toEqual(['m1', 'm2']);
   });
 
-  test('an item on a stage no card shows is listed, not dropped', () => {
+  test('an item on a stage the map has no row for is listed, not dropped', () => {
     expect(live.notOnMap.map(entry => [entry.item.item.key, entry.workflow])).toEqual([
-      ['d1', 'discoveries'],
+      ['r1', 'review'],
     ]);
   });
 

@@ -13,6 +13,7 @@ import { rounded } from '../canvas-lines';
 import { PILL_LINE } from './map-sizes';
 import { PILL_H, pillWidth } from './overview-layout';
 import type { Box, Point } from './map-layout';
+import { wordsOf } from './graph-structure';
 
 export const FW_CARD_W = 208;
 export const FW_CARD_H = 92;
@@ -69,13 +70,6 @@ export interface FullLayout {
   bounds: Box;
 }
 
-/** What an arrow of the graph says: its outcome, or what settles the ask it follows. */
-function wordsOf(from: PackGraph['arrows'][number]['from']): string {
-  if ('outcome' in from) return from.outcome;
-  if (from.option !== undefined) return from.option;
-  return from.settled === 'any' ? 'asked' : from.settled;
-}
-
 /** The workflow each of the graph's stage names stands for. */
 function workflowOf(graph: PackGraph): Map<string, string> {
   return new Map(graph.stages.map(stage => [stage.name, stage.workflow]));
@@ -127,8 +121,8 @@ function placePill(lines: readonly string[], along: [Point, Point], taken: reado
   return middle;
 }
 
-export function fullWorkflowLayout(graph: PackGraph, groups: readonly StageGroup[]): FullLayout {
-  const workflows = workflowOf(graph);
+/** The columns (the groups, then Merged) and a card per stage, each column centred on the tallest. */
+function placeColumns(groups: readonly StageGroup[]): { columns: FullColumn[]; cards: FullCard[] } {
   const names: StageGroup[] = [...groups, { name: 'Merged', stages: [MERGED] }];
   const tallest = Math.max(1, ...names.map(group => group.stages.length));
   const colHeight = tallest * FW_CARD_H + (tallest - 1) * FW_ROW_GAP;
@@ -151,10 +145,16 @@ export function fullWorkflowLayout(graph: PackGraph, groups: readonly StageGroup
       })
     );
   });
-  const byId = new Map(cards.map(card => [card.id, card]));
+  return { columns, cards };
+}
 
-  // One arrow per pair of stages, its outcomes joined. An arrow over a `depends_on` link moves
-  // no item between stages, as on the curated map. Outcomes that end the item go to Merged.
+/**
+ * One pair per two stages the graph connects, its outcomes joined. An arrow over a
+ * `depends_on` link moves no item between stages, as on the curated map. Outcomes that end the
+ * item go to Merged.
+ */
+function stagePairs(graph: PackGraph, byId: ReadonlyMap<string, FullCard>): Pair[] {
+  const workflows = workflowOf(graph);
   const pairs = new Map<string, Pair>();
   const add = (from: string, to: string, label: string): void => {
     if (from === to || !byId.has(from) || !byId.has(to)) return;
@@ -174,96 +174,130 @@ export function fullWorkflowLayout(graph: PackGraph, groups: readonly StageGroup
     for (const value of stage.outcome?.values ?? [])
       if (value.final) add(stage.workflow, MERGED, value.value);
   }
+  return [...pairs.values()];
+}
 
+/** A forward arrow's route and the run its pill sits on, placed once every lane is known. */
+interface ForwardRoute {
+  points: Point[];
+  along: [Point, Point];
+}
+
+/** The card under it in its column: straight down, the pill in the gap between them. */
+function routeDown(from: FullCard, to: FullCard): ForwardRoute {
+  const a: Point = { x: from.box.x + from.box.w / 2, y: from.box.y + from.box.h };
+  const b: Point = { x: a.x, y: to.box.y };
+  return { points: [a, b], along: [a, b] };
+}
+
+/**
+ * A card further down its column: down the column's right side (the `side`th hop there), so
+ * the line and its pill pass the cards between rather than hide behind one.
+ */
+function routeColumnSide(from: FullCard, to: FullCard, side: number): ForwardRoute {
+  const shift = (side % 3) * 12 - 12;
+  const x = from.box.x + from.box.w + SIDE_FIRST + side * SIDE_STEP;
+  const a: Point = { x: from.box.x + from.box.w, y: from.box.y + from.box.h / 2 + shift };
+  const b: Point = { x: to.box.x + to.box.w, y: to.box.y + to.box.h / 2 + shift };
+  const turnA: Point = { x, y: a.y };
+  const turnB: Point = { x, y: b.y };
+  return { points: [a, turnA, turnB, b], along: [turnA, turnB] };
+}
+
+/** The next column: right across the gap, turning in its middle. */
+function routeNextColumn(from: FullCard, to: FullCard): ForwardRoute {
+  const a: Point = { x: from.box.x + from.box.w, y: from.box.y + from.box.h / 2 };
+  const b: Point = { x: to.box.x, y: to.box.y + to.box.h / 2 };
+  if (a.y === b.y) return { points: [a, b], along: [a, b] };
+  const mid = (a.x + b.x) / 2;
+  const turnA: Point = { x: mid, y: a.y };
+  const turnB: Point = { x: mid, y: b.y };
+  return { points: [a, turnA, turnB, b], along: [turnA, turnB] };
+}
+
+/**
+ * A send-back, or a hand-off that skips a column: routed in the `lane`th lane under the cards,
+ * at `laneY`, so it crosses no card. Each lane is one pill tall, so no two lanes' pills meet.
+ */
+function routeLane(entry: Pair, from: FullCard, to: FullCard, lane: number, laneY: number) {
+  const spread = (lane % 3) * 12 - 12;
+  const lines = linesOf(entry.labels);
+  const h = pillHeight(lines);
+  const a: Point = { x: from.box.x + from.box.w / 2 + spread, y: from.box.y + from.box.h };
+  const b: Point = { x: to.box.x + to.box.w / 2 + spread, y: to.box.y + to.box.h };
+  const y = laneY + h / 2;
+  const points = [a, { x: a.x, y }, { x: b.x, y }, b];
+  return {
+    pillBox: pillAt(lines, { x: (a.x + b.x) / 2, y }),
+    points,
+    lines,
+    nextLaneY: laneY + h + LANE_STEP,
+  };
+}
+
+/** Each pair routed: forward hops between neighbours by `routeDown`/`routeColumnSide`/`routeNextColumn`, the rest in lanes. */
+function routePairs(pairs: readonly Pair[], byId: ReadonlyMap<string, FullCard>, bottom: number) {
   const forwardOf = (from: FullCard, to: FullCard): boolean =>
     to.column > from.column || (to.column === from.column && to.box.y > from.box.y);
-  const bottom = Math.max(...cards.map(card => card.box.y + card.box.h));
   let laneY = bottom + LANE_FIRST;
   let lane = 0;
   /** How many hops already run down each column's right side. */
   const sides = new Map<number, number>();
-  const arrows: FullArrow[] = [];
-  /** A forward pill is placed once every lane is known: it keeps clear of what is placed. */
-  const forward: { entry: Pair; points: Point[]; along: [Point, Point] }[] = [];
-  for (const entry of pairs.values()) {
+  const lanes: FullArrow[] = [];
+  const forward: (ForwardRoute & { entry: Pair })[] = [];
+  for (const entry of pairs) {
     const from = byId.get(entry.from) as FullCard;
     const to = byId.get(entry.to) as FullCard;
     const isForward = forwardOf(from, to);
     const hops = to.column - from.column;
-    if (isForward && hops === 0) {
-      const next = to.box.y === from.box.y + FW_CARD_H + FW_ROW_GAP;
-      if (next) {
-        // The card under it: straight down, the pill in the gap between them.
-        const a: Point = { x: from.box.x + from.box.w / 2, y: from.box.y + from.box.h };
-        const b: Point = { x: a.x, y: to.box.y };
-        forward.push({ entry, points: [a, b], along: [a, b] });
-        continue;
-      }
-      // A card further down the column: down its right side, so the line and its pill pass the
-      // cards between rather than hide behind one.
+    if (isForward && hops === 0 && to.box.y === from.box.y + FW_CARD_H + FW_ROW_GAP) {
+      forward.push({ entry, ...routeDown(from, to) });
+    } else if (isForward && hops === 0) {
       const side = sides.get(from.column) ?? 0;
       sides.set(from.column, side + 1);
-      const shift = (side % 3) * 12 - 12;
-      const x = from.box.x + from.box.w + SIDE_FIRST + side * SIDE_STEP;
-      const a: Point = { x: from.box.x + from.box.w, y: from.box.y + from.box.h / 2 + shift };
-      const b: Point = { x: to.box.x + to.box.w, y: to.box.y + to.box.h / 2 + shift };
-      const turnA: Point = { x, y: a.y };
-      const turnB: Point = { x, y: b.y };
-      forward.push({ entry, points: [a, turnA, turnB, b], along: [turnA, turnB] });
-      continue;
+      forward.push({ entry, ...routeColumnSide(from, to, side) });
+    } else if (isForward && hops === 1) {
+      forward.push({ entry, ...routeNextColumn(from, to) });
+    } else {
+      const routed = routeLane(entry, from, to, lane, laneY);
+      lane += 1;
+      laneY = routed.nextLaneY;
+      const { points, lines, pillBox } = routed;
+      lanes.push({ ...entry, back: !isForward, points, d: rounded(points), lines, pillBox });
     }
-    if (isForward && hops === 1) {
-      // The next column: right across the gap, turning in its middle.
-      const a: Point = { x: from.box.x + from.box.w, y: from.box.y + from.box.h / 2 };
-      const b: Point = { x: to.box.x, y: to.box.y + to.box.h / 2 };
-      const mid = (a.x + b.x) / 2;
-      const points = a.y === b.y ? [a, b] : [a, { x: mid, y: a.y }, { x: mid, y: b.y }, b];
-      const along: [Point, Point] =
-        a.y === b.y
-          ? [a, b]
-          : [
-              { x: mid, y: a.y },
-              { x: mid, y: b.y },
-            ];
-      forward.push({ entry, points, along });
-      continue;
-    }
-    // A send-back, or a hand-off that skips a column: routed in a lane under the cards, so it
-    // crosses no card. Each lane is one pill tall, so no two lanes' pills meet.
-    const spread = (lane % 3) * 12 - 12;
-    lane += 1;
-    const lines = linesOf(entry.labels);
-    const h = pillHeight(lines);
-    const a: Point = { x: from.box.x + from.box.w / 2 + spread, y: from.box.y + from.box.h };
-    const b: Point = { x: to.box.x + to.box.w / 2 + spread, y: to.box.y + to.box.h };
-    const y = laneY + h / 2;
-    laneY += h + LANE_STEP;
-    const points = [a, { x: a.x, y }, { x: b.x, y }, b];
-    arrows.push({
-      ...entry,
-      back: !isForward,
-      points,
-      d: rounded(points),
-      lines,
-      pillBox: pillAt(lines, { x: (a.x + b.x) / 2, y }),
-    });
   }
-  const placed = [...cards.map(card => card.box), ...arrows.map(arrow => arrow.pillBox)];
-  for (const { entry, points, along } of forward) {
+  return { lanes, forward };
+}
+
+/** The forward arrows, each pill placed clear of the cards and of every pill placed before it. */
+function placeForwardPills(
+  forward: readonly (ForwardRoute & { entry: Pair })[],
+  taken: Box[]
+): FullArrow[] {
+  return forward.map(({ entry, points, along }) => {
     const lines = linesOf(entry.labels);
-    const pillBox = placePill(lines, along, placed);
-    placed.push(pillBox);
-    arrows.push({ ...entry, back: false, points, d: rounded(points), lines, pillBox });
-  }
+    const pillBox = placePill(lines, along, taken);
+    taken.push(pillBox);
+    return { ...entry, back: false, points, d: rounded(points), lines, pillBox };
+  });
+}
+
+/** The box everything is drawn in, with the layout's margin. */
+function boundsOf(cards: readonly FullCard[], arrows: readonly FullArrow[], bottom: number): Box {
   const lowest = Math.max(bottom, ...arrows.map(arrow => arrow.pillBox.y + arrow.pillBox.h));
   const right = Math.max(
     ...cards.map(card => card.box.x + card.box.w),
     ...arrows.map(arrow => arrow.pillBox.x + arrow.pillBox.w)
   );
-  return {
-    columns,
-    cards,
-    arrows,
-    bounds: { x: 0, y: 0, w: right + PAD, h: lowest + PAD },
-  };
+  return { x: 0, y: 0, w: right + PAD, h: lowest + PAD };
+}
+
+export function fullWorkflowLayout(graph: PackGraph, groups: readonly StageGroup[]): FullLayout {
+  const { columns, cards } = placeColumns(groups);
+  const byId = new Map(cards.map(card => [card.id, card]));
+  const bottom = Math.max(...cards.map(card => card.box.y + card.box.h));
+  const { lanes, forward } = routePairs(stagePairs(graph, byId), byId, bottom);
+  const taken = [...cards.map(card => card.box), ...lanes.map(arrow => arrow.pillBox)];
+  const arrows = [...lanes, ...placeForwardPills(forward, taken)];
+  return { columns, cards, arrows, bounds: boundsOf(cards, arrows, bottom) };
 }

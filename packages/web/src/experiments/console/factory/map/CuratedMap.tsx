@@ -105,8 +105,6 @@ function MapCanvas({
 
   const stagesOf = (stages: readonly string[]): FactoryStage[] =>
     stages.flatMap(id => view.stages.filter(stage => stage.id === id));
-  const stageNotes = (stage: string): string[] =>
-    (view.map.notes ?? []).filter(note => note.near === stage).map(note => note.text);
   const { k, x, y } = camera.camera;
   return (
     <div className="flex flex-col gap-2">
@@ -159,7 +157,6 @@ function MapCanvas({
             stages={stagesOf(selectedCard.stages).map(stage => ({
               stage,
               live: stageReadOf(live, stage.id),
-              notes: stageNotes(stage.id),
             }))}
             onClose={() => setSelected(null)}
           />

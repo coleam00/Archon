@@ -1,42 +1,43 @@
 /**
  * A pack's factory view: how a console presents the pack as a software factory. The pack's
  * author ships it as `<pack>/.shared/factory-view.json`, hand-curated, and it is presentation
- * only: words for the pack's groups, stages, steps and outcomes, the Overview map's cards, the
- * How it works picture (`factory-view-how-it-works.ts`), drill-down cards and story wording,
- * and where a console finds an item's rounds, returns and change in its runs' records
- * (`factory-view-progress.ts`).
+ * only: words for the pack's stages, steps and outcomes, its groups, which stage items leave
+ * the map by (`merged`), the How it works picture (`factory-view-how-it-works.ts`), drill-down
+ * cards and story wording, and where a console finds an item's rounds, returns and change in its
+ * runs' records (`factory-view-progress.ts`). The Overview map lays itself out from the pack
+ * graph; nothing here places its cards or draws its arrows.
  *
- * Structure is never stated here. Which stages exist, their order, their groups, steps,
- * outcomes and the arrows between them come from the pack graph
- * (`GET /api/packs/{pack}/graph`); this file only names them, by a stage's `workflow` name.
- * Whether every name is one the graph has is `checkFactoryView` (`factory-view-check.ts`),
- * run when the file is read and by `bun run check:factory-view`.
+ * Structure is never stated here. Which stages exist, their order, steps, outcomes and the
+ * arrows between them come from the pack graph (`GET /api/packs/{pack}/graph`); this file only
+ * names them, by a stage's `workflow` name. The file is read entry by entry
+ * (`factory-view-read.ts`), so one bad entry costs only itself, and reconciled with the graph
+ * (`factory-view-check.ts`), so one stale name costs only its entry; both run when the file is
+ * read and in `bun run check:factory-view`.
  */
 import { z } from 'zod';
 import { howItWorksSchema } from './factory-view-how-it-works';
 import { progressDeclarations } from './factory-view-progress';
 
 export const FACTORY_VIEW_FILE = 'factory-view.json';
-/** A map note may sit by the Needs-you list instead of a card. */
-const NEAR_NEEDS_YOU = 'needs-you';
 
 const labelSchema = z.string().min(1).max(80);
 /** One plain sentence a person reads: no placeholders, no markup. */
 const sentenceSchema = z.string().trim().min(1).max(160);
-const cardIdSchema = z.string().regex(/^[a-z][a-z0-9-]*$/, 'a lowercase slug such as "plan"');
 /** A pack graph stage's `workflow` name: its authored `name:`. */
-const stageNameSchema = z.string().regex(/^[A-Za-z0-9_.-]+$/, 'a stage workflow name');
+export const stageNameSchema = z.string().regex(/^[A-Za-z0-9_.-]+$/, 'a stage workflow name');
 /**
  * A step id as the engine records it: an included workflow's node is `<include>__<node>`,
  * and a loop group's body node is `<group>.<node>`.
  */
 const stepIdSchema = z.string().regex(/^[A-Za-z0-9_.-]+$/, 'a step id');
 /** `stage:outcome`, or `stage:*` for every completed run of the stage no exact key takes. */
-const outcomeKeySchema = z
+export const outcomeKeySchema = z
   .string()
   .regex(/^[A-Za-z0-9_.-]+:([A-Za-z0-9_.-]+|\*)$/, 'stage:outcome or stage:*');
 /** `stage:option`, an option id of an ask a run of the stage left. */
-const answerKeySchema = z.string().regex(/^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/, 'stage:option');
+export const answerKeySchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/, 'stage:option');
 
 /** The icons a drill-down card may show; a console maps each one, so the set is closed. */
 const drilldownIconSchema = z.enum([
@@ -84,7 +85,7 @@ const drilldownSchema = z.strictObject({
     .min(1),
 });
 
-const stageSchema = z.strictObject({
+export const stageSchema = z.strictObject({
   label: labelSchema,
   /** At most 24 characters: what one row of a map card holding several stages shows whole. */
   short: z.string().min(1).max(24).optional(),
@@ -103,7 +104,7 @@ const stageSchema = z.strictObject({
  * it: `ended` (closed without a change), `parked` (kept for later), `awaits` (waits on a
  * person though no ask is open; `next` says what that person does) or `returned` (sent back).
  */
-const outcomeSchema = z
+export const outcomeSchema = z
   .strictObject({
     label: labelSchema.optional(),
     story: z
@@ -121,7 +122,7 @@ const outcomeSchema = z
   });
 
 /** The words a console uses for what it counts across a pack's runs. */
-const wordsSchema = z.strictObject({
+export const wordsSchema = z.strictObject({
   round: labelSchema.optional(),
   rounds: labelSchema.optional(),
   sentBack: labelSchema.optional(),
@@ -131,82 +132,31 @@ const wordsSchema = z.strictObject({
 });
 
 /**
- * The Overview map: its cards in drawing order, each standing for one or more graph stages,
- * which it names in order. A card holding one stage takes that stage's words; `label`,
- * `short` and `blurb` word a card holding several.
+ * One group of the factory: its name, one plain line, its stages in flow order, and its kind:
+ * which of the console's group colours and kind labels its card and board column take. A group
+ * without a kind, or `neutral`, takes the neutral one; a console never infers it from position.
  */
-const mapCardSchema = z.strictObject({
-  id: cardIdSchema,
-  label: labelSchema.optional(),
-  short: z.string().min(1).max(24).optional(),
-  blurb: z.string().min(1).max(300).optional(),
+export const groupSchema = z.strictObject({
+  name: labelSchema,
+  blurb: z.string().min(1).max(160),
   stages: z.array(stageNameSchema).min(1),
+  kind: z.enum(['intake', 'build', 'check', 'merge', 'neutral']).optional(),
 });
 
-const mapShape = z.strictObject({
-  cards: z.array(mapCardSchema).min(1),
-  /**
-   * Words for the map's arrows, not the arrows: the map draws what the pack graph connects
-   * between two cards' stages, and an entry here labels the arrow from card `from` to card `to`.
-   */
-  edges: z
-    .array(z.strictObject({ from: cardIdSchema, to: cardIdSchema, label: labelSchema }))
-    .optional(),
-  /** A short line drawn by a card, or by the Needs-you list (`near: "needs-you"`). */
-  notes: z
-    .array(z.strictObject({ text: z.string().min(1).max(160), near: z.string().min(1) }))
-    .optional(),
-});
-
-type Issue = { path: (string | number)[]; message: string };
-
-/** Card ids are unique, a stage sits on one card, and edges and notes name cards the map has. */
-function mapIssues(map: z.infer<typeof mapShape>): Issue[] {
-  const issues: Issue[] = [];
-  const ids = new Set<string>();
-  const holder = new Map<string, string>();
-  map.cards.forEach((card, c) => {
-    if (ids.has(card.id))
-      issues.push({ path: ['cards', c, 'id'], message: `card "${card.id}" is declared twice` });
-    ids.add(card.id);
-    card.stages.forEach((stage, s) => {
-      const already = holder.get(stage);
-      if (already !== undefined)
-        issues.push({
-          path: ['cards', c, 'stages', s],
-          message: `stage "${stage}" is on card "${already}" already`,
-        });
-      else holder.set(stage, card.id);
-    });
-  });
-  const refer = (path: Issue['path'], id: string, allowed?: string): void => {
-    if (!ids.has(id) && id !== allowed)
-      issues.push({ path, message: `names card "${id}", which the map does not have` });
-  };
-  map.edges?.forEach((edge, e) => {
-    refer(['edges', e, 'from'], edge.from);
-    refer(['edges', e, 'to'], edge.to);
-  });
-  map.notes?.forEach((note, n) => {
-    refer(['notes', n, 'near'], note.near, NEAR_NEEDS_YOU);
-  });
-  return issues;
-}
-
-const mapSchema = mapShape.superRefine((map, ctx) => {
-  for (const issue of mapIssues(map))
-    ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
-});
+/** What choosing one option of an ask starts, in one plain sentence. */
+export const answerSchema = z.strictObject({ starts: sentenceSchema });
 
 export const factoryViewSchema = z.strictObject({
   version: z.literal(1),
   title: labelSchema,
   /** One paragraph, plain words: what goes in, what comes out, where people step in. */
   summary: z.string().min(1).max(1200),
-  /** Words for the pack document's groups, by group name. Membership is the document's. */
-  groups: z
-    .record(z.string().min(1), z.strictObject({ blurb: z.string().min(1).max(160) }))
-    .optional(),
+  /**
+   * The factory's groups in drawing order, each holding its stages in flow order. The file
+   * declares them because a pack need not (its document's groups are gone on the pack's main);
+   * where both do, the file's win (DESIGN.md, COMBINED direction).
+   */
+  groups: z.array(groupSchema).optional(),
   /** Words for the graph's stages, by `workflow` name. */
   stages: z.record(stageNameSchema, stageSchema),
   /** How each outcome reads, by `stage:outcome` or `stage:*`. */
@@ -215,21 +165,41 @@ export const factoryViewSchema = z.strictObject({
    * What choosing an option of an ask a run of the stage left starts, by `stage:option`, in one
    * plain sentence. It decides nothing: the pack's bindings do.
    */
-  answers: z.record(answerKeySchema, z.strictObject({ starts: sentenceSchema })).optional(),
+  answers: z.record(answerKeySchema, answerSchema).optional(),
   words: wordsSchema.optional(),
   ...progressDeclarations,
-  map: mapSchema,
+  /**
+   * The stage items leave the map by: the Overview draws it last, on its own, and counts the
+   * board's Merged column on it. The graph does not say which stage that is. Without it, the
+   * last in-flow stage is.
+   */
+  merged: stageNameSchema.optional(),
   howItWorks: howItWorksSchema,
 });
 export type FactoryView = z.infer<typeof factoryViewSchema>;
 
 /**
- * What is wrong with a factory view against its pack graph, or with the file itself: an
- * `error` for a name the graph lacks or a file that does not read, a `warning` for what the
- * graph has that the file leaves out. `path` is where in the file, as a zod issue path.
+ * What is wrong with a factory view, as one entry of the file: every kind is an error
+ * `check:factory-view` fails on, and a console shows them all while it draws what is left.
+ *
+ * - `unreadable`: the file is not JSON or its envelope (version, title, summary, How it
+ *   works, a `stages` object) does not read. The view is null; nothing else is reported.
+ * - `invalid`: an entry fails its schema, or contradicts another entry; a failing entry is
+ *   dropped alone.
+ * - `unknown`: a key the schema does not know (an older file's `map`, a misspelt key); the key
+ *   is dropped and its entry kept.
+ * - `dropped`: an entry names a stage, step, outcome, option or group the pack graph lacks, or
+ *   joins stages no arrow connects; it is dropped alone.
+ * - `retired`: a `rounds`, `returns`, `approves` or `change` entry names a workflow the graph
+ *   lacks and the file does not retire. It is kept and its workflow treated as retired, so
+ *   old runs still count.
+ * - `unworded`: an in-flow stage, one of its steps, or one of its outcome values has no words.
+ * - `ungrouped`: the file declares groups and an in-flow stage is in none of them.
+ *
+ * `path` is where in the file, as a zod issue path, naming the entry as the author wrote it.
  */
 export const factoryViewProblemSchema = z.object({
-  severity: z.enum(['error', 'warning']),
+  kind: z.enum(['unreadable', 'invalid', 'unknown', 'dropped', 'retired', 'unworded', 'ungrouped']),
   path: z.array(z.union([z.string(), z.number()])),
   message: z.string(),
 });

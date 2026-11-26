@@ -11,60 +11,44 @@ function noteOf(source: ReturnType<typeof mapSource>): string {
   return source.note;
 }
 type Problem = PackView['problems'][number];
-const problem = (severity: Problem['severity'], message: string): Problem => ({
-  severity,
-  path: [],
-  message,
-});
+const problem = (kind: Problem['kind'], message: string): Problem => ({ kind, path: [], message });
 
 describe('which map a view read draws', () => {
   test('nothing is chosen before the read answers, so the derived map never flashes first', () => {
     expect(mapSource({})).toEqual({ kind: 'loading' });
   });
 
-  test('a file that read and checked clean draws the curated map', () => {
+  test('a file that read clean draws the curated map', () => {
     expect(mapSource({ data: { path: PATH, view: shippedFile, problems: [] } })).toEqual({
       kind: 'curated',
       path: PATH,
       view: shippedFile,
-      warnings: [],
+      problems: [],
     });
   });
 
-  test('warnings only still draw the curated map, carrying the warnings', () => {
-    const warning = problem('warning', 'stage "discoveries" is on no map card');
-    const source = mapSource({ data: { path: PATH, view: shippedFile, problems: [warning] } });
-    expect(source).toMatchObject({ kind: 'curated', warnings: [warning] });
+  test('a file with problems still draws the curated map, carrying every one of them', () => {
+    const problems = [
+      problem('dropped', 'names stage "stage-check", which pack "p" does not have'),
+      problem('unworded', 'stage "stage-review" has no words'),
+    ];
+    const source = mapSource({ data: { path: PATH, view: shippedFile, problems } });
+    expect(source).toMatchObject({ kind: 'curated', problems });
   });
 
   test('a pack that ships no file draws the derived map with no note', () => {
     expect(mapSource({ data: { path: null, view: null, problems: [] } })).toEqual({
       kind: 'derived',
       note: null,
+      problems: [],
     });
   });
 
-  test('a file that did not read draws the derived map and says why', () => {
-    const note = noteOf(
-      mapSource({
-        data: { path: PATH, view: null, problems: [problem('error', 'is not JSON: oops')] },
-      })
-    );
-    expect(note).toContain('is not JSON: oops');
-  });
-
-  test('a file with an error against the graph draws the derived map, naming the first three once each', () => {
-    const errors = ['a', 'a', 'b', 'c', 'd', 'e'].map(name =>
-      problem('error', `names step "${name}"`)
-    );
-    const note = noteOf(
-      mapSource({
-        data: { path: PATH, view: shippedFile, problems: [problem('warning', 'w'), ...errors] },
-      })
-    );
-    for (const named of ['"a"', '"b"', '"c"']) expect(note).toContain(named);
-    expect(note).not.toContain('"d"');
-    expect(note.split('"a"')).toHaveLength(2);
+  test('a file that does not read draws the derived map, says so, and keeps its problems', () => {
+    const unreadable = problem('unreadable', 'is not JSON: oops');
+    const source = mapSource({ data: { path: PATH, view: null, problems: [unreadable] } });
+    expect(noteOf(source)).not.toBe('');
+    expect(source).toMatchObject({ kind: 'derived', problems: [unreadable] });
   });
 
   test('the note names the file within the pack, not where it is installed', () => {
@@ -73,7 +57,7 @@ describe('which map a view read draws', () => {
         data: {
           path: 'C:\\home\\plugins\\packs\\o\\p\\abc\\.shared\\factory-view.json',
           view: null,
-          problems: [problem('error', 'is not JSON: oops')],
+          problems: [problem('unreadable', 'is not JSON: oops')],
         },
       })
     );

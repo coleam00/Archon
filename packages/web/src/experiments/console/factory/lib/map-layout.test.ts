@@ -10,26 +10,28 @@ import {
   type Segment,
 } from './map-geometry.test-fixtures';
 import type { CuratedView } from './curated-view';
+import type { MapArrow } from './graph-structure';
 
 type Declaration = CuratedView;
-type MapBlock = Declaration['map'];
 type Columns = Declaration['columns'];
+/** A test view with the arrows the graph would draw for it. */
+type Seeded = Declaration & { arrows: MapArrow[] };
 
 /**
- * The shipped view with `stages` in this order, each given a card, `columns` as given (by
- * default one card per stage), and `map`'s arrows.
+ * The shipped view with `stages` in this order, `columns` as given (by default one card per
+ * stage), and the arrows standing for the graph's.
  */
 function declaration(
   stages: readonly string[],
-  map: Partial<MapBlock> = {},
+  { arrows = [] }: { arrows?: MapArrow[] } = {},
   columns: Columns | undefined = undefined
-): Declaration {
+): Seeded {
   return {
     ...shippedView,
     stages: stages.map(id => ({ id, label: id, blurb: id, workflows: [id] })),
     columns: columns ?? stages.map(id => ({ id, label: id, blurb: id, stages: [id] })),
     landed: { stage: stages.at(-1) ?? '' },
-    map: { cards: stages.map(stage => ({ stage })), arrows: [], ...map },
+    arrows,
   };
 }
 
@@ -109,24 +111,14 @@ function expectClean(layout: MapLayout): void {
   }
 }
 
-/** The layout of a test declaration, its `map.arrows` standing for the arrows the graph draws. */
-const lay = (view: Declaration): MapLayout => layoutMap(view, view.map.arrows);
+/** The layout of a test declaration, its `arrows` standing for the arrows the graph draws. */
+const lay = (view: Seeded): MapLayout => layoutMap(view, view.arrows);
 
 const arrowBetween = (layout: MapLayout, from: string, to: string) =>
   layout.arrows.find(arrow => arrow.from === from && arrow.to === to);
 
 describe('the shipped map', () => {
   const layout = layoutMap(shippedView, shippedArrows);
-
-  test("five cards, the pack's groups in order, each holding its stages", () => {
-    expect(layout.cards.map(card => [card.label, card.stages])).toEqual([
-      ['Intake', ['order', 'triage', 'link']],
-      ['Plan and build', ['plan', 'build']],
-      ['Checks', ['checks', 'host']],
-      ['Ready to merge', ['ready']],
-      ['Merged', ['landed']],
-    ]);
-  });
 
   test('nothing crosses a card, a line or a pill, and the bounds hold every pill', () => {
     expectClean(layout);
@@ -137,18 +129,17 @@ describe('the shipped map', () => {
       layout.arrows.map(arrow => [arrow.from, arrow.to, arrow.lines.join(' '), arrow.outcomes])
     ).toEqual([
       ['intake', 'plan-and-build', 'placed, kept whole', ['placed', 'kept whole']],
-      // Build to CI and review ("fixed for CI") skips Checks, but not a card: Plan & build and
-      // Checks & review are neighbours, so it joins the one pill between them.
-      // Build to Ready to merge (a drop or reshape answer starts close) skips a card, so it is
-      // worded on this pill with its target. Three outcomes are past the two lines a pill holds.
+      // Build to CI and review (built_for_host) skips no card: Plan and build and Checks are
+      // neighbours, so it joins the one pill between them. Build to close (a drop or reshape
+      // answer) skips a card, so it is worded on this pill with its target.
       [
         'plan-and-build',
         'checks',
-        'built +2',
-        ['built', 'fixed for CI', 'drop or reshape → Ready to merge'],
+        'built +4',
+        ['built', 'fixed for CI', 'take-as-is', 'drop → Landing', 'reshape → Landing'],
       ],
-      ['checks', 'ready', 'ready, drop or reshape', ['ready', 'drop or reshape']],
-      ['ready', 'landed', 'merged', ['merged']],
+      ['checks', 'landing', 'ready +3', ['ready', 'take-as-is', 'drop', 'reshape']],
+      ['landing', 'landed', 'merged', ['merged']],
     ]);
     for (const arrow of layout.arrows) {
       const [s] = segments(arrow.d);
@@ -160,13 +151,20 @@ describe('the shipped map', () => {
 
   test('one lane under the row: one pill per target stage, the self hand-offs on it too', () => {
     expect(layout.feedback.pills.map(pill => [pill.stage, pill.text])).toEqual([
-      ['order', 'pieces, broke the branch'],
-      ['triage', 'split'],
-      ['link', 'answers'],
-      ['plan', 'replan, answers'],
-      ['build', 'returned, sent back, answers'],
-      ['ready', 'land, drop or reshape'],
+      ['order', 'Ordered as a work order, Split into pieces, broke the branch'],
+      ['link', 'asked'],
+      ['split', 'answered'],
+      ['plan', 'answered, replan'],
+      ['stage-build', 'returned, send-back, one-more-round'],
+      ['land', 'land'],
     ]);
+    // Checks holds stage-check and stage-host, which both send back to stage-build and to plan:
+    // one route each, not two drawn on top of each other.
+    const routes = layout.feedback.paths.map(path => `${path.from}>${path.to}`);
+    expect(routes).toEqual([...new Set(routes)]);
+    expect(
+      layout.feedback.paths.find(p => p.from === 'landing' && p.to === 'stage-build')?.label
+    ).toBe('send-back, returned');
     const bottom = Math.max(...layout.cards.map(card => card.box.y + card.box.h));
     for (const path of layout.feedback.paths)
       expect(Math.max(...segments(path.d).map(seg => seg.y2))).toBeGreaterThan(bottom);
@@ -217,9 +215,9 @@ describe('the rules for arrows between card groups', () => {
     expect(layout.arrows.some(arrow => arrow.from === 'b' && arrow.to === 'd')).toBe(false);
   });
 
-  test('send-backs go by card order; one inside a card into its own stage too', () => {
+  test('send-backs go by card order, one route per card and target; one inside a card into its own stage too', () => {
+    // s4 and s5, both on card c, return to s3: one route.
     expect(layout.feedback.paths.map(path => [path.from, path.to])).toEqual([
-      ['c', 's3'],
       ['c', 's3'],
       ['c', 's1'],
       ['c', 's2'],

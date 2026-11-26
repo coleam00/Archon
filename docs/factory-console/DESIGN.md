@@ -19,7 +19,7 @@ http://127.0.0.1:3195/console). Rules:
   Overview tab stay; build on them, do not replace them with a second copy. His
   `itemStanding` is the one placement on the server; extend and correct it, do not add a
   parallel one.
-- **The Overview map is drawn from the pack graph; the view file carries words and meaning only (owner, 11/26, after the JSON spike #226-#233).** The map's cards, their stages and their edges come from the graph (`GET /api/packs/{pack}/graph`): one card per group, stages in flow order, forward edges from `arrows`, a send-back lane for every arrow that goes backward in flow order. The pack-shipped view file (`<pack>/.shared/factory-view.json`, read through `packages/workflows/src/pack-declarations.ts`) has no `map` and no hand positions. It carries words (stage, step and outcome words, answers, group words, summary), meaning (`retired`, `rounds`, `returns`, `approves`, `change`), the **groups** (the file declares the groups and their stages itself, because the pack's own document groups are gone on the pack's main; when the pack graph has groups, the file's groups win), and the How it works explainer.
+- **The Overview map is drawn from the pack graph; the view file carries words and meaning only (owner, 11/26, after the JSON spike #226-#233).** The map's cards, their stages and their edges come from the graph (`GET /api/packs/{pack}/graph`): one card per group, stages in flow order, forward edges from `arrows`, a send-back lane for every arrow that goes backward in flow order. The pack-shipped view file (`<pack>/.shared/factory-view.json`, read through `packages/workflows/src/pack-declarations.ts`) has no `map` and no hand positions. It carries words (stage, step and outcome words, answers, group words, summary), meaning (`retired`, `rounds`, `returns`, `approves`, `change`), the **groups** (the file declares the groups and their stages itself, because the pack's own document groups are gone on the pack's main; when the pack graph has groups, the file's groups win), and the How it works explainer. Each group declares its `kind` (intake, build, check, merge or neutral), and a group card's colour and kind label come from it, never from the card's position; a group without one reads neutral (owner ruling on #237). The board's columns are the same groups as the map's.
 - **A stale entry drops only itself, and says so (owner, 11/26).** A view-file entry naming a stage, step, outcome or group the graph lacks is dropped on its own; the rest of the file still draws. Meaning entries (`rounds`, `returns`, `approves`, `change`) that name a workflow the graph lacks are KEPT, treated as retired (old runs carry the old name, and board cards read their rounds from them). Every dropped entry, and every in-flow stage, step or outcome the file gives no words, is (a) shown as a visible warning on the project Overview and the factory's How it works page, and (b) an ERROR from `check:factory-view` so CI fails. The console never refuses the whole file for one entry; a file that does not parse at all falls back to the graph-drawn map with plain names and a visible warning.
 - **Speed is a requirement (owner, 11/26).** The board's columns, cards, titles and round progress, the Overview and the Needs you tab must be complete within 3 s on a warm server and 10 s on a freshly started server, measured in the browser at 1440x900 on a live-DB copy. No page waits on another page's read; the pack graph is read once per pack copy and cached; the view file is not re-read through a second graph read.
 - **Board (owner, 11/26):** all pipeline columns are the same width. There is no "Not on a stage" column: every item stands at a stage (deliver-era and retired-workflow items map to their stage through `retired`), and an item that truly has no stage goes to Set aside. The pack's Setup and Settings links are not on the board. A card's actions are buttons at the bottom of the card, beside the PR link (which is a button too): "Needs you · N" is a clearly clickable button there; the top-right chip is a status LABEL only (Running, Merged, Stopped), styled so it does not look clickable.
@@ -113,6 +113,9 @@ Visual standard below still bind everything a person sees):
 outcomes, asks and arrows. The view JSON names workflows, steps and outcomes only to give them
 words, a group and a position; it never lists or adds structure. A check fails when the view
 names something the graph lacks and warns when the graph has something the view leaves out.
+*Superseded on `combined` by the COMBINED direction (#237): the view gives no positions, a name
+the graph lacks drops only its entry, and every problem, including an in-flow stage, step or
+outcome without words, is a check error and is listed on the Overview and How it works.*
 
 **One of each.** One items-in-a-stage list (board column, map card, stage modal), one ask
 (Archon's own ask card), one item history (the item page), one graph renderer (Archon's existing
@@ -641,7 +644,9 @@ The section has **two separate things**, each with its own file:
    grows to carry, per stage, a curated drill-down (numbered phase columns of a few plain cards, each
    card `covers` the real step ids it stands for) and display names for steps. The check (The factory
    view declaration) fails on a step a card names that the pack graph lacks and warns on a real step
-   no card covers. The live map
+   no card covers. *Superseded on `combined` by the COMBINED direction (#237): a covered step the
+   graph lacks drops only that card's entry, and a step without a display name is a check error.*
+   The live map
    is one row of stages with one feedback lane underneath; clicking a stage opens it.
 
 **Step names, everywhere a person reads:** never a raw engine id such as `build__build` or
@@ -769,6 +774,9 @@ What it carries, and nothing else:
 - per board column and map stage: label, blurb, short name, which workflows (and, by name,
   which steps) it groups, its colour group, and its order (`stages`, `columns`, `map.cards`);
 - map and How it works layout: positions, lanes, captions, edge labels, notes (`map.notes`);
+  *Superseded on `combined` by the COMBINED direction (#237): the file has no `map`; it declares
+  `groups` (name, blurb, stages) and `merged`, and the map's cards and edges come from the graph,
+  its edges worded by the outcomes' `label`.*
 - story wording: how each outcome reads (`story.outcomes`, `story.steps`, `story.said`), what
   choosing an ask's option starts (`answers`), and the words for a check round, a return, a
   parked item and a work order;
@@ -813,7 +821,18 @@ stages the graph connects (FAIL), and a view stage that no card opens WARNS. It 
 repo and commit are pinned once, in `<pack key>.pack-pin.json` beside the view. Where a home is
 named it reads the pack installed there and fails when that is at another commit than the pin;
 in CI it fetches the pinned commit into a throwaway home. A `retired` workflow is not required
-of the pack.
+of the pack. *Superseded on `combined` by the COMBINED direction (#237): there is no `map` and no
+warning. `check:factory-view <pack dir>` reads the file entry by entry and reconciles it with the
+pack graph through the same path the view route serves (`servedFactoryView`), prints each
+problem as `path: [kind] message`, and exits 1 on any. The kinds are `unreadable` (the file does
+not read), `invalid` (an entry fails its schema), `unknown` (a key the schema does not know),
+`dropped` (an entry names a stage, step, outcome, option or group stage the graph lacks, or a
+How it works edge joins stages no arrow connects), `retired` (a `rounds`, `returns`, `approves`
+or `change` entry names a workflow the graph lacks; it is kept as retired), `unworded` (an
+in-flow stage, step or outcome value with no words) and `ungrouped` (an in-flow stage the
+file's groups leave out). Uncovered drill-down steps and unlabelled arrows are not reported. No
+pin file exists: the check reads an installed pack at its install path, or any pack folder with
+`--repo <owner/name>`, at the folder's own git HEAD or an unknown commit, which it says.*
 
 ## Data
 
@@ -945,7 +964,9 @@ Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row,
 
 - **One card per board column** (owner change 4): the view file's `columns`, in order, each
   card holding the stages of its column that `map.cards` lists, in the column's order; a
-  column left with none is not drawn. Without `columns`, one card per stage, as the board. For
+  column left with none is not drawn. *Superseded on `combined` by the COMBINED direction
+  (#237): one card per group (the file's groups, else the pack document's), its in-flow stages
+  in flow order, and the `merged` stage on its own last.* Without `columns`, one card per stage, as the board. For
   the shipped file: Intake, Plan & build, Checks & review, Ready to merge, Merged. `col` and
   `row` on a card are accepted, so an older view file still loads, and ignored.
 - **Always one row**, left to right. It opens (and Fit returns) fitted to its frame, down to a

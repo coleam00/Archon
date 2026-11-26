@@ -6,8 +6,8 @@
  * installed.
  *
  * What it draws is `mapSource`'s choice, as on the Overview: the pack's curated How it works
- * picture when it ships a view file the server read without an error, else the pack's document
- * and the map derived from its graph.
+ * picture whenever the server could read its view file, with what the file gets wrong listed
+ * above it, else the pack's document and the map derived from its graph.
  */
 import type { ReactElement, ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -25,6 +25,7 @@ import { usePackGraph } from '../map-structure';
 import { OverviewBody } from '../overview/OverviewPage';
 import { useFullWorkflow, usePackView } from '../PackMap';
 import { SegmentedControl } from '../ui/SegmentedControl';
+import { ViewProblems } from '../ViewProblems';
 import { PackFrame } from './PackFrame';
 
 /** Every pack some project stages, in the projects read's order, each with that first project. */
@@ -118,6 +119,7 @@ function HowItWorks({ projectId, pack }: { projectId: string; pack: string }): R
             {source.note}
           </p>
         )}
+        <ViewProblems problems={source.problems} drawn={false} />
         <DerivedStructure projectId={projectId} pack={pack} />
         {document == null || document.text === '' ? null : (
           <div
@@ -139,9 +141,6 @@ function HowItWorks({ projectId, pack }: { projectId: string; pack: string }): R
           <span className="font-mono" title={source.path}>
             ({source.path.split(/[\\/]/).at(-1)})
           </span>
-          {source.warnings.length === 0
-            ? null
-            : `. ${source.warnings.map(warning => warning.message).join('; ')}.`}
         </>
       }
       actions={
@@ -155,8 +154,9 @@ function HowItWorks({ projectId, pack }: { projectId: string; pack: string }): R
         />
       }
     >
+      <ViewProblems problems={source.problems} drawn />
       {full ? (
-        <DerivedStructure projectId={projectId} pack={pack} />
+        <DerivedStructure projectId={projectId} pack={pack} view={source.view} />
       ) : (
         <OverviewBody overview={source.view.howItWorks} />
       )}

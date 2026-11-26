@@ -4,68 +4,117 @@ import { curatedView } from './curated-view';
 import { mapColumns } from './map-columns';
 
 const stage = (id: string) => shippedView.stages.find(entry => entry.id === id);
+const FLOW = [
+  'order',
+  'triage',
+  'link',
+  'split',
+  'plan',
+  'stage-build',
+  'stage-check',
+  'stage-host',
+  'landgate',
+  'land',
+  'landed',
+  'discoveries',
+  'close',
+];
 
-describe('the shipped file over the b62ec7b graph', () => {
-  test('one map stage per card of the file, in its order, each with its graph stages', () => {
-    expect(shippedView.stages.map(entry => [entry.id, entry.workflows])).toEqual([
-      ['order', ['order']],
-      ['triage', ['triage', 'split']],
-      ['link', ['link']],
-      ['plan', ['plan']],
-      ['build', ['stage-build']],
-      ['checks', ['stage-check']],
-      ['host', ['stage-host']],
-      ['ready', ['landgate', 'land', 'close']],
-      ['landed', ['landed']],
-    ]);
-  });
-
-  test("a card of one stage takes the stage's words; a card of several takes its own", () => {
-    expect(stage('build')).toMatchObject({ label: 'Build', short: 'Writes the change and PR' });
-    expect(stage('ready')).toMatchObject({
-      label: 'Ready to merge',
-      short: 'Gated, merged on land',
+describe('the slim file over the b62ec7b graph', () => {
+  test('one map stage per in-flow graph stage, in flow order, with its words from the file', () => {
+    expect(shippedView.stages.map(entry => [entry.id, entry.workflows])).toEqual(
+      FLOW.map(workflow => [workflow, [workflow]])
+    );
+    expect(stage('stage-build')).toMatchObject({
+      label: 'Build',
+      short: 'Writes the change and PR',
     });
-  });
-
-  test("a card of several stages tells their drill-downs in the card's order, each card covering its own stage's steps", () => {
-    expect(stage('triage')?.drilldown?.phases.map(phase => phase.label)).toEqual([
-      'Decide',
-      'Follow up',
-      'Split',
-    ]);
-    expect(stage('ready')?.drilldown?.phases.map(phase => phase.label)).toEqual([
-      'Gate',
-      'Merge',
-      'Drop or reshape',
-    ]);
-    const [cut] = stage('triage')?.drilldown?.phases[2]?.cards ?? [];
+    const [cut] = stage('split')?.drilldown?.phases[0]?.cards ?? [];
     expect(cut?.covers).toEqual([{ workflow: 'split', steps: ['cut'] }]);
   });
 
-  test("columns are the pack's groups, the last card its own column, in the stage colours then merged", () => {
+  test('columns are the groups with their stages in flow order, then the merged stage alone', () => {
     expect(
       mapColumns(shippedView).map(column => [column.label, column.stages, column.tone])
     ).toEqual([
-      ['Intake', ['order', 'triage', 'link'], 'intake'],
-      ['Plan and build', ['plan', 'build'], 'build'],
-      ['Checks', ['checks', 'host'], 'check'],
-      ['Ready to merge', ['ready'], 'land'],
+      ['Intake', ['order', 'triage', 'link', 'split'], 'intake'],
+      ['Plan and build', ['plan', 'stage-build'], 'build'],
+      ['Checks', ['stage-check', 'stage-host'], 'check'],
+      ['Landing', ['landgate', 'land', 'discoveries', 'close'], 'land'],
       ['Merged', ['landed'], 'merged'],
     ]);
     expect(shippedView.landed.stage).toBe('landed');
   });
 
-  test("the map's arrows are the graph's between cards, in the file's words", () => {
-    const label = (from: string, to: string) =>
-      shippedArrows.find(arrow => arrow.from === from && arrow.to === to)?.label;
-    expect(label('order', 'triage')).toBe('ready');
-    expect(label('checks', 'build')).toBe('returned');
-    expect(label('ready', 'landed')).toBe('merged');
+  test("a graph with no groups draws the file's groups, each column headed by its group", () => {
+    const view = curatedView(shippedFile, { ...shippedGraph, groups: [] });
+    expect(mapColumns(view).map(column => [column.label, column.blurb, column.tone])).toEqual(
+      mapColumns(shippedView).map(column => [column.label, column.blurb, column.tone])
+    );
   });
 
-  test('a card whose stages no group holds is a column of its own', () => {
-    const view = curatedView(shippedFile, { ...shippedGraph, groups: [] });
-    expect(view.columns.map(column => column.stages)).toEqual(view.stages.map(entry => [entry.id]));
+  test("a group's colour is its declared kind, so dropping a group moves no other's", () => {
+    const groups = (shippedFile.groups ?? []).filter(group => group.name !== 'Plan and build');
+    const tones = mapColumns(curatedView({ ...shippedFile, groups }, shippedGraph)).map(column => [
+      column.label,
+      column.tone,
+    ]);
+    expect(tones).toContainEqual(['Checks', 'check']);
+    expect(tones).toContainEqual(['Landing', 'land']);
+  });
+
+  test('a group that declares no kind reads neutral', () => {
+    const groups = (shippedFile.groups ?? []).map(({ kind: _kind, ...group }) => group);
+    const columns = mapColumns(curatedView({ ...shippedFile, groups }, shippedGraph));
+    expect(columns.filter(column => column.tone !== 'merged').map(column => column.tone)).toEqual([
+      'other',
+      'other',
+      'other',
+      'other',
+    ]);
+  });
+
+  test("where the graph and the file both group, the file's groups win", () => {
+    const graph = { ...shippedGraph, groups: [{ name: 'Everything', stages: [...FLOW] }] };
+    expect(curatedView(shippedFile, graph).columns.map(column => column.label)).toEqual([
+      'Intake',
+      'Plan and build',
+      'Checks',
+      'Landing',
+      'Merged',
+    ]);
+  });
+
+  test('with no groups anywhere, every stage is a column of its own, never a group it is not in', () => {
+    const { groups: _none, ...file } = shippedFile;
+    const columns = mapColumns(curatedView(file, { ...shippedGraph, groups: [] }));
+    expect(columns.map(column => column.stages)).toEqual([
+      ...FLOW.filter(id => id !== 'landed').map(id => [id]),
+      ['landed'],
+    ]);
+    // A lone stage takes no group's colour or kind: Triage is not tagged "Build".
+    expect(columns.find(column => column.id === 'triage')?.tone).toBe('other');
+    expect(columns.at(-1)?.tone).toBe('merged');
+  });
+
+  test('a file that names no merged stage leaves the last in-flow stage there', () => {
+    const { merged: _named, ...file } = shippedFile;
+    const view = curatedView(file, shippedGraph);
+    expect([view.landed.stage, view.columns.at(-1)?.stages]).toEqual(['close', ['close']]);
+  });
+});
+
+describe("the map's arrows over the b62ec7b graph", () => {
+  const label = (from: string, to: string) =>
+    shippedArrows.find(arrow => arrow.from === from && arrow.to === to)?.label;
+
+  test("each pair is labelled with the file's outcome labels, and an ask's answers as the graph names them", () => {
+    expect(label('triage', 'link')).toBe('build, narrow');
+    expect(label('link', 'plan')).toBe('placed');
+    expect(label('stage-build', 'close')).toBe('drop, reshape');
+    expect(label('stage-check', 'stage-build')).toBe('returned, send-back, one-more-round');
+    expect(label('land', 'landed')).toBe('merged');
+    expect(label('plan', 'plan')).toBe('answered');
+    expect(label('link', 'link')).toBe('asked');
   });
 });

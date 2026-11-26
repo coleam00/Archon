@@ -10,8 +10,6 @@ interface StageDetails {
   stage: FactoryStage;
   /** Why there are no items yet, until they are read. */
   live: StageRead;
-  /** Notes the view file places by the stage. */
-  notes: readonly string[];
 }
 
 interface MapDetailsProps {
@@ -82,7 +80,7 @@ function StageSection({
   entry: StageDetails;
   named: boolean;
 }): ReactElement {
-  const { stage, live, notes } = entry;
+  const { stage, live } = entry;
   const open = stageModalLink(projectId, stage.id);
   // A workflow's name opens the stage on that workflow's steps.
   const steps = stageModalLink(projectId, stage.id, 'workflow');
@@ -102,11 +100,6 @@ function StageSection({
         </Link>
       </div>
       <p className="text-console-13 leading-relaxed text-text-secondary">{stage.blurb}</p>
-      {notes.map(note => (
-        <p key={note} className="text-console-13 italic text-text-tertiary">
-          {note}
-        </p>
-      ))}
       <ItemsHere
         projectId={projectId}
         view={view}

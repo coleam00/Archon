@@ -13329,10 +13329,12 @@ export interface components {
         title: string;
         summary: string;
         groups?: {
-          [key: string]: {
-            blurb: string;
-          };
-        };
+          name: string;
+          blurb: string;
+          stages: string[];
+          /** @enum {string} */
+          kind?: 'intake' | 'build' | 'check' | 'merge' | 'neutral';
+        }[];
         stages: {
           [key: string]: {
             label: string;
@@ -13452,24 +13454,7 @@ export interface components {
               workflow: string;
               pointer: string;
             }[];
-        map: {
-          cards: {
-            id: string;
-            label?: string;
-            short?: string;
-            blurb?: string;
-            stages: string[];
-          }[];
-          edges?: {
-            from: string;
-            to: string;
-            label: string;
-          }[];
-          notes?: {
-            text: string;
-            near: string;
-          }[];
-        };
+        merged?: string;
         howItWorks: {
           title: string;
           caption: string;
@@ -13525,7 +13510,14 @@ export interface components {
       } | null;
       problems: {
         /** @enum {string} */
-        severity: 'error' | 'warning';
+        kind:
+          | 'unreadable'
+          | 'invalid'
+          | 'unknown'
+          | 'dropped'
+          | 'retired'
+          | 'unworded'
+          | 'ungrouped';
         path: (string | number)[];
         message: string;
       }[];

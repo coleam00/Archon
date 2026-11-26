@@ -96,6 +96,26 @@ describe('How it works', () => {
     expect(opened.querySelector('div[data-flow]')).toBeNull();
   });
 
+  test('a file with problems still draws its picture, under one line that opens to the list', async () => {
+    const problem = {
+      kind: 'dropped' as const,
+      path: ['howItWorks', 'views', 'factory', 'cards', 7, 'stages', 0],
+      message: 'names stage "stage-check", which pack "p" does not have',
+    };
+    const opened = await mount(page, { ...CURATED, problems: [problem] });
+    expect(opened.querySelector('[data-card]')).not.toBeNull();
+    const line = opened.querySelector('[data-view-problems]');
+    expect(line?.querySelector('summary')).not.toBeNull();
+    expect(
+      [...(line?.querySelectorAll('li') ?? [])].map(entry =>
+        entry.getAttribute('data-view-problem')
+      )
+    ).toEqual(['dropped']);
+    await unmount?.();
+    unmount = undefined;
+    expect((await mount(page, CURATED)).querySelector('[data-view-problems]')).toBeNull();
+  });
+
   test('?view=build opens the build drill-down', async () => {
     const opened = await mount(`${page}?view=build`, CURATED);
     expect(cards(opened)).toEqual(

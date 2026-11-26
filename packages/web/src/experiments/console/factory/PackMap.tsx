@@ -1,6 +1,7 @@
 /**
- * A pack's map on the project Overview: the curated map when the pack ships a view file the
- * server read without an error, else the map derived from the pack graph (`mapSource`, the one
+ * A pack's map on the project Overview: the curated map, laid out from the pack graph and
+ * worded by the pack's view file, whenever the server could read that file, with what the file
+ * gets wrong listed above it; else the map derived from the pack graph (`mapSource`, the one
  * place that chooses). The curated map offers the derived one as "Full workflow"
  * (`?map=full`). The routes import the factory's map through this file only.
  */
@@ -17,12 +18,14 @@ import { GraphSkeleton } from './GraphSkeleton';
 import { curatedView } from './lib/curated-view';
 import { retiredOf } from './lib/item-card';
 import { mapSource } from './lib/map-source';
+import { groupsOf } from './lib/view-groups';
 import type { PackBoardGroups } from './lib/board-numbers';
 import { stageLive, type MapLive, type Unread } from './lib/map-live';
 import { CuratedMap } from './map/CuratedMap';
 import { useMapStructure, usePackGraph } from './map-structure';
 import { ReadFailure } from './ReadFailure';
 import { SegmentedControl } from './ui/SegmentedControl';
+import { ViewProblems } from './ViewProblems';
 
 /** The search param that shows the derived map in place of the curated one. */
 const MAP_PARAM = 'map';
@@ -70,9 +73,17 @@ export function PackMap({ projectId, pack, board, itemsError }: PackMapProps): R
   const retired = retiredOf(viewRead.data?.view);
   const [full, choose] = useFullWorkflow();
   const boardPath = `/console/p/${encodeURIComponent(projectId)}/board`;
+  // The derived map's columns are the same groups the curated map draws, so a card's heading
+  // is its group's on both.
+  const groups = groupsOf(source.kind === 'curated' ? source.view : null, graph.data);
   const derived = (
     <DerivedFlow
-      flow={flowCounts(columnsOf(graph.data), board?.moving ?? [], graph.data?.stages, retired)}
+      flow={flowCounts(
+        columnsOf(graph.data, groups),
+        board?.moving ?? [],
+        graph.data?.stages,
+        retired
+      )}
       graph={graph.data}
       counts={stageCounts(board?.moving ?? [], graph.data?.stages, retired)}
       live={{ board: boardPath, numbers: board?.numbers, failed: itemsError !== undefined }}
@@ -94,6 +105,7 @@ export function PackMap({ projectId, pack, board, itemsError }: PackMapProps): R
             {source.note}
           </p>
         )}
+        <ViewProblems problems={source.problems} drawn={false} />
         {derived}
       </div>
     );
@@ -110,6 +122,7 @@ export function PackMap({ projectId, pack, board, itemsError }: PackMapProps): R
         />
       }
     >
+      <ViewProblems problems={source.problems} drawn />
       {full ? (
         derived
       ) : (

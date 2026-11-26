@@ -2,20 +2,49 @@
   "version": 1,
   "title": "Software factory",
   "summary": "Work comes in as a work order, or as an issue someone adds the factory label to. Order turns each one into an item the factory can read. Triage decides whether the item is worth building. Link holds it until what it depends on has landed. Plan writes down the approach. Build writes the change and opens a draft pull request. Three checks then read it (a review, a test check and a product check) and send what they find back to the builder, for up to three rounds. Once they approve, the factory reads CI and the reviews on the pull request and fixes what they raise. A ready change goes to a merge gate that lets it through or asks you; told \"land\", the factory merges it itself. A person steps in only to answer the questions an item asks, and to shape an item triage or your answer sent back to shaping.",
-  "groups": {
-    "Intake": {
-      "blurb": "Order, triage, split and link"
+  "groups": [
+    {
+      "name": "Intake",
+      "blurb": "Order, triage, split and link",
+      "stages": [
+        "order",
+        "triage",
+        "split",
+        "link"
+      ],
+      "kind": "intake"
     },
-    "Plan and build": {
-      "blurb": "Plan, then build"
+    {
+      "name": "Plan and build",
+      "blurb": "Plan, then build",
+      "stages": [
+        "plan",
+        "stage-build"
+      ],
+      "kind": "build"
     },
-    "Checks": {
-      "blurb": "Checks, CI and PR reviews"
+    {
+      "name": "Checks",
+      "blurb": "Checks, CI and PR reviews",
+      "stages": [
+        "stage-check",
+        "stage-host"
+      ],
+      "kind": "check"
     },
-    "Landing": {
-      "blurb": "Gate, merge, and what follows the merge"
+    {
+      "name": "Landing",
+      "blurb": "Gate, merge, and what follows the merge",
+      "stages": [
+        "landgate",
+        "land",
+        "landed",
+        "discoveries",
+        "close"
+      ],
+      "kind": "merge"
     }
-  },
+  ],
   "stages": {
     "order": {
       "label": "Order",
@@ -38,6 +67,9 @@
             ]
           }
         ]
+      },
+      "steps": {
+        "order": "Take the order"
       }
     },
     "triage": {
@@ -579,7 +611,11 @@
     "discoveries": {
       "label": "Discoveries",
       "short": "Files what was noticed",
-      "blurb": "After a merge, files what agents noticed outside their own task as new work, or holds or drops it."
+      "blurb": "After a merge, files what agents noticed outside their own task as new work, or holds or drops it.",
+      "steps": {
+        "intake": "Collect what agents noticed",
+        "drain": "File it as new work, or hold or drop it"
+      }
     }
   },
   "outcomes": {
@@ -592,6 +628,7 @@
       }
     },
     "close:none": {
+      "label": "nothing to do",
       "story": "Drop or reshape found no drop or reshape answer and did nothing"
     },
     "close:not_closed": {
@@ -612,12 +649,15 @@
       "story": "The factory looked for other work it noticed"
     },
     "land:ask": {
+      "label": "asked you",
       "story": "Merging asked you"
     },
     "land:landed": {
+      "label": "merged",
       "story": "The factory merged it"
     },
     "land:returned": {
+      "label": "returned",
       "story": "Merging sent it back to the builder"
     },
     "land:stop": {
@@ -628,13 +668,36 @@
     "landed:*": {
       "story": "The factory checked the branch after the merge"
     },
+    "landed:broken_before": {
+      "label": "broken before the merge"
+    },
+    "landed:broken_here": {
+      "label": "broke the branch"
+    },
+    "landed:clear": {
+      "label": "branch sound"
+    },
+    "landed:none": {
+      "label": "nothing to check"
+    },
+    "landed:not_landed": {
+      "label": "not merged"
+    },
+    "landed:unclear": {
+      "label": "unclear"
+    },
+    "landed:waiting": {
+      "label": "waiting on CI"
+    },
     "landgate:*": {
       "story": "The merge gate read the change"
     },
     "landgate:ask": {
+      "label": "asked you",
       "story": "The merge gate asked you"
     },
     "landgate:land": {
+      "label": "land",
       "story": "The merge gate said land"
     },
     "link:dropped": {
@@ -648,15 +711,19 @@
       "story": "Link folded it into another item"
     },
     "link:none": {
+      "label": "nothing to change",
       "story": "Link found it was not waiting, and changed nothing"
     },
     "link:place": {
+      "label": "placed",
       "story": "Link found what it relates to and sent it on to planning"
     },
     "link:waiting": {
+      "label": "waiting on what it needs",
       "story": "Link is holding it until what it depends on has landed"
     },
     "order:ready": {
+      "label": "ready",
       "story": "Order took the work order and made it an item"
     },
     "order:refused": {
@@ -670,9 +737,11 @@
       "story": "Order took the work order and ordered its pieces"
     },
     "plan:ask": {
+      "label": "asked you",
       "story": "Plan asked you before writing the approach"
     },
     "plan:planned": {
+      "label": "planned",
       "story": "Plan wrote the approach"
     },
     "plan:stop": {
@@ -686,50 +755,65 @@
       "story": "Split cut it into pieces"
     },
     "split:waiting": {
+      "label": "waiting to split",
       "story": "Split is waiting before it can cut it"
     },
     "split:whole": {
+      "label": "kept whole",
       "story": "Split kept it as one change"
     },
     "stage-build:ask": {
+      "label": "asked you",
       "story": "Build asked you"
     },
     "stage-build:built": {
+      "label": "built",
       "story": "Build wrote the change"
     },
     "stage-build:built_for_host": {
+      "label": "fixed for CI",
       "story": "Build fixed what CI and the reviews raised"
     },
     "stage-build:replan": {
+      "label": "replan",
       "story": "Build sent it back to planning"
     },
     "stage-check:approve": {
+      "label": "approved",
       "story": "The checks approved it"
     },
     "stage-check:ask": {
+      "label": "asked you",
       "story": "The checks asked you"
     },
     "stage-check:replan": {
+      "label": "replan",
       "story": "The checks sent it back to planning"
     },
     "stage-check:return": {
+      "label": "returned",
       "story": "The checks sent it back",
       "reads": "returned"
     },
     "stage-host:ask": {
+      "label": "asked you",
       "story": "CI and review asked you"
     },
     "stage-host:ready": {
+      "label": "ready",
       "story": "CI and the reviews passed"
     },
     "stage-host:return": {
+      "label": "returned",
       "story": "CI or a review sent it back",
       "reads": "returned"
     },
     "stage-host:waiting": {
+      "label": "waiting on CI",
       "story": "Waiting on CI"
     },
     "triage:build": {
+      "label": "build",
       "story": "Triage judged it worth building"
     },
     "triage:close": {
@@ -753,6 +837,7 @@
       "story": "Triage folded it into another item"
     },
     "triage:narrow": {
+      "label": "narrow",
       "story": "Triage judged it worth building, in a narrower form"
     },
     "triage:native": {
@@ -777,6 +862,7 @@
       "story": "Triage judged it worth doing, once a maintainer settles its open questions"
     },
     "triage:split": {
+      "label": "split",
       "story": "Triage judged it is more than one change"
     }
   },
@@ -897,211 +983,7 @@
       "pointer": "/change"
     }
   ],
-  "map": {
-    "cards": [
-      {
-        "id": "order",
-        "stages": [
-          "order"
-        ]
-      },
-      {
-        "id": "triage",
-        "label": "Triage",
-        "short": "Is it worth building?",
-        "blurb": "Reads a new item and decides whether it is worth building.",
-        "stages": [
-          "triage",
-          "split"
-        ]
-      },
-      {
-        "id": "link",
-        "stages": [
-          "link"
-        ]
-      },
-      {
-        "id": "plan",
-        "stages": [
-          "plan"
-        ]
-      },
-      {
-        "id": "build",
-        "stages": [
-          "stage-build"
-        ]
-      },
-      {
-        "id": "checks",
-        "stages": [
-          "stage-check"
-        ]
-      },
-      {
-        "id": "host",
-        "stages": [
-          "stage-host"
-        ]
-      },
-      {
-        "id": "ready",
-        "label": "Ready to merge",
-        "short": "Gated, merged on land",
-        "blurb": "A gate reads the approved change and either lets it through or asks you; told \"land\", the factory merges it. Told to drop or reshape it, the factory closes the change or turns it back into a draft.",
-        "stages": [
-          "landgate",
-          "land",
-          "close"
-        ]
-      },
-      {
-        "id": "landed",
-        "stages": [
-          "landed"
-        ]
-      }
-    ],
-    "edges": [
-      {
-        "from": "order",
-        "to": "triage",
-        "label": "ready"
-      },
-      {
-        "from": "triage",
-        "to": "link",
-        "label": "build, narrow"
-      },
-      {
-        "from": "link",
-        "to": "plan",
-        "label": "placed"
-      },
-      {
-        "from": "triage",
-        "to": "plan",
-        "label": "kept whole"
-      },
-      {
-        "from": "plan",
-        "to": "build",
-        "label": "planned"
-      },
-      {
-        "from": "build",
-        "to": "checks",
-        "label": "built"
-      },
-      {
-        "from": "checks",
-        "to": "host",
-        "label": "approved"
-      },
-      {
-        "from": "host",
-        "to": "ready",
-        "label": "ready, drop or reshape"
-      },
-      {
-        "from": "ready",
-        "to": "landed",
-        "label": "merged"
-      },
-      {
-        "from": "checks",
-        "to": "build",
-        "label": "returned"
-      },
-      {
-        "from": "host",
-        "to": "build",
-        "label": "returned"
-      },
-      {
-        "from": "host",
-        "to": "plan",
-        "label": "replan"
-      },
-      {
-        "from": "plan",
-        "to": "plan",
-        "label": "answers"
-      },
-      {
-        "from": "ready",
-        "to": "ready",
-        "label": "land, drop or reshape"
-      },
-      {
-        "from": "triage",
-        "to": "triage",
-        "label": "split"
-      },
-      {
-        "from": "triage",
-        "to": "order",
-        "label": "pieces"
-      },
-      {
-        "from": "order",
-        "to": "order",
-        "label": "pieces"
-      },
-      {
-        "from": "landed",
-        "to": "order",
-        "label": "broke the branch"
-      },
-      {
-        "from": "build",
-        "to": "host",
-        "label": "fixed for CI"
-      },
-      {
-        "from": "ready",
-        "to": "build",
-        "label": "sent back"
-      },
-      {
-        "from": "build",
-        "to": "build",
-        "label": "answers"
-      },
-      {
-        "from": "build",
-        "to": "plan",
-        "label": "replan"
-      },
-      {
-        "from": "checks",
-        "to": "plan",
-        "label": "replan"
-      },
-      {
-        "from": "build",
-        "to": "ready",
-        "label": "drop or reshape"
-      },
-      {
-        "from": "checks",
-        "to": "ready",
-        "label": "drop or reshape"
-      },
-      {
-        "from": "link",
-        "to": "link",
-        "label": "answers"
-      }
-    ],
-    "notes": [
-      {
-        "text": "You answer asks here",
-        "near": "needs-you"
-      }
-    ]
-  },
+  "merged": "landed",
   "howItWorks": {
     "title": "How the factory works",
     "caption": "Work comes in as a work order, or as an issue someone gives the factory label; agents also find work as they go. Triage decides whether it is worth building. Link holds it until what it needs has landed. Plan writes down how. Build writes the change and opens a draft pull request. Three checks read it, then CI and the pull request's reviews have their say. A ready change goes to a merge gate that lets it through or asks you; told \"land\", the factory merges it. When a decision is yours, the factory asks you, and your answer restarts the stage that asked. On a change in delivery you pick what happens: send it back to the builder or to Plan, take it as is, drop it, or reshape it. What the checks and CI find goes back to the same builder, for up to three rounds, or to Plan for a new approach.",

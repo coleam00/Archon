@@ -33,7 +33,7 @@ export interface LaneCard {
   stages: readonly string[];
 }
 
-/** A send-back the view file declares, from a card into a stage. */
+/** A send-back the pack graph draws, from a card into a stage. */
 export interface SendBack {
   /** Unique on the map: `decl:<index>`. */
   id: string;
