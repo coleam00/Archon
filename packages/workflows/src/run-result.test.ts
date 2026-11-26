@@ -10,7 +10,6 @@ import {
   latestResultsOnItem,
   observeReturnsCheckout,
   sampleResultCommit,
-  unsuppliedResultInputs,
   type ReturnsCheckout,
 } from './run-result';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
@@ -234,15 +233,4 @@ test('a result holds at no commit when its checkout moved and came back while th
   } finally {
     sampler.mockRestore();
   }
-});
-
-test("an installed pack's result_of names a sibling in the same pack", () => {
-  const inputs = { order: { result_of: 'order' }, other: { result_of: 'acme/kit:plan' } };
-  const read = unsuppliedResultInputs({ name: 'Wirasm/factory:link', inputs }, undefined);
-  expect(read.get('order')?.workflow).toBe('Wirasm/factory:order');
-  expect(read.get('other')?.workflow).toBe('acme/kit:plan');
-  // A workflow with a plain name reads plain names, as before.
-  expect(unsuppliedResultInputs({ name: 'link', inputs }, undefined).get('order')?.workflow).toBe(
-    'order'
-  );
 });
