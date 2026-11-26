@@ -60,7 +60,7 @@ inputs:
 # `asked` leaves its ask. `merged` and `parked` end the item: the change landed, or work on
 # it stopped until the build queue readies it again, and a later step on the item opens it.
 # `waiting` with no wait (a red base branch) stops the item until archon-merge-pick starts it.
-returns: { node: settle, outcome: outcome, asks: asks, waits: waits, ends: [merged, parked] }
+returns: { node: settle, outcome: outcome, asks: asks, waits: waits, ends: [merged, parked], summary: summary }
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:

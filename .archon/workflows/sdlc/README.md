@@ -713,7 +713,8 @@ wait, and no step follows. So each workflow declares its endings:
   item, so a workflow whose failure the item's operator must see stays a step. An
   `include:` drops the declaration with a warning on every load, so a workflow another
   one includes does not declare it.
-- Every other outcome stops the item on purpose.
+- Every other outcome stops the item on purpose. `returns.summary` names the property
+  that says why, which the attention queue shows on the stop.
 
 `archon validate workflows` warns `[stops]` for each outcome left stopping. A warning
 that remains is an outcome a person or a later pass has to take.

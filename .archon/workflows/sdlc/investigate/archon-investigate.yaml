@@ -23,7 +23,7 @@ inputs:
 # owes delivery; `refuted` and `inconclusive` are valid completions, so lifecycle
 # status and the verdict are separate facts. `refuted` ends the run's item: no change is
 # owed in this repository.
-returns: { node: investigate, outcome: verdict, ends: [refuted] }
+returns: { node: investigate, outcome: verdict, ends: [refuted], summary: summary }
 
 nodes:
 

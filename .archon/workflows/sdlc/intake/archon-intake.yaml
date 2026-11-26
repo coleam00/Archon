@@ -51,7 +51,7 @@ inputs:
 # no pickup can act on fails at the outcome node, naming them. `close` ends the item: triage
 # found no work owed. A build route starts the build queue through the `build-after-intake`
 # binding; every other stage stops the item, for the split queue or a person to take.
-returns: { node: outcome, outcome: outcome, ends: [close] }
+returns: { node: outcome, outcome: outcome, ends: [close], summary: summary }
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:
