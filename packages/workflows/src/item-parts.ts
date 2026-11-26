@@ -10,9 +10,11 @@ import type { IWorkflowStore } from './store';
 
 /**
  * A linked item is done when its change merged, else when `placedDone` says it stands `done`;
- * a part is also done when an operator's end holds on it, as a work order counts its members
- * (`work-order.ts`). An ended item that is depended on is not done: what depends on it
- * still waits, because the end says nothing more happens there, not that it delivered.
+ * a part is also done when any end holds on it, as a work order counts its members
+ * (`work-order.ts`). An item that is depended on counts as done only through `placedDone`:
+ * an end the engine recorded for a finishing outcome stands it `done` (`item-standing.ts`),
+ * so what depends on it goes on, while an operator's end leaves it `resting`, so what
+ * depends on it still waits: that end says nothing more happens there, not that it delivered.
  * `inside` is `visiting` with the item, for the linked item's own links. An item met again
  * inside its own links is not done, so a cycle of links ends. An unreadable link joins
  * nothing; the item read reports it.

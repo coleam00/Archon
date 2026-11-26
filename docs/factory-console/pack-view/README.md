@@ -12,7 +12,8 @@ A pack ships this file as `<pack>/.shared/factory-view.json`. This copy is the s
 `<installed pack>/.shared/` for the demo until the owner's own copy of the pack ships it. The pack's
 dev branch tracks Archon `dev` and its main tracks the released Archon; `combined` carries Archon
 `dev`, which refuses `returns.final`, so the pack's main (c1104737) no longer loads on it. The demo
-installs the pack at dev. A demo of an older revision needs the file written for it: main
+installs the pack at af6d0b4a exactly, not dev's tip, which may have moved past what this file
+words (`check:factory-view` against the tip says what it lacks). A demo of an older revision needs the file written for it: main
 c1104737's is `git show a60acf84d:docs/factory-console/pack-view/factory-view.json`, b62ec7b's is
 `git show 753d17b4f:docs/factory-console/pack-view/factory-view.json` (each graph fixture is in
 the same commit).

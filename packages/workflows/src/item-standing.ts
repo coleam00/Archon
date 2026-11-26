@@ -22,9 +22,10 @@ import { displayedRunOutcome, type WorkflowRun } from './schemas/workflow-run';
  * run of the item recorded one.
  *
  * Its parts are the items joined to it by an active `part_of` link pointing at it; a part is
- * done when it merged, an operator's end holds on it, or it stands `done`, as a work order
- * counts its members. What it depends on are the items its own active `depends_on` links
- * point at; one of those is done when it merged or stands `done`, never by an end alone.
+ * done when it merged, any end holds on it, or it stands `done`, as a work order counts its
+ * members. What it depends on are the items its own active `depends_on` links point at; one
+ * of those is done when it merged or stands `done`: the engine's end counts, because it
+ * stands the item `done`, and an operator's end does not.
  *
  * `state`, the first that holds:
  * - `running`: a run of the item is running.
