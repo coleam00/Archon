@@ -8,7 +8,7 @@
 import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
-import { setLogSink } from '@archon/paths';
+import { rootLogger, setLogSink } from '@archon/paths';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
 import { readHoldingItemEnd } from '@archon/workflows/item-end';
 import { ItemEndRefusedError } from '@archon/workflows/schemas/item-end';
@@ -113,11 +113,38 @@ async function refusal(promise: Promise<unknown>): Promise<ItemEndRefusedError> 
 }
 
 export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness>): void {
+  test('open work contains an older unreadable candidate before applying a small limit', async () => {
+    const harness = await makeHarness();
+    try {
+      const older = await harness.store.createWorkflowRun({
+        workflow_name: 'older',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+      });
+      const healthy = await harness.store.createWorkflowRun({
+        workflow_name: 'healthy',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+      });
+      for (const id of [older.id, healthy.id]) await harness.store.failWorkflowRun(id, 'failed');
+      await backdate(harness, older.id, 1);
+      await harness.db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+        JSON.stringify({ conversationId: 7 }),
+        older.id,
+      ]);
+      expect(await openWorkIds(harness, 1)).toEqual([healthy.id]);
+    } finally {
+      await harness.close();
+    }
+  });
+
   test.each(['origin', 'status'] as const)(
     'open work contains an unreadable ancestor %s and names its affected runs',
     async field => {
       const harness = await makeHarness();
       const logs: string[] = [];
+      const previousLevel = rootLogger.level;
+      rootLogger.level = 'error';
       try {
         const parent = await startOnItem(harness);
         const child = await createOnItem(harness, parent);
@@ -134,7 +161,12 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
         expect((await openWorkIds(harness)).sort()).toEqual([child, grandchild, healthy.id].sort());
         await harness.db.query(
           `UPDATE remote_agent_workflow_runs SET ${field} = $1 WHERE id = $2`,
-          [field === 'origin' ? '{"unexpected":"private-origin-sentinel"}' : 'unexpected', parent]
+          [
+            field === 'origin'
+              ? '{"unexpected":"private-origin-sentinel"}'
+              : 'private-origin-sentinel',
+            parent,
+          ]
         );
         setLogSink(line => logs.push(line));
         expect(await harness.store.getWorkflowRunForAttention(parent)).toEqual({
@@ -157,6 +189,7 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
         expect(logs.join('')).not.toContain('private-origin-sentinel');
       } finally {
         setLogSink(undefined);
+        rootLogger.level = previousLevel;
         await harness.close();
       }
     }

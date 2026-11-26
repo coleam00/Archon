@@ -169,6 +169,7 @@ describe('workflowRunsCommand', () => {
     (workflowDb.findOpenWorkRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
       ended,
       withoutItem,
+      { ...withoutItem, id: 'second-eligible' },
     ]);
     const endRead = spyOn(host.deps.store, 'getHoldingItemEnd').mockResolvedValue({
       kind: 'ended',

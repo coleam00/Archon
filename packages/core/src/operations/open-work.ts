@@ -22,13 +22,21 @@ export async function readOpenWorkRuns(
     codebaseId: options.codebaseId,
     limit: null,
   });
+  // Reuse shared-tree reads for this listing; the next listing must see a reopen.
+  const ancestors = new Map<string, ReturnType<IWorkflowStore['getWorkflowRunForAttention']>>();
+  const ends = new Map<string, ReturnType<typeof readHoldingItemEnd>>();
   const runs: WorkflowRun[] = [];
   for (const run of candidates) {
     if (runs.length === options.limit) break;
     const itemId = await readRunItemId(
       {
         getWorkflowRun: async id => {
-          const ancestor = await store.getWorkflowRunForAttention(id);
+          let read = ancestors.get(id);
+          if (read === undefined) {
+            read = store.getWorkflowRunForAttention(id);
+            ancestors.set(id, read);
+          }
+          const ancestor = await read;
           if (ancestor !== null && 'type' in ancestor) {
             log ??= createLogger('operations.open-work');
             log.error(
@@ -44,7 +52,12 @@ export async function readOpenWorkRuns(
       run
     );
     if (itemId !== null) {
-      const end = await readHoldingItemEnd(store, itemId);
+      let read = ends.get(itemId);
+      if (read === undefined) {
+        read = readHoldingItemEnd(store, itemId);
+        ends.set(itemId, read);
+      }
+      const end = await read;
       if (end !== null && !('type' in end)) continue;
     }
     runs.push(run);

@@ -303,6 +303,9 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       expect(
         (await store.findOpenWorkRuns({ codebaseId: CONFORMANCE_CODEBASE_ID })).map(run => run.id)
       ).toEqual([failed.id]);
+      expect((await store.findOpenWorkRuns({ limit: null })).map(run => run.id)).toEqual([
+        failed.id,
+      ]);
       const first = await create(store, { adopted_from_run_id: failed.id });
       await harness.backdate(first.id, { started_at: old });
       const second = await create(store, { adopted_from_run_id: failed.id });
@@ -311,6 +314,7 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
         first.id,
       ]);
       expect(await store.findOpenWorkRuns()).toEqual([]);
+      expect(await store.findOpenWorkRuns({ limit: null })).toEqual([]);
       const scope = { workflow_name: 'conformance', scope_key: 'cleanup' };
       await store.upsertWorkflowNodeSession({
         ...scope,
@@ -360,6 +364,9 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       expect(await store.findOpenWorkRuns({ codebaseId: CONFORMANCE_CODEBASE_ID })).toHaveLength(
         50
       );
+      expect(
+        await store.findOpenWorkRuns({ codebaseId: CONFORMANCE_CODEBASE_ID, limit: 3 })
+      ).toHaveLength(3);
     });
     test.each(['run', 'id'] as const)(
       'root item resolution rejects cyclic ancestry from a persisted %s',

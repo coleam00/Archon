@@ -242,12 +242,12 @@ describe('GET /api/workflows/runs', () => {
     });
 
     const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs?open=true&limit=1');
+    const response = await app.request('/api/workflows/runs?open=true&limit=1&codebaseId=cb-open');
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { runs: Array<{ id: string }> };
     expect(body.runs.map(run => run.id)).toEqual(['run-without-item']);
-    expect(mockFindOpenWorkRuns).toHaveBeenCalledWith({ codebaseId: undefined, limit: null });
+    expect(mockFindOpenWorkRuns).toHaveBeenCalledWith({ codebaseId: 'cb-open', limit: null });
     expect(mockGetHoldingItemEnd).toHaveBeenCalledWith('item-ended');
     expect(mockListWorkflowRuns).not.toHaveBeenCalled();
   });
