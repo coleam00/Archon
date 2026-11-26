@@ -3,7 +3,8 @@
  * the pack graph alone: one card per flow stage, stacked in a column per document group (Intake,
  * Plan and build, Checks, Landing), the columns left to right in the document's order, then a
  * Merged card. An arrow into a later column runs forward, card to card; one into the same or an
- * earlier column is a send-back, drawn in the lanes under the cards with its outcome on a pill.
+ * earlier column is a send-back, drawn in the lanes under the cards. Every pill reads the view
+ * file's words for what the arrow carries, as the curated map's do (`arrowWords`).
  *
  * Pure.
  */
@@ -13,10 +14,11 @@ import { rounded } from '../canvas-lines';
 import { PILL_LINE } from './map-sizes';
 import { PILL_H, pillWidth } from './overview-layout';
 import type { Box, Point } from './map-layout';
-import { wordsOf } from './graph-structure';
+import { arrowWords, outcomeWords, type ArrowLabels } from './graph-structure';
 
 export const FW_CARD_W = 208;
 export const FW_CARD_H = 92;
+/** The least gap between columns; a pill wider than it less 16 px widens every gap. */
 export const FW_COL_GAP = 148;
 /** Room between stacked cards for the tallest pill a hop to the card under draws (three lines), with 8 px each side. */
 export const FW_ROW_GAP = PILL_H + 2 * PILL_LINE + 16;
@@ -51,7 +53,7 @@ export interface FullColumn {
 export interface FullArrow {
   from: string;
   to: string;
-  /** Outcomes the arrow carries, each once, in the graph's order. */
+  /** What each outcome or answer the arrow carries reads (`arrowWords`), each once, in the graph's order. */
   labels: string[];
   back: boolean;
   /** The line, in world units. */
@@ -122,14 +124,17 @@ function placePill(lines: readonly string[], along: [Point, Point], taken: reado
 }
 
 /** The columns (the groups, then Merged) and a card per stage, each column centred on the tallest. */
-function placeColumns(groups: readonly StageGroup[]): { columns: FullColumn[]; cards: FullCard[] } {
+function placeColumns(
+  groups: readonly StageGroup[],
+  gap: number
+): { columns: FullColumn[]; cards: FullCard[] } {
   const names: StageGroup[] = [...groups, { name: 'Merged', stages: [MERGED] }];
   const tallest = Math.max(1, ...names.map(group => group.stages.length));
   const colHeight = tallest * FW_CARD_H + (tallest - 1) * FW_ROW_GAP;
   const columns: FullColumn[] = [];
   const cards: FullCard[] = [];
   names.forEach((group, column) => {
-    const x = PAD + column * (FW_CARD_W + FW_COL_GAP);
+    const x = PAD + column * (FW_CARD_W + gap);
     const height = group.stages.length * FW_CARD_H + (group.stages.length - 1) * FW_ROW_GAP;
     const top = FW_HEAD + (colHeight - height) / 2;
     columns.push({
@@ -149,15 +154,15 @@ function placeColumns(groups: readonly StageGroup[]): { columns: FullColumn[]; c
 }
 
 /**
- * One pair per two stages the graph connects, its outcomes joined. An arrow over a
- * `depends_on` link moves no item between stages, as on the curated map. Outcomes that end the
- * item go to Merged.
+ * One pair per two drawn stages the graph connects, its arrows' words joined, each worded as on
+ * the curated map (`arrowWords`). An arrow over a `depends_on` link moves no item between
+ * stages, as on the curated map. Outcomes that end the item go to Merged, worded as any outcome.
  */
-function stagePairs(graph: PackGraph, byId: ReadonlyMap<string, FullCard>): Pair[] {
+function stagePairs(graph: PackGraph, drawn: ReadonlySet<string>, labels: ArrowLabels): Pair[] {
   const workflows = workflowOf(graph);
   const pairs = new Map<string, Pair>();
   const add = (from: string, to: string, label: string): void => {
-    if (from === to || !byId.has(from) || !byId.has(to)) return;
+    if (from === to || !drawn.has(from) || !drawn.has(to)) return;
     const key = JSON.stringify([from, to]);
     const entry = pairs.get(key) ?? { from, to, labels: [] };
     if (!entry.labels.includes(label)) entry.labels.push(label);
@@ -167,12 +172,13 @@ function stagePairs(graph: PackGraph, byId: ReadonlyMap<string, FullCard>): Pair
     if (arrow.linked?.kind === 'depends_on') continue;
     const from = workflows.get(arrow.from.stage);
     const to = workflows.get(arrow.to);
-    if (from !== undefined && to !== undefined) add(from, to, wordsOf(arrow.from));
+    if (from !== undefined && to !== undefined) add(from, to, arrowWords(labels, from, arrow.from));
   }
   for (const stage of graph.stages) {
     if (!stage.inFlow) continue;
     for (const value of stage.outcome?.values ?? [])
-      if (value.ends) add(stage.workflow, MERGED, value.value);
+      if (value.ends)
+        add(stage.workflow, MERGED, outcomeWords(labels, stage.workflow, value.value));
   }
   return [...pairs.values()];
 }
@@ -292,11 +298,23 @@ function boundsOf(cards: readonly FullCard[], arrows: readonly FullArrow[], bott
   return { x: 0, y: 0, w: right + PAD, h: lowest + PAD };
 }
 
-export function fullWorkflowLayout(graph: PackGraph, groups: readonly StageGroup[]): FullLayout {
-  const { columns, cards } = placeColumns(groups);
+/**
+ * `labels` are the view file's words (`arrowLabels`); with none every pill reads its raw value,
+ * as the curated map would.
+ */
+export function fullWorkflowLayout(
+  graph: PackGraph,
+  groups: readonly StageGroup[],
+  labels: ArrowLabels
+): FullLayout {
+  const drawn = new Set([...groups.flatMap(group => group.stages), MERGED]);
+  const pairs = stagePairs(graph, drawn, labels);
+  // A pill sits in the gap between two columns, so the gap is never narrower than the widest.
+  const widest = Math.max(0, ...pairs.flatMap(pair => linesOf(pair.labels).map(pillWidth)));
+  const { columns, cards } = placeColumns(groups, Math.max(FW_COL_GAP, widest + 16));
   const byId = new Map(cards.map(card => [card.id, card]));
   const bottom = Math.max(...cards.map(card => card.box.y + card.box.h));
-  const { lanes, forward } = routePairs(stagePairs(graph, byId), byId, bottom);
+  const { lanes, forward } = routePairs(pairs, byId, bottom);
   const taken = [...cards.map(card => card.box), ...lanes.map(arrow => arrow.pillBox)];
   const arrows = [...lanes, ...placeForwardPills(forward, taken)];
   return { columns, cards, arrows, bounds: boundsOf(cards, arrows, bottom) };
