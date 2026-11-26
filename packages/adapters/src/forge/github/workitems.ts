@@ -466,8 +466,8 @@ type AssigneeRequest = Extract<
  * One assignee write and what it established, shared by add and remove.
  *
  * GitHub can answer an assignee write with success and leave the user as they were: it
- * ignores the change from a credential without push access, and an add past its limit of
- * ten assignees. A write response that shows the login unchanged is therefore a refusal
+ * ignores either change from a credential without push access, and an add past its limit
+ * of ten assignees. A write response that shows the login unchanged is therefore a refusal
  * stating that observation; the response does not say which cause applied. Any other
  * acknowledged write, including one whose response body could not be read, is decided by
  * a separate read of the issue.
@@ -503,7 +503,9 @@ async function writeAssignee(
   if (written && isAssigned(written, login) !== adding)
     return refused(request, {
       kind: 'conflict',
-      message: `GitHub accepted the request but left ${login} ${adding ? 'unassigned' : 'assigned'} on issue ${String(ref.number)} in ${ref.repo.path}. GitHub ignores assignee changes from a credential without push access to the repository, and adds beyond ten assignees; check which applies.`,
+      message: adding
+        ? `GitHub accepted the request but left ${login} unassigned on issue ${String(ref.number)} in ${ref.repo.path}. GitHub ignores an assignee add from a credential without push access to the repository, and one beyond ten assignees; check which applies.`
+        : `GitHub accepted the request but left ${login} assigned on issue ${String(ref.number)} in ${ref.repo.path}. GitHub ignores an assignee removal from a credential without push access to the repository; check the credential's access.`,
     });
   const after = await readAssigned(fetchImpl, token, ref);
   const observed = assignedRecord(ref, after);

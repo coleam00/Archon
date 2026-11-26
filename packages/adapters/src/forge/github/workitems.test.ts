@@ -996,6 +996,10 @@ test('an assignee write GitHub answers with the login unchanged is refused with 
       mutation: { outcome: 'refused' },
     });
     expect(!response.ok && response.error.message).toContain(state);
+    // The ten-assignee limit caps adds only, so it cannot explain a failed removal.
+    expect(!response.ok && response.error.message.includes('ten assignees')).toBe(
+      request.op === 'workitem.assignee.add'
+    );
   }
   expect(fake.assigned()).toEqual(['Other']);
 });
