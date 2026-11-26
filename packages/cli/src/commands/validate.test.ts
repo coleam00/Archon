@@ -556,8 +556,8 @@ describe('validateWorkflowsCommand', () => {
               level: 'error',
               field: 'manifest_entrypoints',
               message:
-                "binding 'plan-after-triage' in .pack/pack.yaml names workflow 'triage', which archon-plugin.json does not list as an entrypoint",
-              hint: "An installed copy refuses this binding at archon pack bindings. List 'triage' under entrypoints, or bind one it lists: plan.",
+                "Binding 'plan-after-triage' names workflow 'triage', which pack 'factory' does not provide.",
+              hint: "A pack dispatches only the entrypoints archon-plugin.json lists. List 'triage' under entrypoints, or bind one it lists: plan.",
             },
           ],
         },
@@ -579,8 +579,8 @@ describe('validateWorkflowsCommand', () => {
         issues: [
           {
             message:
-              "binding 'plan' in .pack/pack.yaml names workflow 'acme/factory:plan', which archon-plugin.json does not list as an entrypoint",
-            hint: 'Name a stage of this pack by its bare name, as the pack writes it; archon pack bindings adds the installed prefix. Bind one it lists: plan, triage.',
+              "Binding 'plan' names workflow 'acme/factory:plan', which pack 'factory' does not provide.",
+            hint: 'Name a stage of this pack by its bare name in .pack/pack.yaml; archon pack bindings adds the installed prefix. Bind one archon-plugin.json lists: plan, triage.',
           },
         ],
       });
@@ -590,41 +590,47 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
-  test('checks the pack manifest above the directory it runs in', async () => {
+  test('checks the root pack manifest from any directory, also below another plugin', async () => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
-    await writeFile(
-      join(validationCwd, 'archon-plugin.json'),
-      JSON.stringify({
-        schemaVersion: 1,
-        kind: 'workflow-pack',
-        name: 'factory',
-        description: 'Factory workflows',
-        entrypoints: { plan: 'plan/plan.yaml' },
-      })
-    );
+    const manifest = (dir: string, name: string, entrypoints: Record<string, string>) =>
+      writeFile(
+        join(dir, 'archon-plugin.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          kind: 'workflow-pack',
+          name,
+          description: 'd',
+          entrypoints,
+        })
+      );
+    await manifest(validationCwd, 'factory', { plan: 'plan/plan.yaml' });
     await mkdir(join(validationCwd, '.pack'));
     await writeFile(
       join(validationCwd, '.pack', 'pack.yaml'),
       'bindings:\n  triage:\n    workflow: triage\n    resource: triage\n    overlap: queue\n'
     );
-    await mkdir(join(validationCwd, 'plan'));
+    // A valid plugin kept in the repository, nearer to where the command runs.
+    const tool = join(validationCwd, 'vendor', 'tool');
+    await mkdir(join(tool, 'deep'), { recursive: true });
+    await manifest(tool, 'tool', { tool: 'tool/tool.yaml' });
     const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
     try {
-      expect(
-        await validateWorkflowsCommand(
-          validationCwd,
-          undefined,
-          true,
-          process.env,
-          join(validationCwd, 'plan')
-        )
-      ).toBe(1);
-      const { results } = JSON.parse(String(write.mock.calls[0]?.[0])) as {
-        results: validator.WorkflowValidationResult[];
-      };
-      expect(results.find(r => r.workflowName === 'archon-plugin.json')?.issues).toMatchObject([
-        { field: 'manifest_entrypoints' },
-      ]);
+      for (const from of [tool, join(tool, 'deep')]) {
+        write.mockClear();
+        expect(
+          await validateWorkflowsCommand(validationCwd, undefined, true, process.env, from)
+        ).toBe(1);
+        const { results } = JSON.parse(String(write.mock.calls[0]?.[0])) as {
+          results: validator.WorkflowValidationResult[];
+        };
+        expect(results.find(r => r.workflowName === 'archon-plugin.json')?.issues).toMatchObject([
+          {
+            field: 'manifest_entrypoints',
+            message:
+              "Binding 'triage' names workflow 'triage', which pack 'factory' does not provide.",
+          },
+        ]);
+      }
     } finally {
       write.mockRestore();
     }

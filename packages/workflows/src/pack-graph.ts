@@ -342,6 +342,14 @@ export function packWorkflowName(names: readonly string[], declared: string): st
 }
 
 /**
+ * The refusal of a binding whose workflow `packWorkflowName` does not find in the pack,
+ * worded once for `archon pack bindings` and `archon validate workflows`.
+ */
+export function unprovidedBindingWorkflow(id: string, declared: string, packKey: string): string {
+  return `Binding '${id}' names workflow '${declared}', which pack '${packKey}' does not provide.`;
+}
+
+/**
  * Every workflow name one binding declares: the workflow it starts, the run it follows,
  * the workflow whose run resets its limit, and the workflow it wakes. `archon pack bindings`
  * resolves each of these with `packWorkflowName`, so a field that names a workflow there

@@ -58,6 +58,7 @@ import {
   type PackGraphLink,
   packWorkflowName,
   packWorkflows,
+  unprovidedBindingWorkflow,
 } from '@archon/workflows/pack-graph';
 import { liveSourceRoots, loadablePackFolder } from '@archon/workflows/workflow-source';
 import { writeJsonLine } from '../utils/stdout';
@@ -423,23 +424,19 @@ async function findPack(
         ...copyLines(packKey, copies, cwd, explicitSource),
       ].join('\n')
     );
-  // Discovery reads a pack folder's support workflows as dispatchable, while an installed
-  // copy dispatches only its manifest entrypoints. A binding generated from the folder
-  // resolves as it will once installed, the rule `archon validate workflows` checks.
+  // Discovery reads a pack folder's support workflows as dispatchable, and merges in a
+  // same-named copy from another scope, while an installed copy dispatches only its manifest
+  // entrypoints. So the folder's bindings may name only what its own manifest lists: the
+  // rule `archon validate workflows` checks.
   const project = copies.loaded.find(copy => copy.source === 'project');
   const folder = project?.dir ? await loadablePackFolder(project.dir) : null;
-  const dispatchable =
-    folder?.name === packKey
-      ? workflows.filter(
-          ({ workflow }) =>
-            workflow.pack?.source !== 'project' || folder.entrypoints.includes(workflow.name)
-        )
-      : workflows;
+  const names = workflows.map(entry => entry.workflow.name);
   return {
     key: packKey,
     copies,
     bindings,
-    workflowNames: dispatchable.map(entry => entry.workflow.name),
+    workflowNames:
+      folder?.name === packKey ? names.filter(name => folder.entrypoints.includes(name)) : names,
   };
 }
 
@@ -458,10 +455,7 @@ function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding must use that name. */
 function workflowNameFor(pack: DeclaredPack, id: string, declared: string): string {
   const name = packWorkflowName(pack.workflowNames, declared);
-  if (name === undefined)
-    throw new Error(
-      `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
-    );
+  if (name === undefined) throw new Error(unprovidedBindingWorkflow(id, declared, pack.key));
   return name;
 }
 

@@ -35,7 +35,11 @@ import { loadConfig, loadRepoConfig } from '@archon/core';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
 import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
-import { bindingWorkflowNames, packWorkflowName } from '@archon/workflows/pack-graph';
+import {
+  bindingWorkflowNames,
+  packWorkflowName,
+  unprovidedBindingWorkflow,
+} from '@archon/workflows/pack-graph';
 import {
   loadPackDeclaration,
   PACK_DECLARATION_PATH,
@@ -49,7 +53,7 @@ import {
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
 import { readFile, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { join, relative } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
 
 /**
@@ -110,9 +114,9 @@ function formatWorkflowResult(result: WorkflowValidationResult): string {
  * Returns exit code: 0 = all valid, 1 = errors found.
  *
  * `pluginRoot` is the directory the operator ran from, before `cwd` was resolved to the
- * project root. The manifest checked is the nearest `archon-plugin.json` at or above it,
- * within the project, so a plugin in a repository subdirectory is checked, and so is a pack
- * validated from one of its workflow folders.
+ * project root. Its `archon-plugin.json` is checked as well as the project root's, so a
+ * plugin in a repository subdirectory is checked, and the root pack whose workflows are
+ * reported is checked wherever the command runs.
  *
  * `source` is an explicit `--workflow-source`. It is read live, as a fresh
  * `workflow run --workflow-source` discovers it: workflows, commands, scripts, the manifest
@@ -148,7 +152,11 @@ export async function validateWorkflowsCommand(
     }
   }
   // The manifest is not a workflow, so the name filter does not apply to it.
-  filteredResults.push(...(await manifestResults(source ?? (await manifestDir(pluginRoot, cwd)))));
+  filteredResults.push(
+    ...(source !== undefined
+      ? await manifestResults(source, PLUGIN_MANIFEST_FILE)
+      : await projectManifestResults(cwd, pluginRoot))
+  );
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -299,24 +307,24 @@ function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, Validat
 }
 
 /**
- * The nearest directory at or above `from` that holds `archon-plugin.json`, stopping at
- * `projectRoot`; `from` itself when none does or when it lies outside the project (`--cwd`
- * pointing elsewhere). Both are canonicalized: the project root comes from git resolution,
- * the invocation directory may not (`/tmp` against `/private/tmp`).
+ * The project root's manifest, which owns the pack whose workflows discovery read, and the
+ * invocation directory's when that is another directory, such as a plugin kept in the
+ * repository. The second is named by its path from the root. Both are canonicalized to
+ * compare: the root comes from git resolution, the invocation directory may not
+ * (`/tmp` against `/private/tmp`).
  */
-async function manifestDir(from: string, projectRoot: string): Promise<string> {
-  const start = await canonicalizeProjectPath(from);
+async function projectManifestResults(
+  projectRoot: string,
+  pluginRoot: string
+): Promise<WorkflowValidationResult[]> {
   const root = await canonicalizeProjectPath(projectRoot);
-  const below = relative(root, start);
-  if (below === '..' || below.startsWith(`..${sep}`) || isAbsolute(below)) return from;
-  for (let dir = start; ; dir = dirname(dir)) {
-    const present = await stat(join(dir, PLUGIN_MANIFEST_FILE)).then(
-      () => true,
-      () => false
+  const here = await canonicalizeProjectPath(pluginRoot);
+  const results = await manifestResults(root, PLUGIN_MANIFEST_FILE);
+  if (here !== root)
+    results.push(
+      ...(await manifestResults(here, join(relative(root, here), PLUGIN_MANIFEST_FILE)))
     );
-    if (present) return dir;
-    if (dir === root) return from;
-  }
+  return results;
 }
 
 /**
@@ -327,7 +335,7 @@ async function manifestDir(from: string, projectRoot: string): Promise<string> {
  * entrypoint: `pack bindings` refuses it, on an installed copy and on the pack's own
  * folder alike. Schema failures are discovery load errors and are not repeated here.
  */
-async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]> {
+async function manifestResults(cwd: string, label: string): Promise<WorkflowValidationResult[]> {
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(join(cwd, PLUGIN_MANIFEST_FILE), 'utf-8'));
@@ -361,10 +369,8 @@ async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]>
       });
     }
   }
-  if (pack.success) issues.push(...(await bindingEntrypointIssues(cwd, pack.data.entrypoints)));
-  return issues.length > 0
-    ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
-    : [];
+  if (pack.success) issues.push(...(await bindingEntrypointIssues(cwd, pack.data)));
+  return issues.length > 0 ? [makeWorkflowResult(label, issues, label)] : [];
 }
 
 /**
@@ -376,7 +382,7 @@ async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]>
  */
 async function bindingEntrypointIssues(
   cwd: string,
-  entrypoints: Readonly<Record<string, string>>
+  manifest: { name: string; entrypoints: Readonly<Record<string, string>> }
 ): Promise<ValidationIssue[]> {
   let declaration: PackDeclaration;
   try {
@@ -386,7 +392,7 @@ async function bindingEntrypointIssues(
     if (error instanceof PackSettingsError) return [];
     throw error;
   }
-  const listed = Object.keys(entrypoints);
+  const listed = Object.keys(manifest.entrypoints);
   return Object.entries(declaration.bindings ?? {}).flatMap(([id, binding]) =>
     bindingWorkflowNames(binding)
       .filter(name => packWorkflowName(listed, name) === undefined)
@@ -394,10 +400,11 @@ async function bindingEntrypointIssues(
         (name): ValidationIssue => ({
           level: 'error',
           field: 'manifest_entrypoints',
-          message: `binding '${id}' in ${PACK_DECLARATION_PATH} names workflow '${name}', which ${PLUGIN_MANIFEST_FILE} does not list as an entrypoint`,
+          // The refusal `pack bindings` gives, so the author sees it before installing.
+          message: unprovidedBindingWorkflow(id, name, manifest.name),
           hint: name.includes(':')
-            ? `Name a stage of this pack by its bare name, as the pack writes it; archon pack bindings adds the installed prefix. Bind one it lists: ${listed.join(', ')}.`
-            : `An installed copy refuses this binding at archon pack bindings. List '${name}' under entrypoints, or bind one it lists: ${listed.join(', ')}.`,
+            ? `Name a stage of this pack by its bare name in ${PACK_DECLARATION_PATH}; archon pack bindings adds the installed prefix. Bind one ${PLUGIN_MANIFEST_FILE} lists: ${listed.join(', ')}.`
+            : `A pack dispatches only the entrypoints ${PLUGIN_MANIFEST_FILE} lists. List '${name}' under entrypoints, or bind one it lists: ${listed.join(', ')}.`,
         })
       )
   );

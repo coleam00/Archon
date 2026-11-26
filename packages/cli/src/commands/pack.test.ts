@@ -5,7 +5,7 @@
 import { closeDatabase } from '@archon/core/db/connection';
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
@@ -687,22 +687,29 @@ describe('archon pack: a pack folder as the workflow source', () => {
 
   it('refuses a binding to a workflow the manifest does not list, as an installed copy does', async () => {
     const source = await writePackFolder();
-    await writeWorkflow(
-      source,
-      'fixture-helper',
-      'name: fixture-helper\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
-    );
+    // The unlisted workflow is in the folder and in a home pack of the same name, both of
+    // which discovery reads as dispatchable; only the folder's manifest decides.
+    for (const dir of [source, join(root, 'home', 'workflows', 'fixture')])
+      await writeWorkflow(
+        dir,
+        'fixture-helper',
+        'name: fixture-helper\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+      );
     await writeFile(
       join(source, '.pack', 'pack.yaml'),
       'bindings:\n  helper:\n    workflow: fixture-helper\n    resource: helper\n    overlap: queue\n    schedule: { interval_seconds: 60 }\n'
     );
     await mkdir(cwd, { recursive: true });
+    const refusal =
+      "Binding 'helper' names workflow 'fixture-helper', which pack 'fixture' does not provide.";
 
     await expect(
       packCommand('bindings', ['fixture'], options({ workflowSource: source }))
-    ).rejects.toThrow(
-      "Binding 'helper' names workflow 'fixture-helper', which pack 'fixture' does not provide."
-    );
+    ).rejects.toThrow(refusal);
+    await rm(join(source, 'fixture-helper'), { recursive: true });
+    await expect(
+      packCommand('bindings', ['fixture'], options({ workflowSource: source }))
+    ).rejects.toThrow(refusal);
     expect(existsSync(out)).toBe(false);
   });
 
