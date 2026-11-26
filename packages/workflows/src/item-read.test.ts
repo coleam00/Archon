@@ -447,6 +447,37 @@ describe('reading an item', () => {
     ]);
   });
 
+  test('an ended item whose last run failed stands at rest and reads its end', async () => {
+    const end: ItemEnd = {
+      kind: 'ended',
+      id: 'end-1',
+      reason: 'Folded into another item.',
+      at: '2026-11-01T12:00:00.000Z',
+      via: 'cli',
+      by: { declared: 'alice' },
+      fromRun: null,
+    };
+    const failed = run('failed', {
+      status: 'failed',
+      started_at: new Date('2026-11-01T11:00:00.000Z'),
+    });
+    const unmerged = (holding: ItemEnd | null): ItemReadSource => ({
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [failed], descendantIds: [] }),
+        getItemMerge: async () => null,
+        getHoldingItemEnd: async () => holding,
+      },
+    });
+    expect((await readItem(unmerged(null), item.projectKey, item.key))?.standing.state).toBe(
+      'failed'
+    );
+    const read = await readItem(unmerged(end), item.projectKey, item.key);
+    expect(read?.standing).toEqual({ runId: 'failed', state: 'resting', pack: null });
+    expect(read?.ended).toEqual(end);
+  });
+
   test('an end the store holds reads as ended until a held trigger start waits on the item', async () => {
     const end: ItemEnd = {
       kind: 'ended',
@@ -884,7 +915,7 @@ describe('reading a work order', () => {
       order.projectKey,
       order.key
     );
-    return { workOrder: read?.workOrder, degraded: read?.degraded };
+    return { workOrder: read?.workOrder, degraded: read?.degraded, standing: read?.standing };
   }
 
   test('one open member and one merged member: open, naming the open member', async () => {
@@ -901,6 +932,11 @@ describe('reading a work order', () => {
   test('once the open member merges or is ended, the order is done with no run on it', async () => {
     const links = [partOf(a, order), partOf(b, order)];
     expect((await readOrder({ links, merged: [a.id, b.id] })).workOrder?.state).toBe('done');
+    // Where the order stands agrees with its work order: an ended part is done for both.
+    expect((await readOrder({ links, merged: [b.id] })).standing?.state).toBe('resting');
+    expect((await readOrder({ links, merged: [b.id], ended: [a.id] })).standing?.state).toBe(
+      'done'
+    );
     expect((await readOrder({ links, merged: [b.id], ended: [a.id] })).workOrder).toEqual({
       state: 'done',
       members: [
