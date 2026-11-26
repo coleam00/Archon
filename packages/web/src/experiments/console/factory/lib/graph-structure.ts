@@ -7,6 +7,7 @@
  * Pure.
  */
 import type { PackGraph } from '../../skills/items';
+import { stageWords } from './stage-words';
 
 /**
  * What of the view the projection reads: the map's stages with the graph stages they stand
@@ -129,7 +130,9 @@ export function stageHandOffs(
     .map(arrow => ({
       label: arrow.label,
       to: arrow.to,
-      toLabel: view.stages.find(stage => stage.id === arrow.to)?.label ?? arrow.to,
+      // A view stage's label is already `stageLabel`'s (curated-view.ts); the fallback is its
+      // no-label branch, so a chip never names a stage by its raw id.
+      toLabel: view.stages.find(stage => stage.id === arrow.to)?.label ?? stageWords(arrow.to),
     }));
 }
 

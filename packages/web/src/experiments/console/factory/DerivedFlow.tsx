@@ -10,7 +10,7 @@
  */
 import { useMemo, type ReactElement } from 'react';
 import { Link } from 'react-router';
-import { columnsOf, type StageGroup } from '../routes/BoardPage';
+import { columnsOf, type BoardColumn, type StageGroup } from '../routes/BoardPage';
 import { stageAt, type Retired } from '../routes/board/standing';
 import type { ItemRead, PackGraph } from '../skills/items';
 import {
@@ -34,7 +34,7 @@ import { usePackGraph } from './map-structure';
 import { ReadFailure } from './ReadFailure';
 import { cardTone, TONES, type Tone } from './tones';
 import { groupsOf } from './lib/view-groups';
-import { stageWords } from './lib/stage-words';
+import { stageLabel } from './lib/stage-words';
 import { askedCount, askedOf, type AskRead } from './lib/item-asks';
 
 /**
@@ -47,14 +47,14 @@ interface StageAt {
 }
 
 /** How many of a pack's items sit in each column, and how many of those have open asks. */
-export function flowCounts(
-  columns: readonly StageGroup[],
+export function flowCounts<C extends StageGroup>(
+  columns: readonly C[],
   items: readonly ItemRead[],
   stages: PackGraph['stages'] | undefined,
   asks: AskRead | null,
   /** The view's retired workflows, which place their runs' items (`stageAt`). */
   retired: readonly Retired[] = []
-): (StageGroup & StageAt)[] {
+): (C & StageAt)[] {
   return columns.map(column => {
     const here = items.filter(read => column.stages.includes(stageAt(read, stages, retired) ?? ''));
     return { ...column, count: here.length, needYou: askedCount(asks, here) };
@@ -82,7 +82,7 @@ export function stageCounts(
 }
 
 /** One column of the derived map, with the project's counts when it is drawn for one. */
-type FlowColumn = StageGroup & Partial<StageAt>;
+type FlowColumn = BoardColumn & Partial<StageAt>;
 
 /** What a project's derived map adds to the structure: its board and its numbers (`packBoard`). */
 interface FlowLive {
@@ -118,8 +118,11 @@ export function DerivedFlow({
   live,
   graph,
   counts,
+  view = null,
 }: {
   flow: readonly FlowColumn[];
+  /** The pack's view, whose labels name its stages (`stageLabel`); null names them by id in words. */
+  view?: Pick<FactoryView, 'stages'> | null;
   live?: FlowLive;
   graph: PackGraph | undefined;
   counts?: ReadonlyMap<string, StageAt>;
@@ -139,6 +142,13 @@ export function DerivedFlow({
     if (live === undefined) return undefined;
     if (column === last) return live.board;
     return `${live.board}?group=${encodeURIComponent(layout.columns[column]?.name ?? '')}`;
+  };
+  // A card's eyebrow names its group. A lone stage's column is named by its id, which is a key,
+  // not words, so its card shows its tone's kind instead.
+  const groupOf = (column: number): string | undefined => {
+    if (column === last) return 'Merged';
+    const at = flow[column];
+    return at?.grouped === true ? at.heading : undefined;
   };
   const stageOf = (workflow: string): PackGraph['stages'][number] | undefined =>
     graph.stages.find(stage => stage.workflow === workflow);
@@ -201,8 +211,11 @@ export function DerivedFlow({
                   className="inline-block size-2.5 shrink-0 rounded-sm"
                   style={{ background: tone.color }}
                 />
-                <span className="truncate text-console-12 font-medium uppercase tracking-console-label text-text-secondary">
-                  {column.name}
+                <span
+                  data-flow-heading
+                  className="truncate text-console-12 font-medium uppercase tracking-console-label text-text-secondary"
+                >
+                  {index === last ? 'Merged' : here?.heading}
                 </span>
                 {number === undefined ? null : (
                   <span data-count className={COUNT}>
@@ -232,8 +245,9 @@ export function DerivedFlow({
               key={card.id}
               card={card}
               tone={TONES[toneOf(card.column)]}
-              group={layout.columns[card.column]?.name}
+              group={groupOf(card.column)}
               stage={stageOf(card.id)}
+              name={stageLabel(view, card.id)}
               at={counts?.get(card.id)}
               live={live}
               href={hrefOf(card.column)}
@@ -312,6 +326,7 @@ function FlowCard({
   tone,
   group,
   stage,
+  name,
   at,
   live,
   href,
@@ -320,6 +335,8 @@ function FlowCard({
   tone: Tone;
   group: string | undefined;
   stage: PackGraph['stages'][number] | undefined;
+  /** The stage's name (`stageLabel`); the Merged card has its own. */
+  name: string;
   at: StageAt | undefined;
   live: FlowLive | undefined;
   href: string | undefined;
@@ -339,7 +356,7 @@ function FlowCard({
         </span>
       </span>
       <span className="line-clamp-2 text-console-15 font-semibold leading-5 text-text-primary">
-        {merged ? 'Merged' : stageWords(card.id)}
+        {merged ? 'Merged' : name}
       </span>
       <span className="mt-auto flex items-center gap-1.5 overflow-hidden text-console-12 text-text-tertiary">
         {merged ? <MergedLine live={live} /> : <StageLine stage={stage} at={at} />}
@@ -396,6 +413,10 @@ export function DerivedStructure({
       </ReadFailure>
     );
   return (
-    <DerivedFlow flow={columnsOf(graph.data, groupsOf(view, graph.data))} graph={graph.data} />
+    <DerivedFlow
+      flow={columnsOf(graph.data, groupsOf(view, graph.data), view ?? null)}
+      graph={graph.data}
+      view={view ?? null}
+    />
   );
 }

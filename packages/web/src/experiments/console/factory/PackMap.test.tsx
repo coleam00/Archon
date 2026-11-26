@@ -195,6 +195,30 @@ describe('the one check where the map is drawn', () => {
     expect(cards(page)).toEqual([]);
   });
 
+  test("the Full workflow heads an ungrouped stage's column by its label, a group's by its name (#261)", async () => {
+    // The shipped file with `stage-host` in no group, so it heads a column alone.
+    const view = {
+      ...shippedFile,
+      groups: (shippedFile.groups ?? []).map(group => ({
+        ...group,
+        stages: group.stages.filter(stage => stage !== 'stage-host'),
+      })),
+    };
+    const page = await mount({ ...CURATED, view }, '?map=full');
+    const heading = (group: string): string | null | undefined =>
+      page.querySelector(`[data-flow-group="${group}"] [data-flow-heading]`)?.textContent;
+    expect(heading('stage-host')).toBe('CI and review');
+    expect(heading('Plan and build')).toBe('Plan and build');
+    expect(heading('merged')).toBe('Merged');
+    // Its card names it once, by label: the eyebrow is its kind, never the workflow id.
+    const card = page.querySelector('[data-flow-stage="stage-host"]')?.textContent ?? '';
+    expect(card).toContain('CI and review');
+    expect(card).not.toContain('stage-host');
+    // No card on the map prints its own stage id.
+    for (const node of page.querySelectorAll('[data-flow-stage]'))
+      expect(node.textContent).not.toContain(node.getAttribute('data-flow-stage') ?? '');
+  });
+
   test("the Full workflow's Merged heading counts the Board's Merged column, not every merge", async () => {
     const page = await mount(CURATED, '?map=full');
     expect(page.querySelector('[data-flow-group="merged"] [data-count]')?.textContent).toBe('2');

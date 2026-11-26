@@ -11,7 +11,8 @@ import type { ReactElement } from 'react';
 import { Link } from 'react-router';
 import { BoardCardProgress, CARD_BUTTON, CardPrButton } from '../../factory/BoardCardProgress';
 import { useCardList } from '../../factory/FactoryCards';
-import type { CardProgress } from '../../factory/lib/item-card';
+import { useFactoryCards } from '../../factory/cards-context';
+import { packOf, runStageName, type CardProgress } from '../../factory/lib/item-card';
 import { NeedsYouLink } from '../../factory/NeedsYouLink';
 import { relativeTime } from '../../lib/format';
 import type { ItemRead } from '../../skills/items';
@@ -50,7 +51,7 @@ export function ItemCard({
   accent?: string;
   read: ItemRead;
   projectId: string;
-  /** The exact stage, shown when the card's column holds more than one. */
+  /** The exact stage's label (`stageLabel`), shown when the card's column holds more than one. */
   stage?: string;
   progress: CardProgress;
   /** The ids of a highlighted work order's members; null or absent when none is. */
@@ -59,7 +60,10 @@ export function ItemCard({
   const run = standingRun(read);
   const open = runToOpen(read);
   const shade = litShade(lit, read.item.id);
-  const reason = needsDecision(read) ? decisionReason(read) : undefined;
+  const packs = useFactoryCards()?.packs ?? null;
+  const reason = needsDecision(read)
+    ? decisionReason(read, at => runStageName(packs === null ? null : packOf(packs, read), at))
+    : undefined;
   const meta = [
     stage,
     run === undefined
@@ -104,7 +108,9 @@ export function ItemCard({
         </p>
       )}
       {meta.length === 0 ? null : (
-        <p className="text-console-13 text-text-tertiary">{meta.join(' · ')}</p>
+        <p data-card-meta className="text-console-13 text-text-tertiary">
+          {meta.join(' · ')}
+        </p>
       )}
       <BoardCardProgress progress={progress} />
       {reason === undefined ? null : (
@@ -171,7 +177,7 @@ export function StateLabel({ read }: { read: ItemRead }): ReactElement {
 export function CardList({
   reads,
   projectId,
-  stageOf,
+  stageNameOf,
   className,
   lit,
   accent,
@@ -179,7 +185,8 @@ export function CardList({
   accent?: string;
   reads: ItemRead[];
   projectId: string;
-  stageOf?: (read: ItemRead) => string | undefined;
+  /** The card's exact stage by its label (`stageLabel`), given when its column holds several. */
+  stageNameOf?: (read: ItemRead) => string | undefined;
   className: string;
   lit?: ReadonlySet<string> | null;
 }): ReactElement {
@@ -191,7 +198,7 @@ export function CardList({
           key={read.item.id}
           read={read}
           projectId={projectId}
-          stage={stageOf?.(read)}
+          stage={stageNameOf?.(read)}
           progress={progressOf(read)}
           lit={lit}
           accent={accent}
