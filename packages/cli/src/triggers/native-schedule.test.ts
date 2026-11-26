@@ -658,6 +658,29 @@ describe('reading installed jobs back', () => {
       { id: 'source-refresh', archonHome },
     ]);
   });
+
+  itOnPosixHost('keeps the requested target beside a readable alternate match', async () => {
+    const directory = await scratchDirectory();
+    const archonHome = join(directory, 'home');
+    const scheduler = {
+      platform: 'darwin' as const,
+      uid: 501,
+      launchAgentsDirectory: directory,
+      runCommand: recorder().runCommand,
+    };
+    const alternateHome = `${archonHome}/`;
+    const idForHome = (home: string): string => (home === alternateHome ? 'alternate' : 'current');
+    await installNativeSchedule(
+      config({ id: 'alternate', archonHome: alternateHome, workingDirectory: alternateHome }),
+      scheduler
+    );
+    await writeFile(join(directory, 'com.archon.trigger.current.plist'), '<plist/>');
+
+    expect(await findNativeScheduleTargets(archonHome, idForHome, scheduler)).toEqual([
+      { id: 'alternate', archonHome: alternateHome },
+      { id: 'current', archonHome },
+    ]);
+  });
 });
 
 describe('a host with no supported scheduler', () => {

@@ -441,7 +441,14 @@ export async function listNativeSchedules(
   // slash, a symlink) is the same install. Compare the directory, not the text.
   const { resolve } = platform === 'win32' ? win32 : posix;
   // A home that no longer exists has no real path; its resolved text is all there is.
-  const identity = (path: string): Promise<string> => realpath(path).catch(() => resolve(path));
+  const identity = async (path: string): Promise<string> => {
+    try {
+      return await realpath(path);
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') return resolve(path);
+      throw error;
+    }
+  };
   const home = await identity(archonHome);
   const installed: InstalledSchedule[] = [];
   for (const entry of await backend.installed())
@@ -453,7 +460,8 @@ export async function listNativeSchedules(
 /**
  * The targets for one logical job in `archonHome`, however that directory was spelled when
  * the job was installed. The id always comes from the home the job file recorded. With no
- * readable match, the current spelling's target still reaches a job file that cannot be read.
+ * readable match, the current spelling's target still reaches a job file that cannot be read;
+ * a distinct current target also stays beside readable matches so removal cannot orphan it.
  */
 export async function findNativeScheduleTargets(
   archonHome: string,
@@ -466,6 +474,10 @@ export async function findNativeScheduleTargets(
     const id = idForHome(job.archonHome);
     if (job.label === scheduleLabel(id)) found.push({ id, archonHome: job.archonHome });
   }
+  const current = { id: idForHome(archonHome), archonHome };
   const [first, ...rest] = found;
-  return first ? [first, ...rest] : [{ id: idForHome(archonHome), archonHome }];
+  if (!first) return [current];
+  if (found.some(target => target.id === current.id && target.archonHome === current.archonHome))
+    return [first, ...rest];
+  return [first, ...rest, current];
 }
