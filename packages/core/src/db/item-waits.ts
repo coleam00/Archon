@@ -12,12 +12,20 @@ import type {
   MetWaitInput,
   StoredItemWait,
 } from '@archon/workflows/schemas/item-wait';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
+import type { JsonValue } from '@archon/workflows/output-ref';
 import {
   sourceReceiptAcceptanceSchema,
+  type BindingWake,
+  type CheckoutHandoff,
   type ResourceStartBindingIntent,
   type SourceReceiptAcceptance,
+  withCheckoutFrom,
 } from '@archon/workflows/schemas/resource-start';
 import { getDatabaseType, getDatabase, pool } from './connection';
+import { readItemAsksIn, readRunMetadataIn } from './item-asks';
+import { recordRunRefusedStart } from './item-stops';
 import type { TransactionQuery } from './resource-slots';
 import { toHydratedTimestamp } from './timestamps';
 
@@ -29,6 +37,8 @@ interface WaitRow {
   position: number | string;
   event: string;
   about: string;
+  subject_kind: string | null;
+  subject_number: number | string | null;
   created_at: string | Date;
   deadline_at: string | Date;
   closed_as: string | null;
@@ -57,6 +67,13 @@ function closure(row: WaitRow): StoredItemWait['closed'] {
   return { as: 'withdrawn', at };
 }
 
+/** A subject this binary does not know (a later one wrote it) reads as none. */
+function subjectOf(row: WaitRow): StoredItemWait['subject'] {
+  const { subject_kind: kind, subject_number: number } = row;
+  if ((kind !== 'pr' && kind !== 'issue') || number === null) return null;
+  return { kind, number: Number(number) };
+}
+
 function readWait(row: WaitRow): StoredItemWait {
   return {
     id: row.id,
@@ -66,6 +83,7 @@ function readWait(row: WaitRow): StoredItemWait {
     position: Number(row.position),
     event: row.event,
     about: row.about,
+    subject: subjectOf(row),
     openedAt: isoTime(row.created_at),
     deadlineAt: isoTime(row.deadline_at),
     closed: closure(row),
@@ -110,8 +128,9 @@ export async function openItemWaitsForCompletedRun(
   for (const [position, wait] of waits.entries())
     await query(
       `INSERT INTO remote_agent_item_waits
-       (item_id, run_id, workflow_name, position, event, about, created_at, deadline_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (item_id, run_id, workflow_name, position, event, about, subject_kind, subject_number,
+        created_at, deadline_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         run.item_id,
         runId,
@@ -119,6 +138,8 @@ export async function openItemWaitsForCompletedRun(
         position,
         wait.event,
         wait.about,
+        wait.subject?.kind ?? null,
+        wait.subject?.number ?? null,
         now,
         new Date(opened.getTime() + wait.within_minutes * 60_000).toISOString(),
       ]
@@ -163,30 +184,184 @@ export async function withdrawItemWaits(runId: string): Promise<ItemWaitsWithdra
 type Evaluated = NonNullable<SourceReceiptAcceptance['evaluatedBindings']>[number];
 
 /**
+ * What a wake binding with `inputs` or `checkout` maps from the run that left the met wait
+ * (`runId`; `run` is null when it was deleted) and the asks on the wait's item: the event
+ * inputs and the checkout hand-off, or why the start is refused. Synchronous, as it runs
+ * while the wait is locked. Supplied by core's workflows, which own the mapping, so this
+ * module reads rows and maps nothing itself (as `StartsOnSettle` is for asks).
+ */
+export type WakeStart = (
+  wake: BindingWake,
+  waiting: {
+    runId: string;
+    run: { metadata: Record<string, unknown> } | null;
+    itemAsks: readonly AttentionRead<StoredItemAsk>[];
+  }
+) =>
+  | { inputs: Record<string, JsonValue>; handoff?: CheckoutHandoff }
+  | { refused: { detail: string; reason: 'inputs_unmapped' | 'checkout_refused' } };
+
+/**
+ * What a wake binding needs from core's workflows, injected as `WakeStart` alone would be:
+ * `start` maps it from the waiting run inside the transaction, and `inputProblems` checks,
+ * before the transaction, each `{ input }` it carries against the inputs its `wake.workflow`
+ * declared in the definitions `waiting` (a run that left a matching open wait) ran with, so
+ * a binding the source plugin accepted with a stale or mistyped name is refused without
+ * meeting the wait.
+ */
+export interface WakeMapping {
+  start: WakeStart;
+  inputProblems: (
+    binding: ResourceStartBindingIntent & { wake: BindingWake },
+    waiting: { runId: string; metadata: Record<string, unknown> }
+  ) => Promise<string[]>;
+}
+
+/** What is read per wake binding before the receipt's transaction. */
+export interface PreparedWake {
+  /** The project its launch is in, or null when none is registered there. */
+  projectKey: string | null;
+  /**
+   * Per run that left a matching open wait, each carried `{ input }` that run's workflow
+   * does not declare. A run absent here, or one with no problems, is not refused for them.
+   */
+  inputProblems: ReadonlyMap<string, readonly string[]>;
+}
+
+/**
+ * The runs that left an open wait `wake` could meet, with their metadata, read before the
+ * receipt's transaction for the input check. Wider than `resolveWake`'s match (any project
+ * or item): it only decides which runs to check, and the match is still made in the
+ * transaction.
+ */
+export async function openWaitingRuns(
+  wake: Pick<BindingWake, 'workflowName' | 'wait' | 'about'>
+): Promise<{ runId: string; metadata: Record<string, unknown> }[]> {
+  const found = await pool.query<{ run_id: string }>(
+    `SELECT DISTINCT run_id FROM remote_agent_item_waits
+     WHERE workflow_name = $1 AND event = $2 AND about = $3 AND closed_as IS NULL`,
+    [wake.workflowName, wake.wait, wake.about]
+  );
+  const runs: { runId: string; metadata: Record<string, unknown> }[] = [];
+  for (const { run_id: runId } of found.rows) {
+    const run = await readRunMetadataIn(pool.query.bind(pool), runId);
+    if (run !== null) runs.push({ runId, ...run });
+  }
+  return runs;
+}
+
+/**
+ * What else a wake's wait must match besides `about`, as SQL clauses whose parameters number
+ * from `$5`, and the words that name it. Its subject is the event's: a wait that names one is
+ * met only by an event about it, and an event that names none (a check) meets only a wait that
+ * names none. Only through the binding's mapped item may a subject-naming event meet a wait
+ * that names none, as before subjects. The wait is on the mapped item, and on the item an
+ * observation was for; when the two differ, nothing matches.
+ */
+function waitScope(
+  wake: NonNullable<ResourceStartBindingIntent['wake']>,
+  itemKey: string | undefined
+): { sql: string; params: (string | number)[]; named: string } {
+  const { subject, observedItemKey } = wake;
+  const params: (string | number)[] = [];
+  const param = (value: string | number): string => `$${String(params.push(value) + 4)}`;
+  const clauses: string[] = [];
+  if (subject === undefined) clauses.push('w.subject_kind IS NULL');
+  else {
+    const same = `w.subject_kind = ${param(subject.kind)} AND w.subject_number = ${param(subject.number)}`;
+    clauses.push(itemKey === undefined ? same : `(w.subject_kind IS NULL OR (${same}))`);
+  }
+  const items = [itemKey, observedItemKey].filter(key => key !== undefined);
+  for (const key of items) clauses.push(`i.key = ${param(key)}`);
+  const forSubject = subject === undefined ? '' : ` for ${subject.kind} ${String(subject.number)}`;
+  return {
+    sql: clauses.map(clause => ` AND ${clause}`).join(''),
+    params,
+    named: `wait '${wake.wait}' about '${wake.about}' from '${wake.workflowName}'${items.map(key => ` on item '${key}'`).join('')}${forSubject}`,
+  };
+}
+
+/**
+ * What a wake carries from the run that left the matched wait `row`, never the latest run on
+ * the item: the inputs and checkout `wakeStart` maps, nothing for a wake that carries neither,
+ * or why the start is refused. A refusal is recorded on the waiting run, so attention lists it
+ * beside the open wait; the caller leaves the set open.
+ */
+async function carriedFromWaitingRun(
+  query: TransactionQuery,
+  receiptId: string,
+  binding: ResourceStartBindingIntent & { wake: BindingWake },
+  row: WaitRow,
+  inputProblems: PreparedWake['inputProblems'],
+  wakeStart: WakeStart | undefined
+): Promise<ReturnType<WakeStart>> {
+  const { wake } = binding;
+  if (wake.inputs === undefined && wake.checkout === undefined) return { inputs: {} };
+  if (wakeStart === undefined)
+    throw new Error(
+      `Binding '${binding.bindingId}' wakes with inputs or a checkout, which this store cannot map`
+    );
+  const undeclared = inputProblems.get(row.run_id) ?? [];
+  const mapped =
+    undeclared.length > 0
+      ? {
+          refused: {
+            detail: `binding '${binding.bindingId}': ${undeclared.join('; ')}`,
+            reason: 'inputs_unmapped' as const,
+          },
+        }
+      : wakeStart(wake, {
+          runId: row.run_id,
+          run: await readRunMetadataIn(query, row.run_id),
+          itemAsks: await readItemAsksIn(query, row.item_id),
+        });
+  if ('refused' in mapped)
+    await recordRunRefusedStart(query, row.run_id, {
+      refused: {
+        receiptId,
+        bindingId: binding.bindingId,
+        workflow: binding.launch.workflowName,
+        reason: mapped.refused.reason,
+        refusedAt: new Date().toISOString(),
+      },
+    });
+  return mapped;
+}
+
+/**
  * The binding a wake makes once resolved against the open waits, or why it starts nothing.
  * A match is an open wait of the binding's workflow and name whose `about` is exactly the
- * event's, on an item of the binding's project, and on the item the event names when it
- * names one: a wait about any other value (the commit the change has moved past), or on
- * another subject at the same commit, is not one. The match closes its whole set as met, guarded on
- * the set still being open, so of two deliveries for one wait only the first starts.
+ * event's, on an item of the binding's project, within `waitScope`. A wait about any other
+ * value (the commit the change has moved past), or on another subject at the same commit, is
+ * not one. The match closes its whole set as met, guarded on the set still being open, so of
+ * two deliveries for one wait only the first starts. A wake with `inputs` or `checkout` is
+ * mapped from the run that left the matched wait first (`wakeStart`), unless the check made
+ * before the transaction found carried inputs that run's workflow does not declare; a refusal
+ * leaves the set open and is recorded on that run.
  */
 async function resolveWake(
   query: TransactionQuery,
   receiptId: string,
   binding: ResourceStartBindingIntent & { wake: NonNullable<ResourceStartBindingIntent['wake']> },
-  projectKey: string | null
+  { projectKey, inputProblems }: PreparedWake,
+  wakeStart: WakeStart | undefined
 ): Promise<{ binding: ResourceStartBindingIntent } | { evaluated: Evaluated }> {
   const { wake, ...rest } = binding;
-  const notStarted = (status: Evaluated['status'], reason: string) => ({
+  const notStarted = (
+    status: Evaluated['status'],
+    reason: string,
+    refused?: NonNullable<Evaluated['refused']>
+  ) => ({
     evaluated: {
       bindingId: binding.bindingId,
       bindingRevision: binding.bindingRevision,
       status,
       reason,
+      ...(refused === undefined ? {} : { refused }),
     },
   });
-  const onItem = binding.itemKey === undefined ? '' : ` on item '${binding.itemKey}'`;
-  const named = `wait '${wake.wait}' about '${wake.about}' from '${wake.workflowName}'${onItem}`;
+  const scope = waitScope(wake, binding.itemKey);
+  const { named } = scope;
   if (projectKey === null)
     return notStarted(
       'rejected',
@@ -197,15 +372,9 @@ async function resolveWake(
     `SELECT w.*, i.key AS item_key FROM remote_agent_item_waits w
      JOIN remote_agent_items i ON i.id = w.item_id
      WHERE i.project_key = $1 AND w.workflow_name = $2 AND w.event = $3 AND w.about = $4
-       AND w.closed_as IS NULL${binding.itemKey === undefined ? '' : ' AND i.key = $5'}
+       AND w.closed_as IS NULL${scope.sql}
      ORDER BY w.created_at, w.run_id${lock}`,
-    [
-      projectKey,
-      wake.workflowName,
-      wake.wait,
-      wake.about,
-      ...(binding.itemKey === undefined ? [] : [binding.itemKey]),
-    ]
+    [projectKey, wake.workflowName, wake.wait, wake.about, ...scope.params]
   );
   const items = [...new Set(found.rows.map(row => row.item_key))];
   const row = found.rows[0];
@@ -214,6 +383,21 @@ async function resolveWake(
     return notStarted(
       'rejected',
       `an open ${named} is on more than one item (${items.join(', ')}), so which one it is for cannot be known; nothing was started`
+    );
+  // Read before the set closes, so a start that cannot be mapped leaves the wait open.
+  const carried = await carriedFromWaitingRun(
+    query,
+    receiptId,
+    binding,
+    row,
+    inputProblems,
+    wakeStart
+  );
+  if ('refused' in carried)
+    return notStarted(
+      'rejected',
+      `${named} on item '${row.item_key}': ${carried.refused.detail}; '${binding.launch.workflowName}' was not started and the wait stays open`,
+      { workflow: binding.launch.workflowName, reason: carried.refused.reason }
     );
   const met = await query(
     `UPDATE remote_agent_item_waits
@@ -226,6 +410,7 @@ async function resolveWake(
   const input: MetWaitInput = {
     event: row.event,
     about: row.about,
+    subject: subjectOf(row),
     workflow: row.workflow_name,
     runId: row.run_id,
     waitingSince: isoTime(row.created_at),
@@ -233,11 +418,12 @@ async function resolveWake(
   };
   const eventInputs = {
     ...rest.eventInputs,
+    ...carried.inputs,
     ...(wake.input === undefined ? {} : { [wake.input]: { ...input } }),
   };
   return {
     binding: {
-      ...rest,
+      ...withCheckoutFrom(rest, carried.handoff),
       itemKey: row.item_key,
       ...(Object.keys(eventInputs).length > 0 ? { eventInputs } : {}),
     },
@@ -247,13 +433,14 @@ async function resolveWake(
 /**
  * `acceptance` with every binding that wakes resolved against the open waits, inside the
  * transaction that writes the receipt: a met wait's binding starts on its item, and any other
- * is recorded as not started. `projectKeys` holds, per binding id, the project its launch
- * resolves to, read before the transaction. The caller resolves only a first delivery.
+ * is recorded as not started. `prepared` holds, per binding id, what was read before the
+ * transaction. The caller resolves only a first delivery.
  */
 export async function resolveWakes(
   query: TransactionQuery,
   acceptance: SourceReceiptAcceptance,
-  projectKeys: ReadonlyMap<string, string | null>
+  prepared: ReadonlyMap<string, PreparedWake>,
+  wakeStart?: WakeStart
 ): Promise<SourceReceiptAcceptance> {
   if (!acceptance.bindings.some(binding => binding.wake !== undefined)) return acceptance;
   const bindings: ResourceStartBindingIntent[] = [];
@@ -269,7 +456,8 @@ export async function resolveWakes(
       query,
       acceptance.receipt.id,
       { ...binding, wake },
-      projectKeys.get(binding.bindingId) ?? null
+      prepared.get(binding.bindingId) ?? { projectKey: null, inputProblems: new Map() },
+      wakeStart
     );
     if ('binding' in resolved) bindings.push(resolved.binding);
     else {

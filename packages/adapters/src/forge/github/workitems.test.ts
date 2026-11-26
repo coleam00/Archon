@@ -703,7 +703,14 @@ test('an item view returns its author, and a response without one reports none',
 });
 
 /** One GitHub item with its conversation comments and close state. */
-function conversationForge(options: { kind?: 'issue' | 'pr'; lose?: boolean } = {}) {
+function conversationForge(
+  options: {
+    kind?: 'issue' | 'pr';
+    lose?: boolean;
+    /** The `issue_url` the instance reports, when it builds one from another host. */
+    issueUrl?: (number: number) => string;
+  } = {}
+) {
   const item = {
     number: 1,
     repository_url: root,
@@ -723,7 +730,7 @@ function conversationForge(options: { kind?: 'issue' | 'pr'; lose?: boolean } = 
     const comment = {
       id: 900 + comments.length,
       html_url: `https://github.com/owner/repo/issues/1#issuecomment-${String(900 + comments.length)}`,
-      issue_url: `${root}/issues/1`,
+      issue_url: options.issueUrl?.(1) ?? `${root}/issues/1`,
       body: body.body,
     };
     if (!options.lose) comments.push(comment);
@@ -769,6 +776,38 @@ const close = (reason: 'completed' | 'not_planned' | 'duplicate') =>
     ref,
     reason,
   }) satisfies ForgeMutationRequest;
+
+test('a comment read back from an instance that names another host still verifies', async () => {
+  // GitHub Enterprise Server builds `issue_url` from its own configured public URL, so a client
+  // that reaches it by a second name (a proxy, a LAN address) used to fail a write that succeeded.
+  const fake = conversationForge({
+    issueUrl: number => `https://ghe.corp.example/api/v3/repos/owner/repo/issues/${String(number)}`,
+  });
+  expect(await runOn(commentOn('issue', 'first'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied' } },
+  });
+});
+
+test('a comment read back for another repository with the same number still fails verification', async () => {
+  const fake = conversationForge({
+    issueUrl: () => 'https://api.github.com/repos/owner/other/issues/1',
+  });
+  expect(await runOn(commentOn('issue', 'first'), fake)).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response', message: expect.stringContaining('did not match') },
+  });
+});
+
+test('a comment read back for another item still fails verification', async () => {
+  const fake = conversationForge({
+    issueUrl: () => 'https://api.github.com/repos/owner/repo/issues/2',
+  });
+  expect(await runOn(commentOn('issue', 'first'), fake)).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response', message: expect.stringContaining('did not match') },
+  });
+});
 
 test('an issue is commented on by its issue reference, and the marked comment is updated in place', async () => {
   const fake = conversationForge();

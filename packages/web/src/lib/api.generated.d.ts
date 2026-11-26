@@ -8831,6 +8831,15 @@ export interface components {
       waits: {
         event: string;
         about: string;
+        subject: {
+          /**
+           * @description 'pr' for a pull request, 'issue' for an issue.
+           * @enum {string}
+           */
+          kind: 'pr' | 'issue';
+          /** @description The number of the pull request or issue on the forge. */
+          number: number;
+        } | null;
         workflow: string;
         runId: string;
         /** Format: date-time */
@@ -9786,6 +9795,15 @@ export interface components {
         waits: {
           event: string;
           about: string;
+          subject: {
+            /**
+             * @description 'pr' for a pull request, 'issue' for an issue.
+             * @enum {string}
+             */
+            kind: 'pr' | 'issue';
+            /** @description The number of the pull request or issue on the forge. */
+            number: number;
+          } | null;
           workflow: string;
           runId: string;
           /** Format: date-time */

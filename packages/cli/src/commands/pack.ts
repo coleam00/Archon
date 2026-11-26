@@ -40,6 +40,8 @@ import {
   type RunEndedBinding,
   runEndedTriggerCheck,
 } from '@archon/core/workflows/run-ended';
+import { packWakeInputProblems } from '@archon/core/workflows/declared-inputs';
+import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { providerRegistry } from '@archon/providers';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import {
@@ -300,7 +302,7 @@ function generate(
             selector: { ...kinded.binding.event, repository: target.repo },
             inputMapping: fields,
             ...(kinded.binding.item ? { item: kinded.binding.item } : {}),
-            ...wakeDocument(kinded.binding.wake, pack, id, waitInput),
+            ...wakeDocument(kinded.binding.wake, pack, id, waitInput, fromRun),
           },
         },
       ];
@@ -336,12 +338,17 @@ function limitFields(
   };
 }
 
-/** The plugin's `wake` for a binding that declares one, with its workflow's installed name. */
+/**
+ * The plugin's `wake` for a binding that declares one, with its workflow's installed name.
+ * The inputs read from the waiting run and its item (`fromRun`) go into `wake.inputs`,
+ * since the engine maps them when it matches the wait.
+ */
 function wakeDocument(
   wake: PackEventBinding['wake'],
   pack: DeclaredPack,
   id: string,
-  input: string | undefined
+  input: string | undefined,
+  fromRun: Record<string, RunInputSource>
 ): Record<string, unknown> {
   if (wake === undefined) return {};
   return {
@@ -350,6 +357,8 @@ function wakeDocument(
       wait: wake.wait,
       about: { field: wake.about },
       ...(input === undefined ? {} : { input }),
+      ...(Object.keys(fromRun).length > 0 ? { inputs: fromRun } : {}),
+      ...(wake.checkout === undefined ? {} : { checkout: wake.checkout }),
     },
   };
 }
@@ -405,6 +414,8 @@ interface DeclaredPack {
   bindings: Readonly<Record<string, PackBinding>>;
   /** The pack's dispatchable workflow names, as a binding must spell them. */
   workflowNames: readonly string[];
+  /** The pack's workflows as loaded, for what a binding reads of them. */
+  workflows: readonly ResolvedWorkflow[];
 }
 
 async function findPack(
@@ -428,6 +439,7 @@ async function findPack(
     copies,
     bindings,
     workflowNames: workflows.map(entry => entry.workflow.name),
+    workflows: workflows.map(entry => entry.workflow),
   };
 }
 
@@ -654,6 +666,22 @@ async function assertNothingOverwritten(generated: readonly Generated[]): Promis
   );
 }
 
+/**
+ * A wake binding's `{ input }` reads a run of its `wake.workflow`, so a name that workflow
+ * does not declare would map nothing on every start: refused here, before an event arrives.
+ */
+function assertWakeInputs(id: string, binding: PackBinding, pack: DeclaredPack): void {
+  const problems = packWakeInputProblems(binding, pack.workflows)?.problems ?? [];
+  if (problems.length > 0)
+    throw new Error(
+      [
+        'Wake bindings have problems:',
+        ...problems.map(problem => `  Binding '${id}': ${problem}`),
+        'Nothing was written.',
+      ].join('\n')
+    );
+}
+
 /** Every selected binding, generated and checked before the first file is written. */
 async function generateChecked(
   pack: DeclaredPack,
@@ -667,6 +695,7 @@ async function generateChecked(
     const binding = pack.bindings[id];
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
+    assertWakeInputs(id, binding, pack);
     for (const item of generate(id, binding, pack, target)) {
       const check = assertLoadable(item, target);
       if (check !== undefined && 'runEnded' in check) ended.push({ id, check });

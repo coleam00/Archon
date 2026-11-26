@@ -697,10 +697,11 @@ nodes:
     if (workflow === null) throw new Error('Expected the workflow to load');
     const resolved = resolveWorkflow(workflow);
     const node = resolved.nodes.find(candidate => candidate.id === 'host');
-    expect(node?.output_format?.properties).toEqual({
+    if (node === undefined) throw new Error('Expected the host node');
+    expect(node.output_format?.properties).toEqual({
       summary: { type: 'string' },
       asks: itemAsksJsonSchema(),
-      waits: itemWaitsJsonSchema(),
+      waits: itemWaitsJsonSchema(node),
     });
     expect(node?.output_format?.required).toEqual(['asks', 'waits']);
     expect(validateWorkflowResultContract(resolved)).toBeNull();

@@ -34,6 +34,7 @@ import {
   type SourceReceiptAcceptance,
   type SourceReceiptInput,
   type TriggerConfig,
+  withCheckoutFrom,
 } from '@archon/workflows/schemas/resource-start';
 import {
   ITEM_KEY_MAX_LENGTH,
@@ -42,7 +43,6 @@ import {
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
-import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
 import type { StartReceiptInspection } from '@archon/workflows/resource-start-store';
@@ -61,6 +61,7 @@ import {
 } from '@archon/workflows/schemas/binding-input-source';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import { selectStartedWorkflow, startedWorkflowInputProblems } from './binding-workflow';
+import { declaredInputNames, undeclaredInputReads } from './declared-inputs';
 import { itemAnswers, type ItemAnswers } from './item-answers';
 
 /** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
@@ -282,11 +283,9 @@ export function runEndedBindingProblems(
     problems.push(
       `outcome '${runEnded.outcome}' is not one '${runEnded.workflowName}' completes with (${values.map(value => `'${value}'`).join(', ')})`
     );
-  for (const [target, source] of Object.entries(runEnded.inputs ?? {}))
-    if ('input' in source && !ended.declaredInputs.includes(source.input))
-      problems.push(
-        `input '${target}' reads '${source.input}', which '${runEnded.workflowName}' does not declare`
-      );
+  problems.push(
+    ...undeclaredInputReads(runEnded.inputs, runEnded.workflowName, ended.declaredInputs)
+  );
   return problems;
 }
 
@@ -825,22 +824,14 @@ export function bindingReceipt(
         },
       ],
     });
-  const binding: ResourceStartBindingIntent = {
-    ...candidate.binding,
-    bindingRevision,
-    ...(Object.keys(inputs).length > 0 ? { eventInputs: inputs } : {}),
-    // `launch.isolation` names the branch for an older binary, which reads no hand-off: it
-    // runs the stage on that branch or fails to check it out, never on the base branch.
-    ...(handoff
-      ? {
-          launch: {
-            ...candidate.binding.launch,
-            isolation: { kind: 'worktree' as const, branch: handoff.branch },
-          },
-          checkoutFrom: handoff,
-        }
-      : {}),
-  };
+  const binding: ResourceStartBindingIntent = withCheckoutFrom(
+    {
+      ...candidate.binding,
+      bindingRevision,
+      ...(Object.keys(inputs).length > 0 ? { eventInputs: inputs } : {}),
+    },
+    handoff
+  );
   return sourceReceiptAcceptanceSchema.parse({ receipt, outcome: 'matched', bindings: [binding] });
 }
 
@@ -865,11 +856,6 @@ export function startRevision(candidate: OnBinding): string {
         ? { runEnded: candidate.runEnded }
         : { asksSettled: candidate.asksSettled },
   });
-}
-
-/** The input names a workflow declares: its own `inputs:` and its pack's settings. */
-export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | 'pack'>): string[] {
-  return [...Object.keys(workflow.inputs ?? {}), ...Object.keys(workflow.pack?.settings ?? {})];
 }
 
 /**

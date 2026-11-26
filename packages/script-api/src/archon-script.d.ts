@@ -2483,6 +2483,10 @@ declare module 'archon:script' {
     readonly waits: ReadonlyArray<{
       readonly event: string;
       readonly about: string;
+      readonly subject: {
+        readonly kind: 'pr' | 'issue';
+        readonly number: number;
+      } | null;
       readonly workflow: string;
       readonly runId: string;
       readonly waitingSince: string;
@@ -3241,6 +3245,10 @@ declare module 'archon:script' {
       readonly waits: ReadonlyArray<{
         readonly event: string;
         readonly about: string;
+        readonly subject: {
+          readonly kind: 'pr' | 'issue';
+          readonly number: number;
+        } | null;
         readonly workflow: string;
         readonly runId: string;
         readonly waitingSince: string;

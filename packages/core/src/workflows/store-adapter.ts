@@ -39,6 +39,7 @@ import * as workflowDb from '../db/workflows';
 import { listUnfinishedRuns } from '../db/unfinished-runs';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
+import { createWakeMapping } from './wake-start';
 import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
 import * as installHold from '../db/install-hold';
 import { queuedItemStarts } from '../db/item-step';
@@ -288,6 +289,8 @@ function onBindingDeps(
 }
 
 export function createWorkflowStore(): IWorkflowStore {
+  // A wake binding's carried inputs are checked against the waiting run's own definitions.
+  const wakes = createWakeMapping({ loadConfig: loadMergedConfig, providers: providerRegistry });
   // The close that settles a set writes the starts its asks-settled bindings cause.
   const asksSettledStarts = createAsksSettledStarts({
     ...onBindingDeps(itemsDb.getItem),
@@ -309,7 +312,7 @@ export function createWorkflowStore(): IWorkflowStore {
     admitPendingRun: resourceStarts.admitPendingRun,
     drainResourceStarts: resourceStarts.drainResourceStarts,
     hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
-    acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf),
+    acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf, wakes),
     getStartReceipt: resourceStarts.getStartReceipt,
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,

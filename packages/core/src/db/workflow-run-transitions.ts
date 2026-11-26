@@ -160,13 +160,13 @@ async function insertRunRow(
   origin: WorkflowRunOrigin,
   itemId: string | null
 ): Promise<WorkflowRunRow> {
+  // The run id is a UUID wherever it is read: resource admission validates it as one
+  // (`preparedRunShape`), and every caller-side handle — `workflow get`, `resume`,
+  // `--item` — is that value. A caller may reserve it (`prepareWorkflowSource`); otherwise
+  // the store generates it here rather than leaving the table's legacy hex default in
+  // place, which would produce a run no admission accepts.
   const result = await query<WorkflowRunRow>(
-    data.id === undefined
-      ? `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, item_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       RETURNING *, CAST(origin AS TEXT) AS origin`
-      : `INSERT INTO remote_agent_workflow_runs
+    `INSERT INTO remote_agent_workflow_runs
        (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, item_id, id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING *, CAST(origin AS TEXT) AS origin`,
@@ -183,7 +183,7 @@ async function insertRunRow(
       data.adopted_from_run_id ?? null,
       JSON.stringify(origin),
       itemId,
-      ...(data.id === undefined ? [] : [data.id]),
+      data.id ?? getDialect().generateUuid(),
     ]
   );
   const row = result.rows[0];
