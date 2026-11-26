@@ -40,6 +40,7 @@ import {
   isContinueSubcommand,
   rejectConfigOutsideRun,
   rejectInputFileOutsideRun,
+  rejectMessageOutsideTriggerFire,
   rejectRunFlagsOnContinue,
   rejectWorkflowSourceOutsideReaders,
 } from './dispatch-guards';
@@ -818,6 +819,15 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       expect(rejectWorkflowSourceOutsideReaders(command, subcommand, 'src')).toBeUndefined();
     }
     expect(rejectWorkflowSourceOutsideReaders('workflow', 'list', undefined)).toBeUndefined();
+  });
+
+  it('refuses --message outside trigger fire', () => {
+    expect(rejectMessageOutsideTriggerFire('trigger', 'fire', 'issue #23')).toBeUndefined();
+    expect(rejectMessageOutsideTriggerFire('trigger', 'list', 'issue #23')).toBe(
+      'Error: --message can only be used with trigger fire.'
+    );
+    expect(rejectMessageOutsideTriggerFire('workflow', 'run', 'issue #23')).toBeDefined();
+    expect(rejectMessageOutsideTriggerFire('trigger', 'fire', undefined)).toBeUndefined();
   });
 
   it('accepts config flags on their owning commands', () => {

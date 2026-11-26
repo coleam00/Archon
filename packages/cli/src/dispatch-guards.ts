@@ -96,6 +96,21 @@ export function rejectConfigOutsideRun(
 }
 
 /**
+ * Refuses `--message` anywhere but `trigger fire`. It names one start's title, which only a
+ * fire can give: a hand run states its message as the positional argument, and a binding
+ * declares its own default, so any other command would take the flag and drop it.
+ */
+export function rejectMessageOutsideTriggerFire(
+  command: string | undefined,
+  subcommand: string | undefined,
+  message: unknown
+): string | undefined {
+  if (message === undefined) return undefined;
+  if (command === 'trigger' && subcommand === 'fire') return undefined;
+  return 'Error: --message can only be used with trigger fire.';
+}
+
+/**
  * Refuses `--workflow-source` on every command but the ones that read their workflows from
  * it, so a command cannot answer about the project while the operator named another source.
  * `workflow run` covers `--dry-run` and the `--supersedes` restart, which its route handles.

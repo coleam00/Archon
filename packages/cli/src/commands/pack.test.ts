@@ -75,6 +75,7 @@ const RUN_ENDED_DECLARATION = `bindings:
     overlap: queue
     isolation: { kind: in-place }
     run_ended: { workflow: fixture-plan, outcome: [planned, blocked] }
+    message: build the plan's issue
     inputs:
       plan: { result: /plan }
       issue: { input: issue }
@@ -414,6 +415,27 @@ describe('archon pack bindings', () => {
 });
 
 describe('archon pack bindings: run-ended', () => {
+  it('carries a binding message into every trigger file it writes', async () => {
+    await writePack(
+      DECLARATION.replace(
+        '    resource: sweep\n',
+        '    resource: sweep\n    message: sweep the queue\n'
+      )
+    );
+    await packCommand('bindings', ['fixture'], options({ only: 'sweep' }));
+    const [file] = await readdir(out);
+    const config = triggerConfigSchema.parse(await readJson(file as string));
+    expect(config.binding.message).toBe('sweep the queue');
+  });
+
+  it('writes no message when the declaration sets none', async () => {
+    await writePack(DECLARATION);
+    await packCommand('bindings', ['fixture'], options({ only: 'sweep' }));
+    const [file] = await readdir(out);
+    const config = triggerConfigSchema.parse(await readJson(file as string));
+    expect('message' in config.binding).toBe(false);
+  });
+
   it('writes one trigger file per outcome to --out, mapping inputs from the ended run, and activates none', async () => {
     const source = join(root, 'pack source');
     const runConfig = join(root, 'run.yaml');
@@ -429,6 +451,8 @@ describe('archon pack bindings: run-ended', () => {
     expect(existsSync(join(root, 'home', 'triggers'))).toBe(false);
     const bindings = await readRunEndedBindings(out);
     expect(bindings.map(entry => entry.runEnded.outcome).sort()).toEqual(['blocked', 'planned']);
+    // One file per outcome, each carrying the binding's message.
+    for (const entry of bindings) expect(entry.binding.message).toBe("build the plan's issue");
     const printed = logSpy.mock.calls.flat().join('\n');
     for (const entry of bindings) expect(printed).toContain(`archon trigger add '${entry.file}'`);
     for (const entry of bindings) {
@@ -442,6 +466,7 @@ describe('archon pack bindings: run-ended', () => {
         resource: 'fixture:git.example.com/acme/widgets:build',
         capacity: 2,
         overlap: 'queue',
+        message: "build the plan's issue",
         launch: {
           cwd,
           workflowName: 'fixture-build',

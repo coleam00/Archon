@@ -299,8 +299,9 @@ async function prepareBinding(
         workflow_name: workflow.name,
         origin: { userId: intent.runAsUserId },
         codebase_id: codebase.id,
-        // Provenance is `metadata.resource_start`; a trigger supplies no user message.
-        user_message: '',
+        // Provenance is `metadata.resource_start`. The message is a title the operator or the
+        // binding supplies, never the event that started the run: nothing gates on it.
+        user_message: intent.message ?? '',
         metadata: bindingRunMetadata(
           workflow,
           preparedWorkflowSourceRecord(source),

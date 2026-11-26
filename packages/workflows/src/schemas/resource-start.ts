@@ -475,6 +475,13 @@ export const resourceStartBindingIntentSchema = z
     bindingRevision: z.string().min(1).nullable(),
     hostId: z.string().min(1),
     runAsUserId: z.string().min(1),
+    /**
+     * The title a start from this binding records, shown as the run's message in the console
+     * and as `user_message` wherever a run is read. Annotation only: a binding's message is
+     * read by nothing that admits, queues or receipts a start, so setting one cannot change
+     * whether or where a run starts.
+     */
+    message: z.string().min(1).optional(),
     resource: z.string().min(1).refine(notProviderResource.check, notProviderResource.message),
     /** Omitted, the start takes its workflow's declared capacity, else 1. */
     capacity: declaredCapacitySchema.optional(),

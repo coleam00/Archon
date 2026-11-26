@@ -233,6 +233,7 @@ export async function runTrigger({
       input: Array.isArray(values.input) ? values.input : undefined,
       item: typeof values.item === 'string' ? values.item : undefined,
       noItem: values['no-item'] === true,
+      message: typeof values.message === 'string' ? values.message : undefined,
       limit: typeof values.limit === 'string' ? values.limit : undefined,
       yes: values.yes === true,
     },

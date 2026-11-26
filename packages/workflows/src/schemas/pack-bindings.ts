@@ -61,6 +61,8 @@ const bindingShape = {
   resource_scope: z.enum(['repo', 'host']).default('repo'),
   capacity: resourceStartBindingIntentSchema.shape.capacity,
   overlap: resourceStartOverlapSchema,
+  /** The title every start from this binding records; `trigger fire --message` overrides it. */
+  message: resourceStartBindingIntentSchema.shape.message,
   isolation: resourceStartBindingIntentSchema.shape.launch.shape.isolation.default({
     kind: 'default',
   }),

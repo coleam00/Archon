@@ -955,7 +955,8 @@ test('trigger list names the run limit on a receipt whose queued start only the 
 async function prepareTriggerInputs(
   workflowYaml: string,
   inputs: ResourceStartBindingIntent['launch']['inputs'],
-  eventInputs?: ResourceStartBindingIntent['eventInputs']
+  eventInputs?: ResourceStartBindingIntent['eventInputs'],
+  message?: string
 ): Promise<{
   host: WorkflowHost;
   receiptId: string;
@@ -984,6 +985,7 @@ async function prepareTriggerInputs(
       capacity: 1,
       overlap: 'queue',
       launch: { cwd: project, workflowName: 'portable', inputs, isolation: { kind: 'in-place' } },
+      ...(message === undefined ? {} : { message }),
       ...(eventInputs ? { eventInputs } : {}),
     },
     'mapped'
@@ -1039,6 +1041,15 @@ test('preparation passes literal inputs through to a workflow that declares none
   const { error, prepared } = await prepareTriggerInputs(undeclaredWorkflow, { mode: 'nightly' });
   expect(error).toBeUndefined();
   expect(prepared?.launch.run.metadata).toMatchObject({ inputs: { mode: 'nightly' } });
+});
+
+test("a binding's message becomes the started run's title, and no message stays empty", async () => {
+  const titled = await prepareTriggerInputs(undeclaredWorkflow, {}, undefined, 'issue #23 — spell');
+  expect(titled.error).toBeUndefined();
+  expect(titled.prepared?.launch.run.user_message).toBe('issue #23 — spell');
+
+  const untitled = await prepareTriggerInputs(undeclaredWorkflow, {});
+  expect(untitled.prepared?.launch.run.user_message).toBe('');
 });
 
 test('preparation passes event-mapped inputs to a workflow that declares them', async () => {
@@ -1313,6 +1324,46 @@ test('fire reports why preparation refused while the receipt keeps only the stag
       error: 'launch_preparation_failed',
     });
     expect(JSON.stringify(stored)).not.toContain('declares no inputs');
+  } finally {
+    restore();
+  }
+});
+
+test("fire --message titles one start, in place of the binding's message", async () => {
+  const { host, configPath, restore } = await fireFixture();
+  const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+    binding: Record<string, unknown>;
+  };
+  config.binding.message = 'issue #23 — spell table';
+  await writeFile(configPath, JSON.stringify(config));
+  try {
+    const fired: string[] = [];
+    const fireOnce = async (options: { message?: string }): Promise<void> => {
+      const before = new Set((await host.deps.store.listStartReceipts(10)).map(r => r.id));
+      await triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath, ...options },
+        { dispatch: noDispatch, env: NO_RUN }
+      );
+      const [receipt] = (await host.deps.store.listStartReceipts(10)).filter(
+        r => !before.has(r.id)
+      );
+      const binding = receipt
+        ? (await host.deps.store.getStartReceipt(receipt.id))?.bindings[0]
+        : undefined;
+      // The first start admits and holds the resource; the second queues behind it. Both
+      // prepared a launch, and the title is recorded there either way.
+      if (!binding?.disposition) {
+        throw new Error(`Expected a prepared start, got ${JSON.stringify(binding)}`);
+      }
+      const prepared = await host.deps.store.getResourceStartRequest(binding.disposition.requestId);
+      fired.push(prepared?.launch.run.user_message ?? '(none)');
+    };
+    await fireOnce({});
+    await fireOnce({ message: 'issue #24 — picker' });
+    expect(fired).toEqual(['issue #23 — spell table', 'issue #24 — picker']);
   } finally {
     restore();
   }

@@ -76,6 +76,8 @@ export const cliArgOptions: CliArgOptions = {
   detach: { type: 'boolean' },
   'no-wait': { type: 'boolean' },
   'no-item': { type: 'boolean' },
+  // `trigger fire --message <text>`: the title this one start records.
+  message: { type: 'string' },
   all: { type: 'boolean' },
   status: { type: 'string' },
   limit: { type: 'string' },

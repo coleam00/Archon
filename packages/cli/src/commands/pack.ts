@@ -237,6 +237,7 @@ function generate(
     bindingId: bindingName(target, id),
     hostId: target.hostId,
     runAsUserId: target.runAsUserId,
+    ...(binding.message === undefined ? {} : { message: binding.message }),
     resource: `${target.packKey}:${scope}:${binding.resource}`,
     capacity: binding.capacity,
     overlap: binding.overlap,

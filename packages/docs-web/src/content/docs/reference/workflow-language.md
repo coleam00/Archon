@@ -3087,6 +3087,7 @@ bindings:
     capacity: 1                       # optional, default the workflow's, else 1
     overlap: skip                     # skip | queue
     isolation: { kind: worktree }     # optional, default { kind: default }
+    message: nightly sweep            # optional title every start from this binding records
     schedule: { interval_seconds: 1800 }
     inputs:
       repo_host: { repo: host }       # the host of --repo
@@ -3228,7 +3229,11 @@ subject and maps no `item:`. See
 A stage that needs both a clock and a hand-off declares two bindings with the
 same `workflow` and `resource`; they share the resource's slots and overlap policy.
 `capacity`, `overlap` and `isolation` mean what they mean in a
-[binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
+[binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
+`message:` is the title a start from that binding records, shown as the run's message in the
+console and as `user_message` wherever a run is read; `trigger fire --message <text>` replaces
+it for one fire. A title is annotation only — nothing that admits, queues or receipts a start
+reads it. The
 resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
 same `resource` share its slots. With `resource_scope: host` it is
 `<pack>:<host id>:<resource>`, for work that spans every repository on the host. When the

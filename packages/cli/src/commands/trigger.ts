@@ -91,6 +91,8 @@ type TriggerOptions = {
   input?: readonly string[];
   item?: string;
   noItem?: boolean;
+  /** The title this one fire records, in place of the binding's message. */
+  message?: string;
 };
 
 /**
@@ -238,6 +240,8 @@ async function inheritedItemKey(
 function assertItemOptions(options: TriggerOptions): void {
   if (options.item === undefined) return;
   if (options.noItem) throw new Error('--item and --no-item are mutually exclusive.');
+  if (options.message !== undefined && options.message.trim().length === 0)
+    throw new Error('--message must not be empty.');
   assertItemKey(options.item);
 }
 
@@ -349,6 +353,9 @@ async function triggerFire(
   });
   const binding = {
     ...config.binding,
+    // A fire's title overrides the binding's for this start only: the revision below still
+    // digests the binding as the file declares it, so a title is not a configuration change.
+    ...(options.message === undefined ? {} : { message: options.message }),
     ...(eventInputs !== undefined ? { eventInputs } : {}),
     bindingRevision: triggerRevision(config),
   };
