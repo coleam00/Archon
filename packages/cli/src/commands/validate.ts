@@ -6,7 +6,12 @@
 
 import { providerRegistry } from '@archon/providers';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/workflow-source';
+import {
+  liveSourceRoots,
+  loadablePackFolder,
+  workflowSourceConfigFrom,
+} from '@archon/workflows/workflow-source';
+import { canonicalizeProjectPath } from '@archon/paths';
 import { suggestWorkflowNames } from '@archon/workflows/router';
 import {
   workflowLoadErrorName,
@@ -126,7 +131,7 @@ export async function validateWorkflowsCommand(
   source?: string
 ): Promise<number> {
   const config = await buildValidationConfig(source ?? cwd);
-  const results = await collectWorkflowResults(cwd, source, config, forgeTrustedEnv);
+  const { results, packs } = await collectWorkflowResults(cwd, source, config, forgeTrustedEnv);
   if (source !== undefined && results.length === 0) {
     const message = `Error: no workflows found in --workflow-source ${source}`;
     if (json) await writeStdout(`${JSON.stringify({ error: message, source })}\n`);
@@ -143,7 +148,15 @@ export async function validateWorkflowsCommand(
       return 1;
     }
   }
-  // The manifest is not a workflow, so the name filter does not apply to it.
+  // A pack's bindings and the manifest are not workflows, so the name filter does not
+  // apply to them.
+  filteredResults.push(...bindingResults(packs));
+  if (source === undefined && (await isNestedPackFolder(cwd, pluginRoot))) {
+    // A pack folder the operator runs from inside a larger project is a pack they mean, and
+    // discovery at the project root does not read it: read it as `--workflow-source` would.
+    const nested = await discoverForValidation(cwd, pluginRoot);
+    filteredResults.push(...bindingResults(packGroups(nested.workflowEntries)));
+  }
   filteredResults.push(...(await manifestResults(source ?? pluginRoot)));
 
   filteredResults.sort((a, b) => {
@@ -195,7 +208,10 @@ async function collectWorkflowResults(
   workflowSource: string | undefined,
   config: ValidationConfig,
   forgeTrustedEnv: NodeJS.ProcessEnv
-): Promise<WorkflowValidationResult[]> {
+): Promise<{
+  results: WorkflowValidationResult[];
+  packs: Map<string, readonly WorkflowWithSource[]>;
+}> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
   const { workflowEntries, loadErrors } = await discoverForValidation(cwd, workflowSource);
@@ -215,7 +231,6 @@ async function collectWorkflowResults(
   }
 
   const packs = packGroups(workflowEntries);
-  results.push(...bindingResults(packs));
   const stops = stopIssues(packs);
   for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(
@@ -252,7 +267,20 @@ async function collectWorkflowResults(
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
-  return results;
+  return { results, packs };
+}
+
+/**
+ * Whether the directory the operator ran from is a pack folder below the project root.
+ * Both paths are canonicalized: the root comes from git resolution, the invocation
+ * directory may not (`/tmp` against `/private/tmp`).
+ */
+async function isNestedPackFolder(projectRoot: string, pluginRoot: string): Promise<boolean> {
+  const [root, here] = await Promise.all([
+    canonicalizeProjectPath(projectRoot),
+    canonicalizeProjectPath(pluginRoot),
+  ]);
+  return here !== root && (await loadablePackFolder(here)) !== null;
 }
 
 /** The discovered workflows by pack key; a workflow outside a pack is a group of its own. */

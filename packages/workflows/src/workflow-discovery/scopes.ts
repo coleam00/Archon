@@ -258,8 +258,8 @@ export async function loadGlobalScope(context: DiscoveryContext, files: ScopeFil
  * A missing folder is no project workflows; any other access failure rejects discovery.
  *
  * A source that is itself a pack folder (`sourcePackFolder`) adds that pack to the project
- * scope under its manifest name; `splitSourcePack` later keeps only its entrypoints
- * dispatchable. A capture freezes such a folder whole as its project
+ * scope under its manifest name; `splitSourcePack` later keeps only the workflows its
+ * manifest lists dispatchable. A capture freezes such a folder whole as its project
  * root, so live and captured roots read it the same way.
  */
 export async function loadProjectScope(
@@ -346,28 +346,32 @@ async function addSourcePack(
     path: pack.dir,
     source: 'project',
   });
-  // An entrypoint is named by its manifest key, as on an installed copy. Renamed before
-  // include expansion, so a key that collides with another workflow's name is a duplicate.
-  const entrypointByPath = new Map(
-    Object.entries(pack.entrypoints).map(([key, path]) => [path, key])
-  );
+  // Only the workflow files the manifest lists dispatch, matched by path as on an installed
+  // copy. They keep their authored names, so includes and recorded runs resolve as before.
+  const loaded = new Map<string, string>();
+  for (const { workflow, filePath } of packaged.workflows.values())
+    if (filePath !== undefined)
+      loaded.set(relative(pack.dir, filePath).split(sep).join('/'), workflow.name);
   const entrypoints = new Set<string>();
-  for (const [filename, parsed] of packaged.workflows) {
-    const path = parsed.filePath === undefined ? undefined : relative(pack.dir, parsed.filePath);
-    const key = path === undefined ? undefined : entrypointByPath.get(path.split(sep).join('/'));
-    if (key === undefined) continue;
-    entrypoints.add(key);
-    if (key !== parsed.workflow.name)
-      packaged.workflows.set(filename, { ...parsed, workflow: { ...parsed.workflow, name: key } });
+  for (const [entry, path] of Object.entries(pack.entrypoints)) {
+    const name = loaded.get(path);
+    if (name !== undefined) entrypoints.add(name);
+    else if (!packaged.errors.some(error => error.filename === basename(path)))
+      packaged.errors.push({
+        filename: path,
+        error: `Entrypoint '${entry}' of pack folder ${pack.name} did not load from ${path}.`,
+        errorType: 'validation_error',
+      });
   }
   context.sourcePack = { key: pack.name, entrypoints };
   mergeScopeResults(into, packaged);
 }
 
 /**
- * A pack folder read as the source dispatches only its manifest entrypoints, as an installed
- * copy does; its other workflows are support, which its own workflows compose and nothing
- * dispatches. Split after include expansion, which needs the support workflows in scope.
+ * A pack folder read as the source dispatches only the workflows its manifest lists, as an
+ * installed copy does; its other workflows are support, which its own workflows compose and
+ * nothing dispatches. Split after include expansion, which needs the support workflows in
+ * scope.
  */
 export function splitSourcePack(
   sourcePack: DiscoveryContext['sourcePack'],

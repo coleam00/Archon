@@ -16,8 +16,8 @@ export interface DiscoveryContext extends WorkflowParseContext {
    */
   allErrors: WorkflowLoadError[];
   /**
-   * The pack folder the project source is, when it is one: its key, and the entrypoint keys
-   * whose workflow file loaded, which name those workflows.
+   * The pack folder the project source is, when it is one: its key, and the authored names
+   * of the workflows whose files its manifest lists as entrypoints.
    */
   sourcePack?: { key: string; entrypoints: ReadonlySet<string> };
 }

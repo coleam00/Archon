@@ -3221,6 +3221,94 @@ it('validate names unknown keys in the manifest of the plugin directory it runs 
   }
 }, 30_000);
 
+// Every route that reads a pack refuses a binding to a workflow its manifest does not
+// list: validate from a workflow folder, with a name, and from a pack kept in a repository,
+// and pack bindings from another checkout.
+it('refuses a binding to an unlisted workflow wherever the pack is read', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-pack-refusal-'));
+  const home = join(root, 'home');
+  const config = 'defaults:\n  loadDefaultCommands: false\n  loadDefaultWorkflows: false\n';
+  const flow = (name: string) =>
+    `name: ${name}\ndescription: d\nnodes:\n  - id: a\n    bash: echo ${name}\n`;
+  /** A pack folder `name` at `dir` listing `listed`, holding it and `unlisted`, bound to both. */
+  const packFolder = (dir: string, name: string, listed: string, unlisted: string) => {
+    for (const workflow of [listed, unlisted]) {
+      mkdirSync(join(dir, workflow), { recursive: true });
+      writeFileSync(join(dir, workflow, `${workflow}.yaml`), flow(workflow));
+    }
+    mkdirSync(join(dir, '.pack'), { recursive: true });
+    writeFileSync(
+      join(dir, '.pack', 'pack.yaml'),
+      `bindings:\n  sweep:\n    workflow: ${unlisted}\n    resource: sweep\n    overlap: queue\n    schedule: { interval_seconds: 60 }\n`
+    );
+    writeFileSync(
+      join(dir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name,
+        description: 'd',
+        entrypoints: { [listed]: `${listed}/${listed}.yaml` },
+      })
+    );
+  };
+  // A pack repository, and a project that keeps another pack under plugins/.
+  const pack = join(root, 'factory');
+  const project = join(root, 'project');
+  for (const repo of [pack, project]) {
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0);
+    writeFileSync(join(repo, '.archon', 'config.yaml'), config);
+  }
+  packFolder(pack, 'factory', 'plan', 'triage');
+  packFolder(join(project, 'plugins', 'kit'), 'kit', 'one', 'two');
+  const cli = (cwd: string, args: string[]) =>
+    spawnSync(process.execPath, [CLI_ENTRY, ...args], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+  const refusal = (workflow: string, key: string) =>
+    `Binding 'sweep' names workflow '${workflow}', which pack '${key}' does not provide.`;
+  try {
+    for (const [cwd, args, workflow, key] of [
+      [join(pack, 'plan'), ['validate', 'workflows', '--json'], 'triage', 'factory'],
+      [pack, ['validate', 'workflows', 'plan', '--json'], 'triage', 'factory'],
+      [join(project, 'plugins', 'kit'), ['validate', 'workflows', '--json'], 'two', 'kit'],
+    ] as const) {
+      const result = cli(cwd, [...args]);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      const { results } = JSON.parse(result.stdout) as {
+        results: { workflowName: string; issues: { message: string }[] }[];
+      };
+      expect(results.flatMap(r => r.issues.map(i => i.message))).toContain(refusal(workflow, key));
+    }
+
+    const out = join(root, 'out');
+    const bindings = cli(project, [
+      'pack',
+      'bindings',
+      'factory',
+      '--workflow-source',
+      pack,
+      '--repo',
+      'github.com/acme/widgets',
+      '--host',
+      'host-1',
+      '--run-as',
+      'user-1',
+      '--out',
+      out,
+    ]);
+    expect(bindings.status, bindings.stdout + bindings.stderr).toBe(1);
+    expect(bindings.stderr).toContain(refusal('triage', 'factory'));
+    expect(existsSync(out)).toBe(false);
+  } finally {
+    await removeTempTree(root);
+  }
+}, 60_000);
+
 it.each([true, false])(
   'file-only commands inspect local files without a registry (Git: %s)',
   async initGit => {

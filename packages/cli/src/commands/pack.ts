@@ -424,11 +424,17 @@ async function findPack(
         ...copyLines(packKey, copies, cwd, explicitSource),
       ].join('\n')
     );
+  // A binding from an explicit source records it as `launch.discoveryCwd`, and a start then
+  // admits only a workflow of the source's own project scope (`selectStartedWorkflow`), so a
+  // same-named pack in another scope cannot supply one.
+  const dispatchable = explicitSource
+    ? workflows.filter(entry => entry.source === 'project')
+    : workflows;
   return {
     key: packKey,
     copies,
     bindings,
-    workflowNames: workflows.map(entry => entry.workflow.name),
+    workflowNames: dispatchable.map(entry => entry.workflow.name),
   };
 }
 

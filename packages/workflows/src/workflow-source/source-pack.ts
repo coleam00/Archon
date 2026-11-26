@@ -15,7 +15,7 @@ import { isDirectory, listTree, type TreeFile, type TreeListing } from './tree';
  * workflow-pack `archon-plugin.json`. It is read as one project-scope pack keyed by its
  * manifest `name`, as if it sat at `<source>/.archon/workflows/<name>/`, so a pack author
  * can run the pack without installing it or copying it into that layout. As on an installed
- * copy, only its manifest entrypoints are dispatchable, named by entrypoint key. A run's capture
+ * copy, only the workflow files its manifest lists are dispatchable. A run's capture
  * freezes the folder whole as its project root, so the frozen copy is read by this rule too.
  */
 export interface SourcePackFolder {
