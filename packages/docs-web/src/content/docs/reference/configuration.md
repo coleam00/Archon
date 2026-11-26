@@ -534,10 +534,12 @@ worktree:
 2. If omitted: Auto-detects — `origin` if it exists, otherwise the sole remote if only one is configured. Merged cleanup is the exception: it judges merges only against `origin` and keeps, with a reason, the worktrees of a repository that has no `origin`.
 3. If multiple remotes exist and none is named `origin`: Worktree creation **fails with an actionable error** listing the available remotes and suggesting the config fix. Registration still succeeds but records no repository URL, unless one of the remotes already belongs to a registered project, which refuses it as a second clone. A project registered this way owns none of its remotes, so a later clone of one of them registers as a separate project; set `worktree.remote` before registering to avoid that.
 
-**Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
+**Base branch behavior:** For a repository with a remote, the canonical workspace is synced to the latest code before creating a worktree. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).
 2. If omitted: Uses the project's stored explicit branch, if present; otherwise resolves the default from the remote's live HEAD advertisement. Renames are followed even when local remote HEAD is stale. A reachable remote with a known symbolic HEAD is required; no branch name is guessed.
 3. If a workflow references `$BASE_BRANCH` while its base is unresolved, the node fails. See [`$BASE_BRANCH` fail-fast](/reference/variables/#base_branch-fail-fast) for causes and recovery.
+
+Without a remote, nothing is fetched or synced. The worktree uses `worktree.baseBranch` as a local branch, or the checkout's current branch when no base is configured. Creation fails if the configured local branch is missing, a detached HEAD has no configured base, the current branch has no commit, or a `--from` start point does not exist. See [Base branch precedence](/reference/cli/#base-branch-precedence) for the full resolution order.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
 
