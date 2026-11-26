@@ -89,7 +89,7 @@ export function itemStanding(facts: {
   /** What the item depends on, each with whether it is done (merged, or standing `done`). */
   dependsOn: readonly { done: boolean }[];
 }): ItemStanding {
-  const { runs, parts } = facts;
+  const { runs } = facts;
   const steps = runs.filter(run => !observesItemRecorded(run.metadata));
   const status = (wanted: WorkflowRun['status']): boolean =>
     steps.some(run => run.status === wanted);
@@ -100,17 +100,12 @@ export function itemStanding(facts: {
   const needsDecision = (kind: string): boolean => kind === 'stopped' || kind === 'refused_start';
   const stopped = facts.questions.some(question => needsDecision(question.kind));
   const asked = facts.questions.some(question => !needsDecision(question.kind));
-  // An item with no parts is not done by them: `every` holds on an empty list.
-  const partsDone = parts.length > 0 && parts.every(part => part.done);
   const state = ((): ItemStanding['state'] => {
     if (status('running')) return 'running';
     if (status('paused') || asked || facts.waits.length > 0) return 'waiting';
     if (status('pending') || facts.queued.length > 0 || facts.held.length > 0) return 'queued';
-    if (facts.merged || partsDone || (at !== undefined && readItemFinal(at.metadata)))
-      return 'done';
-    if (parts.length > 0) return 'resting';
-    if (facts.ended === 'outcome') return 'done';
-    if (facts.ended === 'operator') return 'resting';
+    const finished = finishedState(facts, at);
+    if (finished !== undefined) return finished;
     if (at?.status === 'failed') return 'failed';
     if (facts.dependsOn.some(other => !other.done)) return 'waiting';
     // A completed run with an outcome that nothing followed, recorded as a stop or not.
@@ -120,4 +115,22 @@ export function itemStanding(facts: {
   const keys = runs.map(runPackKey).filter(key => key !== null);
   const pack = (at === undefined ? null : runPackKey(at)) ?? keys.at(-1) ?? null;
   return { runId: at?.id ?? null, state, pack };
+}
+
+/**
+ * `done` or `resting` when a merge, the item's parts or an end that holds decide where an item
+ * nothing runs, waits or queues on stands, in `itemStandingSchema`'s order; else undefined.
+ */
+function finishedState(
+  facts: Pick<Parameters<typeof itemStanding>[0], 'merged' | 'parts' | 'ended'>,
+  at: Pick<WorkflowRun, 'metadata'> | undefined
+): 'done' | 'resting' | undefined {
+  const { parts } = facts;
+  // An item with no parts is not done by them: `every` holds on an empty list.
+  const partsDone = parts.length > 0 && parts.every(part => part.done);
+  if (facts.merged || partsDone || (at !== undefined && readItemFinal(at.metadata))) return 'done';
+  if (parts.length > 0) return 'resting';
+  if (facts.ended === 'outcome') return 'done';
+  if (facts.ended === 'operator') return 'resting';
+  return undefined;
 }
