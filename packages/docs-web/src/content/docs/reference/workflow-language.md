@@ -1860,6 +1860,12 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
   `null`. The engine never falls back to an older run; a node that needs an older one reads
   the item's runs itself. The start says on the run's conversation which run each input read,
   or why it is `null`, so a misspelled workflow name shows as "no completed run".
+- In a pack's workflow, a bare name in `result_of` names that pack's own workflow by its
+  `name:`, as `include:` does. In an installed pack the engine reads the runs of the pack's
+  workflow under its installed name (`owner/plugin:<entrypoint>`), so the pack reads the same
+  in the project copy and the installed one, and its own workflow wins over a project workflow
+  of the same name. A name the pack does not hold reads the project's workflow of that name;
+  to read another installed pack's workflow, write its qualified name.
 - A run on the item that the engine cannot read fails the starting run, naming that run: it
   may be the latest one, so no value is read in its place. An unreadable terminal record fails
   the starting run too.
@@ -2438,7 +2444,8 @@ nodes:
 - **`inputs:`**: a map of input name → `{ required?, default?, description?, result_of?, at? }`. `required: true`
   and `default:` are mutually exclusive (a required input has no default; declaring both drops
   the key at load with a warning). `result_of: <workflow>` fills an unsupplied input with what
-  the latest completed run of that workflow on the run's item returned, and excludes both
+  the latest completed run of that workflow on the run's item returned (in a pack, a bare name
+  is the pack's own workflow), and excludes both
   (see [Reading an earlier run's result](#reading-an-earlier-runs-result)). `at: checkout`
   narrows `result_of` to the latest run whose result holds at this run's commit, read as
   `{ commit, result }` (see [The result
