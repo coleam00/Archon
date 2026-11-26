@@ -255,6 +255,42 @@ test('finds a timer when ARCHON_HOME reaches its home through a symlink', async 
   ]);
 });
 
+async function seedUnresolvableCleanupHome(root: string, schedules: NativeScheduleOptions) {
+  const archonHome = join(root, 'other-install');
+  await installNativeSchedule(
+    {
+      id: `isolation-cleanup-${createHash('sha256').update(archonHome).digest('hex')}`,
+      archonHome,
+      workingDirectory: archonHome,
+      programArguments: [process.execPath, 'isolation', 'cleanup', '--merged'],
+      path: '/usr/bin',
+      schedule: { intervalSeconds: 60, runAtLoad: true },
+      output: 'log',
+      removeCommand: 'archon isolation cleanup schedule remove',
+    },
+    schedules
+  );
+  await rm(archonHome, { recursive: true });
+  await symlink(archonHome, archonHome);
+}
+
+test.skipIf(process.platform === 'win32')(
+  'check ignores another job family with an unresolvable home',
+  async () => {
+    const { root, config, installTimer, check, schedules, scheduled } = await fixture();
+    const path = join(root, 'timer.json');
+    await writeFile(path, JSON.stringify(config({ a: 1 })));
+    await installTimer(path);
+    await seedUnresolvableCleanupHome(root, schedules);
+    scheduled.length = 0;
+
+    const result = await check();
+    expect(result.bindings).toEqual([expect.objectContaining({ file: path, problems: [] })]);
+    expect(result.error).toBeUndefined();
+    expect(scheduled).toEqual([]);
+  }
+);
+
 test('reports a timer whose config file is gone, with how to remove it by hand', async () => {
   const { root, config, installTimer, check, removeByHand } = await fixture();
   const path = join(root, 'timer.json');
@@ -491,6 +527,41 @@ describe('schedule finds the binding timer however ARCHON_HOME is spelled', () =
     const { schedule } = await scheduleFixture();
     expect(await schedule('remove')).toMatchObject({ removed: false });
   });
+
+  test.skipIf(process.platform === 'win32')(
+    'another job family with an unresolvable home does not block schedule operations',
+    async () => {
+      const { root, schedules, schedule, timerFiles } = await scheduleFixture();
+      await schedule('install');
+      const installed = await timerFiles();
+      await seedUnresolvableCleanupHome(root, schedules);
+
+      expect(await schedule('status')).toMatchObject({ installed: true, registered: true });
+      await schedule('install');
+      expect(await timerFiles()).toHaveLength(installed.length + 1);
+      expect(await schedule('remove')).toMatchObject({ removed: true });
+      const remaining = await timerFiles();
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]).toContain('isolation-cleanup-');
+      expect(await schedule('remove')).toMatchObject({ removed: false });
+    }
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'a potentially matching recorded home failure is not successful absence',
+    async () => {
+      const { archonHome, alias, schedule } = await scheduleFixture();
+      process.env.ARCHON_HOME = alias;
+      await schedule('install');
+      await rm(alias);
+      await symlink(alias, alias);
+      process.env.ARCHON_HOME = archonHome;
+
+      for (const operation of ['install', 'status', 'remove']) {
+        await expect(schedule(operation)).rejects.toMatchObject({ code: 'ELOOP' });
+      }
+    }
+  );
 
   test.skipIf(process.platform === 'win32')(
     'remove reaches an unreadable current timer beside a readable alternate',

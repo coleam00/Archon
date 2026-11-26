@@ -427,12 +427,13 @@ export async function removeNativeSchedule(
 
 /**
  * The jobs installed for `archonHome`, read from their files, plus any Archon job file that
- * cannot be read, whose home is unknown. None on a platform Archon has no scheduler for:
- * nothing can be installed there.
+ * cannot be read, whose home is unknown. `matchesJob` excludes unrelated readable jobs
+ * before resolving their homes. None on a platform Archon has no scheduler for.
  */
 export async function listNativeSchedules(
   archonHome: string,
-  options: NativeScheduleOptions = {}
+  options: NativeScheduleOptions = {},
+  matchesJob?: (job: InstalledJob, label: string) => boolean
 ): Promise<InstalledSchedule[]> {
   const platform = options.platform ?? process.platform;
   const backend = backendFor(platform, archonHome, options);
@@ -451,9 +452,14 @@ export async function listNativeSchedules(
   };
   const home = await identity(archonHome);
   const installed: InstalledSchedule[] = [];
-  for (const entry of await backend.installed())
-    if (!('archonHome' in entry) || (await identity(entry.archonHome)) === home)
+  for (const entry of await backend.installed()) {
+    if (!('archonHome' in entry)) {
       installed.push(entry);
+      continue;
+    }
+    if (matchesJob && !matchesJob(entry, entry.label)) continue;
+    if ((await identity(entry.archonHome)) === home) installed.push(entry);
+  }
   return installed;
 }
 
@@ -469,10 +475,14 @@ export async function findNativeScheduleTargets(
   options: NativeScheduleOptions = {}
 ): Promise<[NativeScheduleTarget, ...NativeScheduleTarget[]]> {
   const found: NativeScheduleTarget[] = [];
-  for (const job of await listNativeSchedules(archonHome, options)) {
+  for (const job of await listNativeSchedules(
+    archonHome,
+    options,
+    (entry, label) => label === scheduleLabel(idForHome(entry.archonHome))
+  )) {
     if (!('archonHome' in job)) continue;
     const id = idForHome(job.archonHome);
-    if (job.label === scheduleLabel(id)) found.push({ id, archonHome: job.archonHome });
+    found.push({ id, archonHome: job.archonHome });
   }
   const current = { id: idForHome(archonHome), archonHome };
   const [first, ...rest] = found;

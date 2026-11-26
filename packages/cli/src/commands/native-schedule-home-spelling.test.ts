@@ -1,9 +1,19 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, realpath, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { spyOnJsonStdout } from '../test-support/workflow-harness-output';
 import {
   scheduleLabel,
   scheduledJob,
@@ -31,14 +41,12 @@ const commands = [
     'workflow-wake-',
     (operation: Operation, schedules: NativeScheduleOptions) =>
       workflowWakeScheduleCommand(['schedule', operation], { json: true }, schedules),
-    'workflow-wake-1e14189f615b2caa1617df692c9491f02d52515620207167d960b8534e131b94',
   ],
   [
     'merged cleanup timer',
     'isolation-cleanup-',
     (operation: Operation, schedules: NativeScheduleOptions) =>
       isolationCleanupScheduleCommand([operation], { json: true }, schedules),
-    'isolation-cleanup-1e14189f615b2caa1617df692c9491f02d52515620207167d960b8534e131b94',
   ],
 ] as const;
 
@@ -47,18 +55,10 @@ async function invokeResult(
   operation: Operation,
   schedules: NativeScheduleOptions
 ): Promise<{ exitCode: number; result: Record<string, unknown> }> {
-  let printed = '';
-  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
-    chunk: unknown,
-    encodingOrCallback?: unknown,
-    callback?: () => void
-  ) => {
-    printed += String(chunk);
-    (typeof encodingOrCallback === 'function' ? (encodingOrCallback as () => void) : callback)?.();
-    return true;
-  }) as typeof process.stdout.write);
+  const stdout = spyOnJsonStdout();
   try {
     const exitCode = await command(operation, schedules);
+    const printed = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
     return { exitCode, result: JSON.parse(printed) as Record<string, unknown> };
   } finally {
     stdout.mockRestore();
@@ -100,7 +100,7 @@ async function fixture(idPrefix: string) {
       throw error;
     }
   };
-  return { archonHome, alias, schedules, jobFiles };
+  return { root, archonHome, alias, schedules, jobFiles };
 }
 
 function idForHome(idPrefix: string, archonHome: string): string {
@@ -115,7 +115,9 @@ async function seedJob(
   const job = scheduledJob(
     {
       id,
-      programArguments: [process.execPath, 'workflow', 'wake', '--watch', '--json'],
+      programArguments: id.startsWith('isolation-cleanup-')
+        ? [process.execPath, 'isolation', 'cleanup', '--merged']
+        : [process.execPath, 'workflow', 'wake', '--watch', '--json'],
       workingDirectory: archonHome,
       archonHome,
       path: '/usr/bin',
@@ -131,7 +133,34 @@ async function seedJob(
   return path;
 }
 
-describe.each(commands)('%s home spelling', (_name, idPrefix, command, legacyId) => {
+describe.each(commands)('%s home spelling', (_name, idPrefix, command) => {
+  testOnPosixHost(
+    'another job family with an unresolvable home does not block schedule operations',
+    async () => {
+      const { root, archonHome, schedules, jobFiles } = await fixture(idPrefix);
+      process.env.ARCHON_HOME = archonHome;
+      const installed = await invoke(command, 'install', schedules);
+      const otherHome = join(root, 'other-install');
+      await mkdir(otherHome);
+      const otherPrefix = idPrefix === 'workflow-wake-' ? 'isolation-cleanup-' : 'workflow-wake-';
+      const otherPath = await seedJob(schedules, otherHome, idForHome(otherPrefix, otherHome));
+      const otherDefinition = await readFile(otherPath);
+      await rm(otherHome, { recursive: true });
+      await symlink(otherHome, otherHome);
+
+      expect(await invoke(command, 'status', schedules)).toMatchObject({
+        installed: true,
+        path: installed.path,
+      });
+      expect(await invoke(command, 'install', schedules)).toMatchObject({ path: installed.path });
+      expect(await jobFiles()).toHaveLength(1);
+      expect(await invoke(command, 'remove', schedules)).toMatchObject({ removed: true });
+      expect(await jobFiles()).toEqual([]);
+      expect(await readFile(otherPath)).toEqual(otherDefinition);
+      expect(await invoke(command, 'remove', schedules)).toMatchObject({ removed: false });
+    }
+  );
+
   testOnPosixHost('status and remove find the job installed under another spelling', async () => {
     const { archonHome, alias, schedules, jobFiles } = await fixture(idPrefix);
     process.env.ARCHON_HOME = `${archonHome}${sep}`;
@@ -171,14 +200,27 @@ describe.each(commands)('%s home spelling', (_name, idPrefix, command, legacyId)
   });
 
   testOnPosixHost('status and remove reach an id written before this change', async () => {
-    const { schedules, jobFiles } = await fixture(idPrefix);
-    const recordedHome = '/tmp/archon-legacy-home/';
+    const { archonHome, schedules, jobFiles } = await fixture(idPrefix);
+    const recordedHome = `${archonHome}${sep}`;
+    const legacyId = idForHome(idPrefix, recordedHome);
     const path = await seedJob(schedules, recordedHome, legacyId);
+    const lastPass = { at: '2026-11-26T00:00:00.000Z', pid: 1, ok: true, parts: {} };
+    const lastPassPath = join(archonHome, 'schedules', `${legacyId}.last-pass.json`);
+    const wake = idPrefix === 'workflow-wake-';
+    if (wake) {
+      await mkdir(join(archonHome, 'schedules'));
+      await writeFile(lastPassPath, JSON.stringify(lastPass));
+    }
     process.env.ARCHON_HOME = recordedHome;
 
-    expect(await invoke(command, 'status', schedules)).toMatchObject({ installed: true, path });
+    expect(await invoke(command, 'status', schedules)).toMatchObject({
+      installed: true,
+      path,
+      ...(wake ? { lastPass } : {}),
+    });
     expect(await invoke(command, 'remove', schedules)).toMatchObject({ removed: true });
     expect(await jobFiles()).toEqual([]);
+    if (wake) await expect(readFile(lastPassPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   testOnPosixHost('remove deletes every matching readable job', async () => {
@@ -218,4 +260,21 @@ describe.each(commands)('%s home spelling', (_name, idPrefix, command, legacyId)
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining('ELOOP') });
     }
   });
+
+  testOnPosixHost(
+    'a potentially matching recorded home failure is not successful absence',
+    async () => {
+      const { archonHome, alias, schedules } = await fixture(idPrefix);
+      await seedJob(schedules, alias, idForHome(idPrefix, alias));
+      await rm(alias);
+      await symlink(alias, alias);
+      process.env.ARCHON_HOME = archonHome;
+
+      for (const operation of ['install', 'status', 'remove'] as const) {
+        const { exitCode, result } = await invokeResult(command, operation, schedules);
+        expect(exitCode).toBe(1);
+        expect(result).toMatchObject({ ok: false, error: expect.stringContaining('ELOOP') });
+      }
+    }
+  );
 });

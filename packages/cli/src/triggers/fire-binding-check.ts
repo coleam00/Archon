@@ -130,7 +130,11 @@ async function readTimerConfig(
 /** The directory's bindings, then each installed timer's config not already among them. */
 async function readFireBindingFiles(schedules: NativeScheduleOptions): Promise<FireBindingFile[]> {
   const files = await readDirectoryBindings();
-  for (const job of await listNativeSchedules(getArchonHome(), schedules)) {
+  for (const job of await listNativeSchedules(
+    getArchonHome(),
+    schedules,
+    entry => timerConfigPath(entry.programArguments) !== undefined
+  )) {
     if ('unreadable' in job) {
       files.push({
         file: job.definition,
