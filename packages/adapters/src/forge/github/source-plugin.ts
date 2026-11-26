@@ -36,10 +36,10 @@ type EvaluatedBinding = NonNullable<
 >[number];
 
 /**
- * The wake a binding hands the engine: the value of its `about` field, which the engine
- * matches against the open waits, and the rest as configured. The plugin reads the value
- * and compares nothing; what `inputs` and `checkout` read from the waiting run is the
- * engine's to resolve.
+ * The wake a binding hands the engine: the value of its `about` field and the issue or pull
+ * request the event names, which the engine matches against the open waits, and the rest as
+ * configured. The plugin reads the values and compares nothing; what `inputs` and `checkout`
+ * read from the waiting run is the engine's to resolve.
  */
 function wakeOf(
   wake: NonNullable<z.infer<typeof githubSourceBindingSchema>['wake']>,
@@ -47,8 +47,19 @@ function wakeOf(
 ): { wake: BindingWake } | { reason: string } {
   const { workflow, about: aboutField, ...carried } = wake;
   const about = readForgeEventField(event, aboutField.field);
+  const kind = readForgeEventField(event, 'subject.kind');
+  const number = readForgeEventField(event, 'subject.number');
   if (typeof about === 'string' && about !== '')
-    return { wake: { ...carried, workflowName: workflow, about } };
+    return {
+      wake: {
+        ...carried,
+        workflowName: workflow,
+        about,
+        ...((kind === 'pr' || kind === 'issue') && typeof number === 'number'
+          ? { subject: { kind, number } }
+          : {}),
+      },
+    };
   const state = about === undefined || about === null || about === '' ? 'missing' : 'not text';
   return { reason: `Wake: field '${aboutField.field}' is ${state}` };
 }
@@ -136,10 +147,13 @@ function targetOf(
   if (binding.selector.kind === 'check.changed' && field === 'check.revision')
     return { kind: 'commit', remote: wait.remote, revision: wait.about };
   if (binding.selector.kind === 'review.changed' && field === 'review.commit') {
-    const number = prNumberOf(binding, wait.itemKey);
-    return number === undefined
-      ? { reason: `item '${wait.itemKey}' names no pull request under the binding's item mapping` }
-      : { kind: 'pr', remote: wait.remote, number };
+    const { subject } = wait;
+    const number = subject === null ? prNumberOf(binding, wait.itemKey) : subject.number;
+    if (subject?.kind === 'issue' || number === undefined)
+      return {
+        reason: `the wait names no pull request, as its subject or as item '${wait.itemKey}'`,
+      };
+    return { kind: 'pr', remote: wait.remote, number };
   }
   return { reason: `${binding.selector.kind} wakes about ${String(field)} are not observed` };
 }
@@ -333,8 +347,16 @@ function waitAcceptances(
         sourceActor: null,
       },
       outcome: 'matched',
-      // The observation knows the wait's item, so the start goes to that item only.
-      bindings: [{ ...evaluated.start, itemKey: wait.itemKey }],
+      // Matched as its webhook's would be, and only against the wait on the item this
+      // observation is for, which stays apart from any item the binding maps.
+      bindings: [
+        {
+          ...evaluated.start,
+          ...(evaluated.start.wake && {
+            wake: { ...evaluated.start.wake, observedItemKey: wait.itemKey },
+          }),
+        },
+      ],
     });
   }
   return { acceptances, unserved: [...rejections].map(reason => ({ wait, reason })) };

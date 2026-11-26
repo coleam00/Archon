@@ -13,6 +13,8 @@
  * `output_format`.
  */
 import { z } from 'zod';
+import type { DagNode } from './dag-node';
+import { isExecNode } from './node-guards';
 
 /** What the waits property is for, read by the model as the property's description. */
 export const ITEM_WAITS_DESCRIPTION = [
@@ -20,6 +22,7 @@ export const ITEM_WAITS_DESCRIPTION = [
   'What happens after: this run ends, and nothing of it keeps running. Each wait opens on the item the run is for.',
   'When an event a binding maps to one of them arrives with exactly the `about` value you named, the set is met and the next stage starts on the item.',
   'An event about any other value (an older commit, say) starts nothing.',
+  'Name the issue or pull request the event will be about as `subject` when the event names one: a review names its pull request, while checks name only a commit.',
   'The waits are alternatives: the first one met closes them all.',
   'When the set is still open past the time of any of them, the item is listed for an operator as overdue, naming what it waits for.',
   'A later completed run of this workflow on the same item replaces the waits still open.',
@@ -28,8 +31,24 @@ export const ITEM_WAITS_DESCRIPTION = [
 
 const WAIT_EVENT_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
-// Every property is required, so a provider in OpenAI strict mode (Codex), which refuses an
-// optional property, takes the shape as it is.
+/**
+ * The issue or pull request a wait is about on the forge, in the vocabulary a binding's
+ * `subject.kind` predicate uses. A binding that maps no item finds the wait by it.
+ */
+export const itemWaitSubjectSchema = z
+  .object({
+    kind: z.enum(['pr', 'issue']).describe("'pr' for a pull request, 'issue' for an issue."),
+    number: z
+      .number()
+      .int()
+      .positive()
+      .describe('The number of the pull request or issue on the forge.'),
+  })
+  .strict();
+export type ItemWaitSubject = z.infer<typeof itemWaitSubjectSchema>;
+
+// A model is given every property as required, so a provider in OpenAI strict mode (Codex),
+// which refuses an optional property, takes the shape as it is; see `itemWaitsJsonSchema`.
 const waitFields = {
   event: z
     .string()
@@ -42,6 +61,14 @@ const waitFields = {
     .min(1)
     .describe(
       "The exact value the event will carry, e.g. the full commit id of the change's head. Only an event with this value meets the wait."
+    ),
+  // Read as null when omitted, so a script's output written before `subject` existed, or
+  // a stored returns-node output a resumed run completes with, still opens its waits.
+  subject: itemWaitSubjectSchema
+    .nullable()
+    .default(null)
+    .describe(
+      "The issue or pull request the event will be about, e.g. { kind: 'pr', number: 34 } for a review on pull request 34, also when this item is an issue. Only an event about this subject meets the wait. null when the event names no issue or pull request, as checks on a commit do."
     ),
   within_minutes: z
     .number()
@@ -76,18 +103,31 @@ export const itemWaitsSchema = z
   .superRefine(refineWaits)
   .describe(ITEM_WAITS_DESCRIPTION);
 
+function waitsJsonSchema(io: 'input' | 'output'): Readonly<Record<string, unknown>> {
+  const { $schema: _dialect, ...schema } = z.toJSONSchema(itemWaitsSchema, { io });
+  return schema;
+}
+
 /**
  * The JSON Schema of the waits property, with its descriptions, added to the returns node's
- * `output_format`. Built once; readers take a copy (`itemWaitsJsonSchema`).
+ * `output_format`. Built once per form; readers take a copy (`itemWaitsJsonSchema`).
  */
-const ITEM_WAITS_JSON_SCHEMA: Readonly<Record<string, unknown>> = (() => {
-  const { $schema: _dialect, ...schema } = z.toJSONSchema(itemWaitsSchema, { io: 'input' });
-  return schema;
-})();
+const ITEM_WAITS_JSON_SCHEMAS = {
+  input: waitsJsonSchema('input'),
+  output: waitsJsonSchema('output'),
+};
 
-/** A fresh copy of the waits property's JSON Schema, so no two nodes share one object. */
-export function itemWaitsJsonSchema(): Record<string, unknown> {
-  return structuredClone(ITEM_WAITS_JSON_SCHEMA) as Record<string, unknown>;
+/**
+ * A fresh copy of the waits property's JSON Schema for `node`, so no two nodes share one
+ * object. A model answers every node but a bash or script one, and gets every property
+ * required, because a provider in OpenAI strict mode refuses an optional one. A bash or
+ * script node is checked against what the parser reads, where `subject` may be omitted.
+ */
+export function itemWaitsJsonSchema(node: DagNode): Record<string, unknown> {
+  return structuredClone(ITEM_WAITS_JSON_SCHEMAS[isExecNode(node) ? 'input' : 'output']) as Record<
+    string,
+    unknown
+  >;
 }
 
 /** `value` as a list of waits, or why it is not one, naming the first problem's path. */
@@ -114,6 +154,7 @@ export interface StoredItemWait {
   position: number;
   event: string;
   about: string;
+  subject: ItemWaitSubject | null;
   openedAt: string;
   /** `openedAt` plus the wait's `within_minutes`: past it, an open wait is overdue. */
   deadlineAt: string;
@@ -132,6 +173,7 @@ export interface StoredItemWait {
 export interface MetWaitInput {
   event: string;
   about: string;
+  subject: ItemWaitSubject | null;
   workflow: string;
   runId: string;
   waitingSince: string;

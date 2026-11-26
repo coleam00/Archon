@@ -1968,7 +1968,68 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
   });
 
   it('completes with the waits the run leaves, and fails naming the field when two name one event', async () => {
-    const waits = [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 30 }];
+    const checks = { event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 30 };
+    const review = { event: 'review', about: 'a'.repeat(40), within_minutes: 30 };
+    const waits = [checks, { ...review, subject: { kind: 'pr' as const, number: 34 } }];
+    const complete = async (left: readonly unknown[], node: DagNode = resultNode) => {
+      mockStructuredResult({ summary: 'done', waits: left });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-waits',
+          cwd: testDir,
+          workflow: {
+            name: 'waits',
+            nodes: [node],
+            returns: 'decide',
+            result: { waits: 'waits' },
+          },
+          workflowRun: makeWorkflowRun('waits-run'),
+        })
+      );
+      return store.completeWorkflowRun.mock.calls[0]?.[3];
+    };
+    expect(await complete(waits)).toEqual({ waits });
+    // A review wait that names no subject is not refused.
+    expect(await complete([{ ...review, subject: null }])).toEqual({
+      waits: [{ ...review, subject: null }],
+    });
+    // A script written before `subject` existed leaves a wait that names none.
+    const script: DagNode = {
+      id: 'decide',
+      kind: 'exec',
+      runtime: 'sh',
+      script: `printf '%s' '${JSON.stringify({ summary: 'done', waits: [review] })}'`,
+      output_format: asksSchema,
+    };
+    expect(await complete([], script)).toEqual({ waits: [{ ...review, subject: null }] });
+
+    // The schema cannot hold "each event once"; the engine's check does.
+    mockStructuredResult({ summary: 'done', waits: [checks, checks] });
+    const twice = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(twice),
+        conversationId: 'conv-waits',
+        cwd: testDir,
+        workflow: {
+          name: 'waits',
+          nodes: [resultNode],
+          returns: 'decide',
+          result: { waits: 'waits' },
+        },
+        workflowRun: makeWorkflowRun('waits-run'),
+      })
+    );
+    expect(twice.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(twice.failWorkflowRun.mock.calls[0]?.[1]).toContain(
+      "returns.waits 'waits' on node 'decide': [1].event 'checks' is named more than once"
+    );
+  });
+
+  it('records its checkout only for a wake its pack declares that takes it for a wait it leaves', async () => {
+    const waits = [{ event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 30 }];
     const handoff = { runId: 'waits-run', branch: 'archon/host', commit: 'b'.repeat(40) };
     /** Complete a run of `waits` whose pack declares one wake binding on it. */
     const leaveWaits = async (wake: Record<string, unknown>) => {
@@ -2012,43 +2073,20 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
       const metadata = store.completeWorkflowRun.mock.calls[0]?.[2] as
         | Record<string, unknown>
         | undefined;
-      return { store, read, recorded: metadata?.asks_checkout };
+      return { read, recorded: metadata?.asks_checkout };
     };
     // A wake that takes the checkout: it is read now and recorded for the start.
-    const taken = await leaveWaits({ checkout: 'waiting-run' });
-    expect(taken.store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ waits });
-    expect(taken.read).toEqual([{ waits: true }]);
-    expect(taken.recorded).toEqual({ handoff, worktree: '/worktrees/host' });
+    expect(await leaveWaits({ checkout: 'waiting-run' })).toEqual({
+      read: [{ waits: true }],
+      recorded: { handoff, worktree: '/worktrees/host' },
+    });
     // A wake that carries event fields only: nothing is read, so the worktree is released.
-    const eventOnly = await leaveWaits({});
-    expect(eventOnly.read).toEqual([]);
-    expect(eventOnly.recorded).toBeUndefined();
+    expect(await leaveWaits({})).toEqual({ read: [], recorded: undefined });
     // A wake that takes the checkout for a wait this run does not leave: released as well.
-    const otherWait = await leaveWaits({ wait: 'review', checkout: 'waiting-run' });
-    expect(otherWait.read).toEqual([]);
-    expect(otherWait.recorded).toBeUndefined();
-
-    // The schema cannot hold "each event once"; the engine's check does.
-    mockStructuredResult({ summary: 'done', waits: [...waits, ...waits] });
-    const twice = createMockStore();
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(twice),
-        conversationId: 'conv-waits',
-        cwd: testDir,
-        workflow: {
-          name: 'waits',
-          nodes: [resultNode],
-          returns: 'decide',
-          result: { waits: 'waits' },
-        },
-        workflowRun: makeWorkflowRun('waits-run'),
-      })
-    );
-    expect(twice.completeWorkflowRun).not.toHaveBeenCalled();
-    expect(twice.failWorkflowRun.mock.calls[0]?.[1]).toContain(
-      "returns.waits 'waits' on node 'decide': [1].event 'checks' is named more than once"
-    );
+    expect(await leaveWaits({ wait: 'review', checkout: 'waiting-run' })).toEqual({
+      read: [],
+      recorded: undefined,
+    });
   });
 
   it('fails the run naming the field when an ask does not hold together, and opens none', async () => {
@@ -2295,7 +2333,7 @@ describe('executeDagWorkflow -- what a run on an item records about it as it com
       {
         stage: 'replan',
         why: 'x',
-        waits: [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 60 }],
+        waits: [{ event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 60 }],
       },
       { waits: true },
     ],

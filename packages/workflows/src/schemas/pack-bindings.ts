@@ -122,10 +122,9 @@ export const packEventBindingSchema = z
     /**
      * Wake the open wait `wait` that a run of `workflow`, a workflow of this pack, left on an
      * item, when the event's field `about` holds exactly the value the wait names. When the
-     * event names its subject, `item` is required with it (checked by the source plugin when
-     * the binding is generated), and only a wait on that item matches. `checkout:
-     * waiting-run` starts it in the checkout the run that left the met wait recorded when
-     * it completed.
+     * event names its subject, only a wait on the item `item` maps it to matches, or, with no
+     * `item`, only a wait that names the same subject. `checkout: waiting-run` starts it in
+     * the checkout the run that left the met wait recorded when it completed.
      */
     wake: z
       .object({

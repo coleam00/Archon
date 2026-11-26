@@ -23,7 +23,7 @@ export function withEngineResultSchemas<
   },
 >(workflow: W): W {
   const returns = workflow.returns;
-  const added: [string, () => Record<string, unknown>][] = [];
+  const added: [string, (node: DagNode) => Record<string, unknown>][] = [];
   const options = workflow.result?.options;
   if (workflow.result?.asks !== undefined)
     added.push([workflow.result.asks, () => itemAsksJsonSchema(options)]);
@@ -47,7 +47,7 @@ export function withEngineResultSchemas<
       changed = true;
       // Required, with an empty list meaning none: a strict provider refuses an optional
       // property, and the model always answers whether it leaves any.
-      properties = { ...properties, [field]: schema() };
+      properties = { ...properties, [field]: schema(node) };
       if (!required.includes(field)) required = [...required, field];
     }
     return properties === raw
